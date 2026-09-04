@@ -206,13 +206,19 @@ def suggested_bot_name(backend: str) -> str:
     return {"claude": "OpenClaude", "codex": "OpenCodex"}.get(backend, "OpenTag")
 
 
+def slack_channel_allowed(channel: str) -> bool:
+    """Restrict Slack execution to the configured channel when one is set."""
+    allowed_channel = os.getenv("SLACK_CHANNEL_ID", "").strip()
+    return not allowed_channel or channel == allowed_channel
+
+
 def print_live_summary(backend: str) -> None:
     bot = suggested_bot_name(backend)
     scopes = [s.strip() for s in os.getenv("MFS_ALLOWED_SCOPES", "").split(",") if s.strip()]
-    channel = os.getenv("SLACK_CHANNEL_ID", "(not set)")
+    channel = os.getenv("SLACK_CHANNEL_ID", "").strip() or "(any joined channel)"
     invoke = {
         "claude": "claude -p --dangerously-skip-permissions",
-        "codex": "codex exec --dangerously-bypass-approvals-and-sandbox",
+        "codex": "codex exec --approve-for-me",
     }[backend]
 
     print("=" * 64)
@@ -237,6 +243,9 @@ def create_app(backend: str, timeout: int) -> App:
     @app.event("app_mention")
     def handle_mention(event: dict[str, Any], client: Any, logger: Any) -> None:
         channel = event["channel"]
+        if not slack_channel_allowed(channel):
+            logger.warning("Ignoring Open Tag mention from unapproved Slack channel %s", channel)
+            return
         thread_ts = event.get("thread_ts") or event["ts"]
         question = strip_mention(event.get("text", ""))
 

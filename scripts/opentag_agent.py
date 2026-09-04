@@ -78,6 +78,7 @@ Runtime context:
 - Slack image attachments directory: {attachments_dir or "(none)"}
 
 Available helper scripts:
+- {skill_dir / "scripts" / "mfs_ls.py"}
 - {skill_dir / "scripts" / "mfs_search.py"}
 - {skill_dir / "scripts" / "mfs_cat.py"}
 - {skill_dir / "scripts" / "opentag_memory.py"}
@@ -126,7 +127,7 @@ def run_codex_once(
     cmd = [
         "codex",
         "exec",
-        "--dangerously-bypass-approvals-and-sandbox",
+        "--approve-for-me",
         "-c",
         "shell_environment_policy.inherit=all",
         "-C",

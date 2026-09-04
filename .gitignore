@@ -1,5 +1,6 @@
-.env
 .runtime/
 *.log
 __pycache__/
 *.py[cod]
+config.bat
+node_modules

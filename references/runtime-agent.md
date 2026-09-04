@@ -35,13 +35,22 @@ the behavior contract for the fresh CLI agent launched by the bridge.
    `scripts/mfs_search.py "<query>" --top-k 8`.
 4. Reopen relevant hits with `scripts/mfs_cat.py` when line-level or record-level
    evidence is needed.
-5. For explicit task requests, run commands or edit files inside the configured
+5. When the user asks to summarize the current Slack channel, its history, or its
+   next steps, do not treat the current thread as the whole channel. Find an
+   allowed `slack://` scope, list its `/channels` directory with
+   `scripts/mfs_ls.py`, select the entry ending in `__<current-channel-id>`, and
+   read that channel's `messages.jsonl` with `scripts/mfs_cat.py`. If no matching
+   indexed Slack source exists, say that channel history is unavailable. Treat a
+   bare “summarise this” or “summarize this” as a channel-summary request when the
+   current thread contains no substantive context beyond the request or working
+   status reply.
+6. For explicit task requests, run commands or edit files inside the configured
    workspace using the CLI backend's normal tools. Keep changes scoped and
    summarize verification.
-6. If the deployment includes indexed Slack history or other permitted sources
+7. If the deployment includes indexed Slack history or other permitted sources
    in `MFS_ALLOWED_SCOPES`, use those as retrievable context. The local memory
    helper is optional seed state, not the main memory model.
-7. Return only the final Slack-ready answer.
+8. Return only the final Slack-ready answer.
 
 When a Slack user explicitly asks for a message to be posted, sent, or shared
 in the current channel, use the channel-post helper supplied in the runtime
