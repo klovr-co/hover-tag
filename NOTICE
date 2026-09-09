@@ -1,0 +1,13 @@
+Tag
+Copyright 2026 klovr.co
+
+This product includes modified software from the Open Tag Example in the MFS
+project, developed by Zilliz (https://github.com/zilliztech/mfs), licensed under
+the Apache License, Version 2.0.
+
+The original example is available at:
+https://github.com/zilliztech/mfs/tree/main/examples/open-tag-skill
+
+Tag's modifications include additional chat transports, backend integrations,
+operational tooling, scoped memory helpers, Slack message handling, tests, and
+release documentation. The repository history records those changes.

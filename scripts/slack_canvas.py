@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Modified by klovr.co in 2026 for Tag. See NOTICE and repository history.
 """Create a Slack Canvas in the channel that invoked Open Tag."""
 from __future__ import annotations
 

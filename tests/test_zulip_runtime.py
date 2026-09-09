@@ -27,7 +27,9 @@ class ZulipRuntimeTests(unittest.TestCase):
             root=self.root,
         )
 
-        self.assertEqual(command[:4], ["uv", "run", "--with", "zulip"])
+        self.assertEqual(
+            command[:4], ["uv", "run", "--with", zulip_runtime.ZULIP_PACKAGE]
+        )
         self.assertIn(str(self.root / "scripts" / "zulip_agent.py"), command)
         self.assertEqual(command[-2:], ["--backend", "codex"])
 

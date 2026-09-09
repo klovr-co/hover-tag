@@ -1,9 +1,15 @@
 #!/bin/zsh
+# Modified by klovr.co in 2026 for Tag. See NOTICE and repository history.
 # Open Tag's portable local control panel.
 
 set -u
 
 SKILL_DIR="$(cd "$(dirname "$0")" && pwd)"
+SLACK_BOLT_SPEC="$(awk '/^slack-bolt==/ { print; exit }' "$SKILL_DIR/requirements-runtime.txt")"
+if [[ -z "$SLACK_BOLT_SPEC" ]]; then
+  echo "requirements-runtime.txt does not pin slack-bolt."
+  exit 1
+fi
 ENV_FILE="${OPENTAG_ENV_FILE:-$SKILL_DIR/.env}"
 MFS_LOG="$SKILL_DIR/mfs-server.log"
 SLACK_BRIDGE_LOG="$SKILL_DIR/opentag-slack-bridge.log"
@@ -84,7 +90,7 @@ start_opentag() {
     else
       echo "Starting Open Tag Slack bridge…"
       (
-        exec uv run --with slack-bolt python3 "$SKILL_DIR/scripts/slack_socket_agent.py" \
+        exec uv run --with "$SLACK_BOLT_SPEC" python3 "$SKILL_DIR/scripts/slack_socket_agent.py" \
           --backend "${OPENTAG_BACKEND:?OPENTAG_BACKEND is required}"
       ) >"$SLACK_BRIDGE_LOG" 2>&1 &
     fi

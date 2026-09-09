@@ -1,0 +1,4 @@
+# Runtime dependencies downloaded by the local launch scripts.
+slack-bolt==1.30.0
+zulip==0.9.1
+mfs-server==0.4.6

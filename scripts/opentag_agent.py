@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Modified by klovr.co in 2026 for Tag. See NOTICE and repository history.
 from __future__ import annotations
 
 import argparse

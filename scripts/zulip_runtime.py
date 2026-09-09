@@ -18,10 +18,23 @@ except ModuleNotFoundError:  # Imported as scripts.zulip_runtime by tests.
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def runtime_requirement(package: str) -> str:
+    prefix = f"{package}=="
+    requirements = ROOT / "requirements-runtime.txt"
+    for raw_line in requirements.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if line.startswith(prefix):
+            return line
+    raise RuntimeError(f"{requirements} does not pin {package}")
+
+
 ZULIPMCP_COMMIT = "2ac06bd12b4a10c4b41ecc31392c96285e3d8f05"
 ZULIPMCP_PACKAGE = (
     "zulipmcp @ git+https://github.com/zulip/zulipmcp.git@" + ZULIPMCP_COMMIT
 )
+ZULIP_PACKAGE = runtime_requirement("zulip")
 VALID_ENGINES = {"native", "zulipmcp"}
 VALID_BACKENDS = {"claude", "codex"}
 VALID_CODEX_PERMISSION_MODES = {"parity", "workspace-write", "read-only", "none"}
@@ -152,7 +165,7 @@ def build_runtime_command(
             "uv",
             "run",
             "--with",
-            "zulip",
+            ZULIP_PACKAGE,
             "python3",
             str(root / "scripts" / "zulip_agent.py"),
             "--backend",

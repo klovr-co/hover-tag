@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Modified by klovr.co in 2026 for Tag. See NOTICE and repository history.
 from __future__ import annotations
 
 import argparse
@@ -305,7 +306,7 @@ def run_backend(
 def suggested_bot_name(backend: str) -> str:
     if os.getenv("OPENTAG_BOT_NAME"):
         return os.environ["OPENTAG_BOT_NAME"]
-    return {"claude": "OpenClaude", "codex": "OpenCodex"}.get(backend, "OpenTag")
+    return "OpenMax"
 
 
 def slack_channel_allowed(channel: str) -> bool:

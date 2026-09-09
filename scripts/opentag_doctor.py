@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Modified by klovr.co in 2026 for Tag. See NOTICE and repository history.
 from __future__ import annotations
 
 import argparse
@@ -316,10 +317,53 @@ def check_backend() -> bool:
     return False
 
 
+def check_offline(root: Path) -> bool:
+    """Validate a launch configuration without credentials or network access."""
+    transport = selected_transport()
+    backend = env("OPENTAG_BACKEND")
+    workspace = Path(env("OPENTAG_WORKDIR")).expanduser()
+    scopes = [scope.strip() for scope in env("MFS_ALLOWED_SCOPES").split(",") if scope.strip()]
+    checks = {
+        "supported transport": transport in {"slack", "zulip", "both"},
+        "supported backend": backend in {"codex", "claude"},
+        "agent workspace": workspace.is_dir(),
+        "MFS URL": env("MFS_URL").startswith(("http://", "https://")),
+        "MFS allowed scopes": bool(scopes),
+        "Slack app manifest": (root / "slack-app-manifest.yaml").is_file(),
+        "Tag command": (root / "tag").is_file() and os.access(root / "tag", os.X_OK),
+        "installer": (root / "install.sh").is_file()
+        and os.access(root / "install.sh", os.X_OK),
+    }
+    for label, ok in checks.items():
+        print_check(ok, label)
+
+    try:
+        try:
+            from release_check import validate_release
+        except ImportError:  # Imported as scripts.opentag_doctor by tests.
+            from scripts.release_check import validate_release
+        metadata_errors = validate_release(root)
+    except (ImportError, OSError) as exc:
+        metadata_errors = [str(exc)]
+    metadata_ok = not metadata_errors
+    print_check(metadata_ok, "release metadata")
+    for error in metadata_errors:
+        print(f"       {error}")
+    return all(checks.values()) and metadata_ok
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Preflight an Open Tag Slack + MFS setup.")
+    parser = argparse.ArgumentParser(description="Preflight a Tag chat + MFS setup.")
     parser.add_argument("--channel-id", help="Optional Slack channel ID to verify bot access.")
+    parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="check configuration shape and local release files without credentials or network",
+    )
     args = parser.parse_args()
+
+    if args.offline:
+        return 0 if check_offline(Path(__file__).resolve().parents[1]) else 1
 
     transport = selected_transport()
     if not transport:

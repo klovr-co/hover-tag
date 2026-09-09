@@ -3,6 +3,8 @@ name: open-tag-admin
 description: Admin/control console for an Open Tag Slack and Zulip tag-in workflow backed by MFS. Use to set up a new Open Tag bot from scratch, check what is currently running (backend, permitted MFS scopes, and selected chat transport), change settings, add or remove data sources, switch the CLI agent backend (claude -p / codex exec), run preflight checks, and troubleshoot thread context, retrieval, or task execution.
 ---
 
+<!-- Modified by klovr.co in 2026 for Tag. See NOTICE and repository history. -->
+
 # Open Tag (admin)
 
 This skill is the **control console** for an Open Tag deployment. Use it for the
@@ -48,24 +50,18 @@ indexed source**. Confirm these before any Slack work:
 
 ## Bot name convention
 
-The Slack display name is whatever you call the Slack app — Open Tag's code
-strips the mention regardless. Recommended convention, so it reads like the
-official `@Claude` tag:
-
-| Backend | Suggested Slack app name | In Slack |
-|---|---|---|
-| `claude` | **OpenClaude** | `@OpenClaude <task>` |
-| `codex` | **OpenCodex** | `@OpenCodex <task>` |
-
-Name the Slack app accordingly when you create it (step 3). Set
-`OPENTAG_BOT_NAME` if you want the startup summary to print a different label.
+The default Slack identity is **OpenMax**, so teammates use `@OpenMax <task>`
+regardless of whether Codex or Claude Code is configured underneath. Slack
+routes the mention by bot user ID, and Tag strips the mention before invoking
+the backend. Set `OPENTAG_BOT_NAME` if your Slack app uses another display name.
 
 ## Setup Workflow
 
 1. Satisfy **Prerequisites** above (MFS running + at least one indexed source).
-2. For a new local installation, run `OpenTag Setup.command`. It writes a
-   private `.env`, checks local prerequisites, and leaves provider credentials
-   to the workspace administrator.
+2. For a new local installation, run `./install.sh`. It verifies pinned local
+   prerequisites, writes a private `.env`, and leaves provider credentials to
+   the workspace administrator. Use `slack-app-manifest.yaml` to create the
+   Slack app.
 3. For Slack, read `references/slack-adapter.md`, confirm an isolated channel,
    then create/install the Socket Mode app and invite it to that channel.
 4. For Zulip, create a Generic bot, subscribe it to the intended stream, and
@@ -77,7 +73,8 @@ Name the Slack app accordingly when you create it (step 3). Set
 6. Choose `OPENTAG_BACKEND` explicitly: `claude` or `codex`.
 7. Run `python scripts/opentag_doctor.py --channel-id <channel-id>` (the channel
    ID is needed only for Slack) and fix any failed check.
-8. Start the configured transports with `OpenTag Control.command`. It prints a
+8. Start the configured transports with `./tag start`. Use `./tag status` and
+   `./tag logs` to inspect it. The command prints a
    "what's live now" summary — read it, then validate thread context,
    permitted-context retrieval, and task execution with a realistic delegated task.
 

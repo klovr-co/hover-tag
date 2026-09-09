@@ -1,3 +1,5 @@
+<!-- Modified by klovr.co in 2026 for Tag. See NOTICE and repository history. -->
+
 # Runtime Agent Contract
 
 This file is loaded by `scripts/opentag_agent.py` for every Slack mention. It is

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create a private Open Tag configuration without storing secrets in Git."""
+"""Create a private Tag configuration without storing secrets in Git."""
 
 from __future__ import annotations
 
@@ -14,6 +14,16 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def runtime_requirement(package: str) -> str:
+    requirements = ROOT / "requirements-runtime.txt"
+    prefix = f"{package}=="
+    for raw_line in requirements.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if line.startswith(prefix):
+            return line
+    raise RuntimeError(f"{requirements} does not pin {package}")
 
 
 def ask(prompt: str, default: str | None = None) -> str:
@@ -53,8 +63,11 @@ def check_prerequisites(backend: str) -> bool:
 
     if not shutil.which("mfs-server"):
         print("✗ mfs-server: MFS memory server")
-        if shutil.which("uv") and confirm("Install mfs-server with 'uv tool install mfs-server' now?"):
-            completed = subprocess.run(["uv", "tool", "install", "mfs-server"], check=False)
+        mfs_server_spec = runtime_requirement("mfs-server")
+        if shutil.which("uv") and confirm(f"Install {mfs_server_spec} with uv now?"):
+            completed = subprocess.run(
+                ["uv", "tool", "install", "--force", mfs_server_spec], check=False
+            )
             ok = ok and completed.returncode == 0 and shutil.which("mfs-server") is not None
         else:
             ok = False
@@ -99,7 +112,7 @@ def write_config(path: Path, values: dict[str, str]) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Guided Open Tag first-run setup.")
+    parser = argparse.ArgumentParser(description="Guided Tag first-run setup.")
     parser.add_argument("--config", type=Path, default=ROOT / ".env", help="configuration file to create")
     parser.add_argument("--force", action="store_true", help="replace an existing configuration file")
     args = parser.parse_args()
@@ -110,9 +123,9 @@ def main() -> int:
         print("Use --force only after backing up values you want to keep.")
         return 1
 
-    print("Open Tag guided setup\n")
-    print("Before continuing, create the Slack app and/or Zulip Generic bot. This tool never asks for admin credentials.\n")
-    transport = choose("Chat transport", ("slack", "zulip", "both"), "both")
+    print("Tag guided setup\n")
+    print("Provider authorization stays in your own browser and terminal.\n")
+    transport = choose("Chat transport", ("slack", "zulip", "both"), "slack")
     backend = choose("Agent backend", ("codex", "claude"), "codex")
     workspace = absolute_directory("Workspace the agent may use", ROOT)
     mfs_scope = ask("Allowed MFS scopes (comma-separated)", f"file://local{workspace}")
@@ -120,13 +133,16 @@ def main() -> int:
         "MFS_URL": ask("MFS URL", "http://127.0.0.1:13619"),
         "MFS_ALLOWED_SCOPES": mfs_scope,
         "OPENTAG_BACKEND": backend,
+        "OPENTAG_BOT_NAME": ask("Bot display name", "OpenMax"),
         "OPENTAG_WORKDIR": str(workspace),
         "OPENTAG_TIMEOUT_SECONDS": ask("Per-task timeout in seconds", "420"),
         "OPENTAG_BACKEND_ATTEMPTS": ask("Backend retry attempts", "3"),
         "OPENTAG_TRANSPORT": transport,
     }
     if transport in {"slack", "both"}:
-        print("\nPaste the Slack tokens after creating and installing the app with the README's documented scopes.")
+        print("\nCreate the Slack app from slack-app-manifest.yaml:")
+        print("  https://api.slack.com/apps → Create New App → From an app manifest")
+        print("Then install it, enable Socket Mode, and create an app token with connections:write.")
         values["SLACK_APP_TOKEN"] = ask_secret("Slack app token", "xapp-")
         values["SLACK_BOT_TOKEN"] = ask_secret("Slack bot token", "xoxb-")
         values["SLACK_CHANNEL_ID"] = ask("Optional sandbox Slack channel ID")
@@ -152,10 +168,10 @@ def main() -> int:
     prerequisites_ok = check_prerequisites(backend)
     print("\nNext steps:")
     print("1. Add/index at least one source in MFS that matches MFS_ALLOWED_SCOPES.")
-    print('2. Open "OpenTag Control.command" and choose Start Open Tag.')
-    print(f"3. Run: set -a; source {shlex.quote(str(config_path))}; set +a; python3 scripts/opentag_doctor.py")
+    print("2. Run ./tag start. It starts MFS, runs preflight, and starts the bot.")
+    print("3. Mention the bot in the configured sandbox channel.")
     if not prerequisites_ok:
-        print("\nFinish the failed prerequisite checks before starting Open Tag.")
+        print("\nFinish the failed prerequisite checks before starting Tag.")
         return 1
     return 0
 
