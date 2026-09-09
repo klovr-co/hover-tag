@@ -2,7 +2,7 @@
 
 All notable changes to Tag are documented here.
 
-## [0.1.0-alpha] - Unreleased
+## [0.1.0-alpha] - 2026-09-09
 
 ### Added
 
