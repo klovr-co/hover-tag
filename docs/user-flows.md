@@ -94,10 +94,23 @@ Once this path works, normal use is much shorter: mention, work, reply. Return
 to configuration and `doctor` only when you change the setup or diagnose a
 failure.
 
+## How to read the levels
+
+| Depth | Read this when you need | What it shows |
+|---|---|---|
+| **Level 1 · Journey** | A fast orientation | The happy path and its main outcome. |
+| **Level 2 · Task flow** | To perform or demonstrate the workflow | Exact user steps, choices, limits, and visible recovery paths. |
+| **Level 3 · Service blueprint** | To implement, operate, or debug it | Handoffs among Slack, OpenTag, the backend, MFS, files, and persistent state. |
+
+Start with Level 1. Continue only as deep as the job requires; Level 3 appears
+only where understanding the system boundary materially helps.
+
 ## Flow 1: First-time setup
 
 The first setup connects one chat identity to one local OpenTag worker. Start
 with the smallest safe setup, test it, and add capabilities after that works.
+
+### Level 1 · Journey
 
 ```mermaid
 flowchart LR
@@ -113,6 +126,8 @@ flowchart LR
     Doctor -->|No| Guardrails
     Doctor -->|Yes| Start --> Test
 ```
+
+### Level 2 · Task flow
 
 1. The operator installs Python 3.10+, `uv`, MFS, and an authenticated Codex or
    Claude Code CLI.
@@ -137,11 +152,65 @@ flowchart LR
 You know setup worked when the running service announces the same bot name that
 Slack resolves in a mention.
 
+### Level 3 · Service blueprint
+
+```mermaid
+sequenceDiagram
+    participant O as Operator
+    participant I as Installer/config
+    participant S as Slack
+    participant D as Doctor
+    participant M as MFS
+    participant B as OpenTag bridge
+
+    O->>I: Run installer and choose backend/workspace
+    I-->>O: Save private configuration and Slack manifest
+    O->>S: Create or update app, scopes, events, and tokens
+    O->>M: Index at least one source and allow its exact root
+    O->>D: Run ./tag doctor
+    D->>S: Verify bot identity and channel access
+    D->>M: Verify health and allowed scopes
+    D->>D: Verify backend and required configuration
+    D-->>O: Report the first failed check or readiness
+    O->>B: Run ./tag start
+    B->>M: Start or connect to local MFS
+    B->>S: Open Socket Mode connection
+    O->>S: Send a realistic bot mention
+    S->>B: Deliver app_mention event
+    B-->>S: Post the threaded result
+```
+
 ## Flow 2: Delegate a task from Slack
+
+### Level 1 · Journey
+
+```mermaid
+flowchart LR
+    Ask["Mention OpenTag<br/>with a clear task"]
+    Check["Confirm caller and<br/>channel are allowed"]
+    Work["Agent works with<br/>thread context"]
+    Reply["Review the result<br/>in the same thread"]
+
+    Ask --> Check --> Work --> Reply
+```
+
+### Level 2 · Task flow
 
 Try this:
 
 > `@<bot-name> summarize this thread and list decisions, owners, and open questions.`
+
+1. Mention the bot in a new message to start a fresh Slack thread, or inside an
+   existing thread to continue that conversation.
+2. Keep the request explicit about the deliverable, evidence, and whether any
+   side effect such as posting or editing is intended.
+3. Watch Slack's loading state while the bounded backend run is active.
+4. Review the answer in the invoking thread. Long results may arrive as
+   multiple readable replies.
+5. If the result needs refinement, mention the bot again in the same thread so
+   the next run receives the recent discussion.
+
+### Level 3 · Service blueprint
 
 ```mermaid
 sequenceDiagram
@@ -177,6 +246,8 @@ Runtime behavior:
 
 ## Flow 3: Continue work with thread context and attachments
 
+### Level 1 · Journey
+
 For example:
 
 > `@<bot-name> compare that proposal with the earlier recommendation.`
@@ -194,6 +265,8 @@ flowchart LR
 
     Mention --> Collect --> Normalize --> Inspect --> Cleanup --> Reply
 ```
+
+### Level 2 · Task flow
 
 1. OpenTag fetches one Slack replies page containing up to 30 messages from the
    current thread rather than only the newest message. It does not currently
@@ -216,10 +289,33 @@ flowchart LR
 Attachments are treated as untrusted input. Instructions embedded in an image
 or document do not override the teammate's request or the runtime policy.
 
+### Level 3 · Service blueprint
+
+```mermaid
+sequenceDiagram
+    participant U as Teammate
+    participant S as Slack
+    participant T as OpenTag bridge
+    participant F as Temporary files
+    participant B as CLI backend
+
+    U->>S: Mention bot in a thread with optional attachments
+    S->>T: Deliver event and thread identifier
+    T->>S: Fetch one replies page, up to 30 messages
+    T->>S: Download permitted text and image files
+    T->>F: Store bounded images for this invocation
+    T->>B: Send normalized text, markers, and file paths
+    B-->>T: Return grounded result or explain unavailable input
+    T->>F: Remove invocation files
+    T-->>S: Post result in the same thread
+```
+
 ## Flow 4: Retrieve durable context through MFS
 
 Thread history is short-term conversational context. MFS provides durable,
 searchable context from approved sources.
+
+### Level 1 · Journey
 
 For a cross-source task:
 
@@ -240,12 +336,37 @@ flowchart TD
     Decide -->|Yes| Search --> Reopen --> Synthesize --> Answer
 ```
 
+### Level 2 · Task flow
+
 1. The backend decides that external context is needed.
 2. It searches only roots listed in `MFS_ALLOWED_SCOPES`.
 3. It reopens relevant hits when precise lines or records are needed.
 4. It combines retrieved evidence with the current thread and workspace state.
 5. It cites paths/records when requested or when provenance materially improves
    the answer.
+
+### Level 3 · Service blueprint
+
+```mermaid
+sequenceDiagram
+    participant S as Slack thread
+    participant B as CLI backend
+    participant H as MFS helper
+    participant M as MFS server
+    participant X as Indexed sources
+
+    S->>B: Request requiring durable context
+    B->>H: Search with an allowed root
+    H->>H: Reject roots outside MFS_ALLOWED_SCOPES
+    H->>M: Submit scoped search
+    M->>X: Query already-indexed records
+    X-->>M: Matching records
+    M-->>B: Bounded search hits
+    B->>H: Read the strongest records when needed
+    H->>M: Submit scoped read
+    M-->>B: Precise evidence
+    B-->>S: Synthesize thread, workspace, and retrieved context
+```
 
 Supported MFS source types can include Slack history, local files, GitHub, Jira,
 Linear, databases, object stores, and other configured connectors. Indexing a
@@ -262,6 +383,8 @@ history is unavailable.
 
 ## Flow 5: Perform workspace work
 
+### Level 1 · Journey
+
 Try this:
 
 > `@<bot-name> fix the failing parser test, run the focused suite, and summarize the changed files.`
@@ -276,6 +399,8 @@ flowchart LR
 
     Request --> Inspect --> Work --> Verify --> Report
 ```
+
+### Level 2 · Task flow
 
 1. The backend receives the configured working directory and runtime contract.
 2. It inspects files, runs commands, or edits code with the local account's
@@ -293,6 +418,8 @@ workspace for demos and an external sandbox for stronger production isolation.
 The default result is a reply in the invoking Slack thread. Two explicit output
 flows are also available:
 
+### Level 1 · Journey
+
 ```mermaid
 flowchart TD
     Result["Backend produces<br/>the requested content"]
@@ -307,7 +434,9 @@ flowchart TD
     Destination -->|Create a Canvas| Canvas
 ```
 
-### Post a top-level channel message
+### Level 2 · Task flow
+
+#### Post a top-level channel message
 
 Try this:
 
@@ -317,7 +446,7 @@ When the request explicitly says to post, send, or share, the backend can call
 the channel-post helper. The helper is restricted to the channel that invoked
 OpenTag; the backend cannot select an arbitrary destination.
 
-### Create a Slack Canvas
+#### Create a Slack Canvas
 
 Try this:
 
@@ -331,6 +460,29 @@ helper. The helper creates a Canvas only in the invoking channel and enforces a
 
 After a successful Codex reply, an authorized teammate can select **Change model
 & thinking**.
+
+### Level 1 · Journey
+
+```mermaid
+flowchart LR
+    Reply["Successful Codex reply"]
+    Choose["Open Change model<br/>& thinking"]
+    Save["Save a valid choice<br/>for this thread"]
+    Next["Next mention uses<br/>the saved setting"]
+
+    Reply --> Choose --> Save --> Next
+```
+
+### Level 2 · Task flow
+
+1. OpenTag shows only available Codex models and their supported reasoning
+   levels, narrowed by operator allowlists when configured.
+2. The teammate selects a model, a reasoning level, or **Default**.
+3. Validation prevents unsupported combinations from being saved.
+4. An ephemeral confirmation identifies the thread affected by the choice.
+5. The next mention in that thread uses the saved setting.
+
+### Level 3 · Service blueprint
 
 ```mermaid
 sequenceDiagram
@@ -347,15 +499,6 @@ sequenceDiagram
     T->>N: Start run with saved thread setting
 ```
 
-1. OpenTag opens a modal containing available Codex models and supported
-   reasoning levels.
-2. Operator allowlists restrict the choices when configured.
-3. OpenTag validates and saves the selection for the current Slack thread.
-4. An ephemeral confirmation tells the teammate that the choice applies to the
-   next request.
-5. Future mentions in that thread use the saved choice, including after bridge
-   restarts.
-
 Settings are thread-specific, so one conversation can use deeper reasoning
 without changing every other conversation. Any authorized teammate in that
 thread may update the shared thread setting. “Default” delegates model or
@@ -370,6 +513,8 @@ backend. The included Google Workspace catalog demonstrates this pattern across
 Gmail, Calendar, Drive, Docs, Sheets, Slides, Tasks, Chat, Meet, Forms,
 Classroom, People, Keep, Events, Apps Script, Admin Reports, Model Armor, and
 cross-service workflows.
+
+### Level 1 · Journey
 
 Try this:
 
@@ -389,6 +534,8 @@ flowchart LR
     Auth -->|Yes| Act --> Reply
 ```
 
+### Level 2 · Task flow
+
 The backend selects the appropriate installed skills, and each tool enforces its
 own authentication and grants. OpenTag does not silently grant Google Workspace
 access or maintain a second per-tool permission system.
@@ -397,6 +544,23 @@ See [Included skills](skills.md) for the generated service, helper, persona, and
 recipe catalog.
 
 ## Flow 9: Denials, failures, and recovery
+
+### Level 1 · Journey
+
+```mermaid
+flowchart LR
+    Symptom["Observe the symptom"]
+    Delivery{"Did the mention<br/>reach OpenTag?"}
+    Slack["Check identity, app install,<br/>channel, and event delivery"]
+    Runtime["Check caller access,<br/>doctor, MFS, and backend"]
+    Verify["Retry one realistic mention"]
+
+    Symptom --> Delivery
+    Delivery -->|No| Slack --> Verify
+    Delivery -->|Yes| Runtime --> Verify
+```
+
+### Level 2 · Decision flow
 
 ```mermaid
 flowchart TD
@@ -413,6 +577,8 @@ flowchart TD
     K -->|no| L[Retry eligible Codex capacity errors, then report failure]
     K -->|yes| M[Post result]
 ```
+
+### Level 3 · Operator runbook
 
 Recommended recovery order:
 
@@ -437,6 +603,8 @@ If the event arrives but the task fails, debug runtime dependencies next:
 
 ## Flow 10: Operate, update, and remove OpenTag
 
+### Level 1 · Journey
+
 ```mermaid
 flowchart LR
     Observe["Observe<br/>status → doctor → logs"]
@@ -453,6 +621,8 @@ flowchart LR
     Change -->|Remove OpenTag| Remove
 ```
 
+### Level 2 · Task flow
+
 | Operator intent | User flow |
 |---|---|
 | Check health | `./tag status` → `./tag doctor` → `./tag logs` when needed. |
@@ -462,6 +632,31 @@ flowchart LR
 | Change Slack scopes/interactivity | Update manifest in Slack → reinstall app → refresh tokens if required → restart → mention test. |
 | Upgrade | Stop → pull the intended release → rerun installer → doctor → start → smoke test. Existing private `.env` is preserved. |
 | Uninstall | Stop → remove the clone; optionally remove MFS binaries/data separately. |
+
+### Level 3 · Service blueprint
+
+```mermaid
+sequenceDiagram
+    participant O as Operator
+    participant T as ./tag
+    participant M as MFS process
+    participant B as Slack bridge
+    participant S as Slack
+
+    O->>T: status / doctor / logs
+    T-->>O: Health, first failure, or recent events
+    O->>T: stop before config or upgrade work
+    T->>B: Stop accepting new Slack events
+    T->>M: Stop the managed local process
+    O->>T: Apply configuration or upgrade
+    O->>T: doctor, then start
+    T->>M: Start and verify MFS
+    T->>B: Start bridge after preflight
+    B->>S: Connect through Socket Mode
+    O->>S: Run a realistic mention smoke test
+    S-->>B: Deliver event
+    B-->>S: Post result
+```
 
 ## A demo that covers the product
 
