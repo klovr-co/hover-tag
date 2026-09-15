@@ -48,7 +48,6 @@ Slack. They do not disappear into my private Claude or ChatGPT history.
 - Run real tasks through Claude Code or Codex in a configured workspace.
 - Keep long answers readable by splitting them into threaded Slack replies.
 - Post a requested summary back into the current channel.
-- Run the same memory and agent backend through Zulip.
 
 ## See it in action
 
@@ -74,7 +73,7 @@ returns the result where the rest of the team can read and continue the work.
 ```text
        ┌──────────────┐
        │    Slack     │    @OpenMax <task>
-       │   or Zulip   │ ◄──── answer ──────┐
+       │              │ ◄──── answer ──────┐
        └──────┬───────┘                    │
               │ mention                    │
               ▼                            │
@@ -94,7 +93,7 @@ Tag has three parts:
 
 - **Brain:** Claude Code or Codex runs the task locally.
 - **Memory:** MFS indexes the sources you approve and makes them searchable.
-- **Chat:** Slack or Zulip supplies the conversation and receives the answer.
+- **Chat:** Slack supplies the conversation and receives the answer.
 
 Tag does not call a model API directly. Authentication, model access, and usage
 come from the CLI backend installed on your machine.
@@ -102,8 +101,8 @@ come from the CLI backend installed on your machine.
 ## Quick start
 
 The v0.1.0-alpha supported path is Slack + Codex + local MFS on macOS or Linux.
-Claude Code and Zulip are included as experimental paths, but are not part of
-the launch qualification.
+Claude Code remains an experimental backend and is not part of the launch
+qualification.
 
 You need Python 3.10+, [`uv`](https://docs.astral.sh/uv/), `curl`, and a working
 Codex CLI login. Then run:
@@ -115,7 +114,8 @@ cd tag
 ```
 
 The installer verifies pinned MFS components, creates a private `.env`, and
-guides you through the Slack credentials it cannot authorize on your behalf.
+guides you through the Slack credentials and owner member ID it cannot authorize
+on your behalf.
 When prompted, create the app from [`slack-app-manifest.yaml`](slack-app-manifest.yaml)
 at **Slack API → Your Apps → Create New App → From an app manifest**, install it
 to your workspace, and create an app-level `xapp-` token with
@@ -132,6 +132,22 @@ Start Tag and inspect it with:
 Mention `@OpenMax` in the sandbox channel you configured:
 
 > @OpenMax summarize this channel and list the decisions and open questions.
+
+Only the owner member ID entered during setup can invoke Tag initially. Add
+other IDs to the comma-separated `SLACK_ALLOWED_USER_IDS` setting to share access.
+
+While a task runs, Tag uses Slack's native loading indicator instead of posting
+a temporary bot message. Slack response streaming is enabled by default:
+Claude responses stream into the thread as answer deltas arrive, while Codex
+shows the native loading state and then posts its completed answer because the
+Codex CLI currently emits final-message events. Set
+`OPENTAG_SLACK_STREAMING=0` to retain buffered replies for troubleshooting.
+
+Codex replies also include a **Change model & thinking** button. Its modal saves
+model and reasoning choices for that Slack thread and applies them to the next
+mention. Operators can restrict the selectable models with
+`OPENTAG_CODEX_MODELS` and the reasoning levels with
+`OPENTAG_CODEX_REASONING_EFFORTS`.
 
 Stop the local bridges and MFS server with `./tag stop`.
 
@@ -208,19 +224,6 @@ See [Memory](references/memory.md) for the retrieval model and the
 [MFS connector documentation](https://github.com/zilliztech/mfs/tree/main/docs/connectors/)
 for available sources.
 
-## Optional: use Zulip
-
-Tag can use the same backend and MFS memory from Zulip. The native adapter starts
-a fresh bounded agent for every direct message or stream mention. The optional
-ZulipMCP adapter keeps a persistent mention-activated session per stream topic.
-
-Set `OPENTAG_TRANSPORT` to `zulip` or `both`, provide a Generic bot `zuliprc`,
-and choose `OPENTAG_ZULIP_ENGINE=native` or `zulipmcp`. Start with a private
-sandbox stream and explicit read/write allowlists.
-
-See [the ZulipMCP runtime guide](references/zulipmcp-runtime.md) and the
-`open-tag-admin` skill for the full setup.
-
 ## Security model
 
 Tag turns chat messages into instructions for a local coding agent. Treat every
@@ -229,8 +232,9 @@ message and attachment as untrusted input.
 Current safeguards include:
 
 - MFS scope checks for search, read, and directory listing;
+- a required Slack caller allowlist seeded with the owner during setup;
 - an optional `SLACK_CHANNEL_ID` gate;
-- transport-specific credential isolation;
+- bridge credential isolation;
 - bounded attachment size and thread context;
 - task timeouts and limited retries;
 - automatic Codex workspace safety review.
@@ -244,11 +248,11 @@ Use a non-production host or a real external sandbox for stronger isolation.
 
 ## Documentation
 
+- [Connected user flows and functional tour](docs/user-flows.md) ([rendered HTML](docs/user-flows.html))
 - [Slack setup and troubleshooting](references/slack-adapter.md)
 - [Backend behavior](references/backends.md)
 - [Runtime agent contract](references/runtime-agent.md)
 - [Memory model](references/memory.md)
-- [ZulipMCP runtime](references/zulipmcp-runtime.md)
 - [Included skills](docs/skills.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Security policy](SECURITY.md)

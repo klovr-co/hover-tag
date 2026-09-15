@@ -1,6 +1,6 @@
 ---
 name: open-tag-admin
-description: Admin/control console for an Open Tag Slack and Zulip tag-in workflow backed by MFS. Use to set up a new Open Tag bot from scratch, check what is currently running (backend, permitted MFS scopes, and selected chat transport), change settings, add or remove data sources, switch the CLI agent backend (claude -p / codex exec), run preflight checks, and troubleshoot thread context, retrieval, or task execution.
+description: Admin/control console for an Open Tag Slack workflow backed by MFS. Use to set up a new Open Tag bot from scratch, check what is currently running (backend and permitted MFS scopes), change settings, add or remove data sources, switch the CLI agent backend (claude -p / codex exec), run preflight checks, and troubleshoot thread context, retrieval, or task execution.
 ---
 
 <!-- Modified by klovr.co in 2026 for Tag. See NOTICE and repository history. -->
@@ -24,9 +24,9 @@ Keep the architecture generic:
 The user-facing flow is:
 
 1. Configure MFS sources and allowed scopes.
-2. Configure a Slack app with Socket Mode and/or a Zulip Generic bot, then add it to a sandbox channel or stream.
+2. Configure a Slack app with Socket Mode, then add it to a sandbox channel.
 3. Start the Open Tag bridge.
-4. Mention the bot in a Slack thread or Zulip stream topic.
+4. Mention the bot in a Slack thread.
 5. Let the bridge invoke the selected backend with thread context and scoped MFS
    helper scripts for permitted external context.
 
@@ -63,17 +63,14 @@ the backend. Set `OPENTAG_BOT_NAME` if your Slack app uses another display name.
    the workspace administrator. Use `slack-app-manifest.yaml` to create the
    Slack app.
 3. For Slack, read `references/slack-adapter.md`, confirm an isolated channel,
-   then create/install the Socket Mode app and invite it to that channel.
-4. For Zulip, create a Generic bot, subscribe it to the intended stream, and
-   set `ZULIP_CONFIG_FILE` to its downloaded `zuliprc` file. Choose
-   `OPENTAG_ZULIP_ENGINE=native` for one-shot DM/mention runs or `zulipmcp` for
-   persistent stream/topic sessions. Never run both Zulip engines for one bot.
-5. Configure MFS memory sources and set `MFS_ALLOWED_SCOPES` to the exact source
+   then create/install the Socket Mode app, invite it to that channel, and enter
+   the owner's Slack member ID when setup requests it.
+4. Configure MFS memory sources and set `MFS_ALLOWED_SCOPES` to the exact source
    roots the runtime agent may use.
-6. Choose `OPENTAG_BACKEND` explicitly: `claude` or `codex`.
-7. Run `python scripts/opentag_doctor.py --channel-id <channel-id>` (the channel
-   ID is needed only for Slack) and fix any failed check.
-8. Start the configured transports with `./tag start`. Use `./tag status` and
+5. Choose `OPENTAG_BACKEND` explicitly: `claude` or `codex`.
+6. Run `python scripts/opentag_doctor.py --channel-id <channel-id>` and fix any
+   failed check.
+7. Start the Slack bridge with `./tag start`. Use `./tag status` and
    `./tag logs` to inspect it. The command prints a
    "what's live now" summary — read it, then validate thread context,
    permitted-context retrieval, and task execution with a realistic delegated task.
@@ -105,12 +102,8 @@ Keep the Python scripts as deterministic glue:
 
 - `slack_socket_agent.py`: receive Slack `app_mention`, read the thread, post
   progress, call the backend, and post the final answer.
-- `zulip_runtime.py`: expose the Zulip engine seam and launch either the native
-  adapter or the pinned ZulipMCP adapter with runtime-generated policy files.
-- `zulipmcp_entrypoint.py`: apply the canary session cap before starting the
-  upstream listener.
-- `opentag_process_env.py`: prevent one transport's credentials from entering
-  the other transport's backend processes.
+- `opentag_process_env.py`: keep Socket Mode and bridge access-control settings
+  out of backend processes.
 - `opentag_agent.py`: build a non-interactive prompt and invoke the selected CLI
   backend.
 - `mfs_search.py` and `mfs_cat.py`: call the MFS HTTP API with scoped search and
@@ -129,6 +122,10 @@ backend selection.
 The Slack bridge invokes a fresh CLI agent per mention. That runtime agent must
 follow `references/runtime-agent.md`. Keep runtime behavior there, not in this
 admin skill.
+
+Slack access is owner-only by default. `SLACK_ALLOWED_USER_IDS` must contain at
+least the owner's member ID; add comma-separated IDs only on explicit owner
+request. Never use first-mention claiming or leave this setting empty.
 
 Thread context is short-term state. Durable context should come from permitted
 MFS scopes such as indexed Slack history, repos, docs, issues, databases, object
