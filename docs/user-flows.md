@@ -4,6 +4,10 @@ This is a map of what happens after someone mentions OpenTag. Operators can use
 it to set up or demo the bot. Contributors can use it to find where a feature
 belongs. It also tells teammates what the bot can and cannot do today.
 
+> **Launch scope:** `main` is intentionally Slack-only for v0.1 alpha. The
+> unfinished Zulip implementation is preserved on the `feature/zulip` branch
+> and is not included in the installer, runtime, or supported flow below.
+
 Examples use `@<bot-name>` because the Slack display name is configurable. A
 mention must target the same Slack app whose tokens are used by the running
 bridge.

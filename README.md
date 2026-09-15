@@ -13,6 +13,11 @@ Tag is an open-source reference implementation inspired by
 Slack to a local CLI agent and uses
 [MFS](https://github.com/zilliztech/mfs) as searchable memory.
 
+> [!NOTE]
+> The `main` branch is intentionally Slack-only for the v0.1 alpha launch.
+> Unfinished Zulip work is preserved on [`feature/zulip`](https://github.com/klovr-co/tag/tree/feature/zulip),
+> outside the supported installer and runtime.
+
 > [!WARNING]
 > Tag is an alpha and is not a production security boundary. Start in an
 > isolated channel, point it at a sandbox workspace, and invite only people you
@@ -50,6 +55,17 @@ Slack. They do not disappear into my private Claude or ChatGPT history.
 - Post a requested summary back into the current channel.
 
 ## See it in action
+
+The [connected user-flow guide](docs/user-flows.md) follows the complete journey
+from setup and caller authorization through thread context, MFS retrieval,
+workspace work, shared outputs, and recovery. For the designed light-mode view,
+serve the repository locally and open the rendered tour:
+
+```bash
+python3 -m http.server 8765
+```
+
+Then visit <http://127.0.0.1:8765/docs/user-flows.html>.
 
 ### Delegate work across channels
 
@@ -248,7 +264,7 @@ Use a non-production host or a real external sandbox for stronger isolation.
 
 ## Documentation
 
-- [Connected user flows and functional tour](docs/user-flows.md) ([rendered HTML](docs/user-flows.html))
+- [Connected user flows and functional tour](docs/user-flows.md) ([light-mode HTML](docs/user-flows.html))
 - [Slack setup and troubleshooting](references/slack-adapter.md)
 - [Backend behavior](references/backends.md)
 - [Runtime agent contract](references/runtime-agent.md)
