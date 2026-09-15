@@ -32,6 +32,14 @@ def ask(prompt: str, default: str | None = None) -> str:
     return value or (default or "")
 
 
+def ask_required(prompt: str) -> str:
+    while True:
+        value = ask(prompt)
+        if value:
+            return value
+        print("A value is required.")
+
+
 def choose(prompt: str, options: tuple[str, ...], default: str) -> str:
     while True:
         answer = ask(f"{prompt} ({'/'.join(options)})", default).lower()
@@ -146,6 +154,8 @@ def main() -> int:
         values["SLACK_APP_TOKEN"] = ask_secret("Slack app token", "xapp-")
         values["SLACK_BOT_TOKEN"] = ask_secret("Slack bot token", "xoxb-")
         values["SLACK_CHANNEL_ID"] = ask("Optional sandbox Slack channel ID")
+        print("In Slack, open your profile, choose More, then Copy member ID.")
+        values["SLACK_ALLOWED_USER_IDS"] = ask_required("Owner Slack member ID")
         values["OPENTAG_SLACK_STREAMING"] = "1"
     if transport in {"zulip", "both"}:
         print("\nCreate a Generic Zulip bot, subscribe it to the intended stream, then download its zuliprc file.")

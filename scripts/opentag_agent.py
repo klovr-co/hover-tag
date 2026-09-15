@@ -125,6 +125,8 @@ def run_codex_once(
     memory_root: Path,
     attachments_dir: Path | None,
     timeout: int,
+    model: str | None = None,
+    reasoning_effort: str | None = None,
 ) -> tuple[int, str]:
     memory_root.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("r", suffix=".txt", encoding="utf-8", delete=False) as f:
@@ -146,6 +148,10 @@ def run_codex_once(
         str(output_path),
         prompt,
     ]
+    if model:
+        cmd[2:2] = ["--model", model]
+    if reasoning_effort:
+        cmd[2:2] = ["--config", f'model_reasoning_effort="{reasoning_effort}"']
     if attachments_dir:
         cmd[cmd.index("--skip-git-repo-check"):cmd.index("--skip-git-repo-check")] = [
             "--add-dir",
@@ -286,6 +292,8 @@ def codex_stream_command(
     memory_root: Path,
     attachments_dir: Path | None,
     output_path: Path,
+    model: str | None = None,
+    reasoning_effort: str | None = None,
 ) -> list[str]:
     cmd = [
         "codex",
@@ -305,6 +313,10 @@ def codex_stream_command(
         str(output_path),
         prompt,
     ]
+    if model:
+        cmd[2:2] = ["--model", model]
+    if reasoning_effort:
+        cmd[2:2] = ["--config", f'model_reasoning_effort="{reasoning_effort}"']
     if attachments_dir:
         index = cmd.index("--skip-git-repo-check")
         cmd[index:index] = ["--add-dir", str(attachments_dir)]
@@ -319,6 +331,8 @@ def run_codex_events(
     memory_root: Path,
     attachments_dir: Path | None,
     timeout: int,
+    model: str | None = None,
+    reasoning_effort: str | None = None,
 ) -> int:
     memory_root.mkdir(parents=True, exist_ok=True)
     attempts = max(1, int(os.getenv("OPENTAG_BACKEND_ATTEMPTS", "3")))
@@ -336,6 +350,8 @@ def run_codex_events(
                     memory_root=memory_root,
                     attachments_dir=attachments_dir,
                     output_path=output_path,
+                    model=model,
+                    reasoning_effort=reasoning_effort,
                 ),
                 parser=parse_codex_stream_event,
                 timeout=timeout,
@@ -427,6 +443,8 @@ def run_codex(
     memory_root: Path,
     attachments_dir: Path | None,
     timeout: int,
+    model: str | None = None,
+    reasoning_effort: str | None = None,
 ) -> int:
     attempts = max(1, int(os.getenv("OPENTAG_BACKEND_ATTEMPTS", "3")))
     last_code = 1
@@ -439,6 +457,8 @@ def run_codex(
             memory_root=memory_root,
             attachments_dir=attachments_dir,
             timeout=timeout,
+            model=model,
+            reasoning_effort=reasoning_effort,
         )
         if last_code == 0:
             if last_output:
@@ -503,6 +523,12 @@ def main() -> int:
     parser.add_argument("--channel-id", required=True)
     parser.add_argument("--thread-file", type=Path, required=True)
     parser.add_argument("--attachments-dir", type=Path)
+    parser.add_argument("--model", help="backend model override for this run")
+    parser.add_argument(
+        "--reasoning-effort",
+        choices=("minimal", "low", "medium", "high", "xhigh", "max", "ultra"),
+        help="Codex reasoning-effort override for this run",
+    )
     parser.add_argument(
         "--event-stream",
         action="store_true",
@@ -538,8 +564,18 @@ def main() -> int:
 
     try:
         if args.event_stream:
-            runner = run_codex_events if args.backend == "codex" else run_claude_events
-            return runner(
+            if args.backend == "codex":
+                return run_codex_events(
+                    prompt,
+                    skill_dir=args.skill_dir.resolve(),
+                    workdir=args.workdir.resolve(),
+                    memory_root=args.memory_root.expanduser().resolve(),
+                    attachments_dir=args.attachments_dir.resolve() if args.attachments_dir else None,
+                    timeout=args.timeout,
+                    model=args.model,
+                    reasoning_effort=args.reasoning_effort,
+                )
+            return run_claude_events(
                 prompt,
                 skill_dir=args.skill_dir.resolve(),
                 workdir=args.workdir.resolve(),
@@ -555,6 +591,8 @@ def main() -> int:
                 memory_root=args.memory_root.expanduser().resolve(),
                 attachments_dir=args.attachments_dir.resolve() if args.attachments_dir else None,
                 timeout=args.timeout,
+                model=args.model,
+                reasoning_effort=args.reasoning_effort,
             )
         return run_claude(
             prompt,

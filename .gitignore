@@ -1,5 +1,7 @@
-.env
 .runtime/
 *.log
 __pycache__/
 *.py[cod]
+.DS_Store
+config.bat
+node_modules

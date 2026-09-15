@@ -115,7 +115,8 @@ cd tag
 ```
 
 The installer verifies pinned MFS components, creates a private `.env`, and
-guides you through the Slack credentials it cannot authorize on your behalf.
+guides you through the Slack credentials and owner member ID it cannot authorize
+on your behalf.
 When prompted, create the app from [`slack-app-manifest.yaml`](slack-app-manifest.yaml)
 at **Slack API → Your Apps → Create New App → From an app manifest**, install it
 to your workspace, and create an app-level `xapp-` token with
@@ -133,12 +134,21 @@ Mention `@OpenMax` in the sandbox channel you configured:
 
 > @OpenMax summarize this channel and list the decisions and open questions.
 
+Only the owner member ID entered during setup can invoke Tag initially. Add
+other IDs to the comma-separated `SLACK_ALLOWED_USER_IDS` setting to share access.
+
 While a task runs, Tag uses Slack's native loading indicator instead of posting
 a temporary bot message. Slack response streaming is enabled by default:
 Claude responses stream into the thread as answer deltas arrive, while Codex
 shows the native loading state and then posts its completed answer because the
 Codex CLI currently emits final-message events. Set
 `OPENTAG_SLACK_STREAMING=0` to retain buffered replies for troubleshooting.
+
+Codex replies also include a **Change model & thinking** button. Its modal saves
+model and reasoning choices for that Slack thread and applies them to the next
+mention. Operators can restrict the selectable models with
+`OPENTAG_CODEX_MODELS` and the reasoning levels with
+`OPENTAG_CODEX_REASONING_EFFORTS`.
 
 Stop the local bridges and MFS server with `./tag stop`.
 
@@ -236,6 +246,7 @@ message and attachment as untrusted input.
 Current safeguards include:
 
 - MFS scope checks for search, read, and directory listing;
+- a required Slack caller allowlist seeded with the owner during setup;
 - an optional `SLACK_CHANNEL_ID` gate;
 - transport-specific credential isolation;
 - bounded attachment size and thread context;
@@ -251,6 +262,7 @@ Use a non-production host or a real external sandbox for stronger isolation.
 
 ## Documentation
 
+- [Connected user flows and functional tour](docs/user-flows.md) ([rendered HTML](docs/user-flows.html))
 - [Slack setup and troubleshooting](references/slack-adapter.md)
 - [Backend behavior](references/backends.md)
 - [Runtime agent contract](references/runtime-agent.md)

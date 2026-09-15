@@ -172,3 +172,18 @@ class BackendStreamEventTests(unittest.TestCase):
         self.assertIn("stream-json", claude)
         self.assertIn("--include-partial-messages", claude)
         self.assertNotIn("prompt", claude)
+
+    def test_codex_stream_command_applies_model_and_reasoning_overrides(self) -> None:
+        command = opentag_agent.codex_stream_command(
+            "prompt",
+            skill_dir=Path("/skill"),
+            workdir=Path("/work"),
+            memory_root=Path("/memory"),
+            attachments_dir=None,
+            output_path=Path("/tmp/final.txt"),
+            model="gpt-example",
+            reasoning_effort="high",
+        )
+
+        self.assertIn("gpt-example", command)
+        self.assertIn('model_reasoning_effort="high"', command)

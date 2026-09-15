@@ -92,7 +92,7 @@ def check_env(transport: str, zulip_engine: str) -> bool:
         "OPENTAG_BACKEND",
     ]
     if transport in {"slack", "both"}:
-        required.extend(["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN"])
+        required.extend(["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_ALLOWED_USER_IDS"])
     if transport in {"zulip", "both"}:
         required.append("ZULIP_CONFIG_FILE")
         if zulip_engine == "zulipmcp":
@@ -117,6 +117,10 @@ def check_env(transport: str, zulip_engine: str) -> bool:
                 else "set, unexpected prefix"
             )
             ok = value.startswith("xoxb-")
+        if name == "SLACK_ALLOWED_USER_IDS":
+            user_ids = [user_id.strip() for user_id in value.split(",") if user_id.strip()]
+            ok = bool(user_ids)
+            detail = f"{len(set(user_ids))} user(s)" if ok else "missing"
         print_check(ok, name, detail)
         all_ok = all_ok and ok
 
@@ -329,6 +333,8 @@ def check_offline(root: Path) -> bool:
         "agent workspace": workspace.is_dir(),
         "MFS URL": env("MFS_URL").startswith(("http://", "https://")),
         "MFS allowed scopes": bool(scopes),
+        "Slack allowed users": transport not in {"slack", "both"}
+        or bool([value for value in env("SLACK_ALLOWED_USER_IDS").split(",") if value.strip()]),
         "Slack app manifest": (root / "slack-app-manifest.yaml").is_file(),
         "Tag command": (root / "tag").is_file() and os.access(root / "tag", os.X_OK),
         "installer": (root / "install.sh").is_file()
