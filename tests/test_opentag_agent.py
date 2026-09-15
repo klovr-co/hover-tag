@@ -83,3 +83,107 @@ class OpenTagAgentPromptTests(unittest.TestCase):
         self.assertEqual("done", output)
         self.assertIn("--approve-for-me", command)
         self.assertNotIn("--dangerously-bypass-approvals-and-sandbox", command)
+
+
+class BackendStreamEventTests(unittest.TestCase):
+    def test_codex_exposes_only_completed_agent_messages(self) -> None:
+        self.assertEqual(
+            ("final", "Ready"),
+            opentag_agent.parse_codex_stream_event(
+                {"type": "item.completed", "item": {"type": "agent_message", "text": "Ready"}}
+            ),
+        )
+        self.assertIsNone(
+            opentag_agent.parse_codex_stream_event(
+                {"type": "item.completed", "item": {"type": "command_execution", "command": "secret"}}
+            )
+        )
+        self.assertIsNone(
+            opentag_agent.parse_codex_stream_event(
+                {"type": "item.completed", "item": {"type": "reasoning", "text": "private"}}
+            )
+        )
+
+    def test_claude_exposes_text_deltas_but_not_thinking_or_subagent_text(self) -> None:
+        self.assertEqual(
+            ("delta", "Hello"),
+            opentag_agent.parse_claude_stream_event(
+                {
+                    "type": "stream_event",
+                    "parent_tool_use_id": None,
+                    "event": {
+                        "type": "content_block_delta",
+                        "delta": {"type": "text_delta", "text": "Hello"},
+                    },
+                }
+            ),
+        )
+        self.assertIsNone(
+            opentag_agent.parse_claude_stream_event(
+                {
+                    "type": "stream_event",
+                    "parent_tool_use_id": None,
+                    "event": {
+                        "type": "content_block_delta",
+                        "delta": {"type": "thinking_delta", "thinking": "private"},
+                    },
+                }
+            )
+        )
+        self.assertIsNone(
+            opentag_agent.parse_claude_stream_event(
+                {
+                    "type": "stream_event",
+                    "parent_tool_use_id": "tool-123",
+                    "event": {
+                        "type": "content_block_delta",
+                        "delta": {"type": "text_delta", "text": "subagent output"},
+                    },
+                }
+            )
+        )
+
+    def test_claude_success_result_is_authoritative_final_text(self) -> None:
+        self.assertEqual(
+            ("final", "Complete answer"),
+            opentag_agent.parse_claude_stream_event(
+                {"type": "result", "is_error": False, "result": "Complete answer"}
+            ),
+        )
+
+    def test_stream_commands_enable_each_backends_json_mode(self) -> None:
+        codex = opentag_agent.codex_stream_command(
+            "prompt",
+            skill_dir=Path("/skill"),
+            workdir=Path("/work"),
+            memory_root=Path("/memory"),
+            attachments_dir=None,
+            output_path=Path("/tmp/final.txt"),
+        )
+        claude = opentag_agent.claude_stream_command(
+            skill_dir=Path("/skill"),
+            workdir=Path("/work"),
+            memory_root=Path("/memory"),
+            attachments_dir=None,
+        )
+
+        self.assertIn("--json", codex)
+        self.assertIn("--output-last-message", codex)
+        self.assertIn("stream-json", claude)
+        self.assertIn("--include-partial-messages", claude)
+        self.assertNotIn("prompt", claude)
+
+    def test_codex_stream_command_applies_model_and_reasoning_overrides(self) -> None:
+        command = opentag_agent.codex_stream_command(
+            "prompt",
+            skill_dir=Path("/skill"),
+            workdir=Path("/work"),
+            memory_root=Path("/memory"),
+            attachments_dir=None,
+            output_path=Path("/tmp/final.txt"),
+            model="gpt-example",
+            reasoning_effort="high",
+        )
+
+        self.assertIn("gpt-example", command)
+        self.assertIn('model_reasoning_effort="high"', command)

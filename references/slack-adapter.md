@@ -7,9 +7,11 @@ scratch. The bridge is intentionally thin. It only:
 
 1. Receives `app_mention` events through Socket Mode.
 2. Reads the current thread through Slack Web API.
-3. Posts one temporary working reply.
+3. Starts Slack's native working indicator, falling back to a temporary reply
+   when that API is unavailable.
 4. Runs `scripts/opentag_agent.py` with the selected CLI backend.
-5. Replaces the working reply with the agent's final answer.
+5. Optionally streams normalized answer deltas, or posts the final answer when
+   the selected backend provides only a completed response.
 
 The adapter does not answer questions itself. It passes the thread, channel id,
 and allowed MFS scopes to a fresh CLI agent.
@@ -44,10 +46,11 @@ Open Tag only consumes already-indexed scopes:
    `SLACK_BOT_TOKEN` (`xoxb-...`).
 5. Subscribe the app to `app_mention` bot events.
 6. Invite the bot to the sandbox channel.
-7. Configure MFS sources for Memory and set `MFS_ALLOWED_SCOPES`.
-8. Choose a Brain backend with `OPENTAG_BACKEND`.
-9. Run `scripts/opentag_doctor.py --channel-id <channel-id>`.
-10. Start the Socket Mode bridge and mention the bot in Slack.
+7. Copy the owner's Slack member ID and set it as `SLACK_ALLOWED_USER_IDS`.
+8. Configure MFS sources for Memory and set `MFS_ALLOWED_SCOPES`.
+9. Choose a Brain backend with `OPENTAG_BACKEND`.
+10. Run `scripts/opentag_doctor.py --channel-id <channel-id>`.
+11. Start the Socket Mode bridge and mention the bot in Slack.
 
 If the workspace blocks app creation or install approval, the user must ask a
 Slack workspace admin to approve the app. The skill can guide the setup and
@@ -146,7 +149,15 @@ export MFS_ALLOWED_SCOPES="slack://team-memory,github://owner/repo,file://local/
 export OPENTAG_BACKEND="<backend>"   # claude | codex
 export OPENTAG_WORKDIR="/path/to/workspace"
 export SLACK_CHANNEL_ID="<channel-id>"
+export SLACK_ALLOWED_USER_IDS="<owner-member-id>"
 ```
+
+`SLACK_ALLOWED_USER_IDS` is required and fails closed when empty. In Slack, open
+your profile, choose **More**, then **Copy member ID**. Setup writes that one ID
+as the owner-only default; append comma-separated member IDs only when the owner
+intentionally shares access. Unauthorized mentions receive a denial without
+reading the thread or invoking the backend. Existing installations must add this
+setting before restarting Tag.
 
 The bridge does not need a model API key. The selected CLI backend handles model
 auth and tool execution.
@@ -157,7 +168,25 @@ Optional:
 export OPENTAG_MEMORY_ROOT="$HOME/.mfs/opentag-memory"
 export OPENTAG_TIMEOUT_SECONDS=420
 export OPENTAG_BACKEND_ATTEMPTS=3   # codex backend: retries on capacity/rate-limit
+export OPENTAG_SLACK_STREAMING=0    # optional: disable default Slack response streaming
+export OPENTAG_CODEX_MODELS=""      # optional comma-separated model allowlist
+export OPENTAG_CODEX_REASONING_EFFORTS="low,medium,high,xhigh,max,ultra"
 ```
+
+The native Slack loading indicator and response streaming are enabled by
+default. Claude provides live answer deltas. The current Codex CLI JSONL
+interface emits the completed assistant message rather than token deltas, so
+Codex keeps the native loading indicator visible until it can post the complete
+response. Tag does not simulate streaming or forward reasoning, tool output, or
+raw backend diagnostics.
+
+For the Codex backend, completed replies include a **Change model & thinking**
+button. It opens a thread-scoped settings modal; saved choices apply to the next
+mention in that thread and survive bridge restarts in `.runtime/`. By default,
+Tag reads visible models and their supported reasoning levels from Codex's local
+model cache. Set `OPENTAG_CODEX_MODELS` to restrict what Slack users can select.
+Reinstall the Slack app from `slack-app-manifest.yaml` when upgrading an existing
+installation so interactive components are enabled.
 
 ### Optional local tools, including Google Workspace CLI
 
@@ -188,6 +217,7 @@ python scripts/opentag_doctor.py --channel-id "$SLACK_CHANNEL_ID"
 The doctor checks:
 
 - required environment variables are present;
+- at least one allowed Slack caller is configured;
 - Slack bot token authenticates;
 - the bot can see the target channel and read its history;
 - MFS is reachable and each allowed scope can be listed;

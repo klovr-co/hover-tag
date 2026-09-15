@@ -30,6 +30,11 @@ claude -p \
 
 Availability depends on the operator's account and local CLI setup.
 
+Unless `OPENTAG_SLACK_STREAMING=0`, the Slack bridge invokes Claude with
+`--output-format stream-json --include-partial-messages`. Open Tag forwards only
+top-level text deltas and the final result through its normalized event stream;
+thinking blocks, tool events, hook output, and subagent text are not forwarded.
+
 ## Built-In Backend: Codex Exec
 
 Use this backend when the operator has a working `codex` CLI session and wants
@@ -65,9 +70,16 @@ Slack agent demo, not a locked-down production deployment.
 No `OPENAI_API_KEY` is required by this skill path. The backend uses the local
 Codex CLI session and inherits the environment needed for MFS.
 
+When Slack streaming is enabled, Open Tag invokes `codex exec --json` and reads
+the completed `agent_message` event. The current CLI does not expose answer
+token deltas, so Open Tag shows Slack's native loading indicator and posts the
+complete response without a fake typewriter animation.
+
 ## Backend Selection
 
 - Use the backend that is already authenticated and approved for the operator's
   workspace.
 - Keep the Slack bridge thin: backend-specific behavior belongs in
   `opentag_agent.py`, not in Slack event handling.
+- Keep the normalized event contract limited to `status`, `delta`, `final`, and
+  `error`; chat transports must never parse backend-native event payloads.

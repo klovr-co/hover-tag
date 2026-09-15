@@ -3,13 +3,9 @@
 from __future__ import annotations
 
 import argparse
-import base64
-import configparser
 import json
 import os
 import shutil
-import subprocess
-import sys
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -68,35 +64,13 @@ def slack_api(
     return ok and bool(data.get("ok")), data
 
 
-def selected_transport() -> str:
-    transport = env("OPENTAG_TRANSPORT") or "slack"
-    if transport in {"slack", "zulip", "both"}:
-        return transport
-    print_check(False, "OPENTAG_TRANSPORT", "must be slack, zulip, or both")
-    return ""
-
-
-def selected_zulip_engine(transport: str) -> str:
-    if transport not in {"zulip", "both"}:
-        return "native"
-    engine = env("OPENTAG_ZULIP_ENGINE") or "native"
-    ok = engine in {"native", "zulipmcp"}
-    print_check(ok, "OPENTAG_ZULIP_ENGINE", engine if ok else "must be native or zulipmcp")
-    return engine if ok else ""
-
-
-def check_env(transport: str, zulip_engine: str) -> bool:
+def check_env() -> bool:
     required = [
         "MFS_URL",
         "MFS_ALLOWED_SCOPES",
         "OPENTAG_BACKEND",
     ]
-    if transport in {"slack", "both"}:
-        required.extend(["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN"])
-    if transport in {"zulip", "both"}:
-        required.append("ZULIP_CONFIG_FILE")
-        if zulip_engine == "zulipmcp":
-            required.append("OPENTAG_WORKDIR")
+    required.extend(["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_ALLOWED_USER_IDS"])
     all_ok = True
     for name in required:
         value = env(name)
@@ -117,6 +91,10 @@ def check_env(transport: str, zulip_engine: str) -> bool:
                 else "set, unexpected prefix"
             )
             ok = value.startswith("xoxb-")
+        if name == "SLACK_ALLOWED_USER_IDS":
+            user_ids = [user_id.strip() for user_id in value.split(",") if user_id.strip()]
+            ok = bool(user_ids)
+            detail = f"{len(set(user_ids))} user(s)" if ok else "missing"
         print_check(ok, name, detail)
         all_ok = all_ok and ok
 
@@ -187,114 +165,6 @@ def check_slack(channel_id: str | None) -> bool:
     return all_ok
 
 
-def read_zuliprc(path_value: str) -> tuple[bool, dict[str, str], str]:
-    path = Path(path_value).expanduser()
-    if not path.is_file():
-        return False, {}, f"file not found: {path}"
-
-    parser = configparser.ConfigParser()
-    try:
-        parser.read(path)
-        config = parser["api"]
-    except (configparser.Error, KeyError) as exc:
-        return False, {}, f"invalid zuliprc: {exc}"
-
-    values = {name: config.get(name, "").strip() for name in ("site", "email", "key")}
-    missing = [name for name, value in values.items() if not value]
-    if missing:
-        return False, {}, f"missing {', '.join(missing)} in [api]"
-    return True, values, "loaded"
-
-
-def check_zulip_config(path_value: str, label: str) -> bool:
-    ok, values, detail = read_zuliprc(path_value)
-    print_check(ok, f"{label} config", detail)
-    if not ok:
-        return False
-
-    credentials = f"{values['email']}:{values['key']}".encode()
-    authorization = base64.b64encode(credentials).decode()
-    url = f"{values['site'].rstrip('/')}/api/v1/users/me"
-    ok, data = request_json(url, headers={"Authorization": f"Basic {authorization}"})
-    identity = data.get("full_name") or data.get("email") or data.get("msg") or data.get("error")
-    print_check(ok and data.get("result") == "success", f"{label} auth", str(identity))
-    return ok and data.get("result") == "success"
-
-
-def check_zulipmcp_runtime() -> bool:
-    runtime = Path(__file__).with_name("zulip_runtime.py")
-    result = subprocess.run(
-        [sys.executable, str(runtime), "--print-command"],
-        check=False,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        timeout=30,
-    )
-    command_ok = result.returncode == 0
-    detail = "launch policy validated" if command_ok else result.stdout.strip()[-500:]
-    print_check(command_ok, "ZulipMCP OpenTag runtime", detail)
-    if not command_ok:
-        return False
-
-    from zulip_runtime import ZULIPMCP_PACKAGE
-
-    uv_path = shutil.which("uv")
-    if not uv_path:
-        print_check(False, "ZulipMCP dependency", "uv executable missing")
-        return False
-    result = subprocess.run(
-        [
-            uv_path,
-            "run",
-            "--with",
-            ZULIPMCP_PACKAGE,
-            "python3",
-            "-c",
-            "import zulipmcp; print('imported')",
-        ],
-        check=False,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        timeout=180,
-    )
-    dependency_ok = result.returncode == 0 and "imported" in result.stdout
-    print_check(
-        dependency_ok,
-        "ZulipMCP pinned dependency",
-        "imported" if dependency_ok else result.stdout.strip()[-500:],
-    )
-
-    private_streams = env("BOT_ALLOWED_PRIVATE_STREAMS")
-    print_check(
-        True,
-        "ZulipMCP private-stream policy",
-        "explicit allowlist set" if private_streams else "public streams only",
-    )
-    return dependency_ok
-
-
-def check_zulip(zulip_engine: str) -> bool:
-    all_ok = check_zulip_config(env("ZULIP_CONFIG_FILE"), "Zulip bot")
-    auto_grant = env("ZULIP_AUTO_GRANT_PRIVATE_HISTORY").lower() == "true"
-    if zulip_engine == "zulipmcp":
-        auto_grant_ok = not auto_grant
-        print_check(
-            auto_grant_ok,
-            "ZULIP_AUTO_GRANT_PRIVATE_HISTORY",
-            "disabled" if auto_grant_ok else "must be false with zulipmcp",
-        )
-        return check_zulipmcp_runtime() and auto_grant_ok and all_ok
-    if auto_grant:
-        admin_path = env("ZULIP_ADMIN_CONFIG_FILE")
-        if not admin_path:
-            print_check(False, "ZULIP_ADMIN_CONFIG_FILE", "required when auto-grant is enabled")
-            return False
-        all_ok = check_zulip_config(admin_path, "Zulip admin") and all_ok
-    return all_ok
-
-
 def check_backend() -> bool:
     backend = env("OPENTAG_BACKEND")
     if backend == "claude":
@@ -319,16 +189,18 @@ def check_backend() -> bool:
 
 def check_offline(root: Path) -> bool:
     """Validate a launch configuration without credentials or network access."""
-    transport = selected_transport()
     backend = env("OPENTAG_BACKEND")
     workspace = Path(env("OPENTAG_WORKDIR")).expanduser()
     scopes = [scope.strip() for scope in env("MFS_ALLOWED_SCOPES").split(",") if scope.strip()]
     checks = {
-        "supported transport": transport in {"slack", "zulip", "both"},
+        "supported transport": (env("OPENTAG_TRANSPORT") or "slack") == "slack",
         "supported backend": backend in {"codex", "claude"},
         "agent workspace": workspace.is_dir(),
         "MFS URL": env("MFS_URL").startswith(("http://", "https://")),
         "MFS allowed scopes": bool(scopes),
+        "Slack allowed users": bool(
+            [value for value in env("SLACK_ALLOWED_USER_IDS").split(",") if value.strip()]
+        ),
         "Slack app manifest": (root / "slack-app-manifest.yaml").is_file(),
         "Tag command": (root / "tag").is_file() and os.access(root / "tag", os.X_OK),
         "installer": (root / "install.sh").is_file()
@@ -365,22 +237,16 @@ def main() -> int:
     if args.offline:
         return 0 if check_offline(Path(__file__).resolve().parents[1]) else 1
 
-    transport = selected_transport()
-    if not transport:
-        return 1
-    zulip_engine = selected_zulip_engine(transport)
-    if transport in {"zulip", "both"} and not zulip_engine:
+    if (env("OPENTAG_TRANSPORT") or "slack") != "slack":
+        print_check(False, "OPENTAG_TRANSPORT", "must be slack")
         return 1
     scopes = [scope.strip() for scope in env("MFS_ALLOWED_SCOPES").split(",") if scope.strip()]
     checks = [
-        check_env(transport, zulip_engine),
+        check_env(),
         check_mfs(scopes) if scopes else False,
         check_backend(),
     ]
-    if transport in {"slack", "both"}:
-        checks.append(check_slack(args.channel_id))
-    if transport in {"zulip", "both"}:
-        checks.append(check_zulip(zulip_engine))
+    checks.append(check_slack(args.channel_id))
     return 0 if all(checks) else 1
 
 

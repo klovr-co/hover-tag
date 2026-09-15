@@ -37,4 +37,5 @@ jobs:
             OPENTAG_WORKDIR="$PWD" \
             MFS_URL=http://127.0.0.1:13619 \
             MFS_ALLOWED_SCOPES="file://local$PWD" \
+            SLACK_ALLOWED_USER_IDS=UOWNER \
             ./tag doctor --offline

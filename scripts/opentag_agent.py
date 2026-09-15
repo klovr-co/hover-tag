@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 
 def default_skill_dir() -> Path:
@@ -38,10 +42,7 @@ def build_prompt(
     attachments_dir: Path | None,
     allowed_scopes: str,
 ) -> str:
-    transport = os.getenv("OPENTAG_TRANSPORT", "slack")
-    canvas_instructions = ""
-    if transport == "slack":
-        canvas_instructions = f"""
+    canvas_instructions = f"""
 Canvas capability:
 - When the user asks to create a Canvas in this Slack channel, you may create
   a Markdown file in the workspace and call `{skill_dir / "scripts" / "slack_canvas.py"}`
@@ -62,7 +63,7 @@ Channel-post capability:
   the post succeeded.
 """
     return f"""
-You are being invoked by an Open Tag {transport} bridge.
+You are being invoked by the Open Tag Slack bridge.
 
 First read and follow the runtime instructions at:
 {skill_dir / "references" / "runtime-agent.md"}
@@ -121,6 +122,8 @@ def run_codex_once(
     memory_root: Path,
     attachments_dir: Path | None,
     timeout: int,
+    model: str | None = None,
+    reasoning_effort: str | None = None,
 ) -> tuple[int, str]:
     memory_root.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("r", suffix=".txt", encoding="utf-8", delete=False) as f:
@@ -142,6 +145,10 @@ def run_codex_once(
         str(output_path),
         prompt,
     ]
+    if model:
+        cmd[2:2] = ["--model", model]
+    if reasoning_effort:
+        cmd[2:2] = ["--config", f'model_reasoning_effort="{reasoning_effort}"']
     if attachments_dir:
         cmd[cmd.index("--skip-git-repo-check"):cmd.index("--skip-git-repo-check")] = [
             "--add-dir",
@@ -171,6 +178,260 @@ def retryable_backend_failure(output: str) -> bool:
     return "selected model is at capacity" in lowered or "rate limit" in lowered
 
 
+def emit_event(event_type: str, text: str = "") -> None:
+    """Write one backend-neutral event for a parent transport to consume."""
+    print(json.dumps({"type": event_type, "text": text}), flush=True)
+
+
+def parse_codex_stream_event(payload: dict[str, Any]) -> tuple[str, str] | None:
+    """Return only user-facing Codex events; tool and diagnostic items stay private."""
+    if payload.get("type") != "item.completed":
+        return None
+    item = payload.get("item")
+    if not isinstance(item, dict) or item.get("type") != "agent_message":
+        return None
+    text = item.get("text")
+    return ("final", text) if isinstance(text, str) and text else None
+
+
+def parse_claude_stream_event(payload: dict[str, Any]) -> tuple[str, str] | None:
+    """Normalize Claude text deltas and its authoritative final result."""
+    if payload.get("type") == "stream_event" and payload.get("parent_tool_use_id") is None:
+        event = payload.get("event")
+        if isinstance(event, dict) and event.get("type") == "content_block_delta":
+            delta = event.get("delta")
+            if isinstance(delta, dict) and delta.get("type") == "text_delta":
+                text = delta.get("text")
+                return ("delta", text) if isinstance(text, str) and text else None
+    if payload.get("type") == "result" and not payload.get("is_error"):
+        text = payload.get("result")
+        return ("final", text) if isinstance(text, str) and text else None
+    return None
+
+
+def backend_diagnostic(payload: dict[str, Any]) -> str:
+    """Extract a useful error string without forwarding raw event objects."""
+    if payload.get("type") == "item.completed":
+        item = payload.get("item")
+        if isinstance(item, dict) and item.get("type") == "error":
+            message = item.get("message")
+            return message if isinstance(message, str) else ""
+    if payload.get("type") == "result" and payload.get("is_error"):
+        message = payload.get("result") or payload.get("subtype")
+        return message if isinstance(message, str) else ""
+    return ""
+
+
+def stream_command(
+    cmd: list[str],
+    *,
+    parser: Callable[[dict[str, Any]], tuple[str, str] | None],
+    timeout: int,
+    input_text: str | None = None,
+) -> tuple[int, str, bool, bool]:
+    """Run a JSONL backend, emitting normalized events as lines arrive."""
+    process = subprocess.Popen(
+        cmd,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        stdin=subprocess.PIPE if input_text is not None else None,
+        bufsize=1,
+    )
+    if input_text is not None:
+        assert process.stdin is not None
+        process.stdin.write(input_text)
+        process.stdin.close()
+    timed_out = threading.Event()
+
+    def stop_process() -> None:
+        timed_out.set()
+        process.kill()
+
+    timer = threading.Timer(timeout, stop_process)
+    timer.start()
+    diagnostics: list[str] = []
+    emitted_final = False
+    try:
+        assert process.stdout is not None
+        for raw_line in process.stdout:
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                diagnostics.append(line)
+                continue
+            if not isinstance(payload, dict):
+                continue
+            diagnostic = backend_diagnostic(payload)
+            if diagnostic:
+                diagnostics.append(diagnostic)
+            event = parser(payload)
+            if event is None:
+                continue
+            event_type, text = event
+            emit_event(event_type, text)
+            emitted_final = emitted_final or event_type == "final"
+        return_code = process.wait()
+    finally:
+        timer.cancel()
+    output = "\n".join(diagnostics)[-4000:].strip()
+    return return_code, output, emitted_final, timed_out.is_set()
+
+
+def codex_stream_command(
+    prompt: str,
+    *,
+    skill_dir: Path,
+    workdir: Path,
+    memory_root: Path,
+    attachments_dir: Path | None,
+    output_path: Path,
+    model: str | None = None,
+    reasoning_effort: str | None = None,
+) -> list[str]:
+    cmd = [
+        "codex",
+        "exec",
+        "--approve-for-me",
+        "--json",
+        "-c",
+        "shell_environment_policy.inherit=all",
+        "-C",
+        str(workdir),
+        "--add-dir",
+        str(skill_dir),
+        "--add-dir",
+        str(memory_root),
+        "--skip-git-repo-check",
+        "--output-last-message",
+        str(output_path),
+        prompt,
+    ]
+    if model:
+        cmd[2:2] = ["--model", model]
+    if reasoning_effort:
+        cmd[2:2] = ["--config", f'model_reasoning_effort="{reasoning_effort}"']
+    if attachments_dir:
+        index = cmd.index("--skip-git-repo-check")
+        cmd[index:index] = ["--add-dir", str(attachments_dir)]
+    return cmd
+
+
+def run_codex_events(
+    prompt: str,
+    *,
+    skill_dir: Path,
+    workdir: Path,
+    memory_root: Path,
+    attachments_dir: Path | None,
+    timeout: int,
+    model: str | None = None,
+    reasoning_effort: str | None = None,
+) -> int:
+    memory_root.mkdir(parents=True, exist_ok=True)
+    attempts = max(1, int(os.getenv("OPENTAG_BACKEND_ATTEMPTS", "3")))
+    last_code = 1
+    last_output = ""
+    for attempt in range(1, attempts + 1):
+        with tempfile.NamedTemporaryFile("r", suffix=".txt", encoding="utf-8", delete=False) as f:
+            output_path = Path(f.name)
+        try:
+            last_code, last_output, emitted_final, timed_out = stream_command(
+                codex_stream_command(
+                    prompt,
+                    skill_dir=skill_dir,
+                    workdir=workdir,
+                    memory_root=memory_root,
+                    attachments_dir=attachments_dir,
+                    output_path=output_path,
+                    model=model,
+                    reasoning_effort=reasoning_effort,
+                ),
+                parser=parse_codex_stream_event,
+                timeout=timeout,
+            )
+            if timed_out:
+                emit_event("error", f"Open Tag backend timed out after {timeout}s")
+                return 124
+            if last_code == 0:
+                if not emitted_final:
+                    final_text = read_text(output_path).strip()
+                    if final_text:
+                        emit_event("final", final_text)
+                return 0
+        finally:
+            output_path.unlink(missing_ok=True)
+        if not retryable_backend_failure(last_output) or attempt == attempts:
+            break
+        emit_event("status", "The backend is busy; retrying…")
+        time.sleep(min(2 * attempt, 8))
+    emit_event("error", f"Open Tag backend failed with exit code {last_code}:\n{last_output}")
+    return last_code
+
+
+def claude_stream_command(
+    *,
+    skill_dir: Path,
+    workdir: Path,
+    memory_root: Path,
+    attachments_dir: Path | None,
+) -> list[str]:
+    cmd = [
+        "claude",
+        "-p",
+        "--dangerously-skip-permissions",
+        "--verbose",
+        "--output-format",
+        "stream-json",
+        "--include-partial-messages",
+        "--add-dir",
+        str(workdir),
+        "--add-dir",
+        str(skill_dir),
+        "--add-dir",
+        str(memory_root),
+    ]
+    if attachments_dir:
+        cmd.extend(["--add-dir", str(attachments_dir)])
+    return cmd
+
+
+def run_claude_events(
+    prompt: str,
+    *,
+    skill_dir: Path,
+    workdir: Path,
+    memory_root: Path,
+    attachments_dir: Path | None,
+    timeout: int,
+) -> int:
+    memory_root.mkdir(parents=True, exist_ok=True)
+    code, output, emitted_final, timed_out = stream_command(
+        claude_stream_command(
+            skill_dir=skill_dir,
+            workdir=workdir,
+            memory_root=memory_root,
+            attachments_dir=attachments_dir,
+        ),
+        parser=parse_claude_stream_event,
+        timeout=timeout,
+        input_text=prompt,
+    )
+    if timed_out:
+        emit_event("error", f"Open Tag backend timed out after {timeout}s")
+        return 124
+    if code != 0:
+        emit_event("error", f"Open Tag backend failed with exit code {code}:\n{output}")
+        return code
+    if not emitted_final:
+        emit_event("error", "Open Tag finished without a final response.")
+        return 1
+    return 0
+
+
 def run_codex(
     prompt: str,
     *,
@@ -179,6 +440,8 @@ def run_codex(
     memory_root: Path,
     attachments_dir: Path | None,
     timeout: int,
+    model: str | None = None,
+    reasoning_effort: str | None = None,
 ) -> int:
     attempts = max(1, int(os.getenv("OPENTAG_BACKEND_ATTEMPTS", "3")))
     last_code = 1
@@ -191,6 +454,8 @@ def run_codex(
             memory_root=memory_root,
             attachments_dir=attachments_dir,
             timeout=timeout,
+            model=model,
+            reasoning_effort=reasoning_effort,
         )
         if last_code == 0:
             if last_output:
@@ -255,6 +520,17 @@ def main() -> int:
     parser.add_argument("--channel-id", required=True)
     parser.add_argument("--thread-file", type=Path, required=True)
     parser.add_argument("--attachments-dir", type=Path)
+    parser.add_argument("--model", help="backend model override for this run")
+    parser.add_argument(
+        "--reasoning-effort",
+        choices=("minimal", "low", "medium", "high", "xhigh", "max", "ultra"),
+        help="Codex reasoning-effort override for this run",
+    )
+    parser.add_argument(
+        "--event-stream",
+        action="store_true",
+        help="emit backend-neutral NDJSON events for a chat transport",
+    )
     parser.add_argument("--skill-dir", type=Path, default=default_skill_dir())
     parser.add_argument(
         "--workdir",
@@ -284,6 +560,26 @@ def main() -> int:
     )
 
     try:
+        if args.event_stream:
+            if args.backend == "codex":
+                return run_codex_events(
+                    prompt,
+                    skill_dir=args.skill_dir.resolve(),
+                    workdir=args.workdir.resolve(),
+                    memory_root=args.memory_root.expanduser().resolve(),
+                    attachments_dir=args.attachments_dir.resolve() if args.attachments_dir else None,
+                    timeout=args.timeout,
+                    model=args.model,
+                    reasoning_effort=args.reasoning_effort,
+                )
+            return run_claude_events(
+                prompt,
+                skill_dir=args.skill_dir.resolve(),
+                workdir=args.workdir.resolve(),
+                memory_root=args.memory_root.expanduser().resolve(),
+                attachments_dir=args.attachments_dir.resolve() if args.attachments_dir else None,
+                timeout=args.timeout,
+            )
         if args.backend == "codex":
             return run_codex(
                 prompt,
@@ -292,6 +588,8 @@ def main() -> int:
                 memory_root=args.memory_root.expanduser().resolve(),
                 attachments_dir=args.attachments_dir.resolve() if args.attachments_dir else None,
                 timeout=args.timeout,
+                model=args.model,
+                reasoning_effort=args.reasoning_effort,
             )
         return run_claude(
             prompt,

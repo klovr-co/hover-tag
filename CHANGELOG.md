@@ -11,15 +11,19 @@ All notable changes to Tag are documented here.
   portable `tag` setup/doctor/start/status/logs/stop command.
 - Slack thread context, text attachments, Markdown conversion, long reply
   chunking, explicit channel posting, and Canvas creation.
-- Optional Claude Code, native Zulip, and pinned ZulipMCP experimental paths.
+- Native Slack loading states with a temporary-message fallback, plus optional
+  real-time Claude answer streaming through a backend-neutral event protocol.
+- Optional Claude Code experimental backend.
 - Apache-2.0 licensing and upstream Open Tag Example attribution.
 - Cross-platform CI, clean-install smoke workflows, secret checks, and release
   metadata validation.
 
 ### Security
 
+- Slack invocations default to an owner-seeded user allowlist and fail closed
+  when no authorized member ID is configured.
 - Scoped MFS list/read/search helpers reject sibling-prefix and traversal paths.
-- Transport-specific process environments reduce credential crossover.
+- Bridge-only credentials are removed from backend process environments.
 - This alpha is explicitly limited to trusted sandbox use and is not a
   production security boundary.
 

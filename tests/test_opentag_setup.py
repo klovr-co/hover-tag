@@ -4,11 +4,16 @@ import stat
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from scripts.opentag_setup import render_env, runtime_requirement, write_config
+from scripts.opentag_setup import ask_required, render_env, runtime_requirement, write_config
 
 
 class OpenTagSetupTests(unittest.TestCase):
+    @patch("builtins.input", side_effect=["", "UOWNER"])
+    def test_required_owner_id_reprompts_until_set(self, _mock_input: object) -> None:
+        self.assertEqual("UOWNER", ask_required("Owner Slack member ID"))
+
     def test_runtime_dependencies_come_from_the_pinned_requirement_file(self) -> None:
         self.assertEqual(runtime_requirement("mfs-server"), "mfs-server==0.4.6")
 

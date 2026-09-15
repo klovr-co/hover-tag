@@ -15,7 +15,7 @@ PATTERNS = {
     "API key": re.compile(rb"\bsk-[A-Za-z0-9]{20,}\b"),
     "private key": re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
 }
-FORBIDDEN_TRACKED = {".env", "opentag-slack-bridge.log", "opentag-zulip-bridge.log"}
+FORBIDDEN_TRACKED = {".env", "opentag-slack-bridge.log"}
 
 
 def tracked_files(root: Path) -> list[Path]:

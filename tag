@@ -21,9 +21,9 @@ usage() {
         "  setup    Install prerequisites and create private configuration" \
         "  version  Show the Tag release version" \
         "  doctor   Run configuration and connectivity checks" \
-        "  start    Start MFS, run preflight, and start configured bridges" \
+        "  start    Start MFS, run preflight, and start the Slack bridge" \
         "  status   Show local service status" \
-        "  stop     Stop bridges and the local MFS server" \
+        "  stop     Stop the Slack bridge and local MFS server" \
         "  logs     Show the latest bridge logs"
 }
 
@@ -97,15 +97,6 @@ start_slack() {
     printf '%s\n' "$!" >"$RUNTIME_DIR/slack.pid"
 }
 
-start_zulip() {
-    if pid_is_running "$RUNTIME_DIR/zulip.pid"; then
-        return 0
-    fi
-    nohup python3 "$ROOT/scripts/zulip_runtime.py" --backend "$OPENTAG_BACKEND" \
-        >"$ROOT/opentag-zulip-bridge.log" 2>&1 &
-    printf '%s\n' "$!" >"$RUNTIME_DIR/zulip.pid"
-}
-
 stop_pid() {
     pid_file=$1
     if pid_is_running "$pid_file"; then
@@ -138,13 +129,7 @@ case "$command" in
         chmod 0700 "$RUNTIME_DIR"
         start_mfs
         run_doctor
-        transport=${OPENTAG_TRANSPORT:-slack}
-        case "$transport" in
-            slack) start_slack ;;
-            zulip) start_zulip ;;
-            both) start_slack; start_zulip ;;
-            *) printf 'OPENTAG_TRANSPORT must be slack, zulip, or both.\n' >&2; exit 1 ;;
-        esac
+        start_slack
         sleep 2
         "$0" status
         ;;
@@ -158,12 +143,10 @@ case "$command" in
             printf '✗ MFS: stopped or unhealthy\n'
         fi
         service_status "Slack bridge" "$RUNTIME_DIR/slack.pid"
-        service_status "Zulip bridge" "$RUNTIME_DIR/zulip.pid"
         ;;
     stop)
         mkdir -p "$RUNTIME_DIR"
         stop_pid "$RUNTIME_DIR/slack.pid"
-        stop_pid "$RUNTIME_DIR/zulip.pid"
         stop_pid "$RUNTIME_DIR/mfs.pid"
         if command -v mfs >/dev/null 2>&1; then
             mfs serve stop >/dev/null 2>&1 || true
@@ -172,7 +155,7 @@ case "$command" in
         ;;
     logs)
         found=0
-        for log in "$ROOT/mfs-server.log" "$ROOT/opentag-slack-bridge.log" "$ROOT/opentag-zulip-bridge.log"; do
+        for log in "$ROOT/mfs-server.log" "$ROOT/opentag-slack-bridge.log"; do
             if [ -f "$log" ]; then
                 found=1
                 printf '\n==> %s <==\n' "$(basename "$log")"
