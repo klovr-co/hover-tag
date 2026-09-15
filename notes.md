@@ -28,7 +28,7 @@ workspace on a non-production machine.
 - Test the documented installation command from a clean machine or isolated
   environment.
 - Publish a support statement describing the tested Python, macOS/Linux, Codex,
-  Claude, Slack, Zulip, and MFS versions.
+  Claude, Slack, and MFS versions.
 
 ## End-to-end smoke-test plan
 
@@ -54,10 +54,7 @@ their results recorded:
     traversal, and verify that each is rejected.
 11. Trigger a backend failure and timeout and verify that the user receives a
     useful error without credentials or sensitive output being exposed.
-12. Repeat the applicable flow for Zulip native and the pinned ZulipMCP engine,
-    or explicitly mark either engine experimental and outside the initial launch
-    support promise.
-13. Stop and restart Open Tag, then confirm it reconnects and can complete
+12. Stop and restart Open Tag, then confirm it reconnects and can complete
     another request.
 
 Record the environment, commands, expected results, actual results, screenshots,
@@ -84,7 +81,7 @@ pass automatic preflight → start the bot → send a test mention
 ### Options to evaluate
 
 1. **One-command local installer:** install dependencies, create private
-   configuration, guide Slack/Zulip authorization, configure an initial MFS
+   configuration, guide Slack authorization, configure an initial MFS
    source, run preflight, and start the bot.
 2. **Desktop one-click setup:** turn the existing setup and control commands into
    a coherent wizard with progress, actionable errors, and a final test button.
@@ -98,7 +95,7 @@ pass automatic preflight → start the bot → send a test mention
 ### Documentation requirements
 
 - Put a five-minute quick start at the top of the README.
-- Separate Slack-only, Zulip-only, and advanced dual-transport paths.
+- Keep the initial setup focused on the supported Slack path.
 - State exactly which administrator actions cannot be automated.
 - Include copyable Slack app configuration or an app manifest where possible.
 - Explain each required credential without ever asking users to paste it into an

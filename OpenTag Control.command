@@ -13,7 +13,6 @@ fi
 ENV_FILE="${OPENTAG_ENV_FILE:-$SKILL_DIR/.env}"
 MFS_LOG="$SKILL_DIR/mfs-server.log"
 SLACK_BRIDGE_LOG="$SKILL_DIR/opentag-slack-bridge.log"
-ZULIP_BRIDGE_LOG="$SKILL_DIR/opentag-zulip-bridge.log"
 
 is_mfs_running() {
   pgrep -f "mfs-server run" >/dev/null 2>&1
@@ -21,18 +20,6 @@ is_mfs_running() {
 
 is_slack_running() {
   pgrep -f "$SKILL_DIR/scripts/slack_socket_agent.py --backend" >/dev/null 2>&1
-}
-
-is_native_zulip_running() {
-  pgrep -f "$SKILL_DIR/scripts/zulip_agent.py --backend" >/dev/null 2>&1
-}
-
-is_zulipmcp_running() {
-  pgrep -f "$SKILL_DIR/scripts/zulipmcp_entrypoint.py --zuliprc" >/dev/null 2>&1
-}
-
-is_zulip_running() {
-  is_native_zulip_running || is_zulipmcp_running
 }
 
 show_status() {
@@ -46,13 +33,6 @@ show_status() {
     echo "✓ Open Tag Slack bridge: running"
   else
     echo "✗ Open Tag Slack bridge: stopped"
-  fi
-  if is_zulipmcp_running; then
-    echo "✓ Open Tag Zulip bridge: running (zulipmcp)"
-  elif is_native_zulip_running; then
-    echo "✓ Open Tag Zulip bridge: running (native)"
-  else
-    echo "✗ Open Tag Zulip bridge: stopped"
   fi
   echo
 }
@@ -76,41 +56,19 @@ start_opentag() {
     nohup mfs-server run >"$MFS_LOG" 2>&1 &
   fi
 
-  local transport="${OPENTAG_TRANSPORT:-slack}"
   local allowed_slack_users="${SLACK_ALLOWED_USER_IDS:-}"
-  if [[ "$transport" != "slack" && "$transport" != "zulip" && "$transport" != "both" ]]; then
-    echo "OPENTAG_TRANSPORT must be slack, zulip, or both."
-    return 1
-  fi
-
-  if [[ "$transport" == "slack" || "$transport" == "both" ]]; then
-    if is_slack_running; then
-      echo "Open Tag Slack bridge is already running."
-    elif [[ -z "${SLACK_APP_TOKEN:-}" || -z "${SLACK_BOT_TOKEN:-}" ]]; then
-      echo "Slack bridge not started: set SLACK_APP_TOKEN and SLACK_BOT_TOKEN in $ENV_FILE."
-    elif [[ -z "${allowed_slack_users//[[:space:],]/}" ]]; then
-      echo "Slack bridge not started: set SLACK_ALLOWED_USER_IDS to the owner's Slack member ID in $ENV_FILE."
-    else
-      echo "Starting Open Tag Slack bridge…"
-      (
-        exec uv run --with "$SLACK_BOLT_SPEC" python3 "$SKILL_DIR/scripts/slack_socket_agent.py" \
-          --backend "${OPENTAG_BACKEND:?OPENTAG_BACKEND is required}"
-      ) >"$SLACK_BRIDGE_LOG" 2>&1 &
-    fi
-  fi
-
-  if [[ "$transport" == "zulip" || "$transport" == "both" ]]; then
-    if is_zulip_running; then
-      echo "Open Tag Zulip bridge is already running."
-    elif [[ -z "${ZULIP_CONFIG_FILE:-}" ]]; then
-      echo "Zulip bridge not started: set ZULIP_CONFIG_FILE in $ENV_FILE."
-    else
-      echo "Starting Open Tag Zulip bridge…"
-      (
-        exec python3 "$SKILL_DIR/scripts/zulip_runtime.py" \
-          --backend "${OPENTAG_BACKEND:?OPENTAG_BACKEND is required}"
-      ) >"$ZULIP_BRIDGE_LOG" 2>&1 &
-    fi
+  if is_slack_running; then
+    echo "Open Tag Slack bridge is already running."
+  elif [[ -z "${SLACK_APP_TOKEN:-}" || -z "${SLACK_BOT_TOKEN:-}" ]]; then
+    echo "Slack bridge not started: set SLACK_APP_TOKEN and SLACK_BOT_TOKEN in $ENV_FILE."
+  elif [[ -z "${allowed_slack_users//[[:space:],]/}" ]]; then
+    echo "Slack bridge not started: set SLACK_ALLOWED_USER_IDS to the owner's Slack member ID in $ENV_FILE."
+  else
+    echo "Starting Open Tag Slack bridge…"
+    (
+      exec uv run --with "$SLACK_BOLT_SPEC" python3 "$SKILL_DIR/scripts/slack_socket_agent.py" \
+        --backend "${OPENTAG_BACKEND:?OPENTAG_BACKEND is required}"
+    ) >"$SLACK_BRIDGE_LOG" 2>&1 &
   fi
 
   sleep 2
@@ -120,12 +78,6 @@ start_opentag() {
 stop_opentag() {
   if is_slack_running; then
     pkill -f "$SKILL_DIR/scripts/slack_socket_agent.py --backend"
-  fi
-  if is_native_zulip_running; then
-    pkill -f "$SKILL_DIR/scripts/zulip_agent.py --backend"
-  fi
-  if is_zulipmcp_running; then
-    pkill -f "$SKILL_DIR/scripts/zulipmcp_entrypoint.py --zuliprc"
   fi
   if is_mfs_running; then
     pkill -f "mfs-server run"

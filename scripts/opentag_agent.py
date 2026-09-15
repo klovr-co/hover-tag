@@ -42,10 +42,7 @@ def build_prompt(
     attachments_dir: Path | None,
     allowed_scopes: str,
 ) -> str:
-    transport = os.getenv("OPENTAG_TRANSPORT", "slack")
-    canvas_instructions = ""
-    if transport == "slack":
-        canvas_instructions = f"""
+    canvas_instructions = f"""
 Canvas capability:
 - When the user asks to create a Canvas in this Slack channel, you may create
   a Markdown file in the workspace and call `{skill_dir / "scripts" / "slack_canvas.py"}`
@@ -66,7 +63,7 @@ Channel-post capability:
   the post succeeded.
 """
     return f"""
-You are being invoked by an Open Tag {transport} bridge.
+You are being invoked by the Open Tag Slack bridge.
 
 First read and follow the runtime instructions at:
 {skill_dir / "references" / "runtime-agent.md"}

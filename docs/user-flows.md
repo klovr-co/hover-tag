@@ -11,7 +11,7 @@ bridge.
 ## Product at a glance
 
 OpenTag brings a locally authenticated Codex or Claude Code agent into a shared
-Slack or Zulip conversation. The chat transport supplies the request and a
+Slack conversation. Slack supplies the request and a
 bounded slice of the conversation, the CLI backend performs the work, and MFS
 supplies retrieval from sources approved by the operator. A working deployment
 requires MFS and at least one allowed source, although any individual task may
@@ -19,13 +19,13 @@ finish without performing retrieval.
 
 ```mermaid
 flowchart TD
-    Ask["1 · Ask<br/>Mention OpenTag in Slack or Zulip"]
+    Ask["1 · Ask<br/>Mention OpenTag in Slack"]
     Gate{"2 · Check access<br/>Is this person and location allowed?"}
     Stop["Stop here<br/>Deny or ignore the request"]
-    Context["3 · Read the conversation<br/>Thread or topic, plus attachments"]
+    Context["3 · Read the conversation<br/>Thread plus attachments"]
     Brain["4 · Do the work<br/>Codex or Claude Code"]
     Extra["Only when needed<br/>MFS memory, workspace, and local tools"]
-    Reply["5 · Reply<br/>Return to the same thread or topic"]
+    Reply["5 · Reply<br/>Return to the same thread"]
 
     Ask --> Gate
     Gate -->|No| Stop
@@ -48,20 +48,10 @@ questions can go straight from the agent to the reply.
    to older material outside the thread.
 5. OpenTag posts the answer back in the same Slack thread.
 
-### Example: continue a Zulip topic
-
-1. A teammate mentions OpenTag in an allowed stream and topic.
-2. OpenTag applies the configured stream and topic rules.
-3. The agent receives that topic's context and works on the request.
-4. With ZulipMCP, the topic session can listen for a follow-up until its idle
-   timeout. The native adapter starts a fresh run for the next mention.
-5. The answer stays in the same topic.
-
 A few rules matter:
 
 - **Chat** is the shared interface, not the source of model authentication.
-- **Brain** is a fresh CLI run for each Slack mention unless the selected
-  transport/backend explicitly provides session continuity.
+- **Brain** is a fresh CLI run for each Slack mention.
 - **Memory** setup is required for deployment. At runtime it contains only
   sources already indexed by MFS and allowed by `MFS_ALLOWED_SCOPES`; retrieval
   is used only when a request needs it.
@@ -75,7 +65,7 @@ A few rules matter:
 | Workspace operator | Installs OpenTag, connects the chat app, chooses the backend and workspace, approves data scopes, and starts/stops the service. |
 | Authorized teammate | Mentions the bot, supplies thread context or attachments, requests work, and reviews the shared result. |
 | Unauthorized teammate | Receives a denial; their request does not read the thread or start the backend. |
-| Slack or Zulip | Delivers the conversation and displays progress and results. |
+| Slack | Delivers the conversation and displays progress and results. |
 | Codex or Claude Code | Reasons, retrieves context, uses permitted local tools, and performs workspace tasks. |
 | MFS | Searches and reads previously indexed, operator-approved sources. |
 
@@ -84,7 +74,7 @@ A few rules matter:
 ```mermaid
 flowchart LR
     A["1 · Install<br/>OpenTag + prerequisites"]
-    B["2 · Connect chat<br/>Slack, Zulip, or both"]
+    B["2 · Connect chat<br/>Install the Slack app"]
     C["3 · Choose the agent<br/>Codex or Claude"]
     D["4 · Set boundaries<br/>Workspace, users, locations, MFS"]
     E{"5 · Run doctor<br/>All checks pass?"}
@@ -109,7 +99,7 @@ with the smallest safe setup, test it, and add capabilities after that works.
    Claude Code CLI.
 2. The operator runs `./install.sh` or the guided setup launcher.
 3. Setup records:
-   - chat transport: `slack`, `zulip`, or `both`;
+   - chat transport: `slack`;
    - backend: `codex` or `claude`;
    - agent workspace;
    - bot display name;
@@ -118,17 +108,15 @@ with the smallest safe setup, test it, and add capabilities after that works.
 4. For Slack, the operator creates/installs the app from the manifest, enables
    Socket Mode, supplies the `xapp-` and `xoxb-` tokens, and records at least one
    owner member ID in `SLACK_ALLOWED_USER_IDS`.
-5. For Zulip, the operator supplies a Generic bot configuration and chooses the
-   native or ZulipMCP engine.
-6. The operator indexes at least one useful source in MFS and adds its exact root
+5. The operator indexes at least one useful source in MFS and adds its exact root
    to `MFS_ALLOWED_SCOPES`.
-7. `./tag doctor` verifies configuration, backend availability, MFS access, and
+6. `./tag doctor` verifies configuration, backend availability, MFS access, and
    chat access before the service starts.
-8. `./tag start` launches MFS and the configured chat bridge or bridges.
-9. `./tag status` and `./tag logs` provide the first operational check.
+7. `./tag start` launches MFS and the Slack bridge.
+8. `./tag status` and `./tag logs` provide the first operational check.
 
 You know setup worked when the running service announces the same bot name that
-Slack or Zulip resolves in a mention.
+Slack resolves in a mention.
 
 ## Flow 2: Delegate a task from Slack
 
@@ -238,7 +226,7 @@ Try this:
 3. It uses installed skills and commands when they match the task and are
    available to that backend process.
 4. It runs proportionate verification.
-5. It reports changed files and observed test/command results in Slack or Zulip.
+5. It reports changed files and observed test/command results in Slack.
 
 OpenTag does not add a hardened sandbox. The operator should use a trusted
 workspace for demos and an external sandbox for stronger production isolation.
@@ -308,27 +296,14 @@ access or maintain a second per-tool permission system.
 See [Included skills](skills.md) for the generated service, helper, persona, and
 recipe catalog.
 
-## Flow 9: Use Zulip
-
-The same backend and MFS memory can be exposed through either Zulip engine:
-
-| Engine | Conversation model | Best fit |
-|---|---|---|
-| Native | Fresh bounded run for every direct message or stream mention | Simple one-shot requests and operational parity with Slack. |
-| ZulipMCP | Persistent mention-activated session per stream/topic | Follow-up-heavy topic conversations within configured session limits. |
-
-The Zulip path applies stream/topic read and write policy, isolates Slack
-credentials, and returns concise Zulip-ready answers. ZulipMCP sessions listen
-for follow-ups until their configured idle timeout and then end cleanly.
-
-## Flow 10: Denials, failures, and recovery
+## Flow 9: Denials, failures, and recovery
 
 ```mermaid
 flowchart TD
     A[Mention arrives] --> B{Correct running bot?}
     B -->|no| C[No event reaches this worker]
-    B -->|yes| D{Allowed channel/stream?}
-    D -->|no| E[Slack logs and ignores; Zulip applies its stream/topic policy]
+    B -->|yes| D{Allowed channel?}
+    D -->|no| E[Slack logs and ignores the request]
     D -->|yes| F{Authorized caller?}
     F -->|no| G[Post denial; do not read thread or invoke backend]
     F -->|yes| H{Preflight and runtime healthy?}
@@ -343,10 +318,10 @@ Recommended recovery order:
 
 For a completely silent mention, debug event delivery first:
 
-1. Confirm the mentioned Slack/Zulip identity matches the running worker.
-2. Run `./tag status` and confirm the expected transport is running.
+1. Confirm the mentioned Slack identity matches the running worker.
+2. Run `./tag status` and confirm the Slack bridge is running.
 3. Confirm the bot is invited and has the required scopes/events.
-4. Confirm the channel/stream policy allows that location.
+4. Confirm the channel policy allows that location.
 5. Run `./tag logs` and look for a received, ignored, or rejected event.
 
 If the event arrives but the task fails, debug runtime dependencies next:
@@ -360,13 +335,13 @@ If the event arrives but the task fails, debug runtime dependencies next:
    mention event.
 5. Restart only after configuration changes that require a new process.
 
-## Flow 11: Operate, update, and remove OpenTag
+## Flow 10: Operate, update, and remove OpenTag
 
 | Operator intent | User flow |
 |---|---|
 | Check health | `./tag status` → `./tag doctor` → `./tag logs` when needed. |
-| Start | Preflight succeeds → MFS starts → selected bridge or bridges start. |
-| Stop | Slack/Zulip bridges stop → local MFS process stops. |
+| Start | Preflight succeeds → MFS starts → Slack bridge starts. |
+| Stop | Slack bridge stops → local MFS process stops. |
 | Change configuration | Stop → edit private `.env`/rerun guided setup → doctor → start → realistic mention test. |
 | Change Slack scopes/interactivity | Update manifest in Slack → reinstall app → refresh tokens if required → restart → mention test. |
 | Upgrade | Stop → pull the intended release → rerun installer → doctor → start → smoke test. Existing private `.env` is preserved. |
@@ -374,7 +349,7 @@ If the event arrives but the task fails, debug runtime dependencies next:
 
 ## A demo that covers the product
 
-Use this 12-step script for a product demo. Run it in a sandbox workspace and an
+Use this 11-step script for a product demo. Run it in a sandbox workspace and an
 isolated chat location. Skip an optional step when its dependency is not set up.
 
 1. Show `./tag status`, `./tag doctor`, and the startup summary. Confirm that the
@@ -401,8 +376,6 @@ isolated chat location. Skip an optional step when its dependency is not set up.
     such as meeting preparation or email-to-task.
 11. If a separate non-allowlisted test account is available, mention the bot and
     show that the backend is not invoked.
-12. If Zulip is configured, repeat a basic task in the native adapter. Then show
-    a topic follow-up with ZulipMCP if that engine is enabled.
 
 ## Capability coverage and current boundaries
 
@@ -426,8 +399,6 @@ isolated chat location. Skip an optional step when its dependency is not set up.
 | Slack direct messages | Not implemented by the current manifest/handler | The bridge subscribes to channel `app_mention` events, not direct-message events. |
 | Duplicate-event idempotency and cancellation | Not implemented | Avoid concurrent mentions in the same thread; tasks stop on timeout or process termination rather than a user cancellation control. |
 | Side-effect confirmation layer | Not provided by OpenTag | Workspace and connected-tool actions follow the selected backend/tool's permissions and confirmation behavior. |
-| Zulip native one-shot mode | Experimental | Fresh bounded run per DM/mention. |
-| ZulipMCP persistent topic mode | Experimental | Controlled by stream/topic policy and session caps. |
 | Enterprise governance/audit/approvals | Not provided | Add external sandboxing and policy systems for production use. |
 
 ## Related documentation
@@ -436,7 +407,6 @@ isolated chat location. Skip an optional step when its dependency is not set up.
 - [Backend behavior](../references/backends.md)
 - [Runtime agent contract](../references/runtime-agent.md)
 - [Memory model](../references/memory.md)
-- [ZulipMCP runtime](../references/zulipmcp-runtime.md)
 - [Included skills](skills.md)
 - [Troubleshooting](troubleshooting.md)
 - [Security policy](../SECURITY.md)
