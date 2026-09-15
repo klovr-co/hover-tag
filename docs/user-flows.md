@@ -99,6 +99,21 @@ failure.
 The first setup connects one chat identity to one local OpenTag worker. Start
 with the smallest safe setup, test it, and add capabilities after that works.
 
+```mermaid
+flowchart LR
+    Install["Install<br/>OpenTag + prerequisites"]
+    Slack["Connect Slack<br/>App, Socket Mode, tokens"]
+    Agent["Choose agent<br/>Codex or Claude"]
+    Guardrails["Set boundaries<br/>Workspace, users, MFS roots"]
+    Doctor{"Run doctor<br/>Checks pass?"}
+    Start["Start services<br/>MFS + Slack bridge"]
+    Test["Mention the bot<br/>Confirm threaded reply"]
+
+    Install --> Slack --> Agent --> Guardrails --> Doctor
+    Doctor -->|No| Guardrails
+    Doctor -->|Yes| Start --> Test
+```
+
 1. The operator installs Python 3.10+, `uv`, MFS, and an authenticated Codex or
    Claude Code CLI.
 2. The operator runs `./install.sh` or the guided setup launcher.
@@ -168,6 +183,18 @@ For example:
 
 > `@<bot-name> review the attached screenshot and explain the failure.`
 
+```mermaid
+flowchart LR
+    Mention["Mention in thread<br/>with a follow-up request"]
+    Collect["Collect context<br/>Up to 30 messages"]
+    Normalize["Normalize inputs<br/>Text + bounded attachments"]
+    Inspect["Backend resolves references<br/>and inspects available files"]
+    Cleanup["Remove temporary files"]
+    Reply["Reply in the<br/>same Slack thread"]
+
+    Mention --> Collect --> Normalize --> Inspect --> Cleanup --> Reply
+```
+
 1. OpenTag fetches one Slack replies page containing up to 30 messages from the
    current thread rather than only the newest message. It does not currently
    paginate longer threads or separately guarantee that a triggering message
@@ -198,6 +225,21 @@ For a cross-source task:
 
 > `@<bot-name> find the original decision, compare it with the current code, and explain what changed.`
 
+```mermaid
+flowchart TD
+    Request["Request needs older<br/>or cross-source context"]
+    Decide{"Is durable context needed?"}
+    Thread["Use current thread<br/>and workspace context"]
+    Search["Search allowed<br/>MFS roots only"]
+    Reopen["Open the most<br/>relevant records"]
+    Synthesize["Combine evidence<br/>with current state"]
+    Answer["Answer with provenance<br/>when it improves trust"]
+
+    Request --> Decide
+    Decide -->|No| Thread --> Answer
+    Decide -->|Yes| Search --> Reopen --> Synthesize --> Answer
+```
+
 1. The backend decides that external context is needed.
 2. It searches only roots listed in `MFS_ALLOWED_SCOPES`.
 3. It reopens relevant hits when precise lines or records are needed.
@@ -224,6 +266,17 @@ Try this:
 
 > `@<bot-name> fix the failing parser test, run the focused suite, and summarize the changed files.`
 
+```mermaid
+flowchart LR
+    Request["Slack request"]
+    Inspect["Inspect the configured<br/>workspace"]
+    Work["Edit files or<br/>run commands"]
+    Verify["Run proportionate<br/>verification"]
+    Report["Report changes and<br/>observed results in Slack"]
+
+    Request --> Inspect --> Work --> Verify --> Report
+```
+
 1. The backend receives the configured working directory and runtime contract.
 2. It inspects files, runs commands, or edits code with the local account's
    permissions.
@@ -239,6 +292,20 @@ workspace for demos and an external sandbox for stronger production isolation.
 
 The default result is a reply in the invoking Slack thread. Two explicit output
 flows are also available:
+
+```mermaid
+flowchart TD
+    Result["Backend produces<br/>the requested content"]
+    Destination{"What did the teammate<br/>explicitly request?"}
+    Thread["Thread reply<br/>Default path"]
+    Channel["Top-level message<br/>Invoking channel only"]
+    Canvas["Slack Canvas<br/>Invoking channel only"]
+
+    Result --> Destination
+    Destination -->|No special destination| Thread
+    Destination -->|Post or announce| Channel
+    Destination -->|Create a Canvas| Canvas
+```
 
 ### Post a top-level channel message
 
@@ -264,6 +331,21 @@ helper. The helper creates a Canvas only in the invoking channel and enforces a
 
 After a successful Codex reply, an authorized teammate can select **Change model
 & thinking**.
+
+```mermaid
+sequenceDiagram
+    participant U as Authorized teammate
+    participant S as Slack modal
+    participant T as OpenTag bridge
+    participant N as Next Codex run
+
+    U->>S: Select Change model & thinking
+    S->>T: Submit model and reasoning choice
+    T->>T: Validate against configured allowlists
+    T-->>U: Confirm setting for this thread
+    U->>T: Send the next mention
+    T->>N: Start run with saved thread setting
+```
 
 1. OpenTag opens a modal containing available Codex models and supported
    reasoning levels.
@@ -292,6 +374,20 @@ cross-service workflows.
 Try this:
 
 > `@<bot-name> find the next free 30-minute slot, create the meeting, and email the attendees.`
+
+```mermaid
+flowchart LR
+    Ask["Request a connected-tool task"]
+    Select["Backend selects an<br/>installed matching skill"]
+    Auth{"Tool authenticated<br/>and permitted?"}
+    Stop["Explain the missing<br/>access or setup"]
+    Act["Tool performs the<br/>approved action"]
+    Reply["OpenTag returns the<br/>result to Slack"]
+
+    Ask --> Select --> Auth
+    Auth -->|No| Stop
+    Auth -->|Yes| Act --> Reply
+```
 
 The backend selects the appropriate installed skills, and each tool enforces its
 own authentication and grants. OpenTag does not silently grant Google Workspace
@@ -340,6 +436,22 @@ If the event arrives but the task fails, debug runtime dependencies next:
 5. Restart only after configuration changes that require a new process.
 
 ## Flow 10: Operate, update, and remove OpenTag
+
+```mermaid
+flowchart LR
+    Observe["Observe<br/>status → doctor → logs"]
+    Change{"What needs to change?"}
+    Config["Configuration<br/>Stop → edit → doctor"]
+    Upgrade["Upgrade<br/>Stop → pull → install"]
+    Remove["Uninstall<br/>Stop → remove clone"]
+    Start["Start services"]
+    Smoke["Run a realistic<br/>Slack mention test"]
+
+    Observe --> Change
+    Change -->|Config or Slack app| Config --> Start --> Smoke
+    Change -->|OpenTag version| Upgrade --> Start
+    Change -->|Remove OpenTag| Remove
+```
 
 | Operator intent | User flow |
 |---|---|
