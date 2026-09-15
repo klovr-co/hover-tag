@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="A rendered, interactive tour of OpenTag's connected user flows and capabilities.">
-  <title>OpenTag | How it works</title>
+  <meta name="description" content="A rendered tour of OpenTag's Slack-only launch flow, from mention to verified result.">
+  <title>OpenTag | Slack user flows</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Manrope:wght@400;500;600;700;800&family=Newsreader:opsz,wght@6..72,500;6..72,600&display=swap" rel="stylesheet">
@@ -243,6 +243,32 @@
       background: currentColor;
     }
 
+    .scope-strip {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.55rem;
+      margin-bottom: 1.4rem;
+    }
+
+    .scope-strip span {
+      padding: 0.38rem 0.62rem;
+      border: 1px solid var(--line-strong);
+      border-radius: 100px;
+      background: rgba(255, 253, 247, 0.58);
+      color: var(--paper-dim);
+      font: 500 0.63rem "DM Mono", monospace;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .scope-strip .is-live {
+      border-color: rgba(88, 127, 23, 0.55);
+      color: var(--lime);
+      background: rgba(88, 127, 23, 0.08);
+    }
+
     .hero h1 {
       position: relative;
       z-index: 1;
@@ -272,6 +298,40 @@
       margin: 0;
       color: var(--paper-dim);
       font-size: 1.05rem;
+    }
+
+    .hero-copy { max-width: 42rem; }
+
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.7rem;
+      margin-top: 1.4rem;
+    }
+
+    .hero-actions a {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      padding: 0.62rem 0.85rem;
+      border: 1px solid var(--line-strong);
+      color: var(--paper);
+      background: rgba(255, 253, 247, 0.55);
+      font: 500 0.68rem "DM Mono", monospace;
+      text-decoration: none;
+      text-transform: uppercase;
+      transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+    }
+
+    .hero-actions a:first-child {
+      border-color: var(--lime);
+      color: var(--ink-raised);
+      background: var(--paper);
+    }
+
+    .hero-actions a:hover {
+      transform: translateY(-2px);
+      border-color: var(--lime);
     }
 
     .hero-meta {
@@ -554,11 +614,22 @@
 
     <main id="top">
       <header class="hero">
-        <div class="eyebrow">How OpenTag works / v0.1 alpha</div>
-        <h1>What happens after you <em>mention the bot.</em></h1>
+        <div class="eyebrow">Slack-only launch / v0.1 alpha</div>
+        <div class="scope-strip" aria-label="Current launch scope">
+          <span class="is-live">main · Slack</span>
+          <span>10 connected flows</span>
+          <span>Zulip · feature branch</span>
+        </div>
+        <h1>From Slack mention to <em>finished work.</em></h1>
         <div class="hero-bottom">
-          <p>This guide follows a request through chat, the local agent, MFS, and back to the thread. It also points out what is not built yet.</p>
-          <div class="hero-meta">Slack<br>Codex + Claude<br>MFS memory</div>
+          <div class="hero-copy">
+            <p>Follow the supported path from an authorized Slack mention through the local agent and MFS, then back to a shared thread. The guide also marks optional capabilities and current gaps.</p>
+            <div class="hero-actions">
+              <a href="#product-at-a-glance">Start the tour <span aria-hidden="true">↓</span></a>
+              <a href="../README.md">Read the README <span aria-hidden="true">↗</span></a>
+            </div>
+          </div>
+          <div class="hero-meta">Slack interface<br>Codex launch path<br>MFS memory</div>
         </div>
       </header>
 
