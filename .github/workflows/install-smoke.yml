@@ -34,7 +34,8 @@ jobs:
           OPENTAG_ENV_FILE=/dev/null \
             OPENTAG_TRANSPORT=slack \
             OPENTAG_BACKEND=codex \
-            OPENTAG_WORKDIR="$PWD" \
-            MFS_URL=http://127.0.0.1:13619 \
-            MFS_ALLOWED_SCOPES="file://local$PWD" \
-            ./tag doctor --offline
+          OPENTAG_WORKDIR="$PWD" \
+          MFS_URL=http://127.0.0.1:13619 \
+          MFS_ALLOWED_SCOPES="file://local$PWD" \
+          SLACK_ALLOWED_USER_IDS=UOWNER \
+          ./tag doctor --offline
