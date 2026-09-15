@@ -17,7 +17,21 @@ class OpenTagDoctorTests(unittest.TestCase):
             "OPENTAG_WORKDIR": str(root),
             "MFS_URL": "http://127.0.0.1:13619",
             "MFS_ALLOWED_SCOPES": f"file://local{root}",
+            "SLACK_ALLOWED_USER_IDS": "UOWNER",
         }
 
         with patch.dict(os.environ, environment, clear=True):
             self.assertTrue(check_offline(root))
+
+    def test_offline_slack_check_fails_without_allowed_user(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        environment = {
+            "OPENTAG_TRANSPORT": "slack",
+            "OPENTAG_BACKEND": "codex",
+            "OPENTAG_WORKDIR": str(root),
+            "MFS_URL": "http://127.0.0.1:13619",
+            "MFS_ALLOWED_SCOPES": f"file://local{root}",
+        }
+
+        with patch.dict(os.environ, environment, clear=True):
+            self.assertFalse(check_offline(root))

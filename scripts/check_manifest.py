@@ -35,6 +35,8 @@ def validate_manifest(root: Path) -> list[str]:
     events = settings.get("event_subscriptions", {}).get("bot_events", [])
     if "app_mention" not in events:
         errors.append("app_mention must be subscribed")
+    if settings.get("interactivity", {}).get("is_enabled") is not True:
+        errors.append("interactivity must be enabled")
     return errors
 
 

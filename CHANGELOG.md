@@ -20,6 +20,8 @@ All notable changes to Tag are documented here.
 
 ### Security
 
+- Slack invocations default to an owner-seeded user allowlist and fail closed
+  when no authorized member ID is configured.
 - Scoped MFS list/read/search helpers reject sibling-prefix and traversal paths.
 - Transport-specific process environments reduce credential crossover.
 - This alpha is explicitly limited to trusted sandbox use and is not a

@@ -63,7 +63,8 @@ the backend. Set `OPENTAG_BOT_NAME` if your Slack app uses another display name.
    the workspace administrator. Use `slack-app-manifest.yaml` to create the
    Slack app.
 3. For Slack, read `references/slack-adapter.md`, confirm an isolated channel,
-   then create/install the Socket Mode app and invite it to that channel.
+   then create/install the Socket Mode app, invite it to that channel, and enter
+   the owner's Slack member ID when setup requests it.
 4. For Zulip, create a Generic bot, subscribe it to the intended stream, and
    set `ZULIP_CONFIG_FILE` to its downloaded `zuliprc` file. Choose
    `OPENTAG_ZULIP_ENGINE=native` for one-shot DM/mention runs or `zulipmcp` for
@@ -129,6 +130,10 @@ backend selection.
 The Slack bridge invokes a fresh CLI agent per mention. That runtime agent must
 follow `references/runtime-agent.md`. Keep runtime behavior there, not in this
 admin skill.
+
+Slack access is owner-only by default. `SLACK_ALLOWED_USER_IDS` must contain at
+least the owner's member ID; add comma-separated IDs only on explicit owner
+request. Never use first-mention claiming or leave this setting empty.
 
 Thread context is short-term state. Durable context should come from permitted
 MFS scopes such as indexed Slack history, repos, docs, issues, databases, object

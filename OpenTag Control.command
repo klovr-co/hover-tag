@@ -77,6 +77,7 @@ start_opentag() {
   fi
 
   local transport="${OPENTAG_TRANSPORT:-slack}"
+  local allowed_slack_users="${SLACK_ALLOWED_USER_IDS:-}"
   if [[ "$transport" != "slack" && "$transport" != "zulip" && "$transport" != "both" ]]; then
     echo "OPENTAG_TRANSPORT must be slack, zulip, or both."
     return 1
@@ -87,6 +88,8 @@ start_opentag() {
       echo "Open Tag Slack bridge is already running."
     elif [[ -z "${SLACK_APP_TOKEN:-}" || -z "${SLACK_BOT_TOKEN:-}" ]]; then
       echo "Slack bridge not started: set SLACK_APP_TOKEN and SLACK_BOT_TOKEN in $ENV_FILE."
+    elif [[ -z "${allowed_slack_users//[[:space:],]/}" ]]; then
+      echo "Slack bridge not started: set SLACK_ALLOWED_USER_IDS to the owner's Slack member ID in $ENV_FILE."
     else
       echo "Starting Open Tag Slack bridge…"
       (

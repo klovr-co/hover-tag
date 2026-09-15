@@ -71,6 +71,7 @@ class ZulipRuntimeTests(unittest.TestCase):
             "SLACK_APP_TOKEN": "xapp-secret",
             "SLACK_BOT_TOKEN": "xoxb-secret",
             "SLACK_CHANNEL_ID": "C123",
+            "SLACK_ALLOWED_USER_IDS": "UOWNER",
             "ZULIP_ADMIN_CONFIG_FILE": "/tmp/admin.zuliprc",
             "ZULIP_AUTO_GRANT_PRIVATE_HISTORY": "true",
         }
@@ -80,6 +81,7 @@ class ZulipRuntimeTests(unittest.TestCase):
         self.assertNotIn("SLACK_APP_TOKEN", sanitized)
         self.assertNotIn("SLACK_BOT_TOKEN", sanitized)
         self.assertNotIn("SLACK_CHANNEL_ID", sanitized)
+        self.assertNotIn("SLACK_ALLOWED_USER_IDS", sanitized)
         self.assertNotIn("ZULIP_ADMIN_CONFIG_FILE", sanitized)
         self.assertEqual(sanitized["ZULIP_AUTO_GRANT_PRIVATE_HISTORY"], "false")
         self.assertEqual(sanitized["MFS_ALLOWED_SCOPES"], source["MFS_ALLOWED_SCOPES"])
@@ -88,6 +90,7 @@ class ZulipRuntimeTests(unittest.TestCase):
         source = {
             **self.base_env,
             "SLACK_BOT_TOKEN": "xoxb-secret",
+            "SLACK_ALLOWED_USER_IDS": "UOWNER",
             "ZULIP_ADMIN_CONFIG_FILE": "/tmp/admin.zuliprc",
             "ZULIP_AUTO_GRANT_PRIVATE_HISTORY": "true",
         }
@@ -128,6 +131,7 @@ class ZulipRuntimeTests(unittest.TestCase):
 
         self.assertNotIn("ZULIP_CONFIG_FILE", slack)
         self.assertNotIn("SLACK_APP_TOKEN", slack)
+        self.assertNotIn("SLACK_ALLOWED_USER_IDS", slack)
         self.assertEqual(slack["SLACK_BOT_TOKEN"], "xoxb-secret")
         self.assertNotIn("SLACK_BOT_TOKEN", zulip)
         self.assertNotIn("ZULIP_CONFIG_FILE", zulip)

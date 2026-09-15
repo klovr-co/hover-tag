@@ -6,7 +6,12 @@ from collections.abc import Mapping
 
 
 TRANSPORT_ENV = {
-    "slack": {"SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_CHANNEL_ID"},
+    "slack": {
+        "SLACK_APP_TOKEN",
+        "SLACK_BOT_TOKEN",
+        "SLACK_CHANNEL_ID",
+        "SLACK_ALLOWED_USER_IDS",
+    },
     "zulip": {
         "ZULIP_CONFIG_FILE",
         "ZULIP_ADMIN_CONFIG_FILE",
@@ -42,6 +47,7 @@ def backend_environment(
         # Canvas helper, but never needs the Socket Mode app token.
         clean.pop("SLACK_APP_TOKEN", None)
         clean.pop("SLACK_CHANNEL_ID", None)
+        clean.pop("SLACK_ALLOWED_USER_IDS", None)
     else:
         # The native Zulip backend returns text to its bridge and does not call
         # Zulip directly, so neither bot nor administrator credentials belong
