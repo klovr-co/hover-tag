@@ -18,7 +18,6 @@ class OpenTagAgentPromptTests(unittest.TestCase):
             prompt = opentag_agent.build_prompt(
                 skill_dir=Path("/tmp/open-tag"),
                 workdir=Path("/tmp/workspace"),
-                memory_root=Path("/tmp/memory"),
                 channel_id="C123",
                 question="Use an installed local tool",
                 thread_text="",
@@ -44,7 +43,6 @@ class OpenTagAgentPromptTests(unittest.TestCase):
             prompt = opentag_agent.build_prompt(
                 skill_dir=Path("/tmp/open-tag"),
                 workdir=Path("/tmp/workspace"),
-                memory_root=Path("/tmp/memory"),
                 channel_id="C123",
                 question="Summarise and send it to the channel",
                 thread_text="",
@@ -72,7 +70,6 @@ class OpenTagAgentPromptTests(unittest.TestCase):
                     "test prompt",
                     skill_dir=root / "skill",
                     workdir=root / "workspace",
-                    memory_root=root / "memory",
                     attachments_dir=None,
                     timeout=30,
                 )
@@ -155,14 +152,12 @@ class BackendStreamEventTests(unittest.TestCase):
             "prompt",
             skill_dir=Path("/skill"),
             workdir=Path("/work"),
-            memory_root=Path("/memory"),
             attachments_dir=None,
             output_path=Path("/tmp/final.txt"),
         )
         claude = opentag_agent.claude_stream_command(
             skill_dir=Path("/skill"),
             workdir=Path("/work"),
-            memory_root=Path("/memory"),
             attachments_dir=None,
         )
 
@@ -177,7 +172,6 @@ class BackendStreamEventTests(unittest.TestCase):
             "prompt",
             skill_dir=Path("/skill"),
             workdir=Path("/work"),
-            memory_root=Path("/memory"),
             attachments_dir=None,
             output_path=Path("/tmp/final.txt"),
             model="gpt-example",
