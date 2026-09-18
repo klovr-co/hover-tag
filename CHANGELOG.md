@@ -2,6 +2,25 @@
 
 All notable changes to Tag are documented here.
 
+## [0.1.1-alpha] - 2026-09-18
+
+### Security
+
+- Apply one canonical URI scope policy to MFS list, read, and search helpers,
+  rejecting sibling prefixes, raw traversal, and encoded traversal.
+- Validate recorded process identity before reporting or stopping managed
+  services, preventing stale PID files from targeting a reused PID.
+- Document that agent backends inherit the bot, MFS, and ambient environment
+  credentials; helper scope checks are guardrails, not a capability boundary.
+
+### Fixed
+
+- Make `tag status` fail when either required service is unhealthy.
+- Wait for a live Slack Socket Mode connection during startup and print the
+  bridge log tail when startup fails.
+- Ignore tracked paths that have been deleted from the worktree during secret
+  scanning.
+
 ## [0.1.0-alpha] - 2026-09-09
 
 ### Added
@@ -27,4 +46,5 @@ All notable changes to Tag are documented here.
 - This alpha is explicitly limited to trusted sandbox use and is not a
   production security boundary.
 
+[0.1.1-alpha]: https://github.com/klovr-co/tag/releases/tag/v0.1.1-alpha
 [0.1.0-alpha]: https://github.com/klovr-co/tag/releases/tag/v0.1.0-alpha

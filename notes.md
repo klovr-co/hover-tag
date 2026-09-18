@@ -128,5 +128,5 @@ pass automatic preflight → start the bot → send a test mention
 - Live Slack preflight and Socket Mode connection: pass.
 - Human-authored Slack mention and exactly one correlated OpenMax reply: pass;
   bot self-mentions are correctly suppressed by Slack.
-- Public repository visibility, final merge/tag/prerelease, and X post: pending
-  explicit owner approval after the live mention passes.
+- Public repository visibility, final merge, tag, and prerelease completed on
+  2026-09-09. The historical X-post plan was not part of the release gate.

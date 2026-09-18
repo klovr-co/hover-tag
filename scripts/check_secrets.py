@@ -29,6 +29,8 @@ def validate_secrets(root: Path) -> list[str]:
     errors: list[str] = []
     for path in tracked_files(root):
         relative = path.relative_to(root)
+        if not path.exists():
+            continue
         if str(relative) in FORBIDDEN_TRACKED or ".runtime" in relative.parts:
             errors.append(f"generated or private state is tracked: {relative}")
             continue
