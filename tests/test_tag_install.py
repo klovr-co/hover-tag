@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scripts.tag_install import install, unpack_release
-from scripts.tag_paths import codex_workspace_args, initialize, tag_home
+from scripts.tag_paths import codex_workspace_args, initialize, tag_home, tag_temp_dir
 from scripts.tag_cli import process_for, read_config, start_process, stop_process
 from scripts.tag_migrate import legacy_config, migrate
 from scripts.opentag_setup import render_env
@@ -64,6 +64,13 @@ class TagHomeTests(unittest.TestCase):
             with patch.dict(os.environ, {"TAG_HOME": "relative"}):
                 with self.assertRaises(ValueError):
                     tag_home()
+
+    def test_temporary_root_is_owned_by_tag_home(self):
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp) / "home"
+            with patch.dict(os.environ, {"TAG_HOME": str(home)}):
+                self.assertEqual(tag_temp_dir(), home / "tmp")
+                self.assertTrue((home / "tmp").is_dir())
 
     def test_scoped_mcp_overlay_preserves_global_home(self):
         with tempfile.TemporaryDirectory() as temp:

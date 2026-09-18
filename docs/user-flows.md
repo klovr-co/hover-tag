@@ -274,8 +274,10 @@ flowchart LR
    beyond Slack's returned page is retained.
 2. Plain message text, legacy attachment fields, and bounded text-file content
    are normalized into the prompt.
-3. Image attachments are downloaded into a temporary invocation directory and
-   exposed to the backend for inspection. Each downloaded file is limited to
+3. Image attachments are downloaded into a per-invocation directory under
+   `TAG_HOME/tmp`; generated images, HTML, and other disposable artifacts use
+   the same private temporary subtree. Images are exposed to the backend for
+   inspection. Each downloaded file is limited to
    15 MB; a larger file is skipped with a retrieval-failure marker rather than
    truncated. Embedded text is limited to 12,000 characters per value/file.
    There is no separate aggregate attachment-byte limit beyond the single

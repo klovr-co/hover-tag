@@ -17,9 +17,9 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from tag_paths import codex_workspace_args
+    from tag_paths import codex_workspace_args, tag_temp_dir
 except ImportError:
-    from scripts.tag_paths import codex_workspace_args
+    from scripts.tag_paths import codex_workspace_args, tag_temp_dir
 
 
 def default_skill_dir() -> Path:
@@ -73,6 +73,7 @@ def build_prompt(
     allowed_scopes: str,
 ) -> str:
     image_results_dir = attachments_dir / "results" / "images" if attachments_dir else None
+    artifact_results_dir = attachments_dir / "results" / "artifacts" if attachments_dir else None
     canvas_instructions = f"""
 Canvas capability:
 - When the user asks to create a Canvas in this Slack channel, you may create
@@ -100,6 +101,13 @@ Generated-image result capability:
   thread after your final answer. Do not call Slack's API to upload them.
 - Put only final images there, use descriptive filenames, and still describe
   the result concisely in your final answer.
+
+Temporary-artifact capability:
+- Put other disposable task artifacts, including generated HTML, directly in
+  `{artifact_results_dir or "(unavailable)"}` instead of the workspace.
+- This invocation directory lives under TAG's private temporary home and is
+  removed after the response. Save durable work in the workspace only when the
+  user explicitly requests a lasting file or repository change.
 """
     return f"""
 You are being invoked by the Open Tag Slack bridge.
@@ -161,7 +169,9 @@ def run_codex_once(
     model: str | None = None,
     reasoning_effort: str | None = None,
 ) -> tuple[int, str]:
-    with tempfile.NamedTemporaryFile("r", suffix=".txt", encoding="utf-8", delete=False) as f:
+    with tempfile.NamedTemporaryFile(
+        "r", suffix=".txt", encoding="utf-8", delete=False, dir=tag_temp_dir()
+    ) as f:
         output_path = Path(f.name)
     cmd = [
         "codex",
@@ -368,7 +378,9 @@ def run_codex_events(
     last_code = 1
     last_output = ""
     for attempt in range(1, attempts + 1):
-        with tempfile.NamedTemporaryFile("r", suffix=".txt", encoding="utf-8", delete=False) as f:
+        with tempfile.NamedTemporaryFile(
+            "r", suffix=".txt", encoding="utf-8", delete=False, dir=tag_temp_dir()
+        ) as f:
             output_path = Path(f.name)
         try:
             last_code, last_output, emitted_final, timed_out = stream_command(

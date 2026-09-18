@@ -161,9 +161,15 @@ class SlackGeneratedImageTests(unittest.TestCase):
             result.write_bytes(b"png data")
             return "Here is the chart.", True
 
-        with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+        with tempfile.TemporaryDirectory() as raw_home, patch.object(
+            slack_socket_agent, "App", return_value=fake_app
+        ), patch.dict(
             os.environ,
-            {"SLACK_BOT_TOKEN": "xoxb-test", "OPENTAG_SLACK_STREAMING": "0"},
+            {
+                "TAG_HOME": raw_home,
+                "SLACK_BOT_TOKEN": "xoxb-test",
+                "OPENTAG_SLACK_STREAMING": "0",
+            },
             clear=True,
         ), patch.object(
             slack_socket_agent,
@@ -190,6 +196,7 @@ class SlackGeneratedImageTests(unittest.TestCase):
         self.assertEqual("C123", upload["channel"])
         self.assertEqual("1.23", upload["thread_ts"])
         self.assertEqual("chart.png", upload["filename"])
+        self.assertTrue(Path(upload["file"]).is_relative_to(Path(raw_home) / "tmp"))
 
     def test_failed_backend_does_not_upload_partial_image_result(self) -> None:
         fake_app = FakeApp()
@@ -203,9 +210,15 @@ class SlackGeneratedImageTests(unittest.TestCase):
             result.write_bytes(b"partial")
             return "Backend failed", False
 
-        with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+        with tempfile.TemporaryDirectory() as raw_home, patch.object(
+            slack_socket_agent, "App", return_value=fake_app
+        ), patch.dict(
             os.environ,
-            {"SLACK_BOT_TOKEN": "xoxb-test", "OPENTAG_SLACK_STREAMING": "0"},
+            {
+                "TAG_HOME": raw_home,
+                "SLACK_BOT_TOKEN": "xoxb-test",
+                "OPENTAG_SLACK_STREAMING": "0",
+            },
             clear=True,
         ), patch.object(
             slack_socket_agent,

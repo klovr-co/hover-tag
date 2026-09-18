@@ -25,9 +25,11 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 try:
     from .opentag_process_env import backend_environment
     from .slack_mrkdwn import to_mrkdwn
+    from .tag_paths import tag_temp_dir
 except ImportError:  # Direct script execution does not create a package context.
     from opentag_process_env import backend_environment
     from slack_mrkdwn import to_mrkdwn
+    from tag_paths import tag_temp_dir
 
 
 MENTION_RE = re.compile(r"<@[^>]+>")
@@ -783,7 +785,9 @@ def run_backend(
     model: str | None = None,
     reasoning_effort: str | None = None,
 ) -> tuple[str, bool]:
-    with tempfile.NamedTemporaryFile("w", suffix=".txt", encoding="utf-8", delete=False) as f:
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".txt", encoding="utf-8", delete=False, dir=tag_temp_dir()
+    ) as f:
         f.write(thread_text)
         thread_file = Path(f.name)
 
@@ -855,7 +859,9 @@ def run_backend_events(
     reasoning_effort: str | None = None,
 ) -> tuple[str, bool]:
     """Consume normalized backend events and forward only answer deltas."""
-    with tempfile.NamedTemporaryFile("w", suffix=".txt", encoding="utf-8", delete=False) as f:
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".txt", encoding="utf-8", delete=False, dir=tag_temp_dir()
+    ) as f:
         f.write(thread_text)
         thread_file = Path(f.name)
 
@@ -1209,10 +1215,14 @@ def create_app(backend: str, timeout: int, allowed_user_ids: frozenset[str]) -> 
         answer_stream: SlackAnswerStream | None = None
 
         try:
-            with tempfile.TemporaryDirectory(prefix="opentag-slack-") as raw_attachment_dir:
+            with tempfile.TemporaryDirectory(
+                prefix="slack-invocation-",
+                dir=tag_temp_dir(),
+            ) as raw_attachment_dir:
                 attachment_dir = Path(raw_attachment_dir)
                 image_results_dir = generated_images_dir(attachment_dir)
                 image_results_dir.mkdir(parents=True)
+                (attachment_dir / "results" / "artifacts").mkdir()
                 thread_text = build_thread_text(client, channel, thread_ts, attachment_dir)
                 if env_enabled("OPENTAG_SLACK_STREAMING", default=True) and indicator.native:
                     answer_stream = SlackAnswerStream(client, channel, thread_ts, logger)
