@@ -108,8 +108,6 @@ Keep the Python scripts as deterministic glue:
   backend.
 - `mfs_search.py` and `mfs_cat.py`: call the MFS HTTP API with scoped search and
   reads.
-- `opentag_memory.py`: maintain optional local seed notes and re-index them in
-  MFS for deterministic demos.
 - `opentag_doctor.py`: preflight environment variables, Slack bot access, MFS
   reachability, allowed scopes, and backend availability.
 
@@ -129,8 +127,7 @@ request. Never use first-mention claiming or leave this setting empty.
 
 Thread context is short-term state. Durable context should come from permitted
 MFS scopes such as indexed Slack history, repos, docs, issues, databases, object
-stores, or optional local seed notes. See `references/memory.md` for the optional
-helper's file shape.
+stores, or web sources. See `references/memory.md` for the retrieval model.
 
 Never hard-code real workspace names, channel IDs, user IDs, local absolute
 paths, or customer/project details into this skill. Use placeholders in
@@ -142,4 +139,4 @@ documentation and environment examples.
 - Read `references/backends.md` when changing backend selection or command
   invocation.
 - Read `references/runtime-agent.md` when changing per-mention behavior.
-- Read `references/memory.md` only when using optional local seed notes.
+- Read `references/memory.md` when changing the MFS retrieval model.

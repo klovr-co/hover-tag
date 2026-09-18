@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -13,6 +15,11 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+
+try:
+    from tag_paths import codex_workspace_args
+except ImportError:
+    from scripts.tag_paths import codex_workspace_args
 
 
 def default_skill_dir() -> Path:
@@ -23,19 +30,42 @@ def default_workdir() -> Path:
     return Path.cwd()
 
 
-def default_memory_root() -> Path:
-    return Path(os.getenv("OPENTAG_MEMORY_ROOT", str(Path.home() / ".mfs" / "opentag-memory")))
-
-
 def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8") if path.exists() else ""
+
+
+def backend_command(name: str) -> list[str]:
+    """Resolve Windows npm shims without sending task text through cmd.exe."""
+    if os.name != "nt":
+        return [name]
+    executable = shutil.which(name)
+    if not executable:
+        raise RuntimeError(f"{name} is not installed or is not on PATH")
+    path = Path(executable)
+    if path.suffix.lower() in {".cmd", ".bat"}:
+        package = "@openai/codex/bin/codex.js" if name == "codex" else "@anthropic-ai/claude-code/cli.js"
+        script = path.parent / "node_modules" / package
+        node = shutil.which("node")
+        if not script.is_file() or not node:
+            raise RuntimeError(f"Cannot resolve {name} npm shim; install the native CLI or its standard npm package")
+        return [node, str(script)]
+    return [executable]
+
+
+def executable_command(cmd: list[str]) -> list[str]:
+    return [*backend_command(cmd[0]), *cmd[1:]]
+
+
+def helper_command(path: Path) -> str:
+    if os.name == "nt":
+        return "& " + " ".join("'" + str(item).replace("'", "''") + "'" for item in (sys.executable, path))
+    return shlex.join([sys.executable, str(path)])
 
 
 def build_prompt(
     *,
     skill_dir: Path,
     workdir: Path,
-    memory_root: Path,
     channel_id: str,
     question: str,
     thread_text: str,
@@ -46,7 +76,7 @@ def build_prompt(
     canvas_instructions = f"""
 Canvas capability:
 - When the user asks to create a Canvas in this Slack channel, you may create
-  a Markdown file in the workspace and call `{skill_dir / "scripts" / "slack_canvas.py"}`
+  a Markdown file in the workspace and call `{helper_command(skill_dir / "scripts" / "slack_canvas.py")}`
   with `--title` and `--markdown-file`. It is already restricted to the channel
   that triggered this current @mention.
 - Never call Slack's HTTP API directly and never expose or print Slack tokens.
@@ -55,7 +85,7 @@ Canvas capability:
 
 Channel-post capability:
 - When the user explicitly asks to post, send, or share a message in this Slack
-  channel, run `python3 {skill_dir / "scripts" / "slack_post_message.py"}`
+  channel, run `{helper_command(skill_dir / "scripts" / "slack_post_message.py")}`
   with `--text`. This creates a new top-level channel message, not a thread reply.
 - It is already restricted to the channel that triggered this @mention. Never
   call Slack's HTTP API directly or use it to post to another channel.
@@ -83,7 +113,6 @@ The user-facing setup skill is:
 Runtime context:
 - Conversation id: {channel_id}
 - Workspace/repo root: {workdir}
-- Memory root: {memory_root}
 - Allowed MFS scopes: {allowed_scopes}
 - MFS URL: {os.getenv("MFS_URL", "http://127.0.0.1:13619")}
 - Slack image attachments directory: {attachments_dir or "(none)"}
@@ -92,13 +121,12 @@ Available helper scripts:
 - {skill_dir / "scripts" / "mfs_ls.py"}
 - {skill_dir / "scripts" / "mfs_search.py"}
 - {skill_dir / "scripts" / "mfs_cat.py"}
-- {skill_dir / "scripts" / "opentag_memory.py"}
 - {skill_dir / "scripts" / "slack_post_message.py"}
 {canvas_instructions}
 
 Local tools:
 - The backend may use the commands and skills installed in its environment, subject to
-  its normal permissions. This includes `gws` when it is installed and authenticated.
+  its normal permissions.
 - Each tool's own credentials and OAuth grants determine what it can do; Open Tag does
   not add per-tool feature flags or caller allowlists.
 - Do not expose tokens or other credentials.
@@ -128,13 +156,11 @@ def run_codex_once(
     *,
     skill_dir: Path,
     workdir: Path,
-    memory_root: Path,
     attachments_dir: Path | None,
     timeout: int,
     model: str | None = None,
     reasoning_effort: str | None = None,
 ) -> tuple[int, str]:
-    memory_root.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("r", suffix=".txt", encoding="utf-8", delete=False) as f:
         output_path = Path(f.name)
     cmd = [
@@ -147,13 +173,12 @@ def run_codex_once(
         str(workdir),
         "--add-dir",
         str(skill_dir),
-        "--add-dir",
-        str(memory_root),
         "--skip-git-repo-check",
         "--output-last-message",
         str(output_path),
         prompt,
     ]
+    cmd[2:2] = codex_workspace_args(workdir)
     if model:
         cmd[2:2] = ["--model", model]
     if reasoning_effort:
@@ -165,7 +190,7 @@ def run_codex_once(
         ]
     try:
         result = subprocess.run(
-            cmd,
+            executable_command(cmd),
             check=False,
             timeout=timeout,
             text=True,
@@ -237,10 +262,12 @@ def stream_command(
     parser: Callable[[dict[str, Any]], tuple[str, str] | None],
     timeout: int,
     input_text: str | None = None,
+    workdir: Path | None = None,
 ) -> tuple[int, str, bool, bool]:
     """Run a JSONL backend, emitting normalized events as lines arrive."""
     process = subprocess.Popen(
-        cmd,
+        executable_command(cmd),
+        cwd=workdir,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -295,7 +322,6 @@ def codex_stream_command(
     *,
     skill_dir: Path,
     workdir: Path,
-    memory_root: Path,
     attachments_dir: Path | None,
     output_path: Path,
     model: str | None = None,
@@ -312,13 +338,12 @@ def codex_stream_command(
         str(workdir),
         "--add-dir",
         str(skill_dir),
-        "--add-dir",
-        str(memory_root),
         "--skip-git-repo-check",
         "--output-last-message",
         str(output_path),
         prompt,
     ]
+    cmd[2:2] = codex_workspace_args(workdir)
     if model:
         cmd[2:2] = ["--model", model]
     if reasoning_effort:
@@ -334,13 +359,11 @@ def run_codex_events(
     *,
     skill_dir: Path,
     workdir: Path,
-    memory_root: Path,
     attachments_dir: Path | None,
     timeout: int,
     model: str | None = None,
     reasoning_effort: str | None = None,
 ) -> int:
-    memory_root.mkdir(parents=True, exist_ok=True)
     attempts = max(1, int(os.getenv("OPENTAG_BACKEND_ATTEMPTS", "3")))
     last_code = 1
     last_output = ""
@@ -353,7 +376,6 @@ def run_codex_events(
                     prompt,
                     skill_dir=skill_dir,
                     workdir=workdir,
-                    memory_root=memory_root,
                     attachments_dir=attachments_dir,
                     output_path=output_path,
                     model=model,
@@ -385,7 +407,6 @@ def claude_stream_command(
     *,
     skill_dir: Path,
     workdir: Path,
-    memory_root: Path,
     attachments_dir: Path | None,
 ) -> list[str]:
     cmd = [
@@ -400,8 +421,6 @@ def claude_stream_command(
         str(workdir),
         "--add-dir",
         str(skill_dir),
-        "--add-dir",
-        str(memory_root),
     ]
     if attachments_dir:
         cmd.extend(["--add-dir", str(attachments_dir)])
@@ -413,21 +432,19 @@ def run_claude_events(
     *,
     skill_dir: Path,
     workdir: Path,
-    memory_root: Path,
     attachments_dir: Path | None,
     timeout: int,
 ) -> int:
-    memory_root.mkdir(parents=True, exist_ok=True)
     code, output, emitted_final, timed_out = stream_command(
         claude_stream_command(
             skill_dir=skill_dir,
             workdir=workdir,
-            memory_root=memory_root,
             attachments_dir=attachments_dir,
         ),
         parser=parse_claude_stream_event,
         timeout=timeout,
         input_text=prompt,
+        workdir=workdir,
     )
     if timed_out:
         emit_event("error", f"Open Tag backend timed out after {timeout}s")
@@ -446,7 +463,6 @@ def run_codex(
     *,
     skill_dir: Path,
     workdir: Path,
-    memory_root: Path,
     attachments_dir: Path | None,
     timeout: int,
     model: str | None = None,
@@ -460,7 +476,6 @@ def run_codex(
             prompt,
             skill_dir=skill_dir,
             workdir=workdir,
-            memory_root=memory_root,
             attachments_dir=attachments_dir,
             timeout=timeout,
             model=model,
@@ -484,11 +499,9 @@ def run_claude(
     *,
     skill_dir: Path,
     workdir: Path,
-    memory_root: Path,
     attachments_dir: Path | None,
     timeout: int,
 ) -> int:
-    memory_root.mkdir(parents=True, exist_ok=True)
     # Pass the prompt on stdin, not as a trailing positional: `claude --add-dir`
     # is variadic and would otherwise swallow the prompt as another directory.
     cmd = [
@@ -499,13 +512,12 @@ def run_claude(
         str(workdir),
         "--add-dir",
         str(skill_dir),
-        "--add-dir",
-        str(memory_root),
     ]
     if attachments_dir:
         cmd.extend(["--add-dir", str(attachments_dir)])
     result = subprocess.run(
-        cmd,
+        executable_command(cmd),
+        cwd=workdir,
         input=prompt,
         check=False,
         timeout=timeout,
@@ -546,7 +558,6 @@ def main() -> int:
         type=Path,
         default=Path(os.getenv("OPENTAG_WORKDIR", default_workdir())),
     )
-    parser.add_argument("--memory-root", type=Path, default=default_memory_root())
     parser.add_argument(
         "--timeout", type=int, default=int(os.getenv("OPENTAG_TIMEOUT_SECONDS", "420"))
     )
@@ -560,7 +571,6 @@ def main() -> int:
     prompt = build_prompt(
         skill_dir=args.skill_dir.resolve(),
         workdir=workdir,
-        memory_root=args.memory_root.expanduser().resolve(),
         channel_id=args.channel_id,
         question=args.question,
         thread_text=read_text(args.thread_file),
@@ -575,7 +585,6 @@ def main() -> int:
                     prompt,
                     skill_dir=args.skill_dir.resolve(),
                     workdir=args.workdir.resolve(),
-                    memory_root=args.memory_root.expanduser().resolve(),
                     attachments_dir=args.attachments_dir.resolve() if args.attachments_dir else None,
                     timeout=args.timeout,
                     model=args.model,
@@ -585,7 +594,6 @@ def main() -> int:
                 prompt,
                 skill_dir=args.skill_dir.resolve(),
                 workdir=args.workdir.resolve(),
-                memory_root=args.memory_root.expanduser().resolve(),
                 attachments_dir=args.attachments_dir.resolve() if args.attachments_dir else None,
                 timeout=args.timeout,
             )
@@ -594,7 +602,6 @@ def main() -> int:
                 prompt,
                 skill_dir=args.skill_dir.resolve(),
                 workdir=args.workdir.resolve(),
-                memory_root=args.memory_root.expanduser().resolve(),
                 attachments_dir=args.attachments_dir.resolve() if args.attachments_dir else None,
                 timeout=args.timeout,
                 model=args.model,
@@ -604,7 +611,6 @@ def main() -> int:
             prompt,
             skill_dir=args.skill_dir.resolve(),
             workdir=args.workdir.resolve(),
-            memory_root=args.memory_root.expanduser().resolve(),
             attachments_dir=args.attachments_dir.resolve() if args.attachments_dir else None,
             timeout=args.timeout,
         )

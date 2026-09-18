@@ -11,16 +11,34 @@ from scripts import opentag_agent
 
 
 class OpenTagAgentPromptTests(unittest.TestCase):
-    def test_prompt_treats_gws_as_a_normal_local_tool(self) -> None:
+    def test_windows_npm_backend_bypasses_command_shell(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            script = root / "node_modules/@openai/codex/bin/codex.js"
+            script.parent.mkdir(parents=True)
+            script.write_text("// fixture")
+            shim = root / "codex.cmd"
+            with patch.object(opentag_agent, "os", SimpleNamespace(name="nt")), patch(
+                "scripts.opentag_agent.shutil.which", side_effect=[str(shim), "node.exe"]
+            ):
+                command = opentag_agent.executable_command(["codex", "exec", "text & special %characters%"])
+            self.assertEqual(command, ["node.exe", str(script), "exec", "text & special %characters%"])
+
+    def test_helper_command_quotes_application_support_paths(self) -> None:
+        path = Path("/Users/person/Library/Application Support/Tag/slack_canvas.py")
+        command = opentag_agent.helper_command(path)
+        self.assertIn("Application Support", command)
+        self.assertIn("'", command)
+
+    def test_prompt_treats_installed_tools_as_normal_local_tools(self) -> None:
         previous_transport = os.environ.get("OPENTAG_TRANSPORT")
         os.environ["OPENTAG_TRANSPORT"] = "slack"
         try:
             prompt = opentag_agent.build_prompt(
                 skill_dir=Path("/tmp/open-tag"),
                 workdir=Path("/tmp/workspace"),
-                memory_root=Path("/tmp/memory"),
                 channel_id="C123",
-                question="Check my email",
+                question="Use an installed local tool",
                 thread_text="",
                 attachments_dir=None,
                 allowed_scopes="file://local/tmp/workspace",
@@ -31,12 +49,11 @@ class OpenTagAgentPromptTests(unittest.TestCase):
             else:
                 os.environ["OPENTAG_TRANSPORT"] = previous_transport
 
-        self.assertIn("This includes `gws` when it is installed and authenticated.", prompt)
+        self.assertIn("commands and skills installed in its environment", prompt)
         self.assertIn("mfs_ls.py", prompt)
         self.assertIn("not add per-tool feature flags or caller allowlists.", prompt)
-        self.assertNotIn("OPENTAG_GWS_ENABLED", prompt)
-        self.assertNotIn("OPENTAG_GWS_ALLOWED_CALLERS", prompt)
-        self.assertNotIn("read-only Gmail operations", prompt)
+        self.assertNotIn("gws", prompt.lower())
+        self.assertNotIn("gmail", prompt.lower())
 
     def test_slack_prompt_includes_current_channel_posting_capability(self) -> None:
         previous_transport = os.environ.get("OPENTAG_TRANSPORT")
@@ -45,7 +62,6 @@ class OpenTagAgentPromptTests(unittest.TestCase):
             prompt = opentag_agent.build_prompt(
                 skill_dir=Path("/tmp/open-tag"),
                 workdir=Path("/tmp/workspace"),
-                memory_root=Path("/tmp/memory"),
                 channel_id="C123",
                 question="Summarise and send it to the channel",
                 thread_text="",
@@ -66,7 +82,6 @@ class OpenTagAgentPromptTests(unittest.TestCase):
         prompt = opentag_agent.build_prompt(
             skill_dir=Path("/tmp/open-tag"),
             workdir=Path("/tmp/workspace"),
-            memory_root=Path("/tmp/memory"),
             channel_id="C123",
             question="Create a launch graphic",
             thread_text="",
@@ -78,7 +93,8 @@ class OpenTagAgentPromptTests(unittest.TestCase):
         self.assertIn("Slack bridge uploads supported files", prompt)
         self.assertIn("Do not call Slack's API to upload them", prompt)
 
-    def test_codex_backend_uses_automatic_workspace_safety_review(self) -> None:
+    @patch("scripts.opentag_agent.backend_command", return_value=["codex"])
+    def test_codex_backend_uses_automatic_workspace_safety_review(self, _backend) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
             root = Path(raw_dir)
             with patch(
@@ -89,7 +105,6 @@ class OpenTagAgentPromptTests(unittest.TestCase):
                     "test prompt",
                     skill_dir=root / "skill",
                     workdir=root / "workspace",
-                    memory_root=root / "memory",
                     attachments_dir=None,
                     timeout=30,
                 )
@@ -172,14 +187,12 @@ class BackendStreamEventTests(unittest.TestCase):
             "prompt",
             skill_dir=Path("/skill"),
             workdir=Path("/work"),
-            memory_root=Path("/memory"),
             attachments_dir=None,
             output_path=Path("/tmp/final.txt"),
         )
         claude = opentag_agent.claude_stream_command(
             skill_dir=Path("/skill"),
             workdir=Path("/work"),
-            memory_root=Path("/memory"),
             attachments_dir=None,
         )
 
@@ -194,7 +207,6 @@ class BackendStreamEventTests(unittest.TestCase):
             "prompt",
             skill_dir=Path("/skill"),
             workdir=Path("/work"),
-            memory_root=Path("/memory"),
             attachments_dir=None,
             output_path=Path("/tmp/final.txt"),
             model="gpt-example",

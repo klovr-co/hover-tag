@@ -117,9 +117,9 @@ come from the CLI backend installed on your machine.
 
 ## Quick start
 
-The v0.1.0-alpha supported path is Slack + Codex + local MFS on macOS or Linux.
-Claude Code remains an experimental backend and is not part of the launch
-qualification.
+TAG provides installers for macOS, Linux, and native Windows. The primary path
+is Slack + Codex + local MFS; Claude Code remains experimental. Native Windows
+live Slack/backend qualification is still required before release.
 
 You need Python 3.10+, [`uv`](https://docs.astral.sh/uv/), `curl`, and a working
 Codex CLI login. Then run:
@@ -130,9 +130,11 @@ cd tag
 ./install.sh
 ```
 
-The installer verifies pinned MFS components, creates a private `.env`, and
-guides you through the Slack credentials and owner member ID it cannot authorize
-on your behalf.
+The installer creates a permanent application home and an isolated runtime,
+independent of this checkout. Add its printed command directory to PATH, then
+run `tag setup` for Slack credentials and your owner member ID. Windows users
+run `./install.ps1` from PowerShell instead. See [installation and TAG home](docs/installation.md)
+for platform paths, download installers, skills, MCP, and migration.
 When prompted, create the app from [`slack-app-manifest.yaml`](slack-app-manifest.yaml)
 at **Slack API → Your Apps → Create New App → From an app manifest**, install it
 to your workspace, and create an app-level `xapp-` token with
@@ -141,9 +143,9 @@ to your workspace, and create an app-level `xapp-` token with
 Start Tag and inspect it with:
 
 ```bash
-./tag start
-./tag status
-./tag logs
+tag start
+tag status
+tag logs
 ```
 
 Mention `@OpenMax` in the sandbox channel you configured:
@@ -166,7 +168,8 @@ mention. Operators can restrict the selectable models with
 `OPENTAG_CODEX_MODELS` and the reasoning levels with
 `OPENTAG_CODEX_REASONING_EFFORTS`.
 
-Stop the local bridges and MFS server with `./tag stop`.
+Stop TAG-managed processes with `tag stop`. Independently started MFS servers
+are left running.
 
 ### Optional admin skill
 
@@ -182,14 +185,14 @@ create or approve a Slack app on behalf of your workspace administrator.
 
 ### Upgrade or uninstall
 
-To upgrade, stop Tag, pull the desired release, and rerun `./install.sh`; your
-existing `.env` is preserved. To uninstall Tag, run `./tag stop`, delete the
-clone, and optionally remove MFS with `uv tool uninstall mfs-server` and the
-`mfs` binary from `~/.local/bin` if the installer placed it there.
+To upgrade, rerun the installer, then `tag stop` and `tag start`. Configuration,
+personal skills, MCP settings, and state are preserved. `tag rollback` selects
+the previous release while stopped. Use `tag migrate --from /path/to/old/checkout`
+to copy legacy configuration and skills without deleting the originals.
 
-The macOS `OpenTag Setup.command` and `OpenTag Control.command` launchers remain
-available for existing installations; `./install.sh` and `./tag` are the
-portable supported interface.
+To uninstall, stop TAG, back up personal files, then remove its managed launcher
+and application home. See [installation](docs/installation.md) for details.
+For source development, use `./tag` with an isolated absolute `TAG_HOME`.
 
 ## Slack credentials
 
@@ -200,6 +203,13 @@ Tag uses Slack credentials in two separate places:
 | `SLACK_APP_TOKEN` (`xapp-…`) | Opens the Socket Mode connection that receives mentions. |
 | `SLACK_BOT_TOKEN` (`xoxb-…`) | Reads permitted conversations and posts replies. |
 | MFS Slack connector token | Optionally indexes approved Slack channels as durable memory. |
+
+The local agent backend inherits `SLACK_BOT_TOKEN`, `MFS_TOKEN`, and other
+credentials already present in the bridge environment. Tag withholds the
+Socket Mode app token and Slack access-control configuration from the backend,
+but the MFS and Slack helper restrictions are application guardrails—not a
+hardened capability boundary. Run Tag with dedicated, least-privilege
+credentials in an isolated environment.
 
 The bridge app normally needs these bot scopes:
 
@@ -253,12 +263,15 @@ Current safeguards include:
 - MFS scope checks for search, read, and directory listing;
 - a required Slack caller allowlist seeded with the owner during setup;
 - an optional `SLACK_CHANNEL_ID` gate;
-- bridge credential isolation;
+- withholding of the Socket Mode token and bridge access-control settings from
+  backend processes;
 - bounded attachment size and thread context;
 - task timeouts and limited retries;
 - automatic Codex workspace safety review.
 
-Tag does **not** provide a hardened sandbox, organization-wide identity policy,
+The backend's inherited credentials can be used directly by tools or shell
+commands, bypassing Tag's scoped helpers. Tag does **not** provide a hardened
+sandbox, organization-wide identity policy,
 auditable approvals, spend controls, or enterprise administration. Claude Code
 currently runs with permission checks skipped. Locally installed tools use their
 own credentials and permissions.
@@ -272,7 +285,6 @@ Use a non-production host or a real external sandbox for stronger isolation.
 - [Backend behavior](references/backends.md)
 - [Runtime agent contract](references/runtime-agent.md)
 - [Memory model](references/memory.md)
-- [Included skills](docs/skills.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Security policy](SECURITY.md)
 - [Release contract](RELEASE.md)

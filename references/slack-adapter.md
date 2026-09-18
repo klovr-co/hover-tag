@@ -166,7 +166,6 @@ auth and tool execution.
 Optional:
 
 ```bash
-export OPENTAG_MEMORY_ROOT="$HOME/.mfs/opentag-memory"
 export OPENTAG_TIMEOUT_SECONDS=420
 export OPENTAG_BACKEND_ATTEMPTS=3   # codex backend: retries on capacity/rate-limit
 export OPENTAG_SLACK_STREAMING=0    # optional: disable default Slack response streaming
@@ -188,24 +187,6 @@ Tag reads visible models and their supported reasoning levels from Codex's local
 model cache. Set `OPENTAG_CODEX_MODELS` to restrict what Slack users can select.
 Reinstall the Slack app from `slack-app-manifest.yaml` when upgrading an existing
 installation so interactive components are enabled.
-
-### Optional local tools, including Google Workspace CLI
-
-Open Tag passes work to the selected backend with its normal local commands and
-skills. An installed, authenticated [`gws`](https://github.com/googleworkspace/cli)
-CLI is available to that backend like any other local tool. Open Tag does not
-maintain a separate Gmail feature flag or caller allowlist; the tool's own OAuth
-grants determine its capabilities.
-
-Open Tag keeps its project-specific skills in `.codex/skills`. This repository
-includes only `gws-shared` and `gws-gmail` there; Codex also retains its normal
-global `~/.codex/skills` discovery.
-
-```bash
-gws auth login -s gmail
-```
-
-This is distinct from MFS: it does not index mail or add a `gmail://` scope.
 
 ## Preflight
 

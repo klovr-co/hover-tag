@@ -4,12 +4,16 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import posixpath
 import sys
 import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
+
+try:
+    from scripts.mfs_scope_policy import is_path_allowed, parse_scopes
+except ModuleNotFoundError:  # Direct execution: python3 scripts/mfs_ls.py
+    from mfs_scope_policy import is_path_allowed, parse_scopes
 
 
 def token_from_env() -> str | None:
@@ -31,39 +35,6 @@ def request_json(path: str, params: dict[str, Any]) -> dict[str, Any]:
     req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=60) as response:
         return json.loads(response.read().decode("utf-8"))
-
-
-def parse_scopes(raw: str) -> list[str]:
-    return [scope.strip() for scope in raw.split(",") if scope.strip()]
-
-
-def scope_parts(value: str) -> tuple[str, str, str] | None:
-    """Parse an MFS URI into canonical components, rejecting parent traversal."""
-    parsed = urllib.parse.urlsplit(value)
-    decoded_path = urllib.parse.unquote(parsed.path)
-    if ".." in decoded_path.split("/"):
-        return None
-    normalized_path = posixpath.normpath(decoded_path or "/").rstrip("/") or "/"
-    return parsed.scheme.lower(), parsed.netloc, normalized_path
-
-
-def is_path_allowed(path: str, allowed_scopes: list[str]) -> bool:
-    if "--all" in allowed_scopes:
-        return True
-    target = scope_parts(path)
-    if target is None:
-        return False
-    for allowed in allowed_scopes:
-        scope = scope_parts(allowed)
-        if scope is None or target[:2] != scope[:2]:
-            continue
-        target_path = target[2]
-        scope_path = scope[2]
-        if target_path == scope_path or (
-            scope_path == "/" or target_path.startswith(f"{scope_path}/")
-        ):
-            return True
-    return False
 
 
 def main() -> int:

@@ -12,7 +12,6 @@ VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$")
 MODIFICATION_NOTICE = "Modified by klovr.co in 2026 for Tag."
 MODIFIED_UPSTREAM_FILES = (
     ".env.example",
-    "OpenTag Control.command",
     "README.md",
     "SKILL.md",
     "references/runtime-agent.md",
@@ -50,7 +49,11 @@ def validate_release(root: Path) -> list[str]:
             errors.append(f"NOTICE is missing attribution: {token!r}")
 
     release = _read(root, "RELEASE.md", errors)
-    for token in ("Slack + Codex CLI + a local MFS server", "v0.1.0-alpha", "explicit owner action"):
+    for token in (
+        "Slack + Codex CLI + a local MFS server",
+        f"v{version}" if version else "## v",
+        "explicit owner action",
+    ):
         if release and token not in release:
             errors.append(f"RELEASE.md is missing contract text: {token!r}")
 

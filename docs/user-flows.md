@@ -131,7 +131,7 @@ flowchart LR
 
 1. The operator installs Python 3.10+, `uv`, MFS, and an authenticated Codex or
    Claude Code CLI.
-2. The operator runs `./install.sh` or the guided setup launcher.
+2. The operator runs `./install.sh`.
 3. Setup records:
    - chat transport: `slack`;
    - backend: `codex` or `claude`;
@@ -506,44 +506,7 @@ reasoning selection to the Codex CLI. If a saved choice is no longer available,
 OpenTag normalizes it back to the applicable default. Claude replies do not
 show this control.
 
-## Flow 8: Use optional local tools and Google Workspace skills
-
-OpenTag can use commands and skills already available to the selected CLI
-backend. The included Google Workspace catalog demonstrates this pattern across
-Gmail, Calendar, Drive, Docs, Sheets, Slides, Tasks, Chat, Meet, Forms,
-Classroom, People, Keep, Events, Apps Script, Admin Reports, Model Armor, and
-cross-service workflows.
-
-### Level 1 · Journey
-
-Try this:
-
-> `@<bot-name> find the next free 30-minute slot, create the meeting, and email the attendees.`
-
-```mermaid
-flowchart LR
-    Ask["Request a connected-tool task"]
-    Select["Backend selects an<br/>installed matching skill"]
-    Auth{"Tool authenticated<br/>and permitted?"}
-    Stop["Explain the missing<br/>access or setup"]
-    Act["Tool performs the<br/>approved action"]
-    Reply["OpenTag returns the<br/>result to Slack"]
-
-    Ask --> Select --> Auth
-    Auth -->|No| Stop
-    Auth -->|Yes| Act --> Reply
-```
-
-### Level 2 · Task flow
-
-The backend selects the appropriate installed skills, and each tool enforces its
-own authentication and grants. OpenTag does not silently grant Google Workspace
-access or maintain a second per-tool permission system.
-
-See [Included skills](skills.md) for the generated service, helper, persona, and
-recipe catalog.
-
-## Flow 9: Denials, failures, and recovery
+## Flow 8: Denials, failures, and recovery
 
 ### Level 1 · Journey
 
@@ -601,7 +564,7 @@ If the event arrives but the task fails, debug runtime dependencies next:
    mention event.
 5. Restart only after configuration changes that require a new process.
 
-## Flow 10: Operate, update, and remove OpenTag
+## Flow 9: Operate, update, and remove OpenTag
 
 ### Level 1 · Journey
 
@@ -660,7 +623,7 @@ sequenceDiagram
 
 ## A demo that covers the product
 
-Use this 11-step script for a product demo. Run it in a sandbox workspace and an
+Use this 10-step script for a product demo. Run it in a sandbox workspace and an
 isolated chat location. Skip an optional step when its dependency is not set up.
 
 1. Show `./tag status`, `./tag doctor`, and the startup summary. Confirm that the
@@ -683,9 +646,7 @@ isolated chat location. Skip an optional step when its dependency is not set up.
 9. With the Codex backend, reinstall the updated manifest with Slack
    interactivity enabled. Change the model/reasoning choice, then invoke the next
    task in that thread.
-10. If Google Workspace tools are authenticated, run one cross-service recipe
-    such as meeting preparation or email-to-task.
-11. If a separate non-allowlisted test account is available, mention the bot and
+10. If a separate non-allowlisted test account is available, mention the bot and
     show that the backend is not invoked.
 
 ## Capability coverage and current boundaries
@@ -705,7 +666,6 @@ isolated chat location. Skip an optional step when its dependency is not set up.
 | Slack Canvas creation | Implemented on explicit request | Restricted to the invoking channel; `canvases:write` required. |
 | MFS search/read | Implemented | Source must be indexed and its root explicitly allowed. |
 | Workspace commands and edits | Implemented through backend | Uses local account permissions; not a hardened sandbox. |
-| Local skills/tools, including Google Workspace | Available when installed and authenticated | Each tool retains its own credentials and grants. |
 | Slack durable session | Not provided | Each mention launches a fresh agent; thread text and MFS restore context. |
 | Slack direct messages | Not implemented by the current manifest/handler | The bridge subscribes to channel `app_mention` events, not direct-message events. |
 | Duplicate-event idempotency and cancellation | Not implemented | Avoid concurrent mentions in the same thread; tasks stop on timeout or process termination rather than a user cancellation control. |
@@ -718,6 +678,5 @@ isolated chat location. Skip an optional step when its dependency is not set up.
 - [Backend behavior](../references/backends.md)
 - [Runtime agent contract](../references/runtime-agent.md)
 - [Memory model](../references/memory.md)
-- [Included skills](skills.md)
 - [Troubleshooting](troubleshooting.md)
 - [Security policy](../SECURITY.md)
