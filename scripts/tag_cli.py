@@ -9,6 +9,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import uuid
 import warnings
 from pathlib import Path
 
@@ -41,7 +42,14 @@ def process_for(path: Path):
     return None
 
 
-def start_process(home: Path, name: str, command: list[str]) -> bool:
+def start_process(
+    home: Path,
+    name: str,
+    command: list[str],
+    *,
+    environment: dict[str, str] | None = None,
+    metadata: dict[str, object] | None = None,
+) -> bool:
     import psutil
     record = home / "state" / f"{name}.json"
     if process_for(record):
@@ -49,11 +57,13 @@ def start_process(home: Path, name: str, command: list[str]) -> bool:
     options = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS} if os.name == "nt" else {"start_new_session": True}
     with (home / "state" / f"{name}.log").open("ab") as log:
         child = subprocess.Popen(command, cwd=home / "workspace", stdin=subprocess.DEVNULL,
-                                 stdout=log, stderr=subprocess.STDOUT, **options)
+                                 stdout=log, stderr=subprocess.STDOUT, env=environment, **options)
     process = psutil.Process(child.pid)
-    record.write_text(json.dumps({"pid": child.pid, "created": process.create_time()}), encoding="utf-8")
+    identity = {"pid": child.pid, "created": process.create_time(), **(metadata or {})}
+    record.write_text(json.dumps(identity), encoding="utf-8")
     time.sleep(0.3)
     if child.poll() is not None:
+        record.unlink(missing_ok=True)
         raise RuntimeError(f"{name} exited during startup; run tag logs")
     # This command intentionally leaves a detached service alive on return.
     with warnings.catch_warnings():
@@ -83,6 +93,40 @@ def stop_process(home: Path, name: str) -> None:
         if alive:
             raise RuntimeError(f"Could not stop {name}; retaining its process record")
     record.unlink(missing_ok=True)
+    if name == "slack":
+        (home / "state/slack.ready").unlink(missing_ok=True)
+
+
+def slack_ready(home: Path, maximum_age: float = 5.0) -> bool:
+    """Confirm the managed Slack process is publishing a current heartbeat."""
+    record_path = home / "state/slack.json"
+    process = process_for(record_path)
+    if process is None:
+        return False
+    try:
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+        instance_id, raw_pid, raw_heartbeat = (home / "state/slack.ready").read_text(
+            encoding="utf-8"
+        ).split()
+        ready_pid = int(raw_pid)
+        heartbeat = float(raw_heartbeat)
+        return (
+            instance_id == record["instance_id"]
+            and ready_pid == process.pid
+            and 0 <= time.time() - heartbeat <= maximum_age
+        )
+    except (OSError, ValueError, KeyError):
+        return False
+
+
+def log_tail(home: Path, name: str, lines: int = 50) -> str:
+    try:
+        content = (home / "state" / f"{name}.log").read_text(
+            encoding="utf-8", errors="replace"
+        )
+    except OSError:
+        return ""
+    return "\n".join(content.splitlines()[-lines:])
 
 
 def healthy(url: str) -> bool:
@@ -171,10 +215,11 @@ def main() -> int:
         print("TAG stopped. Independently managed MFS servers were left running.")
         return 0
     if args.command == "status":
-        for name in ("slack", "mfs"):
-            print(f"{name}: {'running' if process_for(home / 'state' / (name + '.json')) else 'stopped (TAG-managed)'}")
-        print(f"MFS endpoint: {'healthy' if healthy(os.getenv('MFS_URL', 'http://127.0.0.1:13619')) else 'unavailable'}")
-        return 0
+        mfs_healthy = healthy(os.getenv("MFS_URL", "http://127.0.0.1:13619"))
+        slack_connected = slack_ready(home)
+        print(f"MFS: {'healthy' if mfs_healthy else 'stopped or unhealthy'}")
+        print(f"Slack bridge: {'connected' if slack_connected else 'stopped or disconnected'}")
+        return 0 if mfs_healthy and slack_connected else 1
     if args.command == "start":
         # Serialize starts so concurrent invocations cannot create orphan services.
         lock = home / "state/start.lock"
@@ -199,8 +244,49 @@ def main() -> int:
                     raise RuntimeError("MFS did not become healthy; run tag logs")
             if doctor(home, False):
                 raise RuntimeError("Preflight failed")
-            if start_process(home, "slack", [sys.executable, str(ROOT / "scripts/slack_socket_agent.py"), "--backend", os.environ["OPENTAG_BACKEND"]]):
-                started.append("slack")
+            if not slack_ready(home):
+                # Replace a live but disconnected TAG-managed bridge rather than
+                # accepting a PID as proof that Socket Mode is operational.
+                stop_process(home, "slack")
+                instance_id = uuid.uuid4().hex
+                ready_file = home / "state/slack.ready"
+                slack_environment = os.environ.copy()
+                slack_environment["OPENTAG_PROCESS_ID"] = instance_id
+                slack_command = [
+                    sys.executable,
+                    str(ROOT / "scripts/slack_socket_agent.py"),
+                    "--backend",
+                    os.environ["OPENTAG_BACKEND"],
+                    "--ready-file",
+                    str(ready_file),
+                    "--process-id",
+                    instance_id,
+                ]
+                if start_process(
+                    home,
+                    "slack",
+                    slack_command,
+                    environment=slack_environment,
+                    metadata={"instance_id": instance_id},
+                ):
+                    started.append("slack")
+            attempts = int(os.getenv("OPENTAG_STARTUP_ATTEMPTS", "30"))
+            for _ in range(attempts):
+                if slack_ready(home):
+                    break
+                if process_for(home / "state/slack.json") is None:
+                    detail = log_tail(home, "slack")
+                    raise RuntimeError(
+                        "Slack bridge exited before becoming ready"
+                        + (f":\n{detail}" if detail else "; run tag logs")
+                    )
+                time.sleep(1)
+            else:
+                detail = log_tail(home, "slack")
+                raise RuntimeError(
+                    "Slack bridge did not become ready"
+                    + (f":\n{detail}" if detail else "; run tag logs")
+                )
             print("TAG is running in the background. Use tag stop to stop it.")
         except Exception:
             for name in reversed(started):

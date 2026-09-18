@@ -4,23 +4,23 @@
 
 set -eu
 
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$ROOT"
 
 ./scripts/ci_check.sh
 
 version=$(sed -n '1p' VERSION)
-[ "$version" = "0.1.0-alpha" ] || {
-    printf 'Unexpected release version: %s\n' "$version" >&2
-    exit 1
-}
 
-git diff --quiet && git diff --cached --quiet || {
+if ! git diff --quiet || ! git diff --cached --quiet; then
     printf 'Tracked changes must be committed before release.\n' >&2
     exit 1
-}
+fi
 
 evidence="docs/release-evidence/v$version.md"
+[ -f "$evidence" ] || {
+    printf 'Missing release evidence: %s\n' "$evidence" >&2
+    exit 1
+}
 grep -F 'Live Slack sandbox: **PASS**' "$evidence" >/dev/null || {
     printf 'Live Slack sandbox evidence is not PASS in %s.\n' "$evidence" >&2
     exit 1
@@ -36,8 +36,8 @@ for argument in "$@"; do
 done
 
 if [ "$publish" = true ]; then
-    grep -F 'Public visibility approval: **PASS**' "$evidence" >/dev/null || {
-        printf 'Public visibility approval is not PASS in %s.\n' "$evidence" >&2
+    grep -F 'Prerelease publication approval: **PASS**' "$evidence" >/dev/null || {
+        printf 'Prerelease publication approval is not PASS in %s.\n' "$evidence" >&2
         exit 1
     }
 fi

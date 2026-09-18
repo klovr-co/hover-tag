@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
@@ -1219,6 +1220,12 @@ def main() -> None:
     parser.add_argument(
         "--timeout", type=int, default=int(os.getenv("OPENTAG_TIMEOUT_SECONDS", "420"))
     )
+    parser.add_argument(
+        "--ready-file",
+        type=Path,
+        help="Write a short-lived Socket Mode connection heartbeat to this path.",
+    )
+    parser.add_argument("--process-id", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if not args.backend:
         parser.error("--backend or OPENTAG_BACKEND is required")
@@ -1226,7 +1233,28 @@ def main() -> None:
     allowed_user_ids = configured_slack_user_ids()
     app = create_app(args.backend, args.timeout, allowed_user_ids)
     print_live_summary(args.backend, allowed_user_ids)
-    SocketModeHandler(app, require_env("SLACK_APP_TOKEN")).start()
+    handler = SocketModeHandler(app, require_env("SLACK_APP_TOKEN"))
+    handler.connect()
+    try:
+        while True:
+            if args.ready_file:
+                if handler.client.is_connected():
+                    instance_id = args.process_id or require_env("OPENTAG_PROCESS_ID")
+                    temporary = args.ready_file.with_name(
+                        f"{args.ready_file.name}.tmp.{os.getpid()}"
+                    )
+                    temporary.write_text(
+                        f"{instance_id} {os.getpid()} {int(time.time())}\n",
+                        encoding="utf-8",
+                    )
+                    temporary.replace(args.ready_file)
+                else:
+                    args.ready_file.unlink(missing_ok=True)
+            time.sleep(1)
+    finally:
+        if args.ready_file:
+            args.ready_file.unlink(missing_ok=True)
+        handler.close()
 
 
 if __name__ == "__main__":

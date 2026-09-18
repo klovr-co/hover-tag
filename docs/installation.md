@@ -88,8 +88,8 @@ script and GitHub repository remain trust inputs.
 ## Integrations
 
 Place TAG-specific Codex skills in `workspace/.agents/skills/<name>/SKILL.md`.
-Bundled Google Workspace skills are copied there on initial installation;
-upgrades preserve existing skill directories, including local edits.
+The installer creates TAG's administration skill there; upgrades preserve
+existing skill directories, including locally installed skills and edits.
 Global backend skills and authentication remain available, subject to the
 backend's own discovery rules and context limits.
 

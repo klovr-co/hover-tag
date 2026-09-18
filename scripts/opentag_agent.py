@@ -30,10 +30,6 @@ def default_workdir() -> Path:
     return Path.cwd()
 
 
-def default_memory_root() -> Path:
-    return Path(os.getenv("OPENTAG_MEMORY_ROOT", str(Path.home() / ".mfs" / "opentag-memory")))
-
-
 def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8") if path.exists() else ""
 
@@ -70,7 +66,6 @@ def build_prompt(
     *,
     skill_dir: Path,
     workdir: Path,
-    memory_root: Path,
     channel_id: str,
     question: str,
     thread_text: str,
@@ -109,7 +104,6 @@ The user-facing setup skill is:
 Runtime context:
 - Conversation id: {channel_id}
 - Workspace/repo root: {workdir}
-- Memory root: {memory_root}
 - Allowed MFS scopes: {allowed_scopes}
 - MFS URL: {os.getenv("MFS_URL", "http://127.0.0.1:13619")}
 - Slack image attachments directory: {attachments_dir or "(none)"}
@@ -118,13 +112,12 @@ Available helper scripts:
 - {skill_dir / "scripts" / "mfs_ls.py"}
 - {skill_dir / "scripts" / "mfs_search.py"}
 - {skill_dir / "scripts" / "mfs_cat.py"}
-- {skill_dir / "scripts" / "opentag_memory.py"}
 - {skill_dir / "scripts" / "slack_post_message.py"}
 {canvas_instructions}
 
 Local tools:
 - The backend may use the commands and skills installed in its environment, subject to
-  its normal permissions. This includes `gws` when it is installed and authenticated.
+  its normal permissions.
 - Each tool's own credentials and OAuth grants determine what it can do; Open Tag does
   not add per-tool feature flags or caller allowlists.
 - Do not expose tokens or other credentials.
@@ -154,13 +147,11 @@ def run_codex_once(
     *,
     skill_dir: Path,
     workdir: Path,
-    memory_root: Path,
     attachments_dir: Path | None,
     timeout: int,
     model: str | None = None,
     reasoning_effort: str | None = None,
 ) -> tuple[int, str]:
-    memory_root.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("r", suffix=".txt", encoding="utf-8", delete=False) as f:
         output_path = Path(f.name)
     cmd = [
@@ -173,8 +164,6 @@ def run_codex_once(
         str(workdir),
         "--add-dir",
         str(skill_dir),
-        "--add-dir",
-        str(memory_root),
         "--skip-git-repo-check",
         "--output-last-message",
         str(output_path),
@@ -324,7 +313,6 @@ def codex_stream_command(
     *,
     skill_dir: Path,
     workdir: Path,
-    memory_root: Path,
     attachments_dir: Path | None,
     output_path: Path,
     model: str | None = None,
@@ -341,8 +329,6 @@ def codex_stream_command(
         str(workdir),
         "--add-dir",
         str(skill_dir),
-        "--add-dir",
-        str(memory_root),
         "--skip-git-repo-check",
         "--output-last-message",
         str(output_path),
@@ -364,13 +350,11 @@ def run_codex_events(
     *,
     skill_dir: Path,
     workdir: Path,
-    memory_root: Path,
     attachments_dir: Path | None,
     timeout: int,
     model: str | None = None,
     reasoning_effort: str | None = None,
 ) -> int:
-    memory_root.mkdir(parents=True, exist_ok=True)
     attempts = max(1, int(os.getenv("OPENTAG_BACKEND_ATTEMPTS", "3")))
     last_code = 1
     last_output = ""
@@ -383,7 +367,6 @@ def run_codex_events(
                     prompt,
                     skill_dir=skill_dir,
                     workdir=workdir,
-                    memory_root=memory_root,
                     attachments_dir=attachments_dir,
                     output_path=output_path,
                     model=model,
@@ -415,7 +398,6 @@ def claude_stream_command(
     *,
     skill_dir: Path,
     workdir: Path,
-    memory_root: Path,
     attachments_dir: Path | None,
 ) -> list[str]:
     cmd = [
@@ -430,8 +412,6 @@ def claude_stream_command(
         str(workdir),
         "--add-dir",
         str(skill_dir),
-        "--add-dir",
-        str(memory_root),
     ]
     if attachments_dir:
         cmd.extend(["--add-dir", str(attachments_dir)])
@@ -443,16 +423,13 @@ def run_claude_events(
     *,
     skill_dir: Path,
     workdir: Path,
-    memory_root: Path,
     attachments_dir: Path | None,
     timeout: int,
 ) -> int:
-    memory_root.mkdir(parents=True, exist_ok=True)
     code, output, emitted_final, timed_out = stream_command(
         claude_stream_command(
             skill_dir=skill_dir,
             workdir=workdir,
-            memory_root=memory_root,
             attachments_dir=attachments_dir,
         ),
         parser=parse_claude_stream_event,
@@ -477,7 +454,6 @@ def run_codex(
     *,
     skill_dir: Path,
     workdir: Path,
-    memory_root: Path,
     attachments_dir: Path | None,
     timeout: int,
     model: str | None = None,
@@ -491,7 +467,6 @@ def run_codex(
             prompt,
             skill_dir=skill_dir,
             workdir=workdir,
-            memory_root=memory_root,
             attachments_dir=attachments_dir,
             timeout=timeout,
             model=model,
@@ -515,11 +490,9 @@ def run_claude(
     *,
     skill_dir: Path,
     workdir: Path,
-    memory_root: Path,
     attachments_dir: Path | None,
     timeout: int,
 ) -> int:
-    memory_root.mkdir(parents=True, exist_ok=True)
     # Pass the prompt on stdin, not as a trailing positional: `claude --add-dir`
     # is variadic and would otherwise swallow the prompt as another directory.
     cmd = [
@@ -530,8 +503,6 @@ def run_claude(
         str(workdir),
         "--add-dir",
         str(skill_dir),
-        "--add-dir",
-        str(memory_root),
     ]
     if attachments_dir:
         cmd.extend(["--add-dir", str(attachments_dir)])
@@ -578,7 +549,6 @@ def main() -> int:
         type=Path,
         default=Path(os.getenv("OPENTAG_WORKDIR", default_workdir())),
     )
-    parser.add_argument("--memory-root", type=Path, default=default_memory_root())
     parser.add_argument(
         "--timeout", type=int, default=int(os.getenv("OPENTAG_TIMEOUT_SECONDS", "420"))
     )
@@ -592,7 +562,6 @@ def main() -> int:
     prompt = build_prompt(
         skill_dir=args.skill_dir.resolve(),
         workdir=workdir,
-        memory_root=args.memory_root.expanduser().resolve(),
         channel_id=args.channel_id,
         question=args.question,
         thread_text=read_text(args.thread_file),
@@ -607,7 +576,6 @@ def main() -> int:
                     prompt,
                     skill_dir=args.skill_dir.resolve(),
                     workdir=args.workdir.resolve(),
-                    memory_root=args.memory_root.expanduser().resolve(),
                     attachments_dir=args.attachments_dir.resolve() if args.attachments_dir else None,
                     timeout=args.timeout,
                     model=args.model,
@@ -617,7 +585,6 @@ def main() -> int:
                 prompt,
                 skill_dir=args.skill_dir.resolve(),
                 workdir=args.workdir.resolve(),
-                memory_root=args.memory_root.expanduser().resolve(),
                 attachments_dir=args.attachments_dir.resolve() if args.attachments_dir else None,
                 timeout=args.timeout,
             )
@@ -626,7 +593,6 @@ def main() -> int:
                 prompt,
                 skill_dir=args.skill_dir.resolve(),
                 workdir=args.workdir.resolve(),
-                memory_root=args.memory_root.expanduser().resolve(),
                 attachments_dir=args.attachments_dir.resolve() if args.attachments_dir else None,
                 timeout=args.timeout,
                 model=args.model,
@@ -636,7 +602,6 @@ def main() -> int:
             prompt,
             skill_dir=args.skill_dir.resolve(),
             workdir=args.workdir.resolve(),
-            memory_root=args.memory_root.expanduser().resolve(),
             attachments_dir=args.attachments_dir.resolve() if args.attachments_dir else None,
             timeout=args.timeout,
         )

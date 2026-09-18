@@ -93,12 +93,12 @@ def install(source: Path, home: Path, bin_dir: Path, *, dependencies: bool = Tru
         release = home / "releases" / f"{version}-{uuid.uuid4().hex[:12]}"
         # An allowlist prevents copying credentials, worktree metadata, or personal skills.
         release.mkdir()
-        for name in ("scripts", "references", "skills"):
+        for name in ("scripts", "references"):
             shutil.copytree(source / name, release / name,
                             ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         for name in ("VERSION", "LICENSE", "NOTICE", "README.md", "RELEASE.md", "SECURITY.md",
                      "SKILL.md", ".env.example", "requirements-runtime.txt", "slack-app-manifest.yaml",
-                     "tag", "tag.cmd", "install.sh", "install.ps1", "OpenTag Control.command", "OpenTag Setup.command"):
+                     "tag", "tag.cmd", "install.sh", "install.ps1"):
             shutil.copy2(source / name, release / name)
         (release / "tag").chmod(0o755)
         (release / "install.sh").chmod(0o755)
@@ -113,10 +113,6 @@ def install(source: Path, home: Path, bin_dir: Path, *, dependencies: bool = Tru
             # Explicit test/development mode; never advertised as a complete install.
             python = Path(sys.executable)
         for backend in (".agents", ".claude"):
-            for skill in (release / "skills").iterdir():
-                target = home / "workspace" / backend / "skills" / skill.name
-                if skill.is_dir() and (skill / "SKILL.md").is_file() and not target.exists():
-                    shutil.copytree(skill, target)
             bundled = home / "workspace" / backend / "skills/open-tag-admin"
             if not bundled.exists():
                 bundled.mkdir(parents=True)

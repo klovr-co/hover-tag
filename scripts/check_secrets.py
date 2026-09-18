@@ -31,6 +31,8 @@ def validate_secrets(root: Path) -> list[str]:
         if not path.exists():
             continue  # A tracked file may have been deleted in the working tree.
         relative = path.relative_to(root)
+        if not path.exists():
+            continue
         if str(relative) in FORBIDDEN_TRACKED or ".runtime" in relative.parts:
             errors.append(f"generated or private state is tracked: {relative}")
             continue
