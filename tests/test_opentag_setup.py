@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import stat
+import os
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -120,6 +121,7 @@ class OpenTagSetupTests(unittest.TestCase):
         self.assertIn("export OPENTAG_WORKDIR='/tmp/Tag workspace'", rendered)
         self.assertIn("export TOKEN='a'\"'\"'b'", rendered)
 
+    @unittest.skipIf(os.name == "nt", "Windows uses account directory ACLs, not POSIX mode bits")
     def test_write_config_uses_owner_only_permissions(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             path = Path(temporary_directory) / ".env"

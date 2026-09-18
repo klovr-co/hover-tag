@@ -8,6 +8,7 @@ import mimetypes
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -723,7 +724,7 @@ def run_backend(
         thread_file = Path(f.name)
 
     cmd = [
-        "python3",
+        sys.executable,
         str(skill_dir() / "scripts" / "opentag_agent.py"),
         "--backend",
         backend,
@@ -791,7 +792,7 @@ def run_backend_events(
         thread_file = Path(f.name)
 
     cmd = [
-        "python3",
+        sys.executable,
         str(skill_dir() / "scripts" / "opentag_agent.py"),
         "--backend",
         backend,

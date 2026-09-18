@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import json
 import os
 import shlex
 import shutil
@@ -15,6 +16,11 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+try:
+    from tag_paths import tag_home, initialize
+except ImportError:
+    from scripts.tag_paths import tag_home, initialize
 
 
 @dataclass(frozen=True)
@@ -118,7 +124,8 @@ def check_prerequisites(backend: str) -> bool:
         print(f"{'✓' if found else '✗'} {command}: {purpose}")
         ok = ok and bool(found)
 
-    if not shutil.which("mfs-server"):
+    installed_server = Path(sys.executable).parent / ("mfs-server.exe" if os.name == "nt" else "mfs-server")
+    if not installed_server.is_file() and not shutil.which("mfs-server"):
         print("✗ mfs-server: MFS memory server")
         mfs_server_spec = runtime_requirement("mfs-server")
         if shutil.which("uv") and confirm(f"Install {mfs_server_spec} with uv now?"):
@@ -154,14 +161,19 @@ def render_env(values: dict[str, str]) -> str:
 
 
 def write_config(path: Path, values: dict[str, str]) -> None:
-    path.write_text(render_env(values))
-    path.chmod(0o600)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    content = json.dumps(values, indent=2) + "\n" if path.suffix == ".json" else render_env(values)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.write(content)
+    if os.name != "nt":
+        path.chmod(0o600)
     print(f"\nWrote private configuration: {path}")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Guided Tag first-run setup.")
-    parser.add_argument("--config", type=Path, default=ROOT / ".env", help="configuration file to create")
+    parser.add_argument("--config", type=Path, default=tag_home() / "config/settings.json", help="configuration file to create")
     parser.add_argument("--force", action="store_true", help="replace an existing configuration file")
     args = parser.parse_args()
     config_path = args.config.expanduser().resolve()
@@ -176,7 +188,9 @@ def main() -> int:
     backend = choose_backend()
     if not selected_backend_available(backend):
         return 1
-    workspace = absolute_directory("Workspace the agent may use", ROOT)
+    initialize(tag_home())
+    workspace = tag_home() / "workspace"
+    print(f"Agent workspace: {workspace}")
     mfs_scope = ask("Allowed MFS scopes (comma-separated)", f"file://local{workspace}")
     values = {
         "MFS_URL": ask("MFS URL", "http://127.0.0.1:13619"),
@@ -203,7 +217,7 @@ def main() -> int:
     prerequisites_ok = check_prerequisites(backend)
     print("\nNext steps:")
     print("1. Add/index at least one source in MFS that matches MFS_ALLOWED_SCOPES.")
-    print("2. Run ./tag start. It starts MFS, runs preflight, and starts the bot.")
+    print("2. Run tag start. It starts MFS, runs preflight, and starts the bot.")
     print("3. Mention the bot in the configured sandbox channel.")
     if not prerequisites_ok:
         print("\nFinish the failed prerequisite checks before starting Tag.")
