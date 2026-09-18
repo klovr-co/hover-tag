@@ -28,6 +28,8 @@ def tracked_files(root: Path) -> list[Path]:
 def validate_secrets(root: Path) -> list[str]:
     errors: list[str] = []
     for path in tracked_files(root):
+        if not path.exists():
+            continue  # A tracked file may have been deleted in the working tree.
         relative = path.relative_to(root)
         if not path.exists():
             continue

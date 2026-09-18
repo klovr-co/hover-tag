@@ -116,9 +116,9 @@ come from the CLI backend installed on your machine.
 
 ## Quick start
 
-The v0.1 alpha supported path is Slack + Codex + local MFS on macOS or Linux.
-Claude Code remains an experimental backend and is not part of the launch
-qualification.
+TAG provides installers for macOS, Linux, and native Windows. The primary path
+is Slack + Codex + local MFS; Claude Code remains experimental. Native Windows
+live Slack/backend qualification is still required before release.
 
 You need Python 3.10+, [`uv`](https://docs.astral.sh/uv/), `curl`, and a working
 Codex CLI login. Then run:
@@ -129,9 +129,11 @@ cd tag
 ./install.sh
 ```
 
-The installer verifies pinned MFS components, creates a private `.env`, and
-guides you through the Slack credentials and owner member ID it cannot authorize
-on your behalf.
+The installer creates a permanent application home and an isolated runtime,
+independent of this checkout. Add its printed command directory to PATH, then
+run `tag setup` for Slack credentials and your owner member ID. Windows users
+run `./install.ps1` from PowerShell instead. See [installation and TAG home](docs/installation.md)
+for platform paths, download installers, skills, MCP, and migration.
 When prompted, create the app from [`slack-app-manifest.yaml`](slack-app-manifest.yaml)
 at **Slack API → Your Apps → Create New App → From an app manifest**, install it
 to your workspace, and create an app-level `xapp-` token with
@@ -140,9 +142,9 @@ to your workspace, and create an app-level `xapp-` token with
 Start Tag and inspect it with:
 
 ```bash
-./tag start
-./tag status
-./tag logs
+tag start
+tag status
+tag logs
 ```
 
 Mention `@OpenMax` in the sandbox channel you configured:
@@ -165,7 +167,8 @@ mention. Operators can restrict the selectable models with
 `OPENTAG_CODEX_MODELS` and the reasoning levels with
 `OPENTAG_CODEX_REASONING_EFFORTS`.
 
-Stop the local bridges and MFS server with `./tag stop`.
+Stop TAG-managed processes with `tag stop`. Independently started MFS servers
+are left running.
 
 ### Optional admin skill
 
@@ -181,10 +184,14 @@ create or approve a Slack app on behalf of your workspace administrator.
 
 ### Upgrade or uninstall
 
-To upgrade, stop Tag, pull the desired release, and rerun `./install.sh`; your
-existing `.env` is preserved. To uninstall Tag, run `./tag stop`, delete the
-clone, and optionally remove MFS with `uv tool uninstall mfs-server` and the
-`mfs` binary from `~/.local/bin` if the installer placed it there.
+To upgrade, rerun the installer, then `tag stop` and `tag start`. Configuration,
+personal skills, MCP settings, and state are preserved. `tag rollback` selects
+the previous release while stopped. Use `tag migrate --from /path/to/old/checkout`
+to copy legacy configuration and skills without deleting the originals.
+
+To uninstall, stop TAG, back up personal files, then remove its managed launcher
+and application home. See [installation](docs/installation.md) for details.
+For source development, use `./tag` with an isolated absolute `TAG_HOME`.
 
 ## Slack credentials
 
