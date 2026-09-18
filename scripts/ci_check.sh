@@ -12,9 +12,6 @@ python3 scripts/check_docs.py
 python3 scripts/check_secrets.py
 python3 -m compileall -q scripts tests
 sh -n install.sh tag scripts/ci_check.sh
-if command -v zsh >/dev/null 2>&1; then
-    zsh -n "OpenTag Control.command" "OpenTag Setup.command"
-fi
 
 PY_YAML_SPEC=$(awk '/^PyYAML==/ { print; exit }' requirements-ci.txt)
 SLACK_BOLT_SPEC=$(awk '/^slack-bolt==/ { print; exit }' requirements-runtime.txt)

@@ -131,7 +131,7 @@ flowchart LR
 
 1. The operator installs Python 3.10+, `uv`, MFS, and an authenticated Codex or
    Claude Code CLI.
-2. The operator runs `./install.sh` or the guided setup launcher.
+2. The operator runs `./install.sh`.
 3. Setup records:
    - chat transport: `slack`;
    - backend: `codex` or `claude`;
