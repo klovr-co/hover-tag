@@ -186,10 +186,6 @@ existing `.env` is preserved. To uninstall Tag, run `./tag stop`, delete the
 clone, and optionally remove MFS with `uv tool uninstall mfs-server` and the
 `mfs` binary from `~/.local/bin` if the installer placed it there.
 
-The macOS `OpenTag Setup.command` and `OpenTag Control.command` launchers remain
-available for existing installations; `./install.sh` and `./tag` are the
-portable supported interface.
-
 ## Slack credentials
 
 Tag uses Slack credentials in two separate places:
