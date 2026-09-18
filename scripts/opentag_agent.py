@@ -89,7 +89,7 @@ Available helper scripts:
 
 Local tools:
 - The backend may use the commands and skills installed in its environment, subject to
-  its normal permissions. This includes `gws` when it is installed and authenticated.
+  its normal permissions.
 - Each tool's own credentials and OAuth grants determine what it can do; Open Tag does
   not add per-tool feature flags or caller allowlists.
 - Do not expose tokens or other credentials.

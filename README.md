@@ -275,7 +275,6 @@ Use a non-production host or a real external sandbox for stronger isolation.
 - [Backend behavior](references/backends.md)
 - [Runtime agent contract](references/runtime-agent.md)
 - [Memory model](references/memory.md)
-- [Included skills](docs/skills.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Security policy](SECURITY.md)
 - [Release contract](RELEASE.md)
