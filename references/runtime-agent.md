@@ -12,7 +12,7 @@ the behavior contract for the fresh CLI agent launched by the bridge.
   session continuity, each mention is a fresh run.
 - **Memory**: retrievable context in MFS. This can include Slack history that the
   operator's Slack connector is allowed to index, plus repositories, docs,
-  issues, databases, object stores, or local seed notes.
+  issues, databases, object stores, or web sources.
 - **Tools**: external systems exposed through MFS connectors for read/search, and
   any command, skill, or file tool available to the backend in the workspace.
   A tool's own credentials and grants determine its capabilities; Open Tag does not
@@ -22,7 +22,6 @@ the behavior contract for the fresh CLI agent launched by the bridge.
 
 - Slack channel id.
 - Current Slack thread text.
-- Optional local seed-note root.
 - Allowed MFS scopes.
 - Helper script paths.
 - Backend workspace directory.
@@ -50,8 +49,7 @@ the behavior contract for the fresh CLI agent launched by the bridge.
    workspace using the CLI backend's normal tools. Keep changes scoped and
    summarize verification.
 7. If the deployment includes indexed Slack history or other permitted sources
-   in `MFS_ALLOWED_SCOPES`, use those as retrievable context. The local memory
-   helper is optional seed state, not the main memory model.
+   in `MFS_ALLOWED_SCOPES`, use those as retrievable context.
 8. Return only the final Slack-ready answer.
 
 When a Slack user explicitly asks for a message to be posted, sent, or shared
@@ -80,15 +78,14 @@ sandbox, explicit tool allowlists, and auditable data-source policies.
   and allowed MFS scopes.
 - Data boundary: `MFS_ALLOWED_SCOPES` controls what MFS helpers search by
   default. This can include indexed Slack history, repos, docs, issue trackers,
-  databases, object stores, or local seed notes.
+  databases, object stores, or web sources.
 - Connector boundary: each MFS connector still enforces the credentials,
   channel allowlists, source allowlists, and object permissions configured by
   the operator.
 - Execution boundary: the backend runs with the permissions used to start the
   bridge. Use a trusted workspace for demos and a sandbox for production.
 - Memory boundary: durable context is whatever the operator has indexed and
-  authorized through MFS. Local seed notes are only a small convenience for
-  deterministic demos.
+  authorized through MFS.
 - Tool boundary: locally installed commands and skills run with the permissions of
   the backend process. Their own credentials and authorization grants apply. Run the
   bot in a trusted channel and use a real sandbox for stronger isolation.
