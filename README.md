@@ -116,7 +116,7 @@ come from the CLI backend installed on your machine.
 
 ## Quick start
 
-The v0.1.0-alpha supported path is Slack + Codex + local MFS on macOS or Linux.
+The v0.1 alpha supported path is Slack + Codex + local MFS on macOS or Linux.
 Claude Code remains an experimental backend and is not part of the launch
 qualification.
 
@@ -200,6 +200,13 @@ Tag uses Slack credentials in two separate places:
 | `SLACK_BOT_TOKEN` (`xoxb-…`) | Reads permitted conversations and posts replies. |
 | MFS Slack connector token | Optionally indexes approved Slack channels as durable memory. |
 
+The local agent backend inherits `SLACK_BOT_TOKEN`, `MFS_TOKEN`, and other
+credentials already present in the bridge environment. Tag withholds the
+Socket Mode app token and Slack access-control configuration from the backend,
+but the MFS and Slack helper restrictions are application guardrails—not a
+hardened capability boundary. Run Tag with dedicated, least-privilege
+credentials in an isolated environment.
+
 The bridge app normally needs these bot scopes:
 
 - `app_mentions:read`
@@ -250,12 +257,15 @@ Current safeguards include:
 - MFS scope checks for search, read, and directory listing;
 - a required Slack caller allowlist seeded with the owner during setup;
 - an optional `SLACK_CHANNEL_ID` gate;
-- bridge credential isolation;
+- withholding of the Socket Mode token and bridge access-control settings from
+  backend processes;
 - bounded attachment size and thread context;
 - task timeouts and limited retries;
 - automatic Codex workspace safety review.
 
-Tag does **not** provide a hardened sandbox, organization-wide identity policy,
+The backend's inherited credentials can be used directly by tools or shell
+commands, bypassing Tag's scoped helpers. Tag does **not** provide a hardened
+sandbox, organization-wide identity policy,
 auditable approvals, spend controls, or enterprise administration. Claude Code
 currently runs with permission checks skipped. Locally installed tools use their
 own credentials and permissions.
