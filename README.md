@@ -121,11 +121,30 @@ Claude Code remains an experimental backend and is not part of the launch
 qualification.
 
 You need Python 3.10+, [`uv`](https://docs.astral.sh/uv/), `curl`, and a working
-Codex CLI login. Then run:
+Codex CLI login. Clone Tag first:
 
 ```bash
 git clone https://github.com/klovr-co/tag.git
 cd tag
+```
+
+### Agent-guided setup (recommended)
+
+Install Tag's admin skill for Codex:
+
+```bash
+npx skills add klovr-co/tag --skill open-tag-admin -a codex -g
+```
+
+Open a new Codex task in the cloned repository and ask: `Set up Tag for me.`
+The agent can check prerequisites, run the installer, and diagnose failures. It
+will pause when Slack requires you to create or approve the app.
+
+### Manual setup
+
+Run the same guided installer yourself:
+
+```bash
 ./install.sh
 ```
 
@@ -167,17 +186,8 @@ mention. Operators can restrict the selectable models with
 
 Stop the local bridges and MFS server with `./tag stop`.
 
-### Optional admin skill
-
-Codex can guide later configuration and troubleshooting through the bundled
-admin skill:
-
-```bash
-npx skills add klovr-co/tag --skill open-tag-admin -a codex -g
-```
-
-Open a new Codex task and ask it to set up or diagnose Tag. The skill cannot
-create or approve a Slack app on behalf of your workspace administrator.
+The admin skill also supports later configuration and troubleshooting. It
+cannot create or approve a Slack app on behalf of your workspace administrator.
 
 ### Upgrade or uninstall
 

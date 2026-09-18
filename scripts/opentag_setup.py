@@ -10,10 +10,35 @@ import shlex
 import shutil
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@dataclass(frozen=True)
+class BackendOption:
+    key: str
+    name: str
+    note: str
+    install_url: str
+
+
+BACKEND_OPTIONS = (
+    BackendOption(
+        key="codex",
+        name="Codex",
+        note="Recommended and supported",
+        install_url="https://learn.chatgpt.com/docs/codex/cli",
+    ),
+    BackendOption(
+        key="claude",
+        name="Claude Code",
+        note="Experimental",
+        install_url="https://code.claude.com/docs/en/setup",
+    ),
+)
 
 
 def runtime_requirement(package: str) -> str:
@@ -40,12 +65,36 @@ def ask_required(prompt: str) -> str:
         print("A value is required.")
 
 
-def choose(prompt: str, options: tuple[str, ...], default: str) -> str:
+def choose_backend() -> str:
+    print("Choose the local agent that will run Tag tasks:\n")
+    for index, option in enumerate(BACKEND_OPTIONS, start=1):
+        availability = "installed" if shutil.which(option.key) else "not found"
+        print(f"  {index}. {option.name:<12} {option.note:<27} {availability}")
+
+    aliases = {
+        "1": "codex",
+        "codex": "codex",
+        "2": "claude",
+        "claude": "claude",
+        "claude code": "claude",
+    }
     while True:
-        answer = ask(f"{prompt} ({'/'.join(options)})", default).lower()
-        if answer in options:
-            return answer
-        print(f"Choose one of: {', '.join(options)}.")
+        answer = ask("\nAgent", "1").lower()
+        backend = aliases.get(answer)
+        if backend:
+            return backend
+        print("Choose 1 for Codex or 2 for Claude Code.")
+
+
+def selected_backend_available(backend: str) -> bool:
+    option = next(option for option in BACKEND_OPTIONS if option.key == backend)
+    if shutil.which(option.key):
+        return True
+
+    print(f"\n{option.name} was selected, but `{option.key}` is not available on PATH.")
+    print(f"Install and sign in first: {option.install_url}")
+    print("Then run ./tag setup again.")
+    return False
 
 
 def ask_secret(prompt: str, prefix: str) -> str:
@@ -124,7 +173,9 @@ def main() -> int:
 
     print("Tag guided setup\n")
     print("Provider authorization stays in your own browser and terminal.\n")
-    backend = choose("Agent backend", ("codex", "claude"), "codex")
+    backend = choose_backend()
+    if not selected_backend_available(backend):
+        return 1
     workspace = absolute_directory("Workspace the agent may use", ROOT)
     mfs_scope = ask("Allowed MFS scopes (comma-separated)", f"file://local{workspace}")
     values = {
