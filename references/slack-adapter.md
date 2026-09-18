@@ -39,7 +39,7 @@ Open Tag only consumes already-indexed scopes:
 ## End-To-End Checklist
 
 1. Pick an isolated Slack channel, preferably private, for the first run.
-2. Create a Slack app in the target workspace named **OpenMax**.
+2. Create a Slack app in the target workspace named **Tag**.
 3. Enable Socket Mode and create an app-level token with `connections:write`.
    Save it as `SLACK_APP_TOKEN` (`xapp-...`).
 4. Add bot scopes, install the app, and save the bot token as
@@ -61,7 +61,7 @@ diagnose failures, but it cannot bypass workspace policy.
 Create or reuse a Slack app:
 
 1. Go to <https://api.slack.com/apps>.
-2. Create a new app from scratch in the target workspace. Name it **OpenMax** so
+2. Create a new app from scratch in the target workspace. Name it **Tag** so
    the teammate identity stays stable when the backend changes. The name is
    cosmetic—Tag strips the mention before invoking the configured backend.
 3. Open **Socket Mode**, enable it, and create an app-level token with:

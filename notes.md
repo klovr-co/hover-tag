@@ -126,7 +126,7 @@ pass automatic preflight → start the bot → send a test mention
 - GitHub CI: pass on macOS/Linux and Python 3.10/3.14.
 - Clean-install smoke: pass on macOS and Linux.
 - Live Slack preflight and Socket Mode connection: pass.
-- Human-authored Slack mention and exactly one correlated OpenMax reply: pass;
+- Human-authored Slack mention and exactly one correlated Tag reply: pass;
   bot self-mentions are correctly suppressed by Slack.
 - Public repository visibility, final merge/tag/prerelease, and X post: pending
   explicit owner approval after the live mention passes.
