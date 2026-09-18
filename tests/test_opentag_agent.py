@@ -11,7 +11,7 @@ from scripts import opentag_agent
 
 
 class OpenTagAgentPromptTests(unittest.TestCase):
-    def test_prompt_treats_gws_as_a_normal_local_tool(self) -> None:
+    def test_prompt_treats_installed_tools_as_normal_local_tools(self) -> None:
         previous_transport = os.environ.get("OPENTAG_TRANSPORT")
         os.environ["OPENTAG_TRANSPORT"] = "slack"
         try:
@@ -20,7 +20,7 @@ class OpenTagAgentPromptTests(unittest.TestCase):
                 workdir=Path("/tmp/workspace"),
                 memory_root=Path("/tmp/memory"),
                 channel_id="C123",
-                question="Check my email",
+                question="Use an installed local tool",
                 thread_text="",
                 attachments_dir=None,
                 allowed_scopes="file://local/tmp/workspace",
@@ -31,12 +31,11 @@ class OpenTagAgentPromptTests(unittest.TestCase):
             else:
                 os.environ["OPENTAG_TRANSPORT"] = previous_transport
 
-        self.assertIn("This includes `gws` when it is installed and authenticated.", prompt)
+        self.assertIn("commands and skills installed in its environment", prompt)
         self.assertIn("mfs_ls.py", prompt)
         self.assertIn("not add per-tool feature flags or caller allowlists.", prompt)
-        self.assertNotIn("OPENTAG_GWS_ENABLED", prompt)
-        self.assertNotIn("OPENTAG_GWS_ALLOWED_CALLERS", prompt)
-        self.assertNotIn("read-only Gmail operations", prompt)
+        self.assertNotIn("gws", prompt.lower())
+        self.assertNotIn("gmail", prompt.lower())
 
     def test_slack_prompt_includes_current_channel_posting_capability(self) -> None:
         previous_transport = os.environ.get("OPENTAG_TRANSPORT")
