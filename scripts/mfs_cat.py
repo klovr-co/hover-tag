@@ -10,6 +10,11 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+try:
+    from scripts.mfs_scope_policy import is_path_allowed, parse_scopes
+except ModuleNotFoundError:  # Direct execution: python3 scripts/mfs_cat.py
+    from mfs_scope_policy import is_path_allowed, parse_scopes
+
 
 def token_from_env() -> str | None:
     if os.getenv("MFS_TOKEN"):
@@ -30,20 +35,6 @@ def request_json(path: str, params: dict[str, Any]) -> dict[str, Any]:
     req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=60) as response:
         return json.loads(response.read().decode("utf-8"))
-
-
-def parse_scopes(raw: str) -> list[str]:
-    return [scope.strip() for scope in raw.split(",") if scope.strip()]
-
-
-def is_path_allowed(path: str, allowed_scopes: list[str]) -> bool:
-    if "--all" in allowed_scopes:
-        return True
-    for allowed in allowed_scopes:
-        normalized = allowed.rstrip("/")
-        if path == normalized or path.startswith(f"{normalized}/"):
-            return True
-    return False
 
 
 def main() -> int:
