@@ -1,0 +1,160 @@
+# Installation and TAG home
+
+TAG installs independently of any Git checkout. Its default home is:
+
+| Platform | Home |
+| --- | --- |
+| macOS | `~/Library/Application Support/Tag` |
+| Linux | `${XDG_DATA_HOME:-~/.local/share}/tag` |
+| Windows | `%LOCALAPPDATA%\Tag` |
+
+Set `TAG_HOME` to an absolute path before installing to choose another home.
+Use an isolated `TAG_HOME` for development. WSL uses the Linux layout.
+
+```text
+Tag/
+  releases/<version>-<installation-id>/
+  current.json
+  previous.json
+  bin/
+  config/settings.json
+  workspace/
+    .agents/skills/          # Codex skills
+    .codex/config.toml      # TAG-only Codex MCP definitions
+    .claude/skills/         # Claude skills
+    .mcp.json              # Claude project MCP definitions, when configured
+  integrations/bin/        # optional TAG-only tool executables; prepended to PATH
+  state/                   # logs, process identities, conversation settings
+  tmp/                     # disposable task files and attachments
+```
+
+Configuration is JSON on every platform and is never executed as shell code.
+POSIX installations create private directories; Windows uses the account's ACL.
+MFS retains its own existing data and authentication locations, as do external
+tools such as `gws`. The installer does not relocate their credentials.
+
+## Install from a checkout
+
+Install Python 3.10+, [uv](https://docs.astral.sh/uv/), and your chosen agent CLI.
+Authenticate the agent CLI separately. No administrator privileges are needed.
+
+macOS/Linux:
+
+```sh
+./install.sh
+tag setup
+tag start
+```
+
+Windows PowerShell:
+
+```powershell
+./install.ps1
+tag setup
+tag start
+```
+
+The installer prints the command directory. Add `~/.local/bin` on macOS/Linux
+or `%LOCALAPPDATA%\Tag\bin` on Windows to your user PATH if it is not already
+present. It does not rewrite shell profiles or Windows PATH. Use `--bin-dir`
+(PowerShell: `-BinDir`) to choose a different command directory. Existing
+unrelated commands are never replaced.
+
+Each release has its own Python environment with the pinned runtime requirements.
+The MFS Python server is used directly; installation does not require the
+Unix-only MFS CLI binary. Google Workspace CLI and third-party MCP packages are
+optional integrations, installed and authenticated separately.
+
+## Download installer
+
+These endpoints become usable after this implementation is merged and a release
+with `tag-<version>.zip` and `SHA256SUMS` has been published. A prerelease must be
+selected explicitly; omitting the version selects GitHub's latest stable release.
+
+```sh
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/klovr-co/tag/main/install.sh | sh -s -- --version 0.1.0-alpha
+```
+
+```powershell
+$installer = Join-Path $env:TEMP 'tag-install.ps1'
+Invoke-WebRequest https://raw.githubusercontent.com/klovr-co/tag/main/install.ps1 -OutFile $installer
+& $installer -Version 0.1.0-alpha
+```
+
+Release downloads are checked against the release's SHA-256 manifest. This checks
+integrity; it is not an independent publisher signature. The HTTPS bootstrap
+script and GitHub repository remain trust inputs.
+
+## Integrations
+
+Place TAG-specific Codex skills in `workspace/.agents/skills/<name>/SKILL.md`.
+Bundled Google Workspace skills are copied there on initial installation;
+upgrades preserve existing skill directories, including local edits.
+Global backend skills and authentication remain available, subject to the
+backend's own discovery rules and context limits.
+
+Put Codex MCP definitions in `workspace/.codex/config.toml`:
+
+```toml
+[mcp_servers.example]
+command = "example-mcp-server"
+args = ["--stdio"]
+env_vars = ["EXAMPLE_API_TOKEN"]
+```
+
+TAG passes these definitions to `codex exec` for that invocation only. Other
+project config keys in this file are not applied by TAG. Use distinct server
+names; matching names override the corresponding global server fields. Names
+must contain only letters, numbers, underscores, or hyphens. Prefer absolute
+paths for local MCP server executables and arguments. Put integration commands
+in `integrations/bin` when they should be available only to TAG.
+
+Use environment references (`env_vars`, `bearer_token_env_var`,
+`env_http_headers`) for MCP secrets. Inline values would become process arguments.
+Configure OAuth with the backend's supported login flow. TAG does not grant
+access merely by adding a server definition; normal backend permissions apply.
+
+Claude remains experimental. It runs from the same stable workspace, with
+project skills under `.claude/skills` and normal Claude project MCP settings in
+`.mcp.json`; use Claude's own trust/approval setup for project MCP servers.
+
+Codex discovery references: [skills](https://developers.openai.com/codex/skills)
+and [MCP](https://developers.openai.com/codex/mcp).
+
+## Operate, upgrade, and migrate
+
+`tag paths` shows storage locations; `tag doctor` checks configuration and
+connectivity. `tag start` runs in the background until stopped or rebooted.
+Use `tag status`, `tag logs`, and `tag stop`. Automatic login startup is not
+configured. A separately managed MFS server is reused and never stopped by TAG.
+
+Rerun the installer to upgrade. Failed dependency installation leaves the active
+release unchanged. Run `tag stop` then `tag start` to activate the new code for
+running services. `tag rollback` selects the previous release after stopping
+TAG. Older releases remain available; no automatic release deletion is performed.
+
+For a legacy checkout, explicitly copy settings and local skills:
+
+```sh
+tag migrate --from /absolute/path/to/old/tag
+```
+
+This reads generated `export KEY=value` configuration as data, copies local
+skills and MCP files, preserves existing destination settings/skills, and leaves
+all originals untouched. Review copied MCP executable paths and `tag doctor`.
+Old `.runtime` process records and logs are not migrated; stop the old instance
+using its original launcher before starting the new installation.
+
+To uninstall, stop TAG, remove its managed command, and remove the selected TAG
+home after backing up any configuration and personal skills you want to keep.
+Global backend configuration, external integration credentials, and MFS data
+are separate and remain untouched.
+
+## Verification
+
+The CI matrix covers macOS, Linux, and native Windows. Unit tests exercise
+installation and upgrade persistence, failure before activation, migration,
+process ownership, and traversal rejection. The installation smoke test installs
+real dependencies and runs the installed command outside the checkout.
+Live Slack and native backend qualification still require an authenticated test
+on each target platform; an offline smoke test does not establish those results.

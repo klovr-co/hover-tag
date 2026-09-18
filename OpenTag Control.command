@@ -1,113 +1,14 @@
 #!/bin/zsh
 # Modified by klovr.co in 2026 for Tag. See NOTICE and repository history.
-# Open Tag's portable local control panel.
-
-set -u
-
-SKILL_DIR="$(cd "$(dirname "$0")" && pwd)"
-SLACK_BOLT_SPEC="$(awk '/^slack-bolt==/ { print; exit }' "$SKILL_DIR/requirements-runtime.txt")"
-if [[ -z "$SLACK_BOLT_SPEC" ]]; then
-  echo "requirements-runtime.txt does not pin slack-bolt."
+set -eu
+tag_source="$(cd "$(dirname "$0")" && pwd)"
+tag_launcher=$(PYTHONPATH="$tag_source/scripts" python3 -c 'from tag_paths import tag_home; print(tag_home() / "bin/tag-launch.py")')
+if [[ ! -f "$tag_launcher" ]]; then
+  print 'Install TAG with ./install.sh first.'
   exit 1
 fi
-ENV_FILE="${OPENTAG_ENV_FILE:-$SKILL_DIR/.env}"
-MFS_LOG="$SKILL_DIR/mfs-server.log"
-SLACK_BRIDGE_LOG="$SKILL_DIR/opentag-slack-bridge.log"
-
-is_mfs_running() {
-  pgrep -f "mfs-server run" >/dev/null 2>&1
-}
-
-is_slack_running() {
-  pgrep -f "$SKILL_DIR/scripts/slack_socket_agent.py --backend" >/dev/null 2>&1
-}
-
-show_status() {
-  echo
-  if is_mfs_running; then
-    echo "✓ MFS memory server: running"
-  else
-    echo "✗ MFS memory server: stopped"
-  fi
-  if is_slack_running; then
-    echo "✓ Open Tag Slack bridge: running"
-  else
-    echo "✗ Open Tag Slack bridge: stopped"
-  fi
-  echo
-}
-
-require_config() {
-  if [[ ! -f "$ENV_FILE" ]]; then
-    echo "Missing Open Tag configuration:"
-    echo "  $ENV_FILE"
-    echo
-    echo "Copy .env.example to .env and fill in your chat/MFS values."
-    return 1
-  fi
-}
-
-start_opentag() {
-  require_config || return 1
-  source "$ENV_FILE"
-
-  if ! is_mfs_running; then
-    echo "Starting MFS memory server…"
-    nohup mfs-server run >"$MFS_LOG" 2>&1 &
-  fi
-
-  local allowed_slack_users="${SLACK_ALLOWED_USER_IDS:-}"
-  if is_slack_running; then
-    echo "Open Tag Slack bridge is already running."
-  elif [[ -z "${SLACK_APP_TOKEN:-}" || -z "${SLACK_BOT_TOKEN:-}" ]]; then
-    echo "Slack bridge not started: set SLACK_APP_TOKEN and SLACK_BOT_TOKEN in $ENV_FILE."
-  elif [[ -z "${allowed_slack_users//[[:space:],]/}" ]]; then
-    echo "Slack bridge not started: set SLACK_ALLOWED_USER_IDS to the owner's Slack member ID in $ENV_FILE."
-  else
-    echo "Starting Open Tag Slack bridge…"
-    (
-      exec uv run --with "$SLACK_BOLT_SPEC" python3 "$SKILL_DIR/scripts/slack_socket_agent.py" \
-        --backend "${OPENTAG_BACKEND:?OPENTAG_BACKEND is required}"
-    ) >"$SLACK_BRIDGE_LOG" 2>&1 &
-  fi
-
-  sleep 2
-  show_status
-}
-
-stop_opentag() {
-  if is_slack_running; then
-    pkill -f "$SKILL_DIR/scripts/slack_socket_agent.py --backend"
-  fi
-  if is_mfs_running; then
-    pkill -f "mfs-server run"
-  fi
-  sleep 1
-  show_status
-}
-
-while true; do
-  clear
-  echo "Open Tag Control"
-  echo "================"
-  show_status
-  echo "1) Start Open Tag"
-  echo "2) Check status"
-  echo "3) Stop Open Tag"
-  echo "4) Open logs folder"
-  echo "q) Quit"
-  echo
-  read "choice?Choose an option: "
-
-  case "$choice" in
-    1) start_opentag ;;
-    2) show_status ;;
-    3) stop_opentag ;;
-    4) open "$SKILL_DIR" ;;
-    q|Q) exit 0 ;;
-    *) echo "Please choose 1–4 or q." ;;
-  esac
-
-  echo
-  read "?Press Return to continue…"
+PS3='Choose a TAG command: '
+select action in status start stop logs doctor quit; do
+  [[ "$action" == quit ]] && break
+  [[ -n "$action" ]] && python3 "$tag_launcher" "$action"
 done

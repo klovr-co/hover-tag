@@ -11,6 +11,25 @@ from scripts import opentag_agent
 
 
 class OpenTagAgentPromptTests(unittest.TestCase):
+    def test_windows_npm_backend_bypasses_command_shell(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            script = root / "node_modules/@openai/codex/bin/codex.js"
+            script.parent.mkdir(parents=True)
+            script.write_text("// fixture")
+            shim = root / "codex.cmd"
+            with patch.object(opentag_agent, "os", SimpleNamespace(name="nt")), patch(
+                "scripts.opentag_agent.shutil.which", side_effect=[str(shim), "node.exe"]
+            ):
+                command = opentag_agent.executable_command(["codex", "exec", "text & special %characters%"])
+            self.assertEqual(command, ["node.exe", str(script), "exec", "text & special %characters%"])
+
+    def test_helper_command_quotes_application_support_paths(self) -> None:
+        path = Path("/Users/person/Library/Application Support/Tag/slack_canvas.py")
+        command = opentag_agent.helper_command(path)
+        self.assertIn("Application Support", command)
+        self.assertIn("'", command)
+
     def test_prompt_treats_gws_as_a_normal_local_tool(self) -> None:
         previous_transport = os.environ.get("OPENTAG_TRANSPORT")
         os.environ["OPENTAG_TRANSPORT"] = "slack"
@@ -62,7 +81,8 @@ class OpenTagAgentPromptTests(unittest.TestCase):
         self.assertIn("new top-level channel message", prompt)
         self.assertIn("only when the user", prompt)
 
-    def test_codex_backend_uses_automatic_workspace_safety_review(self) -> None:
+    @patch("scripts.opentag_agent.backend_command", return_value=["codex"])
+    def test_codex_backend_uses_automatic_workspace_safety_review(self, _backend) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
             root = Path(raw_dir)
             with patch(

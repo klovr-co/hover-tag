@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -13,6 +15,11 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+
+try:
+    from tag_paths import codex_workspace_args
+except ImportError:
+    from scripts.tag_paths import codex_workspace_args
 
 
 def default_skill_dir() -> Path:
@@ -31,6 +38,34 @@ def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8") if path.exists() else ""
 
 
+def backend_command(name: str) -> list[str]:
+    """Resolve Windows npm shims without sending task text through cmd.exe."""
+    if os.name != "nt":
+        return [name]
+    executable = shutil.which(name)
+    if not executable:
+        raise RuntimeError(f"{name} is not installed or is not on PATH")
+    path = Path(executable)
+    if path.suffix.lower() in {".cmd", ".bat"}:
+        package = "@openai/codex/bin/codex.js" if name == "codex" else "@anthropic-ai/claude-code/cli.js"
+        script = path.parent / "node_modules" / package
+        node = shutil.which("node")
+        if not script.is_file() or not node:
+            raise RuntimeError(f"Cannot resolve {name} npm shim; install the native CLI or its standard npm package")
+        return [node, str(script)]
+    return [executable]
+
+
+def executable_command(cmd: list[str]) -> list[str]:
+    return [*backend_command(cmd[0]), *cmd[1:]]
+
+
+def helper_command(path: Path) -> str:
+    if os.name == "nt":
+        return "& " + " ".join("'" + str(item).replace("'", "''") + "'" for item in (sys.executable, path))
+    return shlex.join([sys.executable, str(path)])
+
+
 def build_prompt(
     *,
     skill_dir: Path,
@@ -45,7 +80,7 @@ def build_prompt(
     canvas_instructions = f"""
 Canvas capability:
 - When the user asks to create a Canvas in this Slack channel, you may create
-  a Markdown file in the workspace and call `{skill_dir / "scripts" / "slack_canvas.py"}`
+  a Markdown file in the workspace and call `{helper_command(skill_dir / "scripts" / "slack_canvas.py")}`
   with `--title` and `--markdown-file`. It is already restricted to the channel
   that triggered this current @mention.
 - Never call Slack's HTTP API directly and never expose or print Slack tokens.
@@ -54,7 +89,7 @@ Canvas capability:
 
 Channel-post capability:
 - When the user explicitly asks to post, send, or share a message in this Slack
-  channel, run `python3 {skill_dir / "scripts" / "slack_post_message.py"}`
+  channel, run `{helper_command(skill_dir / "scripts" / "slack_post_message.py")}`
   with `--text`. This creates a new top-level channel message, not a thread reply.
 - It is already restricted to the channel that triggered this @mention. Never
   call Slack's HTTP API directly or use it to post to another channel.
@@ -145,6 +180,7 @@ def run_codex_once(
         str(output_path),
         prompt,
     ]
+    cmd[2:2] = codex_workspace_args(workdir)
     if model:
         cmd[2:2] = ["--model", model]
     if reasoning_effort:
@@ -156,7 +192,7 @@ def run_codex_once(
         ]
     try:
         result = subprocess.run(
-            cmd,
+            executable_command(cmd),
             check=False,
             timeout=timeout,
             text=True,
@@ -228,10 +264,12 @@ def stream_command(
     parser: Callable[[dict[str, Any]], tuple[str, str] | None],
     timeout: int,
     input_text: str | None = None,
+    workdir: Path | None = None,
 ) -> tuple[int, str, bool, bool]:
     """Run a JSONL backend, emitting normalized events as lines arrive."""
     process = subprocess.Popen(
-        cmd,
+        executable_command(cmd),
+        cwd=workdir,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -310,6 +348,7 @@ def codex_stream_command(
         str(output_path),
         prompt,
     ]
+    cmd[2:2] = codex_workspace_args(workdir)
     if model:
         cmd[2:2] = ["--model", model]
     if reasoning_effort:
@@ -419,6 +458,7 @@ def run_claude_events(
         parser=parse_claude_stream_event,
         timeout=timeout,
         input_text=prompt,
+        workdir=workdir,
     )
     if timed_out:
         emit_event("error", f"Open Tag backend timed out after {timeout}s")
@@ -496,7 +536,8 @@ def run_claude(
     if attachments_dir:
         cmd.extend(["--add-dir", str(attachments_dir)])
     result = subprocess.run(
-        cmd,
+        executable_command(cmd),
+        cwd=workdir,
         input=prompt,
         check=False,
         timeout=timeout,

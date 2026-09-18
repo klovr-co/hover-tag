@@ -196,9 +196,10 @@ CLI is available to that backend like any other local tool. Open Tag does not
 maintain a separate Gmail feature flag or caller allowlist; the tool's own OAuth
 grants determine its capabilities.
 
-Open Tag keeps its project-specific skills in `.codex/skills`. This repository
-includes only `gws-shared` and `gws-gmail` there; Codex also retains its normal
-global `~/.codex/skills` discovery.
+The local Tag home can keep project-specific skills in `.codex/skills`. That
+directory is intentionally untracked, so the skills stay with the local Tag
+installation instead of being copied into every Git checkout. Codex also
+retains its normal global `~/.codex/skills` discovery.
 
 ```bash
 gws auth login -s gmail

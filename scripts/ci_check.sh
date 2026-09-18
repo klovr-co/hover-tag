@@ -21,7 +21,7 @@ SLACK_BOLT_SPEC=$(awk '/^slack-bolt==/ { print; exit }' requirements-runtime.txt
 [ -n "$PY_YAML_SPEC" ] && [ -n "$SLACK_BOLT_SPEC" ]
 
 uv run --with "$PY_YAML_SPEC" python3 scripts/check_manifest.py
-uv run --with "$SLACK_BOLT_SPEC" --with "$PY_YAML_SPEC" \
+uv run --with "$SLACK_BOLT_SPEC" --with "$PY_YAML_SPEC" --with psutil==7.0.0 --with tomli==2.2.1 \
     python3 -m unittest discover -s tests -v
 
 git diff --check
