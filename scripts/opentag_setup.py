@@ -131,7 +131,7 @@ def main() -> int:
         "MFS_URL": ask("MFS URL", "http://127.0.0.1:13619"),
         "MFS_ALLOWED_SCOPES": mfs_scope,
         "OPENTAG_BACKEND": backend,
-        "OPENTAG_BOT_NAME": ask("Bot display name", "OpenMax"),
+        "OPENTAG_BOT_NAME": ask("Bot display name", "Tag"),
         "OPENTAG_WORKDIR": str(workspace),
         "OPENTAG_TIMEOUT_SECONDS": ask("Per-task timeout in seconds", "420"),
         "OPENTAG_BACKEND_ATTEMPTS": ask("Backend retry attempts", "3"),

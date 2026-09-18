@@ -934,7 +934,7 @@ def post_final_reply(
 def suggested_bot_name(backend: str) -> str:
     if os.getenv("OPENTAG_BOT_NAME"):
         return os.environ["OPENTAG_BOT_NAME"]
-    return "OpenMax"
+    return "Tag"
 
 
 def slack_channel_allowed(channel: str) -> bool:

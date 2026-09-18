@@ -45,7 +45,7 @@ Slack. They do not disappear into my private Claude or ChatGPT history.
 
 ## What Tag can do
 
-- Respond when someone mentions `@OpenMax` in Slack.
+- Respond when someone mentions `@Tag` in Slack.
 - Read the current thread, including text and image attachments.
 - Summarize an indexed Slack channel instead of seeing only one thread.
 - Search approved Slack history, repositories, documents, issues, databases,
@@ -88,7 +88,7 @@ returns the result where the rest of the team can read and continue the work.
 
 ```text
        ┌──────────────┐
-       │    Slack     │    @OpenMax <task>
+       │    Slack     │    @Tag <task>
        │              │ ◄──── answer ──────┐
        └──────┬───────┘                    │
               │ mention                    │
@@ -145,9 +145,9 @@ Start Tag and inspect it with:
 ./tag logs
 ```
 
-Mention `@OpenMax` in the sandbox channel you configured:
+Mention `@Tag` in the sandbox channel you configured:
 
-> @OpenMax summarize this channel and list the decisions and open questions.
+> @Tag summarize this channel and list the decisions and open questions.
 
 Only the owner member ID entered during setup can invoke Tag initially. Add
 other IDs to the comma-separated `SLACK_ALLOWED_USER_IDS` setting to share access.
