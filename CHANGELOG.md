@@ -25,6 +25,8 @@ All notable changes to Tag are documented here.
 
 - Remove the legacy macOS `.command` launchers. `./install.sh` and `./tag` are
   now the only supported setup and service-control entry points.
+- Remove the bundled Google Workspace skill catalog and project-local Gmail
+  skills. Tag now ships only its core Slack, MFS, and backend integration.
 
 ## [0.1.0-alpha] - 2026-09-09
 
