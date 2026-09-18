@@ -15,6 +15,7 @@ oauth_config:
       - canvases:write
       - chat:write
       - files:read
+      - files:write
       - groups:history
       - groups:read
 settings:

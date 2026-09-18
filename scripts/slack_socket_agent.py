@@ -31,6 +31,7 @@ except ImportError:  # Direct script execution does not create a package context
 MENTION_RE = re.compile(r"<@[^>]+>")
 MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024
 MAX_ATTACHMENT_TEXT_CHARS = 12_000
+MAX_GENERATED_IMAGES = 10
 MAX_REPLY_CHARS = 3_800
 STREAM_START_CHARS = 40
 STREAM_APPEND_CHARS = 200
@@ -75,6 +76,12 @@ TEXT_FILE_TYPES = {
     "typescript",
     "xml",
     "yaml",
+}
+GENERATED_IMAGE_MIME_TYPES = {
+    "image/gif",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
 }
 
 
@@ -363,6 +370,63 @@ def download_thread_text_files(messages: list[dict[str, Any]]) -> list[str]:
             except (OSError, UnicodeError, urllib.error.URLError, ValueError) as exc:
                 lines.append(f"[Could not retrieve Slack text attachment {name}: {exc}]")
     return lines
+
+
+def generated_images_dir(attachment_dir: Path) -> Path:
+    """Return the backend/bridge handoff directory for generated images."""
+    return attachment_dir / "results" / "images"
+
+
+def collect_generated_images(results_dir: Path) -> tuple[list[Path], list[str]]:
+    """Validate bounded image results before giving their paths to Slack."""
+    images: list[Path] = []
+    errors: list[str] = []
+    for path in sorted(results_dir.iterdir(), key=lambda item: item.name.lower()):
+        if path.is_symlink() or not path.is_file():
+            errors.append(f"{path.name}: not a regular file")
+            continue
+        mime_type = mimetypes.guess_type(path.name)[0]
+        if mime_type not in GENERATED_IMAGE_MIME_TYPES:
+            errors.append(f"{path.name}: unsupported image type")
+            continue
+        try:
+            size = path.stat().st_size
+        except OSError as exc:
+            errors.append(f"{path.name}: {exc}")
+            continue
+        if size == 0:
+            errors.append(f"{path.name}: empty file")
+            continue
+        if size > MAX_ATTACHMENT_BYTES:
+            errors.append(f"{path.name}: exceeds the 15 MB safety limit")
+            continue
+        if len(images) >= MAX_GENERATED_IMAGES:
+            errors.append(f"{path.name}: exceeds the {MAX_GENERATED_IMAGES}-image result limit")
+            continue
+        images.append(path)
+    return images, errors
+
+
+def upload_generated_images(
+    client: Any,
+    channel: str,
+    thread_ts: str,
+    results_dir: Path,
+) -> list[str]:
+    """Upload validated backend image results into the originating Slack thread."""
+    images, errors = collect_generated_images(results_dir)
+    for path in images:
+        try:
+            client.files_upload_v2(
+                channel=channel,
+                thread_ts=thread_ts,
+                file=str(path),
+                filename=path.name,
+                title=path.stem,
+            )
+        except Exception as exc:  # noqa: BLE001 - upload failures must not hide the text answer
+            errors.append(f"{path.name}: {exc}")
+    return errors
 
 
 def build_thread_text(client: Any, channel: str, thread_ts: str, attachment_dir: Path) -> str:
@@ -716,7 +780,7 @@ def run_backend(
     timeout: int,
     model: str | None = None,
     reasoning_effort: str | None = None,
-) -> str:
+) -> tuple[str, bool]:
     with tempfile.NamedTemporaryFile("w", suffix=".txt", encoding="utf-8", delete=False) as f:
         f.write(thread_text)
         thread_file = Path(f.name)
@@ -763,8 +827,12 @@ def run_backend(
         )
         output = result.stdout.strip()
         if result.returncode != 0:
-            return f"Open Tag backend failed with exit code {result.returncode}:\n```text\n{output[-3000:]}\n```"
-        return output or "Open Tag finished without output."
+            return (
+                f"Open Tag backend failed with exit code {result.returncode}:\n"
+                f"```text\n{output[-3000:]}\n```",
+                False,
+            )
+        return output or "Open Tag finished without output.", True
     finally:
         try:
             thread_file.unlink()
@@ -1141,6 +1209,8 @@ def create_app(backend: str, timeout: int, allowed_user_ids: frozenset[str]) -> 
         try:
             with tempfile.TemporaryDirectory(prefix="opentag-slack-") as raw_attachment_dir:
                 attachment_dir = Path(raw_attachment_dir)
+                image_results_dir = generated_images_dir(attachment_dir)
+                image_results_dir.mkdir(parents=True)
                 thread_text = build_thread_text(client, channel, thread_ts, attachment_dir)
                 if env_enabled("OPENTAG_SLACK_STREAMING", default=True) and indicator.native:
                     answer_stream = SlackAnswerStream(client, channel, thread_ts, logger)
@@ -1157,7 +1227,7 @@ def create_app(backend: str, timeout: int, allowed_user_ids: frozenset[str]) -> 
                         reasoning_effort=agent_settings.reasoning_effort,
                     )
                 else:
-                    answer = run_backend(
+                    answer, succeeded = run_backend(
                         backend,
                         channel,
                         user_id,
@@ -1168,35 +1238,51 @@ def create_app(backend: str, timeout: int, allowed_user_ids: frozenset[str]) -> 
                         model=agent_settings.model,
                         reasoning_effort=agent_settings.reasoning_effort,
                     )
-                    succeeded = True
-            indicator.clear()
-            footer_blocks = (
-                settings_button_blocks(
-                    team=team,
-                    channel=channel,
-                    thread_ts=thread_ts,
-                    settings=agent_settings,
-                    models=models,
+                indicator.clear()
+                footer_blocks = (
+                    settings_button_blocks(
+                        team=team,
+                        channel=channel,
+                        thread_ts=thread_ts,
+                        settings=agent_settings,
+                        models=models,
+                    )
+                    if backend == "codex" and succeeded
+                    else None
                 )
-                if backend == "codex" and succeeded
-                else None
-            )
-            if (
-                answer_stream is not None
-                and succeeded
-                and answer_stream.finish(answer, footer_blocks)
-            ):
-                return
-            if answer_stream is not None:
-                answer_stream.abort()
-            post_final_reply(
-                client,
-                channel,
-                thread_ts,
-                answer,
-                indicator.message_ts,
-                footer_blocks,
-            )
+                streamed = (
+                    answer_stream is not None
+                    and succeeded
+                    and answer_stream.finish(answer, footer_blocks)
+                )
+                if not streamed:
+                    if answer_stream is not None:
+                        answer_stream.abort()
+                    post_final_reply(
+                        client,
+                        channel,
+                        thread_ts,
+                        answer,
+                        indicator.message_ts,
+                        footer_blocks,
+                    )
+                if succeeded:
+                    upload_errors = upload_generated_images(
+                        client,
+                        channel,
+                        thread_ts,
+                        image_results_dir,
+                    )
+                    if upload_errors:
+                        logger.warning("Generated-image upload failed: %s", "; ".join(upload_errors))
+                        client.chat_postMessage(
+                            channel=channel,
+                            thread_ts=thread_ts,
+                            text=(
+                                "I couldn't attach every generated image: "
+                                + "; ".join(upload_errors)
+                            ),
+                        )
         except Exception as exc:
             logger.exception("Open Tag failed")
             indicator.clear()

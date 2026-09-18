@@ -111,6 +111,119 @@ class SlackTextAttachmentTests(unittest.TestCase):
         self.assertTrue(text[0].endswith("[Attachment text truncated]"))
 
 
+class SlackGeneratedImageTests(unittest.TestCase):
+    def test_uploads_supported_images_to_originating_thread(self) -> None:
+        client = MagicMock()
+        with tempfile.TemporaryDirectory() as raw_dir:
+            results_dir = Path(raw_dir)
+            image = results_dir / "launch-card.png"
+            image.write_bytes(b"png data")
+
+            errors = slack_socket_agent.upload_generated_images(
+                client,
+                "C123",
+                "1.23",
+                results_dir,
+            )
+
+        self.assertEqual([], errors)
+        client.files_upload_v2.assert_called_once_with(
+            channel="C123",
+            thread_ts="1.23",
+            file=str(image),
+            filename="launch-card.png",
+            title="launch-card",
+        )
+
+    def test_rejects_unsupported_oversized_and_symlinked_results(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            results_dir = Path(raw_dir)
+            (results_dir / "notes.txt").write_text("not an image", encoding="utf-8")
+            with (results_dir / "large.png").open("wb") as output:
+                output.truncate(slack_socket_agent.MAX_ATTACHMENT_BYTES + 1)
+            (results_dir / "linked.png").symlink_to(results_dir / "large.png")
+            images, errors = slack_socket_agent.collect_generated_images(results_dir)
+
+        self.assertEqual([], images)
+        self.assertTrue(any("unsupported image type" in error for error in errors))
+        self.assertTrue(any("15 MB" in error for error in errors))
+        self.assertTrue(any("not a regular file" in error for error in errors))
+
+    def test_mention_uploads_backend_image_result_after_text_answer(self) -> None:
+        fake_app = FakeApp()
+        client = MagicMock()
+
+        def backend_result(*args: object, **kwargs: object) -> tuple[str, bool]:
+            del kwargs
+            attachment_dir = args[5]
+            assert isinstance(attachment_dir, Path)
+            result = slack_socket_agent.generated_images_dir(attachment_dir) / "chart.png"
+            result.write_bytes(b"png data")
+            return "Here is the chart.", True
+
+        with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+            os.environ,
+            {"SLACK_BOT_TOKEN": "xoxb-test", "OPENTAG_SLACK_STREAMING": "0"},
+            clear=True,
+        ), patch.object(
+            slack_socket_agent,
+            "build_thread_text",
+            return_value="UOWNER: make a chart",
+        ), patch.object(slack_socket_agent, "run_backend", side_effect=backend_result):
+            slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+            handler = fake_app.events["app_mention"]
+            handler(
+                {"channel": "C123", "ts": "1.23", "user": "UOWNER", "text": "<@BOT> chart"},
+                {"team_id": "T123"},
+                client,
+                MagicMock(),
+            )
+
+        client.chat_postMessage.assert_called_once_with(
+            channel="C123",
+            thread_ts="1.23",
+            text="Here is the chart.",
+            mrkdwn=True,
+            blocks=None,
+        )
+        upload = client.files_upload_v2.call_args.kwargs
+        self.assertEqual("C123", upload["channel"])
+        self.assertEqual("1.23", upload["thread_ts"])
+        self.assertEqual("chart.png", upload["filename"])
+
+    def test_failed_backend_does_not_upload_partial_image_result(self) -> None:
+        fake_app = FakeApp()
+        client = MagicMock()
+
+        def backend_failure(*args: object, **kwargs: object) -> tuple[str, bool]:
+            del kwargs
+            attachment_dir = args[5]
+            assert isinstance(attachment_dir, Path)
+            result = slack_socket_agent.generated_images_dir(attachment_dir) / "partial.png"
+            result.write_bytes(b"partial")
+            return "Backend failed", False
+
+        with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+            os.environ,
+            {"SLACK_BOT_TOKEN": "xoxb-test", "OPENTAG_SLACK_STREAMING": "0"},
+            clear=True,
+        ), patch.object(
+            slack_socket_agent,
+            "build_thread_text",
+            return_value="UOWNER: make a chart",
+        ), patch.object(slack_socket_agent, "run_backend", side_effect=backend_failure):
+            slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+            handler = fake_app.events["app_mention"]
+            handler(
+                {"channel": "C123", "ts": "1.23", "user": "UOWNER", "text": "<@BOT> chart"},
+                {"team_id": "T123"},
+                client,
+                MagicMock(),
+            )
+
+        client.files_upload_v2.assert_not_called()
+
+
 class SlackReplyChunkingTests(unittest.TestCase):
     def test_splits_at_paragraph_boundaries(self) -> None:
         text = "First paragraph.\n\nSecond paragraph.\n\nThird paragraph."

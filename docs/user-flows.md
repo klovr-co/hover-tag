@@ -697,7 +697,7 @@ isolated chat location. Skip an optional step when its dependency is not set up.
 | Optional channel restriction | Implemented | Empty allows any joined channel; configured ID restricts execution. |
 | Thread text and text attachments | Implemented | Content is bounded and treated as untrusted. |
 | Image attachment understanding | Implemented bridge path | Images up to 15 MB are downloaded temporarily; successful interpretation still depends on the selected backend/model. |
-| Generated-image upload to Slack | **Not implemented by the bridge** | A backend may generate a local image, but OpenTag currently has no dedicated upload-and-attach result path. |
+| Generated-image upload to Slack | Implemented bridge path | The backend saves up to 10 final PNG, JPEG, GIF, or WebP files in the invocation's dedicated result directory; the bridge validates files up to 15 MB and uploads them to the requesting thread. |
 | Slack loading state and answers | Implemented | Claude text can stream; Codex currently posts the complete final answer. |
 | Long-answer splitting | Implemented | Results remain in the invoking thread. |
 | Model/reasoning settings | Implemented for Codex | Requires Slack interactivity and a reinstalled updated manifest. |

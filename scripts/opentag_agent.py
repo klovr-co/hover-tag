@@ -42,6 +42,7 @@ def build_prompt(
     attachments_dir: Path | None,
     allowed_scopes: str,
 ) -> str:
+    image_results_dir = attachments_dir / "results" / "images" if attachments_dir else None
     canvas_instructions = f"""
 Canvas capability:
 - When the user asks to create a Canvas in this Slack channel, you may create
@@ -61,6 +62,14 @@ Channel-post capability:
 - Do not post merely because you produced a summary; post only when the user
   expressly requested the channel message. State in your final answer whether
   the post succeeded.
+
+Generated-image result capability:
+- When the user asks you to create or return an image, save each final PNG,
+  JPEG, GIF, or WebP file directly in `{image_results_dir or "(unavailable)"}`.
+- The Slack bridge uploads supported files from that directory to the current
+  thread after your final answer. Do not call Slack's API to upload them.
+- Put only final images there, use descriptive filenames, and still describe
+  the result concisely in your final answer.
 """
     return f"""
 You are being invoked by the Open Tag Slack bridge.
