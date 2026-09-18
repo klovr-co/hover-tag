@@ -21,6 +21,11 @@ All notable changes to Tag are documented here.
 - Ignore tracked paths that have been deleted from the worktree during secret
   scanning.
 
+### Removed
+
+- Remove the legacy macOS `.command` launchers. `./install.sh` and `./tag` are
+  now the only supported setup and service-control entry points.
+
 ## [0.1.0-alpha] - 2026-09-09
 
 ### Added

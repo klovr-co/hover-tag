@@ -12,7 +12,6 @@ VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$")
 MODIFICATION_NOTICE = "Modified by klovr.co in 2026 for Tag."
 MODIFIED_UPSTREAM_FILES = (
     ".env.example",
-    "OpenTag Control.command",
     "README.md",
     "SKILL.md",
     "references/runtime-agent.md",
