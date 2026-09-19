@@ -1,0 +1,104 @@
+- generic [ref=e2]:
+  - complementary [ref=e3]:
+    - generic [ref=e4]:
+      - generic [ref=e5]:
+        - link "Hover / @Tag" [ref=e6] [cursor=pointer]:
+          - /url: https://www.hover.team/
+          - generic [ref=e7]:
+            - generic [ref=e8]: Hover
+            - generic [ref=e9]: /
+            - generic [ref=e10]:
+              - text: "@"
+              - strong [ref=e11]: Tag
+        - button "Collapse Sidebar" [ref=e12]
+      - button "Search ⌘ K" [ref=e15]:
+        - text: Search
+        - generic [ref=e19]:
+          - generic [ref=e20]: ⌘
+          - generic [ref=e21]: K
+    - generic [ref=e23]:
+      - link "Hover" [ref=e24] [cursor=pointer]:
+        - /url: https://www.hover.team/
+      - link "GitHub" [ref=e29] [cursor=pointer]:
+        - /url: https://github.com/klovr-co/tag
+      - link "Introduction" [ref=e34] [cursor=pointer]:
+        - /url: /tag/
+      - link "Why Tag" [ref=e35] [cursor=pointer]:
+        - /url: /tag/why-tag/
+      - paragraph [ref=e36]: Get started
+      - link "Run your first task" [ref=e37] [cursor=pointer]:
+        - /url: /tag/first-task/
+      - paragraph [ref=e38]: Concepts
+      - link "How Tag works" [ref=e39] [cursor=pointer]:
+        - /url: /tag/how-it-works/
+      - paragraph [ref=e40]: Operate
+      - link "Supported capabilities" [ref=e41] [cursor=pointer]:
+        - /url: /tag/capabilities/
+      - link "Troubleshooting" [ref=e42] [cursor=pointer]:
+        - /url: /tag/troubleshooting/
+    - generic [ref=e44]:
+      - link "GitHub" [ref=e45] [cursor=pointer]:
+        - /url: https://github.com/klovr-co/tag
+      - button "Toggle Theme" [ref=e48]
+  - generic:
+    - button "Collapse Sidebar"
+    - button "Open Search"
+  - main [ref=e57]:
+    - article [ref=e58]:
+      - heading "Introduction" [level=1] [ref=e59]
+      - paragraph [ref=e60]: "@Tag, Slack is all you need."
+      - generic [ref=e61]:
+        - paragraph [ref=e62]:
+          - text: Tag brings Codex or Claude into the Slack conversation. Mention
+          - code [ref=e63]: "@Tag"
+          - text: where the work is already being discussed. Tag picks up the thread, works inside a configured workspace, finds context it is allowed to use, and replies where the team can review the result together.
+        - generic "Example Tag request in Slack" [ref=e64]:
+          - generic [ref=e65]:
+            - strong [ref=e66]: "# launch-ops"
+            - generic [ref=e67]: Slack
+          - generic [ref=e68]:
+            - generic [ref=e69]: M
+            - generic [ref=e70]:
+              - paragraph [ref=e71]:
+                - strong [ref=e72]: Maya Chen
+                - generic [ref=e73]: 10:42 AM
+              - paragraph [ref=e74]:
+                - mark [ref=e75]: "@Tag"
+                - text: turn this thread into a launch brief. Call out unresolved risks and give every next step an owner.
+          - generic [ref=e77]:
+            - generic [ref=e78]: "@"
+            - generic [ref=e79]:
+              - paragraph [ref=e80]:
+                - strong [ref=e81]: Tag
+                - generic [ref=e82]: APP · 10:43 AM
+              - paragraph [ref=e83]: I prepared the brief. Two decisions remain, and I assigned owners to the four next steps.
+        - heading [level=2] [ref=e84]:
+          - link "Get started" [ref=e85] [cursor=pointer]:
+            - /url: "#get-started"
+          - button "Copy Anchor Link" [ref=e86]
+        - generic [ref=e90]:
+          - link [ref=e91] [cursor=pointer]:
+            - /url: /tag/first-task/
+            - heading "Run your first task" [level=3] [ref=e92]
+            - paragraph [ref=e94]: Install Tag, connect one Slack channel, and complete your first delegation.
+          - link [ref=e95] [cursor=pointer]:
+            - /url: /tag/how-it-works/
+            - heading "How Tag works" [level=3] [ref=e96]
+            - paragraph [ref=e98]: Understand Slack, the agent workspace, and permitted context.
+        - heading [level=2] [ref=e99]:
+          - link "What you can delegate" [ref=e100] [cursor=pointer]:
+            - /url: "#what-you-can-delegate"
+          - button "Copy Anchor Link" [ref=e101]
+        - paragraph [ref=e105]: Ask Tag to summarize a discussion, investigate a question across approved sources, compare documents or issues, work with files in its configured workspace, or return a result as a reply or Slack Canvas.
+        - paragraph [ref=e106]: What Tag knows depends on the current thread, the configured workspace, and the sources the operator has explicitly approved through MFS.
+      - link [ref=e108] [cursor=pointer]:
+        - /url: /tag/why-tag/
+        - paragraph [ref=e112]: Why Tag
+        - paragraph [ref=e113]: Keep the request, context, work, and answer in the conversation your team already shares.
+  - generic [ref=e114]:
+    - heading "On this page" [level=3] [ref=e115]
+    - generic [ref=e118]:
+      - link "Get started" [ref=e119] [cursor=pointer]:
+        - /url: "#get-started"
+      - link "What you can delegate" [ref=e121] [cursor=pointer]:
+        - /url: "#what-you-can-delegate"

@@ -1,0 +1,203 @@
+- generic [active] [ref=f1e1]:
+  - link "Skip to content" [ref=f1e2] [cursor=pointer]:
+    - /url: "#main"
+  - banner [ref=f1e3]:
+    - link "Hover home" [ref=f1e4] [cursor=pointer]:
+      - /url: ../
+      - generic [ref=f1e5]: Hover
+      - generic [aria-hidden] [ref=f1e6]: /
+      - generic [ref=f1e7]: "@Tag"
+    - button "Open navigation" [ref=f1e8]
+  - main [ref=f1e12]:
+    - region [ref=f1e13]:
+      - generic [aria-hidden] [ref=f1e15]: "@"
+      - generic [ref=f1e16]:
+        - paragraph [ref=f1e17]: An agent for work already in motion
+        - heading [level=1] [ref=f1e19]:
+          - emphasis [ref=f1e20]: "@Tag,"
+          - text: Slack is allyou need.
+        - paragraph [ref=f1e21]: Bring Codex or Claude into the conversation. Tag reads the thread, does the work in your workspace, and comes back with the result.
+        - generic [ref=f1e22]:
+          - link "Get started" [ref=f1e23] [cursor=pointer]:
+            - /url: "#install"
+            - text: Get started
+            - generic [aria-hidden] [ref=f1e24]: ↘
+          - link "See it in Slack" [ref=f1e25] [cursor=pointer]:
+            - /url: "#demo"
+            - text: See it in Slack ↓
+      - generic [ref=f1e26]:
+        - generic [aria-hidden] [ref=f1e27]:
+          - generic [ref=f1e28]: "01"
+          - text: Delegate where the work lives
+        - generic [ref=f1e29]:
+          - generic [aria-hidden] [ref=f1e30]:
+            - generic [ref=f1e31]: H
+            - generic [ref=f1e32]: ⌂
+            - generic [ref=f1e33]: ◌
+            - generic [ref=f1e34]: ＋
+          - generic [ref=f1e35]:
+            - generic [ref=f1e36]:
+              - generic [ref=f1e37]:
+                - generic [ref=f1e38]: "# launch-ops"
+                - generic [ref=f1e39]: 18 members
+              - generic [aria-hidden] [ref=f1e40]: ⌕ ◌ •••
+            - generic [ref=f1e41]:
+              - article [ref=f1e42]:
+                - generic [ref=f1e43]: M
+                - generic [ref=f1e44]:
+                  - paragraph [ref=f1e45]:
+                    - generic [ref=f1e46]: Maya Chen
+                    - time [ref=f1e47]: 10:42 AM
+                  - paragraph [ref=f1e48]:
+                    - mark [ref=f1e49]: "@Tag"
+                    - text: turn this thread into a launch brief. Call out unresolved risks and give each next step an owner.
+                  - generic [ref=f1e50]:
+                    - generic [ref=f1e51]: 👀 3
+                    - generic [ref=f1e52]: ✅ 1
+              - generic [ref=f1e53]: Tag worked for 46 seconds
+              - article [ref=f1e56]:
+                - generic [ref=f1e57]: "@"
+                - generic [ref=f1e58]:
+                  - paragraph [ref=f1e59]:
+                    - generic [ref=f1e60]: Tag
+                    - generic [ref=f1e61]: APP
+                    - time [ref=f1e62]: 10:43 AM
+                  - generic [ref=f1e63]:
+                    - paragraph [ref=f1e64]: "I turned the discussion into a launch brief. Two things still need a decision:"
+                    - list [ref=f1e65]:
+                      - listitem [ref=f1e66]: "Onboarding: Priya to confirm the revised checklist by Thursday."
+                      - listitem [ref=f1e67]: "Support: Omar to assign weekend coverage before launch approval."
+                  - button "▤ Launch brief · September Slack canvas · Updated just now" [ref=f1e68] [cursor=pointer]:
+                    - generic [ref=f1e69]: ▤
+                    - generic [ref=f1e70]:
+                      - generic [ref=f1e71]: Launch brief · September
+                      - generic [ref=f1e72]: Slack canvas · Updated just now
+                    - generic [aria-hidden] [ref=f1e73]: →
+            - generic [ref=f1e74]:
+              - generic [ref=f1e75]: ＋
+              - generic [ref=f1e76]: "Message #launch-ops"
+              - generic [ref=f1e77]: ☺ Aa ⌁ ➤
+        - group "Example tasks" [ref=f1e78]:
+          - button "Brief the team" [ref=f1e79] [cursor=pointer]
+          - button "Research a decision" [ref=f1e80] [cursor=pointer]
+          - button "Ship the update" [ref=f1e81] [cursor=pointer]
+    - region "Product principles" [ref=f1e82]:
+      - paragraph [ref=f1e83]: One mention.
+      - generic [aria-hidden] [ref=f1e84]: ✳
+      - paragraph [ref=f1e85]: The whole thread.
+      - generic [aria-hidden] [ref=f1e86]: ✳
+      - paragraph [ref=f1e87]: A useful result.
+      - generic [aria-hidden] [ref=f1e88]: ✳
+      - paragraph [ref=f1e89]: Everyone stays in sync.
+    - region [ref=f1e90]:
+      - generic [ref=f1e91]:
+        - generic [ref=f1e92]: "02"
+        - paragraph [ref=f1e93]: Why Tag
+      - generic [ref=f1e94]:
+        - paragraph [ref=f1e95]: Work doesn’t begin as a tidy prompt.
+        - heading "It starts with a question, a few links, and six people talking in a thread." [level=2] [ref=f1e96]
+        - generic [ref=f1e97]:
+          - paragraph [ref=f1e98]: "Moving that conversation into a private AI chat creates another job: retell the context, carry the answer back, then explain what happened."
+          - paragraph [ref=f1e99]: Tag removes the relay. The request, context, work, and answer stay visible to the people who are already involved.
+    - region [ref=f1e100]:
+      - generic [ref=f1e101]:
+        - generic [ref=f1e102]:
+          - generic [ref=f1e103]: "03"
+          - paragraph [ref=f1e104]: How it works
+        - generic [ref=f1e105]:
+          - paragraph [ref=f1e106]: A simple operating model
+          - heading "Slack is the interface. Your agent does the work." [level=2] [ref=f1e107]: Slack is the interface.Your agent does the work.
+      - generic [ref=f1e108]:
+        - article [ref=f1e109]:
+          - text: "01"
+          - generic [aria-hidden] [ref=f1e110]: "#"
+          - heading "Ask in Slack" [level=3] [ref=f1e111]
+          - paragraph [ref=f1e112]:
+            - text: Mention
+            - code [ref=f1e113]: "@Tag"
+            - text: inside the thread. The conversation becomes the brief.
+          - generic [ref=f1e114]: Shared interface
+        - generic [ref=f1e116]: thread context
+        - article [ref=f1e118]:
+          - text: "02"
+          - generic [aria-hidden] [ref=f1e119]: ⌘
+          - heading "The agent works" [level=3] [ref=f1e120]
+          - paragraph [ref=f1e121]: Codex or Claude runs inside the workspace and uses the tools available there.
+          - generic [ref=f1e122]: Local execution
+        - generic [ref=f1e124]: approved sources
+        - article [ref=f1e126]:
+          - text: "03"
+          - generic [aria-hidden] [ref=f1e127]: ◎
+          - heading "Context when needed" [level=3] [ref=f1e128]
+          - paragraph [ref=f1e129]: MFS retrieves relevant information only from sources the operator has allowed.
+          - generic [ref=f1e130]: Scoped retrieval
+    - region [ref=f1e131]:
+      - generic [ref=f1e132]:
+        - generic [ref=f1e133]:
+          - generic [ref=f1e134]: "04"
+          - paragraph [ref=f1e135]: Documentation
+        - generic [ref=f1e136]:
+          - paragraph [ref=f1e137]: From zero to first delegation
+          - heading [level=2] [ref=f1e138]:
+            - text: Set it up once.Then just mention
+            - emphasis [ref=f1e139]: "@Tag."
+      - generic [ref=f1e140]:
+        - complementary [ref=f1e141]:
+          - link "@ Tag docs Alpha" [ref=f1e142] [cursor=pointer]:
+            - /url: "#docs"
+            - generic [ref=f1e143]: "@"
+            - generic [ref=f1e144]: Tag docs
+            - generic [ref=f1e145]: Alpha
+          - generic [ref=f1e146]:
+            - generic [aria-hidden] [ref=f1e147]: ⌕
+            - generic [ref=f1e148]: Search documentation
+            - searchbox "Search documentation" [ref=f1e149]
+            - generic [ref=f1e150]: ⌘ K
+        - article [ref=f1e151]:
+          - paragraph [ref=f1e152]: GET STARTED / FIRST TASK
+          - heading "Run your first Tag task" [level=3] [ref=f1e153]
+          - paragraph [ref=f1e154]: Start with one local workspace and one Slack channel. That’s enough to check the full loop before you connect anything else.
+          - generic [ref=f1e155]:
+            - generic [ref=f1e156]: i
+            - paragraph [ref=f1e157]:
+              - text: The goalA teammate mentions
+              - code [ref=f1e158]: "@Tag"
+              - text: . Codex works in the directory you chose, then Tag replies in the same thread.
+          - heading "1. Install Tag" [level=4] [ref=f1e159]
+          - paragraph [ref=f1e160]: Clone the repository and run the guided installer.
+          - generic [ref=f1e161]:
+            - generic [ref=f1e162]:
+              - generic [ref=f1e163]: Terminal
+              - button "Copy" [ref=f1e164] [cursor=pointer]
+            - code [ref=f1e166]: git clone https://github.com/klovr-co/tag.git cd tag ./install.sh
+          - heading "2. Check and start" [level=4] [ref=f1e167]
+          - paragraph [ref=f1e168]: Confirm the backend, Slack credentials, and retrieval scopes before your first mention.
+          - generic [ref=f1e169]:
+            - generic [ref=f1e170]:
+              - generic [ref=f1e171]: Terminal
+              - button "Copy" [ref=f1e172] [cursor=pointer]
+            - code [ref=f1e174]: ./tag doctor ./tag start ./tag status
+    - region [ref=f1e175]:
+      - generic [aria-hidden] [ref=f1e176]: "@"
+      - paragraph [ref=f1e177]: The conversation is the interface.
+      - heading "Give the thread something to do." [level=2] [ref=f1e178]: Give the threadsomething to do.
+      - generic [ref=f1e179]:
+        - code [ref=f1e180]: git clone https://github.com/klovr-co/tag.git
+        - button "Copy" [ref=f1e181] [cursor=pointer]
+      - generic [ref=f1e182]:
+        - link "View on GitHub ↗" [ref=f1e183] [cursor=pointer]:
+          - /url: https://github.com/klovr-co/tag
+        - link "Read the docs ↑" [ref=f1e184] [cursor=pointer]:
+          - /url: "#docs"
+  - contentinfo [ref=f1e185]:
+    - link "Hover." [ref=f1e186] [cursor=pointer]:
+      - /url: ../
+    - paragraph [ref=f1e187]: Useful context, wherever work happens.
+    - generic [ref=f1e188]:
+      - link "Company" [ref=f1e189] [cursor=pointer]:
+        - /url: ../
+      - link "GitHub" [ref=f1e190] [cursor=pointer]:
+        - /url: https://github.com/klovr-co/tag
+      - link "Contact" [ref=f1e191] [cursor=pointer]:
+        - /url: mailto:hello@hover.team
+    - generic [ref=f1e192]: © 2026 Hover
