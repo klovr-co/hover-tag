@@ -90,9 +90,13 @@ def atomic_text(path: Path, text: str, mode: int = 0o600) -> None:
 
 
 def install(source: Path, home: Path, bin_dir: Path, *, dependencies: bool = True) -> Path:
-    sys.path.insert(0, str(source / "scripts"))
-    from tag_paths import initialize
-    from release_check import validate_release
+    scripts_dir = str(source / "scripts")
+    sys.path.insert(0, scripts_dir)
+    try:
+        from tag_paths import initialize
+        from release_check import validate_release
+    finally:
+        sys.path.remove(scripts_dir)
     errors = validate_release(source)
     if errors:
         raise ValueError("Invalid release: " + "; ".join(errors))

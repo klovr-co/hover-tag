@@ -50,6 +50,12 @@ class TagHomeTests(unittest.TestCase):
             self.assertEqual(command.read_text(), "another program")
             self.assertFalse((root / "home").exists())
 
+    def test_install_preserves_import_path(self):
+        with tempfile.TemporaryDirectory() as temp:
+            original_path = list(sys.path)
+            install(ROOT, Path(temp) / "home", Path(temp) / "bin", dependencies=False)
+            self.assertEqual(sys.path, original_path)
+
     def test_platform_defaults_and_override(self):
         fake = Path(Path.cwd().anchor) / "users/test"
         with patch.dict(os.environ, {}, clear=True), patch("pathlib.Path.home", return_value=fake):
