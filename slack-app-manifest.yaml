@@ -3,6 +3,10 @@ display_information:
   description: Run approved Codex or Claude tasks from Slack.
   background_color: "#1f2937"
 features:
+  app_home:
+    home_tab_enabled: true
+    messages_tab_enabled: false
+    messages_tab_read_only_enabled: false
   bot_user:
     display_name: OpenMax
     always_online: true
@@ -12,6 +16,7 @@ oauth_config:
       - app_mentions:read
       - channels:history
       - channels:read
+      - channels:join
       - canvases:write
       - chat:write
       - files:read
@@ -20,6 +25,7 @@ oauth_config:
 settings:
   event_subscriptions:
     bot_events:
+      - app_home_opened
       - app_mention
   interactivity:
     is_enabled: true

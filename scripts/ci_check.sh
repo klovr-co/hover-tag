@@ -15,10 +15,11 @@ sh -n install.sh tag scripts/ci_check.sh
 
 PY_YAML_SPEC=$(awk '/^PyYAML==/ { print; exit }' requirements-ci.txt)
 SLACK_BOLT_SPEC=$(awk '/^slack-bolt==/ { print; exit }' requirements-runtime.txt)
-[ -n "$PY_YAML_SPEC" ] && [ -n "$SLACK_BOLT_SPEC" ]
+QUESTIONARY_SPEC=$(awk '/^questionary==/ { print; exit }' requirements-runtime.txt)
+[ -n "$PY_YAML_SPEC" ] && [ -n "$SLACK_BOLT_SPEC" ] && [ -n "$QUESTIONARY_SPEC" ]
 
 uv run --with "$PY_YAML_SPEC" python scripts/check_manifest.py
-uv run --with "$SLACK_BOLT_SPEC" --with "$PY_YAML_SPEC" --with psutil==7.0.0 --with tomli==2.2.1 \
+uv run --with "$SLACK_BOLT_SPEC" --with "$PY_YAML_SPEC" --with "$QUESTIONARY_SPEC" --with psutil==7.0.0 --with tomli==2.2.1 \
     python -m unittest discover -s tests -v
 
 git diff --check

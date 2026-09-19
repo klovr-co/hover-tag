@@ -14,6 +14,7 @@ REQUIRED_SCOPES = {
     "canvases:write",
     "channels:history",
     "channels:read",
+    "channels:join",
     "chat:write",
     "files:read",
     "groups:history",
@@ -35,8 +36,13 @@ def validate_manifest(root: Path) -> list[str]:
     events = settings.get("event_subscriptions", {}).get("bot_events", [])
     if "app_mention" not in events:
         errors.append("app_mention must be subscribed")
+    if "app_home_opened" not in events:
+        errors.append("app_home_opened must be subscribed")
     if settings.get("interactivity", {}).get("is_enabled") is not True:
         errors.append("interactivity must be enabled")
+    app_home = manifest.get("features", {}).get("app_home", {})
+    if app_home.get("home_tab_enabled") is not True:
+        errors.append("App Home must be enabled")
     return errors
 
 

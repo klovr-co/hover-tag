@@ -10,7 +10,7 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts.tag_install import install, unpack_release
+from scripts.tag_install import ADMIN_SKILL, LEGACY_ADMIN_SKILL, install, unpack_release
 from scripts.tag_paths import codex_workspace_args, initialize, tag_home
 from scripts.tag_cli import process_for, read_config, start_process, stop_process
 from scripts.tag_migrate import legacy_config, migrate
@@ -109,12 +109,19 @@ class TagHomeTests(unittest.TestCase):
             root = Path(temp)
             home, bin_dir = root / "home", root / "bin"
             first = install(ROOT, home, bin_dir, dependencies=False)
+            admin = home / "workspace/.agents/skills/open-tag-admin/SKILL.md"
+            self.assertEqual(admin.read_text(), ADMIN_SKILL)
+            admin.write_text(LEGACY_ADMIN_SKILL)
+            custom_admin = home / "workspace/.claude/skills/open-tag-admin/SKILL.md"
+            custom_admin.write_text("personal admin instructions")
             skill = home / "workspace/.agents/skills/personal/SKILL.md"
             skill.parent.mkdir()
             skill.write_text("personal skill")
             config = home / "config/settings.json"
             config.write_text('{"OPENTAG_BACKEND":"codex"}')
             second = install(ROOT, home, bin_dir, dependencies=False)
+            self.assertEqual(admin.read_text(), ADMIN_SKILL)
+            self.assertEqual(custom_admin.read_text(), "personal admin instructions")
             self.assertNotEqual(first, second)
             self.assertEqual(json.loads((home / "previous.json").read_text())["release"], first.name)
             self.assertEqual(skill.read_text(), "personal skill")
@@ -124,6 +131,9 @@ class TagHomeTests(unittest.TestCase):
             self.assertIn("Tag v", result.stdout)
             result = subprocess.run([str(command), "paths"], cwd=root, capture_output=True, text=True, check=True)
             self.assertEqual(Path(json.loads(result.stdout)["workspace"]).resolve(), (home / "workspace").resolve())
+            self.assertTrue(Path(json.loads(result.stdout)["management_guide"]).is_file())
+            result = subprocess.run([str(command), "inspect", "--offline", "--json"], cwd=root, capture_output=True, text=True, check=True)
+            self.assertEqual(json.loads(result.stdout)["state"], "setup_incomplete")
             self.assertFalse((second / ".git").exists())
             self.assertFalse((second / ".env").exists())
             # Rollback chooses the old code without reverting persistent settings.

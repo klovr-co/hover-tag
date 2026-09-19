@@ -1,5 +1,7 @@
 # Runtime dependencies downloaded by the local launch scripts.
 slack-bolt==1.30.0
+questionary==2.1.1
+PyYAML==6.0.3
 psutil==7.0.0
 tomli==2.2.1; python_version < "3.11"
-mfs-server==0.4.6
+mfs-server[slack]==0.4.6

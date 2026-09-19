@@ -78,16 +78,18 @@ A few rules matter:
 ```mermaid
 flowchart LR
     A["1 · Install<br/>OpenTag + prerequisites"]
-    B["2 · Connect chat<br/>Install the Slack app"]
-    C["3 · Choose the agent<br/>Codex or Claude"]
-    D["4 · Set boundaries<br/>Workspace, users, locations, MFS"]
-    E{"5 · Run doctor<br/>All checks pass?"}
-    F["6 · Start<br/>Launch MFS + chat bridge"]
-    G["7 · Test<br/>Send one realistic mention"]
+    B["2 · Connect Slack<br/>Create or approve the app"]
+    C["3 · App connected<br/>OpenMax + workspace"]
+    D["4 · Choose destination<br/>Visual channel picker"]
+    E["5 · Choose the agent<br/>Codex or Claude"]
+    F["6 · Set boundaries<br/>Users, workspace, MFS"]
+    G{"7 · Run doctor<br/>All checks pass?"}
+    H["8 · Start<br/>Launch MFS + chat bridge"]
+    I["9 · Test<br/>Mention OpenMax in the channel"]
 
-    A --> B --> C --> D --> E
-    E -->|No: fix the first failure| D
-    E -->|Yes| F --> G
+    A --> B --> C --> D --> E --> F --> G
+    G -->|No: fix the first failure| F
+    G -->|Yes| H --> I
 ```
 
 Once this path works, normal use is much shorter: mention, work, reply. Return
@@ -107,50 +109,55 @@ only where understanding the system boundary materially helps.
 
 ## Flow 1: First-time setup
 
-The first setup connects one chat identity to one local OpenTag worker. Start
-with the smallest safe setup, test it, and add capabilities after that works.
+The first setup connects one Slack identity to one Tag worker. The terminal menu
+and admin skill share the same commands, inspect current state first, and resume
+missing answers. See [setup and management](tag-management.md) for the current
+CLI contract and recovery flow.
 
 ### Level 1 · Journey
 
 ```mermaid
 flowchart LR
     Install["Install<br/>OpenTag + prerequisites"]
-    Slack["Connect Slack<br/>App, Socket Mode, tokens"]
-    Agent["Choose agent<br/>Codex or Claude"]
-    Guardrails["Set boundaries<br/>Workspace, users, MFS roots"]
+    Slack["Connect Slack<br/>Create or approve app"]
+    Connected["App connected<br/>OpenMax + workspace"]
+    Channel["Choose destination<br/>Visual channel picker"]
+    Agent["Review settings<br/>Codex default, Claude experimental"]
+    Guardrails["Set boundaries<br/>Users, workspace, MFS roots"]
     Doctor{"Run doctor<br/>Checks pass?"}
     Start["Start services<br/>MFS + Slack bridge"]
-    Test["Mention the bot<br/>Confirm threaded reply"]
+    Test["Mention OpenMax<br/>in the selected channel"]
 
-    Install --> Slack --> Agent --> Guardrails --> Doctor
+    Install --> Slack --> Connected --> Channel --> Agent --> Guardrails --> Doctor
     Doctor -->|No| Guardrails
     Doctor -->|Yes| Start --> Test
 ```
 
 ### Level 2 · Task flow
 
-1. The operator installs Python 3.10+, `uv`, MFS, and an authenticated Codex or
-   Claude Code CLI.
-2. The operator runs `./install.sh`.
-3. Setup records:
-   - chat transport: `slack`;
-   - backend: `codex` or `claude`;
-   - agent workspace;
-   - bot display name;
-   - allowed MFS roots;
-   - timeout and retry policy.
-4. For Slack, the operator creates/installs the app from the manifest, enables
-   Socket Mode, supplies the `xapp-` and `xoxb-` tokens, and records at least one
-   owner member ID in `SLACK_ALLOWED_USER_IDS`.
-5. The operator indexes at least one useful source in MFS and adds its exact root
-   to `MFS_ALLOWED_SCOPES`.
-6. `./tag doctor` verifies configuration, backend availability, MFS access, and
-   chat access before the service starts.
-7. `./tag start` launches MFS and the Slack bridge.
-8. `./tag status` and `./tag logs` provide the first operational check.
+1. Install Python 3.10+, `uv`, and an authenticated Codex or experimental Claude
+   Code CLI. Run `./install.sh` (or `./install.ps1` on Windows) for Tag's runtime.
+2. Open `tag` for the menu or ask the admin skill to inspect with `tag inspect --json`.
+3. Use `tag setup` to resume missing answers, or let the skill seed defaults with
+   `tag config init --json` and apply targeted `tag config set` operations.
+   Timeouts and retry options stay under advanced settings; Tag manages a stable
+   workspace in its application home.
+4. `tag setup` reuses Slack CLI authorization (or launches its real login
+   handoff), creates or links the app with explicit approval, and validates the
+   Socket Mode and bot credentials separately. Slack CLI can hand them off
+   privately after approval; hidden prompts are an explicit fallback.
+5. The operator selects one or more joined channels by name. Setup separately
+   validates the Slack-history credential and asks before writing/indexing an
+   MFS connector limited to those channel IDs and the chosen history window.
+6. `tag doctor --json` diagnoses configuration, backend executable availability,
+   MFS access, and Slack API access. A stopped MFS server must be started to pass
+   these live checks; `tag start` handles the local server before its preflight.
+7. `tag start` starts MFS, runs preflight, and launches the Slack bridge.
+8. `tag status --json` and `tag logs` provide the first operational check.
 
-You know setup worked when the running service announces the same bot name that
-Slack resolves in a mention.
+Verify the complete journey by mentioning the bot in the permitted Slack channel
+and observing its reply. Executable discovery does not prove agent sign-in, and
+service readiness does not prove that a mention received a response.
 
 ### Level 3 · Service blueprint
 
@@ -165,8 +172,15 @@ sequenceDiagram
 
     O->>I: Run installer and choose backend/workspace
     I-->>O: Save private configuration and Slack manifest
-    O->>S: Create or update app, scopes, events, and tokens
-    O->>M: Index at least one source and allow its exact root
+    I->>S: Run Slack CLI authorization and approved app create/link
+    O->>S: Approve app, scopes, events, and private credential handoff
+    S-->>I: Return connected app identity and visible channels
+    I-->>O: Show app connected + visual channel picker
+    O->>I: Select one or more destination channels
+    I->>S: Verify OpenMax is invited to every channel
+    S-->>I: Confirm channel memberships
+    O->>I: Approve selected-channel history indexing
+    I->>M: Register the bounded Slack connector on start
     O->>D: Run ./tag doctor
     D->>S: Verify bot identity and channel access
     D->>M: Verify health and allowed scopes
@@ -655,7 +669,7 @@ isolated chat location. Skip an optional step when its dependency is not set up.
 |---|---|---|
 | Slack mentions and threaded replies | Implemented | Mention must target the installed app used by the running tokens. |
 | Caller authorization | Implemented | `SLACK_ALLOWED_USER_IDS` is required and fails closed. |
-| Optional channel restriction | Implemented | Empty allows any joined channel; configured ID restricts execution. |
+| Explicit channel restriction | Implemented | Setup requires one or more joined channel IDs and the bridge fails closed when none are configured. |
 | Thread text and text attachments | Implemented | Content is bounded and treated as untrusted. |
 | Image attachment understanding | Implemented bridge path | Images up to 15 MB are downloaded temporarily; successful interpretation still depends on the selected backend/model. |
 | Generated-image upload to Slack | **Not implemented by the bridge** | A backend may generate a local image, but OpenTag currently has no dedicated upload-and-attach result path. |
@@ -664,7 +678,7 @@ isolated chat location. Skip an optional step when its dependency is not set up.
 | Model/reasoning settings | Implemented for Codex | Requires Slack interactivity and a reinstalled updated manifest. |
 | Top-level channel posts | Implemented on explicit request | Restricted to the invoking channel. |
 | Slack Canvas creation | Implemented on explicit request | Restricted to the invoking channel; `canvases:write` required. |
-| MFS search/read | Implemented | Source must be indexed and its root explicitly allowed. |
+| Slack MFS search/read | Implemented; live acceptance pending | Setup creates selected-channel scopes; each reply receives only its current channel's Slack scope. ADR 0001 still applies. |
 | Workspace commands and edits | Implemented through backend | Uses local account permissions; not a hardened sandbox. |
 | Slack durable session | Not provided | Each mention launches a fresh agent; thread text and MFS restore context. |
 | Slack direct messages | Not implemented by the current manifest/handler | The bridge subscribes to channel `app_mention` events, not direct-message events. |

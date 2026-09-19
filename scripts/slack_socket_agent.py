@@ -25,9 +25,11 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 try:
     from .opentag_process_env import backend_environment
     from .slack_mrkdwn import to_mrkdwn
+    from . import slack_channels
 except ImportError:  # Direct script execution does not create a package context.
     from opentag_process_env import backend_environment
     from slack_mrkdwn import to_mrkdwn
+    import slack_channels
 
 
 MENTION_RE = re.compile(r"<@[^>]+>")
@@ -44,6 +46,7 @@ SETTINGS_ACTION_ID = "opentag_change_agent_settings"
 SETTINGS_MODEL_ACTION_ID = "opentag_settings_model"
 SETTINGS_EFFORT_ACTION_ID = "opentag_settings_effort"
 SETTINGS_VIEW_ID = "opentag_agent_settings"
+HOME_CHANNEL_ACTION_ID = "opentag_home_channel"
 UNAUTHORIZED_USER_MESSAGE = "Sorry, only users authorized by the Tag owner can use this bot."
 LOADING_MESSAGES = [
     "Reading the thread…",
@@ -940,9 +943,12 @@ def suggested_bot_name(backend: str) -> str:
 
 
 def slack_channel_allowed(channel: str) -> bool:
-    """Restrict Slack execution to the configured channel when one is set."""
-    allowed_channel = os.getenv("SLACK_CHANNEL_ID", "").strip()
-    return not allowed_channel or channel == allowed_channel
+    """Restrict Slack execution to the explicit configured channel allowlist."""
+    configured = os.getenv("SLACK_CHANNEL_IDS", "").strip()
+    if not configured:
+        configured = os.getenv("SLACK_CHANNEL_ID", "").strip()
+    allowed_channels = set(slack_channels.parse_channel_ids(configured))
+    return bool(allowed_channels) and channel in allowed_channels
 
 
 def parse_slack_user_ids(value: str) -> frozenset[str]:
@@ -962,10 +968,92 @@ def slack_user_allowed(user_id: str, allowed_user_ids: frozenset[str]) -> bool:
     return bool(user_id) and user_id in allowed_user_ids
 
 
+def app_home_view(
+    channel_ids: str = "",
+    *,
+    authorized: bool = True,
+    notice: str | None = None,
+) -> dict[str, Any]:
+    """Build the visual Slack App Home channel configuration surface."""
+    if not authorized:
+        return {
+            "type": "home",
+            "blocks": [
+                {"type": "header", "text": {"type": "plain_text", "text": "Tag"}},
+                {"type": "section", "text": {"type": "mrkdwn", "text": UNAUTHORIZED_USER_MESSAGE}},
+            ],
+        }
+    if os.getenv("SLACK_CHANNEL_POLICY") == "invited":
+        return {"type": "home", "blocks": [
+            {"type": "header", "text": {"type": "plain_text", "text": "Tag"}},
+            {"type": "section", "text": {"type": "mrkdwn", "text":
+                "Invite Tag to a channel to enable replies and automatic channel memory. "
+                "Invitations are checked about every minute while Tag runs. "
+                "Only authorized users can request tasks; replies use this channel’s memory only."}},
+        ]}
+    selector: dict[str, Any] = {
+        "type": "multi_conversations_select",
+        "action_id": HOME_CHANNEL_ACTION_ID,
+        "placeholder": {"type": "plain_text", "text": "Select a Slack channel"},
+        "filter": {
+            "include": ["public", "private"],
+            "exclude_bot_users": True,
+            "exclude_external_shared_channels": True,
+        },
+    }
+    selected = list(slack_channels.parse_channel_ids(channel_ids))
+    if selected:
+        selector["initial_conversations"] = selected
+    current = (
+        "Current channels: " + ", ".join(f"<#{channel_id}>" for channel_id in selected)
+        if selected else "No channels are configured."
+    )
+    blocks: list[dict[str, Any]] = [
+        {"type": "header", "text": {"type": "plain_text", "text": "Set up Tag"}},
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*Choose where Tag should respond*\n{current}",
+            },
+            "accessory": selector,
+        },
+        {
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": "Tag saves the channel ID, so this keeps working if the channel is renamed. The bot must already be invited.",
+                }
+            ],
+        },
+    ]
+    if notice:
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": notice}})
+    return {"type": "home", "blocks": blocks}
+
+
+def save_home_channels(channel_ids: list[str]) -> None:
+    """Persist authorized App Home choices and apply them to this live bridge."""
+    try:
+        import tag_config as settings
+        from tag_paths import tag_home
+    except ImportError:
+        from scripts import tag_config as settings
+        from scripts.tag_paths import tag_home
+    value = ",".join(channel_ids)
+    settings.update_config(settings.config_path(tag_home()), {"SLACK_CHANNEL_IDS": value})
+    os.environ["SLACK_CHANNEL_IDS"] = value
+
+
 def print_live_summary(backend: str, allowed_user_ids: frozenset[str]) -> None:
     bot = suggested_bot_name(backend)
     scopes = [s.strip() for s in os.getenv("MFS_ALLOWED_SCOPES", "").split(",") if s.strip()]
-    channel = os.getenv("SLACK_CHANNEL_ID", "").strip() or "(any joined channel)"
+    channel_ids = os.getenv("SLACK_CHANNEL_IDS", "").strip() or os.getenv("SLACK_CHANNEL_ID", "").strip()
+    channel = ", ".join(
+        slack_channels.channel_label(require_env("SLACK_BOT_TOKEN"), channel_id)
+        for channel_id in slack_channels.parse_channel_ids(channel_ids)
+    ) or "(none configured)"
     invoke = {
         "claude": "claude -p --dangerously-skip-permissions",
         "codex": "codex exec --approve-for-me",
@@ -992,6 +1080,63 @@ def create_app(backend: str, timeout: int, allowed_user_ids: frozenset[str]) -> 
     app = App(token=require_env("SLACK_BOT_TOKEN"))
     settings_store = ThreadAgentSettingsStore()
     models = discover_codex_models() if backend == "codex" else []
+
+    @app.event("app_home_opened")
+    def show_app_home(event: dict[str, Any], client: Any, logger: Any) -> None:
+        if event.get("tab") != "home":
+            return
+        user_id = event.get("user", "")
+        try:
+            client.views_publish(
+                user_id=user_id,
+                view=app_home_view(
+                    os.getenv("SLACK_CHANNEL_IDS", "").strip()
+                    or os.getenv("SLACK_CHANNEL_ID", "").strip(),
+                    authorized=slack_user_allowed(user_id, allowed_user_ids),
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001 - keep the Socket Mode listener alive
+            logger.warning("Could not publish Tag App Home: %s", exc)
+
+    @app.action(HOME_CHANNEL_ACTION_ID)
+    def select_home_channel(ack: Any, body: dict[str, Any], client: Any, logger: Any) -> None:
+        ack()
+        if os.getenv("SLACK_CHANNEL_POLICY") == "invited":
+            return  # Ignore stale manual-picker actions in membership-driven mode.
+        user_id = body.get("user", {}).get("id", "")
+        if not slack_user_allowed(user_id, allowed_user_ids):
+            return
+        try:
+            channel_ids = body["actions"][0]["selected_conversations"]
+            if not isinstance(channel_ids, list) or not channel_ids:
+                raise ValueError("select at least one channel")
+            denied = []
+            for channel_id in channel_ids:
+                response = client.conversations_info(channel=channel_id)
+                channel = response.get("channel") or {}
+                if not channel.get("is_member"):
+                    denied.append(channel_id)
+            if denied:
+                notice = ":warning: Invite the Tag bot to every selected channel first."
+                selected = os.getenv("SLACK_CHANNEL_IDS", "").strip()
+            else:
+                save_home_channels(channel_ids)
+                notice = ":white_check_mark: Tag will respond only in the selected channels."
+                selected = ",".join(channel_ids)
+            client.views_publish(
+                user_id=user_id,
+                view=app_home_view(selected, notice=notice),
+            )
+        except (KeyError, OSError, TypeError, ValueError, RuntimeError) as exc:
+            logger.warning("Could not save the Tag App Home channel: %s", exc)
+            client.views_publish(
+                user_id=user_id,
+                view=app_home_view(
+                    os.getenv("SLACK_CHANNEL_IDS", "").strip()
+                    or os.getenv("SLACK_CHANNEL_ID", "").strip(),
+                    notice=":warning: Tag could not save that channel. Check the local Tag logs.",
+                ),
+            )
 
     @app.action(SETTINGS_ACTION_ID)
     def open_agent_settings(ack: Any, body: dict[str, Any], client: Any, logger: Any) -> None:
@@ -1234,8 +1379,18 @@ def main() -> None:
     app = create_app(args.backend, args.timeout, allowed_user_ids)
     print_live_summary(args.backend, allowed_user_ids)
     handler = SocketModeHandler(app, require_env("SLACK_APP_TOKEN"))
-    handler.connect()
+    invitation_memory = None
+    if os.getenv("SLACK_CHANNEL_POLICY") == "invited":
+        try:
+            from .slack_invitation_memory import InvitationMemory
+            from .tag_paths import tag_home
+        except ImportError:
+            from slack_invitation_memory import InvitationMemory
+            from tag_paths import tag_home
+        invitation_memory = InvitationMemory(tag_home())
+        invitation_memory.start()
     try:
+        handler.connect()
         while True:
             if args.ready_file:
                 if handler.client.is_connected():
@@ -1252,6 +1407,8 @@ def main() -> None:
                     args.ready_file.unlink(missing_ok=True)
             time.sleep(1)
     finally:
+        if invitation_memory:
+            invitation_memory.stop()
         if args.ready_file:
             args.ready_file.unlink(missing_ok=True)
         handler.close()

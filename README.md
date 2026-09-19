@@ -139,6 +139,8 @@ npx skills add klovr-co/tag --skill open-tag-admin -a codex -g
 Open a new Codex task in the cloned repository and ask: `Set up Tag for me.`
 The agent can check prerequisites, run the installer, and diagnose failures. It
 will pause when Slack requires you to create or approve the app.
+Once installed, the skill starts with `tag inspect --json` and uses targeted
+configuration commands, asking only for missing information.
 
 ### Manual setup
 
@@ -150,13 +152,39 @@ Run the same guided installer yourself:
 
 The installer creates a permanent application home and an isolated runtime,
 independent of this checkout. Add its printed command directory to PATH, then
-run `tag setup` for Slack credentials and your owner member ID. Windows users
+run `tag` for status and next steps, or `tag setup` for resumable setup. Use `tag reset`
+to back up the old setup and redo onboarding after confirmation. Windows users
 run `./install.ps1` from PowerShell instead. See [installation and TAG home](docs/installation.md)
 for platform paths, download installers, skills, MCP, and migration.
-When prompted, create the app from [`slack-app-manifest.yaml`](slack-app-manifest.yaml)
-at **Slack API → Your Apps → Create New App → From an app manifest**, install it
-to your workspace, and create an app-level `xapp-` token with
-`connections:write`.
+`tag setup` owns the Slack journey. It reuses the installed Slack CLI, offers
+the CLI's real login flow when the sandbox workspace is not authorized, and
+then lets you create a manifest-based app or link an existing app by App ID.
+It pauses for every Slack approval that only a person or workspace admin can
+grant. Tokens are entered only through hidden terminal prompts.
+
+The menu shows the next useful action based on current settings and service
+health. Settings and Troubleshooting remain available when you return. For
+scripts and skills, use the same operations directly:
+
+```bash
+tag inspect --json
+tag config init --json
+tag config show --json
+tag config set OPENTAG_BACKEND codex --json
+tag doctor --json
+```
+
+Settings output redacts secrets. Existing settings survive initialization and
+setup retries. See [setup and management](docs/tag-management.md) for the command
+contract, secret input, experimental Claude selection, and recovery.
+
+After the bot token is validated, setup shows the Slack channels visible to the
+bot and lets you select one or more joined channels by name. It separately
+validates the Socket Mode, bot, and Slack-history credentials, then asks before
+writing a selected-channel-only MFS connector. For another channel, invite the
+bot there first and rerun setup. Once Tag is running, authorized owners can also
+change reply destinations with the searchable picker in Slack App Home; rerun
+setup before expecting a newly added destination to have indexed memory.
 
 Start Tag and inspect it with:
 
@@ -211,14 +239,14 @@ Tag uses Slack credentials in two separate places:
 |---|---|
 | `SLACK_APP_TOKEN` (`xapp-…`) | Opens the Socket Mode connection that receives mentions. |
 | `SLACK_BOT_TOKEN` (`xoxb-…`) | Reads permitted conversations and posts replies. |
-| MFS Slack connector token | Optionally indexes approved Slack channels as durable memory. |
+| MFS Slack connector token | Indexes only the channels explicitly approved during setup as durable memory. |
 
-The local agent backend inherits `SLACK_BOT_TOKEN`, `MFS_TOKEN`, and other
-credentials already present in the bridge environment. Tag withholds the
-Socket Mode app token and Slack access-control configuration from the backend,
-but the MFS and Slack helper restrictions are application guardrails—not a
-hardened capability boundary. Run Tag with dedicated, least-privilege
-credentials in an isolated environment.
+The local agent backend inherits `SLACK_BOT_TOKEN` and `MFS_TOKEN`. Tag withholds
+the Socket Mode token, Slack-history connector token, and bridge access-control
+configuration from that child process. Its Slack and MFS helper restrictions
+are application guardrails—not a hardened capability boundary: the backend
+still runs as the same local account and can access whatever that account can.
+Run Tag with dedicated, least-privilege credentials in an isolated environment.
 
 The bridge app normally needs these bot scopes:
 
@@ -227,10 +255,14 @@ The bridge app normally needs these bot scopes:
 - `channels:read` and `channels:history`
 - `groups:read` and `groups:history` if you intentionally use private channels
 
-It also needs the `app_mention` bot event and an app-level token with
+It also needs the `app_mention` and `app_home_opened` bot events and an app-level token with
 `connections:write`. Invite the bot only to channels where it should respond.
 The included app manifest also requests `files:read` for text attachments and
 `canvases:write` for the explicit Canvas helper.
+
+By default Slack lets workspace members install apps, but a workspace owner or
+Enterprise organization can require approval. In that case, request approval
+from a workspace owner or app manager before continuing setup.
 
 For the complete setup, token model, and troubleshooting checklist, read
 [the Slack adapter guide](references/slack-adapter.md).

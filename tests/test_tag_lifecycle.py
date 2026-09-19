@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 import psutil
 
-from scripts import tag_cli
+from scripts import slack_invitation_memory, tag_cli
 
 
 class TagLifecycleTests(unittest.TestCase):
@@ -64,8 +64,10 @@ class TagLifecycleTests(unittest.TestCase):
             result = tag_cli.main()
 
         self.assertEqual(1, result)
-        self.assertIn("MFS: stopped or unhealthy", output.getvalue())
-        self.assertIn("Slack bridge: stopped or disconnected", output.getvalue())
+        self.assertIn("Memory", output.getvalue())
+        self.assertIn("Not ready", output.getvalue())
+        self.assertIn("Slack", output.getvalue())
+        self.assertIn("Not connected or unverified", output.getvalue())
 
     def test_failed_start_removes_process_identity(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "exited during startup"):
@@ -76,6 +78,99 @@ class TagLifecycleTests(unittest.TestCase):
             )
 
         self.assertFalse((self.home / "state/fixture.json").exists())
+
+    def test_invitation_reconciliation_requires_a_registered_connector(self) -> None:
+        status = self.home / "state/slack-memory.json"
+        status.write_text(json.dumps({"state": "sync_requested"}), encoding="utf-8")
+        with patch.dict(sys.modules, {"slack_invitation_memory": slack_invitation_memory}), patch.object(
+            slack_invitation_memory.InvitationMemory, "tick"
+        ) as tick:
+            tag_cli.reconcile_invitation_memory(self.home)
+        tick.assert_called_once_with()
+
+        status.write_text(json.dumps({"state": "needs_attention"}), encoding="utf-8")
+        with patch.dict(sys.modules, {"slack_invitation_memory": slack_invitation_memory}), patch.object(
+            slack_invitation_memory.InvitationMemory, "tick"
+        ):
+            with self.assertRaisesRegex(RuntimeError, "Invitation memory could not be prepared"):
+                tag_cli.reconcile_invitation_memory(self.home)
+
+        status.write_text(json.dumps({"state": "needs_attention", "check": "mfs_history_credential"}), encoding="utf-8")
+        with patch.dict(sys.modules, {"slack_invitation_memory": slack_invitation_memory}), patch.object(
+            slack_invitation_memory.InvitationMemory, "tick"
+        ):
+            with self.assertRaisesRegex(tag_cli.MfsHistoryCredentialUnavailable, "already running without Tag"):
+                tag_cli.reconcile_invitation_memory(self.home)
+
+        status.write_text(json.dumps({"state": "needs_attention", "check": "mfs_slack_connector"}), encoding="utf-8")
+        with patch.dict(sys.modules, {"slack_invitation_memory": slack_invitation_memory}), patch.object(
+            slack_invitation_memory.InvitationMemory, "tick"
+        ):
+            with self.assertRaisesRegex(tag_cli.MfsSlackConnectorUnavailable, "Slack connector support is not installed"):
+                tag_cli.reconcile_invitation_memory(self.home)
+
+    def test_sync_explains_when_the_running_mfs_server_lacks_history_credential(self) -> None:
+        config = self.home / "connector.toml"
+        config.touch()
+        completed = type("Completed", (), {
+            "returncode": 1,
+            "stdout": "",
+            "stderr": "credential_ref 'env:MFS_SLACK_TOKEN': environment variable MFS_SLACK_TOKEN is not set",
+        })()
+        with patch.object(tag_cli.shutil, "which", return_value="mfs"), patch.object(
+            tag_cli.subprocess, "run", return_value=completed
+        ):
+            with self.assertRaisesRegex(RuntimeError, "already running without Tag's Slack-history credential"):
+                tag_cli.sync_configured_slack_memory({
+                    "MFS_SLACK_CONNECTOR_URI": "slack://tag-test",
+                    "MFS_SLACK_CONNECTOR_CONFIG": str(config),
+                })
+
+    def test_sync_explains_when_mfs_lacks_the_slack_connector(self) -> None:
+        config = self.home / "connector.toml"
+        config.touch()
+        completed = type("Completed", (), {
+            "returncode": 1,
+            "stdout": "",
+            "stderr": "error 501: no plugin for slack",
+        })()
+        with patch.object(tag_cli.shutil, "which", return_value="mfs"), patch.object(
+            tag_cli.subprocess, "run", return_value=completed
+        ):
+            with self.assertRaisesRegex(tag_cli.MfsSlackConnectorUnavailable, "Slack connector support is not installed"):
+                tag_cli.sync_configured_slack_memory({
+                    "MFS_SLACK_CONNECTOR_URI": "slack://tag-test",
+                    "MFS_SLACK_CONNECTOR_CONFIG": str(config),
+                })
+
+    def test_sync_updates_an_existing_connector_and_accepts_an_in_progress_sync(self) -> None:
+        config = self.home / "connector.toml"
+        config.touch()
+        existing = type("Completed", (), {"returncode": 1, "stdout": "", "stderr": "connector_already_registered"})()
+        updated = type("Completed", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+        with patch.object(tag_cli.shutil, "which", return_value="mfs"), patch.object(
+            tag_cli.subprocess, "run", side_effect=[existing, updated]
+        ) as run:
+            tag_cli.sync_configured_slack_memory({
+                "MFS_SLACK_CONNECTOR_URI": "slack://tag-test",
+                "MFS_SLACK_CONNECTOR_CONFIG": str(config),
+            })
+        self.assertEqual(run.call_args_list[1].args[0], ["mfs", "connector", "update", "slack://tag-test", "--config", str(config)])
+
+        in_progress = type("Completed", (), {"returncode": 1, "stdout": "", "stderr": "sync_already_running"})()
+        with patch.object(tag_cli.shutil, "which", return_value="mfs"), patch.object(
+            tag_cli.subprocess, "run", return_value=in_progress
+        ):
+            tag_cli.sync_configured_slack_memory({
+                "MFS_SLACK_CONNECTOR_URI": "slack://tag-test",
+                "MFS_SLACK_CONNECTOR_CONFIG": str(config),
+            })
+
+    def test_mfs_server_falls_back_to_path_when_python_runtime_has_no_server(self) -> None:
+        with patch.object(tag_cli.Path, "is_file", return_value=False), patch.object(
+            tag_cli.shutil, "which", return_value="/usr/local/bin/mfs-server"
+        ):
+            self.assertEqual(tag_cli.mfs_server_executable(), "/usr/local/bin/mfs-server")
 
 
 if __name__ == "__main__":
