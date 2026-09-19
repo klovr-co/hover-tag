@@ -1,0 +1,162 @@
+- generic [active] [ref=e1]:
+  - link "Skip to documentation" [ref=e2] [cursor=pointer]:
+    - /url: "#article"
+  - banner [ref=e3]:
+    - link "Hover home" [ref=e4] [cursor=pointer]:
+      - /url: ../
+      - generic [ref=e5]: Hover
+      - generic [aria-hidden] [ref=e6]: /
+      - generic [ref=e7]:
+        - emphasis [ref=e8]: "@"
+        - text: Tag
+    - navigation "Header navigation" [ref=e9]:
+      - link "Products" [ref=e10] [cursor=pointer]:
+        - /url: ../
+      - link "Hover" [ref=e11] [cursor=pointer]:
+        - /url: ../
+      - link "GitHub" [ref=e12] [cursor=pointer]:
+        - /url: https://github.com/klovr-co/tag
+        - text: GitHub ↗
+      - link "Install Tag" [ref=e13] [cursor=pointer]:
+        - /url: "#install"
+  - generic [ref=e14]:
+    - complementary [ref=e15]:
+      - generic [ref=e16]:
+        - generic [ref=e17]: "@"
+        - generic [ref=e18]:
+          - generic [ref=e19]: Tag documentation
+          - generic [ref=e20]: Alpha
+      - generic [ref=e21]:
+        - generic [aria-hidden] [ref=e22]: ⌕
+        - generic [ref=e23]: Search documentation
+        - searchbox "Search documentation" [ref=e24]
+        - generic [ref=e25]: ⌘ K
+      - button "Reference" [ref=e26] [cursor=pointer]:
+        - text: Reference
+        - generic [aria-hidden] [ref=e27]: ⌄
+      - navigation "Documentation" [ref=e28]:
+        - generic [ref=e29]:
+          - paragraph [ref=e30]: Overview
+          - button "Welcome to Tag" [ref=e31] [cursor=pointer]
+          - button "Why Tag" [ref=e32] [cursor=pointer]
+        - generic [ref=e33]:
+          - paragraph [ref=e34]: Get started
+          - button "Run your first task" [ref=e35] [cursor=pointer]
+          - button "Connect Slack" [ref=e36] [cursor=pointer]
+          - button "Choose a workspace" [ref=e37] [cursor=pointer]
+        - generic [ref=e38]:
+          - paragraph [ref=e39]: Concepts
+          - button "How Tag works" [ref=e40] [cursor=pointer]
+          - button "Context and MFS" [ref=e41] [cursor=pointer]
+          - button "Threads and continuity" [ref=e42] [cursor=pointer]
+        - generic [ref=e43]:
+          - paragraph [ref=e44]: Operate
+          - button "Supported capabilities" [ref=e45] [cursor=pointer]
+          - button "Troubleshooting" [ref=e46] [cursor=pointer]
+        - generic [ref=e47]:
+          - paragraph [ref=e48]: Reference
+          - link "Slack adapter ↗" [ref=e49] [cursor=pointer]:
+            - /url: https://github.com/klovr-co/tag
+            - text: Slack adapter
+            - generic [ref=e50]: ↗
+          - link "Runtime agent ↗" [ref=e51] [cursor=pointer]:
+            - /url: https://github.com/klovr-co/tag
+            - text: Runtime agent
+            - generic [ref=e52]: ↗
+          - link "Security policy ↗" [ref=e53] [cursor=pointer]:
+            - /url: https://github.com/klovr-co/tag
+            - text: Security policy
+            - generic [ref=e54]: ↗
+      - generic [ref=e55]:
+        - generic [ref=e56]: Was this useful?
+        - button "Yes, this was useful" [ref=e57] [cursor=pointer]: "Yes"
+        - button "No, this was not useful" [ref=e58] [cursor=pointer]: "No"
+    - main [ref=e59]:
+      - generic [ref=e60]:
+        - paragraph [ref=e61]: Get Started › Introduction
+        - article [ref=e62]:
+          - generic [ref=e63]:
+            - heading "Introduction" [level=1] [ref=e64]
+            - paragraph [ref=e65]: Learn what Tag is and where to start in the docs.
+          - generic [ref=e66]:
+            - paragraph [ref=e67]:
+              - strong [ref=e68]: "@Tag, Slack is all you need."
+            - paragraph [ref=e69]:
+              - text: Tag brings Codex or Claude into the Slack conversation. Mention
+              - code [ref=e70]: "@Tag"
+              - text: where the work is already being discussed.
+            - paragraph [ref=e71]: Tag picks up the thread, works inside a configured workspace, finds context it is allowed to use, and replies where the team can review the result together.
+          - region "Example Tag request in Slack" [ref=e72]:
+            - generic [ref=e73]:
+              - generic [ref=e74]:
+                - generic [ref=e75]: "#"
+                - generic [ref=e76]: launch-ops
+              - generic [ref=e77]: Slack
+            - generic [ref=e78]:
+              - generic [ref=e79]: M
+              - generic [ref=e80]:
+                - paragraph [ref=e81]:
+                  - generic [ref=e82]: Maya Chen
+                  - generic [ref=e83]: 10:42 AM
+                - paragraph [ref=e84]:
+                  - mark [ref=e85]: "@Tag"
+                  - text: turn this thread into a launch brief. Call out unresolved risks and give every next step an owner.
+            - generic [ref=e86]: 1 reply
+            - generic [ref=e90]:
+              - generic [ref=e91]: "@"
+              - generic [ref=e92]:
+                - paragraph [ref=e93]:
+                  - generic [ref=e94]: Tag
+                  - generic [ref=e95]: APP
+                  - generic [ref=e96]: 10:43 AM
+                - paragraph [ref=e97]: I prepared the brief. Two decisions remain, and I assigned owners to the four next steps.
+                - button "▤ Launch brief · September Open canvas →" [ref=e98] [cursor=pointer]:
+                  - generic [ref=e99]: ▤
+                  - generic [ref=e100]: Launch brief · September
+                  - emphasis [ref=e101]: Open canvas →
+          - region [ref=e102]:
+            - heading "Get started" [level=2] [ref=e103]
+            - button "Install Tag Connect one Slack channel and complete your first delegation. ↗" [ref=e104] [cursor=pointer]:
+              - generic [aria-hidden] [ref=e105]: ↓
+              - generic [ref=e106]: Install Tag
+              - paragraph [ref=e107]: Connect one Slack channel and complete your first delegation.
+              - generic [ref=e108]: ↗
+            - button "How Tag works Understand Slack, the agent workspace, and permitted context. ↗" [ref=e109] [cursor=pointer]:
+              - generic [aria-hidden] [ref=e110]: ◌
+              - generic [ref=e111]: How Tag works
+              - paragraph [ref=e112]: Understand Slack, the agent workspace, and permitted context.
+              - generic [ref=e113]: ↗
+          - region [ref=e114]:
+            - heading "How it works" [level=2] [ref=e115]
+            - paragraph [ref=e116]: Slack holds the request and the shared conversation. Codex or Claude performs the work inside the workspace chosen by the operator.
+            - paragraph [ref=e117]: When the task needs information beyond the thread, Tag can search sources that have been indexed through MFS and explicitly allowed for that installation.
+            - paragraph [ref=e118]: "Each mention starts a fresh agent run. Continuity comes from reconstructible context: the Slack thread, workspace files, approved sources, and saved thread settings."
+          - generic [ref=e119]:
+            - paragraph [ref=e120]: Ready to try it?
+            - heading "Install Tag" [level=2] [ref=e121]
+            - generic [ref=e122]:
+              - code [ref=e123]: $ git clone https://github.com/klovr-co/tag.git
+              - button "Copy" [ref=e124] [cursor=pointer]
+            - generic [ref=e125]: Requires Python 3.10+, uv, and a working Codex CLI login.
+        - generic [ref=e126]:
+          - link "← Back to Hover" [ref=e127] [cursor=pointer]:
+            - /url: ../
+            - generic [ref=e128]: ←
+            - generic [ref=e129]: Back to
+            - generic [ref=e130]: Hover
+          - button "Next Run your first task →" [ref=e131] [cursor=pointer]:
+            - generic [ref=e132]: Next
+            - generic [ref=e133]: Run your first task
+            - generic [ref=e134]: →
+    - complementary "On this page" [ref=e135]:
+      - paragraph [ref=e136]: ☰ On this page
+      - link "Introduction" [ref=e137] [cursor=pointer]:
+        - /url: "#article"
+      - link "Get started" [ref=e138] [cursor=pointer]:
+        - /url: "#start-title"
+      - link "How it works" [ref=e139] [cursor=pointer]:
+        - /url: "#flow-title"
+      - link "Install Tag" [ref=e140] [cursor=pointer]:
+        - /url: "#install"
+      - link "Report an issue ↗" [ref=e142] [cursor=pointer]:
+        - /url: https://github.com/klovr-co/tag/issues

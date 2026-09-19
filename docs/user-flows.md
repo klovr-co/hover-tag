@@ -1,6 +1,6 @@
-# How OpenTag works
+# How Tag works
 
-This is a map of what happens after someone mentions OpenTag. Operators can use
+This is a map of what happens after someone mentions Tag. Operators can use
 it to set up or demo the bot. Contributors can use it to find where a feature
 belongs. It also tells teammates what the bot can and cannot do today.
 
@@ -14,7 +14,7 @@ bridge.
 
 ## Product at a glance
 
-OpenTag brings a locally authenticated Codex or Claude Code agent into a shared
+Tag brings a locally authenticated Codex or Claude Code agent into a shared
 Slack conversation. Slack supplies the request and a
 bounded slice of the conversation, the CLI backend performs the work, and MFS
 supplies retrieval from sources approved by the operator. A working deployment
@@ -23,7 +23,7 @@ finish without performing retrieval.
 
 ```mermaid
 flowchart TD
-    Ask["1 · Ask<br/>Mention OpenTag in Slack"]
+    Ask["1 · Ask<br/>Mention Tag in Slack"]
     Gate{"2 · Check access<br/>Is this person and location allowed?"}
     Stop["Stop here<br/>Deny or ignore the request"]
     Context["3 · Read the conversation<br/>Thread plus attachments"]
@@ -46,11 +46,11 @@ questions can go straight from the agent to the reply.
 ### Example: summarize a Slack thread
 
 1. Maxine writes `@<bot-name> summarize this thread and list the open questions.`
-2. OpenTag confirms that Maxine and the channel are allowed.
+2. Tag confirms that Maxine and the channel are allowed.
 3. It reads up to 30 messages from the thread.
 4. Codex or Claude writes the summary. It can search MFS if the request refers
    to older material outside the thread.
-5. OpenTag posts the answer back in the same Slack thread.
+5. Tag posts the answer back in the same Slack thread.
 
 A few rules matter:
 
@@ -66,7 +66,7 @@ A few rules matter:
 
 | Actor | Responsibility |
 |---|---|
-| Workspace operator | Installs OpenTag, connects the chat app, chooses the backend and workspace, approves data scopes, and starts/stops the service. |
+| Workspace operator | Installs Tag, connects the chat app, chooses the backend and workspace, approves data scopes, and starts/stops the service. |
 | Authorized teammate | Mentions the bot, supplies thread context or attachments, requests work, and reviews the shared result. |
 | Unauthorized teammate | Receives a denial; their request does not read the thread or start the backend. |
 | Slack | Delivers the conversation and displays progress and results. |
@@ -77,7 +77,7 @@ A few rules matter:
 
 ```mermaid
 flowchart LR
-    A["1 · Install<br/>OpenTag + prerequisites"]
+    A["1 · Install<br/>Tag + prerequisites"]
     B["2 · Connect chat<br/>Install the Slack app"]
     C["3 · Choose the agent<br/>Codex or Claude"]
     D["4 · Set boundaries<br/>Workspace, users, locations, MFS"]
@@ -100,21 +100,21 @@ failure.
 |---|---|---|
 | **Level 1 · Journey** | A fast orientation | The happy path and its main outcome. |
 | **Level 2 · Task flow** | To perform or demonstrate the workflow | Exact user steps, choices, limits, and visible recovery paths. |
-| **Level 3 · Service blueprint** | To implement, operate, or debug it | Handoffs among Slack, OpenTag, the backend, MFS, files, and persistent state. |
+| **Level 3 · Service blueprint** | To implement, operate, or debug it | Handoffs among Slack, Tag, the backend, MFS, files, and persistent state. |
 
 Start with Level 1. Continue only as deep as the job requires; Level 3 appears
 only where understanding the system boundary materially helps.
 
 ## Flow 1: First-time setup
 
-The first setup connects one chat identity to one local OpenTag worker. Start
+The first setup connects one chat identity to one local Tag worker. Start
 with the smallest safe setup, test it, and add capabilities after that works.
 
 ### Level 1 · Journey
 
 ```mermaid
 flowchart LR
-    Install["Install<br/>OpenTag + prerequisites"]
+    Install["Install<br/>Tag + prerequisites"]
     Slack["Connect Slack<br/>App, Socket Mode, tokens"]
     Agent["Choose agent<br/>Codex or Claude"]
     Guardrails["Set boundaries<br/>Workspace, users, MFS roots"]
@@ -161,7 +161,7 @@ sequenceDiagram
     participant S as Slack
     participant D as Doctor
     participant M as MFS
-    participant B as OpenTag bridge
+    participant B as Tag bridge
 
     O->>I: Run installer and choose backend/workspace
     I-->>O: Save private configuration and Slack manifest
@@ -186,7 +186,7 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-    Ask["Mention OpenTag<br/>with a clear task"]
+    Ask["Mention Tag<br/>with a clear task"]
     Check["Confirm caller and<br/>channel are allowed"]
     Work["Agent works with<br/>thread context"]
     Reply["Review the result<br/>in the same thread"]
@@ -216,7 +216,7 @@ Try this:
 sequenceDiagram
     participant U as Authorized teammate
     participant S as Slack
-    participant T as OpenTag bridge
+    participant T as Tag bridge
     participant B as CLI backend
     participant M as MFS/tools
 
@@ -268,7 +268,7 @@ flowchart LR
 
 ### Level 2 · Task flow
 
-1. OpenTag fetches one Slack replies page containing up to 30 messages from the
+1. Tag fetches one Slack replies page containing up to 30 messages from the
    current thread rather than only the newest message. It does not currently
    paginate longer threads or separately guarantee that a triggering message
    beyond Slack's returned page is retained.
@@ -295,7 +295,7 @@ or document do not override the teammate's request or the runtime policy.
 sequenceDiagram
     participant U as Teammate
     participant S as Slack
-    participant T as OpenTag bridge
+    participant T as Tag bridge
     participant F as Temporary files
     participant B as CLI backend
 
@@ -410,7 +410,7 @@ flowchart LR
 4. It runs proportionate verification.
 5. It reports changed files and observed test/command results in Slack.
 
-OpenTag does not add a hardened sandbox. The operator should use a trusted
+Tag does not add a hardened sandbox. The operator should use a trusted
 workspace for demos and an external sandbox for stronger production isolation.
 
 ## Flow 6: Create shared Slack outputs
@@ -444,7 +444,7 @@ Try this:
 
 When the request explicitly says to post, send, or share, the backend can call
 the channel-post helper. The helper is restricted to the channel that invoked
-OpenTag; the backend cannot select an arbitrary destination.
+Tag; the backend cannot select an arbitrary destination.
 
 #### Create a Slack Canvas
 
@@ -475,7 +475,7 @@ flowchart LR
 
 ### Level 2 · Task flow
 
-1. OpenTag shows only available Codex models and their supported reasoning
+1. Tag shows only available Codex models and their supported reasoning
    levels, narrowed by operator allowlists when configured.
 2. The teammate selects a model, a reasoning level, or **Default**.
 3. Validation prevents unsupported combinations from being saved.
@@ -488,7 +488,7 @@ flowchart LR
 sequenceDiagram
     participant U as Authorized teammate
     participant S as Slack modal
-    participant T as OpenTag bridge
+    participant T as Tag bridge
     participant N as Next Codex run
 
     U->>S: Select Change model & thinking
@@ -503,12 +503,12 @@ Settings are thread-specific, so one conversation can use deeper reasoning
 without changing every other conversation. Any authorized teammate in that
 thread may update the shared thread setting. “Default” delegates model or
 reasoning selection to the Codex CLI. If a saved choice is no longer available,
-OpenTag normalizes it back to the applicable default. Claude replies do not
+Tag normalizes it back to the applicable default. Claude replies do not
 show this control.
 
 ## Flow 8: Use optional local tools and Google Workspace skills
 
-OpenTag can use commands and skills already available to the selected CLI
+Tag can use commands and skills already available to the selected CLI
 backend. The included Google Workspace catalog demonstrates this pattern across
 Gmail, Calendar, Drive, Docs, Sheets, Slides, Tasks, Chat, Meet, Forms,
 Classroom, People, Keep, Events, Apps Script, Admin Reports, Model Armor, and
@@ -527,7 +527,7 @@ flowchart LR
     Auth{"Tool authenticated<br/>and permitted?"}
     Stop["Explain the missing<br/>access or setup"]
     Act["Tool performs the<br/>approved action"]
-    Reply["OpenTag returns the<br/>result to Slack"]
+    Reply["Tag returns the<br/>result to Slack"]
 
     Ask --> Select --> Auth
     Auth -->|No| Stop
@@ -537,7 +537,7 @@ flowchart LR
 ### Level 2 · Task flow
 
 The backend selects the appropriate installed skills, and each tool enforces its
-own authentication and grants. OpenTag does not silently grant Google Workspace
+own authentication and grants. Tag does not silently grant Google Workspace
 access or maintain a second per-tool permission system.
 
 See [Included skills](skills.md) for the generated service, helper, persona, and
@@ -550,7 +550,7 @@ recipe catalog.
 ```mermaid
 flowchart LR
     Symptom["Observe the symptom"]
-    Delivery{"Did the mention<br/>reach OpenTag?"}
+    Delivery{"Did the mention<br/>reach Tag?"}
     Slack["Check identity, app install,<br/>channel, and event delivery"]
     Runtime["Check caller access,<br/>doctor, MFS, and backend"]
     Verify["Retry one realistic mention"]
@@ -594,14 +594,14 @@ If the event arrives but the task fails, debug runtime dependencies next:
 
 1. Run `./tag doctor` and correct the first failed check.
 2. Confirm the caller allowlist. An unauthorized Slack caller receives a
-   threaded denial before OpenTag reads the thread or invokes the backend.
+   threaded denial before Tag reads the thread or invokes the backend.
 3. Inspect the transport/backend error in `./tag logs`.
 4. For retrieval failures, confirm MFS is healthy and the requested source root
    is both indexed and allowed. MFS cannot cause Slack to omit the original
    mention event.
 5. Restart only after configuration changes that require a new process.
 
-## Flow 10: Operate, update, and remove OpenTag
+## Flow 10: Operate, update, and remove Tag
 
 ### Level 1 · Journey
 
@@ -617,8 +617,8 @@ flowchart LR
 
     Observe --> Change
     Change -->|Config or Slack app| Config --> Start --> Smoke
-    Change -->|OpenTag version| Upgrade --> Start
-    Change -->|Remove OpenTag| Remove
+    Change -->|Tag version| Upgrade --> Start
+    Change -->|Remove Tag| Remove
 ```
 
 ### Level 2 · Task flow
@@ -697,7 +697,7 @@ isolated chat location. Skip an optional step when its dependency is not set up.
 | Optional channel restriction | Implemented | Empty allows any joined channel; configured ID restricts execution. |
 | Thread text and text attachments | Implemented | Content is bounded and treated as untrusted. |
 | Image attachment understanding | Implemented bridge path | Images up to 15 MB are downloaded temporarily; successful interpretation still depends on the selected backend/model. |
-| Generated-image upload to Slack | **Not implemented by the bridge** | A backend may generate a local image, but OpenTag currently has no dedicated upload-and-attach result path. |
+| Generated-image upload to Slack | **Not implemented by the bridge** | A backend may generate a local image, but Tag currently has no dedicated upload-and-attach result path. |
 | Slack loading state and answers | Implemented | Claude text can stream; Codex currently posts the complete final answer. |
 | Long-answer splitting | Implemented | Results remain in the invoking thread. |
 | Model/reasoning settings | Implemented for Codex | Requires Slack interactivity and a reinstalled updated manifest. |
@@ -709,7 +709,7 @@ isolated chat location. Skip an optional step when its dependency is not set up.
 | Slack durable session | Not provided | Each mention launches a fresh agent; thread text and MFS restore context. |
 | Slack direct messages | Not implemented by the current manifest/handler | The bridge subscribes to channel `app_mention` events, not direct-message events. |
 | Duplicate-event idempotency and cancellation | Not implemented | Avoid concurrent mentions in the same thread; tasks stop on timeout or process termination rather than a user cancellation control. |
-| Side-effect confirmation layer | Not provided by OpenTag | Workspace and connected-tool actions follow the selected backend/tool's permissions and confirmation behavior. |
+| Side-effect confirmation layer | Not provided by Tag | Workspace and connected-tool actions follow the selected backend/tool's permissions and confirmation behavior. |
 | Enterprise governance/audit/approvals | Not provided | Add external sandboxing and policy systems for production use. |
 
 ## Related documentation

@@ -2,7 +2,7 @@
 
 # Slack Adapter
 
-Use this reference when setting up the Slack-facing side of Open Tag from
+Use this reference when setting up the Slack-facing side of Tag from
 scratch. The bridge is intentionally thin. It only:
 
 1. Receives `app_mention` events through Socket Mode.
@@ -29,7 +29,7 @@ Relevant Slack docs:
 ## Prerequisites
 
 Before any Slack work, MFS must be running with at least one indexed source —
-Open Tag only consumes already-indexed scopes:
+Tag only consumes already-indexed scopes:
 
 1. `uv tool install mfs-server` → `mfs-server run` (binds `127.0.0.1:13619`;
    verify with `curl -s 127.0.0.1:13619/healthz`).
@@ -117,7 +117,7 @@ export MFS_ALLOWED_SCOPES="slack://team-memory,file://local/path/to/workspace"
 
 ### More sources
 
-Open Tag's reach is whatever MFS has indexed plus what you list in
+Tag's reach is whatever MFS has indexed plus what you list in
 `MFS_ALLOWED_SCOPES`. Add each once with **mfs-ingest** (it handles credentials),
 then append its root to the scope list:
 
@@ -128,7 +128,7 @@ mfs add postgres://prod             --config ./pg.toml        # rows as objects
 export MFS_ALLOWED_SCOPES="slack://team-memory,github://your-org/your-repo,linear://your-workspace,file://local/path/to/workspace"
 ```
 
-Do not hand-write connector TOML here — Open Tag is only the consumer. For the
+Do not hand-write connector TOML here — Tag is only the consumer. For the
 full connector list and per-connector credentials, use the **mfs-ingest** skill
 and `docs/connectors/`.
 
@@ -190,13 +190,13 @@ installation so interactive components are enabled.
 
 ### Optional local tools, including Google Workspace CLI
 
-Open Tag passes work to the selected backend with its normal local commands and
+Tag passes work to the selected backend with its normal local commands and
 skills. An installed, authenticated [`gws`](https://github.com/googleworkspace/cli)
-CLI is available to that backend like any other local tool. Open Tag does not
+CLI is available to that backend like any other local tool. Tag does not
 maintain a separate Gmail feature flag or caller allowlist; the tool's own OAuth
 grants determine its capabilities.
 
-Open Tag keeps its project-specific skills in `.codex/skills`. This repository
+Tag keeps its project-specific skills in `.codex/skills`. This repository
 includes only `gws-shared` and `gws-gmail` there; Codex also retains its normal
 global `~/.codex/skills` discovery.
 

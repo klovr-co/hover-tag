@@ -1,0 +1,68 @@
+# Tag
+
+## @Tag, Slack is all you need.
+
+Tag lets your team work with an AI agent in a Slack thread. Discuss the work
+with your teammates, then mention `@Tag` to ask it to investigate a question,
+make a plan, or work on files. It uses the thread as context and replies where
+everyone can see the result and follow up.
+
+For example, two teammates can share what they’re taking on and ask Tag to
+pull it together:
+
+> **Jules:** I’ll finish the FAQ by Tuesday.
+>
+> **Maya:** I’ll test signup on Wednesday. Support still needs a briefing.
+>
+> **Jules:** @Tag pull this into a launch checklist with owners.
+>
+> **Tag:** Here’s the shared checklist:
+> - **Jules:** Finish the FAQ by Tuesday.
+> - **Maya:** Test signup on Wednesday.
+> - **Unassigned:** Brief support before launch. Who can take this?
+
+## Who it's for
+
+Tag is for teams that coordinate work in Slack: operations, project leads,
+and anyone who needs to turn a discussion into something they can act on.
+
+You don’t need to code to ask Tag for help. Someone on the team does need to
+set it up: connect Slack, configure the Codex or Claude agent, and choose the
+files, tools, and sources it can access.
+
+## What you can delegate
+
+You can ask Tag to:
+
+- summarize a discussion and turn it into decisions, owners, and next steps;
+- investigate a question across approved Slack history and other sources;
+- compare information from conversations, documents, issues, and repositories;
+- use locally installed tools available to Codex or Claude;
+- inspect or change files in its configured workspace when explicitly asked;
+- return an answer to the thread, post to the channel, or create a Slack Canvas.
+
+What Tag can do depends on its setup. It can use the current thread, files in
+its workspace, and the sources and tools made available to it. See
+[What Tag knows](concepts/what-tag-knows.md) for examples and limits.
+
+## Start here
+
+1. Read [Why Tag](philosophy/why-tag.md) for the product philosophy.
+2. Read [How Tag works](concepts/mental-model.md) to see what happens after a
+   mention.
+3. Follow [Run your first task](getting-started/first-task.md) to install Tag and
+   complete one useful Slack workflow.
+
+## Find the right documentation
+
+| If you want to… | Go to… |
+| --- | --- |
+| Understand why work stays in Slack | [Why Tag](philosophy/why-tag.md) |
+| Understand threads, workspaces, and memory | [How Tag works](concepts/mental-model.md) |
+| Follow up, find earlier discussions, or save a note | [What Tag knows](concepts/what-tag-knows.md) |
+| Install Tag and delegate the first task | [Run your first task](getting-started/first-task.md) |
+| See what is implemented today | [Supported capabilities](reference/supported-capabilities.md) |
+| Explore every connected journey | [Connected user flows](user-flows.md) |
+| Configure Slack in detail | [Slack adapter reference](../references/slack-adapter.md) |
+| Diagnose a problem | [Troubleshooting](troubleshooting.md) |
+| Check release and operating constraints | [Security policy](../SECURITY.md) |
