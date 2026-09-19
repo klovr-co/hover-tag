@@ -36,7 +36,9 @@ tools such as `gws`. The installer does not relocate their credentials.
 ## Install from a checkout
 
 Install Python 3.10+, [uv](https://docs.astral.sh/uv/), and your chosen agent CLI.
-Authenticate the agent CLI separately. No administrator privileges are needed.
+Authenticate the agent CLI separately. No local administrator privileges are
+needed. Slack installation is separate: a workspace owner or Enterprise policy
+may require an app manager to approve the custom Slack app.
 
 macOS/Linux:
 
@@ -122,6 +124,11 @@ Codex discovery references: [skills](https://developers.openai.com/codex/skills)
 and [MCP](https://developers.openai.com/codex/mcp).
 
 ## Operate, upgrade, and migrate
+
+Run `tag` in a terminal for a menu based on the current installation state.
+`tag setup` resumes missing answers; `tag config` edits individual settings.
+Skills use `tag inspect --json` and `tag doctor --json` to plan the same steps.
+See [setup and management](tag-management.md) for the shared flow and commands.
 
 `tag paths` shows storage locations; `tag doctor` checks configuration and
 connectivity. `tag start` runs in the background until stopped or rebooted.

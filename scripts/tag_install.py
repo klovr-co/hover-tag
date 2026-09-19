@@ -19,6 +19,23 @@ from pathlib import Path
 
 REPOSITORY = "https://github.com/klovr-co/tag"
 
+LEGACY_ADMIN_SKILL = (
+    "---\nname: open-tag-admin\ndescription: Configure and diagnose this TAG installation.\n---\n"
+    "Use `tag paths` to find this installation, `tag doctor` to check it, and "
+    "`tag setup` for initial configuration. Settings are in config/settings.json. "
+    "Use tag start, tag status, tag logs and tag stop for lifecycle management. "
+    "Never print credentials. Ask the operator to authorize Slack and integration logins.\n"
+)
+ADMIN_SKILL = (
+    "---\nname: open-tag-admin\ndescription: Set up, configure, and diagnose this Tag installation.\n---\n"
+    "Run `tag paths` and read the file at `admin_skill` for this release's full workflow. "
+    "Begin with `tag inspect --json`; ask only for missing information. "
+    "Use `tag config init --json` for missing defaults and `tag config set` for targeted changes. "
+    "Use stdin for secrets; never print credentials or place them in command arguments. "
+    "Use `tag doctor --json` for diagnosis and `tag status --json` for service readiness. "
+    "The operator authorizes Slack and backend logins. Verify a real Slack reply separately.\n"
+)
+
 
 def download(url: str) -> bytes:
     with urllib.request.urlopen(url, timeout=120) as response:
@@ -73,9 +90,13 @@ def atomic_text(path: Path, text: str, mode: int = 0o600) -> None:
 
 
 def install(source: Path, home: Path, bin_dir: Path, *, dependencies: bool = True) -> Path:
-    sys.path.insert(0, str(source / "scripts"))
-    from tag_paths import initialize
-    from release_check import validate_release
+    scripts_dir = str(source / "scripts")
+    sys.path.insert(0, scripts_dir)
+    try:
+        from tag_paths import initialize
+        from release_check import validate_release
+    finally:
+        sys.path.remove(scripts_dir)
     errors = validate_release(source)
     if errors:
         raise ValueError("Invalid release: " + "; ".join(errors))
@@ -93,7 +114,7 @@ def install(source: Path, home: Path, bin_dir: Path, *, dependencies: bool = Tru
         release = home / "releases" / f"{version}-{uuid.uuid4().hex[:12]}"
         # An allowlist prevents copying credentials, worktree metadata, or personal skills.
         release.mkdir()
-        for name in ("scripts", "references"):
+        for name in ("scripts", "references", "docs"):
             shutil.copytree(source / name, release / name,
                             ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         for name in ("VERSION", "LICENSE", "NOTICE", "README.md", "RELEASE.md", "SECURITY.md",
@@ -114,15 +135,10 @@ def install(source: Path, home: Path, bin_dir: Path, *, dependencies: bool = Tru
             python = Path(sys.executable)
         for backend in (".agents", ".claude"):
             bundled = home / "workspace" / backend / "skills/open-tag-admin"
-            if not bundled.exists():
-                bundled.mkdir(parents=True)
-                (bundled / "SKILL.md").write_text(
-                    "---\nname: open-tag-admin\ndescription: Configure and diagnose this TAG installation.\n---\n"
-                    "Use `tag paths` to find this installation, `tag doctor` to check it, and "
-                    "`tag setup` for initial configuration. Settings are in config/settings.json. "
-                    "Use tag start, tag status, tag logs and tag stop for lifecycle management. "
-                    "Never print credentials. Ask the operator to authorize Slack and integration logins.\n",
-                    encoding="utf-8")
+            skill = bundled / "SKILL.md"
+            if not bundled.exists() or (skill.is_file() and skill.read_text(encoding="utf-8") == LEGACY_ADMIN_SKILL):
+                bundled.mkdir(parents=True, exist_ok=True)
+                skill.write_text(ADMIN_SKILL, encoding="utf-8")
         # Keep the launcher fixed while the pointer changes atomically on upgrade.
         launcher = home / "bin/tag-launch.py"
         launcher_text = '''# TAG managed launcher
