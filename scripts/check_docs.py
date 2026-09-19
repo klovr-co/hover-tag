@@ -13,7 +13,7 @@ MARKDOWN_LINK_RE = re.compile(r"(?<!!)\[[^]]+\]\(([^)]+)\)")
 
 
 def markdown_files(root: Path) -> list[Path]:
-    ignored = {".git", ".runtime", ".mypy_cache", ".codex", "skills"}
+    ignored = {".git", ".context", ".runtime", ".mypy_cache", ".codex", ".venv", "skills", "out"}
     return sorted(
         path
         for path in root.rglob("*.md")
@@ -36,7 +36,7 @@ def validate_docs(root: Path) -> list[str]:
                 )
 
     readme = (root / "README.md").read_text(encoding="utf-8")
-    for command in ("./install.sh", "./tag start", "./tag status", "./tag stop"):
+    for command in ("./install.sh", "tag start", "tag status", "tag stop"):
         if command not in readme:
             errors.append(f"README.md does not document required command: {command}")
     return errors

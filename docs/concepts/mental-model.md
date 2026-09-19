@@ -9,7 +9,7 @@ Here is the basic model:
 
 | Part | What it does | What the operator chooses |
 | --- | --- | --- |
-| **Slack** | Holds the request, thread context, working state, and result | App installation, authorized callers, and optional channel restriction |
+| **Slack** | Holds the request, thread context, working state, and result | App installation, authorized callers, and selected channels |
 | **Agent workspace** | Runs Codex or Claude and gives the agent files and locally available tools | Backend, working directory, local tools, and process permissions |
 | **MFS** | Acts as a searchable context layer over indexed sources | Connectors, credentials, indexed sources, and allowed retrieval scopes |
 
@@ -66,7 +66,7 @@ deployment before the agent can retrieve it through the bundled helpers.
 The operator configures:
 
 - who can invoke Tag;
-- the Slack channels the app joins and, optionally, one enforced channel;
+- the Slack channels where Tag may run;
 - whether Codex or Claude performs the work;
 - the workspace in which the agent runs;
 - the MFS sources and roots available for retrieval;

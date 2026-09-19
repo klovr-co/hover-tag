@@ -36,14 +36,14 @@ unavailable behavior.
 | Use indexed Slack channel history | Implemented | Requires a configured MFS Slack connector and an allowed `slack://` root. |
 | Use repositories, documents, issues, databases, and object stores | Connector-dependent | The source must already be indexed by MFS and permitted to Tag. |
 | Automatically remember every conversation | Not provided | Continuity comes from Slack threads, workspace state, and approved indexed sources. |
-| Optional local seed notes | Available | Intended for deterministic demos, not as the main memory model. |
+| Dedicated local memory-note store | Not provided | Durable retrieval uses indexed, permitted MFS sources. |
 
 ## Operator controls
 
 | Capability | Status | Notes |
 | --- | --- | --- |
 | Slack caller allowlist | Implemented | Setup starts with one owner member ID. |
-| Optional single-channel restriction | Implemented | Configure `SLACK_CHANNEL_ID`. |
+| Explicit channel restriction | Implemented | Configure `SLACK_CHANNEL_IDS`; the bridge fails closed without selected channels. |
 | MFS retrieval roots | Implemented | Configure `MFS_ALLOWED_SCOPES`. |
 | Backend timeout and retry settings | Implemented | Configure the corresponding `OPENTAG_` settings. |
 | Organization-wide administration and approvals | Not provided | These remain outside the current reference implementation. |

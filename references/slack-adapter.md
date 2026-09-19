@@ -17,8 +17,8 @@ The adapter does not answer questions itself. It passes the thread, channel id,
 and allowed MFS scopes to a fresh CLI agent.
 
 The Slack app token and bot token are only for receiving mentions, reading the
-current thread, and posting replies. Broader Slack memory should be configured as
-an MFS Slack connector with its own token, channel allowlist, and source URI.
+current thread, and posting replies. `tag setup` separately configures an MFS
+Slack-history credential, explicit channel-ID allowlist, and source URI.
 
 Relevant Slack docs:
 
@@ -28,40 +28,45 @@ Relevant Slack docs:
 
 ## Prerequisites
 
-Before any Slack work, MFS must be running with at least one indexed source —
-Tag only consumes already-indexed scopes:
+MFS must be available for the completed service. Slack setup creates its
+connector configuration; `tag start` registers it after starting MFS:
 
 1. `uv tool install mfs-server` → `mfs-server run` (binds `127.0.0.1:13619`;
    verify with `curl -s 127.0.0.1:13619/healthz`).
-2. Index at least one source with the **mfs-ingest** skill (a local repo is the
-   quickest start). See "MFS Memory Setup" below and `docs/connectors/`.
+2. Use **mfs-ingest** only for optional sources beyond the Slack channels chosen
+   during `tag setup`.
 
 ## End-To-End Checklist
 
-1. Pick an isolated Slack channel, preferably private, for the first run.
-2. Create a Slack app in the target workspace named **Tag**.
-3. Enable Socket Mode and create an app-level token with `connections:write`.
-   Save it as `SLACK_APP_TOKEN` (`xapp-...`).
-4. Add bot scopes, install the app, and save the bot token as
-   `SLACK_BOT_TOKEN` (`xoxb-...`).
-5. Subscribe the app to `app_mention` bot events.
-6. Invite the bot to the sandbox channel.
-7. Copy the owner's Slack member ID and set it as `SLACK_ALLOWED_USER_IDS`.
-8. Configure MFS sources for Memory and set `MFS_ALLOWED_SCOPES`.
-9. Choose a Brain backend with `OPENTAG_BACKEND`.
-10. Run `scripts/opentag_doctor.py --channel-id <channel-id>`.
-11. Start the Socket Mode bridge and mention the bot in Slack.
+1. Pick one or more isolated Slack channels for the first run and invite the bot.
+2. Run `tag setup`. Let it reuse Slack CLI authorization or start `slack auth
+   login` when the workspace is absent.
+3. Approve either manifest-based app creation or linking an existing App ID.
+   Review/repair missing settings in Slack; setup never changes an existing
+   app's permissions silently.
+4. Enter Socket Mode and bot tokens in the hidden prompts. Setup validates them
+   independently and checks workspace/app identity.
+5. Select one or more joined channels and the owner member ID.
+6. Choose/reuse the history credential and approve the exact channel list and
+   history window before connector creation or indexing.
+7. Choose Codex (default) or experimental Claude, then run `tag start`.
+8. Mention the bot in each selected test channel and record an observed reply;
+   service readiness alone is not an end-to-end pass.
 
 If the workspace blocks app creation or install approval, the user must ask a
 Slack workspace admin to approve the app. The skill can guide the setup and
 diagnose failures, but it cannot bypass workspace policy.
+
+Tag stores each selected channel's stable ID in `SLACK_CHANNEL_IDS` and verifies
+bot membership first. Raw IDs remain available for automation with
+`tag config set SLACK_CHANNEL_IDS C123,C456`.
 
 ## Slack App Setup
 
 Create or reuse a Slack app:
 
 1. Go to <https://api.slack.com/apps>.
-2. Create a new app from scratch in the target workspace. Name it **Tag** so
+2. Create a new app from scratch in the target workspace. Name it **OpenMax** so
    the teammate identity stays stable when the backend changes. The name is
    cosmetic—Tag strips the mention before invoking the configured backend.
 3. Open **Socket Mode**, enable it, and create an app-level token with:
@@ -74,12 +79,15 @@ Create or reuse a Slack app:
    - `groups:read` + `groups:history` — read threads in private channels.
 5. Open **Event Subscriptions** and subscribe to Bot Events:
    - `app_mention`
+   - `app_home_opened`
 6. Install or reinstall the app to the workspace after changing scopes/events.
 7. Copy the **Bot User OAuth Token** (`xoxb-...`).
 8. Invite the bot to the sandbox channel:
    ```text
    /invite @your-bot-name
    ```
+9. Open the app's Home tab to confirm that its visual channel picker shows the
+   selected destination. Only configured Tag owners can change it there.
 
 For a private channel, bot membership matters even when the app has
 `groups:history`. If `opentag_doctor.py` reports `not_in_channel`, invite the bot
@@ -128,9 +136,9 @@ mfs add postgres://prod             --config ./pg.toml        # rows as objects
 export MFS_ALLOWED_SCOPES="slack://team-memory,github://your-org/your-repo,linear://your-workspace,file://local/path/to/workspace"
 ```
 
-Do not hand-write connector TOML here — Tag is only the consumer. For the
-full connector list and per-connector credentials, use the **mfs-ingest** skill
-and `docs/connectors/`.
+Do not hand-write Tag's primary Slack connector TOML; setup creates it with
+`channel_ids` and a bounded history window. For other connector types, use the
+**mfs-ingest** skill and `docs/connectors/`.
 
 Use a bot token for channels the bot can join. Use a user token only when the
 demo intentionally needs the user's own visible Slack context, and always pair it
@@ -148,7 +156,7 @@ export MFS_TOKEN="$(cat ~/.mfs/server.token)"
 export MFS_ALLOWED_SCOPES="slack://team-memory,github://owner/repo,file://local/path/to/workspace"
 export OPENTAG_BACKEND="<backend>"   # claude | codex
 export OPENTAG_WORKDIR="/path/to/workspace"
-export SLACK_CHANNEL_ID="<channel-id>"
+export SLACK_CHANNEL_IDS="<channel-id>,<another-channel-id>"
 export SLACK_ALLOWED_USER_IDS="<owner-member-id>"
 ```
 
@@ -165,7 +173,6 @@ auth and tool execution.
 Optional:
 
 ```bash
-export OPENTAG_MEMORY_ROOT="$HOME/.mfs/opentag-memory"
 export OPENTAG_TIMEOUT_SECONDS=420
 export OPENTAG_BACKEND_ATTEMPTS=3   # codex backend: retries on capacity/rate-limit
 export OPENTAG_SLACK_STREAMING=0    # optional: disable default Slack response streaming
@@ -188,30 +195,12 @@ model cache. Set `OPENTAG_CODEX_MODELS` to restrict what Slack users can select.
 Reinstall the Slack app from `slack-app-manifest.yaml` when upgrading an existing
 installation so interactive components are enabled.
 
-### Optional local tools, including Google Workspace CLI
-
-Tag passes work to the selected backend with its normal local commands and
-skills. An installed, authenticated [`gws`](https://github.com/googleworkspace/cli)
-CLI is available to that backend like any other local tool. Tag does not
-maintain a separate Gmail feature flag or caller allowlist; the tool's own OAuth
-grants determine its capabilities.
-
-Tag keeps its project-specific skills in `.codex/skills`. This repository
-includes only `gws-shared` and `gws-gmail` there; Codex also retains its normal
-global `~/.codex/skills` discovery.
-
-```bash
-gws auth login -s gmail
-```
-
-This is distinct from MFS: it does not index mail or add a `gmail://` scope.
-
 ## Preflight
 
 Run this before starting the bridge:
 
 ```bash
-python scripts/opentag_doctor.py --channel-id "$SLACK_CHANNEL_ID"
+python scripts/opentag_doctor.py --channel-id "<first-id>" --channel-id "<second-id>"
 ```
 
 The doctor checks:

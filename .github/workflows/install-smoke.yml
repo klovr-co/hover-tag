@@ -9,14 +9,19 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   clean-install:
     name: ${{ matrix.os }} clean install
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -24,18 +29,4 @@ jobs:
           python-version: "3.10"
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
       - name: Install and verify without credentials
-        shell: bash
-        run: |
-          export XDG_BIN_HOME="$RUNNER_TEMP/tag-bin"
-          export PATH="$XDG_BIN_HOME:$HOME/.local/bin:$PATH"
-          ./install.sh --dependencies-only
-          ./install.sh --check-dependencies
-          ./tag version
-          OPENTAG_ENV_FILE=/dev/null \
-            OPENTAG_TRANSPORT=slack \
-            OPENTAG_BACKEND=codex \
-            OPENTAG_WORKDIR="$PWD" \
-            MFS_URL=http://127.0.0.1:13619 \
-            MFS_ALLOWED_SCOPES="file://local$PWD" \
-            SLACK_ALLOWED_USER_IDS=UOWNER \
-            ./tag doctor --offline
+        run: python scripts/install_smoke.py

@@ -35,15 +35,11 @@ find something, that alone does not mean the discussion never happened.
 
 > @Tag remember that our weekly report is due Friday.
 
-Tag's runtime instructions tell the agent to save an explicit request like
-this as a short note for the current channel and submit it for indexing. They
-also tell it to confirm what was saved and report any indexing or access
-problem.
-
-A note can be saved locally before it becomes searchable. To retrieve it
-through the search helpers on a later task, indexing must finish and the note
-must be within the permitted sources. This behavior is handled by the agent
-following its instructions; it is not a dedicated Slack command.
+Tag does not provide a dedicated saved-note command or local memory store.
+For a decision you need later, ask Tag to write it to a specific workspace
+file. To make that file searchable through MFS, the operator must include it
+in an indexed, permitted source. Saving a file and indexing it are separate
+steps; ask Tag to confirm what it actually completed.
 
 Tag does not automatically save a note after every conversation. Files it
 writes in the workspace remain available while they are kept there, and
@@ -71,5 +67,5 @@ settings.
 
 Tag began as a modified version of the Open Tag example in MFS and uses MFS
 to search indexed sources. See the [project attribution](../../README.md#origins-and-attribution)
-for its origins and the [memory reference](../../references/memory.md) for saved
-note details.
+for its origins and the [memory reference](../../references/memory.md) for
+retrieval details.

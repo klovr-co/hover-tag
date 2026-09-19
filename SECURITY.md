@@ -5,6 +5,19 @@ messages. It is not a production security boundary. Use a dedicated host or
 sandbox workspace, an isolated chat channel, least-privilege credentials, and
 explicit MFS scope allowlists.
 
+## Credential boundary
+
+The agent backend inherits the bridge process environment, including
+`SLACK_BOT_TOKEN`, `MFS_TOKEN`, and unrelated ambient credentials. Tag removes
+`SLACK_APP_TOKEN`, `SLACK_CHANNEL_ID`, and `SLACK_ALLOWED_USER_IDS` before
+starting backend work, but it does not broker the remaining credentials.
+
+Consequently, Slack and MFS helper allowlists are guardrails for normal agent
+operation, not hardened capability controls: an agent with shell access can use
+inherited credentials directly. Run Tag under a dedicated local account or
+external sandbox and give every credential only the permissions appropriate
+for that environment.
+
 ## Reporting a vulnerability
 
 Please do not disclose a suspected vulnerability in a public issue. Use

@@ -9,6 +9,18 @@ from scripts.check_manifest import validate_manifest
 
 
 class ReleaseHelperTests(unittest.TestCase):
+    def test_uv_uses_the_cross_platform_virtualenv_python(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        script = (root / "scripts/ci_check.sh").read_text(encoding="utf-8")
+        uv_commands = " ".join(
+            line.strip()
+            for line in script.replace("\\\n", " ").splitlines()
+            if line.strip().startswith("uv run")
+        )
+
+        self.assertNotIn(" python3 ", uv_commands)
+        self.assertIn(" python ", uv_commands)
+
     def test_current_documentation_links_resolve(self) -> None:
         root = Path(__file__).resolve().parents[1]
         self.assertEqual(validate_docs(root), [])
@@ -25,3 +37,5 @@ class ReleaseHelperTests(unittest.TestCase):
         self.assertTrue(any("missing bot scopes" in error for error in errors))
         self.assertIn("Socket Mode must be enabled", errors)
         self.assertIn("app_mention must be subscribed", errors)
+        self.assertIn("app_home_opened must be subscribed", errors)
+        self.assertIn("App Home must be enabled", errors)
