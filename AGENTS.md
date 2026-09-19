@@ -4,8 +4,11 @@
 
 ### Issue tracker
 
-Issues and PRDs are tracked in GitHub Issues for `klovr-co/tag`. See
-`docs/agents/issue-tracker.md`.
+Issues and PRDs are tracked in GitHub Issues for `klovr-co/tag`. Feature planning
+uses the Tag Features catalog: https://github.com/orgs/klovr-co/projects/3.
+Follow its existing feature naming, draft lifecycle, and field conventions.
+See `docs/agents/issue-tracker.md` for commands and the authentication fallback
+when the integration token cannot access Projects.
 
 ### Feature catalog
 
