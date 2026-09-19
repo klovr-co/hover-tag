@@ -127,21 +127,97 @@ class SlackReplyChunkingTests(unittest.TestCase):
 class SlackChannelAllowlistTests(unittest.TestCase):
     def setUp(self) -> None:
         self.previous = os.environ.get("SLACK_CHANNEL_ID")
+        self.previous_many = os.environ.get("SLACK_CHANNEL_IDS")
 
     def tearDown(self) -> None:
         if self.previous is None:
             os.environ.pop("SLACK_CHANNEL_ID", None)
         else:
             os.environ["SLACK_CHANNEL_ID"] = self.previous
+        if self.previous_many is None:
+            os.environ.pop("SLACK_CHANNEL_IDS", None)
+        else:
+            os.environ["SLACK_CHANNEL_IDS"] = self.previous_many
 
     def test_configured_channel_is_allowed(self) -> None:
         os.environ["SLACK_CHANNEL_ID"] = "C123"
         self.assertTrue(slack_socket_agent.slack_channel_allowed("C123"))
         self.assertFalse(slack_socket_agent.slack_channel_allowed("C999"))
 
-    def test_empty_configuration_preserves_existing_behavior(self) -> None:
+    def test_multiple_configured_channels_are_allowed(self) -> None:
+        os.environ["SLACK_CHANNEL_IDS"] = "C123,G456"
+        self.assertTrue(slack_socket_agent.slack_channel_allowed("C123"))
+        self.assertTrue(slack_socket_agent.slack_channel_allowed("G456"))
+        self.assertFalse(slack_socket_agent.slack_channel_allowed("C999"))
+
+    def test_empty_configuration_fails_closed(self) -> None:
         os.environ["SLACK_CHANNEL_ID"] = ""
-        self.assertTrue(slack_socket_agent.slack_channel_allowed("C999"))
+        os.environ["SLACK_CHANNEL_IDS"] = ""
+        self.assertFalse(slack_socket_agent.slack_channel_allowed("C999"))
+
+
+class SlackAppHomeTests(unittest.TestCase):
+    def test_invited_policy_replaces_picker_and_ignores_stale_actions(self):
+        fake_app = FakeApp()
+        with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+            os.environ, {"SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_POLICY": "invited"}, clear=True
+        ), patch.object(slack_socket_agent, "save_home_channels") as save:
+            view = slack_socket_agent.app_home_view("C123")
+            self.assertNotIn("multi_conversations_select", str(view))
+            self.assertIn("automatic channel memory", str(view))
+            slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+            fake_app.actions[slack_socket_agent.HOME_CHANNEL_ACTION_ID](
+                MagicMock(), {"actions": [{"selected_conversations": ["COTHER"]}], "user": {"id": "UOWNER"}},
+                MagicMock(), MagicMock(),
+            )
+        save.assert_not_called()
+
+    def test_home_uses_native_visual_channel_selector(self) -> None:
+        view = slack_socket_agent.app_home_view("C123,G456")
+
+        selector = view["blocks"][1]["accessory"]
+        self.assertEqual("multi_conversations_select", selector["type"])
+        self.assertEqual(["public", "private"], selector["filter"]["include"])
+        self.assertEqual(["C123", "G456"], selector["initial_conversations"])
+
+    def test_authorized_user_can_save_a_joined_channel_from_app_home(self) -> None:
+        fake_app = FakeApp()
+        client = MagicMock()
+        client.conversations_info.return_value = {"channel": {"is_member": True}}
+        ack = MagicMock()
+        with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+            os.environ, {"SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_IDS": "COLD"}, clear=True
+        ), patch.object(slack_socket_agent, "save_home_channels") as save:
+            slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+            fake_app.actions[slack_socket_agent.HOME_CHANNEL_ACTION_ID](
+                ack,
+                {"actions": [{"selected_conversations": ["CNEW", "CSECOND"]}], "user": {"id": "UOWNER"}},
+                client,
+                MagicMock(),
+            )
+
+        ack.assert_called_once_with()
+        save.assert_called_once_with(["CNEW", "CSECOND"])
+        self.assertEqual(["CNEW", "CSECOND"], client.views_publish.call_args.kwargs["view"]["blocks"][1]["accessory"]["initial_conversations"])
+
+    def test_app_home_rejects_channel_until_bot_is_invited(self) -> None:
+        fake_app = FakeApp()
+        client = MagicMock()
+        client.conversations_info.return_value = {"channel": {"is_member": False}}
+        with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+            os.environ, {"SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_IDS": "COLD"}, clear=True
+        ), patch.object(slack_socket_agent, "save_home_channels") as save:
+            slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+            fake_app.actions[slack_socket_agent.HOME_CHANNEL_ACTION_ID](
+                MagicMock(),
+                {"actions": [{"selected_conversations": ["CNEW"]}], "user": {"id": "UOWNER"}},
+                client,
+                MagicMock(),
+            )
+
+        save.assert_not_called()
+        published = client.views_publish.call_args.kwargs["view"]
+        self.assertIn("Invite the Tag bot", str(published))
 
 
 class SlackUserAllowlistTests(unittest.TestCase):
@@ -168,7 +244,7 @@ class SlackUserAllowlistTests(unittest.TestCase):
         logger = MagicMock()
         with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
             os.environ,
-            {"SLACK_BOT_TOKEN": "xoxb-test"},
+            {"SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_IDS": "C123"},
             clear=True,
         ), patch.object(slack_socket_agent, "build_thread_text") as build_thread_text, patch.object(
             slack_socket_agent, "run_backend"
@@ -197,7 +273,7 @@ class SlackUserAllowlistTests(unittest.TestCase):
         ack = MagicMock()
         with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
             os.environ,
-            {"SLACK_BOT_TOKEN": "xoxb-test"},
+            {"SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_IDS": "C123"},
             clear=True,
         ), patch.object(slack_socket_agent, "discover_codex_models", return_value=[]):
             slack_socket_agent.create_app("codex", 30, frozenset({"UOWNER"}))

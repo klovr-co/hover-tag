@@ -32,20 +32,16 @@ cd tag
 ./install.sh
 ```
 
-The installer checks MFS, creates a private `.env`, and asks for the Slack and
-workspace settings it cannot guess.
+The installer creates a persistent Tag home and installs the `tag` command.
+Run `tag setup` to configure Slack and save settings. See
+[setup and management](../tag-management.md) for the full setup flow.
 
 ## 2. Connect Slack
 
-When prompted, create a Slack app from
-[`slack-app-manifest.yaml`](../../slack-app-manifest.yaml):
-
-1. Open **Slack API → Your Apps → Create New App → From an app manifest**.
-2. Install the app to your workspace.
-3. Create an app-level token beginning with `xapp-` and grant
-   `connections:write`.
-4. Give the installer the app token, bot token, and your Slack member ID.
-5. Invite the bot to the channel where you will test it.
+Run `tag setup` in a terminal. It guides you through connecting Slack,
+creating or linking an app, entering tokens, and selecting channels and the
+owner member ID. Approve the displayed channels and history window before
+Tag indexes Slack history. Use your installed bot's name when mentioning it.
 
 At first, only the owner member ID can invoke Tag. Add teammates to
 `SLACK_ALLOWED_USER_IDS` when you are ready to share it.
@@ -55,16 +51,17 @@ For every scope and token detail, use the
 
 ## 3. Choose the working workspace
 
-Set `OPENTAG_WORKDIR` to the directory where the agent should perform tasks.
-For a first run, use a dedicated test project whose contents you understand.
+Tag manages a workspace under its persistent home. Use `tag inspect --json`
+to inspect the current configuration, and put the project files you want
+Tag to work on in that workspace.
 
 The workspace is different from MFS memory:
 
 - the workspace is where the agent can inspect, run, and change things;
 - MFS is how the agent retrieves context from approved indexed sources.
 
-The installer adds the selected workspace as a local MFS source. Starting here
-makes a bad path or retrieval result easy to spot.
+Workspace files are available to the agent directly. Searchable context
+depends on which sources are indexed and permitted through MFS.
 
 ## 4. Check and start Tag
 
@@ -94,16 +91,16 @@ right thread.
 
 Reply in the same thread with:
 
-> Turn that into a one-week action plan with an owner placeholder for each item.
+> @Tag turn that into a one-week action plan with an owner placeholder for each item.
 
 Tag receives the earlier thread messages with the new request, so the follow-up
 can build on the shared discussion.
 
 ## 7. Add broader context
 
-Once the first loop works, add Slack history or another source through MFS and
-include its exact root in `MFS_ALLOWED_SCOPES`. Tag consumes sources that are
-already indexed; it does not connect new organizational systems silently.
+Once the first loop works, add another source through MFS and include its exact
+root in `MFS_ALLOWED_SCOPES`. Setup handles the approved Slack history source;
+changing retrieval scopes alone does not index additional sources.
 
 ## If something fails
 

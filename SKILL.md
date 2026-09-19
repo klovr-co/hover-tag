@@ -23,8 +23,9 @@ Keep the architecture generic:
 
 The user-facing flow is:
 
-1. Configure MFS sources and allowed scopes.
-2. Configure a Slack app with Socket Mode, then add it to a sandbox channel.
+1. Run `tag setup` to authorize Slack CLI, create or link an app, select one or
+   more joined sandbox channels, and approve selected-channel history indexing.
+2. Let setup validate Socket Mode, bot, and history credentials separately.
 3. Start the Open Tag bridge.
 4. Mention the bot in a Slack thread.
 5. Let the bridge invoke the selected backend with thread context and scoped MFS
@@ -35,16 +36,15 @@ write permissions come from the selected CLI agent backend.
 
 ## Prerequisites
 
-Open Tag is a thin layer on top of a **running MFS server with at least one
-indexed source**. Confirm these before any Slack work:
+Open Tag requires a **running MFS server with at least one indexed source**.
+Slack-first onboarding configures that source itself:
 
 1. **MFS server installed and running.** `uv tool install mfs-server`, then
    `mfs-server run` (binds `127.0.0.1:13619`). Check with
    `curl -s 127.0.0.1:13619/healthz`.
-2. **At least one data source indexed.** Open Tag only *consumes* already-indexed
-   scopes as Memory — it does not configure connectors itself. Use the
-   **mfs-ingest** skill (Codex: `$mfs-ingest`) to add a source; see
-   "Adding data sources" below.
+2. **At least one data source indexed.** `tag setup` writes and registers a
+   Slack connector limited to the explicitly selected channels. Use the
+   **mfs-ingest** skill only for additional non-Slack sources.
 
 `opentag_doctor.py` fails fast with a hint if either is missing.
 
@@ -55,31 +55,57 @@ regardless of whether Codex or Claude Code is configured underneath. Slack
 routes the mention by bot user ID, and Tag strips the mention before invoking
 the backend. Set `OPENTAG_BOT_NAME` if your Slack app uses another display name.
 
-## Setup Workflow
+## Setup and management workflow
 
-1. Satisfy **Prerequisites** above (MFS running + at least one indexed source).
-2. For a new local installation, run `./install.sh`. It verifies pinned local
-   prerequisites, writes a private `.env`, and leaves provider credentials to
-   the workspace administrator. Use `slack-app-manifest.yaml` to create the
-   Slack app.
-3. For Slack, read `references/slack-adapter.md`, confirm an isolated channel,
-   then create/install the Socket Mode app, invite it to that channel, and enter
-   the owner's Slack member ID when setup requests it.
-4. Configure MFS memory sources and set `MFS_ALLOWED_SCOPES` to the exact source
-   roots the runtime agent may use.
-5. Choose `OPENTAG_BACKEND` explicitly: `claude` or `codex`.
-6. Run `python scripts/opentag_doctor.py --channel-id <channel-id>` and fix any
-   failed check.
-7. Start the Slack bridge with `./tag start`. Use `./tag status` and
-   `./tag logs` to inspect it. The command prints a
-   "what's live now" summary — read it, then validate thread context,
-   permitted-context retrieval, and task execution with a realistic delegated task.
+Start every setup, change, or recovery request by inspecting what already exists.
+Use the installed `tag` CLI; in a source checkout use `./tag` with an isolated
+absolute `TAG_HOME`. Do not drive the interactive menu by feeding numbered input.
+Read `docs/tag-management.md` for the command/output contract.
+
+1. If Tag is not installed, run the repository's `./install.sh` (Windows:
+   `./install.ps1`) and use the printed launcher. Installation creates a private
+   persistent home and runtime; configuration is `config/settings.json` there,
+   not `.env` in the source checkout.
+2. Run `tag inspect --json`. Read `state`, `configuration.fields`, `backend`,
+   `services`, and `next_command`. Use `--offline` for a local-only inspection.
+   Do not ask for values already saved. Redacted `[set]` values are present,
+   not missing.
+3. For initial setup, run `tag setup` in the user's terminal. It seeds only
+   missing defaults, invokes the real Slack CLI authorization flow when needed,
+   and pauses before app creation/linking and history indexing. Never ask the
+   operator to send tokens in chat: setup uses hidden prompts. It accepts an
+   existing app by App ID and exposes an action to open that app's settings.
+   Its multi-select picker accepts joined channels only and persists their
+   stable IDs.
+4. Use `tag config keys --json` to discover supported keys, and
+   `tag config set KEY VALUE --json` for each requested nonsecret change. Preserve
+   unrelated settings. Use the mfs-ingest skill for additional sources; the
+   Slack source created by setup is already selected-channel scoped.
+5. Codex is the default. Change the runtime agent only when requested using
+   `tag config set OPENTAG_BACKEND claude --json` (experimental) or `codex`.
+   The assistant performing installation and Tag's runtime backend are separate.
+6. Run `tag doctor --json` to diagnose failed checks. If local MFS is stopped,
+   `tag start` starts it before preflight. Do not repeatedly rewrite settings to
+   fix a stopped service. Installed executables do not prove authentication;
+   guide sign-in through the backend's own interface when needed.
+7. When startup is part of the request, run `tag start`, then `tag status --json`.
+   Settings changes take effect on the next start; restart a running deployment
+   only when the requested change calls for it. Verify a real mention and reply
+   in the permitted Slack channel before claiming end-to-end success. JSON
+   inspection deliberately reports `first_reply: not_verified`.
+
+For returning users, use the same inspect/change/verify loop. For failures, read
+structured checks and their next actions, then inspect logs if necessary. Never
+paste unreviewed logs into chat because third-party output can contain secrets.
+`tag setup` is the human alternative: saved valid answers are skipped, Ctrl-C
+pauses, and another run resumes. Invalid JSON requires repair, not replacement.
 
 ## Adding data sources
 
 Open Tag's reach is exactly what MFS has indexed and what you list in
-`MFS_ALLOWED_SCOPES`. To add a source, use the **mfs-ingest** skill — it handles
-credentials and writes the connector config; Open Tag never duplicates that.
+`MFS_ALLOWED_SCOPES`. `tag setup` owns the primary Slack-history connector. To
+add a different source, use the **mfs-ingest** skill; it handles that source's
+credentials and connector configuration.
 
 Representative sources (each is `mfs add <uri> --config <toml>` once, then add
 its root to `MFS_ALLOWED_SCOPES`):
@@ -108,8 +134,6 @@ Keep the Python scripts as deterministic glue:
   backend.
 - `mfs_search.py` and `mfs_cat.py`: call the MFS HTTP API with scoped search and
   reads.
-- `opentag_memory.py`: maintain optional local seed notes and re-index them in
-  MFS for deterministic demos.
 - `opentag_doctor.py`: preflight environment variables, Slack bot access, MFS
   reachability, allowed scopes, and backend availability.
 
@@ -129,8 +153,7 @@ request. Never use first-mention claiming or leave this setting empty.
 
 Thread context is short-term state. Durable context should come from permitted
 MFS scopes such as indexed Slack history, repos, docs, issues, databases, object
-stores, or optional local seed notes. See `references/memory.md` for the optional
-helper's file shape.
+stores, or web sources. See `references/memory.md` for the retrieval model.
 
 Never hard-code real workspace names, channel IDs, user IDs, local absolute
 paths, or customer/project details into this skill. Use placeholders in
@@ -142,4 +165,4 @@ documentation and environment examples.
 - Read `references/backends.md` when changing backend selection or command
   invocation.
 - Read `references/runtime-agent.md` when changing per-mention behavior.
-- Read `references/memory.md` only when using optional local seed notes.
+- Read `references/memory.md` when changing the MFS retrieval model.
