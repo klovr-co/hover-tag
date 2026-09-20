@@ -202,11 +202,12 @@ Only the owner member ID entered during setup can invoke Tag initially. Add
 other IDs to the comma-separated `SLACK_ALLOWED_USER_IDS` setting to share access.
 
 While a task runs, Tag uses Slack's native loading indicator instead of posting
-a temporary bot message. Slack response streaming is enabled by default:
-Claude responses stream into the thread as answer deltas arrive, while Codex
-shows the native loading state and then posts its completed answer because the
-Codex CLI currently emits final-message events. Set
+a temporary bot message. Slack response streaming is enabled by default.
+Claude streams answer deltas directly. Codex uses App Server by default to stream
+final-answer deltas, display activity backed by observed tool events, and honor
+Slack's native Stop button. Set `OPENTAG_CODEX_TRANSPORT=exec` for rollback, or set
 `OPENTAG_SLACK_STREAMING=0` to retain buffered replies for troubleshooting.
+Commentary, reasoning, tool output, and raw diagnostics are never streamed.
 
 Codex replies also include a **Change model & thinking** button. Its modal saves
 model and reasoning choices for that Slack thread and applies them to the next
@@ -251,11 +252,13 @@ Run Tag with dedicated, least-privilege credentials in an isolated environment.
 The bridge app normally needs these bot scopes:
 
 - `app_mentions:read`
+- `assistant:write`
 - `chat:write`
 - `channels:read` and `channels:history`
 - `groups:read` and `groups:history` if you intentionally use private channels
 
-It also needs the `app_mention` and `app_home_opened` bot events and an app-level token with
+It also needs the `app_mention`, `app_home_opened`, and `agent_session_stopped`
+bot events and an app-level token with
 `connections:write`. Invite the bot only to channels where it should respond.
 The included app manifest also requests `files:read` for text attachments and
 `canvases:write` for the explicit Canvas helper.

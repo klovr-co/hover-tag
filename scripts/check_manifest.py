@@ -11,6 +11,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_SCOPES = {
     "app_mentions:read",
+    "assistant:write",
     "canvases:write",
     "channels:history",
     "channels:read",
@@ -38,6 +39,8 @@ def validate_manifest(root: Path) -> list[str]:
         errors.append("app_mention must be subscribed")
     if "app_home_opened" not in events:
         errors.append("app_home_opened must be subscribed")
+    if "agent_session_stopped" not in events:
+        errors.append("agent_session_stopped must be subscribed")
     if settings.get("interactivity", {}).get("is_enabled") is not True:
         errors.append("interactivity must be enabled")
     app_home = manifest.get("features", {}).get("app_home", {})

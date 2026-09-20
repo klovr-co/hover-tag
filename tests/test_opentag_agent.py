@@ -102,6 +102,15 @@ class OpenTagAgentPromptTests(unittest.TestCase):
 
 
 class BackendStreamEventTests(unittest.TestCase):
+    def test_codex_event_transport_defaults_to_app_server_and_keeps_exec_rollback(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual("app-server", opentag_agent.codex_event_transport())
+        with patch.dict(os.environ, {"OPENTAG_CODEX_TRANSPORT": "exec"}, clear=True):
+            self.assertEqual("exec", opentag_agent.codex_event_transport())
+        with patch.dict(os.environ, {"OPENTAG_CODEX_TRANSPORT": "socket"}, clear=True):
+            with self.assertRaisesRegex(ValueError, "exec or app-server"):
+                opentag_agent.codex_event_transport()
+
     def test_codex_exposes_only_completed_agent_messages(self) -> None:
         self.assertEqual(
             ("final", "Ready"),

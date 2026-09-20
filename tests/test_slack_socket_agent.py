@@ -306,7 +306,10 @@ class SlackWorkingIndicatorTests(unittest.TestCase):
         first_call = client.assistant_threads_setStatus.call_args_list[0].kwargs
         self.assertEqual("is working on this…", first_call["status"])
         self.assertEqual(slack_socket_agent.LOADING_MESSAGES, first_call["loading_messages"])
-        self.assertEqual("", client.assistant_threads_setStatus.call_args_list[1].kwargs["status"])
+        self.assertEqual(
+            ["processing", "active"],
+            [call.kwargs["json"]["status"] for call in client.api_call.call_args_list],
+        )
         timer.assert_called_once_with(
             slack_socket_agent.STATUS_REFRESH_SECONDS,
             indicator.refresh,
@@ -317,6 +320,7 @@ class SlackWorkingIndicatorTests(unittest.TestCase):
 
     def test_falls_back_to_temporary_message_when_native_status_fails(self) -> None:
         client = MagicMock()
+        client.api_call.side_effect = RuntimeError("unsupported")
         client.assistant_threads_setStatus.side_effect = RuntimeError("unsupported")
         client.chat_postMessage.return_value = {"ts": "2.34"}
         indicator = slack_socket_agent.WorkingIndicator(client, "C123", "1.23", MagicMock())
@@ -329,12 +333,102 @@ class SlackWorkingIndicatorTests(unittest.TestCase):
         client.chat_postMessage.assert_called_once()
         client.assistant_threads_setStatus.assert_called_once()
 
+    def test_activity_status_counts_concurrent_tools(self) -> None:
+        client = MagicMock()
+        indicator = slack_socket_agent.WorkingIndicator(client, "C123", "1.23", MagicMock())
+        indicator.native = True
+        indicator.legacy_status = True
+
+        with patch("scripts.slack_socket_agent.threading.Timer") as timer:
+            indicator.activity("activity_start", "one", "Searching the web…")
+            indicator.activity("activity_start", "two", "Running a command…")
+            timer.assert_called_once()
+        indicator.flush_activity()
+
+        self.assertEqual(
+            "Running a command… (+1 other active)",
+            client.assistant_threads_setStatus.call_args.kwargs["status"],
+        )
+        with patch("scripts.slack_socket_agent.threading.Timer"):
+            indicator.activity("activity_complete", "two", "Running a command…")
+        indicator.flush_activity()
+        self.assertEqual(
+            "Searching the web…",
+            client.assistant_threads_setStatus.call_args.kwargs["status"],
+        )
+
+    def test_activity_hold_wait_and_answer_transition(self) -> None:
+        client = MagicMock()
+        indicator = slack_socket_agent.WorkingIndicator(client, "C123", "1.23", MagicMock())
+        indicator.native = indicator.legacy_status = True
+        with patch("scripts.slack_socket_agent.time.monotonic", return_value=100) as now, patch(
+            "scripts.slack_socket_agent.threading.Timer"
+        ) as timer:
+            indicator.set_native_status()
+            indicator.activity("activity_start", "one", "Searching GitHub issues…", "Still waiting for GitHub…")
+            self.assertEqual(1.5, timer.call_args.args[0])
+            now.return_value = 101.5
+            indicator.flush_activity()
+            self.assertEqual("Searching GitHub issues…", client.assistant_threads_setStatus.call_args.kwargs["status"])
+            self.assertEqual(10.5, timer.call_args.args[0])
+            now.return_value = 112
+            indicator.flush_activity()
+            self.assertEqual("Still waiting for GitHub…", client.assistant_threads_setStatus.call_args.kwargs["status"])
+            indicator.activity("activity_complete", "one", "Searching GitHub issues…")
+            now.return_value = 114
+            indicator.flush_activity()
+            self.assertEqual("is working on this…", client.assistant_threads_setStatus.call_args.kwargs["status"])
+            indicator.answer_started()
+            now.return_value = 116
+            indicator.flush_activity()
+            self.assertEqual("Preparing your answer…", client.assistant_threads_setStatus.call_args.kwargs["status"])
+            indicator.clear(complete_session=False)
+            calls = client.assistant_threads_setStatus.call_count
+            indicator.flush_activity()
+            self.assertEqual(calls, client.assistant_threads_setStatus.call_count)
+
+    def test_short_activity_is_coalesced_without_stale_wait(self) -> None:
+        client = MagicMock()
+        indicator = slack_socket_agent.WorkingIndicator(client, "C123", "1.23", MagicMock())
+        indicator.native = indicator.legacy_status = True
+        with patch("scripts.slack_socket_agent.time.monotonic", return_value=100) as now, patch(
+            "scripts.slack_socket_agent.threading.Timer"
+        ) as timer:
+            indicator.set_native_status()
+            indicator.activity("activity_start", "one", "Searching GitHub issues…")
+            indicator.activity("activity_complete", "one", "Searching GitHub issues…")
+            timer.assert_called_once()
+            now.return_value = 102
+            indicator.flush_activity()
+            client.assistant_threads_setStatus.assert_called_once()
+            self.assertIsNone(indicator.activity_timer)
+
+    def test_stream_takeover_stops_refresh_without_completing_session(self) -> None:
+        client = MagicMock()
+        indicator = slack_socket_agent.WorkingIndicator(client, "C123", "1.23", MagicMock())
+
+        with patch("scripts.slack_socket_agent.threading.Timer"):
+            indicator.start()
+            indicator.clear(complete_session=False)
+
+        self.assertFalse(indicator.native)
+        self.assertTrue(indicator.session_api)
+        self.assertEqual(
+            ["processing"],
+            [call.kwargs["json"]["status"] for call in client.api_call.call_args_list],
+        )
+
+        indicator.clear()
+        self.assertEqual("active", client.api_call.call_args.kwargs["json"]["status"])
+
 
 class SlackAnswerStreamTests(unittest.TestCase):
     def test_batches_deltas_and_finishes_stream(self) -> None:
         client = MagicMock()
         client.chat_startStream.return_value = {"ts": "3.45"}
-        stream = slack_socket_agent.SlackAnswerStream(client, "C123", "1.23", MagicMock())
+        stream = slack_socket_agent.SlackAnswerStream(
+            client, "C123", "1.23", "U123", "T123", MagicMock()
+        )
 
         stream.append("a" * slack_socket_agent.STREAM_START_CHARS)
         stream.append("b" * slack_socket_agent.STREAM_APPEND_CHARS)
@@ -342,12 +436,21 @@ class SlackAnswerStreamTests(unittest.TestCase):
 
         self.assertTrue(finished)
         client.chat_startStream.assert_called_once()
+        self.assertEqual(
+            ("U123", "T123"),
+            (
+                client.chat_startStream.call_args.kwargs["recipient_user_id"],
+                client.chat_startStream.call_args.kwargs["recipient_team_id"],
+            ),
+        )
         client.chat_appendStream.assert_called_once()
         client.chat_stopStream.assert_called_once_with(channel="C123", ts="3.45")
 
     def test_no_deltas_uses_normal_message_fallback(self) -> None:
         client = MagicMock()
-        stream = slack_socket_agent.SlackAnswerStream(client, "C123", "1.23", MagicMock())
+        stream = slack_socket_agent.SlackAnswerStream(
+            client, "C123", "1.23", "U123", "T123", MagicMock()
+        )
 
         self.assertFalse(stream.finish("Complete Codex answer"))
         client.chat_startStream.assert_not_called()
@@ -355,23 +458,210 @@ class SlackAnswerStreamTests(unittest.TestCase):
     def test_start_failure_preserves_complete_answer_fallback(self) -> None:
         client = MagicMock()
         client.chat_startStream.side_effect = RuntimeError("not supported")
-        stream = slack_socket_agent.SlackAnswerStream(client, "C123", "1.23", MagicMock())
+        stream = slack_socket_agent.SlackAnswerStream(
+            client, "C123", "1.23", "U123", "T123", MagicMock()
+        )
 
         stream.append("a" * slack_socket_agent.STREAM_START_CHARS)
 
         self.assertTrue(stream.failed)
         self.assertFalse(stream.finish(stream.received))
 
+    def test_append_failure_replaces_partial_stream_instead_of_duplicating(self) -> None:
+        client = MagicMock()
+        client.chat_startStream.return_value = {"ts": "3.45"}
+        client.chat_appendStream.side_effect = RuntimeError("temporary append failure")
+        stream = slack_socket_agent.SlackAnswerStream(
+            client, "C123", "1.23", "U123", "T123", MagicMock()
+        )
+        stream.append("a" * slack_socket_agent.STREAM_START_CHARS)
+        stream.append("b" * slack_socket_agent.STREAM_APPEND_CHARS)
+
+        self.assertTrue(stream.failed)
+        self.assertTrue(stream.finish(stream.received))
+        client.chat_stopStream.assert_called_once_with(
+            channel="C123",
+            ts="3.45",
+            markdown_text=("a" * slack_socket_agent.STREAM_START_CHARS)
+            + ("b" * slack_socket_agent.STREAM_APPEND_CHARS),
+        )
+
     def test_finishes_stream_with_settings_blocks(self) -> None:
         client = MagicMock()
         client.chat_startStream.return_value = {"ts": "3.45"}
         blocks = [{"type": "actions", "elements": []}]
-        stream = slack_socket_agent.SlackAnswerStream(client, "C123", "1.23", MagicMock())
+        stream = slack_socket_agent.SlackAnswerStream(
+            client, "C123", "1.23", "U123", "T123", MagicMock()
+        )
 
         stream.append("a" * slack_socket_agent.STREAM_START_CHARS)
 
         self.assertTrue(stream.finish(stream.received, blocks))
         client.chat_stopStream.assert_called_once_with(channel="C123", ts="3.45", blocks=blocks)
+
+    def test_short_delta_flushes_on_time_threshold(self) -> None:
+        client = MagicMock()
+        client.chat_startStream.return_value = {"ts": "3.45"}
+        started = MagicMock()
+        stream = slack_socket_agent.SlackAnswerStream(
+            client, "C123", "1.23", "U123", "T123", MagicMock(), on_start=started
+        )
+
+        stream.append("short")
+        stream.flush()
+
+        client.chat_startStream.assert_called_once()
+        started.assert_called_once_with()
+
+    def test_authoritative_final_can_replace_divergent_deltas(self) -> None:
+        client = MagicMock()
+        client.chat_startStream.return_value = {"ts": "3.45"}
+        stream = slack_socket_agent.SlackAnswerStream(
+            client, "C123", "1.23", "U123", "T123", MagicMock()
+        )
+        stream.append("a" * slack_socket_agent.STREAM_START_CHARS)
+
+        self.assertTrue(stream.finish("Corrected final"))
+        client.chat_stopStream.assert_called_once_with(
+            channel="C123", ts="3.45", markdown_text="Corrected final"
+        )
+
+
+class BackendEventRunnerTests(unittest.TestCase):
+    def run_with_events(
+        self,
+        events: list[dict[str, object]],
+        *,
+        return_code: int = 0,
+        register_side_effect: object | None = None,
+        on_answer_start: object | None = None,
+    ) -> tuple[str, bool]:
+        process = MagicMock()
+        process.stdout = iter(json.dumps(event) + "\n" for event in events)
+        process.wait.return_value = return_code
+        process.poll.return_value = None
+        register_patch = patch.object(slack_socket_agent, "register_active_run")
+        with tempfile.TemporaryDirectory() as raw_dir, patch.object(
+            slack_socket_agent.subprocess, "Popen", return_value=process
+        ), patch.object(slack_socket_agent.threading, "Timer"), register_patch as register:
+            register.side_effect = register_side_effect
+            return slack_socket_agent.run_backend_events(
+                "codex",
+                "T123",
+                "C123",
+                "1.23",
+                "U123",
+                "question",
+                "thread",
+                Path(raw_dir),
+                30,
+                MagicMock(),
+                on_answer_start=on_answer_start,
+            )
+
+    def test_only_explicit_final_answer_start_signals_preparation(self) -> None:
+        callback = MagicMock()
+        self.run_with_events([
+            {"type": "message_start", "phase": "commentary"},
+            {"type": "message_start", "phase": None},
+            {"type": "activity_complete", "activity_id": "one", "label": "Working…"},
+        ], on_answer_start=callback)
+        callback.assert_not_called()
+        self.run_with_events([
+            {"type": "message_start", "phase": "final_answer"},
+        ], on_answer_start=callback)
+        callback.assert_called_once()
+
+    def test_multiple_final_messages_are_reconciled_in_order(self) -> None:
+        answer, succeeded = self.run_with_events([
+            {"type": "message_complete", "phase": "final_answer", "text": "First. "},
+            {"type": "message_complete", "phase": "final_answer", "text": "Second."},
+            {"type": "turn_complete", "status": "completed"},
+        ])
+
+        self.assertTrue(succeeded)
+        self.assertEqual("First. Second.", answer)
+
+    def test_forced_cleanup_is_not_reported_as_confirmed_stop(self) -> None:
+        def request_cancel(_key: object, run: slack_socket_agent.ActiveBackendRun) -> None:
+            run.cancel_requested = True
+
+        answer, succeeded = self.run_with_events(
+            [], return_code=137, register_side_effect=request_cancel
+        )
+
+        self.assertFalse(succeeded)
+        self.assertIn("did not confirm interruption", answer)
+
+
+class SlackCancellationTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        with slack_socket_agent.ACTIVE_RUNS_LOCK:
+            slack_socket_agent.ACTIVE_RUNS.clear()
+
+    def test_old_run_cannot_unregister_or_cancel_new_run(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir, patch(
+            "scripts.slack_socket_agent.threading.Timer"
+        ):
+            key = slack_socket_agent.RunKey("T123", "C123", "1.23")
+            old_process = MagicMock()
+            old_process.poll.return_value = None
+            new_process = MagicMock()
+            new_process.poll.return_value = None
+            old = slack_socket_agent.ActiveBackendRun(
+                old_process, Path(raw_dir) / "old", "old"
+            )
+            new = slack_socket_agent.ActiveBackendRun(
+                new_process, Path(raw_dir) / "new", "new"
+            )
+            slack_socket_agent.register_active_run(key, old)
+            slack_socket_agent.register_active_run(key, new)
+            slack_socket_agent.unregister_active_run(key, old)
+
+            self.assertTrue(slack_socket_agent.cancel_active_run(key))
+            self.assertEqual("new", new.control_file.read_text(encoding="utf-8"))
+            self.assertFalse(old.control_file.exists())
+
+    def test_delayed_stop_event_cannot_cancel_a_newer_run(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            key = slack_socket_agent.RunKey("T123", "C123", "1.23")
+            process = MagicMock()
+            process.poll.return_value = None
+            run = slack_socket_agent.ActiveBackendRun(
+                process,
+                Path(raw_dir) / "control",
+                "new-run",
+                started_at_epoch=200.0,
+            )
+            slack_socket_agent.register_active_run(key, run)
+
+            self.assertFalse(slack_socket_agent.cancel_active_run(key, "100.0"))
+            self.assertFalse(run.cancel_requested)
+            self.assertFalse(run.control_file.exists())
+
+    def test_stop_event_targets_team_channel_and_thread(self) -> None:
+        fake_app = FakeApp()
+        with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+            os.environ,
+            {"SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_IDS": "C123"},
+            clear=True,
+        ), patch.object(slack_socket_agent, "cancel_active_run", return_value=True) as cancel:
+            slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+            fake_app.events["agent_session_stopped"](
+                {
+                    "channel": "C123",
+                    "thread_ts": "1.23",
+                    "user": "UOWNER",
+                    "event_ts": "100.25",
+                },
+                {"team_id": "T123"},
+                MagicMock(),
+            )
+
+        cancel.assert_called_once_with(
+            slack_socket_agent.RunKey("T123", "C123", "1.23"),
+            "100.25",
+        )
 
 
 class SlackAgentSettingsTests(unittest.TestCase):

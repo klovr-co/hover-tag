@@ -14,6 +14,7 @@ oauth_config:
   scopes:
     bot:
       - app_mentions:read
+      - assistant:write
       - channels:history
       - channels:read
       - channels:join
@@ -27,6 +28,7 @@ settings:
     bot_events:
       - app_home_opened
       - app_mention
+      - agent_session_stopped
   interactivity:
     is_enabled: true
   org_deploy_enabled: false

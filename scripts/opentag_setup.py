@@ -64,9 +64,11 @@ REQUIRED_APP_SETTINGS = {
     "Socket Mode": "socket_mode_enabled: true",
     "app mentions": "app_mention",
     "App Home event (app_home_opened)": "app_home_opened",
+    "agent stop event": "agent_session_stopped",
     "Home tab enabled": "home_tab_enabled: true",
     "Interactive controls enabled": "is_enabled: true",
     "mention scope": "app_mentions:read",
+    "assistant status scope": "assistant:write",
     "public channel list": "channels:read",
     "public channel join": "channels:join",
     "public history": "channels:history",
@@ -198,12 +200,16 @@ def inspect_slack_app(project: Path, app_id: str, *, issues: list[str] | None = 
         ui.message("Open app settings, make the listed changes, then choose Check again.")
         print()
         ui.message("In Slack app settings:")
-        if "app mentions" in missing or "App Home event (app_home_opened)" in missing:
+        if any(label in missing for label in (
+            "app mentions", "App Home event (app_home_opened)", "agent stop event"
+        )):
             ui.message("Event Subscriptions → Subscribe to bot events:", indent="    ")
             if "app mentions" in missing:
                 ui.message("Add app_mention to receive mentions.", indent="      ")
             if "App Home event (app_home_opened)" in missing:
                 ui.message("Add app_home_opened to show Tag's Home tab controls.", indent="      ")
+            if "agent stop event" in missing:
+                ui.message("Add agent_session_stopped to enable the native Stop button.", indent="      ")
         if "Home tab enabled" in missing:
             ui.message("App Home → Show Tabs → enable Home Tab.", indent="    ")
         if "Interactive controls enabled" in missing:
