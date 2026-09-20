@@ -17,6 +17,7 @@ DEFAULTS = {
     "OPENTAG_BACKEND": "codex", "OPENTAG_BOT_NAME": "OpenMax",
     "OPENTAG_CODEX_TRANSPORT": "app-server",
     "OPENTAG_TRANSPORT": "slack", "OPENTAG_TIMEOUT_SECONDS": "420",
+    "OPENTAG_MAX_TIMEOUT_SECONDS": "3600",
     "OPENTAG_BACKEND_ATTEMPTS": "3", "OPENTAG_SLACK_STREAMING": "1",
     "MFS_URL": "http://127.0.0.1:13619", "MFS_SLACK_HISTORY_DAYS": "30",
 }
@@ -43,7 +44,8 @@ LABELS = {
     "SLACK_CHANNEL_POLICY": "Channel policy (selected or invited)",
     "SLACK_APP_ID": "Slack app ID", "MFS_SLACK_TOKEN": "Slack history credential",
     "MFS_ALLOWED_SCOPES": "Allowed memory sources", "MFS_URL": "Memory server",
-    "MFS_TOKEN": "Memory server token", "OPENTAG_TIMEOUT_SECONDS": "Task timeout (seconds)",
+    "MFS_TOKEN": "Memory server token", "OPENTAG_TIMEOUT_SECONDS": "Agent idle timeout (seconds)",
+    "OPENTAG_MAX_TIMEOUT_SECONDS": "Maximum task runtime (seconds)",
     "MFS_SLACK_HISTORY_DAYS": "Slack history window (days)",
     "MFS_SLACK_CONNECTOR_URI": "Slack history connector",
     "MFS_SLACK_CONNECTOR_CONFIG": "Slack history connector config",
@@ -83,7 +85,7 @@ def validation_error(key: str, value: str) -> str | None:
         return "Choose exec or app-server"
     if key == "OPENTAG_TRANSPORT" and value != "slack":
         return "Only slack is supported"
-    if key in {"OPENTAG_TIMEOUT_SECONDS", "OPENTAG_BACKEND_ATTEMPTS"} and (not value.isascii() or not value.isdigit() or int(value) < 1):
+    if key in {"OPENTAG_TIMEOUT_SECONDS", "OPENTAG_MAX_TIMEOUT_SECONDS", "OPENTAG_BACKEND_ATTEMPTS"} and (not value.isascii() or not value.isdigit() or int(value) < 1):
         return "Use a positive integer"
     if key == "MFS_SLACK_HISTORY_DAYS" and value not in {"7", "30", "90"}:
         return "Choose 7, 30, or 90 days"
