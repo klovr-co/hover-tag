@@ -5,9 +5,10 @@ const token = 'test-relay-token-that-is-long-enough';
 const otherToken = 'different-owner-token-that-is-long-enough';
 const sockets = [];
 const stub = (app = 'ATEST') => env.RECEIVER.get(env.RECEIVER.idFromName(app));
-const config = {team: 'TTEST', app_token: 'xapp-test', bot_token: 'xoxb-test', users: ['UTEST'], channels: ['CTEST'], policy: 'selected'};
+const config = {team: 'TTEST', app_token: 'xapp-test', bot_token: 'xoxb-test', users: ['UTEST'], channels: ['CTEST'], policy: 'selected', direct_messages: true};
 const path = (app, action = 'registration') => `https://test/v1/apps/${app}/${action}`;
 const mention = (extra = {}) => ({type: 'event_callback', event_id: crypto.randomUUID(), team_id: 'TTEST', api_app_id: 'ATEST', event: {type: 'app_mention', user: 'UTEST', channel: 'CTEST', ts: '123.456', thread_ts: '100.001', text: '<@BOT> help'}, ...extra});
+const directMessage = (extra = {}) => ({type: 'event_callback', event_id: crypto.randomUUID(), team_id: 'TTEST', api_app_id: 'ATEST', event: {type: 'message', channel_type: 'im', user: 'UTEST', channel: 'DTEST', ts: '123.456', text: 'help'}, ...extra});
 async function register(app = 'ATEST', options = {}) {
   return runInDurableObject(stub(app), async instance => {
     const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, requestOptions) => {
@@ -93,6 +94,18 @@ it('ignores unauthorized users and channels and wrong workspaces', async () => {
   const body = mention(); body.event.user = 'UOTHER'; await envelope(body);
   body.event.user = 'UTEST'; body.event.channel = 'COTHER'; await envelope(body);
   await envelope(mention({team_id: 'TOTHER'}));
+  expect(await runInDurableObject(stub(), (_, ctx) => ctx.storage.sql.exec('SELECT * FROM deliveries').toArray())).toHaveLength(0);
+});
+it('forwards authorized direct messages independently of channel policy', async () => {
+  await register(); const {requests} = await connect();
+  await envelope(directMessage());
+  expect(requests).toHaveLength(1);
+  expect(requests[0].event.channel).toBe('DTEST');
+});
+it('ignores direct messages when disabled or sent by an unauthorized user', async () => {
+  await register('ATEST', {data: {direct_messages: false}}); await activate();
+  await envelope(directMessage());
+  const body = directMessage(); body.event.user = 'UOTHER'; await envelope(body);
   expect(await runInDurableObject(stub(), (_, ctx) => ctx.storage.sql.exec('SELECT * FROM deliveries').toArray())).toHaveLength(0);
 });
 it('deduplicates offline mentions and posts once in the original thread', async () => {

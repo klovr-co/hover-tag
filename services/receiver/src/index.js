@@ -86,7 +86,8 @@ export class TagReceiver extends DurableObject {
         if (!/^T[A-Z0-9]+$/.test(data.team || '') || !/^xapp-/.test(data.app_token || '') || !/^xoxb-/.test(data.bot_token || '') ||
             !['selected', 'invited'].includes(data.policy) || !Array.isArray(data.users) || !data.users.length || data.users.length > 100 ||
             !data.users.every(id => /^[UW][A-Z0-9]+$/.test(id)) || !Array.isArray(data.channels) || data.channels.length > 1000 ||
-            !data.channels.every(id => /^[CG][A-Z0-9]+$/.test(id)) || (data.policy === 'selected' && !data.channels.length)) return deny(400, 'Invalid registration');
+            !data.channels.every(id => /^[CG][A-Z0-9]+$/.test(id)) || (data.policy === 'selected' && !data.channels.length) ||
+            typeof data.direct_messages !== 'boolean') return deny(400, 'Invalid registration');
         if (this.registration && this.registration.team !== data.team) return deny(409, 'Remove the existing workspace registration first');
         try {
           const identity = await slack('auth.test', data.bot_token);
@@ -98,6 +99,7 @@ export class TagReceiver extends DurableObject {
         const credentialHash = await hash(data.app_token + '\n' + data.bot_token);
         const changed = this.registration?.credentialHash !== credentialHash;
         const registration = {app, team: data.team, owner: await hash(token), users: data.users, channels: data.channels, policy: data.policy,
+          directMessages: data.direct_messages,
           credentialHash, active: this.registration?.active || false,
           credentials: await seal({app_token: data.app_token, bot_token: data.bot_token}, this.env.CREDENTIAL_KEY, app)};
         await this.ctx.storage.put('registration', registration);
@@ -210,6 +212,7 @@ export class TagReceiver extends DurableObject {
     if (!r.users.includes(event?.user || body.user?.id)) return false;
     const channel = event?.channel || body.channel?.id || body.container?.channel_id;
     if (channel) {
+      if (channel.startsWith('D')) return r.directMessages === true;
       if (r.policy === 'selected') return r.channels.includes(channel);
       // Membership is checked live, including while the local computer is off.
       const credentials = await this.credentials(r);
@@ -226,8 +229,10 @@ export class TagReceiver extends DurableObject {
     if (!body || !await this.allowed(body)) { ack(); return; }
     const interactive = envelope.type === 'interactive';
     const event = body.event;
-    if (!interactive && (!body.event_id || !['app_mention', 'app_home_opened', 'agent_session_stopped'].includes(event?.type))) { ack(); return; }
+    const directMessage = event?.type === 'message' && event.channel_type === 'im';
+    if (!interactive && (!body.event_id || (!['app_mention', 'app_home_opened', 'agent_session_stopped'].includes(event?.type) && !directMessage))) { ack(); return; }
     if (event?.type === 'app_mention' && (!event.ts || event.bot_id || event.subtype)) { ack(); return; }
+    if (directMessage && (!event.ts || event.bot_id || ![undefined, 'file_share'].includes(event.subtype))) { ack(); return; }
     const result = await this.deliver(body, interactive);
     if (interactive && result) {
       let payload;
@@ -250,8 +255,8 @@ export class TagReceiver extends DurableObject {
     }
     socket?.close(1000, 'Connection expired');
     if (interactive) return {body: JSON.stringify({response_type: 'ephemeral', text: OFFLINE_MESSAGE})};
-    const mention = body.event?.type === 'app_mention';
-    sql.exec('INSERT INTO deliveries (id, route, created, channel, thread) VALUES (?, ?, ?, ?, ?)', eventId, mention ? 'offline' : 'ignored', Date.now(), mention ? body.event.channel : null, mention ? (body.event.thread_ts || body.event.ts) : null);
+    const invocation = body.event?.type === 'app_mention' || (body.event?.type === 'message' && body.event.channel_type === 'im');
+    sql.exec('INSERT INTO deliveries (id, route, created, channel, thread) VALUES (?, ?, ?, ?, ?)', eventId, invocation ? 'offline' : 'ignored', Date.now(), invocation ? body.event.channel : null, invocation ? (body.event.thread_ts || body.event.ts) : null);
     await this.schedule();
   }
   webSocketMessage(ws, message) {

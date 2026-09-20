@@ -76,6 +76,7 @@ def ensure_registered(config_path: Path) -> dict[str, str]:
         "users": [s.strip() for s in values["SLACK_ALLOWED_USER_IDS"].split(",") if s.strip()],
         "channels": [s.strip() for s in values.get("SLACK_CHANNEL_IDS", values.get("SLACK_CHANNEL_ID", "")).split(",") if s.strip()],
         "policy": values.get("SLACK_CHANNEL_POLICY", "selected"),
+        "direct_messages": values.get("OPENTAG_SLACK_DM_ENABLED", "1") != "0",
     }
     result = request("PUT", app, values["OPENTAG_RELAY_TOKEN"], payload)
     if not result.get("registered") or result.get("app") != app or result.get("team") != values["SLACK_TEAM_ID"]:

@@ -28,8 +28,16 @@ class ReceiverSetupTests(unittest.TestCase):
         self.assertEqual(request.call_args.args[0], 'PUT')
         self.assertEqual(request.call_args.args[3]['policy'], 'invited')
         self.assertEqual(request.call_args.args[3]['users'], ['UTEST'])
+        self.assertTrue(request.call_args.args[3]['direct_messages'])
         self.assertEqual(values['OPENTAG_RELAY_APP_ID'], 'ATEST')
         self.assertEqual(tag_config.public_config(values)['OPENTAG_RELAY_TOKEN'], '[set]')
+
+    def test_start_registers_disabled_direct_messages(self):
+        self.values['OPENTAG_SLACK_DM_ENABLED'] = '0'
+        tag_config.save_config(self.path, self.values)
+        with patch.object(tag_receiver, 'request', return_value={'registered': True, 'app': 'ATEST', 'team': 'TTEST'}) as request:
+            tag_receiver.ensure_registered(self.path)
+        self.assertFalse(request.call_args.args[3]['direct_messages'])
 
     def test_interrupted_registration_reuses_saved_ownership(self):
         with patch.object(tag_receiver, 'request', side_effect=tag_receiver.ReceiverError('Offline')) as first:
