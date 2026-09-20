@@ -114,6 +114,134 @@ class SlackTextAttachmentTests(unittest.TestCase):
 
 
 class SlackOutputArtifactTests(unittest.TestCase):
+    def test_local_artifact_actions_allow_enabled_direct_messages(self) -> None:
+        fake_app = FakeApp()
+        client = MagicMock()
+        logger = MagicMock()
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir).resolve()
+            artifact = root / "report.md"
+            artifact.write_text("# Report\n", encoding="utf-8")
+            with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+                os.environ,
+                {"SLACK_BOT_TOKEN": "xoxb-test", "OPENTAG_SLACK_DM_ENABLED": "1"},
+                clear=True,
+            ), patch.object(
+                slack_socket_agent, "default_workdir", return_value=root
+            ), patch.object(
+                slack_socket_agent, "open_local_artifact"
+            ) as local_open, patch.object(
+                slack_socket_agent, "open_local_artifact_directory"
+            ) as directory_open:
+                slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+                metadata = {
+                    "user": "UOWNER",
+                    "channel": "D123",
+                    "thread_ts": "1.23",
+                    "path": "report.md",
+                }
+                body = {
+                    "user": {"id": "UOWNER"},
+                    "channel": {"id": "D123"},
+                    "actions": [{"value": json.dumps(metadata)}],
+                }
+
+                file_handler = fake_app.actions[
+                    slack_socket_agent.OPEN_LOCAL_ARTIFACT_ACTION_ID
+                ]
+                file_handler(MagicMock(), body, client, logger)
+                metadata["path"] = "."
+                body["actions"][0]["value"] = json.dumps(metadata)
+                directory_handler = fake_app.actions[
+                    slack_socket_agent.OPEN_LOCAL_ARTIFACT_DIRECTORY_ACTION_ID
+                ]
+                directory_handler(MagicMock(), body, client, logger)
+
+            local_open.assert_called_once_with(artifact)
+            directory_open.assert_called_once_with(root)
+            self.assertEqual(2, client.chat_postEphemeral.call_count)
+
+    def test_local_artifact_actions_report_failures_in_enabled_direct_messages(self) -> None:
+        fake_app = FakeApp()
+        client = MagicMock()
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir).resolve()
+            with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+                os.environ,
+                {"SLACK_BOT_TOKEN": "xoxb-test", "OPENTAG_SLACK_DM_ENABLED": "1"},
+                clear=True,
+            ), patch.object(slack_socket_agent, "default_workdir", return_value=root):
+                slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+                metadata = {
+                    "user": "UOWNER",
+                    "channel": "D123",
+                    "thread_ts": "1.23",
+                    "path": "missing",
+                }
+                body = {
+                    "user": {"id": "UOWNER"},
+                    "channel": {"id": "D123"},
+                    "actions": [{"value": json.dumps(metadata)}],
+                }
+
+                fake_app.actions[slack_socket_agent.OPEN_LOCAL_ARTIFACT_ACTION_ID](
+                    MagicMock(), body, client, MagicMock()
+                )
+                fake_app.actions[
+                    slack_socket_agent.OPEN_LOCAL_ARTIFACT_DIRECTORY_ACTION_ID
+                ](MagicMock(), body, client, MagicMock())
+
+            self.assertEqual(2, client.chat_postEphemeral.call_count)
+            messages = [
+                call.kwargs["text"] for call in client.chat_postEphemeral.call_args_list
+            ]
+            self.assertTrue(any("local file" in message for message in messages))
+            self.assertTrue(any("output folder" in message for message in messages))
+
+    def test_local_artifact_actions_reject_disabled_direct_messages(self) -> None:
+        fake_app = FakeApp()
+        client = MagicMock()
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir).resolve()
+            artifact = root / "report.md"
+            artifact.write_text("# Report\n", encoding="utf-8")
+            with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+                os.environ,
+                {"SLACK_BOT_TOKEN": "xoxb-test", "OPENTAG_SLACK_DM_ENABLED": "0"},
+                clear=True,
+            ), patch.object(
+                slack_socket_agent, "default_workdir", return_value=root
+            ), patch.object(
+                slack_socket_agent, "open_local_artifact"
+            ) as local_open, patch.object(
+                slack_socket_agent, "open_local_artifact_directory"
+            ) as directory_open:
+                slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+                metadata = {
+                    "user": "UOWNER",
+                    "channel": "D123",
+                    "thread_ts": "1.23",
+                    "path": "report.md",
+                }
+                body = {
+                    "user": {"id": "UOWNER"},
+                    "channel": {"id": "D123"},
+                    "actions": [{"value": json.dumps(metadata)}],
+                }
+
+                fake_app.actions[slack_socket_agent.OPEN_LOCAL_ARTIFACT_ACTION_ID](
+                    MagicMock(), body, client, MagicMock()
+                )
+                metadata["path"] = "."
+                body["actions"][0]["value"] = json.dumps(metadata)
+                fake_app.actions[
+                    slack_socket_agent.OPEN_LOCAL_ARTIFACT_DIRECTORY_ACTION_ID
+                ](MagicMock(), body, client, MagicMock())
+
+            local_open.assert_not_called()
+            directory_open.assert_not_called()
+            client.chat_postEphemeral.assert_not_called()
+
     def test_builds_one_compact_local_open_row_for_all_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
             root = Path(raw_dir).resolve()

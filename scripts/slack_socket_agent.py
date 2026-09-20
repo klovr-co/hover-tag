@@ -2379,7 +2379,10 @@ def create_app(
             if (
                 user_id != expected_user
                 or channel != expected_channel
-                or not slack_channel_allowed(channel)
+                or not slack_conversation_allowed(
+                    channel,
+                    direct_message=is_direct_message_channel(channel),
+                )
                 or not slack_user_allowed(user_id, allowed_user_ids)
             ):
                 raise PermissionError("local artifact action is not authorized")
@@ -2400,7 +2403,10 @@ def create_app(
                 and channel
                 and channel == expected_channel
                 and user_id == metadata.get("user")
-                and slack_channel_allowed(channel)
+                and slack_conversation_allowed(
+                    channel,
+                    direct_message=is_direct_message_channel(channel),
+                )
                 and slack_user_allowed(user_id, allowed_user_ids)
             ):
                 client.chat_postEphemeral(
@@ -2445,7 +2451,10 @@ def create_app(
             if (
                 user_id != expected_user
                 or channel != expected_channel
-                or not slack_channel_allowed(channel)
+                or not slack_conversation_allowed(
+                    channel,
+                    direct_message=is_direct_message_channel(channel),
+                )
                 or not slack_user_allowed(user_id, allowed_user_ids)
             ):
                 raise PermissionError("local artifact directory action is not authorized")
@@ -2466,7 +2475,10 @@ def create_app(
                 and channel
                 and channel == expected_channel
                 and user_id == metadata.get("user")
-                and slack_channel_allowed(channel)
+                and slack_conversation_allowed(
+                    channel,
+                    direct_message=is_direct_message_channel(channel),
+                )
                 and slack_user_allowed(user_id, allowed_user_ids)
             ):
                 client.chat_postEphemeral(

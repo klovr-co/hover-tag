@@ -7,7 +7,12 @@ import argparse
 import json
 import os
 import tempfile
+import time
 from pathlib import Path
+
+
+LOCK_ATTEMPTS = 100
+LOCK_RETRY_SECONDS = 0.05
 
 
 def validated_output_path(raw_path: Path, workdir: Path) -> Path:
@@ -25,7 +30,8 @@ def validated_output_path(raw_path: Path, workdir: Path) -> Path:
     return path
 
 
-def record_artifact(manifest: Path, path: Path, *, attach: bool = False) -> None:
+def _update_manifest(manifest: Path, path: Path, *, attach: bool) -> None:
+    """Read, update, and atomically replace an artifact manifest."""
     try:
         existing = json.loads(manifest.read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -67,6 +73,27 @@ def record_artifact(manifest: Path, path: Path, *, attach: bool = False) -> None
         os.replace(temporary, manifest)
     finally:
         Path(temporary).unlink(missing_ok=True)
+
+
+def record_artifact(manifest: Path, path: Path, *, attach: bool = False) -> None:
+    """Record one artifact while serializing concurrent manifest writers."""
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    lock = manifest.with_suffix(manifest.suffix + ".lock")
+    for _attempt in range(LOCK_ATTEMPTS):
+        try:
+            descriptor = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            time.sleep(LOCK_RETRY_SECONDS)
+            continue
+        os.close(descriptor)
+        break
+    else:
+        raise ValueError("the output artifact manifest is busy")
+
+    try:
+        _update_manifest(manifest, path, attach=attach)
+    finally:
+        lock.unlink(missing_ok=True)
 
 
 def main() -> int:
