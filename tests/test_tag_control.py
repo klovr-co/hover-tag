@@ -12,7 +12,7 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts import opentag_doctor, opentag_setup, tag_cli, tag_config, tag_control
+from scripts import opentag_doctor, opentag_setup, slack_manifest_migrations, tag_cli, tag_config, tag_control
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -130,7 +130,9 @@ class TagControlTests(unittest.TestCase):
         self.complete()
         original = self.path.read_bytes()
         for changes in ({"OPENTAG_BACKEND": "other"}, {"OPENTAG_TIMEOUT_SECONDS": "-1"},
+                        {"OPENTAG_MAX_TIMEOUT_SECONDS": "0"},
                         {"OPENTAG_CODEX_TRANSPORT": "socket"},
+                        {"OPENTAG_SLACK_DM_ENABLED": "maybe"},
                         {"SLACK_ALLOWED_USER_IDS": ""}, {"MFS_URL": "http://user:secret@host"},
                         {"OPENTAG_WORKDIR": "/other"}, {"MFS_ALLOWED_SCOPES": "file://local/a/../b"}):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
@@ -298,6 +300,7 @@ class TagControlTests(unittest.TestCase):
                 self.complete(backend)
                 with patch.object(sys, "argv", ["tag", "start"]), patch.object(
                     tag_cli, "missing_runtime_dependencies", return_value=()
+                ), patch.object(slack_manifest_migrations, "reconcile", return_value=False
                 ), patch.object(tag_cli, "healthy", return_value=True
                 ), patch.object(tag_cli, "sync_configured_slack_memory"
                 ), patch.object(tag_cli, "doctor_report", return_value=(0, {"checks": []})), patch.object(

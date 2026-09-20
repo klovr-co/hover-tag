@@ -25,7 +25,7 @@ Tag/
     .mcp.json              # Claude project MCP definitions, when configured
   integrations/bin/        # optional TAG-only tool executables; prepended to PATH
   state/                   # logs, process identities, conversation settings
-  tmp/                     # disposable task files and attachments
+  tmp/                     # disposable task files, generated artifacts, and attachments
 ```
 
 Configuration is JSON on every platform and is never executed as shell code.

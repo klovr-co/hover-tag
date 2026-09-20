@@ -112,6 +112,134 @@ class SlackTextAttachmentTests(unittest.TestCase):
         self.assertTrue(text[0].endswith("[Attachment text truncated]"))
 
 
+class SlackGeneratedImageTests(unittest.TestCase):
+    def test_uploads_supported_images_to_originating_thread(self) -> None:
+        client = MagicMock()
+        with tempfile.TemporaryDirectory() as raw_dir:
+            results_dir = Path(raw_dir)
+            image = results_dir / "launch-card.png"
+            image.write_bytes(b"png data")
+
+            errors = slack_socket_agent.upload_generated_images(
+                client,
+                "C123",
+                "1.23",
+                results_dir,
+            )
+
+        self.assertEqual([], errors)
+        client.files_upload_v2.assert_called_once_with(
+            channel="C123",
+            thread_ts="1.23",
+            file=str(image),
+            filename="launch-card.png",
+            title="launch-card",
+        )
+
+    def test_rejects_unsupported_oversized_and_symlinked_results(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            results_dir = Path(raw_dir)
+            (results_dir / "notes.txt").write_text("not an image", encoding="utf-8")
+            with (results_dir / "large.png").open("wb") as output:
+                output.truncate(slack_socket_agent.MAX_ATTACHMENT_BYTES + 1)
+            (results_dir / "linked.png").symlink_to(results_dir / "large.png")
+            images, errors = slack_socket_agent.collect_generated_images(results_dir)
+
+        self.assertEqual([], images)
+        self.assertTrue(any("unsupported image type" in error for error in errors))
+        self.assertTrue(any("15 MB" in error for error in errors))
+        self.assertTrue(any("not a regular file" in error for error in errors))
+
+    def test_mention_uploads_backend_image_result_after_text_answer(self) -> None:
+        fake_app = FakeApp()
+        client = MagicMock()
+
+        def backend_result(*args: object, **kwargs: object) -> tuple[str, bool]:
+            del kwargs
+            attachment_dir = args[5]
+            assert isinstance(attachment_dir, Path)
+            result = slack_socket_agent.generated_images_dir(attachment_dir) / "chart.png"
+            result.write_bytes(b"png data")
+            return "Here is the chart.", True
+
+        with tempfile.TemporaryDirectory() as raw_home, patch.object(
+            slack_socket_agent, "App", return_value=fake_app
+        ), patch.dict(
+            os.environ,
+            {
+                "TAG_HOME": raw_home,
+                "SLACK_BOT_TOKEN": "xoxb-test",
+                "SLACK_CHANNEL_IDS": "C123",
+                "OPENTAG_SLACK_STREAMING": "0",
+            },
+            clear=True,
+        ), patch.object(
+            slack_socket_agent,
+            "build_thread_text",
+            return_value="UOWNER: make a chart",
+        ), patch.object(slack_socket_agent, "run_backend", side_effect=backend_result):
+            slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+            handler = fake_app.events["app_mention"]
+            handler(
+                {"channel": "C123", "ts": "1.23", "user": "UOWNER", "text": "<@BOT> chart"},
+                {"team_id": "T123"},
+                client,
+                MagicMock(),
+            )
+
+        client.chat_postMessage.assert_called_once_with(
+            channel="C123",
+            thread_ts="1.23",
+            text="Here is the chart.",
+            mrkdwn=True,
+            blocks=None,
+        )
+        upload = client.files_upload_v2.call_args.kwargs
+        self.assertEqual("C123", upload["channel"])
+        self.assertEqual("1.23", upload["thread_ts"])
+        self.assertEqual("chart.png", upload["filename"])
+        self.assertTrue(Path(upload["file"]).is_relative_to(Path(raw_home) / "tmp"))
+
+    def test_failed_backend_does_not_upload_partial_image_result(self) -> None:
+        fake_app = FakeApp()
+        client = MagicMock()
+
+        def backend_failure(*args: object, **kwargs: object) -> tuple[str, bool]:
+            del kwargs
+            attachment_dir = args[5]
+            assert isinstance(attachment_dir, Path)
+            result = slack_socket_agent.generated_images_dir(attachment_dir) / "partial.png"
+            result.write_bytes(b"partial")
+            return "Backend failed", False
+
+        with tempfile.TemporaryDirectory() as raw_home, patch.object(
+            slack_socket_agent, "App", return_value=fake_app
+        ), patch.dict(
+            os.environ,
+            {
+                "TAG_HOME": raw_home,
+                "SLACK_BOT_TOKEN": "xoxb-test",
+                "SLACK_CHANNEL_IDS": "C123",
+                "OPENTAG_SLACK_STREAMING": "0",
+            },
+            clear=True,
+        ), patch.object(
+            slack_socket_agent,
+            "build_thread_text",
+            return_value="UOWNER: make a chart",
+        ), patch.object(slack_socket_agent, "run_backend", side_effect=backend_failure):
+            slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+            handler = fake_app.events["app_mention"]
+            handler(
+                {"channel": "C123", "ts": "1.23", "user": "UOWNER", "text": "<@BOT> chart"},
+                {"team_id": "T123"},
+                client,
+                MagicMock(),
+            )
+
+        client.files_upload_v2.assert_not_called()
+
+
 class SlackReplyChunkingTests(unittest.TestCase):
     def test_splits_at_paragraph_boundaries(self) -> None:
         text = "First paragraph.\n\nSecond paragraph.\n\nThird paragraph."
@@ -128,6 +256,19 @@ class SlackReplyChunkingTests(unittest.TestCase):
 
 
 class SlackFailureReplyTests(unittest.TestCase):
+    def test_timeout_copy_distinguishes_idle_and_maximum_deadlines(self) -> None:
+        idle = slack_socket_agent.user_facing_failure(
+            "Tag backend timed out: no backend activity for 420s", 420, "IDLE", 3600
+        )
+        maximum = slack_socket_agent.user_facing_failure(
+            "Tag backend exceeded its maximum runtime of 3600s", 420, "MAX", 3600
+        )
+
+        self.assertIn("without backend activity", idle)
+        self.assertIn("420", idle)
+        self.assertIn("maximum runtime", maximum)
+        self.assertIn("3600", maximum)
+
     def test_failure_copy_does_not_expose_backend_diagnostics(self) -> None:
         reply = slack_socket_agent.user_facing_failure(
             "RuntimeError: secret backend detail", 420, "ABC12345"
@@ -148,6 +289,17 @@ class SlackFailureReplyTests(unittest.TestCase):
             {"team": "T1", "channel": "C1", "thread_ts": "1.0", "request_ts": "1.1"},
             json.loads(button["value"]),
         )
+
+    def test_retry_button_marks_direct_message_origin(self) -> None:
+        blocks = slack_socket_agent.retry_button_blocks(
+            team="T1",
+            channel="D1",
+            thread_ts="1.0",
+            request_ts="1.1",
+            direct_message=True,
+        )
+
+        self.assertIs(True, json.loads(blocks[0]["elements"][0]["value"])["direct_message"])
 
     def test_retry_action_reloads_original_slack_request(self) -> None:
         fake_app = FakeApp()
@@ -386,6 +538,156 @@ class SlackUserAllowlistTests(unittest.TestCase):
             metadata,
             json.loads(client.views_open.call_args.kwargs["view"]["private_metadata"]),
         )
+
+class SlackDirectMessageTests(unittest.TestCase):
+    def test_direct_messages_default_on_and_can_be_disabled(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertTrue(slack_socket_agent.direct_messages_enabled())
+        with patch.dict(os.environ, {"OPENTAG_SLACK_DM_ENABLED": "0"}, clear=True):
+            self.assertFalse(slack_socket_agent.direct_messages_enabled())
+
+    def test_disabled_direct_message_is_ignored(self) -> None:
+        fake_app = FakeApp()
+        with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+            os.environ,
+            {
+                "SLACK_BOT_TOKEN": "xoxb-test",
+                "OPENTAG_SLACK_DM_ENABLED": "0",
+            },
+            clear=True,
+        ), patch.object(slack_socket_agent, "run_backend") as run_backend:
+            slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+            fake_app.events["message"](
+                {
+                    "channel": "D123",
+                    "channel_type": "im",
+                    "ts": "1.00",
+                    "user": "UOWNER",
+                    "text": "hello",
+                },
+                {"team_id": "T123"},
+                MagicMock(),
+                MagicMock(),
+            )
+
+        run_backend.assert_not_called()
+
+    def test_top_level_messages_start_fresh_tasks_and_replies_reuse_the_root(self) -> None:
+        fake_app = FakeApp()
+        client = MagicMock()
+        with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+            os.environ,
+            {
+                "SLACK_BOT_TOKEN": "xoxb-test",
+                "SLACK_CHANNEL_ID": "C-SANDBOX",
+                "OPENTAG_SLACK_DM_ENABLED": "1",
+                "OPENTAG_SLACK_STREAMING": "0",
+            },
+            clear=True,
+        ), patch.object(
+            slack_socket_agent, "build_thread_text", return_value="bounded context"
+        ) as build_thread_text, patch.object(
+            slack_socket_agent, "run_backend", return_value=("done", True)
+        ) as run_backend:
+            slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+            handler = fake_app.events["message"]
+            for event in (
+                {"ts": "1.00", "text": "first task"},
+                {"ts": "1.01", "thread_ts": "1.00", "text": "follow up"},
+                {"ts": "2.00", "text": "second task"},
+            ):
+                handler(
+                    {
+                        "channel": "D123",
+                        "channel_type": "im",
+                        "user": "UOWNER",
+                        **event,
+                    },
+                    {"team_id": "T123"},
+                    client,
+                    MagicMock(),
+                )
+
+        self.assertEqual(
+            ["1.00", "1.00", "2.00"],
+            [call.args[2] for call in build_thread_text.call_args_list],
+        )
+        self.assertEqual(
+            ["first task", "follow up", "second task"],
+            [call.args[3] for call in run_backend.call_args_list],
+        )
+
+    def test_unauthorized_direct_message_is_denied_before_thread_read(self) -> None:
+        fake_app = FakeApp()
+        client = MagicMock()
+        with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+            os.environ,
+            {
+                "SLACK_BOT_TOKEN": "xoxb-test",
+                "OPENTAG_SLACK_DM_ENABLED": "1",
+            },
+            clear=True,
+        ), patch.object(slack_socket_agent, "build_thread_text") as build_thread_text:
+            slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+            fake_app.events["message"](
+                {
+                    "channel": "D123",
+                    "channel_type": "im",
+                    "ts": "1.00",
+                    "user": "UOTHER",
+                    "text": "hello",
+                },
+                {"team_id": "T123"},
+                client,
+                MagicMock(),
+            )
+
+        client.chat_postMessage.assert_called_once_with(
+            channel="D123",
+            thread_ts="1.00",
+            text=slack_socket_agent.UNAUTHORIZED_USER_MESSAGE,
+        )
+        build_thread_text.assert_not_called()
+
+    def test_bot_and_non_dm_message_events_are_ignored(self) -> None:
+        fake_app = FakeApp()
+        with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+            os.environ,
+            {
+                "SLACK_BOT_TOKEN": "xoxb-test",
+                "OPENTAG_SLACK_DM_ENABLED": "1",
+            },
+            clear=True,
+        ), patch.object(slack_socket_agent, "run_backend") as run_backend:
+            slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+            handler = fake_app.events["message"]
+            handler(
+                {
+                    "channel": "D123",
+                    "channel_type": "im",
+                    "ts": "1.00",
+                    "bot_id": "B123",
+                    "text": "bot reply",
+                },
+                {},
+                MagicMock(),
+                MagicMock(),
+            )
+            handler(
+                {
+                    "channel": "C123",
+                    "channel_type": "channel",
+                    "ts": "2.00",
+                    "user": "UOWNER",
+                    "text": "ordinary channel message",
+                },
+                {},
+                MagicMock(),
+                MagicMock(),
+            )
+
+        run_backend.assert_not_called()
+
 
 class SlackWorkingIndicatorTests(unittest.TestCase):
     def test_journals_native_session_until_clear_succeeds(self) -> None:
@@ -902,6 +1204,17 @@ class SlackAgentSettingsTests(unittest.TestCase):
         self.assertEqual(
             {"team": "T1", "channel": "C1", "thread_ts": "1.23"},
             json.loads(button["value"]),
+        )
+
+        dm_blocks = slack_socket_agent.settings_button_blocks(
+            team="T1",
+            channel="D1",
+            thread_ts="2.34",
+            direct_message=True,
+        )
+        self.assertIs(
+            True,
+            json.loads(dm_blocks[0]["elements"][0]["value"])["direct_message"],
         )
 
         client = MagicMock()

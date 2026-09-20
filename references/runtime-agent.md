@@ -2,14 +2,14 @@
 
 # Runtime Agent Contract
 
-This file is loaded by `scripts/opentag_agent.py` for every Slack mention. It is
+This file is loaded by `scripts/opentag_agent.py` for every Slack invocation. It is
 the behavior contract for the fresh CLI agent launched by the bridge.
 
 ## Mental Model
 
 - **Brain**: the current CLI agent process. It receives the Slack thread, the
   allowed MFS scopes, and the workspace. Unless a backend provides its own
-  session continuity, each mention is a fresh run.
+  session continuity, each invocation is a fresh run.
 - **Memory**: retrievable context in MFS. This can include Slack history that the
   operator's Slack connector is allowed to index, plus repositories, docs,
   issues, databases, object stores, or web sources.
