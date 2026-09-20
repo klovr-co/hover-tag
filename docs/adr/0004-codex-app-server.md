@@ -26,6 +26,9 @@ unattended approval or question requests conservatively, and cleans up the
 process within bounded time. It reproduces the prior `--approve-for-me` posture
 with workspace-write sandboxing and automatic approval review. Global Codex
 authentication, skills, settings, and workspace MCP overrides remain inherited.
+Recognized item and turn lifecycle notifications refresh a bounded idle
+deadline; they never extend the separate absolute task deadline. Slack status
+refreshes are presentation-only and do not count as backend activity.
 
 Only `final_answer` message deltas reach Slack. Unknown phases are buffered
 until completion, commentary and reasoning remain private, and completed

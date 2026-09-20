@@ -128,6 +128,19 @@ class SlackReplyChunkingTests(unittest.TestCase):
 
 
 class SlackFailureReplyTests(unittest.TestCase):
+    def test_timeout_copy_distinguishes_idle_and_maximum_deadlines(self) -> None:
+        idle = slack_socket_agent.user_facing_failure(
+            "Tag backend timed out: no backend activity for 420s", 420, "IDLE", 3600
+        )
+        maximum = slack_socket_agent.user_facing_failure(
+            "Tag backend exceeded its maximum runtime of 3600s", 420, "MAX", 3600
+        )
+
+        self.assertIn("without backend activity", idle)
+        self.assertIn("420", idle)
+        self.assertIn("maximum runtime", maximum)
+        self.assertIn("3600", maximum)
+
     def test_failure_copy_does_not_expose_backend_diagnostics(self) -> None:
         reply = slack_socket_agent.user_facing_failure(
             "RuntimeError: secret backend detail", 420, "ABC12345"

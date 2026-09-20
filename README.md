@@ -334,6 +334,10 @@ Current safeguards include:
 - task timeouts and limited retries;
 - automatic Codex workspace safety review.
 
+The default task watchdog stops a backend after seven minutes without a
+recognized lifecycle event, while a separate one-hour maximum still bounds an
+active task. Slack's processing-status refresh does not extend either deadline.
+
 The backend's inherited credentials can be used directly by tools or shell
 commands, bypassing Tag's scoped helpers. Tag does **not** provide a hardened
 sandbox, organization-wide identity policy,

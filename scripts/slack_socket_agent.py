@@ -1349,7 +1349,10 @@ def run_backend(
     model: str | None = None,
     reasoning_effort: str | None = None,
     fast_mode: bool = False,
+    max_timeout: int | None = None,
 ) -> tuple[str, bool]:
+    if max_timeout is None:
+        max_timeout = int(os.getenv("OPENTAG_MAX_TIMEOUT_SECONDS", "3600"))
     with tempfile.NamedTemporaryFile("w", suffix=".txt", encoding="utf-8", delete=False) as f:
         f.write(thread_text)
         thread_file = Path(f.name)
@@ -1372,7 +1375,9 @@ def run_backend(
         "--workdir",
         str(default_workdir()),
         "--timeout",
-        str(timeout),
+        str(max_timeout),
+        "--max-timeout",
+        str(max_timeout),
     ]
     if backend == "codex" and model:
         cmd.extend(["--model", model])
@@ -1393,11 +1398,13 @@ def run_backend(
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            timeout=timeout + 10,
+            timeout=max_timeout + 10,
             env=child_env,
         )
         output = result.stdout.strip()
         if result.returncode != 0:
+            if result.returncode == 124:
+                return f"Tag backend exceeded its maximum runtime of {max_timeout}s", False
             detail = output[-3000:] or f"Open Tag backend failed with exit code {result.returncode}."
             return detail, False
         return output or "Open Tag finished without output.", True
@@ -1425,8 +1432,11 @@ def run_backend_events(
     on_answer_start: Callable[[], None] | None = None,
     on_status: Callable[[str], None] | None = None,
     fast_mode: bool = False,
+    max_timeout: int | None = None,
 ) -> tuple[str, bool]:
     """Consume normalized lifecycle events and forward only final-answer text."""
+    if max_timeout is None:
+        max_timeout = int(os.getenv("OPENTAG_MAX_TIMEOUT_SECONDS", "3600"))
     with tempfile.NamedTemporaryFile("w", suffix=".txt", encoding="utf-8", delete=False) as f:
         f.write(thread_text)
         thread_file = Path(f.name)
@@ -1450,6 +1460,8 @@ def run_backend_events(
         str(default_workdir()),
         "--timeout",
         str(timeout),
+        "--max-timeout",
+        str(max_timeout),
         "--event-stream",
     ]
     if backend == "codex" and model:
@@ -1491,7 +1503,7 @@ def run_backend_events(
         timed_out.set()
         active_run.force_stop()
 
-    timer = threading.Timer(timeout + 10, stop_process)
+    timer = threading.Timer(max_timeout + 10, stop_process)
     timer.start()
     final_messages: list[str] = []
     delta_text: list[str] = []
@@ -1552,7 +1564,7 @@ def run_backend_events(
     if active_run.cancel_requested:
         return "Stop requested, but the backend did not confirm interruption before cleanup.", False
     if timed_out.is_set():
-        return f"Tag backend timed out after {timeout}s", False
+        return f"Tag backend exceeded its maximum runtime of {max_timeout}s", False
     if return_code != 0:
         details = error_text or "\n".join(diagnostics)[-3000:].strip()
         return details or f"Open Tag backend failed with exit code {return_code}.", False
@@ -1643,11 +1655,20 @@ def retry_button_blocks(
     }]
 
 
-def user_facing_failure(detail: str, timeout: int, error_reference: str) -> str:
+def user_facing_failure(
+    detail: str,
+    timeout: int,
+    error_reference: str,
+    max_timeout: int | None = None,
+) -> str:
     """Turn private backend diagnostics into stable, actionable Slack copy."""
     if detail.startswith("Stopped.") or detail.startswith("Stop requested"):
         return detail
     lowered = detail.lower()
+    if "no backend activity" in lowered:
+        return f"Tag stopped after {timeout} seconds without backend activity. Please retry."
+    if "maximum runtime" in lowered and max_timeout is not None:
+        return f"Tag reached its maximum runtime of {max_timeout} seconds. Please retry."
     if "timed out" in lowered:
         return f"Tag timed out after {timeout} seconds. Please retry."
     if any(
@@ -1817,8 +1838,11 @@ def create_app(
     timeout: int,
     allowed_user_ids: frozenset[str],
     *,
+    max_timeout: int | None = None,
     session_journal: SlackSessionJournal | None = None,
 ) -> App:
+    if max_timeout is None:
+        max_timeout = int(os.getenv("OPENTAG_MAX_TIMEOUT_SECONDS", "3600"))
     app = App(token=require_env("SLACK_BOT_TOKEN"))
 
     @app.event("agent_session_stopped")
@@ -2158,6 +2182,7 @@ def create_app(
                         on_answer_start=indicator.answer_started,
                         on_status=indicator.status,
                         fast_mode=agent_settings.fast_mode,
+                        max_timeout=max_timeout,
                     )
                 else:
                     answer, succeeded = run_backend(
@@ -2171,6 +2196,7 @@ def create_app(
                         model=agent_settings.model,
                         reasoning_effort=agent_settings.reasoning_effort,
                         fast_mode=agent_settings.fast_mode,
+                        max_timeout=max_timeout,
                     )
             indicator.clear()
             if succeeded:
@@ -2188,7 +2214,7 @@ def create_app(
             else:
                 error_reference = uuid.uuid4().hex[:8].upper()
                 logger.error("Tag backend failure [%s]: %s", error_reference, answer)
-                answer = user_facing_failure(answer, timeout, error_reference)
+                answer = user_facing_failure(answer, timeout, error_reference, max_timeout)
                 footer_blocks = retry_button_blocks(
                     team=team,
                     channel=channel,
@@ -2218,7 +2244,7 @@ def create_app(
             if answer_stream is not None:
                 answer_stream.abort()
             answer = user_facing_failure(
-                f"{type(exc).__name__}: {exc}", timeout, error_reference
+                f"{type(exc).__name__}: {exc}", timeout, error_reference, max_timeout
             )
             post_final_reply(
                 client,
@@ -2313,6 +2339,11 @@ def main() -> None:
         "--timeout", type=int, default=int(os.getenv("OPENTAG_TIMEOUT_SECONDS", "420"))
     )
     parser.add_argument(
+        "--max-timeout",
+        type=int,
+        default=int(os.getenv("OPENTAG_MAX_TIMEOUT_SECONDS", "3600")),
+    )
+    parser.add_argument(
         "--ready-file",
         type=Path,
         help="Write a short-lived Socket Mode connection heartbeat to this path.",
@@ -2328,6 +2359,7 @@ def main() -> None:
         args.backend,
         args.timeout,
         allowed_user_ids,
+        max_timeout=args.max_timeout,
         session_journal=session_journal,
     )
     print_live_summary(args.backend, allowed_user_ids)
