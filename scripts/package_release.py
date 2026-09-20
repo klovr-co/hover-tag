@@ -13,6 +13,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
+SYMLINK_MODE = 0o120000
+GITLINK_MODE = 0o160000
+
+
 def _source_epoch(root: Path) -> int:
     configured = os.environ.get("SOURCE_DATE_EPOCH")
     if configured is not None:
@@ -41,9 +45,14 @@ def build_archive(root: Path, archive: Path, epoch: int | None = None) -> str:
     timestamp = max(timestamp, (1980, 1, 1, 0, 0, 0))
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
         for name, git_mode in _tracked_files(root):
+            # Installers reject symlink entries, and gitlinks contain no file data.
+            if git_mode in {SYMLINK_MODE, GITLINK_MODE}:
+                continue
             path = root / name
             if not path.is_file():
-                continue
+                raise FileNotFoundError(
+                    f"tracked file missing from the working tree: {name}"
+                )
             info = zipfile.ZipInfo(name, timestamp)
             info.create_system = 3
             info.compress_type = zipfile.ZIP_DEFLATED

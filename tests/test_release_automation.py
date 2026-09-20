@@ -8,6 +8,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 from scripts.package_release import build_archive
 from scripts.release_automation import (
@@ -119,6 +120,30 @@ class ReleaseArtifactTests(unittest.TestCase):
 
         self.assertEqual(first_digest, second_digest)
         self.assertEqual(first_bytes, second_bytes)
+
+    def test_package_rejects_missing_files_but_skips_symlinks_and_gitlinks(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            included = root / "included.txt"
+            included.write_text("included\n", encoding="utf-8")
+
+            with patch(
+                "scripts.package_release._tracked_files",
+                return_value=[
+                    ("skill-link", 0o120000),
+                    ("dependency", 0o160000),
+                    (included.name, 0o100644),
+                ],
+            ):
+                build_archive(root, root / "valid.zip", epoch=315532800)
+
+            with patch(
+                "scripts.package_release._tracked_files",
+                return_value=[("missing.txt", 0o100644)],
+            ), self.assertRaisesRegex(
+                FileNotFoundError, "tracked file missing.*missing.txt"
+            ):
+                build_archive(root, root / "invalid.zip", epoch=315532800)
 
     def test_validates_and_promotes_exact_edge_bytes(self) -> None:
         sha = "d" * 40
