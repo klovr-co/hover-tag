@@ -105,3 +105,5 @@ class ReleaseHelperTests(unittest.TestCase):
         self.assertIn("app_mention must be subscribed", errors)
         self.assertIn("app_home_opened must be subscribed", errors)
         self.assertIn("App Home must be enabled", errors)
+        self.assertIn("App Messages tab must be enabled", errors)
+        self.assertIn("Agent view must be enabled with a description", errors)
