@@ -1,0 +1,19 @@
+{
+  "name": "tag-hosted-receiver",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "check": "wrangler deploy --dry-run"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "0.22.0",
+    "vitest": "4.1.11",
+    "wrangler": "4.135.0"
+  },
+  "overrides": {
+    "sharp": "0.35.4"
+  }
+}

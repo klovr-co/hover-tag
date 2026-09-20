@@ -1,0 +1,32 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "tag-offline-receiver",
+  "main": "src/index.js",
+  "compatibility_date": "2026-08-01",
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "RECEIVER",
+        "class_name": "TagReceiver"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "TagReceiver"
+      ]
+    }
+  ],
+  "ratelimits": [
+    {
+      "name": "REGISTRATION_LIMITER",
+      "namespace_id": "1048",
+      "simple": {
+        "limit": 10,
+        "period": 60
+      }
+    }
+  ]
+}

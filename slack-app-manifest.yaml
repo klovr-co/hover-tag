@@ -1,6 +1,6 @@
 display_information:
   name: OpenMax
-  description: Run approved Codex or Claude tasks from Slack.
+  description: Run local agent tasks. No reply? Run tag start on the host computer, then mention me again.
   background_color: "#1f2937"
 features:
   app_home:
@@ -8,7 +8,7 @@ features:
     messages_tab_enabled: true
     messages_tab_read_only_enabled: false
   agent_view:
-    agent_description: Run approved Codex or Claude tasks from Slack.
+    agent_description: Run local agent tasks. No reply? Run tag start on the host computer, then mention me again.
   bot_user:
     display_name: OpenMax
     always_online: true
@@ -16,6 +16,7 @@ oauth_config:
   scopes:
     bot:
       - app_mentions:read
+      - users:read
       - assistant:write
       - channels:history
       - channels:read
