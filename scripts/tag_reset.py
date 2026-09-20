@@ -107,6 +107,17 @@ def archive_setup(home: Path, lifecycle, *, expected_app: dict | None = None) ->
         # saved answers intact and never starts a second onboarding flow.
         for name in ("slack", "mfs"):
             lifecycle.stop_process(home, name)
+        # Remove hosted access before archiving the only local ownership secret.
+        try:
+            from tag_receiver import remove_registration
+        except ImportError:
+            from scripts.tag_receiver import remove_registration
+        try:
+            saved_values = settings.load_config(config)
+        except ValueError:
+            saved_values = {}
+            ui.message("Unreadable settings will be backed up. If hosted access was enabled, restore its registration credential from the backup to remove it.")
+        remove_registration(saved_values)
         backup_root = home / "config/backups"
         backup_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")

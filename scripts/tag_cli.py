@@ -360,6 +360,15 @@ def development_loop(home: Path) -> int:
     if result:
         return result
 
+    # Bootstrap may have registered the hosted connection in its subprocess.
+    try:
+        from tag_config import config_path as saved_config_path
+    except ImportError:
+        from scripts.tag_config import config_path as saved_config_path
+    saved = saved_config_path(home)
+    if saved.is_file():
+        os.environ.update(read_config(saved))
+
     # Take ownership of the bridge even when `tag start` found one already
     # running, so leaving this foreground command has predictable cleanup.
     stop_process(home, "slack")
@@ -537,7 +546,7 @@ def doctor(home: Path, offline: bool, json_output: bool = False) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Tag: set up, inspect, and manage your Slack teammate.",
                                      epilog="Use tag for status and the next step. Start with tag setup; change configuration with tag settings.")
-    parser.add_argument("command", nargs="?", choices=("settings", "inspect", "config", "setup", "reset", "migrate", "rollback", "version", "paths", "doctor", "start", "stop", "restart", "status", "logs", "dev"))
+    parser.add_argument("command", nargs="?", choices=("settings", "inspect", "config", "setup", "reset", "migrate", "rollback", "version", "paths", "doctor", "start", "stop", "restart", "status", "logs", "dev", "disconnect"))
     parser.add_argument("arguments", nargs="*", help="config: init | show | keys | set KEY VALUE")
     parser.add_argument("--offline", action="store_true")
     parser.add_argument("--json", action="store_true", dest="json_output", help="structured output for inspect, status, doctor, config, and paths")
@@ -699,6 +708,24 @@ def main() -> int:
         if args.review:
             command.append("--review")
         return subprocess.call(command, env=environment)
+    if args.command == "disconnect":
+        try:
+            from tag_receiver import disconnect
+        except ImportError:
+            from scripts.tag_receiver import disconnect
+        lock = home / "state/start.lock"
+        try:
+            lock.mkdir()
+        except FileExistsError:
+            raise RuntimeError("Another start or disconnect is in progress; retry shortly") from None
+        try:
+            stop_process(home, "slack")
+            disconnect(config_path)
+        finally:
+            lock.rmdir()
+        display.completion("Tag disconnected", "Hosted credentials were removed. Your Slack app is kept.",
+                           next_label="Start locally", next_command="tag start")
+        return 0
     if args.command == "doctor" and args.json_output:
         report = control.inspect(home, sys.modules[__name__], offline=True)
         if not report["configuration"]["complete"]:
@@ -794,6 +821,23 @@ def main() -> int:
                 "Permissions migrated" if manifest_changed else "Permissions current",
                 good=True,
             )
+            if os.getenv("OPENTAG_SLACK_CONNECTION") == "direct" and os.getenv("OPENTAG_RELAY_APP_ID"):
+                try:
+                    from tag_receiver import disconnect
+                except ImportError:
+                    from scripts.tag_receiver import disconnect
+                stop_process(home, "slack")
+                os.environ.update(disconnect(config_path))
+            if os.getenv("OPENTAG_SLACK_CONNECTION") == "hosted":
+                try:
+                    from tag_receiver import ensure_registered
+                except ImportError:
+                    from scripts.tag_receiver import ensure_registered
+                # Never open a hosted Slack receiver while an older direct bridge
+                # can compete for its events. Registration retries retain ownership.
+                if not os.getenv("OPENTAG_RELAY_URL"):
+                    stop_process(home, "slack")
+                os.environ.update(ensure_registered(config_path))
             url = os.getenv("MFS_URL", "http://127.0.0.1:13619")
             if not healthy(url):
                 if url.rstrip("/") not in ("http://localhost:13619", "http://127.0.0.1:13619"):
