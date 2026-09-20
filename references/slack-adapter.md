@@ -189,6 +189,29 @@ phased final-answer deltas, observed activity, and interruption; set
 `OPENTAG_CODEX_TRANSPORT=exec` only for legacy rollback. Tag does not
 forward commentary, reasoning, tool output, or raw backend diagnostics.
 
+Codex retries capacity and rate-limit failures up to
+`OPENTAG_BACKEND_ATTEMPTS`, but only when the failed attempt produced no
+observable activity or answer content. Slack displays the next attempt (for
+example, `Backend busy — retrying (2/3)…`). After a terminal failure, Tag clears
+the working state, keeps detailed diagnostics in local logs under a short error
+reference, and posts sanitized guidance with a **Retry** button. Retry reloads
+the canonical original message from Slack by timestamp; prompt text is not
+stored in the button payload. User-requested stops are terminal and do not show
+the Retry button.
+
+The bridge records active Slack session identities in
+`state/slack-active-sessions.json` under Tag home. The journal contains only the
+workspace, channel, and thread identifiers needed for cleanup. SIGTERM and
+SIGINT request a graceful bridge shutdown, which closes recorded sessions before
+exit. If the process cannot run cleanup (for example, after SIGKILL or a host
+crash), the next bridge start reconciles the journal through both the Agent
+Sessions and legacy assistant-status APIs before connecting Socket Mode. Entries
+are retained when both cleanup calls fail so a later start can retry them.
+If Slack delivers `agent_session_stopped` after the original backend process is
+already gone, the bridge treats it as an orphaned stop: it closes the Slack
+session immediately instead of waiting for a nonexistent run to confirm
+interruption. Failed orphan cleanup is added to the same recovery journal.
+
 Activity copy uses a fixed public vocabulary. Recognized MCP services and tool
 names produce natural copy (for example, `Searching GitHub issues…`); unrecognized
 names fall back to a service-only or generic label. Extend `MCP_SERVICE_NAMES`

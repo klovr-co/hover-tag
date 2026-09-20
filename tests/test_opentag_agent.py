@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, call, patch
 
 from scripts import opentag_agent
 
@@ -104,6 +104,56 @@ class OpenTagAgentPromptTests(unittest.TestCase):
 
 
 class BackendStreamEventTests(unittest.TestCase):
+    def test_retryable_failure_recognizes_structured_rate_limit_errors(self) -> None:
+        self.assertTrue(opentag_agent.retryable_backend_failure("rate_limit_exceeded"))
+        self.assertTrue(opentag_agent.retryable_backend_failure("HTTP 429: too many requests"))
+        self.assertFalse(opentag_agent.retryable_backend_failure("invalid authentication"))
+
+    def test_app_server_retries_capacity_before_work_begins(self) -> None:
+        server = MagicMock()
+        server.run.side_effect = [
+            ("failed", "selected model is at capacity"),
+            ("completed", ""),
+        ]
+        with patch.dict(os.environ, {"OPENTAG_BACKEND_ATTEMPTS": "3"}, clear=False), patch.object(
+            opentag_agent, "CodexAppServer", return_value=server
+        ) as server_class, patch.object(opentag_agent, "emit_event") as emit, patch.object(
+            opentag_agent.time, "sleep"
+        ):
+            result = opentag_agent.run_codex_app_server_events(
+                "prompt", workdir=Path("/work"), timeout=30
+            )
+
+        self.assertEqual(0, result)
+        self.assertEqual(2, server_class.call_count)
+        self.assertIn(
+            call("status", "Backend busy — retrying (2/3)…"),
+            emit.call_args_list,
+        )
+
+    def test_app_server_does_not_retry_after_observable_work(self) -> None:
+        server = MagicMock()
+
+        def fail_after_activity(*_args, **kwargs):
+            kwargs["emit"]({
+                "type": "activity_start",
+                "activity_id": "one",
+                "label": "Running a command…",
+            })
+            return "failed", "rate limit exceeded"
+
+        server.run.side_effect = fail_after_activity
+        with patch.dict(os.environ, {"OPENTAG_BACKEND_ATTEMPTS": "3"}, clear=False), patch.object(
+            opentag_agent, "CodexAppServer", return_value=server
+        ) as server_class, patch.object(opentag_agent, "emit_event") as emit:
+            result = opentag_agent.run_codex_app_server_events(
+                "prompt", workdir=Path("/work"), timeout=30
+            )
+
+        self.assertEqual(1, result)
+        server_class.assert_called_once()
+        self.assertNotIn("status", [item.args[0] for item in emit.call_args_list])
+
     def test_codex_event_transport_defaults_to_app_server_and_keeps_exec_rollback(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
             self.assertEqual("app-server", opentag_agent.codex_event_transport())

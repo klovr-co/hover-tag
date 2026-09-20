@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import tempfile
 import unittest
 from pathlib import Path
@@ -124,6 +125,68 @@ class SlackReplyChunkingTests(unittest.TestCase):
         text = "a" * 25
 
         self.assertEqual(["a" * 10, "a" * 10, "a" * 5], slack_socket_agent.split_reply(text, max_chars=10))
+
+
+class SlackFailureReplyTests(unittest.TestCase):
+    def test_failure_copy_does_not_expose_backend_diagnostics(self) -> None:
+        reply = slack_socket_agent.user_facing_failure(
+            "RuntimeError: secret backend detail", 420, "ABC12345"
+        )
+
+        self.assertNotIn("secret backend detail", reply)
+        self.assertIn("ABC12345", reply)
+        self.assertIn("Please retry", reply)
+
+    def test_retry_button_contains_only_request_identity(self) -> None:
+        blocks = slack_socket_agent.retry_button_blocks(
+            team="T1", channel="C1", thread_ts="1.0", request_ts="1.1"
+        )
+        button = blocks[0]["elements"][0]
+
+        self.assertEqual(slack_socket_agent.RETRY_ACTION_ID, button["action_id"])
+        self.assertEqual(
+            {"team": "T1", "channel": "C1", "thread_ts": "1.0", "request_ts": "1.1"},
+            json.loads(button["value"]),
+        )
+
+    def test_retry_action_reloads_original_slack_request(self) -> None:
+        fake_app = FakeApp()
+        client = MagicMock()
+        client.conversations_replies.return_value = {
+            "messages": [{"ts": "1.1", "text": "<@BOT> try this again"}]
+        }
+        metadata = {
+            "team": "T1",
+            "channel": "C1",
+            "thread_ts": "1.0",
+            "request_ts": "1.1",
+        }
+        with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+            os.environ,
+            {"SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_IDS": "C1"},
+            clear=True,
+        ), patch.object(slack_socket_agent, "discover_codex_models", return_value=[]), patch.object(
+            slack_socket_agent, "build_thread_text", return_value="thread"
+        ), patch.object(
+            slack_socket_agent, "run_backend_events", return_value=("done", True)
+        ) as run_backend:
+            slack_socket_agent.create_app("codex", 30, frozenset({"UOWNER"}))
+            ack = MagicMock()
+            fake_app.actions[slack_socket_agent.RETRY_ACTION_ID](
+                ack,
+                {
+                    "user": {"id": "UOWNER"},
+                    "actions": [{"value": json.dumps(metadata)}],
+                },
+                client,
+                MagicMock(),
+            )
+
+        ack.assert_called_once_with()
+        self.assertEqual("try this again", run_backend.call_args.args[5])
+        self.assertEqual("UOWNER", run_backend.call_args.args[4])
+
+
 class SlackChannelAllowlistTests(unittest.TestCase):
     def setUp(self) -> None:
         self.previous = os.environ.get("SLACK_CHANNEL_ID")
@@ -325,6 +388,37 @@ class SlackUserAllowlistTests(unittest.TestCase):
         )
 
 class SlackWorkingIndicatorTests(unittest.TestCase):
+    def test_journals_native_session_until_clear_succeeds(self) -> None:
+        client = MagicMock()
+        journal = MagicMock()
+        indicator = slack_socket_agent.WorkingIndicator(
+            client,
+            "C123",
+            "1.23",
+            MagicMock(),
+            journal=journal,
+            team="T123",
+        )
+
+        with patch("scripts.slack_socket_agent.threading.Timer"):
+            indicator.start()
+            indicator.clear()
+
+        journal.add.assert_called_once_with("T123", "C123", "1.23")
+        journal.remove.assert_called_once_with("T123", "C123", "1.23")
+
+    def test_backend_retry_status_replaces_generic_working_copy(self) -> None:
+        client = MagicMock()
+        indicator = slack_socket_agent.WorkingIndicator(client, "C123", "1.23", MagicMock())
+        indicator.native = indicator.legacy_status = True
+
+        indicator.status("Backend busy — retrying (2/3)…")
+
+        self.assertEqual(
+            "Backend busy — retrying (2/3)…",
+            client.assistant_threads_setStatus.call_args.kwargs["status"],
+        )
+
     def test_uses_native_slack_loading_status(self) -> None:
         client = MagicMock()
         indicator = slack_socket_agent.WorkingIndicator(client, "C123", "1.23", MagicMock())
@@ -347,6 +441,7 @@ class SlackWorkingIndicatorTests(unittest.TestCase):
         timer.return_value.start.assert_called_once()
         timer.return_value.cancel.assert_called_once()
         client.chat_postMessage.assert_not_called()
+
 
     def test_falls_back_to_temporary_message_when_native_status_fails(self) -> None:
         client = MagicMock()
@@ -450,6 +545,52 @@ class SlackWorkingIndicatorTests(unittest.TestCase):
 
         indicator.clear()
         self.assertEqual("active", client.api_call.call_args.kwargs["json"]["status"])
+
+
+class SlackSessionJournalTests(unittest.TestCase):
+    def test_sigterm_requests_graceful_cleanup(self) -> None:
+        shutdown_requested = slack_socket_agent.threading.Event()
+        handlers: dict[signal.Signals, object] = {}
+
+        def capture(sig, handler):
+            handlers[sig] = handler
+
+        with patch("scripts.slack_socket_agent.signal.signal", side_effect=capture):
+            slack_socket_agent.install_shutdown_handlers(shutdown_requested)
+
+        handlers[signal.SIGTERM](signal.SIGTERM, None)
+        self.assertTrue(shutdown_requested.is_set())
+
+    def test_reconciles_session_left_by_a_crashed_process(self) -> None:
+        client = MagicMock()
+        logger = MagicMock()
+        with tempfile.TemporaryDirectory() as raw_dir:
+            path = Path(raw_dir) / "active-sessions.json"
+            slack_socket_agent.SlackSessionJournal(path).add("T1", "C1", "1.23")
+
+            journal = slack_socket_agent.SlackSessionJournal(path)
+            self.assertEqual(1, journal.reconcile(client, logger))
+            self.assertFalse(path.exists())
+
+        client.api_call.assert_called_once_with(
+            "agents.sessions.setStatus",
+            json={"channel_id": "C1", "thread_ts": "1.23", "status": "active"},
+        )
+        client.assistant_threads_setStatus.assert_called_once_with(
+            channel_id="C1", thread_ts="1.23", status=""
+        )
+
+    def test_retains_session_when_both_cleanup_apis_fail(self) -> None:
+        client = MagicMock()
+        client.api_call.side_effect = RuntimeError("unavailable")
+        client.assistant_threads_setStatus.side_effect = RuntimeError("unavailable")
+        with tempfile.TemporaryDirectory() as raw_dir:
+            path = Path(raw_dir) / "active-sessions.json"
+            journal = slack_socket_agent.SlackSessionJournal(path)
+            journal.add("T1", "C1", "1.23")
+
+            self.assertEqual(0, journal.reconcile(client, MagicMock()))
+            self.assertTrue(path.exists())
 
 
 class SlackAnswerStreamTests(unittest.TestCase):
@@ -565,6 +706,7 @@ class BackendEventRunnerTests(unittest.TestCase):
         return_code: int = 0,
         register_side_effect: object | None = None,
         on_answer_start: object | None = None,
+        on_status: object | None = None,
     ) -> tuple[str, bool]:
         process = MagicMock()
         process.stdout = iter(json.dumps(event) + "\n" for event in events)
@@ -587,7 +729,18 @@ class BackendEventRunnerTests(unittest.TestCase):
                 30,
                 MagicMock(),
                 on_answer_start=on_answer_start,
+                on_status=on_status,
             )
+
+    def test_forwards_backend_retry_status(self) -> None:
+        callback = MagicMock()
+
+        self.run_with_events(
+            [{"type": "status", "text": "Backend busy — retrying (2/3)…"}],
+            on_status=callback,
+        )
+
+        callback.assert_called_once_with("Backend busy — retrying (2/3)…")
 
     def test_only_explicit_final_answer_start_signals_preparation(self) -> None:
         callback = MagicMock()
@@ -671,6 +824,7 @@ class SlackCancellationTests(unittest.TestCase):
 
     def test_stop_event_targets_team_channel_and_thread(self) -> None:
         fake_app = FakeApp()
+        client = MagicMock()
         with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
             os.environ,
             {"SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_IDS": "C123"},
@@ -685,6 +839,7 @@ class SlackCancellationTests(unittest.TestCase):
                     "event_ts": "100.25",
                 },
                 {"team_id": "T123"},
+                client,
                 MagicMock(),
             )
 
@@ -692,6 +847,43 @@ class SlackCancellationTests(unittest.TestCase):
             slack_socket_agent.RunKey("T123", "C123", "1.23"),
             "100.25",
         )
+        client.api_call.assert_not_called()
+
+    def test_orphaned_stop_event_clears_slack_session(self) -> None:
+        fake_app = FakeApp()
+        client = MagicMock()
+        journal = MagicMock()
+        with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+            os.environ,
+            {"SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_IDS": "C123"},
+            clear=True,
+        ), patch.object(slack_socket_agent, "cancel_active_run", return_value=False):
+            slack_socket_agent.create_app(
+                "claude",
+                30,
+                frozenset({"UOWNER"}),
+                session_journal=journal,
+            )
+            fake_app.events["agent_session_stopped"](
+                {
+                    "channel": "C123",
+                    "thread_ts": "1.23",
+                    "user": "UOWNER",
+                    "event_ts": "100.25",
+                },
+                {"team_id": "T123"},
+                client,
+                MagicMock(),
+            )
+
+        client.api_call.assert_called_once_with(
+            "agents.sessions.setStatus",
+            json={"channel_id": "C123", "thread_ts": "1.23", "status": "active"},
+        )
+        client.assistant_threads_setStatus.assert_called_once_with(
+            channel_id="C123", thread_ts="1.23", status=""
+        )
+        journal.remove.assert_called_once_with("T123", "C123", "1.23")
 
 
 class SlackAgentSettingsTests(unittest.TestCase):

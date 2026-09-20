@@ -54,6 +54,7 @@ SETTINGS_MODEL_ACTION_ID = "opentag_settings_model"
 SETTINGS_EFFORT_ACTION_ID = "opentag_settings_effort"
 SETTINGS_FAST_ACTION_ID = "opentag_settings_fast_mode"
 SETTINGS_RESET_ACTION_ID = "opentag_settings_reset"
+RETRY_ACTION_ID = "opentag_retry_request"
 SETTINGS_VIEW_ID = "opentag_agent_settings"
 HOME_CHANNEL_ACTION_ID = "opentag_home_channel"
 UNAUTHORIZED_USER_MESSAGE = "Sorry, only users authorized by the Tag owner can use this bot."
@@ -743,14 +744,142 @@ def selected_fast_mode(view: dict[str, Any]) -> bool:
     )
 
 
+def clear_slack_session(client: Any, channel: str, thread_ts: str, logger: Any) -> bool:
+    """Best-effort completion for an active or orphaned Slack agent session."""
+    succeeded = False
+    try:
+        client.api_call(
+            "agents.sessions.setStatus",
+            json={
+                "channel_id": channel,
+                "thread_ts": thread_ts,
+                "status": "active",
+            },
+        )
+        succeeded = True
+    except Exception as exc:  # noqa: BLE001 - legacy cleanup may still work
+        logger.warning("Could not close Slack agent session: %s", exc)
+    try:
+        client.assistant_threads_setStatus(
+            channel_id=channel,
+            thread_ts=thread_ts,
+            status="",
+        )
+        succeeded = True
+    except Exception as exc:  # noqa: BLE001 - Agent Sessions may have worked
+        logger.warning("Could not clear Slack loading status: %s", exc)
+    return succeeded
+
+
+class SlackSessionJournal:
+    """Persist enough identity to clear Slack statuses after an unclean exit."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.lock = threading.RLock()
+        self.sessions = self._load()
+
+    @staticmethod
+    def key(team: str, channel: str, thread_ts: str) -> str:
+        return f"{team}:{channel}:{thread_ts}"
+
+    def _load(self) -> dict[str, dict[str, str]]:
+        try:
+            payload = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            return {}
+        if not isinstance(payload, dict):
+            return {}
+        return {
+            key: value
+            for key, value in payload.items()
+            if isinstance(key, str)
+            and isinstance(value, dict)
+            and all(
+                isinstance(value.get(field), str) and value[field]
+                for field in ("team", "channel", "thread_ts")
+            )
+        }
+
+    def _save(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if not self.sessions:
+            self.path.unlink(missing_ok=True)
+            return
+        descriptor, temporary = tempfile.mkstemp(
+            prefix=f".{self.path.name}.", dir=self.path.parent
+        )
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump(self.sessions, handle, separators=(",", ":"))
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, self.path)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+
+    def add(self, team: str, channel: str, thread_ts: str) -> None:
+        with self.lock:
+            self.sessions[self.key(team, channel, thread_ts)] = {
+                "team": team,
+                "channel": channel,
+                "thread_ts": thread_ts,
+            }
+            self._save()
+
+    def remove(self, team: str, channel: str, thread_ts: str) -> None:
+        with self.lock:
+            self.sessions.pop(self.key(team, channel, thread_ts), None)
+            self._save()
+
+    def reconcile(self, client: Any, logger: Any) -> int:
+        """Clear recorded sessions with Slack, retaining entries that still fail."""
+        with self.lock:
+            pending = list(self.sessions.items())
+        cleared = 0
+        for key, session in pending:
+            if clear_slack_session(
+                client, session["channel"], session["thread_ts"], logger
+            ):
+                with self.lock:
+                    self.sessions.pop(key, None)
+                    try:
+                        self._save()
+                    except OSError as exc:
+                        logger.warning("Could not update the Slack session journal: %s", exc)
+                cleared += 1
+        return cleared
+
+
+def slack_session_journal_path() -> Path:
+    return Path(
+        os.getenv(
+            "OPENTAG_SLACK_SESSIONS_FILE",
+            str(skill_dir() / ".runtime" / "slack-active-sessions.json"),
+        )
+    ).expanduser()
+
+
 class WorkingIndicator:
     """Prefer Slack's native agent status, with the old message as a fallback."""
 
-    def __init__(self, client: Any, channel: str, thread_ts: str, logger: Any) -> None:
+    def __init__(
+        self,
+        client: Any,
+        channel: str,
+        thread_ts: str,
+        logger: Any,
+        *,
+        journal: SlackSessionJournal | None = None,
+        team: str = "",
+    ) -> None:
         self.client = client
         self.channel = channel
         self.thread_ts = thread_ts
         self.logger = logger
+        self.journal = journal
+        self.team = team
         self.native = False
         self.session_api = False
         self.legacy_status = False
@@ -762,12 +891,31 @@ class WorkingIndicator:
         self.activity_started: dict[str, float] = {}
         self.wait_labels: dict[str, str] = {}
         self.preparing_answer = False
+        self.public_status: str | None = None
         self.last_status: str | None = None
         self.last_status_at = float("-inf")
         self.lock = threading.RLock()
 
+    def journal_add(self) -> None:
+        if self.journal is None:
+            return
+        try:
+            self.journal.add(self.team, self.channel, self.thread_ts)
+        except OSError as exc:
+            self.logger.warning("Could not record the active Slack session: %s", exc)
+
+    def journal_remove(self) -> None:
+        if self.journal is None:
+            return
+        try:
+            self.journal.remove(self.team, self.channel, self.thread_ts)
+        except OSError as exc:
+            self.logger.warning("Could not update the Slack session journal: %s", exc)
+
     def set_native_status(self, *, force: bool = False) -> None:
-        if self.activities:
+        if self.public_status:
+            status = self.public_status
+        elif self.activities:
             latest = next(reversed(self.activities))
             elapsed = time.monotonic() - self.activity_started[latest]
             status = self.wait_labels[latest] if elapsed >= ACTIVITY_WAIT_SECONDS else self.activities[latest]
@@ -830,6 +978,7 @@ class WorkingIndicator:
         """Debounce truthful tool lifecycle updates and count concurrent work."""
         with self.lock:
             if event_type == "activity_start":
+                self.public_status = None
                 self.activities[activity_id] = label
                 self.activity_started.setdefault(activity_id, time.monotonic())
                 self.wait_labels[activity_id] = wait_label
@@ -842,8 +991,20 @@ class WorkingIndicator:
 
     def answer_started(self) -> None:
         with self.lock:
+            self.public_status = None
             self.preparing_answer = True
             self.schedule_activity()
+
+    def status(self, text: str) -> None:
+        """Display a backend-provided public lifecycle status such as a retry."""
+        with self.lock:
+            self.public_status = text
+            if self.native and self.legacy_status:
+                try:
+                    self.set_native_status(force=True)
+                except Exception as exc:  # noqa: BLE001 - processing remains active
+                    self.logger.warning("Could not update native Slack status: %s", exc)
+                    self.legacy_status = False
 
     def schedule_activity(self) -> None:
         """Coalesce events and hold the displayed copy briefly; caller holds lock."""
@@ -884,6 +1045,7 @@ class WorkingIndicator:
 
     def start(self) -> None:
         with self.lock:
+            self.journal_add()
             try:
                 self.set_session_status("processing")
                 self.session_api = True
@@ -898,6 +1060,7 @@ class WorkingIndicator:
             if self.native:
                 self.schedule_refresh()
             else:
+                self.journal_remove()
                 response = self.client.chat_postMessage(
                     channel=self.channel,
                     thread_ts=self.thread_ts,
@@ -923,6 +1086,7 @@ class WorkingIndicator:
             if self.session_api:
                 try:
                     self.set_session_status("active")
+                    self.journal_remove()
                 except Exception as exc:  # noqa: BLE001 - final replies must still be delivered
                     self.logger.warning("Could not complete Slack agent session status: %s", exc)
             elif self.legacy_status:
@@ -932,6 +1096,7 @@ class WorkingIndicator:
                         thread_ts=self.thread_ts,
                         status="",
                     )
+                    self.journal_remove()
                 except Exception as exc:  # noqa: BLE001 - final replies must still be delivered
                     self.logger.warning("Could not clear native Slack loading status: %s", exc)
             self.session_api = False
@@ -1184,7 +1349,7 @@ def run_backend(
     model: str | None = None,
     reasoning_effort: str | None = None,
     fast_mode: bool = False,
-) -> str:
+) -> tuple[str, bool]:
     with tempfile.NamedTemporaryFile("w", suffix=".txt", encoding="utf-8", delete=False) as f:
         f.write(thread_text)
         thread_file = Path(f.name)
@@ -1233,8 +1398,9 @@ def run_backend(
         )
         output = result.stdout.strip()
         if result.returncode != 0:
-            return f"Open Tag backend failed with exit code {result.returncode}:\n```text\n{output[-3000:]}\n```"
-        return output or "Open Tag finished without output."
+            detail = output[-3000:] or f"Open Tag backend failed with exit code {result.returncode}."
+            return detail, False
+        return output or "Open Tag finished without output.", True
     finally:
         try:
             thread_file.unlink()
@@ -1257,6 +1423,7 @@ def run_backend_events(
     model: str | None = None,
     reasoning_effort: str | None = None,
     on_answer_start: Callable[[], None] | None = None,
+    on_status: Callable[[str], None] | None = None,
     fast_mode: bool = False,
 ) -> tuple[str, bool]:
     """Consume normalized lifecycle events and forward only final-answer text."""
@@ -1359,6 +1526,8 @@ def run_backend_events(
                 final_messages.append(text)
             elif event_type == "error" and isinstance(text, str):
                 error_text = text
+            elif event_type == "status" and isinstance(text, str) and on_status:
+                on_status(text)
             elif event_type in {"activity_start", "activity_complete"} and on_activity:
                 activity_id = event.get("activity_id")
                 label = event.get("label")
@@ -1448,6 +1617,55 @@ def post_final_reply(
             mrkdwn=True,
             blocks=blocks,
         )
+
+
+def retry_button_blocks(
+    *,
+    team: str,
+    channel: str,
+    thread_ts: str,
+    request_ts: str,
+) -> list[dict[str, Any]]:
+    metadata = {
+        "team": team,
+        "channel": channel,
+        "thread_ts": thread_ts,
+        "request_ts": request_ts,
+    }
+    return [{
+        "type": "actions",
+        "elements": [{
+            "type": "button",
+            "action_id": RETRY_ACTION_ID,
+            "text": {"type": "plain_text", "text": "Retry"},
+            "value": json.dumps(metadata, separators=(",", ":")),
+        }],
+    }]
+
+
+def user_facing_failure(detail: str, timeout: int, error_reference: str) -> str:
+    """Turn private backend diagnostics into stable, actionable Slack copy."""
+    if detail.startswith("Stopped.") or detail.startswith("Stop requested"):
+        return detail
+    lowered = detail.lower()
+    if "timed out" in lowered:
+        return f"Tag timed out after {timeout} seconds. Please retry."
+    if any(
+        marker in lowered
+        for marker in (
+            "capacity",
+            "rate limit",
+            "rate_limit",
+            "too many requests",
+            "http 429",
+            "backend is busy",
+        )
+    ):
+        return "Tag couldn’t complete this request because the backend is busy. Please retry."
+    return (
+        "Tag couldn’t complete this request. Please retry. If it keeps happening, "
+        f"ask the Tag owner to check the local logs with error reference `{error_reference}`."
+    )
 
 
 def suggested_bot_name(backend: str) -> str:
@@ -1594,13 +1812,20 @@ def print_live_summary(backend: str, allowed_user_ids: frozenset[str]) -> None:
     print("=" * 64)
 
 
-def create_app(backend: str, timeout: int, allowed_user_ids: frozenset[str]) -> App:
+def create_app(
+    backend: str,
+    timeout: int,
+    allowed_user_ids: frozenset[str],
+    *,
+    session_journal: SlackSessionJournal | None = None,
+) -> App:
     app = App(token=require_env("SLACK_BOT_TOKEN"))
 
     @app.event("agent_session_stopped")
     def handle_agent_session_stopped(
         event: dict[str, Any],
         body: dict[str, Any],
+        client: Any,
         logger: Any,
     ) -> None:
         channel = event.get("channel", "")
@@ -1620,6 +1845,17 @@ def create_app(backend: str, timeout: int, allowed_user_ids: frozenset[str]) -> 
             event.get("event_ts") if isinstance(event.get("event_ts"), str) else None,
         ):
             logger.info("No active Tag run matched the Slack stop event")
+            if clear_slack_session(client, channel, thread_ts, logger):
+                if session_journal is not None:
+                    try:
+                        session_journal.remove(str(team), channel, thread_ts)
+                    except OSError as exc:
+                        logger.warning("Could not update the Slack session journal: %s", exc)
+            elif session_journal is not None:
+                try:
+                    session_journal.add(str(team), channel, thread_ts)
+                except OSError as exc:
+                    logger.warning("Could not record the orphaned Slack session: %s", exc)
     settings_store = UserAgentSettingsStore()
     models = discover_codex_models() if backend == "codex" else []
 
@@ -1874,7 +2110,14 @@ def create_app(backend: str, timeout: int, allowed_user_ids: frozenset[str]) -> 
             models,
         )
 
-        indicator = WorkingIndicator(client, channel, thread_ts, logger)
+        indicator = WorkingIndicator(
+            client,
+            channel,
+            thread_ts,
+            logger,
+            journal=session_journal,
+            team=team,
+        )
         indicator.start()
         answer_stream: SlackAnswerStream | None = None
 
@@ -1913,10 +2156,11 @@ def create_app(backend: str, timeout: int, allowed_user_ids: frozenset[str]) -> 
                         model=agent_settings.model,
                         reasoning_effort=agent_settings.reasoning_effort,
                         on_answer_start=indicator.answer_started,
+                        on_status=indicator.status,
                         fast_mode=agent_settings.fast_mode,
                     )
                 else:
-                    answer = run_backend(
+                    answer, succeeded = run_backend(
                         backend,
                         channel,
                         user_id,
@@ -1928,17 +2172,29 @@ def create_app(backend: str, timeout: int, allowed_user_ids: frozenset[str]) -> 
                         reasoning_effort=agent_settings.reasoning_effort,
                         fast_mode=agent_settings.fast_mode,
                     )
-                    succeeded = True
             indicator.clear()
-            footer_blocks = (
-                settings_button_blocks(
+            if succeeded:
+                footer_blocks = (
+                    settings_button_blocks(
+                        team=team,
+                        channel=channel,
+                        thread_ts=thread_ts,
+                    )
+                    if backend == "codex"
+                    else None
+                )
+            elif answer.startswith("Stopped.") or answer.startswith("Stop requested"):
+                footer_blocks = None
+            else:
+                error_reference = uuid.uuid4().hex[:8].upper()
+                logger.error("Tag backend failure [%s]: %s", error_reference, answer)
+                answer = user_facing_failure(answer, timeout, error_reference)
+                footer_blocks = retry_button_blocks(
                     team=team,
                     channel=channel,
                     thread_ts=thread_ts,
+                    request_ts=event["ts"],
                 )
-                if backend == "codex" and succeeded
-                else None
-            )
             if (
                 answer_stream is not None
                 and succeeded
@@ -1956,14 +2212,94 @@ def create_app(backend: str, timeout: int, allowed_user_ids: frozenset[str]) -> 
                 footer_blocks,
             )
         except Exception as exc:
-            logger.exception("Open Tag failed")
+            error_reference = uuid.uuid4().hex[:8].upper()
+            logger.exception("Open Tag failed [%s]", error_reference)
             indicator.clear()
             if answer_stream is not None:
                 answer_stream.abort()
-            answer = f"Open Tag failed: `{type(exc).__name__}: {exc}`"
-            post_final_reply(client, channel, thread_ts, answer, indicator.message_ts)
+            answer = user_facing_failure(
+                f"{type(exc).__name__}: {exc}", timeout, error_reference
+            )
+            post_final_reply(
+                client,
+                channel,
+                thread_ts,
+                answer,
+                indicator.message_ts,
+                retry_button_blocks(
+                    team=team,
+                    channel=channel,
+                    thread_ts=thread_ts,
+                    request_ts=event["ts"],
+                ),
+            )
+
+    @app.action(RETRY_ACTION_ID)
+    def retry_request(ack: Any, body: dict[str, Any], client: Any, logger: Any) -> None:
+        ack()
+        user_id = body.get("user", {}).get("id", "")
+        if not slack_user_allowed(user_id, allowed_user_ids):
+            return
+        metadata: dict[str, Any] = {}
+        try:
+            metadata = json.loads(body["actions"][0]["value"])
+            channel = metadata["channel"]
+            thread_ts = metadata["thread_ts"]
+            request_ts = metadata["request_ts"]
+            team = metadata.get("team", "")
+            if not all(
+                isinstance(value, str) and value
+                for value in (channel, thread_ts, request_ts, team)
+            ) or not slack_channel_allowed(channel):
+                raise ValueError("invalid retry metadata")
+            response = client.conversations_replies(channel=channel, ts=thread_ts)
+            original = next(
+                (
+                    message
+                    for message in response.get("messages", [])
+                    if message.get("ts") == request_ts
+                    and isinstance(message.get("text"), str)
+                ),
+                None,
+            )
+            if original is None:
+                raise ValueError("original Slack request is unavailable")
+            handle_mention(
+                {
+                    "channel": channel,
+                    "thread_ts": thread_ts,
+                    "ts": request_ts,
+                    "user": user_id,
+                    "text": original["text"],
+                    "team": team,
+                },
+                {"team_id": team},
+                client,
+                logger,
+            )
+        except Exception as exc:  # noqa: BLE001 - keep the Slack action listener alive
+            logger.warning("Could not retry Tag request: %s", exc)
+            channel = metadata.get("channel")
+            if isinstance(channel, str) and slack_channel_allowed(channel):
+                client.chat_postEphemeral(
+                    channel=channel,
+                    user=user_id,
+                    text="Tag couldn’t retry that request. Mention the bot again instead.",
+                )
 
     return app
+
+
+def install_shutdown_handlers(shutdown_requested: threading.Event) -> None:
+    """Turn process signals into a graceful main-loop exit."""
+    if threading.current_thread() is not threading.main_thread():
+        return
+
+    def request_shutdown(_signum: int, _frame: Any) -> None:
+        shutdown_requested.set()
+
+    signal.signal(signal.SIGTERM, request_shutdown)
+    signal.signal(signal.SIGINT, request_shutdown)
 
 
 def main() -> None:
@@ -1987,9 +2323,18 @@ def main() -> None:
         parser.error("--backend or OPENTAG_BACKEND is required")
 
     allowed_user_ids = configured_slack_user_ids()
-    app = create_app(args.backend, args.timeout, allowed_user_ids)
+    session_journal = SlackSessionJournal(slack_session_journal_path())
+    app = create_app(
+        args.backend,
+        args.timeout,
+        allowed_user_ids,
+        session_journal=session_journal,
+    )
     print_live_summary(args.backend, allowed_user_ids)
     handler = SocketModeHandler(app, require_env("SLACK_APP_TOKEN"))
+    session_journal.reconcile(app.client, app.logger)
+    shutdown_requested = threading.Event()
+    install_shutdown_handlers(shutdown_requested)
     invitation_memory = None
     if os.getenv("SLACK_CHANNEL_POLICY") == "invited":
         try:
@@ -2002,7 +2347,7 @@ def main() -> None:
         invitation_memory.start()
     try:
         handler.connect()
-        while True:
+        while not shutdown_requested.is_set():
             if args.ready_file:
                 if handler.client.is_connected():
                     instance_id = args.process_id or require_env("OPENTAG_PROCESS_ID")
@@ -2023,6 +2368,7 @@ def main() -> None:
         if args.ready_file:
             args.ready_file.unlink(missing_ok=True)
         handler.close()
+        session_journal.reconcile(app.client, app.logger)
 
 
 if __name__ == "__main__":

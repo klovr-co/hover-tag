@@ -50,6 +50,7 @@ def runtime_environment(home: Path) -> dict[str, str]:
         "OPENTAG_WORKDIR": str(home / "workspace"),
         "OPENTAG_MEMORY_ROOT": str(home / "state/memory"),
         "OPENTAG_SLACK_SETTINGS_FILE": str(home / "state/slack-user-settings.json"),
+        "OPENTAG_SLACK_SESSIONS_FILE": str(home / "state/slack-active-sessions.json"),
         "TMPDIR": str(home / "tmp"), "TEMP": str(home / "tmp"), "TMP": str(home / "tmp"),
         "PATH": str(home / "integrations/bin") + os.pathsep + os.environ.get("PATH", ""),
     }

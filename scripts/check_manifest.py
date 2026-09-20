@@ -46,6 +46,11 @@ def validate_manifest(root: Path) -> list[str]:
     app_home = manifest.get("features", {}).get("app_home", {})
     if app_home.get("home_tab_enabled") is not True:
         errors.append("App Home must be enabled")
+    if app_home.get("messages_tab_enabled") is not True:
+        errors.append("App Messages tab must be enabled")
+    agent_view = manifest.get("features", {}).get("agent_view", {})
+    if not agent_view.get("agent_description"):
+        errors.append("Agent view must be enabled with a description")
     return errors
 
 

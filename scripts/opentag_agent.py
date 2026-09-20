@@ -209,7 +209,21 @@ def run_codex_once(
 
 def retryable_backend_failure(output: str) -> bool:
     lowered = output.lower()
-    return "selected model is at capacity" in lowered or "rate limit" in lowered
+    return any(
+        marker in lowered
+        for marker in (
+            "selected model is at capacity",
+            "rate limit",
+            "rate_limit",
+            "too many requests",
+            "http 429",
+        )
+    )
+
+
+def retry_status(next_attempt: int, attempts: int) -> str:
+    """Return stable public copy for a retry that is about to begin."""
+    return f"Backend busy — retrying ({next_attempt}/{attempts})…"
 
 
 def emit_event(event_type: str, text: str = "", **fields: Any) -> None:
@@ -406,7 +420,7 @@ def run_codex_events(
             output_path.unlink(missing_ok=True)
         if not retryable_backend_failure(last_output) or attempt == attempts:
             break
-        emit_event("status", "The backend is busy; retrying…")
+        emit_event("status", retry_status(attempt + 1, attempts))
         time.sleep(min(2 * attempt, 8))
     emit_event("error", f"Open Tag backend failed with exit code {last_code}:\n{last_output}")
     return last_code
@@ -444,37 +458,57 @@ def run_codex_app_server_events(
     run_id: str | None = None,
 ) -> int:
     """Run one request-scoped App Server and emit the richer event contract."""
-    server = CodexAppServer(
-        codex_app_server_command(workdir),
-        cwd=workdir,
-        timeout=timeout,
-        control_file=control_file,
-        run_id=run_id,
-    )
-    def forward_event(event: dict[str, Any]) -> None:
-        payload = dict(event)
-        event_type = str(payload.pop("type"))
-        text = str(payload.pop("text", ""))
-        emit_event(event_type, text, **payload)
-
-    try:
-        status, detail = server.run(
-            prompt,
-            model=model,
-            reasoning_effort=reasoning_effort,
-            emit=forward_event,
+    attempts = max(1, int(os.getenv("OPENTAG_BACKEND_ATTEMPTS", "3")))
+    for attempt in range(1, attempts + 1):
+        server = CodexAppServer(
+            codex_app_server_command(workdir),
+            cwd=workdir,
+            timeout=timeout,
+            control_file=control_file,
+            run_id=run_id,
         )
-    except CodexAppServerError as exc:
-        emit_event("error", str(exc))
+        made_progress = False
+
+        def forward_event(event: dict[str, Any]) -> None:
+            nonlocal made_progress
+            payload = dict(event)
+            event_type = str(payload.pop("type"))
+            text = str(payload.pop("text", ""))
+            if event_type in {
+                "activity_start",
+                "message_start",
+                "message_delta",
+                "message_complete",
+            }:
+                made_progress = True
+            emit_event(event_type, text, **payload)
+
+        try:
+            status, detail = server.run(
+                prompt,
+                model=model,
+                reasoning_effort=reasoning_effort,
+                emit=forward_event,
+            )
+        except CodexAppServerError as exc:
+            status, detail = "failed", str(exc)
+        if status == "completed":
+            return 0
+        if status == "interrupted":
+            return 130
+        if status == "timeout":
+            emit_event("error", f"Tag backend timed out after {timeout}s")
+            return 124
+        if (
+            not made_progress
+            and retryable_backend_failure(detail)
+            and attempt < attempts
+        ):
+            emit_event("status", retry_status(attempt + 1, attempts))
+            time.sleep(min(2 * attempt, 8))
+            continue
+        emit_event("error", detail or f"Codex turn ended with status {status}")
         return 1
-    if status == "completed":
-        return 0
-    if status == "interrupted":
-        return 130
-    if status == "timeout":
-        emit_event("error", f"Tag backend timed out after {timeout}s")
-        return 124
-    emit_event("error", detail or f"Codex turn ended with status {status}")
     return 1
 
 

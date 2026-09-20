@@ -221,6 +221,13 @@ final-answer deltas, display activity backed by observed tool events, and honor
 Slack's native Stop button. Set `OPENTAG_CODEX_TRANSPORT=exec` for rollback, or set
 `OPENTAG_SLACK_STREAMING=0` to retain buffered replies for troubleshooting.
 Commentary, reasoning, tool output, and raw diagnostics are never streamed.
+Capacity and rate-limit failures are retried before observable work begins; the
+loading indicator shows the attempt count. A terminal failure clears the loading
+state, posts sanitized guidance with a local-log reference, and offers a **Retry**
+button that reloads the original Slack request.
+Tag also journals active Slack thread identities in its private state directory.
+Normal shutdown clears those sessions before exit; after a forced crash, the
+next start clears any stale Slack working indicators before accepting new work.
 
 Codex replies also include a compact **Configure** button beneath the answer. It
 opens a modal that saves model, native Codex reasoning-level,

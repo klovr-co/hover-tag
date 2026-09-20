@@ -66,6 +66,8 @@ REQUIRED_APP_SETTINGS = {
     "App Home event (app_home_opened)": "app_home_opened",
     "agent stop event": "agent_session_stopped",
     "Home tab enabled": "home_tab_enabled: true",
+    "Messages tab enabled": "messages_tab_enabled: true",
+    "Agent view enabled": "agent_view",
     "Interactive controls enabled": "is_enabled: true",
     "mention scope": "app_mentions:read",
     "assistant status scope": "assistant:write",
@@ -212,6 +214,10 @@ def inspect_slack_app(project: Path, app_id: str, *, issues: list[str] | None = 
                 ui.message("Add agent_session_stopped to enable the native Stop button.", indent="      ")
         if "Home tab enabled" in missing:
             ui.message("App Home → Show Tabs → enable Home Tab.", indent="    ")
+        if "Messages tab enabled" in missing:
+            ui.message("App Home → Show Tabs → enable Messages Tab.", indent="    ")
+        if "Agent view enabled" in missing:
+            ui.message("Agents & AI Apps → enable the Agent messaging experience.", indent="    ")
         if "Interactive controls enabled" in missing:
             ui.message("Interactivity & Shortcuts → enable Interactivity.", indent="    ")
         if "Socket Mode" in missing:
