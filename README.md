@@ -204,22 +204,6 @@ Prefer the dedicated `tag restart` command over chaining stop and start so the
 terminal presents one coherent operation. Use `tag doctor` for deeper
 diagnostics after the quick status and recent logs.
 
-Tag setup includes hosted offline replies: the shared Tag service keeps your own
-Slack app connected while this computer is off. Setup explains hosted credential
-storage in its normal review; `tag start` registers and connects automatically.
-No Cloudflare deployment, signing secret, or Slack request-URL changes are needed.
-`tag stop` leaves offline reminders active; `tag disconnect` removes hosted access
-and returns to direct local connections. Existing installations stay direct until
-setup is reviewed again. See [connection service details](docs/hosted-receiver.md).
-
-For direct local connections, the bot description and App Home include startup
-guidance. Restart Tag and open App Home to publish the updated Home view.
-
-For a reminder that is easy to find in your channel, pin this message:
-
-> No reply from OpenMax? Make sure Tag is running on its host computer. Run
-> `tag start`, check `tag status`, then mention me again.
-
 When developing from a prepared source checkout, use `./tag dev`. It watches
 `scripts/**/*.py`, reloads only the Slack bridge after changes, and streams its
 output in the foreground. Press Ctrl-C to stop the development bridge; MFS is
@@ -297,7 +281,6 @@ Run Tag with dedicated, least-privilege credentials in an isolated environment.
 The bridge app normally needs these bot scopes:
 
 - `app_mentions:read`
-- `users:read` (verify the app identity during hosted registration)
 - `assistant:write`
 - `chat:write`
 - `files:read` and `files:write`
