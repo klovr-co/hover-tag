@@ -109,21 +109,29 @@ def show_status(report: dict) -> None:
 
 
 def show_inspection(report: dict) -> None:
-    print(f"Tag: {report['state'].replace('_', ' ')}")
-    print(f"Workspace: {report['workspace']}")
+    ui.display.header("Inspect", "Configuration and runtime facts without making changes.")
+    ui.display.section("Installation")
+    ui.display.info_row("State", report["state"].replace("_", " "))
+    ui.display.info_row("Workspace", ui.display.short_path(report["workspace"]))
     if report["configuration"]["error"]:
-        print(report["configuration"]["error"])
+        ui.display.info_row("Settings", report["configuration"]["error"], good=False)
     for key, problem in report["configuration"]["fields"].items():
-        print(f"  {settings.LABELS.get(key, key)}: {problem.lower()}")
+        ui.display.info_row(settings.LABELS.get(key, key), problem.lower(), good=False)
+    ui.display.section("Runtime")
     if report["runtime"]["error"]:
-        print(report["runtime"]["error"])
+        ui.display.info_row("Dependencies", report["runtime"]["error"], good=False)
     if not report["runtime"]["mfs_executable_found"] and not report["services"]["mfs"]:
-        print("MFS runtime not found beside Tag's Python; rerun the installer or start your configured MFS server.")
+        ui.display.info_row("Memory", "Runtime not found beside Tag's Python", good=False)
     backend = report["backend"]
-    print(f"Agent: {backend['selected'] or 'not configured'} ({'executable found' if backend['executable_found'] else 'not found'}; sign-in not checked)")
-    print(f"Next: {report['next_command']}")
+    ui.display.info_row(
+        "Agent",
+        f"{backend['selected'] or 'not configured'} · "
+        f"{'executable found' if backend['executable_found'] else 'not found'} · sign-in not checked",
+        good=backend["executable_found"],
+    )
     if report.get("memory_sync", {}).get("policy") == "invited":
-        print("Invitation memory: " + report["memory_sync"]["state"].replace("_", " "))
+        ui.display.info_row("Invitations", report["memory_sync"]["state"].replace("_", " "))
+    ui.display.next_action("Recommended next step", report["next_command"])
 
 
 def config_command(home: Path, words: list[str], *, json_output: bool, stdin: bool) -> int:
@@ -156,20 +164,28 @@ def config_command(home: Path, words: list[str], *, json_output: bool, stdin: bo
     if json_output:
         print(json.dumps(result, indent=2))
     elif action == "show":
-        print(f"Settings: {path}")
+        ui.display.header("Config", "Public settings. Secret values are never displayed.")
+        ui.display.info_row("File", ui.display.short_path(path))
+        ui.display.section("Settings")
         for key, value in result["settings"].items():
             if key == "SLACK_CHANNEL_ID" and value and values.get("SLACK_BOT_TOKEN"):
                 value = f"{slack_channels.channel_label(values['SLACK_BOT_TOKEN'], value)} ({value})"
-            print(f"  {key}: {value}")
+            ui.display.info_row(key, value or "not set")
         for key, problem in result["fields"].items():
-            print(f"  {key}: {problem}")
+            ui.display.info_row(key, problem, good=False)
+        ui.display.next_action("Edit settings interactively", "tag settings")
     elif action == "init":
-        print(result["note"] + " Next: " + result["next_command"])
+        ui.display.header("Config", "Initialize missing settings without replacing existing values.")
+        ui.display.completion("Defaults saved", result["note"], next_label="Inspect configuration", next_command=result["next_command"])
     elif action == "keys":
-        print("\n".join(result["editable"]))
-        print(result["secret_input"])
+        ui.display.header("Config keys", "Settings supported by the noninteractive configuration interface.")
+        ui.display.section("Editable")
+        for key in result["editable"]:
+            ui.display.info_row("", key)
+        ui.display.next_action("Set a secret without shell history", "tag config set KEY --stdin", detail=result["secret_input"])
     else:
-        print(f"Updated {words[1]}. {result['note']}")
+        ui.display.header("Config", "Update one setting without exposing secret values.")
+        ui.display.completion(f"Updated {words[1]}", result["note"], next_label="Inspect configuration", next_command=result["next_command"])
     return 0
 
 
@@ -191,7 +207,8 @@ def _settings_menu(home: Path) -> None:
         ("Slack connection and access", ("SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_ALLOWED_USER_IDS", "SLACK_CHANNEL_IDS", "OPENTAG_BOT_NAME", "SLACK_CHANNEL_POLICY", "change_app", "reconnect")),
         ("Workspace and memory", ("MFS_SLACK_HISTORY_DAYS", "MFS_ALLOWED_SCOPES", "MFS_URL", "MFS_TOKEN")),
         ("Agent", ("OPENTAG_BACKEND",)),
-        ("Advanced", ("OPENTAG_TIMEOUT_SECONDS", "OPENTAG_BACKEND_ATTEMPTS", "OPENTAG_SLACK_STREAMING")),
+        ("Advanced", ("OPENTAG_TIMEOUT_SECONDS", "OPENTAG_BACKEND_ATTEMPTS", "OPENTAG_SLACK_STREAMING",
+                      "OPENTAG_CODEX_TRANSPORT")),
     )
     while True:
         ui.display.header("Settings", "Manage your Slack assistant. Changes apply on next start.")

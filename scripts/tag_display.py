@@ -4,6 +4,7 @@ import sys
 import shutil
 import subprocess
 import textwrap
+from pathlib import Path
 
 try:
     from tag_mascot import PALETTE, PIXELS
@@ -15,6 +16,37 @@ ACCENT = "38;2;56;207;241"
 MUTED = "90"
 WARNING = "33"
 SUCCESS = "38;2;149;197;112"
+ASCII_FALLBACK = str.maketrans({
+    "✓": "+",
+    "●": "*",
+    "○": "o",
+    "›": ">",
+    "─": "-",
+    "·": ".",
+    "…": "...",
+    "–": "-",
+    "—": "-",
+    "’": "'",
+    "▀": "#",
+    "█": "#",
+    "▄": "#",
+})
+
+
+def terminal_text(text):
+    """Return text the active stdout encoding can write without failing."""
+    encoding = getattr(sys.stdout, "encoding", None)
+    if not encoding:
+        return text
+    try:
+        text.encode(encoding)
+    except (LookupError, UnicodeEncodeError):
+        return text.translate(ASCII_FALLBACK)
+    return text
+
+
+def emit(text=""):
+    print(terminal_text(str(text)))
 
 
 def color_available():
@@ -71,7 +103,7 @@ def mascot_banner():
                 chunks.append(f"\033[38;2;{rgb(fg)};48;2;{rgb(bg)}m")
                 previous = fg, bg
             chunks.append(char)
-        print("  " + "".join(chunks) + "\033[0m")
+        emit("  " + "".join(chunks) + "\033[0m")
     return True
 
 
@@ -83,30 +115,141 @@ def paragraph(text, code="", *, indent="  "):
     """Wrap before styling so ANSI sequences never count toward line width."""
     for line in textwrap.wrap(text, width=max(8, content_width() - len(indent) + 2),
                               break_long_words=True, break_on_hyphens=False):
-        print(indent + styled(line, code) if code else indent + line)
+        emit(indent + styled(line, code) if code else indent + line)
+
+
+def short_path(value):
+    """Use a stable home-relative path when it is easier to scan."""
+    path = str(value)
+    home = str(Path.home())
+    return "~" + path[len(home):] if path == home or path.startswith(home + os.sep) else path
 
 
 def rule():
-    print("  " + styled("─" * content_width(), MUTED))
+    emit("  " + styled("─" * content_width(), MUTED))
 
 
 def header(section, detail=""):
-    print()
+    emit()
     if mascot_banner():
-        print()
+        emit()
         paragraph(section.upper(), "1;" + ACCENT)
     else:
-        print("  " + styled("tag", "1;" + ACCENT) + "  /  " + styled(section, MUTED))
+        emit("  " + styled("tag", "1;" + ACCENT) + "  /  " + styled(section, MUTED))
     rule()
     if detail:
         paragraph(detail, MUTED)
-        print()
 
 
 def status_row(name, value, good):
     marker = "●" if good else "!"
     code = SUCCESS if good else WARNING
-    paragraph(f"{marker}  {name:<9} {value}", code, indent="    ")
+    paragraph(f"{marker}  {name:<14} {value}", code, indent="    ")
+
+
+def section(label):
+    emit()
+    paragraph(label.upper(), MUTED)
+
+
+def info_row(name, value, *, good=None):
+    """Render one aligned row for lifecycle and informational screens."""
+    if good is None:
+        if len(f"{name:<12} {value}") > content_width() - 4:
+            paragraph(name, MUTED, indent="    ")
+            paragraph(value, indent="      ")
+            return
+        paragraph(f"{name:<12} {value}", indent="    ")
+        return
+    marker = "✓" if good else "!"
+    code = SUCCESS if good else WARNING
+    paragraph(f"{marker}  {name:<14} {value}", code, indent="    ")
+
+
+def next_action(label, command, *, detail=""):
+    emit()
+    rule()
+    paragraph(label, MUTED)
+    paragraph(f"› {command}", "1;" + ACCENT)
+    if detail:
+        paragraph(detail, MUTED)
+    emit()
+
+
+def completion(title, detail="", *, next_label="", next_command=""):
+    emit()
+    rule()
+    paragraph(f"✓  {title}", "1;" + SUCCESS)
+    if detail:
+        paragraph(detail, MUTED)
+    if next_command:
+        emit()
+        paragraph(next_label or "Next step", MUTED)
+        paragraph(f"› {next_command}", "1;" + ACCENT)
+    emit()
+
+
+def failure(title, detail, *, next_command=""):
+    header(title)
+    emit()
+    paragraph("!  Needs attention", "1;" + WARNING)
+    paragraph(detail, MUTED)
+    if next_command:
+        next_action("Recommended next step", next_command)
+    else:
+        emit()
+
+
+def doctor_summary(report, *, title="Doctor"):
+    """Collapse low-level probes into the product concepts operators recognize."""
+    checks = report.get("checks", [])
+
+    def matching(predicate):
+        return [item for item in checks if predicate(str(item.get("check", "")))]
+
+    groups = [
+        ("Runtime", matching(lambda label: label in {
+            "Tag runtime dependencies", "Tag command", "installer", "release metadata"
+        })),
+        ("Configuration", matching(lambda label: label.startswith(("SLACK_", "MFS_TOKEN")) or label in {
+            "supported transport", "agent workspace", "Slack app manifest", "Slack allowed users"
+        })),
+        ("Memory", matching(lambda label: label.startswith("MFS") and not label.startswith("MFS_TOKEN"))),
+        ("Agent", matching(lambda label: label.startswith("backend") or label in {"OPENTAG_BACKEND", "supported backend"})),
+        ("Slack", matching(lambda label: label.startswith("Slack") and label not in {"Slack app manifest", "Slack allowed users"})),
+    ]
+    header(title, "Verifying the runtime, connections, and permissions Tag needs.")
+    section("Readiness")
+    for name, items in groups:
+        if not items:
+            continue
+        good = all(bool(item.get("ok")) for item in items)
+        if name == "Slack":
+            channels = sum(
+                1
+                for item in items
+                if str(item.get("check", "")).startswith("Slack channel ")
+                and not str(item.get("check", "")).startswith("Slack channel history")
+            )
+            value = f"{channels} channel{'s' if channels != 1 else ''} accessible" if good else "Connection or channel access failed"
+        elif name == "Memory":
+            if report.get("offline"):
+                value = "Configuration valid" if good else "Configuration needs attention"
+            else:
+                value = "Healthy and scopes accessible" if good else "Server or scope access failed"
+        else:
+            value = "Ready" if good else "Needs attention"
+        info_row(name, value, good=good)
+
+    failed = [item for item in checks if not item.get("ok")]
+    if failed:
+        section("Attention")
+        for item in failed[:5]:
+            info_row(str(item.get("check", "Check")), "Failed", good=False)
+        action = failed[0].get("next_action") or "Run tag inspect --json"
+        next_action("Recommended next step", str(action))
+    else:
+        completion("All checks passed", "Tag is ready to start or continue running.")
 
 
 def backend_status(backend="codex", *, search_path=None):
@@ -140,7 +283,7 @@ def summary(state, command, *, slack=None, memory=None, backend=None, agent=None
     good = state in {"ready", "running"}
     attention = state in {"needs_attention", "invalid_configuration", "setup_incomplete"}
     marker = "●" if good else "!" if attention else "○"
-    print()
+    emit()
     paragraph(f"{marker}  {label}", "1;" + (SUCCESS if good else WARNING if attention else MUTED))
     descriptions = {
         "not_configured": "Connect Slack, choose your channels, and bring your agent online.",
@@ -150,7 +293,7 @@ def summary(state, command, *, slack=None, memory=None, backend=None, agent=None
     }
     if state in descriptions:
         paragraph(descriptions[state], MUTED)
-    print()
+    emit()
     if agent or slack is not None or memory is not None:
         paragraph("CONNECTIONS", MUTED)
     if agent:
@@ -162,13 +305,13 @@ def summary(state, command, *, slack=None, memory=None, backend=None, agent=None
     ):
         if value is not None:
             status_row(name, good if value else bad, value)
-    print()
+    emit()
     prompt = {"tag setup": "Get started" if state == "not_configured" else "Continue setup",
               "tag start": "Start Tag", "tag doctor": "Check what needs attention",
               "tag status": "View status"}.get(command, "Next step")
     rule()
     paragraph(prompt, MUTED)
     paragraph(f"› {command}", "1;" + ACCENT)
-    print()
+    emit()
     paragraph("tag settings   ·   tag --help", MUTED)
-    print()
+    emit()

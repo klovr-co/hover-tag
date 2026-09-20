@@ -10,7 +10,7 @@ unavailable behavior.
 | Respond to app mentions | Implemented | The caller must be in `SLACK_ALLOWED_USER_IDS`. |
 | Read the current thread | Implemented | Tag fetches one page containing up to 30 messages. |
 | Read supported attachments | Implemented | Text content is truncated at 12,000 characters per item; downloaded image or text files are limited to 15 MiB. |
-| Stream answer text | Backend-dependent | Claude can stream text deltas; Codex currently returns its completed answer after Slack's loading state. |
+| Stream answer text | Backend-dependent | Claude streams text deltas; Codex App Server streams final-answer deltas and observed activity. |
 | Continue with thread context | Implemented | A later mention receives the current bounded thread context. |
 | Post a requested top-level message | Implemented | Restricted to the channel that invoked Tag. |
 | Create a requested Slack Canvas | Implemented | Requires the Slack Canvas scope and explicit user intent. |
@@ -25,7 +25,8 @@ unavailable behavior.
 | Inspect and change workspace files | Implemented | Uses the permissions of the backend process. |
 | Run workspace commands and tests | Implemented | Available when the selected backend can perform them. |
 | Use installed local tools and skills | Available | Each tool uses its own credentials and grants. |
-| Choose Codex model and reasoning per thread | Implemented | Available through the Slack settings action; operators can restrict the choices. |
+| Choose Codex model, reasoning, and Fast Mode per user | Implemented | Saved choices follow the user across channels and threads; operators can restrict model and reasoning choices. |
+| Stop an active Codex turn | Implemented with App Server | Slack's native Stop button interrupts the active turn; the legacy exec transport remains a rollback path. |
 
 ## Context and memory
 

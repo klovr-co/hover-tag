@@ -44,11 +44,64 @@ class FlowTests(unittest.TestCase):
 
     def test_restart_stops_then_starts_and_stops_on_failure(self):
         with patch.object(tag_cli.subprocess, "call", side_effect=[0, 7]) as call:
-            self.assertEqual(self.invoke(["restart"])[0], 7)
+            code, output = self.invoke(["restart"])
+            self.assertEqual(code, 7)
+            self.assertIn("tag  /  Restart", output)
             self.assertEqual([c.args[0][-1] for c in call.call_args_list], ["stop", "start"])
+            self.assertTrue(all(c.kwargs["env"]["TAG_RESTART_FLOW"] == "1" for c in call.call_args_list))
         with patch.object(tag_cli.subprocess, "call", return_value=4) as call:
             self.assertEqual(self.invoke(["restart"])[0], 4)
             self.assertEqual(call.call_count, 1)
+
+    def test_source_snapshot_reports_added_removed_and_modified_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            scripts = root / "scripts"
+            scripts.mkdir()
+            first = scripts / "first.py"
+            removed = scripts / "removed.py"
+            first.write_text("before\n", encoding="utf-8")
+            removed.write_text("remove\n", encoding="utf-8")
+            before = tag_cli.source_snapshot(root)
+            first.write_text("after with a different size\n", encoding="utf-8")
+            removed.unlink()
+            added = scripts / "added.py"
+            added.write_text("new\n", encoding="utf-8")
+            after = tag_cli.source_snapshot(root)
+        self.assertEqual(tag_cli.changed_sources(before, after), [added, first, removed])
+
+    def test_dev_loads_configuration_and_enters_development_loop(self):
+        self.seed()
+        with patch.object(tag_cli, "missing_runtime_dependencies", return_value=()), patch.object(
+            tag_cli, "legacy_slack_ready", return_value=False
+        ), patch.object(tag_cli, "development_loop", return_value=0) as development:
+            code, _ = self.invoke(["dev"])
+        self.assertEqual(code, 0)
+        development.assert_called_once_with(self.home)
+        self.assertEqual(os.environ["OPENTAG_BACKEND"], "codex")
+
+    def test_development_loop_owns_and_cleans_up_slack_bridge(self):
+        with patch.object(tag_cli, "runtime_identity", return_value={"active_release": False}), patch.object(
+            tag_cli.subprocess, "call", return_value=0
+        ), patch.object(tag_cli, "stop_process") as stop, patch.object(
+            tag_cli, "start_development_slack"
+        ) as start, patch.object(tag_cli, "source_snapshot", return_value={}), patch.object(
+            tag_cli.time, "sleep", side_effect=KeyboardInterrupt
+        ), redirect_stdout(StringIO()):
+            with self.assertRaises(KeyboardInterrupt):
+                tag_cli.development_loop(self.home)
+        start.assert_called_once_with(self.home)
+        self.assertEqual(stop.call_args_list, [unittest.mock.call(self.home, "slack"), unittest.mock.call(self.home, "slack")])
+
+    def test_logs_are_bounded_redacted_and_offer_follow_mode(self):
+        log = self.home / "state/slack.log"
+        log.write_text("first\nsecond xoxb-secret-value\nthird\n", encoding="utf-8")
+        code, output = self.invoke(["logs", "--limit", "2"])
+        self.assertEqual(code, 0)
+        self.assertNotIn("first", output)
+        self.assertNotIn("xoxb-secret-value", output)
+        self.assertIn("second <redacted>", output)
+        self.assertIn("tag logs --follow", output)
 
     def test_status_and_plain_tag_use_same_checks_and_output(self):
         self.seed()

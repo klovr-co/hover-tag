@@ -152,6 +152,9 @@ run `tag` for status and next steps, or `tag setup` for resumable setup. Use `ta
 to back up the old setup and redo onboarding after confirmation. Windows users
 run `./install.ps1` from PowerShell instead. See [installation and TAG home](docs/installation.md)
 for platform paths, download installers, skills, MCP, and migration.
+Contributors running directly from a checkout must first run
+`./install.sh --dependencies-only`; `./tag` deliberately does not fall back to
+system Python or install dependencies during startup.
 `tag setup` owns the Slack journey. It reuses the installed Slack CLI, offers
 the CLI's real login flow when the sandbox workspace is not authorized, and
 then lets you create a manifest-based app or link an existing app by App ID.
@@ -188,7 +191,17 @@ Start Tag and inspect it with:
 tag start
 tag status
 tag logs
+tag logs --follow
 ```
+
+Prefer the dedicated `tag restart` command over chaining stop and start so the
+terminal presents one coherent operation. Use `tag doctor` for deeper
+diagnostics after the quick status and recent logs.
+
+When developing from a prepared source checkout, use `./tag dev`. It watches
+`scripts/**/*.py`, reloads only the Slack bridge after changes, and streams its
+output in the foreground. Press Ctrl-C to stop the development bridge; MFS is
+left running. This command is intentionally unavailable from managed releases.
 
 Mention `@Tag` in the test channel you configured:
 
@@ -203,17 +216,28 @@ Only the owner member ID entered during setup can invoke Tag initially. Add
 other IDs to the comma-separated `SLACK_ALLOWED_USER_IDS` setting to share access.
 
 While a task runs, Tag uses Slack's native loading indicator instead of posting
-a temporary bot message. Slack response streaming is enabled by default:
-Claude responses stream into the thread as answer deltas arrive, while Codex
-shows the native loading state and then posts its completed answer because the
-Codex CLI currently emits final-message events. Set
+a temporary bot message. Slack response streaming is enabled by default.
+Claude streams answer deltas directly. Codex uses App Server by default to stream
+final-answer deltas, display activity backed by observed tool events, and honor
+Slack's native Stop button. Set `OPENTAG_CODEX_TRANSPORT=exec` for rollback, or set
 `OPENTAG_SLACK_STREAMING=0` to retain buffered replies for troubleshooting.
+Commentary, reasoning, tool output, and raw diagnostics are never streamed.
+Capacity and rate-limit failures are retried before observable work begins; the
+loading indicator shows the attempt count. A terminal failure clears the loading
+state, posts sanitized guidance with a local-log reference, and offers a **Retry**
+button that reloads the original Slack request.
+Tag also journals active Slack thread identities in its private state directory.
+Normal shutdown clears those sessions before exit; after a forced crash, the
+next start clears any stale Slack working indicators before accepting new work.
 
-Codex replies also include a **Change model & thinking** button. Its modal saves
-model and reasoning choices for that Slack thread and applies them to the next
-mention. Operators can restrict the selectable models with
-`OPENTAG_CODEX_MODELS` and the reasoning levels with
-`OPENTAG_CODEX_REASONING_EFFORTS`.
+Codex replies also include a compact **Configure** button beneath the answer. It
+opens a modal that saves model, native Codex reasoning-level,
+and Fast Mode choices for that Slack user across channels and threads.
+The modal's **Reset to default** button restores every control before saving.
+Fast Mode is independent of
+reasoning level and uses increased usage for faster responses. Operators can
+restrict the selectable models with `OPENTAG_CODEX_MODELS` and the reasoning
+levels with `OPENTAG_CODEX_REASONING_EFFORTS`.
 
 Stop TAG-managed processes with `tag stop`. Independently started MFS servers
 are left running.
@@ -252,11 +276,13 @@ Run Tag with dedicated, least-privilege credentials in an isolated environment.
 The bridge app normally needs these bot scopes:
 
 - `app_mentions:read`
+- `assistant:write`
 - `chat:write`
 - `channels:read` and `channels:history`
 - `groups:read` and `groups:history` if you intentionally use private channels
 
-It also needs the `app_mention` and `app_home_opened` bot events and an app-level token with
+It also needs the `app_mention`, `app_home_opened`, and `agent_session_stopped`
+bot events and an app-level token with
 `connections:write`. Invite the bot only to channels where it should respond.
 The included app manifest also requests `files:read` for text attachments and
 `canvases:write` for the explicit Canvas helper.

@@ -12,12 +12,23 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
 import urllib.request
 import uuid
 import zipfile
 from pathlib import Path
 
 REPOSITORY = "https://github.com/klovr-co/tag"
+ACCENT = "38;2;56;207;241"
+MUTED = "90"
+SUCCESS = "38;2;149;197;112"
+ASCII_FALLBACK = str.maketrans({
+    "✓": "+",
+    "›": ">",
+    "─": "-",
+    "·": ".",
+    "…": "...",
+})
 
 LEGACY_ADMIN_SKILL = (
     "---\nname: open-tag-admin\ndescription: Configure and diagnose this TAG installation.\n---\n"
@@ -35,6 +46,80 @@ ADMIN_SKILL = (
     "Use `tag doctor --json` for diagnosis and `tag status --json` for service readiness. "
     "The operator authorizes Slack and backend logins. Verify a real Slack reply separately.\n"
 )
+
+
+def color_available() -> bool:
+    return (
+        sys.stdout.isatty()
+        and os.getenv("TERM", "") not in {"", "dumb"}
+        and "NO_COLOR" not in os.environ
+    )
+
+
+def styled(text: str, code: str) -> str:
+    return f"\033[{code}m{text}\033[0m" if color_available() else text
+
+
+def terminal_text(text: str) -> str:
+    """Return installer output the active stdout encoding can write."""
+    encoding = getattr(sys.stdout, "encoding", None)
+    if not encoding:
+        return text
+    try:
+        text.encode(encoding)
+    except (LookupError, UnicodeEncodeError):
+        return text.translate(ASCII_FALLBACK)
+    return text
+
+
+def emit(text: str = "") -> None:
+    print(terminal_text(text), flush=True)
+
+
+def content_width() -> int:
+    return max(12, min(72, shutil.get_terminal_size((80, 24)).columns - 4))
+
+
+def short_path(value: Path) -> str:
+    path = str(value)
+    home = str(Path.home())
+    return "~" + path[len(home):] if path == home or path.startswith(home + os.sep) else path
+
+
+def paragraph(text: str, code: str = "", *, indent: str = "  ") -> None:
+    for line in textwrap.wrap(
+        str(text),
+        width=max(8, content_width() - len(indent) + 2),
+        break_long_words=True,
+        break_on_hyphens=False,
+    ):
+        emit(indent + (styled(line, code) if code else line))
+
+
+def header(section: str, detail: str = "") -> None:
+    emit()
+    emit("  " + styled("tag", "1;" + ACCENT) + "  /  " + styled(section, MUTED))
+    emit("  " + styled("─" * content_width(), MUTED))
+    if detail:
+        paragraph(detail, MUTED)
+
+
+def section(label: str) -> None:
+    emit()
+    paragraph(label.upper(), MUTED)
+
+
+def row(name: str, value: str, *, good: bool = True) -> None:
+    marker = "✓" if good else "!"
+    paragraph(f"{marker}  {name:<9} {value}", SUCCESS if good else "33", indent="    ")
+
+
+def install_step(command: list[str], label: str) -> None:
+    completed = subprocess.run(command, capture_output=True, text=True, check=False)
+    if completed.returncode:
+        output = (completed.stderr or completed.stdout).strip().splitlines()
+        detail = "\n".join(output[-20:])
+        raise RuntimeError(f"{label} failed" + (f":\n{detail}" if detail else ""))
 
 
 def download(url: str) -> bytes:
@@ -89,6 +174,34 @@ def atomic_text(path: Path, text: str, mode: int = 0o600) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def command_owner(command: Path) -> str | None:
+    """Identify launchers Tag may safely replace without claiming unrelated commands."""
+    if command.is_symlink():
+        try:
+            target = command.resolve(strict=True)
+            text = target.read_text(encoding="utf-8", errors="replace")
+        except (OSError, RuntimeError):
+            return None
+        source = target.parent
+        if (
+            target.name in {"tag", "tag.cmd"}
+            and (source / "VERSION").is_file()
+            and (source / "scripts/tag_cli.py").is_file()
+            and "scripts/tag_cli.py" in text.replace("\\", "/")
+        ):
+            return "legacy Tag source checkout"
+        return None
+    if command.is_file():
+        try:
+            if "TAG managed launcher" in command.read_text(
+                encoding="utf-8", errors="replace"
+            ):
+                return "managed Tag installation"
+        except OSError:
+            pass
+    return None
+
+
 def install(source: Path, home: Path, bin_dir: Path, *, dependencies: bool = True) -> Path:
     scripts_dir = str(source / "scripts")
     sys.path.insert(0, scripts_dir)
@@ -101,9 +214,16 @@ def install(source: Path, home: Path, bin_dir: Path, *, dependencies: bool = Tru
     if errors:
         raise ValueError("Invalid release: " + "; ".join(errors))
     command = bin_dir / ("tag.cmd" if os.name == "nt" else "tag")
-    if command.is_symlink() or (command.exists() and "TAG managed launcher" not in command.read_text(encoding="utf-8", errors="replace")):
+    existing_owner = command_owner(command)
+    legacy_command = str(command.resolve()) if existing_owner == "legacy Tag source checkout" else None
+    if (command.exists() or command.is_symlink()) and existing_owner is None:
         raise RuntimeError(f"Refusing to replace unrelated command: {command}. Choose --bin-dir.")
     initialize(home)
+    if legacy_command:
+        atomic_text(
+            home / "state/legacy-command.json",
+            json.dumps({"command": legacy_command}, indent=2) + "\n",
+        )
     lock = home / "state/install.lock"
     try:
         lock.mkdir()
@@ -111,6 +231,11 @@ def install(source: Path, home: Path, bin_dir: Path, *, dependencies: bool = Tru
         raise RuntimeError(f"An install is already in progress; interrupted installs leave {lock}")
     try:
         version = (source / "VERSION").read_text().strip()
+        header("Install", f"Preparing Tag v{version} in an isolated runtime.")
+        section("Preparing")
+        row("Release", f"Tag v{version}")
+        if existing_owner == "legacy Tag source checkout":
+            row("Migration", "Legacy command recognized; original checkout preserved")
         release = home / "releases" / f"{version}-{uuid.uuid4().hex[:12]}"
         # An allowlist prevents copying credentials, worktree metadata, or personal skills.
         release.mkdir()
@@ -128,11 +253,20 @@ def install(source: Path, home: Path, bin_dir: Path, *, dependencies: bool = Tru
             uv = shutil.which("uv")
             if not uv:
                 raise RuntimeError("Install uv first: https://docs.astral.sh/uv/")
-            subprocess.run([uv, "venv", "--python", sys.executable, str(release / ".venv")], check=True)
-            subprocess.run([uv, "pip", "install", "--python", str(python), "-r", str(release / "requirements-runtime.txt")], check=True)
+            paragraph("Installing runtime dependencies…", MUTED, indent="    ")
+            install_step(
+                [uv, "venv", "--python", sys.executable, str(release / ".venv")],
+                "Creating the Tag runtime",
+            )
+            install_step(
+                [uv, "pip", "install", "--python", str(python), "-r", str(release / "requirements-runtime.txt")],
+                "Installing Tag dependencies",
+            )
+            row("Runtime", f"Python {sys.version_info.major}.{sys.version_info.minor} · dependencies ready")
         else:
             # Explicit test/development mode; never advertised as a complete install.
             python = Path(sys.executable)
+            row("Runtime", "Development mode · dependencies skipped")
         for backend in (".agents", ".claude"):
             bundled = home / "workspace" / backend / "skills/open-tag-admin"
             skill = bundled / "SKILL.md"
@@ -152,7 +286,7 @@ raise SystemExit(subprocess.call([record["python"], str(release / "scripts/tag_c
         atomic_text(launcher, launcher_text)
         bin_dir.mkdir(parents=True, exist_ok=True)
         command = bin_dir / ("tag.cmd" if os.name == "nt" else "tag")
-        if command.exists() and "TAG managed launcher" not in command.read_text(encoding="utf-8", errors="replace"):
+        if (command.exists() or command.is_symlink()) and command_owner(command) is None:
             raise RuntimeError(f"Refusing to replace unrelated command: {command}")
         if os.name == "nt":
             if any(c in str(path) for path in (Path(sys.executable), launcher) for c in '%\r\n"'):
@@ -165,11 +299,18 @@ raise SystemExit(subprocess.call([record["python"], str(release / "scripts/tag_c
         if current.exists():
             atomic_text(home / "previous.json", current.read_text(encoding="utf-8"))
         atomic_text(current, json.dumps({"release": release.name, "python": str(python)}, indent=2) + "\n")
-        print(f"Installed Tag v{version}\nTAG home: {home}\nCommand: {command}")
-        print(f"Add {bin_dir} to your PATH if needed. Then run: tag setup")
-        print("Upgrading a running instance? Run tag stop, then tag start to use the new release.")
-        if not dependencies:
-            print("Development install: dependencies were skipped.")
+        row("Command", short_path(command))
+        row("Home", short_path(home))
+        emit()
+        emit("  " + styled("─" * content_width(), MUTED))
+        paragraph("✓  Tag is installed", "1;" + SUCCESS)
+        paragraph("Configuration and personal workspace data were preserved.", MUTED)
+        emit()
+        paragraph("Next step", MUTED)
+        paragraph("› tag setup", "1;" + ACCENT)
+        paragraph("Already configured? Run tag stop, then tag start.", MUTED)
+        paragraph(f"If needed, add {short_path(bin_dir)} to PATH.", MUTED)
+        emit()
         return release
     finally:
         lock.rmdir()
