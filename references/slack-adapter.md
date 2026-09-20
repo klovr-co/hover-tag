@@ -79,7 +79,7 @@ Create or reuse a Slack app:
    - `assistant:write` — manage native agent working status.
    - `chat:write` — post and update Slack replies.
    - `files:read` — download text snippets and image attachments shared in the current thread.
-   - `files:write` — upload backend-generated image results to the current thread.
+   - `files:write` — upload explicitly requested generated files, including images, and return private links in the current thread. Requested output files also receive separate **Open filename** actions that validate the requesting user and workspace path before opening the file on the Tag host.
    - `channels:read` + `channels:history` — read threads in public channels.
    - `groups:read` + `groups:history` — read threads in private channels.
    - `im:history` — read direct-message threads when DM invocation is enabled.
