@@ -208,6 +208,7 @@ def _settings_menu(home: Path) -> None:
         ("Workspace and memory", ("MFS_SLACK_HISTORY_DAYS", "MFS_ALLOWED_SCOPES", "MFS_URL", "MFS_TOKEN")),
         ("Agent", ("OPENTAG_BACKEND",)),
         ("Advanced", ("OPENTAG_TIMEOUT_SECONDS", "OPENTAG_MAX_TIMEOUT_SECONDS", "OPENTAG_BACKEND_ATTEMPTS", "OPENTAG_SLACK_STREAMING",
+                      "OPENTAG_SLACK_DM_ENABLED",
                       "OPENTAG_CODEX_TRANSPORT")),
     )
     while True:
