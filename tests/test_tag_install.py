@@ -10,7 +10,13 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts.tag_install import ADMIN_SKILL, LEGACY_ADMIN_SKILL, install, unpack_release
+from scripts.tag_install import (
+    ADMIN_SKILL,
+    LEGACY_ADMIN_SKILL,
+    command_owner,
+    install,
+    unpack_release,
+)
 from scripts.tag_paths import codex_workspace_args, initialize, tag_home
 from scripts.tag_cli import process_for, read_config, start_process, stop_process
 from scripts.tag_migrate import legacy_config, migrate
@@ -49,6 +55,50 @@ class TagHomeTests(unittest.TestCase):
                 install(ROOT, root / "home", root, dependencies=False)
             self.assertEqual(command.read_text(), "another program")
             self.assertFalse((root / "home").exists())
+
+    @unittest.skipIf(os.name == "nt", "POSIX symlink migration")
+    def test_legacy_source_symlink_is_migrated_to_managed_launcher(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            legacy = root / "legacy"
+            (legacy / "scripts").mkdir(parents=True)
+            (legacy / "VERSION").write_text("0.0.1", encoding="utf-8")
+            (legacy / "scripts/tag_cli.py").write_text("", encoding="utf-8")
+            (legacy / "tag").write_text(
+                '#!/bin/sh\npython3 "$(dirname "$0")/scripts/tag_cli.py" "$@"\n',
+                encoding="utf-8",
+            )
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            command = bin_dir / "tag"
+            command.symlink_to(legacy / "tag")
+
+            self.assertEqual(command_owner(command), "legacy Tag source checkout")
+            install(ROOT, root / "home", bin_dir, dependencies=False)
+
+            self.assertFalse(command.is_symlink())
+            self.assertIn("TAG managed launcher", command.read_text(encoding="utf-8"))
+            self.assertTrue((legacy / "tag").is_file())
+            legacy_record = json.loads(
+                (root / "home/state/legacy-command.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(Path(legacy_record["command"]), (legacy / "tag").resolve())
+
+    @unittest.skipIf(os.name == "nt", "POSIX symlink protection")
+    def test_unrelated_symlink_is_not_replaced(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            target = root / "another-program"
+            target.write_text("#!/bin/sh\n", encoding="utf-8")
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            command = bin_dir / "tag"
+            command.symlink_to(target)
+
+            with self.assertRaisesRegex(RuntimeError, "unrelated command"):
+                install(ROOT, root / "home", bin_dir, dependencies=False)
+
+            self.assertTrue(command.is_symlink())
 
     def test_install_preserves_import_path(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -135,9 +185,12 @@ class TagHomeTests(unittest.TestCase):
             command = bin_dir / ("tag.cmd" if os.name == "nt" else "tag")
             result = subprocess.run([str(command), "version"], cwd=root, capture_output=True, text=True, check=True)
             self.assertIn("Tag v", result.stdout)
-            result = subprocess.run([str(command), "paths"], cwd=root, capture_output=True, text=True, check=True)
-            self.assertEqual(Path(json.loads(result.stdout)["workspace"]).resolve(), (home / "workspace").resolve())
-            self.assertTrue(Path(json.loads(result.stdout)["management_guide"]).is_file())
+            result = subprocess.run([str(command), "paths", "--json"], cwd=root, capture_output=True, text=True, check=True)
+            paths = json.loads(result.stdout)
+            self.assertEqual(Path(paths["workspace"]).resolve(), (home / "workspace").resolve())
+            self.assertTrue(Path(paths["management_guide"]).is_file())
+            self.assertEqual(paths["runtime"]["mode"], "managed")
+            self.assertTrue(paths["runtime"]["active_release"])
             result = subprocess.run([str(command), "inspect", "--offline", "--json"], cwd=root, capture_output=True, text=True, check=True)
             self.assertEqual(json.loads(result.stdout)["state"], "setup_incomplete")
             self.assertFalse((second / ".git").exists())

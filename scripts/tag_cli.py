@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -15,13 +17,17 @@ import warnings
 from pathlib import Path
 
 try:
-    from tag_paths import codex_workspace_args, initialize, runtime_environment, tag_home
+    from tag_paths import initialize, runtime_environment, tag_home
     from tag_config import read_config
+    import tag_display as display
 except ImportError:
-    from scripts.tag_paths import codex_workspace_args, initialize, runtime_environment, tag_home
+    from scripts.tag_paths import initialize, runtime_environment, tag_home
     from scripts.tag_config import read_config
+    from scripts import tag_display as display
 
 ROOT = Path(__file__).resolve().parents[1]
+RUNTIME_DEPENDENCIES = ("mfs_server", "psutil", "slack_bolt")
+TOKEN_PATTERN = re.compile(r"\b(?:xox[a-z]-|xapp-)[A-Za-z0-9-]+")
 MFS_HISTORY_CREDENTIAL_MESSAGE = (
     "MFS is already running without Tag's Slack-history credential. "
     "Stop that MFS server, then run tag start so Tag can start its managed MFS with the approved credential."
@@ -38,6 +44,84 @@ class MfsHistoryCredentialUnavailable(RuntimeError):
 
 class MfsSlackConnectorUnavailable(RuntimeError):
     """The MFS server was installed without its optional Slack connector."""
+
+
+def missing_runtime_dependencies() -> tuple[str, ...]:
+    return tuple(
+        dependency
+        for dependency in RUNTIME_DEPENDENCIES
+        if importlib.util.find_spec(dependency) is None
+    )
+
+
+def runtime_dependency_message(missing: tuple[str, ...]) -> str:
+    names = ", ".join(missing)
+    return (
+        f"Tag runtime is incomplete (missing: {names}). Re-run the Tag installer. "
+        "For a source checkout, run ./install.sh --dependencies-only."
+    )
+
+
+def legacy_slack_ready(home: Path, maximum_age: float = 15.0) -> bool:
+    """Detect the heartbeat written by pre-supervisor Tag releases."""
+    try:
+        record = json.loads((home / "runtime/slack-connected.json").read_text(encoding="utf-8"))
+        heartbeat = float(
+            record.get(
+                "time",
+                record.get("timestamp", record.get("updated_at", record.get("heartbeat"))),
+            )
+        )
+        return bool(record.get("connected")) and 0 <= time.time() - heartbeat <= maximum_age
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return False
+
+
+def legacy_stop_command(home: Path) -> str:
+    try:
+        record = json.loads(
+            (home / "state/legacy-command.json").read_text(encoding="utf-8")
+        )
+        command = record["command"]
+        if isinstance(command, str) and Path(command).is_file():
+            return f'"{command}" stop'
+    except (OSError, KeyError, json.JSONDecodeError):
+        pass
+    return "the original legacy Tag launcher's stop command"
+
+
+def runtime_identity(home: Path) -> dict[str, object]:
+    identity: dict[str, object] = {
+        "mode": "source",
+        "version": (ROOT / "VERSION").read_text(encoding="utf-8").strip(),
+        "root": str(ROOT),
+        "python": sys.executable,
+        "active_release": False,
+    }
+    try:
+        record = json.loads((home / "current.json").read_text(encoding="utf-8"))
+        selected = (home / "releases" / record["release"]).resolve()
+        active = ROOT.resolve() == selected
+        identity.update(
+            mode="managed" if active else "source",
+            active_release=active,
+            selected_release=str(selected),
+            selected_python=record["python"],
+        )
+    except (OSError, KeyError, ValueError, json.JSONDecodeError):
+        pass
+    return identity
+
+
+def redact_log_text(content: str) -> str:
+    redacted = TOKEN_PATTERN.sub("<redacted>", content)
+    for key, value in os.environ.items():
+        if (
+            len(value) >= 8
+            and any(marker in key.upper() for marker in ("TOKEN", "SECRET", "PASSWORD", "KEY"))
+        ):
+            redacted = redacted.replace(value, "<redacted>")
+    return redacted
 
 
 def process_for(path: Path):
@@ -74,7 +158,11 @@ def start_process(
     time.sleep(0.3)
     if child.poll() is not None:
         record.unlink(missing_ok=True)
-        raise RuntimeError(f"{name} exited during startup; run tag logs")
+        detail = log_tail(home, name, 20)
+        raise RuntimeError(
+            f"{name} exited during startup"
+            + (f":\n{detail}" if detail else "; run tag logs")
+        )
     # This command intentionally leaves a detached service alive on return.
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", ResourceWarning)
@@ -136,7 +224,188 @@ def log_tail(home: Path, name: str, lines: int = 50) -> str:
         )
     except OSError:
         return ""
-    return "\n".join(content.splitlines()[-lines:])
+    return redact_log_text("\n".join(content.splitlines()[-lines:]))
+
+
+def follow_logs(home: Path, existing: list[Path]) -> None:
+    """Stream appended log bytes, tolerating newly created and rotated files."""
+    positions = {}
+    for log in existing:
+        try:
+            positions[log] = log.stat().st_size
+        except OSError:
+            pass
+    display.section("Following")
+    display.info_row("Mode", "Waiting for new entries · Ctrl-C to stop")
+    while True:
+        time.sleep(0.5)
+        for log in sorted((home / "state").glob("*.log")):
+            try:
+                size = log.stat().st_size
+                previous = positions.get(log, 0)
+                if size < previous:
+                    previous = 0
+                if size == previous:
+                    continue
+                with log.open("rb") as handle:
+                    handle.seek(previous)
+                    chunk = handle.read()
+                positions[log] = size
+            except OSError:
+                continue
+            if log not in existing:
+                display.section(log.stem)
+                existing.append(log)
+            content = redact_log_text(chunk.decode("utf-8", errors="replace"))
+            for line in content.splitlines():
+                print("    " + line, flush=True)
+
+
+def source_snapshot(root: Path = ROOT) -> dict[Path, tuple[int, int]]:
+    """Capture the source files that can change the running Slack bridge."""
+    snapshot = {}
+    for path in (root / "scripts").rglob("*.py"):
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        snapshot[path] = (stat.st_mtime_ns, stat.st_size)
+    return snapshot
+
+
+def changed_sources(
+    previous: dict[Path, tuple[int, int]],
+    current: dict[Path, tuple[int, int]],
+) -> list[Path]:
+    """Return added, removed, and modified source paths in stable order."""
+    return sorted(
+        path
+        for path in previous.keys() | current.keys()
+        if previous.get(path) != current.get(path)
+    )
+
+
+def start_development_slack(home: Path) -> None:
+    """Start a managed bridge from this checkout and wait for Socket Mode."""
+    instance_id = uuid.uuid4().hex
+    ready_file = home / "state/slack.ready"
+    environment = os.environ.copy()
+    environment["OPENTAG_PROCESS_ID"] = instance_id
+    command = [
+        sys.executable,
+        str(ROOT / "scripts/slack_socket_agent.py"),
+        "--backend",
+        os.environ["OPENTAG_BACKEND"],
+        "--ready-file",
+        str(ready_file),
+        "--process-id",
+        instance_id,
+    ]
+    start_process(
+        home,
+        "slack",
+        command,
+        environment=environment,
+        metadata={"instance_id": instance_id},
+    )
+    attempts = int(os.getenv("OPENTAG_STARTUP_ATTEMPTS", "30"))
+    for _ in range(attempts):
+        if slack_ready(home):
+            return
+        if process_for(home / "state/slack.json") is None:
+            detail = log_tail(home, "slack")
+            raise RuntimeError(
+                "Slack bridge exited before becoming ready"
+                + (f":\n{detail}" if detail else "; fix the source and save again")
+            )
+        time.sleep(1)
+    detail = log_tail(home, "slack")
+    raise RuntimeError(
+        "Slack bridge did not become ready"
+        + (f":\n{detail}" if detail else "; fix the source and save again")
+    )
+
+
+def stream_new_log_bytes(path: Path, position: int) -> int:
+    """Print newly appended bridge output and return the next byte position."""
+    try:
+        size = path.stat().st_size
+        if size < position:
+            position = 0
+        if size == position:
+            return position
+        with path.open("rb") as handle:
+            handle.seek(position)
+            chunk = handle.read()
+    except OSError:
+        return position
+    content = redact_log_text(chunk.decode("utf-8", errors="replace"))
+    for line in content.splitlines():
+        print("    " + line, flush=True)
+    return size
+
+
+def development_loop(home: Path) -> int:
+    """Run the Slack bridge with source watching and foreground log output."""
+    if runtime_identity(home)["active_release"]:
+        raise RuntimeError(
+            "tag dev is only available from a source checkout. "
+            "Run ./install.sh --dependencies-only, then ./tag dev in the repository."
+        )
+
+    display.header("Dev", "Watching Python source and reloading the Slack bridge.")
+    display.section("Bootstrap")
+    command = [sys.executable, str(ROOT / "scripts/tag_cli.py"), "start"]
+    result = subprocess.call(command, env=os.environ.copy())
+    if result:
+        return result
+
+    # Take ownership of the bridge even when `tag start` found one already
+    # running, so leaving this foreground command has predictable cleanup.
+    stop_process(home, "slack")
+    start_development_slack(home)
+    display.info_row("Slack", "Connected from this checkout", good=True)
+    display.info_row("Watching", "scripts/**/*.py")
+    display.info_row("Exit", "Ctrl-C stops the development bridge")
+
+    snapshot = source_snapshot()
+    log = home / "state/slack.log"
+    try:
+        log_position = log.stat().st_size
+    except OSError:
+        log_position = 0
+    try:
+        while True:
+            time.sleep(0.35)
+            log_position = stream_new_log_bytes(log, log_position)
+            current = source_snapshot()
+            changes = changed_sources(snapshot, current)
+            if not changes:
+                continue
+            # Editors commonly replace a file atomically. A short debounce folds
+            # that remove/add pair and a multi-file save into one bridge reload.
+            time.sleep(0.2)
+            settled = source_snapshot()
+            changes = changed_sources(snapshot, settled)
+            snapshot = settled
+            display.section("Reloading")
+            names = ", ".join(path.name for path in changes[:3])
+            if len(changes) > 3:
+                names += f" +{len(changes) - 3} more"
+            display.info_row("Changed", names)
+            stop_process(home, "slack")
+            try:
+                start_development_slack(home)
+            except (OSError, ValueError, RuntimeError, ImportError) as exc:
+                display.failure("Reload failed", str(exc))
+                continue
+            display.info_row("Slack", "Reloaded and connected", good=True)
+            try:
+                log_position = log.stat().st_size
+            except OSError:
+                log_position = 0
+    finally:
+        stop_process(home, "slack")
 
 
 def healthy(url: str) -> bool:
@@ -226,15 +495,7 @@ def reconcile_invitation_memory(home: Path) -> None:
         )
 
 
-def doctor(home: Path, offline: bool, json_output: bool = False) -> int:
-    definitions = codex_workspace_args(home / "workspace")
-    if not json_output:
-        print(f"TAG home: {home}", flush=True)
-        print(f"Agent workspace: {home / 'workspace'}", flush=True)
-        print(f"Codex skills: {home / 'workspace/.agents/skills'}", flush=True)
-        print(f"Codex MCP: {home / 'workspace/.codex/config.toml'}", flush=True)
-        print(f"Claude skills / MCP: {home / 'workspace/.claude/skills'} / {home / 'workspace/.mcp.json'}", flush=True)
-        print(f"TAG Codex MCP definitions: {len(definitions) // 2} (configuration parsed; connectivity checked by backend)", flush=True)
+def doctor_command(offline: bool, *, json_output: bool) -> list[str]:
     cmd = [sys.executable, str(ROOT / "scripts/opentag_doctor.py")]
     if json_output:
         cmd.append("--json")
@@ -245,38 +506,78 @@ def doctor(home: Path, offline: bool, json_output: bool = False) -> int:
         for channel_id in (item.strip() for item in configured_channels.split(",")):
             if channel_id:
                 cmd.extend(["--channel-id", channel_id])
-    return subprocess.call(cmd)
+    return cmd
+
+
+def doctor_report(offline: bool) -> tuple[int, dict[str, object]]:
+    completed = subprocess.run(
+        doctor_command(offline, json_output=True),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    try:
+        report = json.loads(completed.stdout)
+    except (TypeError, json.JSONDecodeError):
+        detail = completed.stderr.strip() or "Doctor did not return a valid report"
+        raise RuntimeError(detail)
+    if not isinstance(report, dict):
+        raise RuntimeError("Doctor did not return a valid report")
+    return completed.returncode, report
+
+
+def doctor(home: Path, offline: bool, json_output: bool = False) -> int:
+    if json_output:
+        return subprocess.call(doctor_command(offline, json_output=True))
+    result, report = doctor_report(offline)
+    display.doctor_summary(report)
+    return result
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Tag: set up, inspect, and manage your Slack teammate.",
                                      epilog="Use tag for status and the next step. Start with tag setup; change configuration with tag settings.")
-    parser.add_argument("command", nargs="?", choices=("settings", "inspect", "config", "setup", "reset", "migrate", "rollback", "version", "paths", "doctor", "start", "stop", "restart", "status", "logs"))
+    parser.add_argument("command", nargs="?", choices=("settings", "inspect", "config", "setup", "reset", "migrate", "rollback", "version", "paths", "doctor", "start", "stop", "restart", "status", "logs", "dev"))
     parser.add_argument("arguments", nargs="*", help="config: init | show | keys | set KEY VALUE")
     parser.add_argument("--offline", action="store_true")
-    parser.add_argument("--json", action="store_true", dest="json_output", help="structured output for inspect, status, doctor, and config")
+    parser.add_argument("--json", action="store_true", dest="json_output", help="structured output for inspect, status, doctor, config, and paths")
     parser.add_argument("--stdin", action="store_true", help="read a config value from stdin")
     parser.add_argument("--from", dest="source", type=Path)
     parser.add_argument("--no-start", action="store_true", help="setup: save choices without starting services or indexing")
     parser.add_argument("--test", action="store_true", help="setup: use a separate test home; implies --no-start")
     parser.add_argument("--review", action="store_true", help="setup: review choices even when already configured")
+    parser.add_argument("--follow", action="store_true", help="logs: continue streaming new service output")
+    parser.add_argument("--limit", type=int, help="logs: number of recent lines per service (default: 50)")
     args = parser.parse_args()
     if (args.no_start or args.test or args.review) and args.command != "setup":
         parser.error("--no-start, --test and --review are only for setup")
     if args.arguments and args.command != "config":
         parser.error("Only config accepts additional positional arguments")
-    if args.json_output and args.command not in {"inspect", "status", "doctor", "config"}:
-        parser.error("--json supports inspect, status, doctor, and config")
+    if args.json_output and args.command not in {"inspect", "status", "doctor", "config", "paths"}:
+        parser.error("--json supports inspect, status, doctor, config, and paths")
     if args.stdin and args.command != "config":
         parser.error("--stdin is only for config set")
     if args.offline and args.command not in {"inspect", "doctor"}:
         parser.error("--offline supports inspect and doctor")
+    if (args.follow or args.limit is not None) and args.command != "logs":
+        parser.error("--follow and --limit are only for logs")
+    if args.limit is not None and args.limit < 1:
+        parser.error("--limit must be at least 1")
     home = tag_home()
     try:
         import tag_control as control
         import tag_config as settings
     except ImportError:
         from scripts import tag_control as control, tag_config as settings
+    if args.command in {"start", "dev"}:
+        missing = missing_runtime_dependencies()
+        if missing:
+            raise RuntimeError(runtime_dependency_message(missing))
+        if legacy_slack_ready(home):
+            raise RuntimeError(
+                "Another Tag installation is already connected to Slack. "
+                f"Stop it using {legacy_stop_command(home)}, then retry this start."
+            )
     if args.command is None or args.command == "status":
         report = control.status_report(home, sys.modules[__name__])
         if args.json_output:
@@ -299,9 +600,12 @@ def main() -> int:
         control.settings_menu(home)
         return 0
     if args.command == "restart":
+        display.header("Restart", "Refreshing the services managed by this Tag installation.")
         command = [sys.executable, str(ROOT / "scripts/tag_cli.py")]
-        result = subprocess.call(command + ["stop"])
-        return result if result else subprocess.call(command + ["start"])
+        environment = os.environ.copy()
+        environment["TAG_RESTART_FLOW"] = "1"
+        result = subprocess.call(command + ["stop"], env=environment)
+        return result if result else subprocess.call(command + ["start"], env=environment)
     if args.command == "config":
         # Initialize the private home before writing, including Windows ACLs.
         if args.arguments and args.arguments[0] in {"init", "set"}:
@@ -320,7 +624,27 @@ def main() -> int:
     if args.command == "paths":
         paths = {key: str(home / key) for key in ("config", "workspace", "integrations", "state", "tmp", "releases")}
         paths.update(admin_skill=str(ROOT / "SKILL.md"), management_guide=str(ROOT / "docs/tag-management.md"))
-        print(json.dumps(paths, indent=2))
+        paths["runtime"] = runtime_identity(home)
+        if args.json_output:
+            print(json.dumps(paths, indent=2))
+            return 0
+        runtime = paths["runtime"]
+        display.header("Paths", "Where this Tag installation keeps its runtime and data.")
+        display.section("Installation")
+        display.info_row("Home", display.short_path(home))
+        display.info_row(
+            "Runtime",
+            f"Tag v{runtime['version']} · {runtime['mode']}",
+            good=bool(runtime["active_release"]) or runtime["mode"] == "source",
+        )
+        display.section("Data")
+        display.info_row("Settings", display.short_path(paths["config"]))
+        display.info_row("Workspace", display.short_path(paths["workspace"]))
+        display.info_row("State", display.short_path(paths["state"]))
+        display.section("Agent")
+        display.info_row("Admin skill", display.short_path(paths["admin_skill"]))
+        display.info_row("Guide", display.short_path(paths["management_guide"]))
+        display.next_action("Machine-readable paths", "tag paths --json")
         return 0
     initialize(home)
     os.environ.update(runtime_environment(home))
@@ -338,7 +662,15 @@ def main() -> int:
         old, target = current.read_text(encoding="utf-8"), previous.read_text(encoding="utf-8")
         atomic_text(current, target)
         atomic_text(previous, old)
-        print("Previous release selected. Run tag start.")
+        display.header("Rollback", "Selecting the previously installed Tag release.")
+        display.section("Release")
+        display.info_row("Previous", "Selected", good=True)
+        display.completion(
+            "Rollback is ready",
+            "Configuration and workspace data were left unchanged.",
+            next_label="Start the selected release",
+            next_command="tag start",
+        )
         return 0
     if args.command == "migrate":
         if args.source is None:
@@ -373,12 +705,12 @@ def main() -> int:
             print(json.dumps({"schema_version": 1, "ok": False, "configuration": report["configuration"],
                               "next_command": report["next_command"]}, indent=2))
             return 1
-    if args.command in ("start", "doctor", "status") and config_path.is_file() and config_path.stat().st_size:
+    if args.command in ("start", "dev", "doctor", "status") and config_path.is_file() and config_path.stat().st_size:
         values = read_config(config_path)
-        if args.command == "start" and settings.config_errors(values):
+        if args.command in {"start", "dev"} and settings.config_errors(values):
             raise RuntimeError("Configuration is incomplete or invalid. Run tag inspect or tag setup.")
         os.environ.update(values)
-    elif args.command == "start" or (args.command == "doctor" and not args.offline):
+    elif args.command in {"start", "dev"} or (args.command == "doctor" and not args.offline):
         raise RuntimeError(f"Missing configuration: {config_path}. Run tag setup.")
     # A TAG installation always has one stable integration workspace.
     os.environ["OPENTAG_WORKDIR"] = str(home / "workspace")
@@ -394,16 +726,56 @@ def main() -> int:
                 report["services"]["mfs"], (home / "state").glob("*.log")))
         return result
     if args.command == "logs":
-        for log in sorted((home / "state").glob("*.log")):
-            print(f"==> {log.name} <==")
-            print("\n".join(log.read_text(encoding="utf-8", errors="replace").splitlines()[-50:]))
+        display.header("Logs", "Recent output from services managed by this Tag installation.")
+        logs = sorted((home / "state").glob("*.log"))
+        if not logs:
+            display.section("Services")
+            display.info_row("Logs", "No service logs found yet")
+        for log in logs:
+            display.section(log.stem)
+            content = log_tail(home, log.stem, args.limit or 50)
+            if content:
+                for line in content.splitlines():
+                    print("    " + line)
+            else:
+                display.info_row("Output", "No recent entries")
+        if args.follow:
+            follow_logs(home, logs)
+        else:
+            display.next_action("Follow new entries", "tag logs --follow", detail="For deeper checks, run tag doctor.")
         return 0
+    if args.command == "dev":
+        return development_loop(home)
     if args.command == "stop":
+        restart_flow = os.getenv("TAG_RESTART_FLOW") == "1"
+        if restart_flow:
+            display.section("Stopping")
+        else:
+            display.header("Stop", "Disconnecting services managed by this Tag installation.")
+            display.section("Services")
         for name in ("slack", "mfs"):
             stop_process(home, name)
-        print("TAG stopped. Independently managed MFS servers were left running.")
+            display.info_row(
+                "Slack" if name == "slack" else "Memory",
+                "Stopped or already offline",
+                good=True,
+            )
+        if not restart_flow:
+            display.completion(
+                "Tag is stopped",
+                "Independently managed memory servers were left running.",
+                next_label="Start again",
+                next_command="tag start",
+            )
         return 0
     if args.command == "start":
+        restart_flow = os.getenv("TAG_RESTART_FLOW") == "1"
+        if restart_flow:
+            display.section("Starting")
+        else:
+            display.header("Start", "Bringing memory and Slack online.")
+            display.section("Readiness")
+        display.info_row("Runtime", "Dependencies available", good=True)
         # Serialize starts so concurrent invocations cannot create orphan services.
         lock = home / "state/start.lock"
         try:
@@ -427,12 +799,24 @@ def main() -> int:
                     time.sleep(1)
                 else:
                     raise RuntimeError("MFS did not become healthy; run tag logs")
+            display.info_row("Memory", "Healthy", good=True)
             if os.getenv("SLACK_CHANNEL_POLICY") == "invited":
                 reconcile_invitation_memory(home)
             else:
                 sync_configured_slack_memory()
-            if doctor(home, False):
-                raise RuntimeError("Preflight failed")
+            preflight_result, preflight = doctor_report(False)
+            if preflight_result:
+                failed = [item for item in preflight.get("checks", []) if not item.get("ok")]
+                if failed:
+                    first = failed[0]
+                    detail = str(first.get("check", "unknown check"))
+                    action = first.get("next_action")
+                    raise RuntimeError(
+                        f"Preflight failed: {detail}"
+                        + (f". {action}" if action else "")
+                    )
+                raise RuntimeError("Preflight failed; run tag doctor")
+            display.info_row("Checks", "Configuration and access verified", good=True)
             if not slack_ready(home):
                 # Replace a live but disconnected TAG-managed bridge rather than
                 # accepting a PID as proof that Socket Mode is operational.
@@ -476,9 +860,14 @@ def main() -> int:
                     "Slack bridge did not become ready"
                     + (f":\n{detail}" if detail else "; run tag logs")
                 )
-            print("TAG is running in the background. Use tag stop to stop it.")
-            print("Try a first mention in your Slack channel: @" + os.getenv("OPENTAG_BOT_NAME", "OpenMax") + " say hello")
-            print("Service readiness passed. A successful Slack reply must still be verified in Slack.")
+            display.info_row("Slack", "Connected", good=True)
+            bot_name = os.getenv("OPENTAG_BOT_NAME", "OpenMax")
+            display.completion(
+                "Tag restarted" if restart_flow else "Tag is connected",
+                "Running in the background · first reply not verified yet.",
+                next_label="Try it in an allowed Slack channel",
+                next_command=f"@{bot_name} say hello",
+            )
         except Exception:
             for name in reversed(started):
                 stop_process(home, name)
@@ -492,11 +881,21 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except KeyboardInterrupt:
-        print("\nInterrupted. Run tag setup to resume saved setup.", file=sys.stderr)
+        if len(sys.argv) > 1 and sys.argv[1] == "logs":
+            print("\nStopped following logs.", file=sys.stderr)
+        elif len(sys.argv) > 1 and sys.argv[1] == "dev":
+            print("\nDevelopment bridge stopped. Memory was left running.", file=sys.stderr)
+        else:
+            print("\nInterrupted. Run tag setup to resume saved setup.", file=sys.stderr)
         raise SystemExit(130)
     except (OSError, ValueError, RuntimeError, ImportError) as exc:
         if "--json" in sys.argv:
             print(json.dumps({"schema_version": 1, "ok": False, "error": str(exc)}))
+        elif len(sys.argv) > 1 and sys.argv[1] in {"start", "restart", "dev"}:
+            title = "Dev" if sys.argv[1] == "dev" else (
+                "Restart" if os.getenv("TAG_RESTART_FLOW") == "1" or sys.argv[1] == "restart" else "Start"
+            )
+            display.failure(title, str(exc))
         else:
             print(f"Error: {exc}", file=sys.stderr)
         raise SystemExit(1)

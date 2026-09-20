@@ -153,7 +153,11 @@ flowchart LR
    MFS access, and Slack API access. A stopped MFS server must be started to pass
    these live checks; `tag start` handles the local server before its preflight.
 7. `tag start` starts MFS, runs preflight, and launches the Slack bridge.
-8. `tag status --json` and `tag logs` provide the first operational check.
+8. `tag status --json` and `tag logs` provide the first operational check;
+   `tag logs --limit N --follow` keeps a bounded initial history and then
+   streams new service output.
+   `tag restart` is a single user-facing flow rather than two complete stop and
+   start screens.
 
 Verify the complete journey by mentioning the bot in the permitted Slack channel
 and observing its reply. Executable discovery does not prove agent sign-in, and
@@ -470,17 +474,17 @@ The backend writes Markdown in the configured workspace and calls the Canvas
 helper. The helper creates a Canvas only in the invoking channel and enforces a
 500 KB content limit.
 
-## Flow 7: Change model and thinking for a Slack thread
+## Flow 7: Change Codex settings for a Slack thread
 
-After a successful Codex reply, an authorized teammate can select **Change model
-& thinking**.
+After a successful Codex reply, an authorized teammate can open the compact
+overflow menu and select **Codex settings…**.
 
 ### Level 1 · Journey
 
 ```mermaid
 flowchart LR
     Reply["Successful Codex reply"]
-    Choose["Open Change model<br/>& thinking"]
+    Choose["Open Codex settings<br/>from the overflow menu"]
     Save["Save a valid choice<br/>for this thread"]
     Next["Next mention uses<br/>the saved setting"]
 
@@ -489,9 +493,10 @@ flowchart LR
 
 ### Level 2 · Task flow
 
-1. OpenTag shows only available Codex models and their supported reasoning
-   levels, narrowed by operator allowlists when configured.
-2. The teammate selects a model, a reasoning level, or **Default**.
+1. OpenTag shows only available Codex models, their native reasoning levels,
+   and Fast Mode availability, narrowed by operator allowlists when configured.
+2. The teammate selects a model, a reasoning level or **Default**, and whether
+   Fast Mode is on or off.
 3. Validation prevents unsupported combinations from being saved.
 4. An ephemeral confirmation identifies the thread affected by the choice.
 5. The next mention in that thread uses the saved setting.
@@ -505,20 +510,21 @@ sequenceDiagram
     participant T as OpenTag bridge
     participant N as Next Codex run
 
-    U->>S: Select Change model & thinking
-    S->>T: Submit model and reasoning choice
+    U->>S: Select Codex settings from overflow menu
+    S->>T: Submit model, reasoning, and Fast Mode choices
     T->>T: Validate against configured allowlists
     T-->>U: Confirm setting for this thread
     U->>T: Send the next mention
     T->>N: Start run with saved thread setting
 ```
 
-Settings are thread-specific, so one conversation can use deeper reasoning
-without changing every other conversation. Any authorized teammate in that
-thread may update the shared thread setting. “Default” delegates model or
-reasoning selection to the Codex CLI. If a saved choice is no longer available,
-OpenTag normalizes it back to the applicable default. Claude replies do not
-show this control.
+Settings are thread-specific, so one conversation can use deeper reasoning or
+Fast Mode without changing every other conversation. Any authorized teammate
+in that thread may update the shared thread setting. Reasoning levels retain
+the names reported by Codex; Fast Mode is an independent latency setting that
+uses increased usage. “Default” delegates model or reasoning selection to
+the Codex CLI. If a saved choice is no longer available, OpenTag normalizes it
+back to the applicable default. Claude replies do not show this control.
 
 ## Flow 8: Denials, failures, and recovery
 
@@ -570,6 +576,9 @@ For a completely silent mention, debug event delivery first:
 If the event arrives but the task fails, debug runtime dependencies next:
 
 1. Run `./tag doctor` and correct the first failed check.
+   If a source checkout reports an incomplete runtime, run
+   `./install.sh --dependencies-only`; a managed installation should be repaired
+   by rerunning its installer. Startup never installs packages implicitly.
 2. Confirm the caller allowlist. An unauthorized Slack caller receives a
    threaded denial before OpenTag reads the thread or invokes the backend.
 3. Inspect the transport/backend error in `./tag logs`.
@@ -658,8 +667,8 @@ isolated chat location. Skip an optional step when its dependency is not set up.
    instead, confirm the installed bot has the
    `canvases:write` scope; reinstall the app if that scope was newly added.
 9. With the Codex backend, reinstall the updated manifest with Slack
-   interactivity enabled. Change the model/reasoning choice, then invoke the next
-   task in that thread.
+   interactivity enabled. Change the model, reasoning, and Fast Mode choices,
+   then invoke the next task in that thread.
 10. If a separate non-allowlisted test account is available, mention the bot and
     show that the backend is not invoked.
 
@@ -675,7 +684,7 @@ isolated chat location. Skip an optional step when its dependency is not set up.
 | Generated-image upload to Slack | **Not implemented by the bridge** | A backend may generate a local image, but OpenTag currently has no dedicated upload-and-attach result path. |
 | Slack loading state and answers | Implemented | Claude text can stream; Codex currently posts the complete final answer. |
 | Long-answer splitting | Implemented | Results remain in the invoking thread. |
-| Model/reasoning settings | Implemented for Codex | Requires Slack interactivity and a reinstalled updated manifest. |
+| Model/reasoning/Fast Mode settings | Implemented for Codex | Requires Slack interactivity and a reinstalled updated manifest; Fast Mode uses increased usage. |
 | Top-level channel posts | Implemented on explicit request | Restricted to the invoking channel. |
 | Slack Canvas creation | Implemented on explicit request | Restricted to the invoking channel; `canvases:write` required. |
 | Slack MFS search/read | Implemented; live acceptance pending | Setup creates selected-channel scopes; each reply receives only its current channel's Slack scope. ADR 0001 still applies. |
