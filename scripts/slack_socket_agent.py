@@ -607,7 +607,9 @@ def settings_modal(
     metadata: dict[str, str],
     settings: AgentSettings,
     models: list[CodexModelOption],
+    revision: str = "",
 ) -> dict[str, Any]:
+    block_suffix = f"_{revision}" if revision else ""
     normalized = normalize_settings(settings, models)
     model_options = [select_option(item.model_id, item.label) for item in models]
     if not model_options:
@@ -635,7 +637,7 @@ def settings_modal(
     if fast_available:
         fast_block = {
             "type": "section",
-            "block_id": "fast_mode",
+            "block_id": f"fast_mode{block_suffix}",
             "text": {"type": "mrkdwn", "text": "*Speed*"},
             "accessory": fast_element,
         }
@@ -659,7 +661,7 @@ def settings_modal(
         "blocks": [
             {
                 "type": "input",
-                "block_id": "model",
+                "block_id": f"model{block_suffix}",
                 "dispatch_action": True,
                 "label": {"type": "plain_text", "text": "Model"},
                 "element": {
@@ -675,7 +677,7 @@ def settings_modal(
             },
             {
                 "type": "input",
-                "block_id": "reasoning_effort",
+                "block_id": f"reasoning_effort{block_suffix}",
                 "label": {"type": "plain_text", "text": "Thinking"},
                 "element": {
                     "type": "static_select",
@@ -707,16 +709,30 @@ def settings_modal(
     }
 
 
-def selected_setting(view: dict[str, Any], block_id: str, action_id: str) -> str | None:
-    selected = view["state"]["values"][block_id][action_id].get("selected_option")
+def setting_state(view: dict[str, Any], action_id: str) -> tuple[str, dict[str, Any]]:
+    """Find a modal control even when a refresh gave its block a fresh ID."""
+    values = view.get("state", {}).get("values", {})
+    if not isinstance(values, dict):
+        return "", {}
+    for block_id, actions in values.items():
+        if not isinstance(block_id, str) or not isinstance(actions, dict):
+            continue
+        state = actions.get(action_id)
+        if isinstance(state, dict):
+            return block_id, state
+    return "", {}
+
+
+def selected_setting(view: dict[str, Any], action_id: str) -> str | None:
+    _, action = setting_state(view, action_id)
+    selected = action.get("selected_option")
     value = selected.get("value") if isinstance(selected, dict) else None
     return None if value == DEFAULT_CONFIG_VALUE else value
 
 
 def selected_fast_mode(view: dict[str, Any]) -> bool:
-    block = view.get("state", {}).get("values", {}).get("fast_mode", {})
-    action = block.get(SETTINGS_FAST_ACTION_ID, {}) if isinstance(block, dict) else {}
-    selected = action.get("selected_options", []) if isinstance(action, dict) else []
+    _, action = setting_state(view, SETTINGS_FAST_ACTION_ID)
+    selected = action.get("selected_options", [])
     return any(
         isinstance(option, dict) and option.get("value") == "on"
         for option in selected
@@ -1365,7 +1381,7 @@ def create_app(backend: str, timeout: int, allowed_user_ids: frozenset[str]) -> 
             metadata = json.loads(view["private_metadata"])
             selected = body["actions"][0]["selected_option"]["value"]
             model = None if selected == DEFAULT_CONFIG_VALUE else selected
-            effort = selected_setting(view, "reasoning_effort", SETTINGS_EFFORT_ACTION_ID)
+            effort = selected_setting(view, SETTINGS_EFFORT_ACTION_ID)
             if effort not in efforts_for_model(model, models):
                 effort = default_effort_for_model(model, models)
             fast_mode = selected_fast_mode(view) and fast_mode_available(model, models)
@@ -1380,6 +1396,7 @@ def create_app(backend: str, timeout: int, allowed_user_ids: frozenset[str]) -> 
                         fast_mode=fast_mode,
                     ),
                     models=models,
+                    revision=f"model_{time.time_ns()}",
                 ),
             )
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
@@ -1413,6 +1430,7 @@ def create_app(backend: str, timeout: int, allowed_user_ids: frozenset[str]) -> 
                     metadata=metadata,
                     settings=default_agent_settings(models),
                     models=models,
+                    revision=f"reset_{time.time_ns()}",
                 ),
             )
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
@@ -1426,21 +1444,31 @@ def create_app(backend: str, timeout: int, allowed_user_ids: frozenset[str]) -> 
         try:
             view = body["view"]
             metadata = json.loads(view["private_metadata"])
-            model = selected_setting(view, "model", SETTINGS_MODEL_ACTION_ID)
-            effort = selected_setting(view, "reasoning_effort", SETTINGS_EFFORT_ACTION_ID)
+            model_block_id, _ = setting_state(view, SETTINGS_MODEL_ACTION_ID)
+            effort_block_id, _ = setting_state(view, SETTINGS_EFFORT_ACTION_ID)
+            fast_block_id, _ = setting_state(view, SETTINGS_FAST_ACTION_ID)
+            model = selected_setting(view, SETTINGS_MODEL_ACTION_ID)
+            effort = selected_setting(view, SETTINGS_EFFORT_ACTION_ID)
             fast_mode = selected_fast_mode(view)
             errors: dict[str, str] = {}
             if model and model not in {item.model_id for item in models}:
-                errors["model"] = "Choose an available model."
+                errors[model_block_id or "model"] = "Choose an available model."
             if effort and effort not in efforts_for_model(model, models):
-                errors["reasoning_effort"] = "Choose a thinking level supported by this model."
+                errors[effort_block_id or "reasoning_effort"] = (
+                    "Choose a thinking level supported by this model."
+                )
             if fast_mode and not fast_mode_available(model, models):
-                errors["fast_mode"] = "Fast mode is not supported by this model."
+                errors[fast_block_id or "fast_mode"] = (
+                    "Fast mode is not supported by this model."
+                )
             if errors:
                 ack(response_action="errors", errors=errors)
                 return
             if not slack_channel_allowed(metadata["channel"]):
-                ack(response_action="errors", errors={"model": "This channel is not allowed."})
+                ack(
+                    response_action="errors",
+                    errors={model_block_id or "model": "This channel is not allowed."},
+                )
                 return
             settings = AgentSettings(
                 model=model,

@@ -766,6 +766,15 @@ class SlackAgentSettingsTests(unittest.TestCase):
             "on",
             reset_view["blocks"][2]["accessory"]["initial_options"][0]["value"],
         )
+        self.assertRegex(reset_view["blocks"][0]["block_id"], r"^model_reset_\d+$")
+        self.assertRegex(
+            reset_view["blocks"][1]["block_id"],
+            r"^reasoning_effort_reset_\d+$",
+        )
+        self.assertRegex(
+            reset_view["blocks"][2]["block_id"],
+            r"^fast_mode_reset_\d+$",
+        )
 
     def test_modal_disables_fast_mode_for_unsupported_explicit_model(self) -> None:
         models = [
@@ -794,7 +803,7 @@ class SlackAgentSettingsTests(unittest.TestCase):
         view = {
             "state": {
                 "values": {
-                    "fast_mode": {
+                    "fast_mode_reset_123": {
                         slack_socket_agent.SETTINGS_FAST_ACTION_ID: {
                             "selected_options": [{"value": "on"}]
                         }
@@ -805,6 +814,39 @@ class SlackAgentSettingsTests(unittest.TestCase):
 
         self.assertTrue(slack_socket_agent.selected_fast_mode(view))
         self.assertFalse(slack_socket_agent.selected_fast_mode({"state": {"values": {}}}))
+
+    def test_reads_select_state_after_modal_reset(self) -> None:
+        view = {
+            "state": {
+                "values": {
+                    "model_reset_123": {
+                        slack_socket_agent.SETTINGS_MODEL_ACTION_ID: {
+                            "selected_option": {"value": "gpt-visible"}
+                        }
+                    },
+                    "reasoning_effort_reset_123": {
+                        slack_socket_agent.SETTINGS_EFFORT_ACTION_ID: {
+                            "selected_option": {"value": "high"}
+                        }
+                    },
+                }
+            }
+        }
+
+        self.assertEqual(
+            "gpt-visible",
+            slack_socket_agent.selected_setting(
+                view,
+                slack_socket_agent.SETTINGS_MODEL_ACTION_ID,
+            ),
+        )
+        self.assertEqual(
+            "high",
+            slack_socket_agent.selected_setting(
+                view,
+                slack_socket_agent.SETTINGS_EFFORT_ACTION_ID,
+            ),
+        )
 
     def test_normalize_settings_turns_fast_mode_off_for_unsupported_model(self) -> None:
         models = [
