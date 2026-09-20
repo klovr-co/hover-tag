@@ -1,10 +1,32 @@
 # Copyright 2026 Open Tag contributors
 # SPDX-License-Identifier: Apache-2.0
 [CmdletBinding()]
-param([string]$Version, [string]$BinDir, [switch]$SkipDependencies)
+param(
+    [string]$Version,
+    [string]$BinDir,
+    [switch]$SkipDependencies,
+    [switch]$DependenciesOnly
+)
 $ErrorActionPreference = 'Stop'
 if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
     throw 'Python 3.10+ is required. Install Python and enable its PATH option.'
+}
+if ($DependenciesOnly) {
+    if (-not $PSScriptRoot -or -not (Test-Path (Join-Path $PSScriptRoot 'requirements-runtime.txt'))) {
+        throw '-DependenciesOnly is available only from a Tag source checkout.'
+    }
+    $runtime = Join-Path $PSScriptRoot '.venv'
+    $runtimePython = Join-Path $runtime 'Scripts/python.exe'
+    if (-not (Test-Path $runtimePython)) {
+        Write-Host 'Creating Tag runtime...'
+        & python -m venv $runtime
+        if ($LASTEXITCODE -ne 0) { throw "Tag runtime creation failed ($LASTEXITCODE)" }
+    }
+    Write-Host 'Installing pinned Tag runtime dependencies...'
+    & $runtimePython -m pip install -r (Join-Path $PSScriptRoot 'requirements-runtime.txt')
+    if ($LASTEXITCODE -ne 0) { throw "Tag dependency installation failed ($LASTEXITCODE)" }
+    Write-Host 'Pinned Tag dependencies are installed.'
+    exit 0
 }
 $installerArgs = @()
 if ($Version) { $installerArgs += @('--version', $Version) }

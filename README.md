@@ -122,23 +122,73 @@ is Slack + Codex + local MFS; Claude Code remains experimental. Native Windows
 live Slack/backend qualification is still required before release.
 
 You need Python 3.10+, [`uv`](https://docs.astral.sh/uv/), `curl`, and a working
-Codex CLI login. Then run:
+Codex CLI login. Clone Tag first:
 
 ```bash
 git clone https://github.com/klovr-co/tag.git
 cd tag
+```
+
+### Agent-guided setup (recommended)
+
+Install Tag's admin skill for Codex:
+
+```bash
+npx skills add klovr-co/tag --skill open-tag-admin -a codex -g
+```
+
+Open a new Codex task in the cloned repository and ask: `Set up Tag for me.`
+The agent can check prerequisites, run the installer, and diagnose failures. It
+will pause when Slack requires you to create or approve the app.
+Once installed, the skill starts with `tag inspect --json` and uses targeted
+configuration commands, asking only for missing information.
+
+### Manual setup
+
+Run the same guided installer yourself:
+
+```bash
 ./install.sh
 ```
 
 The installer creates a permanent application home and an isolated runtime,
 independent of this checkout. Add its printed command directory to PATH, then
-run `tag setup` for Slack credentials and your owner member ID. Windows users
+run `tag` for status and next steps, or `tag setup` for resumable setup. Use `tag reset`
+to back up the old setup and redo onboarding after confirmation. Windows users
 run `./install.ps1` from PowerShell instead. See [installation and TAG home](docs/installation.md)
 for platform paths, download installers, skills, MCP, and migration.
-When prompted, create the app from [`slack-app-manifest.yaml`](slack-app-manifest.yaml)
-at **Slack API → Your Apps → Create New App → From an app manifest**, install it
-to your workspace, and create an app-level `xapp-` token with
-`connections:write`.
+Contributors running directly from a checkout must first run
+`./install.sh --dependencies-only`; `./tag` deliberately does not fall back to
+system Python or install dependencies during startup.
+`tag setup` owns the Slack journey. It reuses the installed Slack CLI, offers
+the CLI's real login flow when the sandbox workspace is not authorized, and
+then lets you create a manifest-based app or link an existing app by App ID.
+It pauses for every Slack approval that only a person or workspace admin can
+grant. Tokens are entered only through hidden terminal prompts.
+
+The menu shows the next useful action based on current settings and service
+health. Settings and Troubleshooting remain available when you return. For
+scripts and skills, use the same operations directly:
+
+```bash
+tag inspect --json
+tag config init --json
+tag config show --json
+tag config set OPENTAG_BACKEND codex --json
+tag doctor --json
+```
+
+Settings output redacts secrets. Existing settings survive initialization and
+setup retries. See [setup and management](docs/tag-management.md) for the command
+contract, secret input, experimental Claude selection, and recovery.
+
+After the bot token is validated, setup shows the Slack channels visible to the
+bot and lets you select one or more joined channels by name. It separately
+validates the Socket Mode, bot, and Slack-history credentials, then asks before
+writing a selected-channel-only MFS connector. For another channel, invite the
+bot there first and rerun setup. Once Tag is running, authorized owners can also
+change reply destinations with the searchable picker in Slack App Home; rerun
+setup before expecting a newly added destination to have indexed memory.
 
 Start Tag and inspect it with:
 
@@ -146,7 +196,17 @@ Start Tag and inspect it with:
 tag start
 tag status
 tag logs
+tag logs --follow
 ```
+
+Prefer the dedicated `tag restart` command over chaining stop and start so the
+terminal presents one coherent operation. Use `tag doctor` for deeper
+diagnostics after the quick status and recent logs.
+
+When developing from a prepared source checkout, use `./tag dev`. It watches
+`scripts/**/*.py`, reloads only the Slack bridge after changes, and streams its
+output in the foreground. Press Ctrl-C to stop the development bridge; MFS is
+left running. This command is intentionally unavailable from managed releases.
 
 Mention `@OpenMax` in the sandbox channel you configured:
 
@@ -156,32 +216,34 @@ Only the owner member ID entered during setup can invoke Tag initially. Add
 other IDs to the comma-separated `SLACK_ALLOWED_USER_IDS` setting to share access.
 
 While a task runs, Tag uses Slack's native loading indicator instead of posting
-a temporary bot message. Slack response streaming is enabled by default:
-Claude responses stream into the thread as answer deltas arrive, while Codex
-shows the native loading state and then posts its completed answer because the
-Codex CLI currently emits final-message events. Set
+a temporary bot message. Slack response streaming is enabled by default.
+Claude streams answer deltas directly. Codex uses App Server by default to stream
+final-answer deltas, display activity backed by observed tool events, and honor
+Slack's native Stop button. Set `OPENTAG_CODEX_TRANSPORT=exec` for rollback, or set
 `OPENTAG_SLACK_STREAMING=0` to retain buffered replies for troubleshooting.
+Commentary, reasoning, tool output, and raw diagnostics are never streamed.
+Capacity and rate-limit failures are retried before observable work begins; the
+loading indicator shows the attempt count. A terminal failure clears the loading
+state, posts sanitized guidance with a local-log reference, and offers a **Retry**
+button that reloads the original Slack request.
+Tag also journals active Slack thread identities in its private state directory.
+Normal shutdown clears those sessions before exit; after a forced crash, the
+next start clears any stale Slack working indicators before accepting new work.
 
-Codex replies also include a **Change model & thinking** button. Its modal saves
-model and reasoning choices for that Slack thread and applies them to the next
-mention. Operators can restrict the selectable models with
-`OPENTAG_CODEX_MODELS` and the reasoning levels with
-`OPENTAG_CODEX_REASONING_EFFORTS`.
+Codex replies also include a compact **Configure** button beneath the answer. It
+opens a modal that saves model, native Codex reasoning-level,
+and Fast Mode choices for that Slack user across channels and threads.
+The modal's **Reset to default** button restores every control before saving.
+Fast Mode is independent of
+reasoning level and uses increased usage for faster responses. Operators can
+restrict the selectable models with `OPENTAG_CODEX_MODELS` and the reasoning
+levels with `OPENTAG_CODEX_REASONING_EFFORTS`.
 
 Stop TAG-managed processes with `tag stop`. Independently started MFS servers
 are left running.
 
-### Optional admin skill
-
-Codex can guide later configuration and troubleshooting through the bundled
-admin skill:
-
-```bash
-npx skills add klovr-co/tag --skill open-tag-admin -a codex -g
-```
-
-Open a new Codex task and ask it to set up or diagnose Tag. The skill cannot
-create or approve a Slack app on behalf of your workspace administrator.
+The admin skill also supports later configuration and troubleshooting. It
+cannot create or approve a Slack app on behalf of your workspace administrator.
 
 ### Upgrade or uninstall
 
@@ -202,28 +264,34 @@ Tag uses Slack credentials in two separate places:
 |---|---|
 | `SLACK_APP_TOKEN` (`xapp-…`) | Opens the Socket Mode connection that receives mentions. |
 | `SLACK_BOT_TOKEN` (`xoxb-…`) | Reads permitted conversations and posts replies. |
-| MFS Slack connector token | Optionally indexes approved Slack channels as durable memory. |
+| MFS Slack connector token | Indexes only the channels explicitly approved during setup as durable memory. |
 
-The local agent backend inherits `SLACK_BOT_TOKEN`, `MFS_TOKEN`, and other
-credentials already present in the bridge environment. Tag withholds the
-Socket Mode app token and Slack access-control configuration from the backend,
-but the MFS and Slack helper restrictions are application guardrails—not a
-hardened capability boundary. Run Tag with dedicated, least-privilege
-credentials in an isolated environment.
+The local agent backend inherits `SLACK_BOT_TOKEN` and `MFS_TOKEN`. Tag withholds
+the Socket Mode token, Slack-history connector token, and bridge access-control
+configuration from that child process. Its Slack and MFS helper restrictions
+are application guardrails—not a hardened capability boundary: the backend
+still runs as the same local account and can access whatever that account can.
+Run Tag with dedicated, least-privilege credentials in an isolated environment.
 
 The bridge app normally needs these bot scopes:
 
 - `app_mentions:read`
+- `assistant:write`
 - `chat:write`
 - `channels:read` and `channels:history`
 - `groups:read` and `groups:history` if you intentionally use private channels
 
-It also needs the `app_mention` bot event and an app-level token with
+It also needs the `app_mention`, `app_home_opened`, and `agent_session_stopped`
+bot events and an app-level token with
 `connections:write`. Invite the bot only to channels where it should respond.
 The included app manifest also requests `files:read` for inbound text and image
 attachments, `files:write` for backend-generated image results, and
 `canvases:write` for the explicit Canvas helper. Reinstall the Slack app after
 adding any scope.
+
+By default Slack lets workspace members install apps, but a workspace owner or
+Enterprise organization can require approval. In that case, request approval
+from a workspace owner or app manager before continuing setup.
 
 For the complete setup, token model, and troubleshooting checklist, read
 [the Slack adapter guide](references/slack-adapter.md).
