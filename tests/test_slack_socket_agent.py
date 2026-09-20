@@ -6,6 +6,7 @@ import signal
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 try:
@@ -110,6 +111,172 @@ class SlackTextAttachmentTests(unittest.TestCase):
             )
 
         self.assertTrue(text[0].endswith("[Attachment text truncated]"))
+
+
+class SlackOutputArtifactTests(unittest.TestCase):
+    def test_uploads_requested_binary_file_to_originating_thread_unchanged(self) -> None:
+        client = MagicMock()
+        logger = MagicMock()
+        observed = b""
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            artifact = root / "release.zip"
+            expected = b"PK\x03\x04\x00binary payload"
+            artifact.write_bytes(expected)
+            manifest = root / ".manifest.json"
+            manifest.write_text(json.dumps([str(artifact)]), encoding="utf-8")
+
+            def capture_upload(**kwargs: object) -> dict[str, object]:
+                nonlocal observed
+                observed = Path(str(kwargs["file"])).read_bytes()
+                return {
+                    "files": [
+                        {
+                            "id": "F123",
+                            "permalink": "https://workspace.slack.com/files/F123/release.zip",
+                        }
+                    ]
+                }
+
+            client.files_upload_v2.side_effect = capture_upload
+            messages = slack_socket_agent.deliver_output_artifacts(
+                client, "C123", "1.23", manifest, root, logger
+            )
+
+        self.assertEqual(expected, observed)
+        client.files_upload_v2.assert_called_once_with(
+            channel="C123",
+            thread_ts="1.23",
+            file=str(artifact.resolve()),
+            filename="release.zip",
+            title="release.zip",
+        )
+        self.assertEqual(
+            [
+                "Download [release.zip](https://workspace.slack.com/files/F123/release.zip)."
+            ],
+            messages,
+        )
+
+    def test_rejects_missing_and_out_of_workspace_files(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir, tempfile.TemporaryDirectory() as outside_dir:
+            root = Path(raw_dir)
+            outside = Path(outside_dir) / "secret.txt"
+            outside.write_text("secret", encoding="utf-8")
+            missing = root / "missing.csv"
+            manifest = root / ".manifest.json"
+            manifest.write_text(json.dumps([str(missing), str(outside)]), encoding="utf-8")
+
+            artifacts, messages = slack_socket_agent.load_output_artifacts(manifest, root)
+
+        self.assertEqual([], artifacts)
+        self.assertEqual(2, len(messages))
+        self.assertIn("missing.csv", messages[0])
+        self.assertIn("secret.txt", messages[1])
+
+    def test_rejects_output_above_tag_file_size_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir, patch.object(
+            slack_socket_agent, "MAX_OUTPUT_FILE_BYTES", 3
+        ):
+            root = Path(raw_dir)
+            artifact = root / "large.bin"
+            artifact.write_bytes(b"four")
+            manifest = root / ".manifest.json"
+            manifest.write_text(json.dumps([str(artifact)]), encoding="utf-8")
+
+            artifacts, messages = slack_socket_agent.load_output_artifacts(manifest, root)
+
+        self.assertEqual([], artifacts)
+        self.assertIn("exceeds Tag’s", messages[0])
+
+    def test_upload_failure_distinguishes_local_save_from_slack_delivery(self) -> None:
+        client = MagicMock()
+        client.files_upload_v2.side_effect = RuntimeError("missing_scope")
+        logger = MagicMock()
+        with tempfile.TemporaryDirectory() as raw_dir, patch.object(
+            slack_socket_agent.uuid, "uuid4", return_value=SimpleNamespace(hex="deadbeef0000")
+        ):
+            root = Path(raw_dir)
+            artifact = root / "report.pdf"
+            artifact.write_bytes(b"pdf")
+            manifest = root / ".manifest.json"
+            manifest.write_text(json.dumps([str(artifact)]), encoding="utf-8")
+
+            messages = slack_socket_agent.deliver_output_artifacts(
+                client, "C123", "1.23", manifest, root, logger
+            )
+
+        self.assertIn("saved locally, but Slack delivery failed", messages[0])
+        self.assertIn("DEADBEEF", messages[0])
+        self.assertIn("files:write", messages[0])
+        logger.exception.assert_called_once()
+
+    def test_mention_delivers_declared_output_and_cleans_request_manifest(self) -> None:
+        fake_app = FakeApp()
+        client = MagicMock()
+        indicator = MagicMock()
+        indicator.native = False
+        indicator.message_ts = None
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir).resolve()
+            artifact = root / "requested.csv"
+            artifact.write_text("owner,due\nAda,Monday\n", encoding="utf-8")
+            client.files_upload_v2.return_value = {
+                "files": [
+                    {
+                        "id": "FCSV",
+                        "permalink": "https://workspace.slack.com/files/FCSV/requested.csv",
+                    }
+                ]
+            }
+
+            def finish_backend(*_args: object, **kwargs: object) -> tuple[str, bool]:
+                manifest = kwargs["output_manifest"]
+                assert isinstance(manifest, Path)
+                manifest.write_text(json.dumps([str(artifact)]), encoding="utf-8")
+                return "Saved requested.csv.", True
+
+            with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+                os.environ,
+                {
+                    "SLACK_BOT_TOKEN": "xoxb-test",
+                    "SLACK_CHANNEL_IDS": "C123",
+                    "OPENTAG_SLACK_STREAMING": "0",
+                },
+                clear=True,
+            ), patch.object(
+                slack_socket_agent, "default_workdir", return_value=root
+            ), patch.object(
+                slack_socket_agent, "WorkingIndicator", return_value=indicator
+            ), patch.object(
+                slack_socket_agent, "build_thread_text", return_value="thread"
+            ), patch.object(
+                slack_socket_agent, "run_backend", side_effect=finish_backend
+            ):
+                slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+                fake_app.events["app_mention"](
+                    {
+                        "channel": "C123",
+                        "ts": "1.23",
+                        "user": "UOWNER",
+                        "text": "<@BOT> create requested.csv",
+                    },
+                    {"team_id": "T123"},
+                    client,
+                    MagicMock(),
+                )
+
+            self.assertEqual([], list(root.glob(f"{slack_socket_agent.OUTPUT_ARTIFACT_MANIFEST_PREFIX}*")))
+
+        client.files_upload_v2.assert_called_once()
+        upload = client.files_upload_v2.call_args.kwargs
+        self.assertEqual(("C123", "1.23"), (upload["channel"], upload["thread_ts"]))
+        posted = client.chat_postMessage.call_args.kwargs["text"]
+        self.assertIn("Saved requested.csv.", posted)
+        self.assertIn(
+            "<https://workspace.slack.com/files/FCSV/requested.csv|requested.csv>",
+            posted,
+        )
 
 
 class SlackReplyChunkingTests(unittest.TestCase):

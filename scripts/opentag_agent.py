@@ -73,7 +73,25 @@ def build_prompt(
     thread_text: str,
     attachments_dir: Path | None,
     allowed_scopes: str,
+    output_manifest: Path | None = None,
 ) -> str:
+    artifact_instructions = ""
+    if output_manifest is not None:
+        artifact_instructions = f"""
+Generated file delivery:
+- When, and only when, the user explicitly asks you to create or return a
+  file, save it inside the workspace and then run
+  `{helper_command(skill_dir / "scripts" / "record_output_artifact.py")}`
+  with `--manifest {shlex.quote(str(output_manifest))}`,
+  `--workdir {shlex.quote(str(workdir))}`, and `--file` set to that output path.
+- Call the helper once for each requested final deliverable. Never record
+  supporting files or files merely mentioned in the conversation. Any regular
+  file type is supported. Do not record anything if saving fails; if recording
+  fails, say that the file was saved but could not be queued for Slack delivery.
+- The Slack bridge performs the upload after your run. In your answer, state
+  that the file was saved, but do not claim it is attached or accessible until
+  the bridge reports successful delivery.
+"""
     canvas_instructions = f"""
 Canvas capability:
 - When the user asks to create a Canvas in this Slack channel, you may create
@@ -116,6 +134,7 @@ Available helper scripts:
 - {skill_dir / "scripts" / "mfs_cat.py"}
 - {skill_dir / "scripts" / "slack_post_message.py"}
 {canvas_instructions}
+{artifact_instructions}
 
 Local tools:
 - The backend may use the commands and skills installed in its environment, subject to
@@ -652,6 +671,7 @@ def main() -> int:
     parser.add_argument("--channel-id", required=True)
     parser.add_argument("--thread-file", type=Path, required=True)
     parser.add_argument("--attachments-dir", type=Path)
+    parser.add_argument("--output-manifest", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--model", help="backend model override for this run")
     parser.add_argument(
         "--reasoning-effort",
@@ -695,6 +715,7 @@ def main() -> int:
         thread_text=read_text(args.thread_file),
         attachments_dir=args.attachments_dir.resolve() if args.attachments_dir else None,
         allowed_scopes=allowed_scopes,
+        output_manifest=args.output_manifest.resolve() if args.output_manifest else None,
     )
 
     try:

@@ -78,6 +78,25 @@ class OpenTagAgentPromptTests(unittest.TestCase):
         self.assertIn("new top-level channel message", prompt)
         self.assertIn("only when the user", prompt)
 
+    def test_slack_prompt_registers_only_explicitly_requested_output_files(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            prompt = opentag_agent.build_prompt(
+                skill_dir=root / "tag",
+                workdir=root / "workspace",
+                channel_id="C123",
+                question="Create an archive",
+                thread_text="",
+                attachments_dir=root / "attachments",
+                allowed_scopes=f"file://local{root / 'workspace'}",
+                output_manifest=root / "workspace/.opentag-output.json",
+            )
+
+        self.assertIn("record_output_artifact.py", prompt)
+        self.assertIn("file type is supported", prompt)
+        self.assertIn("supporting files", prompt)
+        self.assertIn("do not claim it is attached", prompt)
+
     @patch("scripts.opentag_agent.backend_command", return_value=["codex"])
     def test_codex_backend_uses_automatic_workspace_safety_review(self, _backend) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:

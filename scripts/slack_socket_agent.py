@@ -37,6 +37,9 @@ except ImportError:  # Direct script execution does not create a package context
 MENTION_RE = re.compile(r"<@[^>]+>")
 MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024
 MAX_ATTACHMENT_TEXT_CHARS = 12_000
+MAX_OUTPUT_FILE_BYTES = 15 * 1024 * 1024
+MAX_OUTPUT_ARTIFACTS = 10
+OUTPUT_ARTIFACT_MANIFEST_PREFIX = ".opentag-output-artifacts-"
 MAX_REPLY_CHARS = 3_800
 STREAM_START_CHARS = 40
 STREAM_APPEND_CHARS = 200
@@ -1349,6 +1352,7 @@ def run_backend(
     model: str | None = None,
     reasoning_effort: str | None = None,
     fast_mode: bool = False,
+    output_manifest: Path | None = None,
 ) -> tuple[str, bool]:
     with tempfile.NamedTemporaryFile("w", suffix=".txt", encoding="utf-8", delete=False) as f:
         f.write(thread_text)
@@ -1374,6 +1378,8 @@ def run_backend(
         "--timeout",
         str(timeout),
     ]
+    if output_manifest is not None:
+        cmd.extend(["--output-manifest", str(output_manifest)])
     if backend == "codex" and model:
         cmd.extend(["--model", model])
     if backend == "codex" and reasoning_effort:
@@ -1425,6 +1431,7 @@ def run_backend_events(
     on_answer_start: Callable[[], None] | None = None,
     on_status: Callable[[str], None] | None = None,
     fast_mode: bool = False,
+    output_manifest: Path | None = None,
 ) -> tuple[str, bool]:
     """Consume normalized lifecycle events and forward only final-answer text."""
     with tempfile.NamedTemporaryFile("w", suffix=".txt", encoding="utf-8", delete=False) as f:
@@ -1452,6 +1459,8 @@ def run_backend_events(
         str(timeout),
         "--event-stream",
     ]
+    if output_manifest is not None:
+        cmd.extend(["--output-manifest", str(output_manifest)])
     if backend == "codex" and model:
         cmd.extend(["--model", model])
     if backend == "codex" and reasoning_effort:
@@ -1617,6 +1626,100 @@ def post_final_reply(
             mrkdwn=True,
             blocks=blocks,
         )
+
+
+def load_output_artifacts(manifest: Path, workdir: Path) -> tuple[list[Path], list[str]]:
+    """Load and validate request-scoped deliverables without widening workspace access."""
+    if not manifest.exists():
+        return [], []
+    try:
+        raw_artifacts = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return [], ["The requested output list was unreadable, so no files were attached."]
+    if not isinstance(raw_artifacts, list) or not all(
+        isinstance(item, str) for item in raw_artifacts
+    ):
+        return [], ["The requested output list was invalid, so no files were attached."]
+    if len(raw_artifacts) > MAX_OUTPUT_ARTIFACTS:
+        return [], [
+            f"The request listed more than {MAX_OUTPUT_ARTIFACTS} outputs, so no files were attached."
+        ]
+
+    root = workdir.expanduser().resolve()
+    artifacts: list[Path] = []
+    errors: list[str] = []
+    seen: set[Path] = set()
+    for raw_path in raw_artifacts:
+        candidate = Path(raw_path).expanduser()
+        if not candidate.is_absolute():
+            candidate = root / candidate
+        try:
+            path = candidate.resolve(strict=True)
+            path.relative_to(root)
+            if not path.is_file():
+                raise ValueError("not a regular file")
+            size = path.stat().st_size
+        except (OSError, ValueError):
+            errors.append(
+                f"Could not attach `{candidate.name or 'requested output'}` because it is missing, "
+                "inaccessible, or outside the workspace."
+            )
+            continue
+        if size > MAX_OUTPUT_FILE_BYTES:
+            errors.append(
+                f"Could not attach `{path.name}` because it exceeds Tag’s "
+                f"{MAX_OUTPUT_FILE_BYTES // (1024 * 1024)} MB output limit."
+            )
+            continue
+        if path not in seen:
+            artifacts.append(path)
+            seen.add(path)
+    return artifacts, errors
+
+
+def deliver_output_artifacts(
+    client: Any,
+    channel: str,
+    thread_ts: str,
+    manifest: Path,
+    workdir: Path,
+    logger: Any,
+) -> list[str]:
+    """Attach validated outputs to the authorized originating Slack thread."""
+    artifacts, messages = load_output_artifacts(manifest, workdir)
+    for path in artifacts:
+        try:
+            response = client.files_upload_v2(
+                channel=channel,
+                thread_ts=thread_ts,
+                file=str(path),
+                filename=path.name,
+                title=path.name,
+            )
+            uploaded_files = response.get("files") if hasattr(response, "get") else None
+            permalink = next(
+                (
+                    item.get("permalink")
+                    for item in uploaded_files
+                    if isinstance(item, dict)
+                    and isinstance(item.get("permalink"), str)
+                    and item["permalink"]
+                ),
+                None,
+            ) if isinstance(uploaded_files, list) else None
+            if permalink:
+                messages.append(f"Download [{path.name}]({permalink}).")
+            else:
+                messages.append(f"Attached `{path.name}` to this thread.")
+        except Exception:  # noqa: BLE001 - report saved and delivered outcomes separately
+            reference = uuid.uuid4().hex[:8].upper()
+            logger.exception("Slack output upload failed [%s] for %s", reference, path)
+            messages.append(
+                f"`{path.name}` was saved locally, but Slack delivery failed "
+                f"(reference {reference}). Ask Tag to attach it again; an operator may need "
+                "to add `files:write`, reinstall the Slack app, or check Slack’s file limits."
+            )
+    return messages
 
 
 def retry_button_blocks(
@@ -2120,6 +2223,9 @@ def create_app(
         )
         indicator.start()
         answer_stream: SlackAnswerStream | None = None
+        output_manifest = (
+            default_workdir() / f"{OUTPUT_ARTIFACT_MANIFEST_PREFIX}{uuid.uuid4().hex}.json"
+        )
 
         try:
             with tempfile.TemporaryDirectory(prefix="opentag-slack-") as raw_attachment_dir:
@@ -2158,6 +2264,7 @@ def create_app(
                         on_answer_start=indicator.answer_started,
                         on_status=indicator.status,
                         fast_mode=agent_settings.fast_mode,
+                        output_manifest=output_manifest,
                     )
                 else:
                     answer, succeeded = run_backend(
@@ -2171,7 +2278,19 @@ def create_app(
                         model=agent_settings.model,
                         reasoning_effort=agent_settings.reasoning_effort,
                         fast_mode=agent_settings.fast_mode,
+                        output_manifest=output_manifest,
                     )
+                if succeeded:
+                    delivery_messages = deliver_output_artifacts(
+                        client,
+                        channel,
+                        thread_ts,
+                        output_manifest,
+                        default_workdir(),
+                        logger,
+                    )
+                    if delivery_messages:
+                        answer = f"{answer.rstrip()}\n\n" + "\n".join(delivery_messages)
             indicator.clear()
             if succeeded:
                 footer_blocks = (
@@ -2233,6 +2352,8 @@ def create_app(
                     request_ts=event["ts"],
                 ),
             )
+        finally:
+            output_manifest.unlink(missing_ok=True)
 
     @app.action(RETRY_ACTION_ID)
     def retry_request(ack: Any, body: dict[str, Any], client: Any, logger: Any) -> None:

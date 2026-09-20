@@ -18,6 +18,7 @@ REQUIRED_SCOPES = {
     "channels:join",
     "chat:write",
     "files:read",
+    "files:write",
     "groups:history",
     "groups:read",
 }

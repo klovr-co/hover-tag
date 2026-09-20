@@ -277,13 +277,15 @@ The bridge app normally needs these bot scopes:
 - `app_mentions:read`
 - `assistant:write`
 - `chat:write`
+- `files:read` and `files:write`
 - `channels:read` and `channels:history`
 - `groups:read` and `groups:history` if you intentionally use private channels
 
 It also needs the `app_mention`, `app_home_opened`, and `agent_session_stopped`
 bot events and an app-level token with
 `connections:write`. Invite the bot only to channels where it should respond.
-The included app manifest also requests `files:read` for text attachments and
+`files:read` supports input attachments, while `files:write` supports explicitly
+requested generated-file delivery through private Slack file links. The included app manifest also requests
 `canvases:write` for the explicit Canvas helper.
 
 By default Slack lets workspace members install apps, but a workspace owner or
