@@ -1,0 +1,20 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "tag-offline-receiver",
+  "main": "src/retired.js",
+  "compatibility_date": "2026-08-01",
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "TagReceiver"
+      ]
+    },
+    {
+      "tag": "v2",
+      "deleted_classes": [
+        "TagReceiver"
+      ]
+    }
+  ]
+}

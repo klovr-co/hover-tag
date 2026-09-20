@@ -13,7 +13,7 @@ MARKDOWN_LINK_RE = re.compile(r"(?<!!)\[[^]]+\]\(([^)]+)\)")
 
 
 def markdown_files(root: Path) -> list[Path]:
-    ignored = {".git", ".context", ".runtime", ".mypy_cache", ".codex", ".venv", "skills", "out"}
+    ignored = {".git", ".context", ".runtime", ".mypy_cache", ".codex", ".venv", "skills", "out", "node_modules"}
     return sorted(
         path
         for path in root.rglob("*.md")

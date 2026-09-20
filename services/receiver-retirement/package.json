@@ -1,0 +1,14 @@
+{
+  "name": "tag-hosted-receiver-retirement",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "wrangler deploy --dry-run",
+    "retire-data": "wrangler deploy --strict",
+    "verify-retirement": "node scripts/verify-retirement.mjs",
+    "retire-worker": "wrangler delete --name tag-offline-receiver --force"
+  },
+  "devDependencies": {
+    "wrangler": "4.135.0"
+  }
+}
