@@ -289,11 +289,88 @@ def backend_diagnostic(payload: dict[str, Any]) -> str:
     return ""
 
 
+def backend_made_progress(payload: dict[str, Any]) -> bool:
+    """Recognize native lifecycle records that prove the backend is responsive."""
+    event_type = payload.get("type")
+    return isinstance(event_type, str) and event_type in {
+        # Codex exec JSONL
+        "thread.started", "turn.started", "turn.completed", "turn.failed",
+        "item.started", "item.updated", "item.completed", "error",
+        # Claude stream JSONL
+        "system", "assistant", "user", "stream_event", "result",
+    }
+
+
+class BackendWatchdog:
+    """Enforce a refreshable idle timeout and a non-refreshable maximum runtime."""
+
+    def __init__(
+        self,
+        *,
+        idle_timeout: int,
+        max_timeout: int,
+        stop: Callable[[], None],
+    ) -> None:
+        self.idle_timeout = idle_timeout
+        self.max_timeout = max_timeout
+        self.stop = stop
+        self.timed_out = threading.Event()
+        self.reason = ""
+        self.condition = threading.Condition()
+        self.closed = False
+        self.started_at = time.monotonic()
+        self.last_activity = self.started_at
+        self.thread = threading.Thread(target=self._watch, daemon=True)
+
+    def start(self) -> None:
+        self.thread.start()
+
+    def touch(self) -> None:
+        with self.condition:
+            if self.closed or self.timed_out.is_set():
+                return
+            self.last_activity = time.monotonic()
+            self.condition.notify()
+
+    def _watch(self) -> None:
+        with self.condition:
+            while not self.closed:
+                idle_deadline = self.last_activity + self.idle_timeout
+                max_deadline = self.started_at + self.max_timeout
+                deadline = min(idle_deadline, max_deadline)
+                remaining = deadline - time.monotonic()
+                if remaining > 0:
+                    self.condition.wait(timeout=remaining)
+                    continue
+                self.reason = "maximum" if max_deadline <= idle_deadline else "idle"
+                self.timed_out.set()
+                break
+        if self.closed:
+            return
+        try:
+            self.stop()
+        except OSError:
+            pass
+
+    def close(self) -> None:
+        with self.condition:
+            self.closed = True
+            self.condition.notify()
+        if self.thread is not threading.current_thread():
+            self.thread.join(timeout=0.2)
+
+    def message(self) -> str:
+        if self.reason == "maximum":
+            return f"maximum runtime of {self.max_timeout}s exceeded"
+        return f"no backend activity for {self.idle_timeout}s"
+
+
 def stream_command(
     cmd: list[str],
     *,
     parser: Callable[[dict[str, Any]], tuple[str, str] | None],
     timeout: int,
+    max_timeout: int | None = None,
     input_text: str | None = None,
     workdir: Path | None = None,
 ) -> tuple[int, str, bool, bool]:
@@ -311,14 +388,12 @@ def stream_command(
         assert process.stdin is not None
         process.stdin.write(input_text)
         process.stdin.close()
-    timed_out = threading.Event()
-
-    def stop_process() -> None:
-        timed_out.set()
-        process.kill()
-
-    timer = threading.Timer(timeout, stop_process)
-    timer.start()
+    watchdog = BackendWatchdog(
+        idle_timeout=timeout,
+        max_timeout=max_timeout if max_timeout is not None else timeout,
+        stop=process.kill,
+    )
+    watchdog.start()
     diagnostics: list[str] = []
     emitted_final = False
     try:
@@ -334,6 +409,8 @@ def stream_command(
                 continue
             if not isinstance(payload, dict):
                 continue
+            if backend_made_progress(payload):
+                watchdog.touch()
             diagnostic = backend_diagnostic(payload)
             if diagnostic:
                 diagnostics.append(diagnostic)
@@ -345,9 +422,11 @@ def stream_command(
             emitted_final = emitted_final or event_type == "final"
         return_code = process.wait()
     finally:
-        timer.cancel()
+        watchdog.close()
     output = "\n".join(diagnostics)[-4000:].strip()
-    return return_code, output, emitted_final, timed_out.is_set()
+    if watchdog.timed_out.is_set():
+        output = watchdog.message()
+    return return_code, output, emitted_final, watchdog.timed_out.is_set()
 
 
 def codex_stream_command(
@@ -401,6 +480,7 @@ def run_codex_events(
     workdir: Path,
     attachments_dir: Path | None,
     timeout: int,
+    max_timeout: int | None = None,
     model: str | None = None,
     reasoning_effort: str | None = None,
     fast_mode: bool = False,
@@ -427,9 +507,10 @@ def run_codex_events(
                 ),
                 parser=parse_codex_stream_event,
                 timeout=timeout,
+                max_timeout=max_timeout if max_timeout is not None else timeout,
             )
             if timed_out:
-                emit_event("error", f"Open Tag backend timed out after {timeout}s")
+                emit_event("error", f"Open Tag backend timed out: {last_output}")
                 return 124
             if last_code == 0:
                 if not emitted_final:
@@ -473,6 +554,7 @@ def run_codex_app_server_events(
     *,
     workdir: Path,
     timeout: int,
+    max_timeout: int | None = None,
     model: str | None = None,
     reasoning_effort: str | None = None,
     control_file: Path | None = None,
@@ -485,6 +567,7 @@ def run_codex_app_server_events(
             codex_app_server_command(workdir),
             cwd=workdir,
             timeout=timeout,
+            max_timeout=max_timeout,
             control_file=control_file,
             run_id=run_id,
         )
@@ -518,7 +601,7 @@ def run_codex_app_server_events(
         if status == "interrupted":
             return 130
         if status == "timeout":
-            emit_event("error", f"Tag backend timed out after {timeout}s")
+            emit_event("error", f"Tag backend timed out: {detail}")
             return 124
         if (
             not made_progress
@@ -564,6 +647,7 @@ def run_claude_events(
     workdir: Path,
     attachments_dir: Path | None,
     timeout: int,
+    max_timeout: int | None = None,
 ) -> int:
     code, output, emitted_final, timed_out = stream_command(
         claude_stream_command(
@@ -573,11 +657,12 @@ def run_claude_events(
         ),
         parser=parse_claude_stream_event,
         timeout=timeout,
+        max_timeout=max_timeout if max_timeout is not None else timeout,
         input_text=prompt,
         workdir=workdir,
     )
     if timed_out:
-        emit_event("error", f"Open Tag backend timed out after {timeout}s")
+        emit_event("error", f"Open Tag backend timed out: {output}")
         return 124
     if code != 0:
         emit_event("error", f"Open Tag backend failed with exit code {code}:\n{output}")
@@ -701,6 +786,11 @@ def main() -> int:
     parser.add_argument(
         "--timeout", type=int, default=int(os.getenv("OPENTAG_TIMEOUT_SECONDS", "420"))
     )
+    parser.add_argument(
+        "--max-timeout",
+        type=int,
+        default=int(os.getenv("OPENTAG_MAX_TIMEOUT_SECONDS", "3600")),
+    )
     args = parser.parse_args()
     if not args.backend:
         parser.error("--backend or OPENTAG_BACKEND is required")
@@ -726,6 +816,7 @@ def main() -> int:
                         prompt,
                         workdir=args.workdir.resolve(),
                         timeout=args.timeout,
+                        max_timeout=args.max_timeout,
                         model=args.model,
                         reasoning_effort=args.reasoning_effort,
                         control_file=args.control_file,
@@ -737,6 +828,7 @@ def main() -> int:
                     workdir=args.workdir.resolve(),
                     attachments_dir=args.attachments_dir.resolve() if args.attachments_dir else None,
                     timeout=args.timeout,
+                    max_timeout=args.max_timeout,
                     model=args.model,
                     reasoning_effort=args.reasoning_effort,
                     fast_mode=args.fast_mode == "on",
@@ -747,6 +839,7 @@ def main() -> int:
                 workdir=args.workdir.resolve(),
                 attachments_dir=args.attachments_dir.resolve() if args.attachments_dir else None,
                 timeout=args.timeout,
+                max_timeout=args.max_timeout,
             )
         if args.backend == "codex":
             return run_codex(

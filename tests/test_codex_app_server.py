@@ -195,6 +195,12 @@ class CodexEventMapperTests(unittest.TestCase):
 
 
 class ServerRequestTests(unittest.TestCase):
+    def test_only_item_and_turn_lifecycle_refresh_idle_time(self) -> None:
+        self.assertTrue(CodexAppServer._is_progress_notification({"method": "item/started"}))
+        self.assertTrue(CodexAppServer._is_progress_notification({"method": "turn/plan/updated"}))
+        self.assertFalse(CodexAppServer._is_progress_notification({"method": "ping"}))
+        self.assertFalse(CodexAppServer._is_progress_notification({"method": "account/updated"}))
+
     def test_unattended_requests_are_resolved_conservatively(self) -> None:
         server = CodexAppServer(["codex"], cwd=Path("/tmp"), timeout=1)
         server._send = MagicMock()  # type: ignore[method-assign]
@@ -324,13 +330,14 @@ for raw in sys.stdin:
                 [sys.executable, "-u", str(self.fake_server_path(root))],
                 cwd=root,
                 timeout=0.5,
+                max_timeout=5,
             )
 
             status, detail = server.run(
                 "wait-for-interrupt", model=None, reasoning_effort=None, emit=events.append
             )
 
-        self.assertEqual(("timeout", ""), (status, detail))
+        self.assertEqual(("timeout", "no backend activity for 0.5s"), (status, detail))
         self.assertEqual("interrupted", events[-1]["status"])
 
     def test_unexpected_exit_reports_the_bounded_process_failure(self) -> None:

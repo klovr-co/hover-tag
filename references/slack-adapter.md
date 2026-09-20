@@ -176,7 +176,8 @@ auth and tool execution.
 Optional:
 
 ```bash
-export OPENTAG_TIMEOUT_SECONDS=420
+export OPENTAG_TIMEOUT_SECONDS=420      # stop after this much backend inactivity
+export OPENTAG_MAX_TIMEOUT_SECONDS=3600 # absolute task limit, even with activity
 export OPENTAG_BACKEND_ATTEMPTS=3   # codex backend: retries on capacity/rate-limit
 export OPENTAG_SLACK_STREAMING=0    # optional: disable default Slack response streaming
 export OPENTAG_CODEX_TRANSPORT=exec # optional legacy rollback; App Server is the default

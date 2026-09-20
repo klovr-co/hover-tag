@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -121,6 +122,44 @@ class OpenTagAgentPromptTests(unittest.TestCase):
 
 
 class BackendStreamEventTests(unittest.TestCase):
+    def test_backend_progress_requires_a_recognized_lifecycle_event(self) -> None:
+        self.assertTrue(opentag_agent.backend_made_progress({"type": "item.started"}))
+        self.assertTrue(opentag_agent.backend_made_progress({"type": "stream_event"}))
+        self.assertFalse(opentag_agent.backend_made_progress({"type": "keepalive"}))
+        self.assertFalse(opentag_agent.backend_made_progress({"message": "noise"}))
+
+    def test_watchdog_resets_idle_deadline_but_not_maximum_runtime(self) -> None:
+        stopped = threading.Event()
+        watchdog = opentag_agent.BackendWatchdog(
+            idle_timeout=0.08,
+            max_timeout=0.18,
+            stop=stopped.set,
+        )
+        watchdog.start()
+        try:
+            self.assertFalse(stopped.wait(0.05))
+            watchdog.touch()
+            self.assertFalse(stopped.wait(0.05))
+            watchdog.touch()
+            self.assertTrue(stopped.wait(0.12))
+            self.assertEqual("maximum", watchdog.reason)
+        finally:
+            watchdog.close()
+
+    def test_watchdog_reports_idle_timeout_without_progress(self) -> None:
+        stopped = threading.Event()
+        watchdog = opentag_agent.BackendWatchdog(
+            idle_timeout=0.04,
+            max_timeout=0.5,
+            stop=stopped.set,
+        )
+        watchdog.start()
+        try:
+            self.assertTrue(stopped.wait(0.2))
+            self.assertEqual("idle", watchdog.reason)
+        finally:
+            watchdog.close()
+
     def test_retryable_failure_recognizes_structured_rate_limit_errors(self) -> None:
         self.assertTrue(opentag_agent.retryable_backend_failure("rate_limit_exceeded"))
         self.assertTrue(opentag_agent.retryable_backend_failure("HTTP 429: too many requests"))
