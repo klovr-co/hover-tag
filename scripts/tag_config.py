@@ -19,6 +19,7 @@ DEFAULTS = {
     "OPENTAG_TRANSPORT": "slack", "OPENTAG_TIMEOUT_SECONDS": "420",
     "OPENTAG_MAX_TIMEOUT_SECONDS": "3600",
     "OPENTAG_BACKEND_ATTEMPTS": "3", "OPENTAG_SLACK_STREAMING": "1",
+    "OPENTAG_SLACK_DM_ENABLED": "1",
     "MFS_URL": "http://127.0.0.1:13619", "MFS_SLACK_HISTORY_DAYS": "30",
 }
 REQUIRED = ("OPENTAG_BACKEND", "MFS_URL", "MFS_ALLOWED_SCOPES",
@@ -50,6 +51,7 @@ LABELS = {
     "MFS_SLACK_CONNECTOR_URI": "Slack history connector",
     "MFS_SLACK_CONNECTOR_CONFIG": "Slack history connector config",
     "OPENTAG_BACKEND_ATTEMPTS": "Retry attempts", "OPENTAG_SLACK_STREAMING": "Stream replies (1 on, 0 off)",
+    "OPENTAG_SLACK_DM_ENABLED": "Direct messages (1 on, 0 off)",
     "OPENTAG_TRANSPORT": "Chat service",
 }
 
@@ -93,7 +95,7 @@ def validation_error(key: str, value: str) -> str | None:
         return "Use a slack:// connector URI"
     if key == "MFS_SLACK_CONNECTOR_CONFIG" and value and not Path(value).is_absolute():
         return "Use an absolute connector configuration path"
-    if key == "OPENTAG_SLACK_STREAMING" and value not in {"0", "1"}:
+    if key in {"OPENTAG_SLACK_STREAMING", "OPENTAG_SLACK_DM_ENABLED"} and value not in {"0", "1"}:
         return "Use 0 or 1"
     if key == "SLACK_CHANNEL_POLICY" and value not in {"selected", "invited"}:
         return "Choose selected or invited"
