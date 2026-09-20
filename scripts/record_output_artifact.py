@@ -16,6 +16,7 @@ LOCK_RETRY_SECONDS = 0.05
 
 
 def validated_output_path(raw_path: Path, workdir: Path) -> Path:
+    """Resolve an output path and require a regular file inside the workspace."""
     path = raw_path.expanduser()
     if not path.is_absolute():
         path = workdir / path
@@ -97,6 +98,7 @@ def record_artifact(manifest: Path, path: Path, *, attach: bool = False) -> None
 
 
 def main() -> int:
+    """Validate and record an output artifact from CLI arguments."""
     parser = argparse.ArgumentParser(
         description="Mark a requested output for local access and optional Slack attachment."
     )

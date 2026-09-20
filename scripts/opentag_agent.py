@@ -75,6 +75,7 @@ def build_prompt(
     allowed_scopes: str,
     output_manifest: Path | None = None,
 ) -> str:
+    """Build the backend prompt for one Slack request."""
     image_results_dir = attachments_dir / "results" / "images" if attachments_dir else None
     artifact_results_dir = attachments_dir / "results" / "artifacts" if attachments_dir else None
     artifact_instructions = ""
@@ -775,6 +776,7 @@ def run_claude(
 
 
 def main() -> int:
+    """Parse CLI arguments and run the selected agent backend."""
     parser = argparse.ArgumentParser(description="Run Open Tag through a CLI agent backend.")
     parser.add_argument(
         "--backend",

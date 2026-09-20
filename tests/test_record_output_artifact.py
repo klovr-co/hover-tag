@@ -13,6 +13,7 @@ from scripts import record_output_artifact
 
 class RecordOutputArtifactTests(unittest.TestCase):
     def test_serializes_concurrent_manifest_updates(self) -> None:
+        """Concurrent writers preserve every manifest entry."""
         with tempfile.TemporaryDirectory() as raw_dir:
             root = Path(raw_dir)
             artifacts = [root / f"result-{index}.txt" for index in range(8)]
@@ -22,6 +23,7 @@ class RecordOutputArtifactTests(unittest.TestCase):
             original_update = record_output_artifact._update_manifest
 
             def slow_update(path: Path, artifact: Path, *, attach: bool) -> None:
+                """Hold the manifest lock long enough to exercise contention."""
                 time.sleep(0.01)
                 original_update(path, artifact, attach=attach)
 
@@ -48,6 +50,7 @@ class RecordOutputArtifactTests(unittest.TestCase):
             self.assertFalse(manifest.with_suffix(".json.lock").exists())
 
     def test_reports_busy_manifest_after_bounded_lock_retries(self) -> None:
+        """Exhausted lock retries report a busy manifest."""
         with tempfile.TemporaryDirectory() as raw_dir:
             root = Path(raw_dir)
             artifact = root / "result.txt"
@@ -64,6 +67,7 @@ class RecordOutputArtifactTests(unittest.TestCase):
                     )
 
     def test_records_any_regular_file_and_deduplicates_it(self) -> None:
+        """Regular files are recorded once regardless of file type."""
         with tempfile.TemporaryDirectory() as raw_dir:
             root = Path(raw_dir)
             artifact = root / "result.dat"
@@ -80,6 +84,7 @@ class RecordOutputArtifactTests(unittest.TestCase):
             )
 
     def test_explicit_attachment_upgrades_existing_local_record(self) -> None:
+        """An explicit attachment request upgrades a local-only entry."""
         with tempfile.TemporaryDirectory() as raw_dir:
             root = Path(raw_dir)
             artifact = root / "result.csv"
@@ -97,6 +102,7 @@ class RecordOutputArtifactTests(unittest.TestCase):
             )
 
     def test_rejects_files_outside_the_workspace(self) -> None:
+        """Files outside the configured workspace are rejected."""
         with tempfile.TemporaryDirectory() as raw_dir, tempfile.TemporaryDirectory() as outside_dir:
             root = Path(raw_dir)
             artifact = Path(outside_dir) / "result.txt"
@@ -106,6 +112,7 @@ class RecordOutputArtifactTests(unittest.TestCase):
                 record_output_artifact.validated_output_path(artifact, root)
 
     def test_rejects_missing_files(self) -> None:
+        """Missing output files are rejected."""
         with tempfile.TemporaryDirectory() as raw_dir:
             with self.assertRaises(FileNotFoundError):
                 record_output_artifact.validated_output_path(

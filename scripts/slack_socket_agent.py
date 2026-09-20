@@ -1547,6 +1547,7 @@ def run_backend(
     output_manifest: Path | None = None,
     max_timeout: int | None = None,
 ) -> tuple[str, bool]:
+    """Run a backend request synchronously and return its output and status."""
     if max_timeout is None:
         max_timeout = int(os.getenv("OPENTAG_MAX_TIMEOUT_SECONDS", "3600"))
     with tempfile.NamedTemporaryFile(
@@ -1787,6 +1788,7 @@ def post_final_reply(
     placeholder_ts: str | None = None,
     footer_blocks: list[dict[str, Any]] | None = None,
 ) -> None:
+    """Post a complete answer in Slack, splitting long replies as needed."""
     chunks = split_reply(to_mrkdwn(answer), max_chars=2_900 if footer_blocks else MAX_REPLY_CHARS)
 
     def blocks_with_accessory(text: str) -> list[dict[str, Any]]:
@@ -2212,6 +2214,7 @@ def create_app(
     max_timeout: int | None = None,
     session_journal: SlackSessionJournal | None = None,
 ) -> App:
+    """Create and configure the Slack Bolt application and its listeners."""
     if max_timeout is None:
         max_timeout = int(os.getenv("OPENTAG_MAX_TIMEOUT_SECONDS", "3600"))
     app = App(token=require_env("SLACK_BOT_TOKEN"))
@@ -2354,6 +2357,7 @@ def create_app(
     @app.action(OPEN_LOCAL_ARTIFACT_ACTION_ID)
     @app.action(OPEN_LOCAL_ARTIFACT_ACTION_PATTERN)
     def open_output_artifact(ack: Any, body: dict[str, Any], client: Any, logger: Any) -> None:
+        """Validate a Slack action and open its workspace artifact locally."""
         ack()
         user_id = body.get("user", {}).get("id", "")
         channel = body.get("channel", {}).get("id", "")
@@ -2426,6 +2430,7 @@ def create_app(
         client: Any,
         logger: Any,
     ) -> None:
+        """Validate a Slack action and open its workspace directory locally."""
         ack()
         user_id = body.get("user", {}).get("id", "")
         channel = body.get("channel", {}).get("id", "")
@@ -2632,6 +2637,7 @@ def create_app(
         *,
         direct_message: bool,
     ) -> None:
+        """Run one authorized Slack invocation and publish its result."""
         channel = event["channel"]
         thread_ts = event.get("thread_ts") or event["ts"]
         user_id = event.get("user", "")

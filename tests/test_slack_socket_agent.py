@@ -115,6 +115,7 @@ class SlackTextAttachmentTests(unittest.TestCase):
 
 class SlackOutputArtifactTests(unittest.TestCase):
     def test_local_artifact_actions_allow_enabled_direct_messages(self) -> None:
+        """Artifact actions work in direct messages when DMs are enabled."""
         fake_app = FakeApp()
         client = MagicMock()
         logger = MagicMock()
@@ -162,6 +163,7 @@ class SlackOutputArtifactTests(unittest.TestCase):
             self.assertEqual(2, client.chat_postEphemeral.call_count)
 
     def test_local_artifact_actions_report_failures_in_enabled_direct_messages(self) -> None:
+        """Artifact action failures are reported in enabled direct messages."""
         fake_app = FakeApp()
         client = MagicMock()
         with tempfile.TemporaryDirectory() as raw_dir:
@@ -199,6 +201,7 @@ class SlackOutputArtifactTests(unittest.TestCase):
             self.assertTrue(any("output folder" in message for message in messages))
 
     def test_local_artifact_actions_reject_disabled_direct_messages(self) -> None:
+        """Artifact actions do nothing in direct messages when DMs are disabled."""
         fake_app = FakeApp()
         client = MagicMock()
         with tempfile.TemporaryDirectory() as raw_dir:
@@ -243,6 +246,7 @@ class SlackOutputArtifactTests(unittest.TestCase):
             client.chat_postEphemeral.assert_not_called()
 
     def test_builds_one_compact_local_open_row_for_all_artifacts(self) -> None:
+        """Artifact buttons share one compact row with a folder action."""
         with tempfile.TemporaryDirectory() as raw_dir:
             root = Path(raw_dir).resolve()
             first = root / "launch-checklist.md"
@@ -293,6 +297,7 @@ class SlackOutputArtifactTests(unittest.TestCase):
         )
 
     def test_local_open_directory_action_validates_and_opens_common_parent(self) -> None:
+        """The folder action validates and opens the artifact directory."""
         fake_app = FakeApp()
         client = MagicMock()
         logger = MagicMock()
@@ -344,6 +349,7 @@ class SlackOutputArtifactTests(unittest.TestCase):
             )
 
     def test_local_open_action_validates_user_and_workspace_path(self) -> None:
+        """The file action enforces its user and workspace boundary."""
         fake_app = FakeApp()
         client = MagicMock()
         logger = MagicMock()
@@ -419,6 +425,7 @@ class SlackOutputArtifactTests(unittest.TestCase):
                 )
 
     def test_uploads_requested_binary_file_to_originating_thread_unchanged(self) -> None:
+        """Requested binary files reach the originating thread unchanged."""
         client = MagicMock()
         logger = MagicMock()
         observed = b""
@@ -431,6 +438,7 @@ class SlackOutputArtifactTests(unittest.TestCase):
             manifest.write_text(json.dumps([str(artifact)]), encoding="utf-8")
 
             def capture_upload(**kwargs: object) -> dict[str, object]:
+                """Capture the bytes supplied to the Slack upload client."""
                 nonlocal observed
                 observed = Path(str(kwargs["file"])).read_bytes()
                 return {
@@ -463,6 +471,7 @@ class SlackOutputArtifactTests(unittest.TestCase):
         )
 
     def test_local_only_outputs_get_buttons_without_slack_attachments(self) -> None:
+        """Local-only outputs remain available without Slack uploads."""
         client = MagicMock()
         logger = MagicMock()
         with tempfile.TemporaryDirectory() as raw_dir:
@@ -493,6 +502,7 @@ class SlackOutputArtifactTests(unittest.TestCase):
         client.files_upload_v2.assert_not_called()
 
     def test_explicit_multi_file_delivery_uploads_every_output(self) -> None:
+        """Explicit multi-file delivery uploads each requested output."""
         client = MagicMock()
         client.files_upload_v2.side_effect = [
             {"file": {"permalink": "https://example.test/checklist"}},
@@ -527,6 +537,7 @@ class SlackOutputArtifactTests(unittest.TestCase):
         self.assertEqual(2, len(messages))
 
     def test_rejects_missing_and_out_of_workspace_files(self) -> None:
+        """Invalid manifest paths produce errors instead of artifacts."""
         with tempfile.TemporaryDirectory() as raw_dir, tempfile.TemporaryDirectory() as outside_dir:
             root = Path(raw_dir)
             outside = Path(outside_dir) / "secret.txt"
@@ -543,6 +554,7 @@ class SlackOutputArtifactTests(unittest.TestCase):
         self.assertIn("secret.txt", messages[1])
 
     def test_fetches_permalink_when_upload_returns_only_file_id(self) -> None:
+        """A file lookup supplies the permalink omitted by an upload response."""
         client = MagicMock()
         client.files_upload_v2.return_value = {"files": [{"id": "F123"}]}
         client.files_info.return_value = {
@@ -570,6 +582,7 @@ class SlackOutputArtifactTests(unittest.TestCase):
         )
 
     def test_keeps_successful_attachment_when_permalink_lookup_fails(self) -> None:
+        """A successful upload remains successful when permalink lookup fails."""
         client = MagicMock()
         client.files_upload_v2.return_value = {"file": {"id": "F123"}}
         client.files_info.side_effect = RuntimeError("lookup failed")
@@ -589,6 +602,7 @@ class SlackOutputArtifactTests(unittest.TestCase):
         logger.warning.assert_called_once()
 
     def test_rejects_output_above_tag_file_size_limit(self) -> None:
+        """Outputs larger than Tag's limit are rejected before upload."""
         with tempfile.TemporaryDirectory() as raw_dir, patch.object(
             slack_socket_agent, "MAX_OUTPUT_FILE_BYTES", 3
         ):
@@ -604,6 +618,7 @@ class SlackOutputArtifactTests(unittest.TestCase):
         self.assertIn("exceeds Tag’s", messages[0])
 
     def test_upload_failure_distinguishes_local_save_from_slack_delivery(self) -> None:
+        """Upload failures preserve and report the successful local save."""
         client = MagicMock()
         client.files_upload_v2.side_effect = RuntimeError("missing_scope")
         logger = MagicMock()
@@ -626,6 +641,7 @@ class SlackOutputArtifactTests(unittest.TestCase):
         logger.exception.assert_called_once()
 
     def test_mention_delivers_declared_output_and_cleans_request_manifest(self) -> None:
+        """A mention delivers declared output and removes its request manifest."""
         fake_app = FakeApp()
         client = MagicMock()
         indicator = MagicMock()
@@ -645,6 +661,7 @@ class SlackOutputArtifactTests(unittest.TestCase):
             }
 
             def finish_backend(*_args: object, **kwargs: object) -> tuple[str, bool]:
+                """Record a requested artifact as the simulated backend result."""
                 manifest = kwargs["output_manifest"]
                 assert isinstance(manifest, Path)
                 manifest.write_text(json.dumps([str(artifact)]), encoding="utf-8")

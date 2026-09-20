@@ -80,6 +80,7 @@ class OpenTagAgentPromptTests(unittest.TestCase):
         self.assertIn("only when the user", prompt)
 
     def test_slack_prompt_registers_only_explicitly_requested_output_files(self) -> None:
+        """Prompt the backend to register only user-requested deliverables."""
         with tempfile.TemporaryDirectory() as raw_dir:
             root = Path(raw_dir)
             prompt = opentag_agent.build_prompt(
