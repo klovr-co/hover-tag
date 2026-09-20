@@ -79,7 +79,7 @@ Create or reuse a Slack app:
    - `assistant:write` — manage native agent working status.
    - `chat:write` — post and update Slack replies.
    - `files:read` — download text snippets and image attachments shared in the current thread.
-   - `files:write` — upload backend-generated image results to the current thread.
+   - `files:write` — upload explicitly requested generated files, including images, and return private links in the current thread. Requested output files also receive separate **Open filename** actions that validate the requesting user and workspace path before opening the file on the Tag host.
    - `channels:read` + `channels:history` — read threads in public channels.
    - `groups:read` + `groups:history` — read threads in private channels.
    - `im:history` — read direct-message threads when DM invocation is enabled.
@@ -251,7 +251,10 @@ beneath the answer. It opens a user-scoped settings modal; saved choices apply
 to that user's future requests across channels and threads and survive bridge
 restarts in `.runtime/`. By default, Tag reads visible models and
 their supported reasoning levels and Fast Mode availability from Codex's local
-model cache. Reasoning levels retain Codex's native names. Fast Mode is a
+model cache. The modal layers Tag's `workspace/.codex/config.toml` model,
+reasoning, and service-tier defaults over the corresponding global Codex
+settings. Restart Tag after editing the local file. Reasoning levels retain
+Codex's native names. Fast Mode is a
 separate On/Off setting and uses increased usage when enabled. Set
 `OPENTAG_CODEX_MODELS` to restrict what Slack users can select.
 The modal's **Reset to default** button restores every control before saving.

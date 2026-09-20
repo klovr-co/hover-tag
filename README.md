@@ -241,6 +241,8 @@ Codex replies also include a compact **Configure** button beneath the answer. It
 opens a modal that saves model, native Codex reasoning-level,
 and Fast Mode choices for that Slack user across channels and threads.
 The modal's **Reset to default** button restores every control before saving.
+Its defaults come from `workspace/.codex/config.toml`, layered over the user's
+global `~/.codex/config.toml`; restart Tag after editing the local file.
 Fast Mode is independent of
 reasoning level and uses increased usage for faster responses. Operators can
 restrict the selectable models with `OPENTAG_CODEX_MODELS` and the reasoning
@@ -285,6 +287,7 @@ The bridge app normally needs these bot scopes:
 - `app_mentions:read`
 - `assistant:write`
 - `chat:write`
+- `files:read` and `files:write`
 - `channels:read` and `channels:history`
 - `groups:read` and `groups:history` if you intentionally use private channels
 - `im:history` for requests from the app's Messages tab
@@ -292,11 +295,16 @@ The bridge app normally needs these bot scopes:
 It also needs the `app_mention`, `message.im`, `app_home_opened`, and
 `agent_session_stopped` bot events and an app-level token with
 `connections:write`. Invite the bot only to channels where it should respond.
+`files:read` supports input attachments, while `files:write` supports explicitly
+requested generated-file delivery through private Slack file links, including
+backend-generated images. Each requested output also gets its own **Open
+filename** button. The button is restricted to the requesting Slack user and
+opens that workspace file with the default desktop application on the machine
+running Tag; the private Slack link remains available on other devices.
 Direct-message execution is enabled by default and can be disabled with
 `OPENTAG_SLACK_DM_ENABLED=0`.
-The included app manifest also requests `files:read` for inbound text and image
-attachments, `files:write` for backend-generated image results, and
-`canvases:write` for the explicit Canvas helper.
+The included app manifest also requests `canvases:write` for the explicit Canvas
+helper. Reinstall the Slack app after adding any scope.
 
 On upgrade, `tag start` compares the linked app with Tag's versioned manifest
 requirements and applies pending additive migrations before services start.
