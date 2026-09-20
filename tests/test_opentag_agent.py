@@ -163,6 +163,16 @@ class BackendStreamEventTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "exec or app-server"):
                 opentag_agent.codex_event_transport()
 
+    def test_app_server_command_applies_selected_fast_mode(self) -> None:
+        with patch.object(opentag_agent, "codex_workspace_args", return_value=[]):
+            command = opentag_agent.codex_app_server_command(
+                Path("/work"),
+                fast_mode=True,
+            )
+
+        self.assertIn("features.fast_mode=true", command)
+        self.assertIn('service_tier="fast"', command)
+
     def test_codex_exposes_only_completed_agent_messages(self) -> None:
         self.assertEqual(
             ("final", "Ready"),

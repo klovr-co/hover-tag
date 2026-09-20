@@ -44,6 +44,8 @@ class TagHomeTests(unittest.TestCase):
             skill = source / ".codex/skills/custom/SKILL.md"
             skill.parent.mkdir(parents=True)
             skill.write_text("custom")
+            source_codex_config = source / ".codex/config.toml"
+            source_codex_config.write_text('model_reasoning_effort = "high"\n')
             old = source / ".env"
             old.write_text(render_env({"OPENTAG_WORKDIR": str(source), "SLACK_BOT_TOKEN": "quote'and\nnewline"}))
             self.assertEqual(legacy_config(old)["SLACK_BOT_TOKEN"], "quote'and\nnewline")
@@ -51,6 +53,10 @@ class TagHomeTests(unittest.TestCase):
             self.assertEqual(json.loads((home / "config/settings.json").read_text())["OPENTAG_WORKDIR"], str(home / "workspace"))
             copied = home / "workspace/.agents/skills/custom/SKILL.md"
             self.assertEqual(copied.read_text(), "custom")
+            self.assertEqual(
+                (home / "workspace/.codex/config.toml").read_text(),
+                'model_reasoning_effort = "high"\n',
+            )
             copied.write_text("edited")
             migrate(source, home)
             self.assertEqual(copied.read_text(), "edited")

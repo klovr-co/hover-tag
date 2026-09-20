@@ -233,6 +233,8 @@ Codex replies also include a compact **Configure** button beneath the answer. It
 opens a modal that saves model, native Codex reasoning-level,
 and Fast Mode choices for that Slack user across channels and threads.
 The modal's **Reset to default** button restores every control before saving.
+Its defaults come from `workspace/.codex/config.toml`, layered over the user's
+global `~/.codex/config.toml`; restart Tag after editing the local file.
 Fast Mode is independent of
 reasoning level and uses increased usage for faster responses. Operators can
 restrict the selectable models with `OPENTAG_CODEX_MODELS` and the reasoning

@@ -121,21 +121,31 @@ existing skill directories, including locally installed skills and edits.
 Global backend skills and authentication remain available, subject to the
 backend's own discovery rules and context limits.
 
-Put Codex MCP definitions in `workspace/.codex/config.toml`:
+Put Tag-specific Codex defaults and MCP definitions in
+`workspace/.codex/config.toml`:
 
 ```toml
+model = "gpt-5.6-sol"
+model_reasoning_effort = "high"
+service_tier = "default"
+
 [mcp_servers.example]
 command = "example-mcp-server"
 args = ["--stdio"]
 env_vars = ["EXAMPLE_API_TOKEN"]
 ```
 
-TAG passes these definitions to `codex exec` for that invocation only. Other
-project config keys in this file are not applied by TAG. Use distinct server
-names; matching names override the corresponding global server fields. Names
-must contain only letters, numbers, underscores, or hyphens. Prefer absolute
-paths for local MCP server executables and arguments. Put integration commands
-in `integrations/bin` when they should be available only to TAG.
+The Slack settings UI layers these three defaults over the matching values in
+the user's global `~/.codex/config.toml`; omitted values continue to inherit the
+global setting. Saved Slack-user choices take precedence. Restart Tag after
+editing this file so the bridge reloads the model catalog and defaults.
+
+TAG passes MCP definitions to Codex for that invocation only. Other project
+config keys in this file are not applied by TAG. Use distinct server names;
+matching names override the corresponding global server fields. Names must
+contain only letters, numbers, underscores, or hyphens. Prefer absolute paths
+for local MCP server executables and arguments. Put integration commands in
+`integrations/bin` when they should be available only to TAG.
 
 Use environment references (`env_vars`, `bearer_token_env_var`,
 `env_http_headers`) for MCP secrets. Inline values would become process arguments.

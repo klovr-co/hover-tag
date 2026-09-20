@@ -1018,6 +1018,93 @@ class SlackAgentSettingsTests(unittest.TestCase):
             slack_socket_agent.default_agent_settings(models),
         )
 
+    def test_tag_local_codex_defaults_override_global_defaults_in_slack_modal(self) -> None:
+        payload = {
+            "models": [
+                {
+                    "slug": "gpt-global",
+                    "display_name": "GPT Global",
+                    "visibility": "list",
+                    "supported_reasoning_levels": [
+                        {"effort": "medium"},
+                        {"effort": "high"},
+                    ],
+                },
+                {
+                    "slug": "gpt-tag",
+                    "display_name": "GPT Tag",
+                    "visibility": "list",
+                    "additional_speed_tiers": ["fast"],
+                    "supported_reasoning_levels": [
+                        {"effort": "medium"},
+                        {"effort": "high"},
+                    ],
+                },
+            ]
+        }
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            codex_home = root / "codex-home"
+            workdir = root / "tag-workspace"
+            codex_home.mkdir()
+            (workdir / ".codex").mkdir(parents=True)
+            (codex_home / "models_cache.json").write_text(json.dumps(payload), encoding="utf-8")
+            (codex_home / "config.toml").write_text(
+                'model = "gpt-global"\n'
+                'model_reasoning_effort = "medium"\n'
+                'service_tier = "priority"\n',
+                encoding="utf-8",
+            )
+            (workdir / ".codex/config.toml").write_text(
+                'model = "gpt-tag"\n'
+                'model_reasoning_effort = "high"\n'
+                'service_tier = "default"\n',
+                encoding="utf-8",
+            )
+            with patch.dict(
+                os.environ,
+                {"CODEX_HOME": str(codex_home), "OPENTAG_WORKDIR": str(workdir)},
+                clear=True,
+            ):
+                models = slack_socket_agent.discover_codex_models()
+                modal = slack_socket_agent.settings_modal(
+                    metadata={"team": "T1", "channel": "C1", "thread_ts": "1.23"},
+                    settings=slack_socket_agent.AgentSettings(),
+                    models=models,
+                )
+
+        self.assertEqual(
+            "gpt-tag", modal["blocks"][0]["element"]["initial_option"]["value"]
+        )
+        self.assertEqual(
+            "high", modal["blocks"][1]["element"]["initial_option"]["value"]
+        )
+        self.assertNotIn("initial_options", modal["blocks"][2]["accessory"])
+
+    def test_tag_local_codex_defaults_inherit_missing_global_values(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            codex_home = root / "codex-home"
+            workdir = root / "tag-workspace"
+            codex_home.mkdir()
+            (workdir / ".codex").mkdir(parents=True)
+            (codex_home / "config.toml").write_text(
+                'model = "gpt-global"\nmodel_reasoning_effort = "medium"\n',
+                encoding="utf-8",
+            )
+            (workdir / ".codex/config.toml").write_text(
+                'model_reasoning_effort = "high"\nservice_tier = "fast"\n',
+                encoding="utf-8",
+            )
+            with patch.dict(
+                os.environ,
+                {"CODEX_HOME": str(codex_home), "OPENTAG_WORKDIR": str(workdir)},
+                clear=True,
+            ):
+                defaults = slack_socket_agent.configured_codex_defaults()
+
+        self.assertEqual(("gpt-global", "high", True), defaults)
+
     def test_user_settings_without_fast_mode_leave_it_unset(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
             path = Path(raw_dir) / "settings.json"

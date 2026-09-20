@@ -113,24 +113,46 @@ def codex_models_cache_path() -> Path:
     return codex_home / "models_cache.json"
 
 
-def configured_codex_defaults() -> tuple[str | None, str | None, bool]:
-    """Read the model, thinking, and speed an unqualified Codex run will use."""
-    config_path = codex_models_cache_path().with_name("config.toml")
+def tag_codex_config_path() -> Path:
+    """Return the project-local Codex configuration owned by Tag."""
+    workdir = Path(os.getenv("OPENTAG_WORKDIR", str(Path.cwd()))).expanduser()
+    return workdir / ".codex" / "config.toml"
+
+
+def read_codex_config(path: Path) -> dict[str, Any]:
     try:
         try:
             import tomllib
         except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 runtime
             import tomli as tomllib
-        with config_path.open("rb") as handle:
+        with path.open("rb") as handle:
             config = tomllib.load(handle)
+        return config if isinstance(config, dict) else {}
     except (OSError, TypeError, ValueError):
-        return None, None, False
-    model = config.get("model")
-    effort = config.get("model_reasoning_effort")
-    service_tier = config.get("service_tier")
+        return {}
+
+
+def configured_codex_defaults() -> tuple[str | None, str | None, bool]:
+    """Layer Tag's model defaults over the user's global Codex defaults."""
+    global_config = read_codex_config(codex_models_cache_path().with_name("config.toml"))
+    tag_config = read_codex_config(tag_codex_config_path())
+
+    def layered_value(key: str, validator: Callable[[Any], bool]) -> Any:
+        local = tag_config.get(key)
+        if validator(local):
+            return local
+        global_value = global_config.get(key)
+        return global_value if validator(global_value) else None
+
+    model = layered_value("model", lambda value: isinstance(value, str) and bool(value))
+    effort = layered_value(
+        "model_reasoning_effort",
+        lambda value: isinstance(value, str) and value in SUPPORTED_REASONING_EFFORTS,
+    )
+    service_tier = layered_value("service_tier", lambda value: isinstance(value, str))
     return (
-        model if isinstance(model, str) and model else None,
-        effort if isinstance(effort, str) and effort in SUPPORTED_REASONING_EFFORTS else None,
+        model,
+        effort,
         service_tier in {"fast", "priority"},
     )
 

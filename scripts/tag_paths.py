@@ -40,7 +40,14 @@ def initialize(home: Path) -> None:
                        check=True, stdout=subprocess.DEVNULL)
     config = home / "workspace/.codex/config.toml"
     if not config.exists():
-        config.write_text("# TAG-only Codex MCP servers go here: [mcp_servers.NAME]\n", encoding="utf-8")
+        config.write_text(
+            "# TAG-only Codex defaults and MCP servers go here.\n"
+            "# model = \"gpt-example\"\n"
+            "# model_reasoning_effort = \"high\"\n"
+            "# service_tier = \"default\"\n"
+            "# [mcp_servers.NAME]\n",
+            encoding="utf-8",
+        )
 
 
 def runtime_environment(home: Path) -> dict[str, str]:
