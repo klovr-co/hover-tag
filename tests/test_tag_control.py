@@ -204,7 +204,7 @@ class TagControlTests(unittest.TestCase):
         ), patch.object(opentag_setup, "finish_setup", return_value=0), patch.object(opentag_setup.getpass, "getpass") as secret, redirect_stdout(StringIO()):
             self.assertEqual(opentag_setup.guided_setup(self.path), 0)
         secret.assert_not_called()
-        self.assertEqual(tag_config.read_config(self.path), dict(values, SLACK_ALLOWED_USER_IDS="UOWNER"))
+        self.assertEqual(tag_config.read_config(self.path), dict(values, SLACK_ALLOWED_USER_IDS="UOWNER", OPENTAG_SLACK_CONNECTION="hosted"))
 
     def test_no_start_setup_never_calls_service_finish(self):
         tag_config.save_config(self.path, self.complete())

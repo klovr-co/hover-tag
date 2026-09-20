@@ -1808,6 +1808,14 @@ def app_home_view(
                 {"type": "section", "text": {"type": "mrkdwn", "text": UNAUTHORIZED_USER_MESSAGE}},
             ],
         }
+    startup_reminder = {
+        "type": "section",
+        "text": {
+            "type": "mrkdwn",
+            "text": "*No reply from Tag?* Make sure Tag is running on its host computer. "
+            "Run `tag start`, check `tag status`, then mention me again.",
+        },
+    }
     if os.getenv("SLACK_CHANNEL_POLICY") == "invited":
         return {"type": "home", "blocks": [
             {"type": "header", "text": {"type": "plain_text", "text": "Tag"}},
@@ -1815,6 +1823,7 @@ def app_home_view(
                 "Invite Tag to a channel to enable replies and automatic channel memory. "
                 "Invitations are checked about every minute while Tag runs. "
                 "Only authorized users can request tasks; replies use this channel’s memory only."}},
+            startup_reminder,
         ]}
     selector: dict[str, Any] = {
         "type": "multi_conversations_select",
@@ -1855,6 +1864,7 @@ def app_home_view(
     ]
     if notice:
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": notice}})
+    blocks.append(startup_reminder)
     return {"type": "home", "blocks": blocks}
 
 
@@ -2427,7 +2437,7 @@ def install_shutdown_handlers(shutdown_requested: threading.Event) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run Open Tag Slack Socket Mode bridge.")
+    parser = argparse.ArgumentParser(description="Run the Tag Slack bridge.")
     parser.add_argument(
         "--backend",
         choices=["claude", "codex"],
@@ -2444,7 +2454,7 @@ def main() -> None:
     parser.add_argument(
         "--ready-file",
         type=Path,
-        help="Write a short-lived Socket Mode connection heartbeat to this path.",
+        help="Write a short-lived Slack transport connection heartbeat to this path.",
     )
     parser.add_argument("--process-id", help=argparse.SUPPRESS)
     args = parser.parse_args()
@@ -2461,7 +2471,17 @@ def main() -> None:
         session_journal=session_journal,
     )
     print_live_summary(args.backend, allowed_user_ids)
-    handler = SocketModeHandler(app, require_env("SLACK_APP_TOKEN"))
+    if os.getenv("OPENTAG_RELAY_URL"):
+        try:
+            from .slack_relay import RelayHandler
+        except ImportError:
+            from slack_relay import RelayHandler
+        handler = RelayHandler(
+            app, require_env("OPENTAG_RELAY_URL"), require_env("OPENTAG_RELAY_TOKEN"),
+            require_env("SLACK_TEAM_ID"), require_env("SLACK_APP_ID"),
+        )
+    else:
+        handler = SocketModeHandler(app, require_env("SLACK_APP_TOKEN"))
     session_journal.reconcile(app.client, app.logger)
     shutdown_requested = threading.Event()
     install_shutdown_handlers(shutdown_requested)
