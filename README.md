@@ -255,10 +255,15 @@ cannot create or approve a Slack app on behalf of your workspace administrator.
 
 ### Upgrade or uninstall
 
-To upgrade, rerun the installer, then `tag stop` and `tag start`. Configuration,
-personal skills, MCP settings, and state are preserved. `tag rollback` selects
-the previous release while stopped. Use `tag migrate --from /path/to/old/checkout`
-to copy legacy configuration and skills without deleting the originals.
+Install Tag once, then use `tag upgrade`; it follows the channel selected during
+installation, verifies the release, preserves configuration and personal data,
+and restarts running Tag services on the new release. Use
+`tag upgrade --dry-run` to check first, `tag upgrade --channel stable` to switch
+channels, or `tag upgrade --version X.Y.Z` to install and pin an exact release.
+Tag blocks older versions unless `--allow-downgrade` is explicitly supplied;
+prefer `tag rollback` for the immediately previous release. Use
+`tag migrate --from /path/to/old/checkout` to copy legacy configuration and
+skills without deleting the originals.
 
 To uninstall, stop TAG, back up personal files, then remove its managed launcher
 and application home. See [installation](docs/installation.md) for details.

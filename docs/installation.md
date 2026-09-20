@@ -192,10 +192,20 @@ command presents one operation and should be preferred to manually chaining
 stop and start. Automatic login startup is not
 configured. A separately managed MFS server is reused and never stopped by TAG.
 
-Rerun the installer to upgrade. Failed dependency installation leaves the active
-release unchanged. Run `tag stop` then `tag start` to activate the new code for
-running services. `tag rollback` selects the previous release after stopping
-TAG. Older releases remain available; no automatic release deletion is performed.
+Run `tag upgrade` after the initial installation. It follows the saved channel,
+downloads and verifies the candidate, stages a separate runtime, atomically
+selects it, and restarts running Tag services. Failed verification or dependency
+installation leaves the active release unchanged. `tag upgrade --dry-run`
+reports the verified target without changing the installation; add `--json` for
+automation. Use `--channel stable|beta|alpha|edge` to change channels or
+`--version X.Y.Z` to install and pin an exact release. `--no-restart` leaves
+running services on the old code until `tag restart` is run. Upgrades never
+install an older semantic version by default. A channel change is saved while
+Tag keeps the newer installed release until that channel catches up. An
+intentional older install requires `--allow-downgrade`; prefer `tag rollback`
+when returning to the immediately previous known-good release. `tag rollback`
+selects the previous release after stopping Tag. Older releases remain
+available; no automatic release deletion is performed.
 
 For a legacy checkout, explicitly copy settings and local skills:
 

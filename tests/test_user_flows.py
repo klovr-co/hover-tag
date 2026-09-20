@@ -46,7 +46,8 @@ class FlowTests(unittest.TestCase):
         with patch.object(tag_cli.subprocess, "call", side_effect=[0, 7]) as call:
             code, output = self.invoke(["restart"])
             self.assertEqual(code, 7)
-            self.assertIn("tag  /  Restart", output)
+            self.assertIn("@Tag by Hover  /  Restart", output)
+            self.assertIn("https://hover.team/tag", output)
             self.assertEqual([c.args[0][-1] for c in call.call_args_list], ["stop", "start"])
             self.assertTrue(all(c.kwargs["env"]["TAG_RESTART_FLOW"] == "1" for c in call.call_args_list))
         with patch.object(tag_cli.subprocess, "call", return_value=4) as call:
