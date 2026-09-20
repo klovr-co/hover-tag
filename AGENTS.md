@@ -28,3 +28,22 @@ Use the repository's default five-role triage vocabulary. See
 
 This is a single-context repository. Read the root `CONTEXT.md` and relevant
 ADRs under `docs/adr/` when they exist. See `docs/agents/domain.md`.
+
+## Documentation presentation
+
+For documentation only: Slack request examples that mention `@Tag` must use
+the same Slack-style presentation as **What Tag knows** in the rendered docs.
+This includes file-task prompts such as `@Tag read launch-plan.md and create
+launch-checklist.md`. Ordinary inline mentions of the product do not need a
+Slack illustration.
+
+Keep canonical examples as Markdown blockquotes in this repository. In Hover's
+`tag/scripts/sync-docs.mjs`, map them to the existing `SlackPrompt` or
+`SlackContextExample` components from `tag/components/slack-example.tsx`.
+Reuse the established mention styling, pixel avatars, spacing, and typography.
+When showing an illustrative reply, follow the existing once-on-visible
+typing-to-reply behavior and reduced-motion support. Animate only the final
+message, and only when it is the assistant's reply; show all earlier messages
+and human messages immediately. Keep the reply
+consistent with the documented capabilities. Do not invent a reply solely to
+style a prompt. Never edit generated MDX manually.
