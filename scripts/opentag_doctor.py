@@ -102,8 +102,7 @@ def check_env() -> bool:
         "MFS_ALLOWED_SCOPES",
         "OPENTAG_BACKEND",
     ]
-    required.extend(["SLACK_BOT_TOKEN", "SLACK_ALLOWED_USER_IDS"])
-    required.extend(["OPENTAG_RELAY_URL", "OPENTAG_RELAY_TOKEN"] if env("OPENTAG_RELAY_URL") else ["SLACK_APP_TOKEN"])
+    required.extend(["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_ALLOWED_USER_IDS"])
     all_ok = True
     for name in required:
         value = env(name)
