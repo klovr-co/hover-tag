@@ -8,7 +8,7 @@ the files in its workspace, and the sources and tools configured for it.
 
 Mention Tag in the same thread when you want to build on an answer:
 
-> @Tag turn that into a one-week action plan.
+> @Maya's Tag turn that into a one-week action plan.
 
 Each mention starts a fresh agent run. Tag reads one page of up to 30 messages
 from the current thread and receives your new request separately. That lets
@@ -20,7 +20,7 @@ answer seems to have lost it.
 
 ## Find a discussion in another channel
 
-> @Tag find the launch decision in #product and compare it with the plan in
+> @Jules's Tag find the launch decision in #product and compare it with the plan in
 > your workspace. Show me which messages support the decision.
 
 Tag can search another channel's history when it has been indexed and made
@@ -33,7 +33,7 @@ find something, that alone does not mean the discussion never happened.
 
 ## Ask Tag to remember a decision
 
-> @Tag remember that our weekly report is due Friday.
+> @Maya's Tag remember that our weekly report is due Friday.
 
 Tag does not provide a dedicated saved-note command or local memory store.
 For a decision you need later, ask Tag to write it to a specific workspace
@@ -55,7 +55,7 @@ configuration, and the tool's credentials and permissions.
 For example, with the Google Workspace CLI (`gws`) installed and authenticated,
 and the Gmail skill available to the agent, you could ask:
 
-> @Tag find the latest email about the launch schedule and summarize what
+> @Jules's Tag find the latest email about the launch schedule and summarize what
 > changed.
 
 The skill explains how to use `gws`; the Google login determines which email

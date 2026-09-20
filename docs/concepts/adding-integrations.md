@@ -12,7 +12,7 @@ They serve different purposes:
 | Item | What it provides | Example |
 | --- | --- | --- |
 | Command | A program the agent can run | `gws` makes Google Workspace API requests |
-| Skill | Instructions for carrying out a task | A Gmail skill explains how to find and read mail |
+| Skill | Instructions for using tools, sometimes with bundled scripts | A Gmail skill explains how to find and read mail using `gws` |
 | MCP connection | Tools exposed by a configured server | A server can provide document-search tools |
 
 ## Configure integrations
@@ -43,14 +43,15 @@ shows a complete example.
 
 ## Make commands and logins available
 
-Make sure the command works from the terminal you use to start Tag.
+Follow the skill's setup instructions for any required tools. Make sure any
+required command works from the terminal you use to start Tag.
 
 If you change the command search path or environment, run `tag restart` from
 that terminal so Tag receives the changes.
 
-Follow the tool or connector's authentication instructions. If it's already
-authenticated and that login is available to Tag, you can reuse it. Adding a
-skill does not install the tool or sign you in.
+Each tool or connector handles its own authentication. Follow its authentication
+instructions. If it's already authenticated and that login is available to Tag,
+you can reuse it.
 
 The agent also inherits credentials available in Tag's process environment,
 such as API keys. See the [security policy](../../SECURITY.md) for details.

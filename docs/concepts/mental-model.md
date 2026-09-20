@@ -20,7 +20,7 @@ MFS gives it searchable context without opening every indexed source to Tag.
 ## What happens after a mention
 
 ```text
-1. A permitted teammate mentions @Tag in Slack.
+1. You mention your Tag in Slack.
 2. Tag reads the current thread and supported attachments.
 3. Tag starts a CLI agent in the configured workspace.
 4. The agent uses thread context to understand the request.

@@ -6,8 +6,8 @@ right thread. Add more sources after this works.
 
 ## The goal
 
-An authorized teammate mentions `@Tag` in Slack. Codex works in the directory
-you chose, and Tag replies in the same thread.
+You mention your Tag in Slack. Codex works in its configured workspace, and
+Tag replies in the same thread, where your teammates can follow the work.
 
 ## Before you begin
 
@@ -21,8 +21,11 @@ You need:
 - permission to create or install a Slack app; and
 - a dedicated workspace directory where Tag may perform tasks.
 
-Codex is the qualified backend for the v0.1 alpha path. Claude is available as
-an experimental backend.
+If you haven't used Codex yet, install the Codex CLI and sign in on the
+computer that will run Tag. Check that you can run a task in Codex before
+continuing. Tag uses that local agent and its available integrations.
+
+This guide uses Codex. Claude support is coming soon.
 
 ## 1. Install Tag
 
@@ -43,8 +46,15 @@ creating or linking an app, entering tokens, and selecting channels and the
 owner member ID. Approve the displayed channels and history window before
 Tag indexes Slack history. Use your installed bot's name when mentioning it.
 
-At first, only the owner member ID can invoke Tag. Add teammates to
-`SLACK_ALLOWED_USER_IDS` when you are ready to share it.
+Use your own Slack member ID as the owner. At first, only you can request
+work from your Tag. This matters because the agent runs on the host computer
+with the file access, tools, and connected accounts available to its backend.
+Actual access depends on backend permissions, the local account, and
+credentials. Other channel members can still see your requests and Tag's replies.
+
+Each person brings their own Tag through a separate Slack app. You can also
+authorize teammates to use yours, but they would use the same agent's access.
+See [Your own Tag](../concepts/access.md) before sharing.
 
 For every scope and token detail, use the
 [Slack adapter reference](../../references/slack-adapter.md).
@@ -63,6 +73,8 @@ The workspace is different from MFS memory:
 Workspace files are available to the agent directly. Searchable context
 depends on which sources are indexed and permitted through MFS.
 
+The workspace folder is the agent's starting directory, not a security sandbox.
+
 ## 4. Check and start Tag
 
 ```bash
@@ -77,9 +89,9 @@ and configured retrieval scopes. Fix failed checks before testing a mention.
 ## 5. Delegate a useful task
 
 In the Slack channel where Tag is present, try a request grounded in the
-workspace:
+workspace. These examples use Maya's Tag; select your own Tag's mention in Slack:
 
-> @Tag read the project documentation, summarize what this project is trying to
+> @Maya's Tag read the project documentation, summarize what this project is trying to
 > accomplish, and list the three most important open questions. For each point,
 > tell me which file supports it.
 
@@ -91,16 +103,21 @@ right thread.
 
 Reply in the same thread with:
 
-> @Tag turn that into a one-week action plan with an owner placeholder for each item.
+> @Maya's Tag turn that into a one-week action plan with an owner placeholder for each item.
 
 Tag receives the earlier thread messages with the new request, so the follow-up
 can build on the shared discussion.
 
 ## 7. Add broader context
 
-Once the first loop works, add another source through MFS and include its exact
-root in `MFS_ALLOWED_SCOPES`. Setup handles the approved Slack history source;
-changing retrieval scopes alone does not index additional sources.
+Once the first loop works, make your existing tools and connected accounts
+available to Tag. See [Adding integrations](../concepts/adding-integrations.md).
+Availability depends on the local account and environment running Codex.
+
+Setup handles approved Slack history indexing. For Slack requests, the bundled
+MFS helpers are currently filtered to the invoking channel's Slack scopes;
+adding another source to `MFS_ALLOWED_SCOPES` does not make it available through
+those helpers.
 
 ## If something fails
 
