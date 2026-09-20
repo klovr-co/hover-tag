@@ -42,6 +42,17 @@ class ReleaseHelperTests(unittest.TestCase):
         self.assertIn("install.ps1 -DependenciesOnly", script)
         self.assertIn("exit /b 2", script)
 
+    def test_windows_dependency_bootstrap_prepares_the_source_runtime(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        script = (root / "install.ps1").read_text(encoding="utf-8")
+
+        self.assertIn("[switch]$DependenciesOnly", script)
+        self.assertIn(".venv'", script)
+        self.assertIn("Scripts/python.exe", script)
+        self.assertIn("& python -m venv $runtime", script)
+        self.assertIn("-m pip install -r", script)
+        self.assertIn("requirements-runtime.txt", script)
+
     def test_uv_uses_the_cross_platform_virtualenv_python(self) -> None:
         root = Path(__file__).resolve().parents[1]
         script = (root / "scripts/ci_check.sh").read_text(encoding="utf-8")
