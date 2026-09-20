@@ -23,13 +23,16 @@ oauth_config:
       - canvases:write
       - chat:write
       - files:read
+      - files:write
       - groups:history
       - groups:read
+      - im:history
 settings:
   event_subscriptions:
     bot_events:
       - app_home_opened
       - app_mention
+      - message.im
       - agent_session_stopped
   interactivity:
     is_enabled: true
