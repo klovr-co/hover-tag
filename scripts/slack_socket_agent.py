@@ -27,16 +27,19 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 try:
     from .opentag_process_env import backend_environment
     from .slack_mrkdwn import to_mrkdwn
+    from .tag_paths import tag_temp_dir
     from . import slack_channels
 except ImportError:  # Direct script execution does not create a package context.
     from opentag_process_env import backend_environment
     from slack_mrkdwn import to_mrkdwn
+    from tag_paths import tag_temp_dir
     import slack_channels
 
 
 MENTION_RE = re.compile(r"<@[^>]+>")
 MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024
 MAX_ATTACHMENT_TEXT_CHARS = 12_000
+MAX_GENERATED_IMAGES = 10
 MAX_REPLY_CHARS = 3_800
 STREAM_START_CHARS = 40
 STREAM_APPEND_CHARS = 200
@@ -87,6 +90,12 @@ TEXT_FILE_TYPES = {
     "typescript",
     "xml",
     "yaml",
+}
+GENERATED_IMAGE_MIME_TYPES = {
+    "image/gif",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
 }
 
 
@@ -493,6 +502,63 @@ def download_thread_text_files(messages: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
+def generated_images_dir(attachment_dir: Path) -> Path:
+    """Return the backend/bridge handoff directory for generated images."""
+    return attachment_dir / "results" / "images"
+
+
+def collect_generated_images(results_dir: Path) -> tuple[list[Path], list[str]]:
+    """Validate bounded image results before giving their paths to Slack."""
+    images: list[Path] = []
+    errors: list[str] = []
+    for path in sorted(results_dir.iterdir(), key=lambda item: item.name.lower()):
+        if path.is_symlink() or not path.is_file():
+            errors.append(f"{path.name}: not a regular file")
+            continue
+        mime_type = mimetypes.guess_type(path.name)[0]
+        if mime_type not in GENERATED_IMAGE_MIME_TYPES:
+            errors.append(f"{path.name}: unsupported image type")
+            continue
+        try:
+            size = path.stat().st_size
+        except OSError as exc:
+            errors.append(f"{path.name}: {exc}")
+            continue
+        if size == 0:
+            errors.append(f"{path.name}: empty file")
+            continue
+        if size > MAX_ATTACHMENT_BYTES:
+            errors.append(f"{path.name}: exceeds the 15 MB safety limit")
+            continue
+        if len(images) >= MAX_GENERATED_IMAGES:
+            errors.append(f"{path.name}: exceeds the {MAX_GENERATED_IMAGES}-image result limit")
+            continue
+        images.append(path)
+    return images, errors
+
+
+def upload_generated_images(
+    client: Any,
+    channel: str,
+    thread_ts: str,
+    results_dir: Path,
+) -> list[str]:
+    """Upload validated backend image results into the originating Slack thread."""
+    images, errors = collect_generated_images(results_dir)
+    for path in images:
+        try:
+            client.files_upload_v2(
+                channel=channel,
+                thread_ts=thread_ts,
+                file=str(path),
+                filename=path.name,
+                title=path.stem,
+            )
+        except Exception as exc:  # noqa: BLE001 - upload failures must not hide the text answer
+            errors.append(f"{path.name}: {exc}")
+    return errors
+
+
 def build_thread_text(client: Any, channel: str, thread_ts: str, attachment_dir: Path) -> str:
     response = client.conversations_replies(channel=channel, ts=thread_ts, limit=30)
     messages = response.get("messages", [])
@@ -564,12 +630,12 @@ def settings_button_blocks(
     team: str,
     channel: str,
     thread_ts: str,
+    direct_message: bool = False,
 ) -> list[dict[str, Any]]:
     metadata = {"team": team, "channel": channel, "thread_ts": thread_ts}
-    value = json.dumps(
-        metadata,
-        separators=(",", ":"),
-    )
+    if direct_message:
+        metadata["direct_message"] = True
+    value = json.dumps(metadata, separators=(",", ":"))
     return [
         {
             "type": "actions",
@@ -609,7 +675,7 @@ def select_option(value: str, text: str, description: str | None = None) -> dict
 
 def settings_modal(
     *,
-    metadata: dict[str, str],
+    metadata: dict[str, Any],
     settings: AgentSettings,
     models: list[CodexModelOption],
     revision: str = "",
@@ -1349,8 +1415,13 @@ def run_backend(
     model: str | None = None,
     reasoning_effort: str | None = None,
     fast_mode: bool = False,
+    max_timeout: int | None = None,
 ) -> tuple[str, bool]:
-    with tempfile.NamedTemporaryFile("w", suffix=".txt", encoding="utf-8", delete=False) as f:
+    if max_timeout is None:
+        max_timeout = int(os.getenv("OPENTAG_MAX_TIMEOUT_SECONDS", "3600"))
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".txt", encoding="utf-8", delete=False, dir=tag_temp_dir()
+    ) as f:
         f.write(thread_text)
         thread_file = Path(f.name)
 
@@ -1372,7 +1443,9 @@ def run_backend(
         "--workdir",
         str(default_workdir()),
         "--timeout",
-        str(timeout),
+        str(max_timeout),
+        "--max-timeout",
+        str(max_timeout),
     ]
     if backend == "codex" and model:
         cmd.extend(["--model", model])
@@ -1393,11 +1466,13 @@ def run_backend(
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            timeout=timeout + 10,
+            timeout=max_timeout + 10,
             env=child_env,
         )
         output = result.stdout.strip()
         if result.returncode != 0:
+            if result.returncode == 124:
+                return f"Tag backend exceeded its maximum runtime of {max_timeout}s", False
             detail = output[-3000:] or f"Open Tag backend failed with exit code {result.returncode}."
             return detail, False
         return output or "Open Tag finished without output.", True
@@ -1425,9 +1500,14 @@ def run_backend_events(
     on_answer_start: Callable[[], None] | None = None,
     on_status: Callable[[str], None] | None = None,
     fast_mode: bool = False,
+    max_timeout: int | None = None,
 ) -> tuple[str, bool]:
     """Consume normalized lifecycle events and forward only final-answer text."""
-    with tempfile.NamedTemporaryFile("w", suffix=".txt", encoding="utf-8", delete=False) as f:
+    if max_timeout is None:
+        max_timeout = int(os.getenv("OPENTAG_MAX_TIMEOUT_SECONDS", "3600"))
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".txt", encoding="utf-8", delete=False, dir=tag_temp_dir()
+    ) as f:
         f.write(thread_text)
         thread_file = Path(f.name)
 
@@ -1450,6 +1530,8 @@ def run_backend_events(
         str(default_workdir()),
         "--timeout",
         str(timeout),
+        "--max-timeout",
+        str(max_timeout),
         "--event-stream",
     ]
     if backend == "codex" and model:
@@ -1459,7 +1541,9 @@ def run_backend_events(
     if backend == "codex":
         cmd.extend(["--fast-mode", "on" if fast_mode else "off"])
     run_id = uuid.uuid4().hex
-    with tempfile.NamedTemporaryFile("w", suffix=".control", delete=False) as control:
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".control", delete=False, dir=tag_temp_dir()
+    ) as control:
         control_file = Path(control.name)
     cmd.extend(["--control-file", str(control_file), "--run-id", run_id])
     child_env = backend_environment(
@@ -1491,7 +1575,7 @@ def run_backend_events(
         timed_out.set()
         active_run.force_stop()
 
-    timer = threading.Timer(timeout + 10, stop_process)
+    timer = threading.Timer(max_timeout + 10, stop_process)
     timer.start()
     final_messages: list[str] = []
     delta_text: list[str] = []
@@ -1552,7 +1636,7 @@ def run_backend_events(
     if active_run.cancel_requested:
         return "Stop requested, but the backend did not confirm interruption before cleanup.", False
     if timed_out.is_set():
-        return f"Tag backend timed out after {timeout}s", False
+        return f"Tag backend exceeded its maximum runtime of {max_timeout}s", False
     if return_code != 0:
         details = error_text or "\n".join(diagnostics)[-3000:].strip()
         return details or f"Open Tag backend failed with exit code {return_code}.", False
@@ -1625,6 +1709,7 @@ def retry_button_blocks(
     channel: str,
     thread_ts: str,
     request_ts: str,
+    direct_message: bool = False,
 ) -> list[dict[str, Any]]:
     metadata = {
         "team": team,
@@ -1632,6 +1717,8 @@ def retry_button_blocks(
         "thread_ts": thread_ts,
         "request_ts": request_ts,
     }
+    if direct_message:
+        metadata["direct_message"] = True
     return [{
         "type": "actions",
         "elements": [{
@@ -1643,11 +1730,20 @@ def retry_button_blocks(
     }]
 
 
-def user_facing_failure(detail: str, timeout: int, error_reference: str) -> str:
+def user_facing_failure(
+    detail: str,
+    timeout: int,
+    error_reference: str,
+    max_timeout: int | None = None,
+) -> str:
     """Turn private backend diagnostics into stable, actionable Slack copy."""
     if detail.startswith("Stopped.") or detail.startswith("Stop requested"):
         return detail
     lowered = detail.lower()
+    if "no backend activity" in lowered:
+        return f"Tag stopped after {timeout} seconds without backend activity. Please retry."
+    if "maximum runtime" in lowered and max_timeout is not None:
+        return f"Tag reached its maximum runtime of {max_timeout} seconds. Please retry."
     if "timed out" in lowered:
         return f"Tag timed out after {timeout} seconds. Please retry."
     if any(
@@ -1681,6 +1777,21 @@ def slack_channel_allowed(channel: str) -> bool:
         configured = os.getenv("SLACK_CHANNEL_ID", "").strip()
     allowed_channels = set(slack_channels.parse_channel_ids(configured))
     return bool(allowed_channels) and channel in allowed_channels
+
+
+def direct_messages_enabled() -> bool:
+    """Enable authorized DM invocation unless the operator explicitly disables it."""
+    return env_enabled("OPENTAG_SLACK_DM_ENABLED", default=True)
+
+
+def slack_conversation_allowed(channel: str, *, direct_message: bool = False) -> bool:
+    """Apply the channel allowlist to channels and the DM switch to direct messages."""
+    return direct_messages_enabled() if direct_message else slack_channel_allowed(channel)
+
+
+def is_direct_message_channel(channel: str) -> bool:
+    """Recognize Slack's stable DM conversation ID prefix for events without channel_type."""
+    return channel.startswith("D")
 
 
 def parse_slack_user_ids(value: str) -> frozenset[str]:
@@ -1801,12 +1912,14 @@ def print_live_summary(backend: str, allowed_user_ids: frozenset[str]) -> None:
     print(f"  Memory  : {len(scopes)} permitted MFS scope(s):")
     for scope in scopes or ["(none — set MFS_ALLOWED_SCOPES)"]:
         print(f"            - {scope}")
+    dm_status = "enabled" if direct_messages_enabled() else "disabled"
     print(f"  Slack   : listening for @mentions in channel {channel}")
+    print(f"  DMs     : {dm_status}")
     print(f"  Access  : {len(allowed_user_ids)} authorized Slack user(s)")
     print("")
     print("  Only explicitly authorized Slack users can drive the backend,")
     print("  which runs with your shell and inherited environment.")
-    print("  Slack text flows into the prompt, so treat every mention as")
+    print("  Slack text flows into the prompt, so treat every invocation as")
     print("  untrusted input: use an isolated channel on a non-production host.")
     print(f"  Invite the bot only where it should respond: /invite @{bot}")
     print("=" * 64)
@@ -1817,8 +1930,11 @@ def create_app(
     timeout: int,
     allowed_user_ids: frozenset[str],
     *,
+    max_timeout: int | None = None,
     session_journal: SlackSessionJournal | None = None,
 ) -> App:
+    if max_timeout is None:
+        max_timeout = int(os.getenv("OPENTAG_MAX_TIMEOUT_SECONDS", "3600"))
     app = App(token=require_env("SLACK_BOT_TOKEN"))
 
     @app.event("agent_session_stopped")
@@ -1835,7 +1951,10 @@ def create_app(
         if not (
             isinstance(channel, str)
             and isinstance(thread_ts, str)
-            and slack_channel_allowed(channel)
+            and slack_conversation_allowed(
+                channel,
+                direct_message=is_direct_message_channel(channel),
+            )
             and slack_user_allowed(user_id, allowed_user_ids)
         ):
             logger.warning("Ignoring unauthorized or malformed agent stop event")
@@ -1923,7 +2042,10 @@ def create_app(
             raw_value = settings_action_value(body["actions"][0])
             metadata = json.loads(raw_value)
             channel = metadata["channel"]
-            if not slack_channel_allowed(channel):
+            if not slack_conversation_allowed(
+                channel,
+                direct_message=metadata.get("direct_message") is True,
+            ):
                 return
             user_id = body.get("user", {}).get("id", "")
             if not slack_user_allowed(user_id, allowed_user_ids):
@@ -2046,7 +2168,10 @@ def create_app(
             if errors:
                 ack(response_action="errors", errors=errors)
                 return
-            if not slack_channel_allowed(metadata["channel"]):
+            if not slack_conversation_allowed(
+                metadata["channel"],
+                direct_message=metadata.get("direct_message") is True,
+            ):
                 ack(
                     response_action="errors",
                     errors={model_block_id or "model": "This channel is not allowed."},
@@ -2078,22 +2203,20 @@ def create_app(
         except Exception as exc:  # noqa: BLE001 - the setting is already durably saved
             logger.warning("Could not post Open Tag settings confirmation: %s", exc)
 
-    @app.event("app_mention")
-    def handle_mention(
+    def handle_invocation(
         event: dict[str, Any],
         body: dict[str, Any],
         client: Any,
         logger: Any,
+        *,
+        direct_message: bool,
     ) -> None:
         channel = event["channel"]
-        if not slack_channel_allowed(channel):
-            logger.warning("Ignoring Open Tag mention from unapproved Slack channel %s", channel)
-            return
         thread_ts = event.get("thread_ts") or event["ts"]
         user_id = event.get("user", "")
         if not slack_user_allowed(user_id, allowed_user_ids):
             logger.warning(
-                "Rejecting Open Tag mention from unauthorized Slack user %s in channel %s",
+                "Rejecting Open Tag invocation from unauthorized Slack user %s in channel %s",
                 user_id or "(missing)",
                 channel,
             )
@@ -2122,8 +2245,14 @@ def create_app(
         answer_stream: SlackAnswerStream | None = None
 
         try:
-            with tempfile.TemporaryDirectory(prefix="opentag-slack-") as raw_attachment_dir:
+            with tempfile.TemporaryDirectory(
+                prefix="slack-invocation-",
+                dir=tag_temp_dir(),
+            ) as raw_attachment_dir:
                 attachment_dir = Path(raw_attachment_dir)
+                image_results_dir = generated_images_dir(attachment_dir)
+                image_results_dir.mkdir(parents=True)
+                (attachment_dir / "results" / "artifacts").mkdir()
                 thread_text = build_thread_text(client, channel, thread_ts, attachment_dir)
                 stream_available = env_enabled("OPENTAG_SLACK_STREAMING", default=True) and indicator.native
                 app_server_selected = (
@@ -2158,6 +2287,7 @@ def create_app(
                         on_answer_start=indicator.answer_started,
                         on_status=indicator.status,
                         fast_mode=agent_settings.fast_mode,
+                        max_timeout=max_timeout,
                     )
                 else:
                     answer, succeeded = run_backend(
@@ -2171,46 +2301,69 @@ def create_app(
                         model=agent_settings.model,
                         reasoning_effort=agent_settings.reasoning_effort,
                         fast_mode=agent_settings.fast_mode,
+                        max_timeout=max_timeout,
                     )
-            indicator.clear()
-            if succeeded:
-                footer_blocks = (
-                    settings_button_blocks(
+                indicator.clear()
+                if succeeded:
+                    footer_blocks = (
+                        settings_button_blocks(
+                            team=team,
+                            channel=channel,
+                            thread_ts=thread_ts,
+                            direct_message=direct_message,
+                        )
+                        if backend == "codex"
+                        else None
+                    )
+                elif answer.startswith("Stopped.") or answer.startswith("Stop requested"):
+                    footer_blocks = None
+                else:
+                    error_reference = uuid.uuid4().hex[:8].upper()
+                    logger.error("Tag backend failure [%s]: %s", error_reference, answer)
+                    answer = user_facing_failure(answer, timeout, error_reference, max_timeout)
+                    footer_blocks = retry_button_blocks(
                         team=team,
                         channel=channel,
                         thread_ts=thread_ts,
+                        request_ts=event["ts"],
+                        direct_message=direct_message,
                     )
-                    if backend == "codex"
-                    else None
+                streamed = (
+                    answer_stream is not None
+                    and succeeded
+                    and answer_stream.finish(answer, footer_blocks)
                 )
-            elif answer.startswith("Stopped.") or answer.startswith("Stop requested"):
-                footer_blocks = None
-            else:
-                error_reference = uuid.uuid4().hex[:8].upper()
-                logger.error("Tag backend failure [%s]: %s", error_reference, answer)
-                answer = user_facing_failure(answer, timeout, error_reference)
-                footer_blocks = retry_button_blocks(
-                    team=team,
-                    channel=channel,
-                    thread_ts=thread_ts,
-                    request_ts=event["ts"],
-                )
-            if (
-                answer_stream is not None
-                and succeeded
-                and answer_stream.finish(answer, footer_blocks)
-            ):
-                return
-            if answer_stream is not None:
-                answer_stream.abort()
-            post_final_reply(
-                client,
-                channel,
-                thread_ts,
-                answer,
-                indicator.message_ts,
-                footer_blocks,
-            )
+                if not streamed:
+                    if answer_stream is not None:
+                        answer_stream.abort()
+                    post_final_reply(
+                        client,
+                        channel,
+                        thread_ts,
+                        answer,
+                        indicator.message_ts,
+                        footer_blocks,
+                    )
+                if succeeded:
+                    upload_errors = upload_generated_images(
+                        client,
+                        channel,
+                        thread_ts,
+                        image_results_dir,
+                    )
+                    if upload_errors:
+                        logger.warning(
+                            "Generated-image upload failed: %s",
+                            "; ".join(upload_errors),
+                        )
+                        client.chat_postMessage(
+                            channel=channel,
+                            thread_ts=thread_ts,
+                            text=(
+                                "I couldn't attach every generated image: "
+                                + "; ".join(upload_errors)
+                            ),
+                        )
         except Exception as exc:
             error_reference = uuid.uuid4().hex[:8].upper()
             logger.exception("Open Tag failed [%s]", error_reference)
@@ -2218,7 +2371,7 @@ def create_app(
             if answer_stream is not None:
                 answer_stream.abort()
             answer = user_facing_failure(
-                f"{type(exc).__name__}: {exc}", timeout, error_reference
+                f"{type(exc).__name__}: {exc}", timeout, error_reference, max_timeout
             )
             post_final_reply(
                 client,
@@ -2231,6 +2384,7 @@ def create_app(
                     channel=channel,
                     thread_ts=thread_ts,
                     request_ts=event["ts"],
+                    direct_message=direct_message,
                 ),
             )
 
@@ -2247,10 +2401,14 @@ def create_app(
             thread_ts = metadata["thread_ts"]
             request_ts = metadata["request_ts"]
             team = metadata.get("team", "")
+            direct_message = metadata.get("direct_message") is True
             if not all(
                 isinstance(value, str) and value
                 for value in (channel, thread_ts, request_ts, team)
-            ) or not slack_channel_allowed(channel):
+            ) or not slack_conversation_allowed(
+                channel,
+                direct_message=direct_message,
+            ):
                 raise ValueError("invalid retry metadata")
             response = client.conversations_replies(channel=channel, ts=thread_ts)
             original = next(
@@ -2264,7 +2422,7 @@ def create_app(
             )
             if original is None:
                 raise ValueError("original Slack request is unavailable")
-            handle_mention(
+            handle_invocation(
                 {
                     "channel": channel,
                     "thread_ts": thread_ts,
@@ -2276,16 +2434,47 @@ def create_app(
                 {"team_id": team},
                 client,
                 logger,
+                direct_message=direct_message,
             )
         except Exception as exc:  # noqa: BLE001 - keep the Slack action listener alive
             logger.warning("Could not retry Tag request: %s", exc)
             channel = metadata.get("channel")
-            if isinstance(channel, str) and slack_channel_allowed(channel):
+            if isinstance(channel, str) and slack_conversation_allowed(
+                channel,
+                direct_message=metadata.get("direct_message") is True,
+            ):
                 client.chat_postEphemeral(
                     channel=channel,
                     user=user_id,
-                    text="Tag couldn’t retry that request. Mention the bot again instead.",
+                    text="Tag couldn’t retry that request. Send it again instead.",
                 )
+
+    @app.event("app_mention")
+    def handle_mention(
+        event: dict[str, Any],
+        body: dict[str, Any],
+        client: Any,
+        logger: Any,
+    ) -> None:
+        channel = event["channel"]
+        if not slack_conversation_allowed(channel):
+            logger.warning("Ignoring Open Tag mention from unapproved Slack channel %s", channel)
+            return
+        handle_invocation(event, body, client, logger, direct_message=False)
+
+    @app.event("message")
+    def handle_direct_message(
+        event: dict[str, Any],
+        body: dict[str, Any],
+        client: Any,
+        logger: Any,
+    ) -> None:
+        if event.get("channel_type") != "im" or not direct_messages_enabled():
+            return
+        # Ignore bot output and Slack's message lifecycle events to prevent reply loops.
+        if event.get("bot_id") or event.get("subtype") not in {None, "file_share"}:
+            return
+        handle_invocation(event, body, client, logger, direct_message=True)
 
     return app
 
@@ -2313,6 +2502,11 @@ def main() -> None:
         "--timeout", type=int, default=int(os.getenv("OPENTAG_TIMEOUT_SECONDS", "420"))
     )
     parser.add_argument(
+        "--max-timeout",
+        type=int,
+        default=int(os.getenv("OPENTAG_MAX_TIMEOUT_SECONDS", "3600")),
+    )
+    parser.add_argument(
         "--ready-file",
         type=Path,
         help="Write a short-lived Socket Mode connection heartbeat to this path.",
@@ -2328,6 +2522,7 @@ def main() -> None:
         args.backend,
         args.timeout,
         allowed_user_ids,
+        max_timeout=args.max_timeout,
         session_journal=session_journal,
     )
     print_live_summary(args.backend, allowed_user_ids)
