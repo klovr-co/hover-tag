@@ -158,7 +158,11 @@ def configured_codex_defaults() -> tuple[str | None, str | None, bool]:
         "model_reasoning_effort",
         lambda value: isinstance(value, str) and value in SUPPORTED_REASONING_EFFORTS,
     )
-    service_tier = layered_value("service_tier", lambda value: isinstance(value, str))
+    service_tier = layered_value(
+        "service_tier",
+        lambda value: isinstance(value, str)
+        and value in {"default", "fast", "priority"},
+    )
     return (
         model,
         effort,

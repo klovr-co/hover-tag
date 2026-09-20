@@ -1418,6 +1418,28 @@ class SlackAgentSettingsTests(unittest.TestCase):
 
         self.assertEqual(("gpt-global", "high", True), defaults)
 
+    def test_tag_local_codex_defaults_inherit_global_service_tier_when_invalid(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            codex_home = root / "codex-home"
+            workdir = root / "tag-workspace"
+            codex_home.mkdir()
+            (workdir / ".codex").mkdir(parents=True)
+            (codex_home / "config.toml").write_text(
+                'service_tier = "fast"\n', encoding="utf-8"
+            )
+            (workdir / ".codex/config.toml").write_text(
+                'service_tier = "typo"\n', encoding="utf-8"
+            )
+            with patch.dict(
+                os.environ,
+                {"CODEX_HOME": str(codex_home), "OPENTAG_WORKDIR": str(workdir)},
+                clear=True,
+            ):
+                defaults = slack_socket_agent.configured_codex_defaults()
+
+        self.assertEqual((None, None, True), defaults)
+
     def test_user_settings_without_fast_mode_leave_it_unset(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
             path = Path(raw_dir) / "settings.json"
