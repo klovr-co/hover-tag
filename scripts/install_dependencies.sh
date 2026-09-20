@@ -5,9 +5,10 @@
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-MFS_SERVER_SPEC=$(awk '/^mfs-server==/ { print; exit }' "$ROOT/requirements-runtime.txt")
+MFS_SERVER_SPEC=$(awk '/^mfs-server(\[[^]]+\])?==/ { print; exit }' "$ROOT/requirements-runtime.txt")
 MFS_VERSION=${MFS_SERVER_SPEC##*==}
 MFS_RELEASE=https://github.com/zilliztech/mfs/releases/download/v${MFS_VERSION}
+RUNTIME_PYTHON="$ROOT/.venv/bin/python"
 
 say() {
     printf '%s\n' "$*"
@@ -110,6 +111,12 @@ check_install() {
         say "✗ mfs must be v$MFS_VERSION"
         failed=1
     fi
+    if [ -x "$RUNTIME_PYTHON" ] && "$RUNTIME_PYTHON" -c 'import mfs_server, psutil, slack_bolt' >/dev/null 2>&1; then
+        say "✓ Tag runtime"
+    else
+        say "✗ Tag runtime (run ./install.sh --dependencies-only)"
+        failed=1
+    fi
     if [ "$check_mode" = full ]; then
         if command -v codex >/dev/null 2>&1 || command -v claude >/dev/null 2>&1; then
             say "✓ agent backend"
@@ -145,10 +152,17 @@ if [ -n "$uv_bin_dir" ]; then
     export PATH
 fi
 
-if ! command -v mfs-server >/dev/null 2>&1 || ! mfs_server_has_version; then
-    say "Installing MFS server v$MFS_VERSION..."
-    uv tool install --force "$MFS_SERVER_SPEC"
+if [ ! -x "$RUNTIME_PYTHON" ]; then
+    say "Creating Tag runtime..."
+    uv venv --python python3 "$ROOT/.venv"
 fi
+say "Installing pinned Tag runtime dependencies..."
+uv pip install --python "$RUNTIME_PYTHON" -r "$ROOT/requirements-runtime.txt"
+
+# Reinstalling this managed tool ensures optional connector extras (Slack in
+# particular) are present even when the base version already matches.
+say "Ensuring MFS server v$MFS_VERSION with Slack connector support..."
+uv tool install --force "$MFS_SERVER_SPEC"
 if ! command -v mfs >/dev/null 2>&1 || ! command_has_version mfs "$MFS_VERSION"; then
     install_mfs_cli
 fi

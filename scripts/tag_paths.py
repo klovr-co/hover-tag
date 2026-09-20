@@ -27,6 +27,15 @@ def tag_home() -> Path:
     return data / "tag"
 
 
+def tag_temp_dir() -> Path:
+    """Return TAG's private temporary root, creating it for direct script runs."""
+    home = tag_home()
+    home.mkdir(parents=True, exist_ok=True, mode=0o700)
+    temporary = home / "tmp"
+    temporary.mkdir(parents=True, exist_ok=True, mode=0o700)
+    return temporary
+
+
 def initialize(home: Path) -> None:
     home.mkdir(parents=True, exist_ok=True, mode=0o700)
     for name in ("releases", "config", "workspace/.agents/skills", "workspace/.codex",
@@ -49,7 +58,8 @@ def runtime_environment(home: Path) -> dict[str, str]:
         "TAG_HOME": str(home),
         "OPENTAG_WORKDIR": str(home / "workspace"),
         "OPENTAG_MEMORY_ROOT": str(home / "state/memory"),
-        "OPENTAG_SLACK_SETTINGS_FILE": str(home / "state/slack-thread-settings.json"),
+        "OPENTAG_SLACK_SETTINGS_FILE": str(home / "state/slack-user-settings.json"),
+        "OPENTAG_SLACK_SESSIONS_FILE": str(home / "state/slack-active-sessions.json"),
         "TMPDIR": str(home / "tmp"), "TEMP": str(home / "tmp"), "TMP": str(home / "tmp"),
         "PATH": str(home / "integrations/bin") + os.pathsep + os.environ.get("PATH", ""),
     }

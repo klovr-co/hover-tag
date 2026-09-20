@@ -11,13 +11,17 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_SCOPES = {
     "app_mentions:read",
+    "assistant:write",
     "canvases:write",
     "channels:history",
     "channels:read",
+    "channels:join",
     "chat:write",
     "files:read",
+    "files:write",
     "groups:history",
     "groups:read",
+    "im:history",
 }
 
 
@@ -35,8 +39,24 @@ def validate_manifest(root: Path) -> list[str]:
     events = settings.get("event_subscriptions", {}).get("bot_events", [])
     if "app_mention" not in events:
         errors.append("app_mention must be subscribed")
+    if "message.im" not in events:
+        errors.append("message.im must be subscribed")
+    if "app_home_opened" not in events:
+        errors.append("app_home_opened must be subscribed")
+    if "agent_session_stopped" not in events:
+        errors.append("agent_session_stopped must be subscribed")
     if settings.get("interactivity", {}).get("is_enabled") is not True:
         errors.append("interactivity must be enabled")
+    app_home = manifest.get("features", {}).get("app_home", {})
+    if app_home.get("home_tab_enabled") is not True:
+        errors.append("App Home must be enabled")
+    if app_home.get("messages_tab_enabled") is not True:
+        errors.append("App Messages tab must be enabled")
+    if app_home.get("messages_tab_read_only_enabled") is not False:
+        errors.append("App Messages tab must accept user messages")
+    agent_view = manifest.get("features", {}).get("agent_view", {})
+    if not agent_view.get("agent_description"):
+        errors.append("Agent view must be enabled with a description")
     return errors
 
 

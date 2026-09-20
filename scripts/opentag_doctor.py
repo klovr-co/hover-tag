@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import importlib.util
+import io
 import json
 import os
 import shutil
@@ -11,6 +14,21 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
+
+CHECK_RESULTS: list[dict[str, Any]] | None = None
+RUNTIME_DEPENDENCIES = ("mfs_server", "psutil", "slack_bolt")
+
+
+def recovery_hint(label: str) -> str:
+    if label == "Tag runtime dependencies":
+        return "Re-run the Tag installer; for a source checkout, run ./install.sh --dependencies-only"
+    if label.startswith("MFS"):
+        return "Check tag config show, start MFS, and index the configured sources before retrying"
+    if label.startswith("Slack") or label.startswith("SLACK_"):
+        return "Check Slack tokens, allowed member IDs, channel membership, and app scopes in tag setup or tag config"
+    if label.startswith("backend") or label == "OPENTAG_BACKEND":
+        return "Install and sign in with the selected CLI; change it with tag config set OPENTAG_BACKEND codex|claude"
+    return "Review tag inspect --json and tag config show; rerun the installer for missing runtime files"
 
 
 def env(name: str) -> str:
@@ -27,9 +45,23 @@ def token_from_env() -> str | None:
 
 
 def print_check(ok: bool, label: str, detail: str = "") -> None:
+    if CHECK_RESULTS is not None:
+        # Remote error bodies and credential values never enter machine output.
+        CHECK_RESULTS.append({"check": label, "ok": bool(ok),
+                              "next_action": None if ok else recovery_hint(label)})
     status = "ok" if ok else "fail"
     suffix = f" - {detail}" if detail else ""
     print(f"[{status}] {label}{suffix}")
+
+
+def check_runtime_dependencies() -> bool:
+    missing = [name for name in RUNTIME_DEPENDENCIES if importlib.util.find_spec(name) is None]
+    print_check(
+        not missing,
+        "Tag runtime dependencies",
+        "available" if not missing else "missing: " + ", ".join(missing),
+    )
+    return not missing
 
 
 def request_json(
@@ -70,7 +102,8 @@ def check_env() -> bool:
         "MFS_ALLOWED_SCOPES",
         "OPENTAG_BACKEND",
     ]
-    required.extend(["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_ALLOWED_USER_IDS"])
+    required.extend(["SLACK_BOT_TOKEN", "SLACK_ALLOWED_USER_IDS"])
+    required.extend(["OPENTAG_RELAY_URL", "OPENTAG_RELAY_TOKEN"] if env("OPENTAG_RELAY_URL") else ["SLACK_APP_TOKEN"])
     all_ok = True
     for name in required:
         value = env(name)
@@ -192,6 +225,7 @@ def check_offline(root: Path) -> bool:
     backend = env("OPENTAG_BACKEND")
     workspace = Path(env("OPENTAG_WORKDIR")).expanduser()
     scopes = [scope.strip() for scope in env("MFS_ALLOWED_SCOPES").split(",") if scope.strip()]
+    runtime_ok = check_runtime_dependencies()
     checks = {
         "supported transport": (env("OPENTAG_TRANSPORT") or "slack") == "slack",
         "supported backend": backend in {"codex", "claude"},
@@ -221,12 +255,35 @@ def check_offline(root: Path) -> bool:
     print_check(metadata_ok, "release metadata")
     for error in metadata_errors:
         print(f"       {error}")
-    return all(checks.values()) and metadata_ok
+    return runtime_ok and all(checks.values()) and metadata_ok
+
+
+def run_checks(offline: bool, channel_ids: list[str] | None) -> int:
+    if offline:
+        return 0 if check_offline(Path(__file__).resolve().parents[1]) else 1
+    if (env("OPENTAG_TRANSPORT") or "slack") != "slack":
+        print_check(False, "OPENTAG_TRANSPORT", "must be slack")
+        return 1
+    scopes = [scope.strip() for scope in env("MFS_ALLOWED_SCOPES").split(",") if scope.strip()]
+    checks = [
+        check_runtime_dependencies(),
+        check_env(),
+        check_mfs(scopes) if scopes else False,
+        check_backend(),
+    ]
+    configured = channel_ids or []
+    checks.extend(check_slack(channel_id) for channel_id in configured)
+    if not configured:
+        checks.append(check_slack(None))
+    return 0 if all(checks) else 1
 
 
 def main() -> int:
+    global CHECK_RESULTS
     parser = argparse.ArgumentParser(description="Preflight a Tag chat + MFS setup.")
-    parser.add_argument("--channel-id", help="Optional Slack channel ID to verify bot access.")
+    parser.add_argument("--channel-id", action="append", dest="channel_ids",
+                        help="Slack channel ID to verify; repeat for multiple channels.")
+    parser.add_argument("--json", action="store_true", help="emit structured checks without raw service responses")
     parser.add_argument(
         "--offline",
         action="store_true",
@@ -234,20 +291,18 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    if args.offline:
-        return 0 if check_offline(Path(__file__).resolve().parents[1]) else 1
-
-    if (env("OPENTAG_TRANSPORT") or "slack") != "slack":
-        print_check(False, "OPENTAG_TRANSPORT", "must be slack")
-        return 1
-    scopes = [scope.strip() for scope in env("MFS_ALLOWED_SCOPES").split(",") if scope.strip()]
-    checks = [
-        check_env(),
-        check_mfs(scopes) if scopes else False,
-        check_backend(),
-    ]
-    checks.append(check_slack(args.channel_id))
-    return 0 if all(checks) else 1
+    if not args.json:
+        return run_checks(args.offline, args.channel_ids)
+    CHECK_RESULTS = []
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            result = run_checks(args.offline, args.channel_ids)
+        print(json.dumps({"schema_version": 1, "ok": result == 0, "offline": args.offline,
+                          "checks": CHECK_RESULTS, "backend_authentication": "not_checked",
+                          "backend_task_execution": "not_checked", "first_reply": "not_verified"}, indent=2))
+        return result
+    finally:
+        CHECK_RESULTS = None
 
 
 if __name__ == "__main__":
