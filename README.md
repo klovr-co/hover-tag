@@ -122,8 +122,9 @@ TAG provides installers for macOS, Linux, and native Windows. The primary path
 is Slack + Codex + local MFS; Claude Code remains experimental. Native Windows
 live Slack/backend qualification is still required before release.
 
-You need Python 3.10+, [`uv`](https://docs.astral.sh/uv/), `curl`, and a working
-Codex CLI login. Clone Tag first:
+You need Python 3.10+, `curl`, and a working Codex CLI login. The installer uses
+[`uv`](https://docs.astral.sh/uv/) when available and otherwise falls back to
+Python's standard `venv` and pip. Clone Tag first:
 
 ```bash
 git clone https://github.com/klovr-co/tag.git

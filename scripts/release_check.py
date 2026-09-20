@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 from pathlib import Path
 
@@ -37,6 +38,20 @@ def validate_release(root: Path) -> list[str]:
     version = _read(root, "VERSION", errors).strip()
     if version and not VERSION_RE.fullmatch(version):
         errors.append(f"VERSION is not a supported prerelease version: {version!r}")
+
+    channels_text = _read(root, "release-channels.json", errors)
+    if channels_text:
+        try:
+            channels = json.loads(channels_text)
+        except json.JSONDecodeError:
+            errors.append("release-channels.json is malformed")
+        else:
+            if (
+                not isinstance(channels, dict)
+                or channels.get("schema_version") != 1
+                or channels.get("default_channel") not in {"stable", "beta", "alpha", "edge"}
+            ):
+                errors.append("release-channels.json contains an unsupported release policy")
 
     license_text = _read(root, "LICENSE", errors)
     for token in ("Apache License", "Version 2.0, January 2004", "END OF TERMS AND CONDITIONS"):
