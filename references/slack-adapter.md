@@ -73,6 +73,7 @@ Create or reuse a Slack app:
    - `connections:write`
 4. Open **OAuth & Permissions** and add Bot Token Scopes:
    - `app_mentions:read` — receive bot mention events.
+   - `assistant:write` — manage native agent working status.
    - `chat:write` — post and update Slack replies.
    - `files:read` — download text snippets and image attachments shared in the current thread.
    - `channels:read` + `channels:history` — read threads in public channels.
@@ -80,6 +81,7 @@ Create or reuse a Slack app:
 5. Open **Event Subscriptions** and subscribe to Bot Events:
    - `app_mention`
    - `app_home_opened`
+   - `agent_session_stopped`
 6. Install or reinstall the app to the workspace after changing scopes/events.
 7. Copy the **Bot User OAuth Token** (`xoxb-...`).
 8. Invite the bot to the sandbox channel:
@@ -176,16 +178,57 @@ Optional:
 export OPENTAG_TIMEOUT_SECONDS=420
 export OPENTAG_BACKEND_ATTEMPTS=3   # codex backend: retries on capacity/rate-limit
 export OPENTAG_SLACK_STREAMING=0    # optional: disable default Slack response streaming
+export OPENTAG_CODEX_TRANSPORT=exec # optional legacy rollback; App Server is the default
 export OPENTAG_CODEX_MODELS=""      # optional comma-separated model allowlist
 export OPENTAG_CODEX_REASONING_EFFORTS="low,medium,high,xhigh,max,ultra"
 ```
 
 The native Slack loading indicator and response streaming are enabled by
-default. Claude provides live answer deltas. The current Codex CLI JSONL
-interface emits the completed assistant message rather than token deltas, so
-Codex keeps the native loading indicator visible until it can post the complete
-response. Tag does not simulate streaming or forward reasoning, tool output, or
-raw backend diagnostics.
+default. Claude provides live answer deltas. Codex defaults to App Server for
+phased final-answer deltas, observed activity, and interruption; set
+`OPENTAG_CODEX_TRANSPORT=exec` only for legacy rollback. Tag does not
+forward commentary, reasoning, tool output, or raw backend diagnostics.
+
+Codex retries capacity and rate-limit failures up to
+`OPENTAG_BACKEND_ATTEMPTS`, but only when the failed attempt produced no
+observable activity or answer content. Slack displays the next attempt (for
+example, `Backend busy — retrying (2/3)…`). After a terminal failure, Tag clears
+the working state, keeps detailed diagnostics in local logs under a short error
+reference, and posts sanitized guidance with a **Retry** button. Retry reloads
+the canonical original message from Slack by timestamp; prompt text is not
+stored in the button payload. User-requested stops are terminal and do not show
+the Retry button.
+
+The bridge records active Slack session identities in
+`state/slack-active-sessions.json` under Tag home. The journal contains only the
+workspace, channel, and thread identifiers needed for cleanup. SIGTERM and
+SIGINT request a graceful bridge shutdown, which closes recorded sessions before
+exit. If the process cannot run cleanup (for example, after SIGKILL or a host
+crash), the next bridge start reconciles the journal through both the Agent
+Sessions and legacy assistant-status APIs before connecting Socket Mode. Entries
+are retained when both cleanup calls fail so a later start can retry them.
+If Slack delivers `agent_session_stopped` after the original backend process is
+already gone, the bridge treats it as an orphaned stop: it closes the Slack
+session immediately instead of waiting for a nonexistent run to confirm
+interruption. Failed orphan cleanup is added to the same recovery journal.
+
+Activity copy uses a fixed public vocabulary. Recognized MCP services and tool
+names produce natural copy (for example, `Searching GitHub issues…`); unrecognized
+names fall back to a service-only or generic label. Extend `MCP_SERVICE_NAMES`
+and `MCP_TOOL_NAMES` in `scripts/codex_app_server.py` to approve more display
+names. Arguments, results, URLs, and private server identifiers are not used in
+activity labels. Helper commands are classified by simple invocation, never by
+a filename mentioned somewhere in a command. Compound or ambiguous commands
+use generic copy. These labels describe observed attempts, not verified success.
+Concurrent work shows the latest activity and the number of other active tools;
+updates are coalesced without postponing the display indefinitely during bursts.
+Labels change at most every 1.5 seconds during activity updates, grouping rapid
+operations. An operation still active after 12 seconds shows `Still waiting for
+GitHub…` for a recognized service, or generic ongoing-operation copy. Completion
+removes its wait state. `Preparing your answer…` requires an explicit backend
+`final_answer` message-start event and no active tools; tool completion alone
+does not trigger it. Answer streaming and cleanup cancel pending status updates.
+This filtering applies to activity labels, not redaction of the final answer.
 
 For the Codex backend, completed replies include a compact **Configure** button
 beneath the answer. It opens a user-scoped settings modal; saved choices apply

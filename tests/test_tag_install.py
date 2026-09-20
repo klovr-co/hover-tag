@@ -17,7 +17,7 @@ from scripts.tag_install import (
     install,
     unpack_release,
 )
-from scripts.tag_paths import codex_workspace_args, initialize, tag_home
+from scripts.tag_paths import codex_workspace_args, initialize, runtime_environment, tag_home
 from scripts.tag_cli import process_for, read_config, start_process, stop_process
 from scripts.tag_migrate import legacy_config, migrate
 from scripts.opentag_setup import render_env
@@ -26,6 +26,17 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class TagHomeTests(unittest.TestCase):
+    def test_runtime_environment_places_slack_session_journal_in_tag_home(self):
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp) / "home"
+
+            environment = runtime_environment(home)
+
+        self.assertEqual(
+            str(home / "state/slack-active-sessions.json"),
+            environment["OPENTAG_SLACK_SESSIONS_FILE"],
+        )
+
     def test_migration_preserves_originals_and_existing_skills(self):
         with tempfile.TemporaryDirectory() as temp:
             home, source = Path(temp) / "home", Path(temp) / "old checkout"

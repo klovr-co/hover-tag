@@ -18,8 +18,10 @@ from typing import Any
 
 try:
     from tag_paths import codex_workspace_args
+    from codex_app_server import CodexAppServer, CodexAppServerError
 except ImportError:
     from scripts.tag_paths import codex_workspace_args
+    from scripts.codex_app_server import CodexAppServer, CodexAppServerError
 
 
 def default_skill_dir() -> Path:
@@ -207,12 +209,26 @@ def run_codex_once(
 
 def retryable_backend_failure(output: str) -> bool:
     lowered = output.lower()
-    return "selected model is at capacity" in lowered or "rate limit" in lowered
+    return any(
+        marker in lowered
+        for marker in (
+            "selected model is at capacity",
+            "rate limit",
+            "rate_limit",
+            "too many requests",
+            "http 429",
+        )
+    )
 
 
-def emit_event(event_type: str, text: str = "") -> None:
+def retry_status(next_attempt: int, attempts: int) -> str:
+    """Return stable public copy for a retry that is about to begin."""
+    return f"Backend busy — retrying ({next_attempt}/{attempts})…"
+
+
+def emit_event(event_type: str, text: str = "", **fields: Any) -> None:
     """Write one backend-neutral event for a parent transport to consume."""
-    print(json.dumps({"type": event_type, "text": text}), flush=True)
+    print(json.dumps({"type": event_type, "text": text, **fields}), flush=True)
 
 
 def parse_codex_stream_event(payload: dict[str, Any]) -> tuple[str, str] | None:
@@ -404,10 +420,96 @@ def run_codex_events(
             output_path.unlink(missing_ok=True)
         if not retryable_backend_failure(last_output) or attempt == attempts:
             break
-        emit_event("status", "The backend is busy; retrying…")
+        emit_event("status", retry_status(attempt + 1, attempts))
         time.sleep(min(2 * attempt, 8))
     emit_event("error", f"Open Tag backend failed with exit code {last_code}:\n{last_output}")
     return last_code
+
+
+def codex_app_server_command(workdir: Path) -> list[str]:
+    """Build the installed CLI's stable stdio App Server command."""
+    cmd = [
+        "codex",
+        "app-server",
+        "--stdio",
+        "-c",
+        "shell_environment_policy.inherit=all",
+    ]
+    cmd.extend(codex_workspace_args(workdir))
+    return executable_command(cmd)
+
+
+def codex_event_transport() -> str:
+    """Return the validated transport, keeping exec as an explicit rollback."""
+    transport = os.getenv("OPENTAG_CODEX_TRANSPORT", "app-server").strip().lower()
+    if transport not in {"exec", "app-server"}:
+        raise ValueError("OPENTAG_CODEX_TRANSPORT must be exec or app-server")
+    return transport
+
+
+def run_codex_app_server_events(
+    prompt: str,
+    *,
+    workdir: Path,
+    timeout: int,
+    model: str | None = None,
+    reasoning_effort: str | None = None,
+    control_file: Path | None = None,
+    run_id: str | None = None,
+) -> int:
+    """Run one request-scoped App Server and emit the richer event contract."""
+    attempts = max(1, int(os.getenv("OPENTAG_BACKEND_ATTEMPTS", "3")))
+    for attempt in range(1, attempts + 1):
+        server = CodexAppServer(
+            codex_app_server_command(workdir),
+            cwd=workdir,
+            timeout=timeout,
+            control_file=control_file,
+            run_id=run_id,
+        )
+        made_progress = False
+
+        def forward_event(event: dict[str, Any]) -> None:
+            nonlocal made_progress
+            payload = dict(event)
+            event_type = str(payload.pop("type"))
+            text = str(payload.pop("text", ""))
+            if event_type in {
+                "activity_start",
+                "message_start",
+                "message_delta",
+                "message_complete",
+            }:
+                made_progress = True
+            emit_event(event_type, text, **payload)
+
+        try:
+            status, detail = server.run(
+                prompt,
+                model=model,
+                reasoning_effort=reasoning_effort,
+                emit=forward_event,
+            )
+        except CodexAppServerError as exc:
+            status, detail = "failed", str(exc)
+        if status == "completed":
+            return 0
+        if status == "interrupted":
+            return 130
+        if status == "timeout":
+            emit_event("error", f"Tag backend timed out after {timeout}s")
+            return 124
+        if (
+            not made_progress
+            and retryable_backend_failure(detail)
+            and attempt < attempts
+        ):
+            emit_event("status", retry_status(attempt + 1, attempts))
+            time.sleep(min(2 * attempt, 8))
+            continue
+        emit_event("error", detail or f"Codex turn ended with status {status}")
+        return 1
+    return 1
 
 
 def claude_stream_command(
@@ -567,6 +669,8 @@ def main() -> int:
         action="store_true",
         help="emit backend-neutral NDJSON events for a chat transport",
     )
+    parser.add_argument("--control-file", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument("--run-id", help=argparse.SUPPRESS)
     parser.add_argument("--skill-dir", type=Path, default=default_skill_dir())
     parser.add_argument(
         "--workdir",
@@ -596,6 +700,16 @@ def main() -> int:
     try:
         if args.event_stream:
             if args.backend == "codex":
+                if codex_event_transport() == "app-server":
+                    return run_codex_app_server_events(
+                        prompt,
+                        workdir=args.workdir.resolve(),
+                        timeout=args.timeout,
+                        model=args.model,
+                        reasoning_effort=args.reasoning_effort,
+                        control_file=args.control_file,
+                        run_id=args.run_id,
+                    )
                 return run_codex_events(
                     prompt,
                     skill_dir=args.skill_dir.resolve(),
