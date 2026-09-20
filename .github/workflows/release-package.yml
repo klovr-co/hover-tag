@@ -29,6 +29,9 @@ jobs:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           python scripts/release_check.py
+          source_version=$(head -n 1 VERSION)
+          python scripts/release_automation.py validate-release-tag \
+            --source-version "$source_version" --tag "$RELEASE_TAG"
           version=${RELEASE_TAG#v}
           case "$version" in
             *-alpha*|*-beta*) expected_prerelease=true ;;

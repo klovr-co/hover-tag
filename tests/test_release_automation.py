@@ -20,6 +20,7 @@ from scripts.release_automation import (
     validate_candidate,
     validate_edge_bundle,
     validate_release_bundle,
+    validate_release_tag,
     validate_selected_sha,
     validate_transition,
     workflow_gate_state,
@@ -91,6 +92,25 @@ class VersionTransitionTests(unittest.TestCase):
             )),
             "0.2.0-alpha.3",
         )
+        self.assertEqual(
+            str(select_auto_alpha(
+                "0.3.0-alpha", ["v0.2.0-alpha.4"], []
+            )),
+            "0.3.0-alpha.1",
+        )
+
+    def test_release_tag_must_match_source_version_policy(self) -> None:
+        self.assertEqual(
+            validate_release_tag("0.2.0-alpha", "v0.2.0-alpha.4"), []
+        )
+        self.assertEqual(
+            validate_release_tag("0.2.0-alpha.2", "v0.2.0-alpha.4"), []
+        )
+        self.assertEqual(validate_release_tag("0.2.0-beta", "v0.2.0-beta"), [])
+        self.assertEqual(validate_release_tag("0.2.0", "v0.2.0"), [])
+        self.assertTrue(validate_release_tag("0.2.0-alpha", "v0.3.0-alpha.1"))
+        self.assertTrue(validate_release_tag("0.2.0-alpha", "v0.2.0-beta"))
+        self.assertTrue(validate_release_tag("0.2.0-beta", "v0.2.0-beta.1"))
 
     def test_automatic_alpha_honors_explicit_line_and_skip_labels(self) -> None:
         tags = ["v0.2.0-alpha.4"]
@@ -269,6 +289,15 @@ class ReleasePreflightTests(unittest.TestCase):
 
         self.assertIn("run: ./scripts/release_preflight.sh\n", workflow)
         self.assertNotIn("release_preflight.sh --publish", workflow)
+
+    def test_release_workflow_validates_tag_against_source_version(self) -> None:
+        workflow = (
+            Path(__file__).resolve().parents[1]
+            / ".github/workflows/release-package.yml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("validate-release-tag", workflow)
+        self.assertIn("--source-version", workflow)
 
     def test_draft_preparation_does_not_require_publication_approval(self) -> None:
         source_root = Path(__file__).resolve().parents[1]

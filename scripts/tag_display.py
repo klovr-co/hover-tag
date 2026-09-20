@@ -62,7 +62,8 @@ def mascot_banner():
     free of the illustration. This never changes the user's terminal palette.
     """
     width = content_width()
-    if not color_available():
+    brand_width = 3 + max(len(BRAND_NAME), len(BRAND_URL))
+    if not color_available() or width < brand_width:
         return False
     ice, navy = "#bfe6fd", "#083778"
     sprite_width, sprite_height = 13, 14

@@ -131,6 +131,24 @@ def validate_candidate(
     return errors
 
 
+def validate_release_tag(source_version: str, release_tag: str) -> list[str]:
+    """Require a release tag to describe the version selected in source."""
+    try:
+        source = Version.parse(source_version)
+        tagged = Version.parse(release_tag.removeprefix("v"))
+    except ValueError as error:
+        return [str(error)]
+
+    if tagged.phase == "alpha" and tagged.number is not None:
+        if source.phase == "alpha" and source.core == tagged.core:
+            return []
+    elif source == tagged:
+        return []
+    return [
+        f"release tag {release_tag} does not match source VERSION {source_version}"
+    ]
+
+
 def select_auto_alpha(
     base_version: str, tags: Iterable[str], labels: Iterable[str]
 ) -> Version | None:
@@ -164,10 +182,10 @@ def select_auto_alpha(
         core = (previous.major, previous.minor, previous.patch + 1)
     elif "release:next-minor" in selected_labels:
         core = (previous.major, previous.minor + 1, 0)
-    elif previous.phase == "alpha" and previous.number is not None:
-        core = previous.core
     elif base.core > previous.core:
         core = base.core
+    elif previous.phase == "alpha" and previous.number is not None:
+        core = previous.core
     else:
         core = (previous.major, previous.minor + 1, 0)
 
@@ -411,6 +429,10 @@ def main() -> int:
     automatic.add_argument("--base-version", required=True)
     automatic.add_argument("--label", action="append", default=[])
 
+    release_tag = subparsers.add_parser("validate-release-tag")
+    release_tag.add_argument("--source-version", required=True)
+    release_tag.add_argument("--tag", required=True)
+
     commit = subparsers.add_parser("validate-commit")
     commit.add_argument("--sha", required=True)
     commit.add_argument("--main-ref", default="origin/main")
@@ -454,6 +476,8 @@ def main() -> int:
             return _print_errors([str(error)])
         print(version if version is not None else "skip")
         return 0
+    if args.command == "validate-release-tag":
+        return _print_errors(validate_release_tag(args.source_version, args.tag))
     if args.command == "validate-commit":
         if not SHA_RE.fullmatch(args.sha):
             return _print_errors([

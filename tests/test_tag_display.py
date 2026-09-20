@@ -38,6 +38,21 @@ class DisplayTests(unittest.TestCase):
         self.assertEqual(plain.count("@Tag by Hover"), 1)
         self.assertNotIn("▀█▀  ▄▀█  █▀▀", plain)
 
+    def test_narrow_color_header_falls_back_without_clipping_brand_text(self):
+        with patch.object(
+            tag_display.shutil,
+            "get_terminal_size",
+            return_value=os.terminal_size((28, 24)),
+        ), patch.object(
+            tag_display, "color_available", return_value=True
+        ), redirect_stdout(StringIO()) as output:
+            self.assertFalse(tag_display.mascot_banner())
+            tag_display.header("Setup")
+
+        plain = output.getvalue().replace("\n", "").replace(" ", "")
+        self.assertIn(tag_display.BRAND_NAME.replace(" ", ""), plain)
+        self.assertIn(tag_display.BRAND_URL, plain)
+
     def test_backend_missing_does_not_execute(self):
         with patch.object(tag_display.shutil, "which", return_value=None), patch.object(tag_display.subprocess, "run") as run:
             self.assertEqual(tag_display.backend_status(), ("Not installed", False))
