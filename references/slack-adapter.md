@@ -5,7 +5,7 @@
 Use this reference when setting up the Slack-facing side of Open Tag from
 scratch. The bridge is intentionally thin. It only:
 
-1. Receives `app_mention` events through Socket Mode.
+1. Receives `app_mention` and `message.im` events through Socket Mode.
 2. Reads the current thread through Slack Web API.
 3. Starts Slack's native working indicator, falling back to a temporary reply
    when that API is unavailable.
@@ -16,14 +16,15 @@ scratch. The bridge is intentionally thin. It only:
 The adapter does not answer questions itself. It passes the thread, channel id,
 and allowed MFS scopes to a fresh CLI agent.
 
-The Slack app token and bot token are only for receiving mentions, reading the
-current thread, and posting replies. Broader Slack memory should be configured as
+The Slack app token and bot token are only for receiving invocations, reading
+the current thread, and posting replies. Broader Slack memory should be configured as
 an MFS Slack connector with its own token, channel allowlist, and source URI.
 
 Relevant Slack docs:
 
 - Socket Mode: <https://docs.slack.dev/apis/events-api/using-socket-mode/>
 - App mentions: <https://docs.slack.dev/reference/events/app_mention/>
+- Direct messages: <https://docs.slack.dev/reference/events/message.im/>
 - OAuth scopes: <https://docs.slack.dev/reference/scopes/>
 
 ## Prerequisites
@@ -44,7 +45,7 @@ Open Tag only consumes already-indexed scopes:
    Save it as `SLACK_APP_TOKEN` (`xapp-...`).
 4. Add bot scopes, install the app, and save the bot token as
    `SLACK_BOT_TOKEN` (`xoxb-...`).
-5. Subscribe the app to `app_mention` bot events.
+5. Subscribe the app to `app_mention` and `message.im` bot events.
 6. Invite the bot to the sandbox channel.
 7. Copy the owner's Slack member ID and set it as `SLACK_ALLOWED_USER_IDS`.
 8. Configure MFS sources for Memory and set `MFS_ALLOWED_SCOPES`.
@@ -72,8 +73,10 @@ Create or reuse a Slack app:
    - `files:read` — download text snippets and image attachments shared in the current thread.
    - `channels:read` + `channels:history` — read threads in public channels.
    - `groups:read` + `groups:history` — read threads in private channels.
+   - `im:history` — read direct-message threads when DM invocation is enabled.
 5. Open **Event Subscriptions** and subscribe to Bot Events:
    - `app_mention`
+   - `message.im`
 6. Install or reinstall the app to the workspace after changing scopes/events.
 7. Copy the **Bot User OAuth Token** (`xoxb-...`).
 8. Invite the bot to the sandbox channel:
@@ -150,6 +153,7 @@ export OPENTAG_BACKEND="<backend>"   # claude | codex
 export OPENTAG_WORKDIR="/path/to/workspace"
 export SLACK_CHANNEL_ID="<channel-id>"
 export SLACK_ALLOWED_USER_IDS="<owner-member-id>"
+export OPENTAG_SLACK_DM_ENABLED=1
 ```
 
 `SLACK_ALLOWED_USER_IDS` is required and fails closed when empty. In Slack, open
@@ -158,6 +162,13 @@ as the owner-only default; append comma-separated member IDs only when the owner
 intentionally shares access. Unauthorized mentions receive a denial without
 reading the thread or invoking the backend. Existing installations must add this
 setting before restarting Tag.
+
+Direct-message invocation is enabled by default for the same authorized users,
+who can invoke Tag without an `@mention` from OpenMax's Messages tab. The channel
+allowlist does not apply to DMs, but `SLACK_ALLOWED_USER_IDS` still does. Set
+`OPENTAG_SLACK_DM_ENABLED=0` to disable DM invocation. Each top-level DM starts a
+fresh backend task, while replies reuse only that DM thread's bounded context
+(up to 30 messages).
 
 The bridge does not need a model API key. The selected CLI backend handles model
 auth and tool execution.
@@ -225,6 +236,10 @@ Then mention the bot in Slack:
 
 Follow-up messages in the same Slack thread are passed to the next backend run
 through `conversations.replies`.
+
+By default, an authorized user can instead open OpenMax's Messages tab and send
+a top-level request without mentioning the bot. Use thread replies for
+follow-ups; send a new top-level DM to begin a separate task.
 
 ## Manual Non-Slack Test
 

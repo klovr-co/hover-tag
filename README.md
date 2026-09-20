@@ -45,7 +45,8 @@ Slack. They do not disappear into my private Claude or ChatGPT history.
 
 ## What Tag can do
 
-- Respond when someone mentions `@OpenMax` in Slack.
+- Respond when someone mentions `@OpenMax` in Slack or sends it a direct message,
+  provided the sender is explicitly authorized.
 - Read the current thread, including text and image attachments.
 - Summarize an indexed Slack channel instead of seeing only one thread.
 - Search approved Slack history, repositories, documents, issues, databases,
@@ -153,6 +154,10 @@ Mention `@OpenMax` in the sandbox channel you configured:
 
 Only the owner member ID entered during setup can invoke Tag initially. Add
 other IDs to the comma-separated `SLACK_ALLOWED_USER_IDS` setting to share access.
+Those authorized users can also invoke Tag without an `@mention` from OpenMax's
+Messages tab. Each top-level DM starts a fresh task; replies in that DM thread
+provide bounded context only for that task. Set `OPENTAG_SLACK_DM_ENABLED=0` to
+disable direct-message invocation.
 
 While a task runs, Tag uses Slack's native loading indicator instead of posting
 a temporary bot message. Slack response streaming is enabled by default:
@@ -216,9 +221,12 @@ The bridge app normally needs these bot scopes:
 - `chat:write`
 - `channels:read` and `channels:history`
 - `groups:read` and `groups:history` if you intentionally use private channels
+- `im:history` for requests from the app's Messages tab
 
-It also needs the `app_mention` bot event and an app-level token with
-`connections:write`. Invite the bot only to channels where it should respond.
+It also needs the `app_mention` and `message.im` bot events and an app-level
+token with `connections:write`. Invite the bot only to channels where it should
+respond. Direct-message execution is enabled by default and can be disabled with
+`OPENTAG_SLACK_DM_ENABLED=0`.
 The included app manifest also requests `files:read` for text attachments and
 `canvases:write` for the explicit Canvas helper.
 

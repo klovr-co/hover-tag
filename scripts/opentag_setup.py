@@ -159,6 +159,9 @@ def main() -> int:
     values["SLACK_CHANNEL_ID"] = ask("Optional sandbox Slack channel ID")
     print("In Slack, open your profile, choose More, then Copy member ID.")
     values["SLACK_ALLOWED_USER_IDS"] = ask_required("Owner Slack member ID")
+    values["OPENTAG_SLACK_DM_ENABLED"] = (
+        "1" if confirm("Allow authorized users to invoke Tag from direct messages?") else "0"
+    )
     values["OPENTAG_SLACK_STREAMING"] = "1"
 
     write_config(config_path, values)
@@ -167,7 +170,7 @@ def main() -> int:
     print("\nNext steps:")
     print("1. Add/index at least one source in MFS that matches MFS_ALLOWED_SCOPES.")
     print("2. Run tag start. It starts MFS, runs preflight, and starts the bot.")
-    print("3. Mention the bot in the configured sandbox channel.")
+    print("3. Mention the bot in the configured sandbox channel, or DM it if enabled.")
     if not prerequisites_ok:
         print("\nFinish the failed prerequisite checks before starting Tag.")
         return 1

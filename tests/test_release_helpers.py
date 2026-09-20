@@ -37,3 +37,6 @@ class ReleaseHelperTests(unittest.TestCase):
         self.assertTrue(any("missing bot scopes" in error for error in errors))
         self.assertIn("Socket Mode must be enabled", errors)
         self.assertIn("app_mention must be subscribed", errors)
+        self.assertIn("message.im must be subscribed", errors)
+        self.assertIn("App Home Messages tab must be enabled", errors)
+        self.assertIn("App Home Messages tab must accept user messages", errors)

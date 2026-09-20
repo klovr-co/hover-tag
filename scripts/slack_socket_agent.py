@@ -445,9 +445,15 @@ def settings_button_blocks(
     thread_ts: str,
     settings: AgentSettings,
     models: list[CodexModelOption],
+    direct_message: bool = False,
 ) -> list[dict[str, Any]]:
     value = json.dumps(
-        {"team": team, "channel": channel, "thread_ts": thread_ts},
+        {
+            "team": team,
+            "channel": channel,
+            "thread_ts": thread_ts,
+            "direct_message": direct_message,
+        },
         separators=(",", ":"),
     )
     return [
@@ -482,7 +488,7 @@ def select_option(value: str, text: str, description: str | None = None) -> dict
 
 def settings_modal(
     *,
-    metadata: dict[str, str],
+    metadata: dict[str, Any],
     settings: AgentSettings,
     models: list[CodexModelOption],
 ) -> dict[str, Any]:
@@ -945,6 +951,16 @@ def slack_channel_allowed(channel: str) -> bool:
     return not allowed_channel or channel == allowed_channel
 
 
+def direct_messages_enabled() -> bool:
+    """Enable authorized DM invocation unless the operator explicitly disables it."""
+    return env_enabled("OPENTAG_SLACK_DM_ENABLED", default=True)
+
+
+def slack_conversation_allowed(channel: str, *, direct_message: bool = False) -> bool:
+    """Apply the channel allowlist to channels and the DM switch to direct messages."""
+    return direct_messages_enabled() if direct_message else slack_channel_allowed(channel)
+
+
 def parse_slack_user_ids(value: str) -> frozenset[str]:
     """Parse a comma-separated Slack user allowlist into exact member IDs."""
     return frozenset(user_id.strip() for user_id in value.split(",") if user_id.strip())
@@ -977,12 +993,14 @@ def print_live_summary(backend: str, allowed_user_ids: frozenset[str]) -> None:
     print(f"  Memory  : {len(scopes)} permitted MFS scope(s):")
     for scope in scopes or ["(none — set MFS_ALLOWED_SCOPES)"]:
         print(f"            - {scope}")
+    dm_status = "enabled" if direct_messages_enabled() else "disabled"
     print(f"  Slack   : listening for @mentions in channel {channel}")
+    print(f"  DMs     : {dm_status}")
     print(f"  Access  : {len(allowed_user_ids)} authorized Slack user(s)")
     print("")
     print("  Only explicitly authorized Slack users can drive the backend,")
     print("  which runs with your shell and inherited environment.")
-    print("  Slack text flows into the prompt, so treat every mention as")
+    print("  Slack text flows into the prompt, so treat every invocation as")
     print("  untrusted input: use an isolated channel on a non-production host.")
     print(f"  Invite the bot only where it should respond: /invite @{bot}")
     print("=" * 64)
@@ -1000,7 +1018,10 @@ def create_app(backend: str, timeout: int, allowed_user_ids: frozenset[str]) -> 
             raw_value = body["actions"][0]["value"]
             metadata = json.loads(raw_value)
             channel = metadata["channel"]
-            if not slack_channel_allowed(channel):
+            if not slack_conversation_allowed(
+                channel,
+                direct_message=metadata.get("direct_message") is True,
+            ):
                 return
             user_id = body.get("user", {}).get("id", "")
             if not slack_user_allowed(user_id, allowed_user_ids):
@@ -1078,7 +1099,10 @@ def create_app(backend: str, timeout: int, allowed_user_ids: frozenset[str]) -> 
             if errors:
                 ack(response_action="errors", errors=errors)
                 return
-            if not slack_channel_allowed(metadata["channel"]):
+            if not slack_conversation_allowed(
+                metadata["channel"],
+                direct_message=metadata.get("direct_message") is True,
+            ):
                 ack(response_action="errors", errors={"model": "This channel is not allowed."})
                 return
             settings = AgentSettings(model=model, reasoning_effort=effort)
@@ -1104,22 +1128,20 @@ def create_app(backend: str, timeout: int, allowed_user_ids: frozenset[str]) -> 
         except Exception as exc:  # noqa: BLE001 - the setting is already durably saved
             logger.warning("Could not post Open Tag settings confirmation: %s", exc)
 
-    @app.event("app_mention")
-    def handle_mention(
+    def handle_invocation(
         event: dict[str, Any],
         body: dict[str, Any],
         client: Any,
         logger: Any,
+        *,
+        direct_message: bool,
     ) -> None:
         channel = event["channel"]
-        if not slack_channel_allowed(channel):
-            logger.warning("Ignoring Open Tag mention from unapproved Slack channel %s", channel)
-            return
         thread_ts = event.get("thread_ts") or event["ts"]
         user_id = event.get("user", "")
         if not slack_user_allowed(user_id, allowed_user_ids):
             logger.warning(
-                "Rejecting Open Tag mention from unauthorized Slack user %s in channel %s",
+                "Rejecting Open Tag invocation from unauthorized Slack user %s in channel %s",
                 user_id or "(missing)",
                 channel,
             )
@@ -1179,6 +1201,7 @@ def create_app(backend: str, timeout: int, allowed_user_ids: frozenset[str]) -> 
                     thread_ts=thread_ts,
                     settings=agent_settings,
                     models=models,
+                    direct_message=direct_message,
                 )
                 if backend == "codex" and succeeded
                 else None
@@ -1206,6 +1229,33 @@ def create_app(backend: str, timeout: int, allowed_user_ids: frozenset[str]) -> 
                 answer_stream.abort()
             answer = f"Open Tag failed: `{type(exc).__name__}: {exc}`"
             post_final_reply(client, channel, thread_ts, answer, indicator.message_ts)
+
+    @app.event("app_mention")
+    def handle_mention(
+        event: dict[str, Any],
+        body: dict[str, Any],
+        client: Any,
+        logger: Any,
+    ) -> None:
+        channel = event["channel"]
+        if not slack_conversation_allowed(channel):
+            logger.warning("Ignoring Open Tag mention from unapproved Slack channel %s", channel)
+            return
+        handle_invocation(event, body, client, logger, direct_message=False)
+
+    @app.event("message")
+    def handle_direct_message(
+        event: dict[str, Any],
+        body: dict[str, Any],
+        client: Any,
+        logger: Any,
+    ) -> None:
+        if event.get("channel_type") != "im" or not direct_messages_enabled():
+            return
+        # Ignore bot output and Slack's message lifecycle events to prevent reply loops.
+        if event.get("bot_id") or event.get("subtype") not in {None, "file_share"}:
+            return
+        handle_invocation(event, body, client, logger, direct_message=True)
 
     return app
 

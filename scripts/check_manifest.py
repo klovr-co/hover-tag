@@ -18,6 +18,7 @@ REQUIRED_SCOPES = {
     "files:read",
     "groups:history",
     "groups:read",
+    "im:history",
 }
 
 
@@ -35,6 +36,13 @@ def validate_manifest(root: Path) -> list[str]:
     events = settings.get("event_subscriptions", {}).get("bot_events", [])
     if "app_mention" not in events:
         errors.append("app_mention must be subscribed")
+    if "message.im" not in events:
+        errors.append("message.im must be subscribed")
+    app_home = manifest.get("features", {}).get("app_home", {})
+    if app_home.get("messages_tab_enabled") is not True:
+        errors.append("App Home Messages tab must be enabled")
+    if app_home.get("messages_tab_read_only_enabled") is not False:
+        errors.append("App Home Messages tab must accept user messages")
     if settings.get("interactivity", {}).get("is_enabled") is not True:
         errors.append("interactivity must be enabled")
     return errors
