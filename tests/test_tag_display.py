@@ -15,10 +15,43 @@ class DisplayTests(unittest.TestCase):
         import re
         plain = re.sub(r"\x1b\[[0-9;]*m", "", output.getvalue())
         self.assertTrue(all(len(line) <= 46 for line in plain.splitlines()))
-        self.assertIn("Slack assistant", plain)
+        self.assertIn("@Tag by Hover", plain)
+        self.assertIn("https://hover.team/tag", plain)
         with patch.object(tag_display, "color_available", return_value=False), redirect_stdout(StringIO()) as output:
             self.assertFalse(tag_display.mascot_banner())
         self.assertEqual(output.getvalue(), "")
+
+    def test_every_header_includes_brand_name_and_link_without_color(self):
+        with patch.object(tag_display, "color_available", return_value=False), redirect_stdout(StringIO()) as output:
+            tag_display.header("Setup")
+        text = output.getvalue()
+        self.assertIn("@Tag by Hover  /  Setup", text)
+        self.assertIn("https://hover.team/tag", text)
+
+    def test_wide_banner_has_one_brand_name_without_a_duplicate_wordmark(self):
+        with patch.object(tag_display.shutil, "get_terminal_size", return_value=os.terminal_size((80, 24))), patch.object(
+            tag_display, "color_available", return_value=True
+        ), redirect_stdout(StringIO()) as output:
+            tag_display.mascot_banner()
+        import re
+        plain = re.sub(r"\x1b\[[0-9;]*m", "", output.getvalue())
+        self.assertEqual(plain.count("@Tag by Hover"), 1)
+        self.assertNotIn("▀█▀  ▄▀█  █▀▀", plain)
+
+    def test_narrow_color_header_falls_back_without_clipping_brand_text(self):
+        with patch.object(
+            tag_display.shutil,
+            "get_terminal_size",
+            return_value=os.terminal_size((28, 24)),
+        ), patch.object(
+            tag_display, "color_available", return_value=True
+        ), redirect_stdout(StringIO()) as output:
+            self.assertFalse(tag_display.mascot_banner())
+            tag_display.header("Setup")
+
+        plain = output.getvalue().replace("\n", "").replace(" ", "")
+        self.assertIn(tag_display.BRAND_NAME.replace(" ", ""), plain)
+        self.assertIn(tag_display.BRAND_URL, plain)
 
     def test_backend_missing_does_not_execute(self):
         with patch.object(tag_display.shutil, "which", return_value=None), patch.object(tag_display.subprocess, "run") as run:
