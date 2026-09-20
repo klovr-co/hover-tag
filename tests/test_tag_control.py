@@ -130,6 +130,7 @@ class TagControlTests(unittest.TestCase):
         self.complete()
         original = self.path.read_bytes()
         for changes in ({"OPENTAG_BACKEND": "other"}, {"OPENTAG_TIMEOUT_SECONDS": "-1"},
+                        {"OPENTAG_MAX_TIMEOUT_SECONDS": "0"},
                         {"OPENTAG_CODEX_TRANSPORT": "socket"},
                         {"OPENTAG_SLACK_DM_ENABLED": "maybe"},
                         {"SLACK_ALLOWED_USER_IDS": ""}, {"MFS_URL": "http://user:secret@host"},

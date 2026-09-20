@@ -79,6 +79,7 @@ Create or reuse a Slack app:
    - `assistant:write` — manage native agent working status.
    - `chat:write` — post and update Slack replies.
    - `files:read` — download text snippets and image attachments shared in the current thread.
+   - `files:write` — upload backend-generated image results to the current thread.
    - `channels:read` + `channels:history` — read threads in public channels.
    - `groups:read` + `groups:history` — read threads in private channels.
    - `im:history` — read direct-message threads when DM invocation is enabled.
@@ -189,7 +190,8 @@ auth and tool execution.
 Optional:
 
 ```bash
-export OPENTAG_TIMEOUT_SECONDS=420
+export OPENTAG_TIMEOUT_SECONDS=420      # stop after this much backend inactivity
+export OPENTAG_MAX_TIMEOUT_SECONDS=3600 # absolute task limit, even with activity
 export OPENTAG_BACKEND_ATTEMPTS=3   # codex backend: retries on capacity/rate-limit
 export OPENTAG_SLACK_STREAMING=0    # optional: disable default Slack response streaming
 export OPENTAG_CODEX_TRANSPORT=exec # optional legacy rollback; App Server is the default

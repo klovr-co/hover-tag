@@ -15,6 +15,8 @@ All notable changes to Tag are documented here.
 
 ### Fixed
 
+- Let responsive agent tasks run beyond the former seven-minute wall-clock
+  limit by separating the backend idle timeout from a one-hour maximum runtime.
 - Make `tag status` fail when either required service is unhealthy.
 - Wait for a live Slack Socket Mode connection during startup and print the
   bridge log tail when startup fails.

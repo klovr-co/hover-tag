@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -78,11 +79,28 @@ class OpenTagAgentPromptTests(unittest.TestCase):
         self.assertIn("new top-level channel message", prompt)
         self.assertIn("only when the user", prompt)
 
+    def test_slack_prompt_exposes_generated_image_result_directory(self) -> None:
+        prompt = opentag_agent.build_prompt(
+            skill_dir=Path("/tmp/open-tag"),
+            workdir=Path("/tmp/workspace"),
+            channel_id="C123",
+            question="Create a launch graphic",
+            thread_text="",
+            attachments_dir=Path("/tmp/invocation"),
+            allowed_scopes="file://local/tmp/workspace",
+        )
+
+        self.assertIn("/tmp/invocation/results/images", prompt)
+        self.assertIn("Slack bridge uploads supported files", prompt)
+        self.assertIn("Do not call Slack's API to upload them", prompt)
+        self.assertIn("/tmp/invocation/results/artifacts", prompt)
+        self.assertIn("including generated HTML", prompt)
+
     @patch("scripts.opentag_agent.backend_command", return_value=["codex"])
     def test_codex_backend_uses_automatic_workspace_safety_review(self, _backend) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
             root = Path(raw_dir)
-            with patch(
+            with patch.object(opentag_agent, "tag_temp_dir", return_value=root), patch(
                 "scripts.opentag_agent.subprocess.run",
                 return_value=SimpleNamespace(returncode=0, stdout="done"),
             ) as run:
@@ -104,6 +122,44 @@ class OpenTagAgentPromptTests(unittest.TestCase):
 
 
 class BackendStreamEventTests(unittest.TestCase):
+    def test_backend_progress_requires_a_recognized_lifecycle_event(self) -> None:
+        self.assertTrue(opentag_agent.backend_made_progress({"type": "item.started"}))
+        self.assertTrue(opentag_agent.backend_made_progress({"type": "stream_event"}))
+        self.assertFalse(opentag_agent.backend_made_progress({"type": "keepalive"}))
+        self.assertFalse(opentag_agent.backend_made_progress({"message": "noise"}))
+
+    def test_watchdog_resets_idle_deadline_but_not_maximum_runtime(self) -> None:
+        stopped = threading.Event()
+        watchdog = opentag_agent.BackendWatchdog(
+            idle_timeout=0.08,
+            max_timeout=0.18,
+            stop=stopped.set,
+        )
+        watchdog.start()
+        try:
+            self.assertFalse(stopped.wait(0.05))
+            watchdog.touch()
+            self.assertFalse(stopped.wait(0.05))
+            watchdog.touch()
+            self.assertTrue(stopped.wait(0.12))
+            self.assertEqual("maximum", watchdog.reason)
+        finally:
+            watchdog.close()
+
+    def test_watchdog_reports_idle_timeout_without_progress(self) -> None:
+        stopped = threading.Event()
+        watchdog = opentag_agent.BackendWatchdog(
+            idle_timeout=0.04,
+            max_timeout=0.5,
+            stop=stopped.set,
+        )
+        watchdog.start()
+        try:
+            self.assertTrue(stopped.wait(0.2))
+            self.assertEqual("idle", watchdog.reason)
+        finally:
+            watchdog.close()
+
     def test_retryable_failure_recognizes_structured_rate_limit_errors(self) -> None:
         self.assertTrue(opentag_agent.retryable_backend_failure("rate_limit_exceeded"))
         self.assertTrue(opentag_agent.retryable_backend_failure("HTTP 429: too many requests"))

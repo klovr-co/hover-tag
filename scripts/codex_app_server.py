@@ -295,12 +295,14 @@ class CodexAppServer:
         *,
         cwd: Path,
         timeout: int,
+        max_timeout: int | None = None,
         control_file: Path | None = None,
         run_id: str | None = None,
     ) -> None:
         self.command = command
         self.cwd = cwd
         self.timeout = timeout
+        self.max_timeout = max_timeout if max_timeout is not None else timeout
         self.control_file = control_file
         self.run_id = run_id
         self.process: subprocess.Popen[bytes] | None = None
@@ -323,14 +325,14 @@ class CodexAppServer:
     ) -> tuple[str, str]:
         self._start()
         mapper = CodexEventMapper()
-        deadline = time.monotonic() + self.timeout
+        max_deadline = time.monotonic() + self.max_timeout
         try:
             self._request(
                 "initialize",
                 {"clientInfo": {"name": "tag", "title": "Tag", "version": "0.1"}},
                 mapper,
                 emit,
-                deadline,
+                max_deadline,
             )
             self._notify("initialized", {})
             thread_params: dict[str, Any] = {
@@ -342,7 +344,7 @@ class CodexAppServer:
             }
             if model:
                 thread_params["model"] = model
-            thread_result = self._request("thread/start", thread_params, mapper, emit, deadline)
+            thread_result = self._request("thread/start", thread_params, mapper, emit, max_deadline)
             thread = thread_result.get("thread") if isinstance(thread_result, dict) else None
             if not isinstance(thread, dict) or not isinstance(thread.get("id"), str):
                 raise CodexAppServerError("Codex returned an invalid thread/start response")
@@ -355,12 +357,17 @@ class CodexAppServer:
                 turn_params["model"] = model
             if reasoning_effort:
                 turn_params["effort"] = reasoning_effort
-            turn_result = self._request("turn/start", turn_params, mapper, emit, deadline)
+            turn_result = self._request("turn/start", turn_params, mapper, emit, max_deadline)
             turn = turn_result.get("turn") if isinstance(turn_result, dict) else None
             if not isinstance(turn, dict) or not isinstance(turn.get("id"), str):
                 raise CodexAppServerError("Codex returned an invalid turn/start response")
             self.turn_id = turn["id"]
-            return self._consume_turn(mapper, emit, deadline)
+            return self._consume_turn(
+                mapper,
+                emit,
+                idle_deadline=time.monotonic() + self.timeout,
+                max_deadline=max_deadline,
+            )
         finally:
             self.close()
 
@@ -475,32 +482,53 @@ class CodexAppServer:
         self,
         mapper: CodexEventMapper,
         emit: Callable[[dict[str, Any]], None],
-        deadline: float,
+        idle_deadline: float,
+        max_deadline: float,
     ) -> tuple[str, str]:
         timed_out = False
+        timeout_detail = ""
+        interrupt_deadline = float("inf")
         while True:
             try:
-                message = self._next_message(
-                    deadline if not timed_out else deadline + INTERRUPT_GRACE_SECONDS
-                )
+                deadline = min(idle_deadline, max_deadline) if not timed_out else interrupt_deadline
+                message = self._next_message(deadline)
             except CodexAppServerError as exc:
-                if not timed_out and time.monotonic() >= deadline:
+                now = time.monotonic()
+                if not timed_out and now >= deadline:
                     timed_out = True
+                    timeout_detail = (
+                        f"maximum runtime of {self.max_timeout}s exceeded"
+                        if now >= max_deadline
+                        else f"no backend activity for {self.timeout}s"
+                    )
+                    interrupt_deadline = now + INTERRUPT_GRACE_SECONDS
                     self.interrupt()
                     continue
                 if timed_out:
-                    return "timeout", "Codex did not confirm interruption before cleanup"
+                    suffix = "Codex did not confirm interruption before cleanup"
+                    return "timeout", f"{timeout_detail}; {suffix}"
                 raise
             if "method" in message and "id" not in message:
                 events = mapper.map(message)
+                if self._is_progress_notification(message) and not timed_out:
+                    idle_deadline = time.monotonic() + self.timeout
                 for event in events:
                     emit(event)
                     if event.get("type") == "turn_complete":
                         if timed_out:
-                            return "timeout", ""
+                            return "timeout", timeout_detail
                         return str(event.get("status", "failed")), str(event.get("text", ""))
                 continue
             self._dispatch(message, mapper, emit)
+
+    @staticmethod
+    def _is_progress_notification(message: dict[str, Any]) -> bool:
+        """Count private item/turn lifecycle too, without accepting generic pings."""
+        method = message.get("method")
+        return isinstance(method, str) and (
+            method.startswith("item/")
+            or method in {"turn/started", "turn/diff/updated", "turn/plan/updated"}
+        )
 
     def _resolve_server_request(self, message: dict[str, Any]) -> None:
         request_id = message.get("id")

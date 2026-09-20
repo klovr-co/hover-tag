@@ -48,6 +48,7 @@ Slack. They do not disappear into my private Claude or ChatGPT history.
 - Respond when someone mentions `@OpenMax` in Slack or sends it a direct message,
   provided the sender is explicitly authorized.
 - Read the current thread, including text and image attachments.
+- Upload backend-generated PNG, JPEG, GIF, and WebP images to the requesting thread.
 - Summarize an indexed Slack channel instead of seeing only one thread.
 - Search approved Slack history, repositories, documents, issues, databases,
   and object stores through MFS.
@@ -291,7 +292,8 @@ It also needs the `app_mention`, `message.im`, `app_home_opened`, and
 `connections:write`. Invite the bot only to channels where it should respond.
 Direct-message execution is enabled by default and can be disabled with
 `OPENTAG_SLACK_DM_ENABLED=0`.
-The included app manifest also requests `files:read` for text attachments and
+The included app manifest also requests `files:read` for inbound text and image
+attachments, `files:write` for backend-generated image results, and
 `canvases:write` for the explicit Canvas helper.
 
 On upgrade, `tag start` compares the linked app with Tag's versioned manifest
@@ -348,6 +350,10 @@ Current safeguards include:
 - bounded attachment size and thread context;
 - task timeouts and limited retries;
 - automatic Codex workspace safety review.
+
+The default task watchdog stops a backend after seven minutes without a
+recognized lifecycle event, while a separate one-hour maximum still bounds an
+active task. Slack's processing-status refresh does not extend either deadline.
 
 The backend's inherited credentials can be used directly by tools or shell
 commands, bypassing Tag's scoped helpers. Tag does **not** provide a hardened
