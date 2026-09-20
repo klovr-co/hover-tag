@@ -24,6 +24,9 @@ from typing import Any, Iterable
 VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta)(?:\.(\d+))?)?$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 REQUIRED_WORKFLOWS = ("ci.yml", "install-smoke.yml")
+AUTO_RELEASE_LABELS = {
+    "release:next-patch", "release:next-minor", "release:skip",
+}
 
 
 @dataclass(frozen=True)
@@ -126,6 +129,54 @@ def validate_candidate(
     if transition_history:
         errors.extend(validate_transition(max(transition_history, key=Version.precedence), candidate))
     return errors
+
+
+def select_auto_alpha(
+    base_version: str, tags: Iterable[str], labels: Iterable[str]
+) -> Version | None:
+    """Select the next automatic alpha, or None when publication is skipped."""
+    base = Version.parse(base_version)
+    supplied_labels = set(labels)
+    unknown_labels = supplied_labels - AUTO_RELEASE_LABELS
+    if unknown_labels:
+        raise ValueError(
+            "unknown automatic release labels: " + ", ".join(sorted(unknown_labels))
+        )
+    selected_labels = supplied_labels & AUTO_RELEASE_LABELS
+    if len(selected_labels) > 1:
+        raise ValueError(
+            "conflicting automatic release labels: " + ", ".join(sorted(selected_labels))
+        )
+    if "release:skip" in selected_labels or base.phase != "alpha":
+        return None
+
+    published: list[Version] = []
+    for tag in tags:
+        try:
+            published.append(Version.parse(tag.removeprefix("v")))
+        except ValueError:
+            continue
+
+    previous = max(published, key=Version.precedence, default=None)
+    if previous is None:
+        core = base.core
+    elif "release:next-patch" in selected_labels:
+        core = (previous.major, previous.minor, previous.patch + 1)
+    elif "release:next-minor" in selected_labels:
+        core = (previous.major, previous.minor + 1, 0)
+    elif previous.phase == "alpha" and previous.number is not None:
+        core = previous.core
+    elif base.core > previous.core:
+        core = base.core
+    else:
+        core = (previous.major, previous.minor + 1, 0)
+
+    existing_numbers = [
+        item.number or 0
+        for item in published
+        if item.core == core and item.phase == "alpha"
+    ]
+    return Version(*core, "alpha", max(existing_numbers, default=0) + 1)
 
 
 def validate_selected_sha(sha: str, resolved: str, is_on_main: bool) -> list[str]:
@@ -356,6 +407,10 @@ def main() -> int:
     candidate.add_argument("--phase", choices=("alpha", "beta", "stable"), required=True)
     candidate.add_argument("--allow-existing-version", action="store_true")
 
+    automatic = subparsers.add_parser("next-alpha")
+    automatic.add_argument("--base-version", required=True)
+    automatic.add_argument("--label", action="append", default=[])
+
     commit = subparsers.add_parser("validate-commit")
     commit.add_argument("--sha", required=True)
     commit.add_argument("--main-ref", default="origin/main")
@@ -391,6 +446,14 @@ def main() -> int:
         return _print_errors(validate_candidate(
             args.version, args.phase, tags, args.allow_existing_version
         ))
+    if args.command == "next-alpha":
+        tags = subprocess.check_output(["git", "tag", "--list", "v*"], text=True).splitlines()
+        try:
+            version = select_auto_alpha(args.base_version, tags, args.label)
+        except ValueError as error:
+            return _print_errors([str(error)])
+        print(version if version is not None else "skip")
+        return 0
     if args.command == "validate-commit":
         if not SHA_RE.fullmatch(args.sha):
             return _print_errors([

@@ -15,6 +15,7 @@ from scripts.release_automation import (
     Version,
     derive_next_version,
     promote_edge_bundle,
+    select_auto_alpha,
     successful_run,
     validate_candidate,
     validate_edge_bundle,
@@ -77,6 +78,45 @@ class VersionTransitionTests(unittest.TestCase):
         )
         self.assertTrue(validate_candidate("0.2.0-alpha", "alpha", ["v0.1.0"]))
 
+    def test_automatic_alpha_starts_configured_line_then_increments_it(self) -> None:
+        self.assertEqual(
+            str(select_auto_alpha(
+                "0.2.0-alpha", ["v0.1.0-alpha"], []
+            )),
+            "0.2.0-alpha.1",
+        )
+        self.assertEqual(
+            str(select_auto_alpha(
+                "0.2.0-alpha", ["v0.2.0-alpha.1", "v0.2.0-alpha.2"], []
+            )),
+            "0.2.0-alpha.3",
+        )
+
+    def test_automatic_alpha_honors_explicit_line_and_skip_labels(self) -> None:
+        tags = ["v0.2.0-alpha.4"]
+
+        self.assertEqual(
+            str(select_auto_alpha("0.2.0-alpha", tags, ["release:next-patch"])),
+            "0.2.1-alpha.1",
+        )
+        self.assertEqual(
+            str(select_auto_alpha("0.2.0-alpha", tags, ["release:next-minor"])),
+            "0.3.0-alpha.1",
+        )
+        self.assertIsNone(select_auto_alpha(
+            "0.2.0-alpha", tags, ["release:skip"]
+        ))
+        self.assertIsNone(select_auto_alpha("0.2.0-beta.1", tags, []))
+
+    def test_automatic_alpha_rejects_conflicting_release_labels(self) -> None:
+        with self.assertRaisesRegex(ValueError, "conflicting automatic release labels"):
+            select_auto_alpha(
+                "0.2.0-alpha", ["v0.1.0"],
+                ["release:next-patch", "release:skip"],
+            )
+        with self.assertRaisesRegex(ValueError, "unknown automatic release labels"):
+            select_auto_alpha("0.2.0-alpha", ["v0.1.0"], ["release:maybe"])
+
 
 class SelectedCommitTests(unittest.TestCase):
     def test_requires_exact_full_sha_on_main(self) -> None:
@@ -120,6 +160,18 @@ class ReleaseArtifactTests(unittest.TestCase):
 
         self.assertEqual(first_digest, second_digest)
         self.assertEqual(first_bytes, second_bytes)
+
+    def test_package_can_stamp_generated_version_without_editing_source(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        source_version = (root / "VERSION").read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            archive = Path(temporary_directory) / "release.zip"
+            build_archive(root, archive, version="9.8.7-alpha.6")
+            with zipfile.ZipFile(archive) as bundle:
+                packaged_version = bundle.read("VERSION").decode()
+
+        self.assertEqual(packaged_version, "9.8.7-alpha.6\n")
+        self.assertEqual((root / "VERSION").read_text(encoding="utf-8"), source_version)
 
     def test_package_rejects_missing_files_but_skips_symlinks_and_gitlinks(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -198,6 +250,17 @@ class ReleaseArtifactTests(unittest.TestCase):
 
 
 class ReleasePreflightTests(unittest.TestCase):
+    def test_edge_workflow_auto_publishes_alpha_and_supports_skip_label(self) -> None:
+        workflow = (
+            Path(__file__).resolve().parents[1]
+            / ".github/workflows/edge-build.yml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("next-alpha", workflow)
+        self.assertIn('if: env.AUTO_PUBLISH == \'true\'', workflow)
+        self.assertIn("gh release create", workflow)
+        self.assertIn('startswith("release:")', workflow)
+
     def test_prepare_workflow_uses_candidate_preflight(self) -> None:
         workflow = (
             Path(__file__).resolve().parents[1]
