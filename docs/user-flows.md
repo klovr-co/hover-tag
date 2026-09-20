@@ -292,8 +292,10 @@ flowchart LR
    beyond Slack's returned page is retained.
 2. Plain message text, legacy attachment fields, and bounded text-file content
    are normalized into the prompt.
-3. Image attachments are downloaded into a temporary invocation directory and
-   exposed to the backend for inspection. Each downloaded file is limited to
+3. Image attachments are downloaded into a per-invocation directory under
+   `TAG_HOME/tmp`; generated images, HTML, and other disposable artifacts use
+   the same private temporary subtree. Images are exposed to the backend for
+   inspection. Each downloaded file is limited to
    15 MB; a larger file is skipped with a retrieval-failure marker rather than
    truncated. Embedded text is limited to 12,000 characters per value/file.
    There is no separate aggregate attachment-byte limit beyond the single
@@ -683,7 +685,7 @@ isolated chat location. Skip an optional step when its dependency is not set up.
 | Thread text and text attachments | Implemented | Content is bounded and treated as untrusted. |
 | Image attachment understanding | Implemented bridge path | Images up to 15 MB are downloaded temporarily; successful interpretation still depends on the selected backend/model. |
 | Generated-file delivery | Implemented | Only explicitly declared regular files inside the workspace are uploaded to the invoking thread and returned as private Slack file links; each file is limited to 15 MB. |
-| Generated-image delivery | Implemented through generated-file delivery | Explicitly requested image outputs use the same validated, thread-scoped upload path. |
+| Generated-image upload to Slack | Implemented bridge path | The backend saves up to 10 final PNG, JPEG, GIF, or WebP files in the invocation's dedicated result directory; the bridge validates files up to 15 MB and uploads them to the requesting thread. |
 | Slack loading state and answers | Implemented | Claude text can stream; Codex currently posts the complete final answer. |
 | Long-answer splitting | Implemented | Results remain in the invoking thread. |
 | Model/reasoning/Fast Mode settings | Implemented for Codex | Requires Slack interactivity and a reinstalled updated manifest; Fast Mode uses increased usage. |

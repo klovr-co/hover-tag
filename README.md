@@ -47,6 +47,7 @@ Slack. They do not disappear into my private Claude or ChatGPT history.
 
 - Respond when someone mentions `@OpenMax` in Slack.
 - Read the current thread, including text and image attachments.
+- Upload backend-generated PNG, JPEG, GIF, and WebP images to the requesting thread.
 - Summarize an indexed Slack channel instead of seeing only one thread.
 - Search approved Slack history, repositories, documents, issues, databases,
   and object stores through MFS.
@@ -285,8 +286,10 @@ It also needs the `app_mention`, `app_home_opened`, and `agent_session_stopped`
 bot events and an app-level token with
 `connections:write`. Invite the bot only to channels where it should respond.
 `files:read` supports input attachments, while `files:write` supports explicitly
-requested generated-file delivery through private Slack file links. The included app manifest also requests
-`canvases:write` for the explicit Canvas helper.
+requested generated-file delivery through private Slack file links, including
+backend-generated images. The included app manifest also requests
+`canvases:write` for the explicit Canvas helper. Reinstall the Slack app after
+adding any scope.
 
 By default Slack lets workspace members install apps, but a workspace owner or
 Enterprise organization can require approval. In that case, request approval
