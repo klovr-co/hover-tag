@@ -1,10 +1,10 @@
-name: Retire hosted receiver Worker
+name: Delete hosted receiver data
 
 on:
   workflow_dispatch:
     inputs:
       confirmation:
-        description: Type RETIRE to delete the Worker after its Durable Object cleanup has been verified.
+        description: Type DELETE_DATA to permanently delete hosted receiver registrations.
         required: true
         type: string
 
@@ -12,9 +12,9 @@ permissions:
   contents: read
 
 jobs:
-  retire:
-    name: Retire Worker
-    if: inputs.confirmation == 'RETIRE'
+  retire-data:
+    name: Delete Durable Object data
+    if: inputs.confirmation == 'DELETE_DATA'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:
@@ -38,7 +38,7 @@ jobs:
             exit 1
           fi
       - run: npm ci --ignore-scripts
-      - name: Confirm the Durable Object binding was removed
+      - name: Delete the Durable Object namespace and stored registrations
+        run: npm run retire-data
+      - name: Verify the live Worker no longer binds TagReceiver
         run: npm run verify-retirement
-      - name: Delete the retired Worker
-        run: npm run retire-worker

@@ -22,4 +22,15 @@ class ReceiverRetirementTests(unittest.TestCase):
         workflow = (root / ".github/workflows/retire-hosted-receiver.yml").read_text(encoding="utf-8")
 
         self.assertIn("inputs.confirmation == 'RETIRE'", workflow)
+        self.assertIn("group: tag-offline-receiver-retirement", workflow)
         self.assertLess(workflow.index("npm run verify-retirement"), workflow.index("npm run retire-worker"))
+
+    def test_data_retirement_is_a_confirmed_manual_workflow(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        data_workflow = (root / ".github/workflows/delete-hosted-receiver-data.yml").read_text(encoding="utf-8")
+        ci_workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+
+        self.assertIn("inputs.confirmation == 'DELETE_DATA'", data_workflow)
+        self.assertIn("group: tag-offline-receiver-retirement", data_workflow)
+        self.assertIn("npm run retire-data", data_workflow)
+        self.assertNotIn("npm run retire-data", ci_workflow)
