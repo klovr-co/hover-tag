@@ -38,7 +38,7 @@ jobs:
       - name: Check deployment credential
         run: |
           if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
-            echo '::error::Set the repository secret CLOUDFLARE_API_TOKEN to a Cloudflare deployment token for the Tag receiver cleanup.'
+            echo '::error::Set CLOUDFLARE_API_TOKEN as an environment secret for tag-offline-receiver-retirement.'
             exit 1
           fi
       - run: npm ci --ignore-scripts

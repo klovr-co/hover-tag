@@ -25,6 +25,7 @@ class ReceiverRetirementTests(unittest.TestCase):
         self.assertIn("name: tag-offline-receiver-retirement", workflow)
         self.assertIn("ref: ${{ github.event.repository.default_branch }}", workflow)
         self.assertIn("group: tag-offline-receiver-retirement", workflow)
+        self.assertIn("environment secret for tag-offline-receiver-retirement", workflow)
         self.assertLess(workflow.index("npm run verify-retirement"), workflow.index("npm run retire-worker"))
 
     def test_data_retirement_is_a_confirmed_manual_workflow(self) -> None:
@@ -36,5 +37,6 @@ class ReceiverRetirementTests(unittest.TestCase):
         self.assertIn("name: tag-offline-receiver-retirement", data_workflow)
         self.assertIn("ref: ${{ github.event.repository.default_branch }}", data_workflow)
         self.assertIn("group: tag-offline-receiver-retirement", data_workflow)
+        self.assertIn("environment secret for tag-offline-receiver-retirement", data_workflow)
         self.assertIn("npm run retire-data", data_workflow)
         self.assertNotIn("npm run retire-data", ci_workflow)
