@@ -476,6 +476,8 @@ class SlackAgentSettingsTests(unittest.TestCase):
         self.assertEqual(["gpt-visible"], [model.model_id for model in models])
         self.assertEqual(("low", "medium"), models[0].reasoning_efforts)
         self.assertTrue(models[0].supports_fast_mode)
+        self.assertTrue(models[0].is_default)
+        self.assertEqual("medium", models[0].default_reasoning_effort)
 
     def test_user_settings_survive_a_new_store_instance(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
@@ -487,7 +489,54 @@ class SlackAgentSettingsTests(unittest.TestCase):
 
         self.assertEqual(settings, loaded)
 
-    def test_user_settings_without_fast_mode_default_it_off(self) -> None:
+    def test_configured_codex_model_and_thinking_are_the_reset_defaults(self) -> None:
+        payload = {
+            "models": [
+                {
+                    "slug": "gpt-first",
+                    "display_name": "GPT First",
+                    "visibility": "list",
+                    "priority": 1,
+                    "default_reasoning_level": "low",
+                    "supported_reasoning_levels": [{"effort": "low"}],
+                },
+                {
+                    "slug": "gpt-configured",
+                    "display_name": "GPT Configured",
+                    "visibility": "list",
+                    "priority": 2,
+                    "default_reasoning_level": "medium",
+                    "additional_speed_tiers": ["fast"],
+                    "supported_reasoning_levels": [
+                        {"effort": "medium"},
+                        {"effort": "high"},
+                    ],
+                },
+            ]
+        }
+        with tempfile.TemporaryDirectory() as raw_dir:
+            codex_home = Path(raw_dir)
+            (codex_home / "models_cache.json").write_text(
+                json.dumps(payload), encoding="utf-8"
+            )
+            (codex_home / "config.toml").write_text(
+                'model = "gpt-configured"\n'
+                'model_reasoning_effort = "high"\n'
+                'service_tier = "priority"\n',
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {"CODEX_HOME": raw_dir}, clear=True):
+                models = slack_socket_agent.discover_codex_models()
+
+        configured = next(model for model in models if model.is_default)
+        self.assertEqual("gpt-configured", configured.model_id)
+        self.assertEqual("high", configured.default_reasoning_effort)
+        self.assertEqual(
+            slack_socket_agent.AgentSettings("gpt-configured", "high", fast_mode=True),
+            slack_socket_agent.default_agent_settings(models),
+        )
+
+    def test_user_settings_without_fast_mode_leave_it_unset(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
             path = Path(raw_dir) / "settings.json"
             path.write_text(
@@ -504,7 +553,7 @@ class SlackAgentSettingsTests(unittest.TestCase):
 
             loaded = slack_socket_agent.UserAgentSettingsStore(path).get("T1", "U1")
 
-        self.assertFalse(loaded.fast_mode)
+        self.assertIsNone(loaded.fast_mode)
 
     def test_user_settings_are_isolated_between_users(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
@@ -632,7 +681,7 @@ class SlackAgentSettingsTests(unittest.TestCase):
         self.assertEqual("Codex settings", modal["title"]["text"])
         self.assertEqual("static_select", effort_element["type"])
         self.assertEqual(
-            [slack_socket_agent.DEFAULT_CONFIG_VALUE, "low", "high"],
+            ["low", "high"],
             [option["value"] for option in effort_element["options"]],
         )
         self.assertTrue(
@@ -640,6 +689,10 @@ class SlackAgentSettingsTests(unittest.TestCase):
         )
         self.assertEqual("high", effort_element["initial_option"]["value"])
         model_element = modal["blocks"][0]["element"]
+        self.assertEqual(
+            ["gpt-visible"],
+            [option["value"] for option in model_element["options"]],
+        )
         self.assertTrue(
             all("description" not in option for option in model_element["options"])
         )
@@ -675,6 +728,7 @@ class SlackAgentSettingsTests(unittest.TestCase):
                 "GPT Visible",
                 ("low", "high"),
                 supports_fast_mode=True,
+                default_fast_mode=True,
             )
         ]
         with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
@@ -701,14 +755,17 @@ class SlackAgentSettingsTests(unittest.TestCase):
         ack.assert_called_once_with()
         reset_view = client.views_update.call_args.kwargs["view"]
         self.assertEqual(
-            slack_socket_agent.DEFAULT_CONFIG_VALUE,
+            "gpt-visible",
             reset_view["blocks"][0]["element"]["initial_option"]["value"],
         )
         self.assertEqual(
-            slack_socket_agent.DEFAULT_CONFIG_VALUE,
+            "low",
             reset_view["blocks"][1]["element"]["initial_option"]["value"],
         )
-        self.assertNotIn("initial_options", reset_view["blocks"][2]["accessory"])
+        self.assertEqual(
+            "on",
+            reset_view["blocks"][2]["accessory"]["initial_options"][0]["value"],
+        )
 
     def test_modal_disables_fast_mode_for_unsupported_explicit_model(self) -> None:
         models = [

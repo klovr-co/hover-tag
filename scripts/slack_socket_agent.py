@@ -91,18 +91,43 @@ class CodexModelOption:
     label: str
     reasoning_efforts: tuple[str, ...]
     supports_fast_mode: bool = False
+    default_reasoning_effort: str | None = None
+    is_default: bool = False
+    default_fast_mode: bool = False
 
 
 @dataclass(frozen=True)
 class AgentSettings:
     model: str | None = None
     reasoning_effort: str | None = None
-    fast_mode: bool = False
+    fast_mode: bool | None = None
 
 
 def codex_models_cache_path() -> Path:
     codex_home = Path(os.getenv("CODEX_HOME", str(Path.home() / ".codex"))).expanduser()
     return codex_home / "models_cache.json"
+
+
+def configured_codex_defaults() -> tuple[str | None, str | None, bool]:
+    """Read the model, thinking, and speed an unqualified Codex run will use."""
+    config_path = codex_models_cache_path().with_name("config.toml")
+    try:
+        try:
+            import tomllib
+        except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 runtime
+            import tomli as tomllib
+        with config_path.open("rb") as handle:
+            config = tomllib.load(handle)
+    except (OSError, TypeError, ValueError):
+        return None, None, False
+    model = config.get("model")
+    effort = config.get("model_reasoning_effort")
+    service_tier = config.get("service_tier")
+    return (
+        model if isinstance(model, str) and model else None,
+        effort if isinstance(effort, str) and effort in SUPPORTED_REASONING_EFFORTS else None,
+        service_tier in {"fast", "priority"},
+    )
 
 
 def discover_codex_models() -> list[CodexModelOption]:
@@ -112,12 +137,29 @@ def discover_codex_models() -> list[CodexModelOption]:
         for value in os.getenv("OPENTAG_CODEX_MODELS", "").split(",")
         if value.strip()
     ]
+    configured_model, configured_effort, configured_fast_mode = configured_codex_defaults()
     discovered: dict[str, CodexModelOption] = {}
     try:
         payload = json.loads(codex_models_cache_path().read_text(encoding="utf-8"))
         if not isinstance(payload, dict):
             payload = {}
-        for raw_model in payload.get("models", []):
+        raw_models = [
+            raw_model
+            for raw_model in payload.get("models", [])
+            if isinstance(raw_model, dict)
+            and raw_model.get("visibility") != "hide"
+            and isinstance(raw_model.get("slug"), str)
+            and raw_model.get("slug")
+        ]
+        fallback_default = min(
+            raw_models,
+            key=lambda item: item.get("priority")
+            if isinstance(item.get("priority"), (int, float))
+            else float("inf"),
+            default={},
+        ).get("slug")
+        default_model = configured_model or fallback_default
+        for raw_model in raw_models:
             if not isinstance(raw_model, dict) or raw_model.get("visibility") == "hide":
                 continue
             model_id = raw_model.get("slug")
@@ -131,11 +173,22 @@ def discover_codex_models() -> list[CodexModelOption]:
             speed_tiers = raw_model.get("additional_speed_tiers", [])
             if not isinstance(speed_tiers, list):
                 speed_tiers = []
+            catalog_effort = raw_model.get("default_reasoning_level")
+            is_default = model_id == default_model
+            default_effort = configured_effort if is_default and configured_effort else catalog_effort
             discovered[model_id] = CodexModelOption(
                 model_id=model_id,
                 label=str(raw_model.get("display_name") or model_id),
                 reasoning_efforts=efforts or DEFAULT_REASONING_EFFORTS,
                 supports_fast_mode="fast" in speed_tiers,
+                default_reasoning_effort=(
+                    default_effort
+                    if isinstance(default_effort, str)
+                    and default_effort in SUPPORTED_REASONING_EFFORTS
+                    else None
+                ),
+                is_default=is_default,
+                default_fast_mode=configured_fast_mode,
             )
     except (OSError, ValueError, TypeError):
         pass
@@ -144,7 +197,16 @@ def discover_codex_models() -> list[CodexModelOption]:
         return [
             discovered.get(
                 model_id,
-                CodexModelOption(model_id, model_id, DEFAULT_REASONING_EFFORTS),
+                CodexModelOption(
+                    model_id,
+                    model_id,
+                    DEFAULT_REASONING_EFFORTS,
+                    default_reasoning_effort=(
+                        configured_effort if model_id == configured_model else None
+                    ),
+                    is_default=model_id == configured_model,
+                    default_fast_mode=configured_fast_mode,
+                ),
             )
             for model_id in configured
         ]
@@ -178,17 +240,49 @@ def fast_mode_available(model: str | None, models: list[CodexModelOption]) -> bo
     return bool(selected and selected.supports_fast_mode)
 
 
+def default_agent_settings(models: list[CodexModelOption]) -> AgentSettings:
+    if not models:
+        return AgentSettings()
+    selected = next((item for item in models if item.is_default), models[0])
+    efforts = efforts_for_model(selected.model_id, models)
+    effort = selected.default_reasoning_effort
+    if effort not in efforts:
+        effort = efforts[0] if efforts else None
+    return AgentSettings(
+        model=selected.model_id,
+        reasoning_effort=effort,
+        fast_mode=selected.default_fast_mode and selected.supports_fast_mode,
+    )
+
+
+def default_effort_for_model(
+    model: str | None,
+    models: list[CodexModelOption],
+) -> str | None:
+    selected = next((item for item in models if item.model_id == model), None)
+    efforts = efforts_for_model(model, models)
+    if selected and selected.default_reasoning_effort in efforts:
+        return selected.default_reasoning_effort
+    return efforts[0] if efforts else None
+
+
 def normalize_settings(
     settings: AgentSettings,
     models: list[CodexModelOption],
 ) -> AgentSettings:
     known_models = {item.model_id for item in models}
+    defaults = default_agent_settings(models)
     model_is_valid = settings.model is None or settings.model in known_models
-    model = settings.model if settings.model in known_models else None
+    model = settings.model if settings.model in known_models else defaults.model
     efforts = efforts_for_model(model, models)
-    effort = settings.reasoning_effort if settings.reasoning_effort in efforts else None
-    fast_mode = (
-        settings.fast_mode
+    effort = (
+        settings.reasoning_effort
+        if settings.reasoning_effort in efforts
+        else default_effort_for_model(model, models)
+    )
+    requested_fast_mode = defaults.fast_mode if settings.fast_mode is None else settings.fast_mode
+    fast_mode = bool(
+        requested_fast_mode
         and model_is_valid
         and fast_mode_available(model, models)
     )
@@ -229,7 +323,7 @@ class UserAgentSettingsStore:
         return AgentSettings(
             model=model if isinstance(model, str) else None,
             reasoning_effort=effort if isinstance(effort, str) else None,
-            fast_mode=fast_mode if isinstance(fast_mode, bool) else False,
+            fast_mode=fast_mode if isinstance(fast_mode, bool) else None,
         )
 
     def set(self, team: str, user_id: str, settings: AgentSettings) -> None:
@@ -514,13 +608,16 @@ def settings_modal(
     settings: AgentSettings,
     models: list[CodexModelOption],
 ) -> dict[str, Any]:
-    model_options = [select_option(DEFAULT_CONFIG_VALUE, "Codex default")]
-    model_options.extend(select_option(item.model_id, item.label) for item in models)
-    selected_model = settings.model if settings.model in {item.model_id for item in models} else None
+    normalized = normalize_settings(settings, models)
+    model_options = [select_option(item.model_id, item.label) for item in models]
+    if not model_options:
+        model_options = [select_option(DEFAULT_CONFIG_VALUE, "No models available")]
+    selected_model = normalized.model
     efforts = efforts_for_model(selected_model, models)
-    effort_options = [select_option(DEFAULT_CONFIG_VALUE, "Codex default")]
-    effort_options.extend(select_option(effort, friendly_effort(effort)) for effort in efforts)
-    selected_effort = settings.reasoning_effort if settings.reasoning_effort in efforts else None
+    effort_options = [select_option(effort, friendly_effort(effort)) for effort in efforts]
+    if not effort_options:
+        effort_options = [select_option(DEFAULT_CONFIG_VALUE, "No thinking levels available")]
+    selected_effort = normalized.reasoning_effort
     fast_available = fast_mode_available(selected_model, models)
     fast_option = select_option(
         "on",
@@ -532,7 +629,7 @@ def settings_modal(
         "action_id": SETTINGS_FAST_ACTION_ID,
         "options": [fast_option],
     }
-    if settings.fast_mode and fast_available:
+    if normalized.fast_mode and fast_available:
         fast_element["initial_options"] = [fast_option]
     fast_block: dict[str, Any]
     if fast_available:
@@ -1270,7 +1367,7 @@ def create_app(backend: str, timeout: int, allowed_user_ids: frozenset[str]) -> 
             model = None if selected == DEFAULT_CONFIG_VALUE else selected
             effort = selected_setting(view, "reasoning_effort", SETTINGS_EFFORT_ACTION_ID)
             if effort not in efforts_for_model(model, models):
-                effort = None
+                effort = default_effort_for_model(model, models)
             fast_mode = selected_fast_mode(view) and fast_mode_available(model, models)
             client.views_update(
                 view_id=view["id"],
@@ -1314,7 +1411,7 @@ def create_app(backend: str, timeout: int, allowed_user_ids: frozenset[str]) -> 
                 hash=view.get("hash"),
                 view=settings_modal(
                     metadata=metadata,
-                    settings=AgentSettings(),
+                    settings=default_agent_settings(models),
                     models=models,
                 ),
             )
