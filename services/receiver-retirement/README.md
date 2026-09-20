@@ -5,6 +5,12 @@ This directory is a one-time Cloudflare cleanup deployment for the retired
 migration and applies `v2` to permanently delete the `TagReceiver` Durable
 Object class and every stored registration.
 
+Before running either workflow, configure the protected GitHub environment
+`tag-offline-receiver-retirement`: allow protected branches only and add its
+`CLOUDFLARE_API_TOKEN` environment secret. The default branch must have a
+branch-protection rule. Both workflows always check out the repository default
+branch, regardless of the ref selected in the dispatch UI.
+
 After the revert reaches `main`, run the **Delete hosted receiver data** GitHub
 workflow once and type `DELETE_DATA`. It applies the migration and checks the
 live Worker settings for the absence of its Durable Object binding. After that

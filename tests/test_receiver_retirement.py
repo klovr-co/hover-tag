@@ -22,6 +22,8 @@ class ReceiverRetirementTests(unittest.TestCase):
         workflow = (root / ".github/workflows/retire-hosted-receiver.yml").read_text(encoding="utf-8")
 
         self.assertIn("inputs.confirmation == 'RETIRE'", workflow)
+        self.assertIn("name: tag-offline-receiver-retirement", workflow)
+        self.assertIn("ref: ${{ github.event.repository.default_branch }}", workflow)
         self.assertIn("group: tag-offline-receiver-retirement", workflow)
         self.assertLess(workflow.index("npm run verify-retirement"), workflow.index("npm run retire-worker"))
 
@@ -31,6 +33,8 @@ class ReceiverRetirementTests(unittest.TestCase):
         ci_workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
 
         self.assertIn("inputs.confirmation == 'DELETE_DATA'", data_workflow)
+        self.assertIn("name: tag-offline-receiver-retirement", data_workflow)
+        self.assertIn("ref: ${{ github.event.repository.default_branch }}", data_workflow)
         self.assertIn("group: tag-offline-receiver-retirement", data_workflow)
         self.assertIn("npm run retire-data", data_workflow)
         self.assertNotIn("npm run retire-data", ci_workflow)
