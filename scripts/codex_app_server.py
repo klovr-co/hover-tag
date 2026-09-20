@@ -1,8 +1,8 @@
 """Codex App Server stdio transport and Tag event normalization.
 
-Transport safeguards are informed by first-tree-ai/opentag's Apache-2.0
-App Server adapter. Tag's event mapping and per-request lifecycle are local to
-this repository; see NOTICE for attribution.
+Transport safeguards build on OpenTag's Apache-2.0 App Server adapter. Tag's
+event mapping and per-request lifecycle are local to this repository; see
+NOTICE for attribution.
 """
 
 from __future__ import annotations
