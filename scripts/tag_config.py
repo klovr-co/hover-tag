@@ -29,16 +29,15 @@ REQUIRED = ("OPENTAG_BACKEND", "MFS_URL", "MFS_ALLOWED_SCOPES",
 PUBLIC = frozenset((*DEFAULTS, "MFS_ALLOWED_SCOPES", "OPENTAG_WORKDIR",
                     "SLACK_CHANNEL_ID", "SLACK_CHANNEL_IDS", "SLACK_TEAM_ID",
                     "SLACK_APP_ID", "SLACK_ALLOWED_USER_IDS",
-                    "SLACK_CHANNEL_POLICY", "OPENTAG_RELAY_URL", "OPENTAG_RELAY_APP_ID", "OPENTAG_SLACK_CONNECTION",
+                    "SLACK_CHANNEL_POLICY",
                     "MFS_SLACK_HISTORY_DAYS",
                     "MFS_SLACK_CONNECTOR_URI", "MFS_SLACK_CONNECTOR_CONFIG",
                     "OPENTAG_CODEX_MODELS", "OPENTAG_CODEX_REASONING_EFFORTS"))
 EDITABLE = PUBLIC - {"OPENTAG_WORKDIR"} | {
-    "SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "MFS_TOKEN", "MFS_SLACK_TOKEN", "MFS_HOME", "OPENTAG_RELAY_TOKEN"
+    "SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "MFS_TOKEN", "MFS_SLACK_TOKEN", "MFS_HOME"
 }
 LABELS = {
     "OPENTAG_BACKEND": "Agent", "OPENTAG_BOT_NAME": "Bot name",
-    "OPENTAG_SLACK_CONNECTION": "Slack connection (hosted or direct)",
     "OPENTAG_CODEX_TRANSPORT": "Codex transport (exec or app-server)",
     "SLACK_APP_TOKEN": "Slack app token", "SLACK_BOT_TOKEN": "Slack bot token",
     "SLACK_ALLOWED_USER_IDS": "Who can use Tag", "SLACK_CHANNEL_ID": "Legacy channel restriction",
@@ -116,20 +115,6 @@ def validation_error(key: str, value: str) -> str | None:
         return "Use a Slack workspace Team ID"
     if key == "SLACK_APP_ID" and value and not re.fullmatch(r"A[A-Z0-9]+", value):
         return "Use a Slack App ID"
-    if key == "OPENTAG_SLACK_CONNECTION" and value not in {"hosted", "direct"}:
-        return "Choose hosted or direct"
-    if key == "OPENTAG_RELAY_APP_ID" and value and not re.fullmatch(r"A[A-Z0-9]+", value):
-        return "Use a Slack App ID"
-    if key == "OPENTAG_RELAY_URL" and value:
-        try:
-            parsed = urlsplit(value)
-            valid = parsed.scheme == "wss" and parsed.hostname and (parsed.path == "/connect" or re.fullmatch(r"/v1/apps/A[A-Z0-9]+/connect", parsed.path)) and not (parsed.username or parsed.password or parsed.query or parsed.fragment)
-        except ValueError:
-            valid = False
-        if not valid:
-            return "Use wss://host/connect without credentials, query, or fragment"
-    if key == "OPENTAG_RELAY_TOKEN" and value and (len(value) < 32 or any(char.isspace() for char in value)):
-        return "Use at least 32 non-whitespace characters"
     if key == "MFS_URL":
         try:
             url = urlsplit(value)
@@ -152,15 +137,9 @@ def validation_error(key: str, value: str) -> str | None:
 
 def config_errors(values: dict[str, str]) -> dict[str, str]:
     errors = {key: "Required" for key in REQUIRED if not values.get(key, "").strip()}
-    if values.get("OPENTAG_RELAY_URL") and values.get("OPENTAG_SLACK_CONNECTION") != "hosted":
-        errors.pop("SLACK_APP_TOKEN", None)
-        if not values.get("OPENTAG_RELAY_TOKEN"):
-            errors["OPENTAG_RELAY_TOKEN"] = "Required for hosted receiver"
     if not (values.get("SLACK_CHANNEL_IDS", "").strip() or values.get("SLACK_CHANNEL_ID", "").strip()):
         errors["SLACK_CHANNEL_IDS"] = "Select at least one Slack channel"
     for key, value in values.items():
-        if key == "SLACK_APP_TOKEN" and not value and values.get("OPENTAG_RELAY_URL") and values.get("OPENTAG_SLACK_CONNECTION") != "hosted":
-            continue
         if key in EDITABLE and (error := validation_error(key, value)):
             errors[key] = error
     return errors
