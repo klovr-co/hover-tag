@@ -87,7 +87,8 @@ Create or reuse a Slack app:
    - `message.im`
    - `app_home_opened`
    - `agent_session_stopped`
-6. Install or reinstall the app to the workspace after changing scopes/events.
+6. Start Tag. It applies pending manifest migrations and, when a new scope is
+   required, opens Slack's reinstall approval flow automatically.
 7. Copy the **Bot User OAuth Token** (`xoxb-...`).
 8. Invite the bot to the sandbox channel:
    ```text
@@ -252,8 +253,10 @@ model cache. Reasoning levels retain Codex's native names. Fast Mode is a
 separate On/Off setting and uses increased usage when enabled. Set
 `OPENTAG_CODEX_MODELS` to restrict what Slack users can select.
 The modal's **Reset to default** button restores every control before saving.
-Reinstall the Slack app from `slack-app-manifest.yaml` when upgrading an existing
-installation so interactive components are enabled.
+When upgrading an existing app, run `tag start` in an interactive terminal.
+Tag merges pending required scopes and event subscriptions into the remote
+manifest without removing operator-owned settings. Slack may still require an
+owner or workspace admin to approve newly requested OAuth permissions.
 
 ## Preflight
 

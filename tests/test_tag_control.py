@@ -12,7 +12,7 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts import opentag_doctor, opentag_setup, tag_cli, tag_config, tag_control
+from scripts import opentag_doctor, opentag_setup, slack_manifest_migrations, tag_cli, tag_config, tag_control
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -299,6 +299,7 @@ class TagControlTests(unittest.TestCase):
                 self.complete(backend)
                 with patch.object(sys, "argv", ["tag", "start"]), patch.object(
                     tag_cli, "missing_runtime_dependencies", return_value=()
+                ), patch.object(slack_manifest_migrations, "reconcile", return_value=False
                 ), patch.object(tag_cli, "healthy", return_value=True
                 ), patch.object(tag_cli, "sync_configured_slack_memory"
                 ), patch.object(tag_cli, "doctor_report", return_value=(0, {"checks": []})), patch.object(

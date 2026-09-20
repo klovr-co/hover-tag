@@ -294,6 +294,13 @@ Direct-message execution is enabled by default and can be disabled with
 The included app manifest also requests `files:read` for text attachments and
 `canvases:write` for the explicit Canvas helper.
 
+On upgrade, `tag start` compares the linked app with Tag's versioned manifest
+requirements and applies pending additive migrations before services start.
+Existing app-specific settings are preserved. If a migration adds an OAuth
+scope, Slack still requires the owner or workspace admin to approve that new
+permission; Tag opens the reinstall flow and refreshes its saved credentials
+instead of requiring manual manifest editing.
+
 By default Slack lets workspace members install apps, but a workspace owner or
 Enterprise organization can require approval. In that case, request approval
 from a workspace owner or app manager before continuing setup.
