@@ -49,16 +49,16 @@ before launch, then answer its questions in the same thread.
 > Launch: Monday. FAQ: Jules, due Tuesday. Signup testing: Maya, due Wednesday.
 > Support must be briefed before launch. Go/no-go approval is required.
 >
-> **Maya:** @Tag review this and save the open questions as open-questions.md in your workspace.
+> **Maya:** @Maya's Tag review this and save the open questions as open-questions.md in your workspace.
 >
-> **Tag:** Saved the questions in open-questions.md:
+> **Maya's Tag:** Saved the questions in open-questions.md:
 > - Are the FAQ and signup testing due the week before launch?
 > - Who will brief support, and when?
 > - Who makes the final call to launch?
 >
-> **Maya:** @Tag yes, both are due the week before. I'll brief support on Thursday. Update the file.
+> **Maya:** @Maya's Tag yes, both are due the week before. I'll brief support on Thursday. Update the file.
 >
-> **Tag:** Updated open-questions.md with those answers. Still open: who makes the final call to launch?
+> **Maya's Tag:** Updated open-questions.md with those answers. Still open: who makes the final call to launch?
 
 Tag has updated `open-questions.md`. One decision remains: who makes the final
 call to launch?
@@ -74,6 +74,6 @@ operator has included the file in an indexed, permitted source. Saving the file
 does not automatically index it. See [What Tag knows](what-tag-knows.md) for how
 indexed sources work.
 
-Use your installed bot's actual mention in place of `@Tag`.
+Use your own Tag's mention in place of `@Maya's Tag`.
 
 To connect Tag to services such as Gmail, see [Adding integrations](adding-integrations.md).

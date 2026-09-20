@@ -69,9 +69,9 @@ from that terminal so the running service receives the changes:
 tag restart
 ```
 
-Use your installed bot's actual mention in place of `@Tag`. Then ask:
+Use your own Tag's mention in place of `@Maya's Tag`. Then ask:
 
-> @Tag use gws to find the latest email about the launch schedule. Summarize
+> @Maya's Tag use gws to find the latest email about the launch schedule. Summarize
 > what changed and include the sender, subject, and date.
 
 Use a topic you know is in your mailbox, then compare the answer with the email.
@@ -79,7 +79,7 @@ If there is no match, try a more specific subject or sender. If you saved open q
 [attachment example](../concepts/workspaces-and-tools.md#turn-a-brief-into-questions-you-can-resolve),
 you can also ask Tag to update that file:
 
-> @Tag use that email to update the open questions you saved from my brief.
+> @Maya's Tag use that email to update the open questions you saved from my brief.
 > Mark any questions it answers and keep the unresolved ones.
 
 ### If something is missing

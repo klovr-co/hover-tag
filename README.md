@@ -4,7 +4,7 @@
 
 ## @Tag, Slack is all you need.
 
-Tag brings Codex or Claude into the Slack conversation. Mention `@Tag` where the
+Tag brings Codex or Claude into the Slack conversation. Mention your Tag where the
 work is already being discussed. It picks up the thread, finds any context it is
 allowed to use, does the work, and replies there.
 
@@ -42,7 +42,7 @@ Slack. They do not disappear into my private Claude or ChatGPT history.
 
 ## What your team can delegate
 
-- Respond when someone mentions `@Tag` in Slack or sends it a direct message,
+- Respond when someone mentions their Tag in Slack or sends it a direct message,
   provided the sender is explicitly authorized.
 - Read the current thread, including text and image attachments.
 - Upload backend-generated PNG, JPEG, GIF, and WebP images to the requesting thread.
@@ -86,7 +86,7 @@ returns the result where the rest of the team can read and continue the work.
 
 ```text
        ┌──────────────┐
-       │    Slack     │    @Tag <task>
+       │    Slack     │    @Maya's Tag <task>
        │              │ ◄──── answer ──────┐
        └──────┬───────┘                    │
               │ mention                    │
@@ -205,9 +205,10 @@ When developing from a prepared source checkout, use `./tag dev`. It watches
 output in the foreground. Press Ctrl-C to stop the development bridge; MFS is
 left running. This command is intentionally unavailable from managed releases.
 
-Mention `@Tag` in the test channel you configured:
+Mention your Tag in the test channel you configured. This example uses Maya's
+Tag; select your own bot's mention:
 
-> @Tag read the project documentation in your workspace, summarize what this
+> @Maya's Tag read the project documentation in your workspace, summarize what this
 > project is trying to accomplish, and cite the supporting files.
 
 This first request uses the local workspace configured during setup. A request

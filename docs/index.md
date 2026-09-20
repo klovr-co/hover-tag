@@ -3,32 +3,37 @@
 ## @Tag, Slack is all you need.
 
 Tag lets your team work with an AI agent in a Slack thread. Discuss the work
-with your teammates, then mention `@Tag` to ask it to investigate a question,
+with your teammates, then mention your Tag to ask it to investigate a question,
 make a plan, or work on files. It uses the thread as context and replies where
 everyone can see the result and follow up.
 
-For example, two teammates can share what they’re taking on and ask Tag to
-pull it together:
+Jules and Maya discuss the launch, then Jules asks their Tag to pull it
+together:
 
 > **Jules:** I’ll finish the FAQ by Tuesday.
 >
 > **Maya:** I’ll test signup on Wednesday. Support still needs a briefing.
 >
-> **Jules:** @Tag pull this into a launch checklist with owners.
+> **Jules:** @Jules's Tag pull this into a launch checklist with owners.
 >
-> **Tag:** Here’s the shared checklist:
+> **Jules's Tag:** Here’s the shared checklist:
 > - **Jules:** Finish the FAQ by Tuesday.
 > - **Maya:** Test signup on Wednesday.
 > - **Unassigned:** Brief support before launch. Who can take this?
 
 ## Who it's for
 
-Tag is for teams that coordinate work in Slack: operations, project leads,
-and anyone who needs to turn a discussion into something they can act on.
+Bring your own Tag to work. Tag is for people who want to use their Codex
+agent in Slack, with context from Slack threads and integrations already
+connected to their agent. Requests, updates, and results stay in the thread,
+where teammates can follow the work.
 
-You don’t need to code to ask Tag for help. Someone on the team does need to
-set it up: connect Slack, configure the Codex or Claude agent, and choose the
-files, tools, and sources it can access.
+You don’t need to code to use Tag. Follow the
+[setup guide](getting-started/first-task.md) to connect your agent to Slack.
+
+Only you can ask your Tag to work at first, because it uses your agent's
+available files, tools, and connected accounts. Teammates can still see the
+conversation. Read more about [your own Tag](concepts/access.md).
 
 ## What you can delegate
 

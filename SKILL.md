@@ -50,8 +50,9 @@ Slack-first onboarding configures that source itself:
 
 ## Bot name convention
 
-The default Slack identity is **Tag**, so teammates use `@Tag <task>`
-regardless of whether Codex or Claude Code is configured underneath. Slack
+Documentation examples use personal names such as **Jules's Tag** and
+**Maya's Tag** to show who owns the agent. Use the installed bot's actual
+mention; these examples do not change the default Slack identity. Slack
 routes the mention by bot user ID, and Tag strips the mention before invoking
 the backend. Set `OPENTAG_BOT_NAME` if your Slack app uses another display name.
 
