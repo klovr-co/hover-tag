@@ -392,7 +392,12 @@ class TagHomeTests(unittest.TestCase):
             self.assertEqual(admin.read_text(), ADMIN_SKILL)
             self.assertEqual(custom_admin.read_text(), "personal admin instructions")
             self.assertNotEqual(first, second)
-            self.assertEqual(json.loads((home / "previous.json").read_text())["release"], first.name)
+            previous = json.loads((home / "previous.json").read_text())
+            self.assertEqual(previous["release"], first.name)
+            self.assertEqual(
+                previous["installed_version"],
+                (ROOT / "VERSION").read_text().strip(),
+            )
             self.assertEqual(skill.read_text(), "personal skill")
             self.assertEqual(config.read_text(), '{"OPENTAG_BACKEND":"codex"}')
             command = bin_dir / ("tag.cmd" if os.name == "nt" else "tag")
@@ -567,6 +572,50 @@ class TagHomeTests(unittest.TestCase):
 
         installer.assert_not_called()
         self.assertEqual(json.loads(output.getvalue())["status"], "current")
+
+    def test_upgrade_reads_version_from_legacy_active_release(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            home, bin_dir = root / "home", root / "bin"
+            version = (ROOT / "VERSION").read_text().strip()
+            selection = ReleaseSelection("edge", version, "a" * 40)
+            install(
+                ROOT,
+                home,
+                bin_dir,
+                dependencies=False,
+                selection=selection,
+            )
+            current_path = home / "current.json"
+            current = json.loads(current_path.read_text())
+            del current["installed_version"]
+            current_path.write_text(json.dumps(current), encoding="utf-8")
+
+            for arguments in ({"channel": "edge"}, {"version": version}):
+                with self.subTest(arguments=arguments):
+                    output = io.StringIO()
+                    with patch(
+                        "scripts.tag_install.fetch_release",
+                        return_value=FetchedRelease(ROOT, selection),
+                    ), patch(
+                        "scripts.tag_install.install"
+                    ) as installer, patch(
+                        "scripts.tag_cli.process_for", return_value=None
+                    ), contextlib.redirect_stdout(output):
+                        self.assertEqual(
+                            upgrade_command(
+                                home,
+                                dry_run=True,
+                                json_output=True,
+                                **arguments,
+                            ),
+                            0,
+                        )
+
+                    installer.assert_not_called()
+                    result = json.loads(output.getvalue())
+                    self.assertEqual(result["current"]["version"], version)
+                    self.assertFalse(result["downgrade"])
 
     def test_upgrade_restarts_running_services_by_default(self):
         with tempfile.TemporaryDirectory() as temp:

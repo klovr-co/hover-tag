@@ -535,12 +535,12 @@ raise SystemExit(subprocess.call([record["python"], str(release / "scripts/tag_c
             "release": release.name,
             "python": str(python),
             "bin_dir": str(bin_dir.resolve()),
+            "installed_version": version,
         }
         if selection is not None:
             current_record.update({
                 "channel": selection.channel,
                 "selection": selection.selector,
-                "installed_version": selection.version,
                 "installed_commit": selection.commit_sha,
                 "checked_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             })

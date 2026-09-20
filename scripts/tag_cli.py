@@ -569,6 +569,17 @@ def upgrade_command(
         raise RuntimeError(f"Invalid managed release record: {current_path}")
 
     current_version = current.get("installed_version")
+    if current_version is None:
+        release_name = current.get("release")
+        if not isinstance(release_name, str) or not release_name:
+            raise RuntimeError("The managed release record has no active release")
+        version_path = home / "releases" / release_name / "VERSION"
+        try:
+            current_version = version_path.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeError) as error:
+            raise RuntimeError(
+                f"Cannot read the installed release version: {version_path}"
+            ) from error
     current_commit = current.get("installed_commit")
     current_channel = current.get("channel")
     selection = current.get("selection", "channel")
