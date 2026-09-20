@@ -76,6 +76,7 @@ Create or reuse a Slack app:
    - `assistant:write` — manage native agent working status.
    - `chat:write` — post and update Slack replies.
    - `files:read` — download text snippets and image attachments shared in the current thread.
+   - `files:write` — upload backend-generated image results to the current thread.
    - `channels:read` + `channels:history` — read threads in public channels.
    - `groups:read` + `groups:history` — read threads in private channels.
 5. Open **Event Subscriptions** and subscribe to Bot Events:

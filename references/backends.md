@@ -83,3 +83,9 @@ complete response without a fake typewriter animation.
   `opentag_agent.py`, not in Slack event handling.
 - Keep the normalized event contract limited to `status`, `delta`, `final`, and
   `error`; chat transports must never parse backend-native event payloads.
+
+Generated images use a file handoff rather than a new stream event. For each
+Slack invocation, the prompt names a temporary `results/images` directory. A
+backend places only final PNG, JPEG, GIF, or WebP files there; after a successful
+run, the Slack bridge validates and uploads them to the originating thread. The
+directory is deleted when that invocation finishes.
