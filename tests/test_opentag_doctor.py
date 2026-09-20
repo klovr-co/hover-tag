@@ -29,7 +29,9 @@ class OpenTagDoctorTests(unittest.TestCase):
             "SLACK_ALLOWED_USER_IDS": "UOWNER",
         }
 
-        with patch.dict(os.environ, environment, clear=True):
+        with patch.dict(os.environ, environment, clear=True), patch.object(
+            opentag_doctor, "check_runtime_dependencies", return_value=True
+        ):
             self.assertTrue(check_offline(root))
 
     def test_offline_slack_check_fails_without_allowed_user(self) -> None:

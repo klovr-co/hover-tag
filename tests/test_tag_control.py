@@ -296,7 +296,8 @@ class TagControlTests(unittest.TestCase):
             with self.subTest(backend=backend):
                 self.complete(backend)
                 with patch.object(sys, "argv", ["tag", "start"]), patch.object(
-                    tag_cli, "healthy", return_value=True
+                    tag_cli, "missing_runtime_dependencies", return_value=()
+                ), patch.object(tag_cli, "healthy", return_value=True
                 ), patch.object(tag_cli, "sync_configured_slack_memory"
                 ), patch.object(tag_cli, "doctor_report", return_value=(0, {"checks": []})), patch.object(
                     tag_cli, "slack_ready", side_effect=[False, True]

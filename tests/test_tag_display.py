@@ -51,6 +51,11 @@ class DisplayTests(unittest.TestCase):
             with patch.dict(os.environ, env, clear=True), patch.object(tag_display.sys.stdout, "isatty", return_value=True):
                 self.assertEqual("\033" in tag_display.styled("Ready", "32"), expected)
 
+    def test_terminal_text_falls_back_when_stdout_cannot_encode_ui_glyphs(self):
+        legacy_stdout = type("LegacyStdout", (), {"encoding": "cp1252"})()
+        with patch.object(tag_display.sys, "stdout", legacy_stdout):
+            self.assertEqual(tag_display.terminal_text("✓ › ─ ▀"), "+ > - #")
+
     def test_doctor_summary_collapses_successful_low_level_checks(self):
         report = {
             "ok": True,

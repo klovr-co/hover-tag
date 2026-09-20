@@ -53,6 +53,28 @@ class ReleaseHelperTests(unittest.TestCase):
         self.assertIn("-m pip install -r", script)
         self.assertIn("requirements-runtime.txt", script)
 
+    def test_installer_output_supports_legacy_console_encodings(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary = Path(temporary_directory)
+            environment = dict(os.environ, TAG_HOME=str(temporary / "home"), PYTHONIOENCODING="cp1252")
+            result = subprocess.run(
+                [
+                    os.sys.executable,
+                    str(root / "scripts/tag_install.py"),
+                    "--source",
+                    str(root),
+                    "--bin-dir",
+                    str(temporary / "bin"),
+                    "--skip-dependencies",
+                ],
+                capture_output=True,
+                env=environment,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode("cp1252"))
+        self.assertIn("Tag is installed", result.stdout.decode("cp1252"))
+
     def test_uv_uses_the_cross_platform_virtualenv_python(self) -> None:
         root = Path(__file__).resolve().parents[1]
         script = (root / "scripts/ci_check.sh").read_text(encoding="utf-8")

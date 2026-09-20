@@ -16,6 +16,37 @@ ACCENT = "38;2;56;207;241"
 MUTED = "90"
 WARNING = "33"
 SUCCESS = "38;2;149;197;112"
+ASCII_FALLBACK = str.maketrans({
+    "✓": "+",
+    "●": "*",
+    "○": "o",
+    "›": ">",
+    "─": "-",
+    "·": ".",
+    "…": "...",
+    "–": "-",
+    "—": "-",
+    "’": "'",
+    "▀": "#",
+    "█": "#",
+    "▄": "#",
+})
+
+
+def terminal_text(text):
+    """Return text the active stdout encoding can write without failing."""
+    encoding = getattr(sys.stdout, "encoding", None)
+    if not encoding:
+        return text
+    try:
+        text.encode(encoding)
+    except (LookupError, UnicodeEncodeError):
+        return text.translate(ASCII_FALLBACK)
+    return text
+
+
+def emit(text=""):
+    print(terminal_text(str(text)))
 
 
 def color_available():
@@ -72,7 +103,7 @@ def mascot_banner():
                 chunks.append(f"\033[38;2;{rgb(fg)};48;2;{rgb(bg)}m")
                 previous = fg, bg
             chunks.append(char)
-        print("  " + "".join(chunks) + "\033[0m")
+        emit("  " + "".join(chunks) + "\033[0m")
     return True
 
 
@@ -84,7 +115,7 @@ def paragraph(text, code="", *, indent="  "):
     """Wrap before styling so ANSI sequences never count toward line width."""
     for line in textwrap.wrap(text, width=max(8, content_width() - len(indent) + 2),
                               break_long_words=True, break_on_hyphens=False):
-        print(indent + styled(line, code) if code else indent + line)
+        emit(indent + styled(line, code) if code else indent + line)
 
 
 def short_path(value):
@@ -95,16 +126,16 @@ def short_path(value):
 
 
 def rule():
-    print("  " + styled("─" * content_width(), MUTED))
+    emit("  " + styled("─" * content_width(), MUTED))
 
 
 def header(section, detail=""):
-    print()
+    emit()
     if mascot_banner():
-        print()
+        emit()
         paragraph(section.upper(), "1;" + ACCENT)
     else:
-        print("  " + styled("tag", "1;" + ACCENT) + "  /  " + styled(section, MUTED))
+        emit("  " + styled("tag", "1;" + ACCENT) + "  /  " + styled(section, MUTED))
     rule()
     if detail:
         paragraph(detail, MUTED)
@@ -117,7 +148,7 @@ def status_row(name, value, good):
 
 
 def section(label):
-    print()
+    emit()
     paragraph(label.upper(), MUTED)
 
 
@@ -136,37 +167,37 @@ def info_row(name, value, *, good=None):
 
 
 def next_action(label, command, *, detail=""):
-    print()
+    emit()
     rule()
     paragraph(label, MUTED)
     paragraph(f"› {command}", "1;" + ACCENT)
     if detail:
         paragraph(detail, MUTED)
-    print()
+    emit()
 
 
 def completion(title, detail="", *, next_label="", next_command=""):
-    print()
+    emit()
     rule()
     paragraph(f"✓  {title}", "1;" + SUCCESS)
     if detail:
         paragraph(detail, MUTED)
     if next_command:
-        print()
+        emit()
         paragraph(next_label or "Next step", MUTED)
         paragraph(f"› {next_command}", "1;" + ACCENT)
-    print()
+    emit()
 
 
 def failure(title, detail, *, next_command=""):
     header(title)
-    print()
+    emit()
     paragraph("!  Needs attention", "1;" + WARNING)
     paragraph(detail, MUTED)
     if next_command:
         next_action("Recommended next step", next_command)
     else:
-        print()
+        emit()
 
 
 def doctor_summary(report, *, title="Doctor"):
@@ -252,7 +283,7 @@ def summary(state, command, *, slack=None, memory=None, backend=None, agent=None
     good = state in {"ready", "running"}
     attention = state in {"needs_attention", "invalid_configuration", "setup_incomplete"}
     marker = "●" if good else "!" if attention else "○"
-    print()
+    emit()
     paragraph(f"{marker}  {label}", "1;" + (SUCCESS if good else WARNING if attention else MUTED))
     descriptions = {
         "not_configured": "Connect Slack, choose your channels, and bring your agent online.",
@@ -262,7 +293,7 @@ def summary(state, command, *, slack=None, memory=None, backend=None, agent=None
     }
     if state in descriptions:
         paragraph(descriptions[state], MUTED)
-    print()
+    emit()
     if agent or slack is not None or memory is not None:
         paragraph("CONNECTIONS", MUTED)
     if agent:
@@ -274,13 +305,13 @@ def summary(state, command, *, slack=None, memory=None, backend=None, agent=None
     ):
         if value is not None:
             status_row(name, good if value else bad, value)
-    print()
+    emit()
     prompt = {"tag setup": "Get started" if state == "not_configured" else "Continue setup",
               "tag start": "Start Tag", "tag doctor": "Check what needs attention",
               "tag status": "View status"}.get(command, "Next step")
     rule()
     paragraph(prompt, MUTED)
     paragraph(f"› {command}", "1;" + ACCENT)
-    print()
+    emit()
     paragraph("tag settings   ·   tag --help", MUTED)
-    print()
+    emit()

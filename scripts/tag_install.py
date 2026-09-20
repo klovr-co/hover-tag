@@ -22,6 +22,13 @@ REPOSITORY = "https://github.com/klovr-co/tag"
 ACCENT = "38;2;56;207;241"
 MUTED = "90"
 SUCCESS = "38;2;149;197;112"
+ASCII_FALLBACK = str.maketrans({
+    "✓": "+",
+    "›": ">",
+    "─": "-",
+    "·": ".",
+    "…": "...",
+})
 
 LEGACY_ADMIN_SKILL = (
     "---\nname: open-tag-admin\ndescription: Configure and diagnose this TAG installation.\n---\n"
@@ -53,6 +60,22 @@ def styled(text: str, code: str) -> str:
     return f"\033[{code}m{text}\033[0m" if color_available() else text
 
 
+def terminal_text(text: str) -> str:
+    """Return installer output the active stdout encoding can write."""
+    encoding = getattr(sys.stdout, "encoding", None)
+    if not encoding:
+        return text
+    try:
+        text.encode(encoding)
+    except (LookupError, UnicodeEncodeError):
+        return text.translate(ASCII_FALLBACK)
+    return text
+
+
+def emit(text: str = "") -> None:
+    print(terminal_text(text), flush=True)
+
+
 def content_width() -> int:
     return max(12, min(72, shutil.get_terminal_size((80, 24)).columns - 4))
 
@@ -70,19 +93,19 @@ def paragraph(text: str, code: str = "", *, indent: str = "  ") -> None:
         break_long_words=True,
         break_on_hyphens=False,
     ):
-        print(indent + (styled(line, code) if code else line), flush=True)
+        emit(indent + (styled(line, code) if code else line))
 
 
 def header(section: str, detail: str = "") -> None:
-    print()
-    print("  " + styled("tag", "1;" + ACCENT) + "  /  " + styled(section, MUTED))
-    print("  " + styled("─" * content_width(), MUTED))
+    emit()
+    emit("  " + styled("tag", "1;" + ACCENT) + "  /  " + styled(section, MUTED))
+    emit("  " + styled("─" * content_width(), MUTED))
     if detail:
         paragraph(detail, MUTED)
 
 
 def section(label: str) -> None:
-    print()
+    emit()
     paragraph(label.upper(), MUTED)
 
 
@@ -278,16 +301,16 @@ raise SystemExit(subprocess.call([record["python"], str(release / "scripts/tag_c
         atomic_text(current, json.dumps({"release": release.name, "python": str(python)}, indent=2) + "\n")
         row("Command", short_path(command))
         row("Home", short_path(home))
-        print()
-        print("  " + styled("─" * content_width(), MUTED))
+        emit()
+        emit("  " + styled("─" * content_width(), MUTED))
         paragraph("✓  Tag is installed", "1;" + SUCCESS)
         paragraph("Configuration and personal workspace data were preserved.", MUTED)
-        print()
+        emit()
         paragraph("Next step", MUTED)
         paragraph("› tag setup", "1;" + ACCENT)
         paragraph("Already configured? Run tag stop, then tag start.", MUTED)
         paragraph(f"If needed, add {short_path(bin_dir)} to PATH.", MUTED)
-        print()
+        emit()
         return release
     finally:
         lock.rmdir()
