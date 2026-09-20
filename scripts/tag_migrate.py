@@ -5,12 +5,16 @@ import os
 import re
 import shlex
 import shutil
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 
 try:
     from opentag_setup import write_config
+    import tag_display as display
 except ImportError:
     from scripts.opentag_setup import write_config
+    from scripts import tag_display as display
 
 
 def legacy_config(path: Path) -> dict[str, str]:
@@ -32,14 +36,20 @@ def migrate(source: Path, home: Path) -> None:
     source = source.expanduser().resolve()
     if not source.is_dir():
         raise ValueError("Migration source must be an existing checkout")
+    display.header("Migrate", "Copying reusable settings and integrations into Tag home.")
+    display.info_row("Source", display.short_path(source))
+    display.info_row("Destination", display.short_path(home))
+    display.section("Items")
     config = home / "config/settings.json"
     if (source / ".env").exists():
         if config.exists():
-            print(f"Keeping existing {config}")
+            display.info_row("Settings", "Kept existing file")
         else:
             values = legacy_config(source / ".env")
             values["OPENTAG_WORKDIR"] = str(home / "workspace")
-            write_config(config, values)
+            with redirect_stdout(StringIO()):
+                write_config(config, values)
+            display.info_row("Settings", "Copied", good=True)
     for old, new in ((".codex/skills", ".agents/skills"), (".agents/skills", ".agents/skills"),
                      (".claude/skills", ".claude/skills")):
         directory = source / old
@@ -49,10 +59,10 @@ def migrate(source: Path, home: Path) -> None:
             target = home / "workspace" / new / skill.name
             if skill.is_dir() and (skill / "SKILL.md").is_file():
                 if target.exists():
-                    print(f"Keeping existing skill: {target}")
+                    display.info_row("Skill", f"Kept {skill.name}")
                 else:
                     shutil.copytree(skill, target)
-                    print(f"Copied skill: {target}")
+                    display.info_row("Skill", f"Copied {skill.name}", good=True)
     for relative in (".codex/config.toml", ".mcp.json"):
         original, target = source / relative, home / "workspace" / relative
         if original.is_file():
@@ -62,7 +72,12 @@ def migrate(source: Path, home: Path) -> None:
                 shutil.copy2(original, target)
                 if os.name != "nt":
                     target.chmod(0o600)
-                print(f"Copied integration configuration: {target}; check any relative paths")
+                display.info_row("Integration", f"Copied {relative}", good=True)
             else:
-                print(f"Keeping existing integration configuration: {target}")
-    print("Migration finished. Original files were preserved. Review tag doctor before starting.")
+                display.info_row("Integration", f"Kept {relative}")
+    display.completion(
+        "Migration finished",
+        "Original files were preserved. Review copied integration paths before starting.",
+        next_label="Verify the migrated installation",
+        next_command="tag doctor",
+    )

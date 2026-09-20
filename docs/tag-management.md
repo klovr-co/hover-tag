@@ -33,6 +33,10 @@ by Tag's persistent home. Changing memory scopes does not index new sources.
 memory and first-reply caveats. `tag status --json` reports the same checks in
 structured form. `tag restart` stops Tag's managed processes and starts them
 through the normal readiness checks; a failed stop prevents starting again.
+Contributors using a prepared source checkout can run `./tag dev` for a
+foreground loop that watches `scripts/**/*.py`, reloads the Slack bridge, and
+streams bridge logs. Ctrl-C stops the development bridge but leaves MFS running.
+Managed releases do not expose development watching.
 
 Completed `tag setup` checks readiness and exits without repeating onboarding.
 Use `tag setup --review` to review choices explicitly. `tag setup --no-start`

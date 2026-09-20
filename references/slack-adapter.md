@@ -187,11 +187,15 @@ Codex keeps the native loading indicator visible until it can post the complete
 response. Tag does not simulate streaming or forward reasoning, tool output, or
 raw backend diagnostics.
 
-For the Codex backend, completed replies include a **Change model & thinking**
-button. It opens a thread-scoped settings modal; saved choices apply to the next
-mention in that thread and survive bridge restarts in `.runtime/`. By default,
-Tag reads visible models and their supported reasoning levels from Codex's local
-model cache. Set `OPENTAG_CODEX_MODELS` to restrict what Slack users can select.
+For the Codex backend, completed replies include a compact **Configure** button
+beneath the answer. It opens a user-scoped settings modal; saved choices apply
+to that user's future requests across channels and threads and survive bridge
+restarts in `.runtime/`. By default, Tag reads visible models and
+their supported reasoning levels and Fast Mode availability from Codex's local
+model cache. Reasoning levels retain Codex's native names. Fast Mode is a
+separate On/Off setting and uses increased usage when enabled. Set
+`OPENTAG_CODEX_MODELS` to restrict what Slack users can select.
+The modal's **Reset to default** button restores every control before saving.
 Reinstall the Slack app from `slack-app-manifest.yaml` when upgrading an existing
 installation so interactive components are enabled.
 

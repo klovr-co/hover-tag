@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "agent-aware-cli": {
+      "source": "googlecloudplatform/vertex-ai-creative-studio",
+      "sourceType": "github",
+      "skillPath": "experiments/mcp-genmedia/skills/agent-aware-cli/SKILL.md",
+      "computedHash": "43774ed89884759e1b8396d5ff104b557f7bcb40f4fdb151881c3e9b7d321a96"
+    }
+  }
+}
