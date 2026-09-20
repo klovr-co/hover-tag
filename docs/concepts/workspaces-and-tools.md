@@ -10,7 +10,9 @@ experimental.
 
 ## Find your workspace
 
-In your terminal, run:
+The workspace lives on the computer running Tag. If someone else hosts Tag for
+your team, the folder is on their machine. On the computer running Tag, open a
+terminal and run:
 
 ```sh
 tag paths
@@ -38,15 +40,16 @@ sandbox. See the [security policy](../../SECURITY.md) for the execution model.
 
 ## Turn a brief into questions you can resolve
 
-Before a launch meeting, upload your existing brief to Slack as a text or
-Markdown file. Ask Tag to flag anything you need to settle before launch.
+Before a launch meeting, attach your existing brief as a text or Markdown file
+to a Slack message mentioning Tag. Ask it to flag anything you need to settle
+before launch, then answer its questions in the same thread.
 
 > **Maya attached launch-brief.txt**
 >
 > Launch: Monday. FAQ: Jules, due Tuesday. Signup testing: Maya, due Wednesday.
 > Support must be briefed before launch. Go/no-go approval is required.
 >
-> **Maya:** @Tag review this and save the open questions in your workspace.
+> **Maya:** @Tag review this and save the open questions as open-questions.md in your workspace.
 >
 > **Tag:** Saved the questions in open-questions.md:
 > - Are the FAQ and signup testing due the week before launch?
@@ -57,11 +60,20 @@ Markdown file. Ask Tag to flag anything you need to settle before launch.
 >
 > **Tag:** Updated open-questions.md with those answers. Still open: who makes the final call to launch?
 
-The questions and your answers are now in one file. You can pick it up at the
-meeting or ask Tag to update it when the last decision is made.
+Tag has updated `open-questions.md`. One decision remains: who makes the final
+call to launch?
 
-Use your installed bot's actual mention in place of `@Tag`. Reading and saving
-workspace files does not require indexing them first; see
-[What Tag knows](what-tag-knows.md) for how indexed sources differ.
+Uploading the brief lets Tag read it for the request. It does not automatically
+save a copy of the brief in the workspace. In this example, you asked Tag to save
+`open-questions.md`.
+
+Tag knows the filename here, so it can read and update `open-questions.md`
+directly. Later, you might ask it to find the unanswered launch questions
+without knowing which file contains them. MFS can help with that search if the
+operator has included the file in an indexed, permitted source. Saving the file
+does not automatically index it. See [What Tag knows](what-tag-knows.md) for how
+indexed sources work.
+
+Use your installed bot's actual mention in place of `@Tag`.
 
 To connect Tag to services such as Gmail, see [Adding integrations](adding-integrations.md).
