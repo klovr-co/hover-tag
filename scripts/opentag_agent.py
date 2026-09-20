@@ -153,6 +153,7 @@ def run_codex_once(
     timeout: int,
     model: str | None = None,
     reasoning_effort: str | None = None,
+    fast_mode: bool = False,
 ) -> tuple[int, str]:
     with tempfile.NamedTemporaryFile("r", suffix=".txt", encoding="utf-8", delete=False) as f:
         output_path = Path(f.name)
@@ -176,6 +177,12 @@ def run_codex_once(
         cmd[2:2] = ["--model", model]
     if reasoning_effort:
         cmd[2:2] = ["--config", f'model_reasoning_effort="{reasoning_effort}"']
+    cmd[2:2] = [
+        "--config",
+        "features.fast_mode=true",
+        "--config",
+        f'service_tier="{"fast" if fast_mode else "default"}"',
+    ]
     if attachments_dir:
         cmd[cmd.index("--skip-git-repo-check"):cmd.index("--skip-git-repo-check")] = [
             "--add-dir",
@@ -319,6 +326,7 @@ def codex_stream_command(
     output_path: Path,
     model: str | None = None,
     reasoning_effort: str | None = None,
+    fast_mode: bool = False,
 ) -> list[str]:
     cmd = [
         "codex",
@@ -341,6 +349,12 @@ def codex_stream_command(
         cmd[2:2] = ["--model", model]
     if reasoning_effort:
         cmd[2:2] = ["--config", f'model_reasoning_effort="{reasoning_effort}"']
+    cmd[2:2] = [
+        "--config",
+        "features.fast_mode=true",
+        "--config",
+        f'service_tier="{"fast" if fast_mode else "default"}"',
+    ]
     if attachments_dir:
         index = cmd.index("--skip-git-repo-check")
         cmd[index:index] = ["--add-dir", str(attachments_dir)]
@@ -356,6 +370,7 @@ def run_codex_events(
     timeout: int,
     model: str | None = None,
     reasoning_effort: str | None = None,
+    fast_mode: bool = False,
 ) -> int:
     attempts = max(1, int(os.getenv("OPENTAG_BACKEND_ATTEMPTS", "3")))
     last_code = 1
@@ -373,6 +388,7 @@ def run_codex_events(
                     output_path=output_path,
                     model=model,
                     reasoning_effort=reasoning_effort,
+                    fast_mode=fast_mode,
                 ),
                 parser=parse_codex_stream_event,
                 timeout=timeout,
@@ -526,6 +542,7 @@ def run_codex(
     timeout: int,
     model: str | None = None,
     reasoning_effort: str | None = None,
+    fast_mode: bool = False,
 ) -> int:
     attempts = max(1, int(os.getenv("OPENTAG_BACKEND_ATTEMPTS", "3")))
     last_code = 1
@@ -539,6 +556,7 @@ def run_codex(
             timeout=timeout,
             model=model,
             reasoning_effort=reasoning_effort,
+            fast_mode=fast_mode,
         )
         if last_code == 0:
             if last_output:
@@ -607,6 +625,12 @@ def main() -> int:
         help="Codex reasoning-effort override for this run",
     )
     parser.add_argument(
+        "--fast-mode",
+        choices=("on", "off"),
+        default="off",
+        help="Codex Fast Mode override for this run",
+    )
+    parser.add_argument(
         "--event-stream",
         action="store_true",
         help="emit backend-neutral NDJSON events for a chat transport",
@@ -660,6 +684,7 @@ def main() -> int:
                     timeout=args.timeout,
                     model=args.model,
                     reasoning_effort=args.reasoning_effort,
+                    fast_mode=args.fast_mode == "on",
                 )
             return run_claude_events(
                 prompt,
@@ -677,6 +702,7 @@ def main() -> int:
                 timeout=args.timeout,
                 model=args.model,
                 reasoning_effort=args.reasoning_effort,
+                fast_mode=args.fast_mode == "on",
             )
         return run_claude(
             prompt,
