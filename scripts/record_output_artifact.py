@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Record an explicitly requested output file for bridge-managed delivery."""
+"""Record a requested output file for host-local access and optional delivery."""
 
 from __future__ import annotations
 
@@ -25,24 +25,42 @@ def validated_output_path(raw_path: Path, workdir: Path) -> Path:
     return path
 
 
-def record_artifact(manifest: Path, path: Path) -> None:
+def record_artifact(manifest: Path, path: Path, *, attach: bool = False) -> None:
     try:
         existing = json.loads(manifest.read_text(encoding="utf-8"))
     except FileNotFoundError:
         existing = []
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise ValueError("the output artifact manifest is unreadable") from exc
-    if not isinstance(existing, list) or not all(isinstance(item, str) for item in existing):
+    if not isinstance(existing, list) or not all(
+        isinstance(item, str)
+        or (
+            isinstance(item, dict)
+            and isinstance(item.get("path"), str)
+            and isinstance(item.get("attach"), bool)
+        )
+        for item in existing
+    ):
         raise ValueError("the output artifact manifest is invalid")
     value = str(path)
-    if value not in existing:
-        existing.append(value)
+    normalized = [
+        {"path": item, "attach": True}
+        if isinstance(item, str)
+        else {"path": item["path"], "attach": item["attach"]}
+        for item in existing
+    ]
+    recorded = next((item for item in normalized if item["path"] == value), None)
+    if recorded is None:
+        normalized.append({"path": value, "attach": attach})
+    elif attach:
+        # A later explicit attachment request upgrades a local-only record.
+        recorded["attach"] = True
 
     manifest.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary = tempfile.mkstemp(prefix=f".{manifest.name}.", dir=manifest.parent)
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(existing, handle, separators=(",", ":"))
+            json.dump(normalized, handle, separators=(",", ":"))
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
@@ -53,15 +71,20 @@ def record_artifact(manifest: Path, path: Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Mark an explicitly requested file for delivery to Slack."
+        description="Mark a requested output for local access and optional Slack attachment."
     )
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--workdir", type=Path, required=True)
     parser.add_argument("--file", type=Path, required=True)
+    parser.add_argument(
+        "--attach",
+        action="store_true",
+        help="also attach the output to the originating Slack thread",
+    )
     args = parser.parse_args()
     try:
         path = validated_output_path(args.file, args.workdir)
-        record_artifact(args.manifest, path)
+        record_artifact(args.manifest, path, attach=args.attach)
     except (OSError, ValueError) as exc:
         parser.error(str(exc))
     print(path.name)

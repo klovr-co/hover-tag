@@ -114,7 +114,7 @@ class SlackTextAttachmentTests(unittest.TestCase):
 
 
 class SlackOutputArtifactTests(unittest.TestCase):
-    def test_builds_one_local_open_button_per_artifact(self) -> None:
+    def test_builds_one_compact_local_open_row_for_all_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
             root = Path(raw_dir).resolve()
             first = root / "launch-checklist.md"
@@ -130,22 +130,90 @@ class SlackOutputArtifactTests(unittest.TestCase):
                 thread_ts="1.23",
             )
 
-        self.assertEqual(2, len(blocks))
-        buttons = [block["elements"][0] for block in blocks]
+        self.assertEqual(1, len(blocks))
+        buttons = blocks[0]["elements"]
+        file_buttons = buttons[:-1]
+        directory_button = buttons[-1]
         self.assertEqual(
-            ["Open launch-checklist.md", "Open owners.csv"],
-            [button["text"]["text"] for button in buttons],
+            ["↗ launch-checklist.md", "↗ owners.csv"],
+            [button["text"]["text"] for button in file_buttons],
         )
+        action_ids = [button["action_id"] for button in buttons]
+        self.assertEqual(len(action_ids), len(set(action_ids)))
         self.assertTrue(
             all(
-                button["action_id"] == slack_socket_agent.OPEN_LOCAL_ARTIFACT_ACTION_ID
-                for button in buttons
+                slack_socket_agent.OPEN_LOCAL_ARTIFACT_ACTION_PATTERN.fullmatch(action_id)
+                for action_id in action_ids[:-1]
             )
         )
         self.assertEqual(
-            ["launch-checklist.md", "owners.csv"],
-            [json.loads(button["value"])["path"] for button in buttons],
+            slack_socket_agent.OPEN_LOCAL_ARTIFACT_DIRECTORY_ACTION_ID,
+            directory_button["action_id"],
         )
+        self.assertEqual("📁 Open folder", directory_button["text"]["text"])
+        self.assertEqual(".", json.loads(directory_button["value"])["path"])
+        self.assertEqual(
+            ["launch-checklist.md", "owners.csv"],
+            [json.loads(button["value"])["path"] for button in file_buttons],
+        )
+        self.assertEqual(
+            [
+                "Open launch-checklist.md on the Tag host",
+                "Open owners.csv on the Tag host",
+            ],
+            [button["accessibility_label"] for button in file_buttons],
+        )
+
+    def test_local_open_directory_action_validates_and_opens_common_parent(self) -> None:
+        fake_app = FakeApp()
+        client = MagicMock()
+        logger = MagicMock()
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir).resolve()
+            outputs = root / "exports"
+            outputs.mkdir()
+            with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+                os.environ,
+                {"SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_IDS": "C123"},
+                clear=True,
+            ), patch.object(
+                slack_socket_agent, "default_workdir", return_value=root
+            ), patch.object(
+                slack_socket_agent, "open_local_artifact_directory"
+            ) as local_open:
+                slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+                handler = fake_app.actions[
+                    slack_socket_agent.OPEN_LOCAL_ARTIFACT_DIRECTORY_ACTION_ID
+                ]
+                ack = MagicMock()
+                handler(
+                    ack,
+                    {
+                        "user": {"id": "UOWNER"},
+                        "channel": {"id": "C123"},
+                        "actions": [
+                            {
+                                "value": json.dumps(
+                                    {
+                                        "user": "UOWNER",
+                                        "channel": "C123",
+                                        "thread_ts": "1.23",
+                                        "path": "exports",
+                                    }
+                                )
+                            }
+                        ],
+                    },
+                    client,
+                    logger,
+                )
+
+            ack.assert_called_once_with()
+            local_open.assert_called_once_with(outputs)
+            self.assertIn(
+                "Opened the output folder",
+                client.chat_postEphemeral.call_args.kwargs["text"],
+            )
 
     def test_local_open_action_validates_user_and_workspace_path(self) -> None:
         fake_app = FakeApp()
@@ -265,6 +333,70 @@ class SlackOutputArtifactTests(unittest.TestCase):
             ],
             messages,
         )
+
+    def test_local_only_outputs_get_buttons_without_slack_attachments(self) -> None:
+        client = MagicMock()
+        logger = MagicMock()
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            first = root / "launch-checklist.md"
+            second = root / "owners.csv"
+            first.write_text("# Checklist\n", encoding="utf-8")
+            second.write_text("owner\nAda\n", encoding="utf-8")
+            manifest = root / ".manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    [
+                        {"path": str(first), "attach": False},
+                        {"path": str(second), "attach": False},
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            paths, errors = slack_socket_agent.load_output_artifacts(manifest, root)
+            messages = slack_socket_agent.deliver_output_artifacts(
+                client, "C123", "1.23", manifest, root, logger
+            )
+
+        self.assertEqual([first.resolve(), second.resolve()], paths)
+        self.assertEqual([], errors)
+        self.assertEqual([], messages)
+        client.files_upload_v2.assert_not_called()
+
+    def test_explicit_multi_file_delivery_uploads_every_output(self) -> None:
+        client = MagicMock()
+        client.files_upload_v2.side_effect = [
+            {"file": {"permalink": "https://example.test/checklist"}},
+            {"file": {"permalink": "https://example.test/owners"}},
+        ]
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            first = root / "launch-checklist.md"
+            second = root / "owners.csv"
+            first.write_text("# Checklist\n", encoding="utf-8")
+            second.write_text("owner\nAda\n", encoding="utf-8")
+            manifest = root / ".manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    [
+                        {"path": str(first), "attach": True},
+                        {"path": str(second), "attach": True},
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            messages = slack_socket_agent.deliver_output_artifacts(
+                client, "C123", "1.23", manifest, root, MagicMock()
+            )
+
+        self.assertEqual(2, client.files_upload_v2.call_count)
+        self.assertEqual(
+            ["launch-checklist.md", "owners.csv"],
+            [call.kwargs["filename"] for call in client.files_upload_v2.call_args_list],
+        )
+        self.assertEqual(2, len(messages))
 
     def test_rejects_missing_and_out_of_workspace_files(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir, tempfile.TemporaryDirectory() as outside_dir:
@@ -433,7 +565,7 @@ class SlackOutputArtifactTests(unittest.TestCase):
         )
         posted_blocks = client.chat_postMessage.call_args.kwargs["blocks"]
         self.assertEqual(
-            "Open requested.csv",
+            "↗ requested.csv",
             posted_blocks[1]["elements"][0]["text"]["text"],
         )
 

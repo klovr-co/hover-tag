@@ -96,7 +96,10 @@ class OpenTagAgentPromptTests(unittest.TestCase):
         self.assertIn("record_output_artifact.py", prompt)
         self.assertIn("file type is supported", prompt)
         self.assertIn("supporting files", prompt)
-        self.assertIn("do not claim it is attached", prompt)
+        self.assertIn("adds a host-local Open button", prompt)
+        self.assertIn("Add `--attach` only when", prompt)
+        self.assertIn("every file in a multi-file request", prompt)
+        self.assertIn("Do not claim a file is attached", prompt)
         self.assertIn("Do not mention the manifest helper", prompt)
         self.assertIn("empty stdout/stderr details", prompt)
 

@@ -81,20 +81,25 @@ def build_prompt(
     if output_manifest is not None:
         artifact_instructions = f"""
 Generated file delivery:
-- When, and only when, the user explicitly asks you to create or return a
-  file, save it inside the workspace and then run
+- When, and only when, the user explicitly asks you to create a file, save it
+  inside the workspace and then run
   `{helper_command(skill_dir / "scripts" / "record_output_artifact.py")}`
   with `--manifest {shlex.quote(str(output_manifest))}`,
   `--workdir {shlex.quote(str(workdir))}`, and `--file` set to that output path.
-- Call the helper once for each requested final deliverable. Never record
-  supporting files or files merely mentioned in the conversation. Any regular
-  file type is supported. Do not record anything if saving fails; if recording
-  fails, say that the file was saved but could not be queued for Slack delivery.
-- The Slack bridge performs the upload after your run. In your answer, state
-  that the file was saved, but do not claim it is attached or accessible until
-  the bridge reports successful delivery. Do not mention the manifest helper,
-  its exit code, or that the file was queued; those are internal transport
-  details.
+- Call the helper separately for every requested final deliverable, including
+  every file in a multi-file request. Never record supporting files or files
+  merely mentioned in the conversation. Any regular file type is supported.
+- By default, recording adds a host-local Open button but does not attach the
+  file to Slack. Add `--attach` only when the user explicitly asks to attach,
+  upload, send, return, or provide a downloadable copy of that file in Slack.
+  A request merely to create, save, edit, or update a file is not permission to
+  attach it. Apply the user's delivery instruction to every requested file.
+- Do not record anything if saving fails. If recording fails, say that the file
+  was saved but could not be made available through Tag. The Slack bridge
+  performs any requested upload after your run. Do not claim a file is attached
+  or downloadable until the bridge reports successful delivery.
+- Do not mention the manifest helper, its exit code, or manifest state; those
+  are internal transport details.
 """
     canvas_instructions = f"""
 Canvas capability:

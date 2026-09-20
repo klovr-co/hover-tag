@@ -21,7 +21,24 @@ class RecordOutputArtifactTests(unittest.TestCase):
             record_output_artifact.record_artifact(manifest, path)
 
             self.assertEqual(
-                [str(artifact.resolve())],
+                [{"path": str(artifact.resolve()), "attach": False}],
+                json.loads(manifest.read_text(encoding="utf-8")),
+            )
+
+    def test_explicit_attachment_upgrades_existing_local_record(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            artifact = root / "result.csv"
+            artifact.write_text("owner\nAda\n", encoding="utf-8")
+            manifest = root / ".manifest.json"
+
+            record_output_artifact.record_artifact(manifest, artifact.resolve())
+            record_output_artifact.record_artifact(
+                manifest, artifact.resolve(), attach=True
+            )
+
+            self.assertEqual(
+                [{"path": str(artifact.resolve()), "attach": True}],
                 json.loads(manifest.read_text(encoding="utf-8")),
             )
 

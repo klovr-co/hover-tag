@@ -62,6 +62,10 @@ SETTINGS_FAST_ACTION_ID = "opentag_settings_fast_mode"
 SETTINGS_RESET_ACTION_ID = "opentag_settings_reset"
 RETRY_ACTION_ID = "opentag_retry_request"
 OPEN_LOCAL_ARTIFACT_ACTION_ID = "opentag_open_local_artifact"
+OPEN_LOCAL_ARTIFACT_ACTION_PATTERN = re.compile(
+    rf"^{re.escape(OPEN_LOCAL_ARTIFACT_ACTION_ID)}_[0-9]+$"
+)
+OPEN_LOCAL_ARTIFACT_DIRECTORY_ACTION_ID = "opentag_open_local_artifact_directory"
 SETTINGS_VIEW_ID = "opentag_agent_settings"
 HOME_CHANNEL_ACTION_ID = "opentag_home_channel"
 UNAUTHORIZED_USER_MESSAGE = "Sorry, only users authorized by the Tag owner can use this bot."
@@ -664,9 +668,10 @@ def output_artifact_button_blocks(
     channel: str,
     thread_ts: str,
 ) -> list[dict[str, Any]]:
-    """Build one host-local open action for each validated output artifact."""
+    """Build one compact row of host-local actions for validated output artifacts."""
     root = workdir.expanduser().resolve()
-    blocks: list[dict[str, Any]] = []
+    elements: list[dict[str, Any]] = []
+    valid_paths: list[Path] = []
     for index, raw_path in enumerate(paths):
         try:
             path = raw_path.expanduser().resolve(strict=True)
@@ -675,6 +680,7 @@ def output_artifact_button_blocks(
                 continue
         except (OSError, ValueError):
             continue
+        valid_paths.append(path)
         metadata = {
             "user": user_id,
             "channel": channel,
@@ -684,24 +690,49 @@ def output_artifact_button_blocks(
         value = json.dumps(metadata, separators=(",", ":"))
         if len(value.encode("utf-8")) > 2_000:
             continue
-        label = f"Open {path.name}"
+        label = f"↗ {path.name}"
         if len(label) > 75:
             label = label[:74] + "…"
-        blocks.append(
+        elements.append(
             {
-                "type": "actions",
-                "block_id": f"opentag_artifact_{index}_{thread_ts}",
-                "elements": [
-                    {
-                        "type": "button",
-                        "action_id": OPEN_LOCAL_ARTIFACT_ACTION_ID,
-                        "text": {"type": "plain_text", "text": label},
-                        "value": value,
-                    }
-                ],
+                "type": "button",
+                "action_id": f"{OPEN_LOCAL_ARTIFACT_ACTION_ID}_{index}",
+                "text": {"type": "plain_text", "text": label},
+                "accessibility_label": f"Open {path.name} on the Tag host"[:75],
+                "value": value,
             }
         )
-    return blocks
+    if valid_paths:
+        common_directory = Path(
+            os.path.commonpath([str(path.parent) for path in valid_paths])
+        )
+        relative_directory = common_directory.relative_to(root)
+        directory_metadata = {
+            "user": user_id,
+            "channel": channel,
+            "thread_ts": thread_ts,
+            "path": str(relative_directory),
+        }
+        directory_value = json.dumps(directory_metadata, separators=(",", ":"))
+        if len(directory_value.encode("utf-8")) <= 2_000:
+            elements.append(
+                {
+                    "type": "button",
+                    "action_id": OPEN_LOCAL_ARTIFACT_DIRECTORY_ACTION_ID,
+                    "text": {"type": "plain_text", "text": "📁 Open folder"},
+                    "accessibility_label": "Open the output folder on the Tag host",
+                    "value": directory_value,
+                }
+            )
+    if not elements:
+        return []
+    return [
+        {
+            "type": "actions",
+            "block_id": f"opentag_artifacts_{thread_ts}",
+            "elements": elements,
+        }
+    ]
 
 
 def resolve_local_artifact(raw_path: str, workdir: Path) -> Path:
@@ -714,6 +745,19 @@ def resolve_local_artifact(raw_path: str, workdir: Path) -> Path:
     path.relative_to(root)
     if not path.is_file():
         raise ValueError("artifact action path must be a regular file")
+    return path
+
+
+def resolve_local_artifact_directory(raw_path: str, workdir: Path) -> Path:
+    """Resolve an output directory while keeping it inside the configured workspace."""
+    candidate = Path(raw_path)
+    if candidate.is_absolute():
+        raise ValueError("artifact directory path must be relative")
+    root = workdir.expanduser().resolve(strict=True)
+    path = (root / candidate).resolve(strict=True)
+    path.relative_to(root)
+    if not path.is_dir():
+        raise ValueError("artifact directory path must be a directory")
     return path
 
 
@@ -730,6 +774,11 @@ def open_local_artifact(path: Path) -> None:
         stderr=subprocess.DEVNULL,
         timeout=10,
     )
+
+
+def open_local_artifact_directory(path: Path) -> None:
+    """Open an output directory on the machine running Tag."""
+    open_local_artifact(path)
 
 
 def settings_action_value(action: dict[str, Any]) -> str:
@@ -1789,8 +1838,11 @@ def post_final_reply(
         )
 
 
-def load_output_artifacts(manifest: Path, workdir: Path) -> tuple[list[Path], list[str]]:
-    """Load and validate request-scoped deliverables without widening workspace access."""
+def load_output_artifact_entries(
+    manifest: Path,
+    workdir: Path,
+) -> tuple[list[tuple[Path, bool]], list[str]]:
+    """Load validated deliverables and their explicit Slack attachment intent."""
     if not manifest.exists():
         return [], []
     try:
@@ -1798,7 +1850,13 @@ def load_output_artifacts(manifest: Path, workdir: Path) -> tuple[list[Path], li
     except (OSError, UnicodeError, json.JSONDecodeError):
         return [], ["The requested output list was unreadable, so no files were attached."]
     if not isinstance(raw_artifacts, list) or not all(
-        isinstance(item, str) for item in raw_artifacts
+        isinstance(item, str)
+        or (
+            isinstance(item, dict)
+            and isinstance(item.get("path"), str)
+            and isinstance(item.get("attach"), bool)
+        )
+        for item in raw_artifacts
     ):
         return [], ["The requested output list was invalid, so no files were attached."]
     if len(raw_artifacts) > MAX_OUTPUT_ARTIFACTS:
@@ -1807,10 +1865,14 @@ def load_output_artifacts(manifest: Path, workdir: Path) -> tuple[list[Path], li
         ]
 
     root = workdir.expanduser().resolve()
-    artifacts: list[Path] = []
+    artifacts: list[tuple[Path, bool]] = []
     errors: list[str] = []
     seen: set[Path] = set()
-    for raw_path in raw_artifacts:
+    for item in raw_artifacts:
+        # String entries were produced by the first artifact implementation and
+        # retain its upload behavior for in-flight/backward-compatible manifests.
+        raw_path = item if isinstance(item, str) else item["path"]
+        attach = True if isinstance(item, str) else item["attach"]
         candidate = Path(raw_path).expanduser()
         if not candidate.is_absolute():
             candidate = root / candidate
@@ -1833,9 +1895,15 @@ def load_output_artifacts(manifest: Path, workdir: Path) -> tuple[list[Path], li
             )
             continue
         if path not in seen:
-            artifacts.append(path)
+            artifacts.append((path, attach))
             seen.add(path)
     return artifacts, errors
+
+
+def load_output_artifacts(manifest: Path, workdir: Path) -> tuple[list[Path], list[str]]:
+    """Load all outputs that should receive host-local Open actions."""
+    entries, errors = load_output_artifact_entries(manifest, workdir)
+    return [path for path, _attach in entries], errors
 
 
 def deliver_output_artifacts(
@@ -1847,8 +1915,10 @@ def deliver_output_artifacts(
     logger: Any,
 ) -> list[str]:
     """Attach validated outputs to the authorized originating Slack thread."""
-    artifacts, messages = load_output_artifacts(manifest, workdir)
-    for path in artifacts:
+    entries, messages = load_output_artifact_entries(manifest, workdir)
+    for path, attach in entries:
+        if not attach:
+            continue
         try:
             response = client.files_upload_v2(
                 channel=channel,
@@ -2279,7 +2349,10 @@ def create_app(
         except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
             logger.warning("Could not open Open Tag settings modal: %s", exc)
 
+    # Keep the exact listener for buttons posted by older Tag versions while
+    # accepting the indexed IDs required for multiple actions in one block.
     @app.action(OPEN_LOCAL_ARTIFACT_ACTION_ID)
+    @app.action(OPEN_LOCAL_ARTIFACT_ACTION_PATTERN)
     def open_output_artifact(ack: Any, body: dict[str, Any], client: Any, logger: Any) -> None:
         ack()
         user_id = body.get("user", {}).get("id", "")
@@ -2337,6 +2410,72 @@ def create_app(
                     text=(
                         "Tag couldn’t open that local file. It may have been moved or deleted, "
                         "or the Tag host may not have a desktop application for it."
+                    ),
+                )
+
+    @app.action(OPEN_LOCAL_ARTIFACT_DIRECTORY_ACTION_ID)
+    def open_output_artifact_directory(
+        ack: Any,
+        body: dict[str, Any],
+        client: Any,
+        logger: Any,
+    ) -> None:
+        ack()
+        user_id = body.get("user", {}).get("id", "")
+        channel = body.get("channel", {}).get("id", "")
+        metadata: dict[str, Any] = {}
+        try:
+            metadata = json.loads(body["actions"][0]["value"])
+            expected_user = metadata["user"]
+            expected_channel = metadata["channel"]
+            thread_ts = metadata["thread_ts"]
+            raw_path = metadata["path"]
+            if not all(
+                isinstance(value, str) and value
+                for value in (
+                    user_id,
+                    channel,
+                    expected_user,
+                    expected_channel,
+                    thread_ts,
+                    raw_path,
+                )
+            ):
+                raise ValueError("invalid local artifact directory metadata")
+            if (
+                user_id != expected_user
+                or channel != expected_channel
+                or not slack_channel_allowed(channel)
+                or not slack_user_allowed(user_id, allowed_user_ids)
+            ):
+                raise PermissionError("local artifact directory action is not authorized")
+            path = resolve_local_artifact_directory(raw_path, default_workdir())
+            open_local_artifact_directory(path)
+            client.chat_postEphemeral(
+                channel=channel,
+                user=user_id,
+                thread_ts=thread_ts,
+                text="Opened the output folder on the machine running Tag.",
+            )
+        except Exception as exc:  # noqa: BLE001 - keep the action listener alive
+            logger.warning("Could not open local output directory: %s", exc)
+            expected_channel = metadata.get("channel")
+            thread_ts = metadata.get("thread_ts")
+            if (
+                isinstance(channel, str)
+                and channel
+                and channel == expected_channel
+                and user_id == metadata.get("user")
+                and slack_channel_allowed(channel)
+                and slack_user_allowed(user_id, allowed_user_ids)
+            ):
+                client.chat_postEphemeral(
+                    channel=channel,
+                    user=user_id,
+                    thread_ts=thread_ts if isinstance(thread_ts, str) else None,
+                    text=(
+                        "Tag couldn’t open that output folder. It may have been moved or "
+                        "deleted, or the Tag host may not have a desktop file browser."
                     ),
                 )
 
