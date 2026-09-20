@@ -35,10 +35,12 @@ tools such as `gws`. The installer does not relocate their credentials.
 
 ## Install from a checkout
 
-Install Python 3.10+, [uv](https://docs.astral.sh/uv/), and your chosen agent CLI.
-Authenticate the agent CLI separately. No local administrator privileges are
-needed. Slack installation is separate: a workspace owner or Enterprise policy
-may require an app manager to approve the custom Slack app.
+Install Python 3.10+ and your chosen agent CLI. Tag prefers
+[uv](https://docs.astral.sh/uv/) when it is already available and otherwise uses
+Python's standard `venv` and pip. Authenticate the agent CLI separately. No local
+administrator privileges are needed. Slack installation is separate: a workspace
+owner or Enterprise policy may require an app manager to approve the custom Slack
+app.
 
 macOS/Linux:
 
@@ -96,22 +98,38 @@ Ctrl-C stops that development bridge while leaving MFS running.
 ## Download installer
 
 These endpoints become usable after this implementation is merged and a release
-with `tag-<version>.zip` and `SHA256SUMS` has been published. A prerelease must be
-selected explicitly; omitting the version selects GitHub's latest stable release.
+with `tag-<version>.zip`, `SHA256SUMS`, and `BUILD-PROVENANCE.json` has been
+published. The bare command follows the default in `release-channels.json`, which
+is currently `alpha`:
 
 ```sh
-curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/klovr-co/tag/main/install.sh | sh -s -- --version 0.1.0-alpha
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/klovr-co/tag/main/install.sh | sh
+
+# Choose an update channel explicitly.
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/klovr-co/tag/main/install.sh | sh -s -- --channel beta
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/klovr-co/tag/main/install.sh | sh -s -- --channel edge
+
+# Reproduce one immutable release.
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/klovr-co/tag/main/install.sh | sh -s -- --version 0.2.0-beta.1
 ```
 
 ```powershell
 $installer = Join-Path $env:TEMP 'tag-install.ps1'
 Invoke-WebRequest https://raw.githubusercontent.com/klovr-co/tag/main/install.ps1 -OutFile $installer
-& $installer -Version 0.1.0-alpha
+& $installer -Channel beta
+# Or: & $installer -Version 0.2.0-beta.1
 ```
 
-Release downloads are checked against the release's SHA-256 manifest. This checks
-integrity; it is not an independent publisher signature. The HTTPS bootstrap
-script and GitHub repository remain trust inputs.
+`stable` accepts stable releases, `beta` accepts beta or newer stable releases,
+`alpha` accepts alpha, beta, or stable releases, and `edge` follows the latest
+successful `main` build. The selected channel, installed version, source commit,
+and check time are stored atomically in `current.json`; rollback restores the
+previous record with the previous release.
+
+Release downloads are checked against both the SHA-256 manifest and build
+provenance before extraction. This checks integrity and consistency; it is not an
+independent publisher signature. The HTTPS bootstrap script and GitHub repository
+remain trust inputs.
 
 ## Integrations
 

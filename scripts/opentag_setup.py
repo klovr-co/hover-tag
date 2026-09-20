@@ -521,11 +521,14 @@ def write_slack_connector(team_id: str, channels: list[slack_channels.SlackChann
 
 
 def check_prerequisites(backend: str) -> bool:
-    ok = True
-    for command, purpose in (("uv", "Python dependency runner"), (backend, "selected CLI backend")):
-        found = shutil.which(command)
-        ui.message(f"{'✓' if found else '✗'} {command}: {purpose}")
-        ok = ok and bool(found)
+    uv = shutil.which("uv")
+    ui.message(
+        "✓ uv: optional fast Python dependency runner"
+        if uv else "· uv: optional; this installation can use Python venv and pip"
+    )
+    backend_found = shutil.which(backend)
+    ui.message(f"{'✓' if backend_found else '✗'} {backend}: selected CLI backend")
+    ok = bool(backend_found)
 
     installed_server = Path(sys.executable).parent / ("mfs-server.exe" if os.name == "nt" else "mfs-server")
     if not installed_server.is_file() and not shutil.which("mfs-server"):
