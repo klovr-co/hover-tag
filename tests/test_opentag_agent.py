@@ -96,6 +96,8 @@ class OpenTagAgentPromptTests(unittest.TestCase):
         self.assertIn("file type is supported", prompt)
         self.assertIn("supporting files", prompt)
         self.assertIn("do not claim it is attached", prompt)
+        self.assertIn("Do not mention the manifest helper", prompt)
+        self.assertIn("empty stdout/stderr details", prompt)
 
     def test_slack_prompt_exposes_generated_image_result_directory(self) -> None:
         prompt = opentag_agent.build_prompt(

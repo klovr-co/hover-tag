@@ -174,6 +174,52 @@ class SlackOutputArtifactTests(unittest.TestCase):
         self.assertIn("missing.csv", messages[0])
         self.assertIn("secret.txt", messages[1])
 
+    def test_fetches_permalink_when_upload_returns_only_file_id(self) -> None:
+        client = MagicMock()
+        client.files_upload_v2.return_value = {"files": [{"id": "F123"}]}
+        client.files_info.return_value = {
+            "file": {
+                "id": "F123",
+                "permalink": "https://workspace.slack.com/files/F123/report.md",
+            }
+        }
+        logger = MagicMock()
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            artifact = root / "report.md"
+            artifact.write_text("# Report\n", encoding="utf-8")
+            manifest = root / ".manifest.json"
+            manifest.write_text(json.dumps([str(artifact)]), encoding="utf-8")
+
+            messages = slack_socket_agent.deliver_output_artifacts(
+                client, "C123", "1.23", manifest, root, logger
+            )
+
+        client.files_info.assert_called_once_with(file="F123")
+        self.assertEqual(
+            ["Download [report.md](https://workspace.slack.com/files/F123/report.md)."],
+            messages,
+        )
+
+    def test_keeps_successful_attachment_when_permalink_lookup_fails(self) -> None:
+        client = MagicMock()
+        client.files_upload_v2.return_value = {"file": {"id": "F123"}}
+        client.files_info.side_effect = RuntimeError("lookup failed")
+        logger = MagicMock()
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            artifact = root / "report.md"
+            artifact.write_text("# Report\n", encoding="utf-8")
+            manifest = root / ".manifest.json"
+            manifest.write_text(json.dumps([str(artifact)]), encoding="utf-8")
+
+            messages = slack_socket_agent.deliver_output_artifacts(
+                client, "C123", "1.23", manifest, root, logger
+            )
+
+        self.assertEqual(["Attached `report.md` to this thread."], messages)
+        logger.warning.assert_called_once()
+
     def test_rejects_output_above_tag_file_size_limit(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir, patch.object(
             slack_socket_agent, "MAX_OUTPUT_FILE_BYTES", 3

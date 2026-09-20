@@ -1768,17 +1768,46 @@ def deliver_output_artifacts(
                 filename=path.name,
                 title=path.name,
             )
-            uploaded_files = response.get("files") if hasattr(response, "get") else None
+            uploaded_files: list[dict[str, Any]] = []
+            if hasattr(response, "get"):
+                plural = response.get("files")
+                if isinstance(plural, list):
+                    uploaded_files.extend(item for item in plural if isinstance(item, dict))
+                singular = response.get("file")
+                if isinstance(singular, dict) and singular not in uploaded_files:
+                    uploaded_files.append(singular)
+
             permalink = next(
                 (
-                    item.get("permalink")
+                    item["permalink"]
                     for item in uploaded_files
-                    if isinstance(item, dict)
-                    and isinstance(item.get("permalink"), str)
-                    and item["permalink"]
+                    if isinstance(item.get("permalink"), str) and item["permalink"]
                 ),
                 None,
-            ) if isinstance(uploaded_files, list) else None
+            )
+            if permalink is None:
+                file_id = next(
+                    (
+                        item["id"]
+                        for item in uploaded_files
+                        if isinstance(item.get("id"), str) and item["id"]
+                    ),
+                    None,
+                )
+                if file_id is not None:
+                    try:
+                        info = client.files_info(file=file_id)
+                        info_file = info.get("file") if hasattr(info, "get") else None
+                        if isinstance(info_file, dict) and isinstance(
+                            info_file.get("permalink"), str
+                        ):
+                            permalink = info_file["permalink"] or None
+                    except Exception:  # noqa: BLE001 - upload still succeeded
+                        logger.warning(
+                            "Slack file permalink lookup failed for %s",
+                            file_id,
+                            exc_info=True,
+                        )
             if permalink:
                 messages.append(f"Download [{path.name}]({permalink}).")
             else:

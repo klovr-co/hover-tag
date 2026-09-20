@@ -92,7 +92,9 @@ Generated file delivery:
   fails, say that the file was saved but could not be queued for Slack delivery.
 - The Slack bridge performs the upload after your run. In your answer, state
   that the file was saved, but do not claim it is attached or accessible until
-  the bridge reports successful delivery.
+  the bridge reports successful delivery. Do not mention the manifest helper,
+  its exit code, or that the file was queued; those are internal transport
+  details.
 """
     canvas_instructions = f"""
 Canvas capability:
@@ -175,8 +177,9 @@ Slack thread context:
 Return only the final chat-ready answer.
 Do not add a Sources section by default. Include citations only when the user
 explicitly asks for sources/citations, or when a source-backed factual claim
-needs provenance. For command execution tasks, report the command result and
-stdout/stderr status; source citations are not needed.
+needs provenance. For commands the user explicitly asked you to run, report the
+result. Omit internal helper commands and empty stdout/stderr details; source
+citations are not needed.
 """.strip()
 
 
