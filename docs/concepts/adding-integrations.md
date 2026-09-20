@@ -17,27 +17,42 @@ They serve different purposes:
 
 ## Configure integrations
 
-Tag keeps your global Codex configuration and login available, subject to
-Codex's own loading rules. If a skill or connection already works globally,
-you may not need another copy. Put additions specific to Tag in these locations,
-relative to the [workspace](workspaces-and-tools.md#find-your-workspace):
+If a skill or MCP connection already works globally in Codex, you may be able
+to use it through Tag without configuring it again. Tag keeps your global
+Codex configuration and login available when it runs under the same local
+account and environment, subject to Codex's own loading rules.
+
+For additions specific to Tag, [find your workspace](workspaces-and-tools.md#find-your-workspace)
+and use these locations relative to that folder:
 
 | Configuration | Location |
 | --- | --- |
 | Codex skills | `.agents/skills/<skill-name>/SKILL.md` |
 | Codex MCP servers | `.codex/config.toml`, under `[mcp_servers.NAME]` |
 
-Tag explicitly passes the workspace's MCP server definitions to Codex. It does
-not apply other settings from that file through this mechanism. For MCP
-examples and the experimental Claude paths, see
-[installation and integrations](../installation.md#integrations).
+When running in the installed Tag home's workspace, Tag explicitly passes
+the MCP server definitions in `.codex/config.toml` to Codex. This mechanism
+does not forward other settings from that file.
+
+Learn more about configuring and authenticating MCP connections in the
+[official Codex MCP guide](https://developers.openai.com/codex/mcp).
+
+Once the integration is available, try a small Slack request that uses it and
+check the result. [Use Gmail from Slack](../tutorials/use-gmail-from-slack.md)
+shows a complete example.
 
 ## Make commands and logins available
 
-Commands must be available in the environment that starts Tag. The Tag home's
-`integrations/bin` directory is also on its command search path. Tool logins
-remain in their normal locations; adding a skill does not install a command or
-authenticate it. The backend inherits credentials available in its process
-environment, as described in the [security policy](../../SECURITY.md).
+Make sure the command works from the terminal you use to start Tag.
+
+If you change the command search path or environment, run `tag restart` from
+that terminal so Tag receives the changes.
+
+Follow the tool or connector's authentication instructions. If it's already
+authenticated and that login is available to Tag, you can reuse it. Adding a
+skill does not install the tool or sign you in.
+
+The agent also inherits credentials available in Tag's process environment,
+such as API keys. See the [security policy](../../SECURITY.md) for details.
 
 Try it: [Use Gmail from Slack](../tutorials/use-gmail-from-slack.md).
