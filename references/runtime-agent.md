@@ -68,7 +68,8 @@ current channel. Do not post a message merely because you created a summary.
   sources/citations or when provenance materially helps the answer.
 - When citing, use paths and line ranges, for example:
   `file://.../connectors/slack/plugin.py lines 50:103`.
-- For command execution, report the command and its observed output or status.
+- For commands the user explicitly requested, report the observed result. Omit
+  internal helper commands and empty stdout/stderr details.
 - For code-writing tasks, summarize changed files and verification commands.
 - Keep the answer concise enough for a Slack thread.
 

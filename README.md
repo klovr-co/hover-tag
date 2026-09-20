@@ -122,8 +122,9 @@ TAG provides installers for macOS, Linux, and native Windows. The primary path
 is Slack + Codex + local MFS; Claude Code remains experimental. Native Windows
 live Slack/backend qualification is still required before release.
 
-You need Python 3.10+, [`uv`](https://docs.astral.sh/uv/), `curl`, and a working
-Codex CLI login. Clone Tag first:
+You need Python 3.10+, `curl`, and a working Codex CLI login. The installer uses
+[`uv`](https://docs.astral.sh/uv/) when available and otherwise falls back to
+Python's standard `venv` and pip. Clone Tag first:
 
 ```bash
 git clone https://github.com/klovr-co/tag.git
@@ -204,22 +205,6 @@ Prefer the dedicated `tag restart` command over chaining stop and start so the
 terminal presents one coherent operation. Use `tag doctor` for deeper
 diagnostics after the quick status and recent logs.
 
-Tag setup includes hosted offline replies: the shared Tag service keeps your own
-Slack app connected while this computer is off. Setup explains hosted credential
-storage in its normal review; `tag start` registers and connects automatically.
-No Cloudflare deployment, signing secret, or Slack request-URL changes are needed.
-`tag stop` leaves offline reminders active; `tag disconnect` removes hosted access
-and returns to direct local connections. Existing installations stay direct until
-setup is reviewed again. See [connection service details](docs/hosted-receiver.md).
-
-For direct local connections, the bot description and App Home include startup
-guidance. Restart Tag and open App Home to publish the updated Home view.
-
-For a reminder that is easy to find in your channel, pin this message:
-
-> No reply from OpenMax? Make sure Tag is running on its host computer. Run
-> `tag start`, check `tag status`, then mention me again.
-
 When developing from a prepared source checkout, use `./tag dev`. It watches
 `scripts/**/*.py`, reloads only the Slack bridge after changes, and streams its
 output in the foreground. Press Ctrl-C to stop the development bridge; MFS is
@@ -255,6 +240,8 @@ Codex replies also include a compact **Configure** button beneath the answer. It
 opens a modal that saves model, native Codex reasoning-level,
 and Fast Mode choices for that Slack user across channels and threads.
 The modal's **Reset to default** button restores every control before saving.
+Its defaults come from `workspace/.codex/config.toml`, layered over the user's
+global `~/.codex/config.toml`; restart Tag after editing the local file.
 Fast Mode is independent of
 reasoning level and uses increased usage for faster responses. Operators can
 restrict the selectable models with `OPENTAG_CODEX_MODELS` and the reasoning
@@ -300,6 +287,7 @@ The bridge app normally needs these bot scopes:
 - `users:read` (verify app identity and cross-channel caller visibility)
 - `assistant:write`
 - `chat:write`
+- `files:read` and `files:write`
 - `channels:read` and `channels:history`
 - `groups:read` and `groups:history` if you intentionally use private channels
 - `im:history` for requests from the app's Messages tab
@@ -307,11 +295,16 @@ The bridge app normally needs these bot scopes:
 It also needs the `app_mention`, `message.im`, `app_home_opened`, and
 `agent_session_stopped` bot events and an app-level token with
 `connections:write`. Invite the bot only to channels where it should respond.
+`files:read` supports input attachments, while `files:write` supports explicitly
+requested generated-file delivery through private Slack file links, including
+backend-generated images. Each requested output also gets its own **Open
+filename** button. The button is restricted to the requesting Slack user and
+opens that workspace file with the default desktop application on the machine
+running Tag; the private Slack link remains available on other devices.
 Direct-message execution is enabled by default and can be disabled with
 `OPENTAG_SLACK_DM_ENABLED=0`.
-The included app manifest also requests `files:read` for inbound text and image
-attachments, `files:write` for backend-generated image results, and
-`canvases:write` for the explicit Canvas helper.
+The included app manifest also requests `canvases:write` for the explicit Canvas
+helper. Reinstall the Slack app after adding any scope.
 
 On upgrade, `tag start` compares the linked app with Tag's versioned manifest
 requirements and applies pending additive migrations before services start.

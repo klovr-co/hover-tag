@@ -79,6 +79,30 @@ class OpenTagAgentPromptTests(unittest.TestCase):
         self.assertIn("new top-level channel message", prompt)
         self.assertIn("only when the user", prompt)
 
+    def test_slack_prompt_registers_only_explicitly_requested_output_files(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            prompt = opentag_agent.build_prompt(
+                skill_dir=root / "tag",
+                workdir=root / "workspace",
+                channel_id="C123",
+                question="Create an archive",
+                thread_text="",
+                attachments_dir=root / "attachments",
+                allowed_scopes=f"file://local{root / 'workspace'}",
+                output_manifest=root / "workspace/.opentag-output.json",
+            )
+
+        self.assertIn("record_output_artifact.py", prompt)
+        self.assertIn("file type is supported", prompt)
+        self.assertIn("supporting files", prompt)
+        self.assertIn("adds a host-local Open button", prompt)
+        self.assertIn("Add `--attach` only when", prompt)
+        self.assertIn("every file in a multi-file request", prompt)
+        self.assertIn("Do not claim a file is attached", prompt)
+        self.assertIn("Do not mention the manifest helper", prompt)
+        self.assertIn("empty stdout/stderr details", prompt)
+
     def test_slack_prompt_exposes_generated_image_result_directory(self) -> None:
         prompt = opentag_agent.build_prompt(
             skill_dir=Path("/tmp/open-tag"),
@@ -218,6 +242,16 @@ class BackendStreamEventTests(unittest.TestCase):
         with patch.dict(os.environ, {"OPENTAG_CODEX_TRANSPORT": "socket"}, clear=True):
             with self.assertRaisesRegex(ValueError, "exec or app-server"):
                 opentag_agent.codex_event_transport()
+
+    def test_app_server_command_applies_selected_fast_mode(self) -> None:
+        with patch.object(opentag_agent, "codex_workspace_args", return_value=[]):
+            command = opentag_agent.codex_app_server_command(
+                Path("/work"),
+                fast_mode=True,
+            )
+
+        self.assertIn("features.fast_mode=true", command)
+        self.assertIn('service_tier="fast"', command)
 
     def test_codex_exposes_only_completed_agent_messages(self) -> None:
         self.assertEqual(

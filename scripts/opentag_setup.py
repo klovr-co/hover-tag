@@ -70,7 +70,6 @@ REQUIRED_APP_SETTINGS = {
     "Agent view enabled": "agent_view",
     "Interactive controls enabled": "is_enabled: true",
     "mention scope": "app_mentions:read",
-    "bot app identity": "users:read",
     "assistant status scope": "assistant:write",
     "public channel list": "channels:read",
     "public channel join": "channels:join",
@@ -80,6 +79,7 @@ REQUIRED_APP_SETTINGS = {
     "replies": "chat:write",
     "canvas writing": "canvases:write",
     "file access": "files:read",
+    "file delivery": "files:write",
     "direct-message event": "message.im",
     "direct-message history": "im:history",
 }
@@ -521,11 +521,14 @@ def write_slack_connector(team_id: str, channels: list[slack_channels.SlackChann
 
 
 def check_prerequisites(backend: str) -> bool:
-    ok = True
-    for command, purpose in (("uv", "Python dependency runner"), (backend, "selected CLI backend")):
-        found = shutil.which(command)
-        ui.message(f"{'✓' if found else '✗'} {command}: {purpose}")
-        ok = ok and bool(found)
+    uv = shutil.which("uv")
+    ui.message(
+        "✓ uv: optional fast Python dependency runner"
+        if uv else "· uv: optional; this installation can use Python venv and pip"
+    )
+    backend_found = shutil.which(backend)
+    ui.message(f"{'✓' if backend_found else '✗'} {backend}: selected CLI backend")
+    ok = bool(backend_found)
 
     installed_server = Path(sys.executable).parent / ("mfs-server.exe" if os.name == "nt" else "mfs-server")
     if not installed_server.is_file() and not shutil.which("mfs-server"):
@@ -582,7 +585,6 @@ def write_config(path: Path, values: dict[str, str]) -> None:
 
 def guided_setup(config_path: Path, *, start_services: bool = True, review_channels: bool = False) -> int:
     values = settings.load_config(config_path)
-    connection_mode = values.get("OPENTAG_SLACK_CONNECTION", "hosted")
     channel_policy = values.get("SLACK_CHANNEL_POLICY", "selected" if values.get("MFS_SLACK_CONNECTOR_CONFIG") else "invited")
     home = tag_home()
     initialize(home)
@@ -709,9 +711,6 @@ def guided_setup(config_path: Path, *, start_services: bool = True, review_chann
         ui.message("Replies use the current channel’s memory only.")
         ui.message("Allowed callers: " + values["SLACK_ALLOWED_USER_IDS"] + " · channel members can see replies")
         ui.message("Agent: " + ("Codex" if values["OPENTAG_BACKEND"] == "codex" else "Claude · experimental"))
-        if connection_mode == "hosted":
-            ui.message("Tag keeps your app connected while this computer is offline.")
-            ui.message("Your app credentials are stored encrypted by Tag’s hosted connection service; tasks run locally.")
         choice = ui.choose("Ready to continue?", [
             f"Use {len(selected_channels)} channel(s) and finish setup",
             "Change channels", "Change defaults", "Save and exit",
@@ -730,7 +729,6 @@ def guided_setup(config_path: Path, *, start_services: bool = True, review_chann
             ui.message("Continue will index the selected history and start Tag. No test message is sent." if start_services
                        else "Continue saves these choices only. No services or indexing will start.")
             if ui.choose("Approve setup", ["Continue", "Back"], default=1) == 0:
-                values = settings.update_config(config_path, {"OPENTAG_SLACK_CONNECTION": connection_mode})
                 if channel_policy == "invited":
                     values = settings.update_config(config_path, {"SLACK_CHANNEL_POLICY": channel_policy})
                 break

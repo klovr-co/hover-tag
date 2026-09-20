@@ -41,6 +41,9 @@ except ImportError:  # Direct script execution does not create a package context
 MENTION_RE = re.compile(r"<@[^>]+>")
 MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024
 MAX_ATTACHMENT_TEXT_CHARS = 12_000
+MAX_OUTPUT_FILE_BYTES = 15 * 1024 * 1024
+MAX_OUTPUT_ARTIFACTS = 10
+OUTPUT_ARTIFACT_MANIFEST_PREFIX = ".opentag-output-artifacts-"
 MAX_GENERATED_IMAGES = 10
 MAX_REPLY_CHARS = 3_800
 STREAM_START_CHARS = 40
@@ -60,6 +63,11 @@ SETTINGS_EFFORT_ACTION_ID = "opentag_settings_effort"
 SETTINGS_FAST_ACTION_ID = "opentag_settings_fast_mode"
 SETTINGS_RESET_ACTION_ID = "opentag_settings_reset"
 RETRY_ACTION_ID = "opentag_retry_request"
+OPEN_LOCAL_ARTIFACT_ACTION_ID = "opentag_open_local_artifact"
+OPEN_LOCAL_ARTIFACT_ACTION_PATTERN = re.compile(
+    rf"^{re.escape(OPEN_LOCAL_ARTIFACT_ACTION_ID)}_[0-9]+$"
+)
+OPEN_LOCAL_ARTIFACT_DIRECTORY_ACTION_ID = "opentag_open_local_artifact_directory"
 SETTINGS_VIEW_ID = "opentag_agent_settings"
 HOME_CHANNEL_ACTION_ID = "opentag_home_channel"
 UNAUTHORIZED_USER_MESSAGE = "Sorry, only users authorized by the Tag owner can use this bot."
@@ -124,24 +132,50 @@ def codex_models_cache_path() -> Path:
     return codex_home / "models_cache.json"
 
 
-def configured_codex_defaults() -> tuple[str | None, str | None, bool]:
-    """Read the model, thinking, and speed an unqualified Codex run will use."""
-    config_path = codex_models_cache_path().with_name("config.toml")
+def tag_codex_config_path() -> Path:
+    """Return the project-local Codex configuration owned by Tag."""
+    workdir = Path(os.getenv("OPENTAG_WORKDIR", str(Path.cwd()))).expanduser()
+    return workdir / ".codex" / "config.toml"
+
+
+def read_codex_config(path: Path) -> dict[str, Any]:
     try:
         try:
             import tomllib
         except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 runtime
             import tomli as tomllib
-        with config_path.open("rb") as handle:
+        with path.open("rb") as handle:
             config = tomllib.load(handle)
+        return config if isinstance(config, dict) else {}
     except (OSError, TypeError, ValueError):
-        return None, None, False
-    model = config.get("model")
-    effort = config.get("model_reasoning_effort")
-    service_tier = config.get("service_tier")
+        return {}
+
+
+def configured_codex_defaults() -> tuple[str | None, str | None, bool]:
+    """Layer Tag's model defaults over the user's global Codex defaults."""
+    global_config = read_codex_config(codex_models_cache_path().with_name("config.toml"))
+    tag_config = read_codex_config(tag_codex_config_path())
+
+    def layered_value(key: str, validator: Callable[[Any], bool]) -> Any:
+        local = tag_config.get(key)
+        if validator(local):
+            return local
+        global_value = global_config.get(key)
+        return global_value if validator(global_value) else None
+
+    model = layered_value("model", lambda value: isinstance(value, str) and bool(value))
+    effort = layered_value(
+        "model_reasoning_effort",
+        lambda value: isinstance(value, str) and value in SUPPORTED_REASONING_EFFORTS,
+    )
+    service_tier = layered_value(
+        "service_tier",
+        lambda value: isinstance(value, str)
+        and value in {"default", "fast", "priority"},
+    )
     return (
-        model if isinstance(model, str) and model else None,
-        effort if isinstance(effort, str) and effort in SUPPORTED_REASONING_EFFORTS else None,
+        model,
+        effort,
         service_tier in {"fast", "priority"},
     )
 
@@ -652,6 +686,127 @@ def settings_button_blocks(
             ],
         },
     ]
+
+
+def output_artifact_button_blocks(
+    paths: list[Path],
+    workdir: Path,
+    *,
+    user_id: str,
+    channel: str,
+    thread_ts: str,
+) -> list[dict[str, Any]]:
+    """Build one compact row of host-local actions for validated output artifacts."""
+    root = workdir.expanduser().resolve()
+    elements: list[dict[str, Any]] = []
+    valid_paths: list[Path] = []
+    for index, raw_path in enumerate(paths):
+        try:
+            path = raw_path.expanduser().resolve(strict=True)
+            relative_path = path.relative_to(root)
+            if not path.is_file():
+                continue
+        except (OSError, ValueError):
+            continue
+        valid_paths.append(path)
+        metadata = {
+            "user": user_id,
+            "channel": channel,
+            "thread_ts": thread_ts,
+            "path": str(relative_path),
+        }
+        value = json.dumps(metadata, separators=(",", ":"))
+        if len(value.encode("utf-8")) > 2_000:
+            continue
+        label = f"↗ {path.name}"
+        if len(label) > 75:
+            label = label[:74] + "…"
+        elements.append(
+            {
+                "type": "button",
+                "action_id": f"{OPEN_LOCAL_ARTIFACT_ACTION_ID}_{index}",
+                "text": {"type": "plain_text", "text": label},
+                "accessibility_label": f"Open {path.name} on the Tag host"[:75],
+                "value": value,
+            }
+        )
+    if valid_paths:
+        common_directory = Path(
+            os.path.commonpath([str(path.parent) for path in valid_paths])
+        )
+        relative_directory = common_directory.relative_to(root)
+        directory_metadata = {
+            "user": user_id,
+            "channel": channel,
+            "thread_ts": thread_ts,
+            "path": str(relative_directory),
+        }
+        directory_value = json.dumps(directory_metadata, separators=(",", ":"))
+        if len(directory_value.encode("utf-8")) <= 2_000:
+            elements.append(
+                {
+                    "type": "button",
+                    "action_id": OPEN_LOCAL_ARTIFACT_DIRECTORY_ACTION_ID,
+                    "text": {"type": "plain_text", "text": "📁 Open folder"},
+                    "accessibility_label": "Open the output folder on the Tag host",
+                    "value": directory_value,
+                }
+            )
+    if not elements:
+        return []
+    return [
+        {
+            "type": "actions",
+            "block_id": f"opentag_artifacts_{thread_ts}",
+            "elements": elements,
+        }
+    ]
+
+
+def resolve_local_artifact(raw_path: str, workdir: Path) -> Path:
+    """Resolve an action path while keeping it inside the configured workspace."""
+    candidate = Path(raw_path)
+    if candidate.is_absolute():
+        raise ValueError("artifact action path must be relative")
+    root = workdir.expanduser().resolve(strict=True)
+    path = (root / candidate).resolve(strict=True)
+    path.relative_to(root)
+    if not path.is_file():
+        raise ValueError("artifact action path must be a regular file")
+    return path
+
+
+def resolve_local_artifact_directory(raw_path: str, workdir: Path) -> Path:
+    """Resolve an output directory while keeping it inside the configured workspace."""
+    candidate = Path(raw_path)
+    if candidate.is_absolute():
+        raise ValueError("artifact directory path must be relative")
+    root = workdir.expanduser().resolve(strict=True)
+    path = (root / candidate).resolve(strict=True)
+    path.relative_to(root)
+    if not path.is_dir():
+        raise ValueError("artifact directory path must be a directory")
+    return path
+
+
+def open_local_artifact(path: Path) -> None:
+    """Open a file with the desktop application on the machine running Tag."""
+    if os.name == "nt":
+        os.startfile(path)  # type: ignore[attr-defined]
+        return
+    command = ["open", str(path)] if sys.platform == "darwin" else ["xdg-open", str(path)]
+    subprocess.run(
+        command,
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=10,
+    )
+
+
+def open_local_artifact_directory(path: Path) -> None:
+    """Open an output directory on the machine running Tag."""
+    open_local_artifact(path)
 
 
 def settings_action_value(action: dict[str, Any]) -> str:
@@ -1417,6 +1572,7 @@ def run_backend(
     model: str | None = None,
     reasoning_effort: str | None = None,
     fast_mode: bool = False,
+    output_manifest: Path | None = None,
     max_timeout: int | None = None,
     scope_plan: ScopePlan | None = None,
 ) -> tuple[str, bool]:
@@ -1450,6 +1606,8 @@ def run_backend(
         "--max-timeout",
         str(max_timeout),
     ]
+    if output_manifest is not None:
+        cmd.extend(["--output-manifest", str(output_manifest)])
     if backend == "codex" and model:
         cmd.extend(["--model", model])
     if backend == "codex" and reasoning_effort:
@@ -1505,6 +1663,7 @@ def run_backend_events(
     on_answer_start: Callable[[], None] | None = None,
     on_status: Callable[[str], None] | None = None,
     fast_mode: bool = False,
+    output_manifest: Path | None = None,
     max_timeout: int | None = None,
     scope_plan: ScopePlan | None = None,
 ) -> tuple[str, bool]:
@@ -1540,6 +1699,8 @@ def run_backend_events(
         str(max_timeout),
         "--event-stream",
     ]
+    if output_manifest is not None:
+        cmd.extend(["--output-manifest", str(output_manifest)])
     if backend == "codex" and model:
         cmd.extend(["--model", model])
     if backend == "codex" and reasoning_effort:
@@ -1711,6 +1872,150 @@ def post_final_reply(
         )
 
 
+def load_output_artifact_entries(
+    manifest: Path,
+    workdir: Path,
+) -> tuple[list[tuple[Path, bool]], list[str]]:
+    """Load validated deliverables and their explicit Slack attachment intent."""
+    if not manifest.exists():
+        return [], []
+    try:
+        raw_artifacts = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return [], ["The requested output list was unreadable, so no files were attached."]
+    if not isinstance(raw_artifacts, list) or not all(
+        isinstance(item, str)
+        or (
+            isinstance(item, dict)
+            and isinstance(item.get("path"), str)
+            and isinstance(item.get("attach"), bool)
+        )
+        for item in raw_artifacts
+    ):
+        return [], ["The requested output list was invalid, so no files were attached."]
+    if len(raw_artifacts) > MAX_OUTPUT_ARTIFACTS:
+        return [], [
+            f"The request listed more than {MAX_OUTPUT_ARTIFACTS} outputs, so no files were attached."
+        ]
+
+    root = workdir.expanduser().resolve()
+    artifacts: list[tuple[Path, bool]] = []
+    errors: list[str] = []
+    seen: set[Path] = set()
+    for item in raw_artifacts:
+        # String entries were produced by the first artifact implementation and
+        # retain its upload behavior for in-flight/backward-compatible manifests.
+        raw_path = item if isinstance(item, str) else item["path"]
+        attach = True if isinstance(item, str) else item["attach"]
+        candidate = Path(raw_path).expanduser()
+        if not candidate.is_absolute():
+            candidate = root / candidate
+        try:
+            path = candidate.resolve(strict=True)
+            path.relative_to(root)
+            if not path.is_file():
+                raise ValueError("not a regular file")
+            size = path.stat().st_size
+        except (OSError, ValueError):
+            errors.append(
+                f"Could not attach `{candidate.name or 'requested output'}` because it is missing, "
+                "inaccessible, or outside the workspace."
+            )
+            continue
+        if size > MAX_OUTPUT_FILE_BYTES:
+            errors.append(
+                f"Could not attach `{path.name}` because it exceeds Tag’s "
+                f"{MAX_OUTPUT_FILE_BYTES // (1024 * 1024)} MB output limit."
+            )
+            continue
+        if path not in seen:
+            artifacts.append((path, attach))
+            seen.add(path)
+    return artifacts, errors
+
+
+def load_output_artifacts(manifest: Path, workdir: Path) -> tuple[list[Path], list[str]]:
+    """Load all outputs that should receive host-local Open actions."""
+    entries, errors = load_output_artifact_entries(manifest, workdir)
+    return [path for path, _attach in entries], errors
+
+
+def deliver_output_artifacts(
+    client: Any,
+    channel: str,
+    thread_ts: str,
+    manifest: Path,
+    workdir: Path,
+    logger: Any,
+) -> list[str]:
+    """Attach validated outputs to the authorized originating Slack thread."""
+    entries, messages = load_output_artifact_entries(manifest, workdir)
+    for path, attach in entries:
+        if not attach:
+            continue
+        try:
+            response = client.files_upload_v2(
+                channel=channel,
+                thread_ts=thread_ts,
+                file=str(path),
+                filename=path.name,
+                title=path.name,
+            )
+            uploaded_files: list[dict[str, Any]] = []
+            if hasattr(response, "get"):
+                plural = response.get("files")
+                if isinstance(plural, list):
+                    uploaded_files.extend(item for item in plural if isinstance(item, dict))
+                singular = response.get("file")
+                if isinstance(singular, dict) and singular not in uploaded_files:
+                    uploaded_files.append(singular)
+
+            permalink = next(
+                (
+                    item["permalink"]
+                    for item in uploaded_files
+                    if isinstance(item.get("permalink"), str) and item["permalink"]
+                ),
+                None,
+            )
+            if permalink is None:
+                file_id = next(
+                    (
+                        item["id"]
+                        for item in uploaded_files
+                        if isinstance(item.get("id"), str) and item["id"]
+                    ),
+                    None,
+                )
+                if file_id is not None:
+                    try:
+                        info = client.files_info(file=file_id)
+                        info_file = info.get("file") if hasattr(info, "get") else None
+                        if isinstance(info_file, dict) and isinstance(
+                            info_file.get("permalink"), str
+                        ):
+                            permalink = info_file["permalink"] or None
+                    except Exception:  # noqa: BLE001 - upload still succeeded
+                        logger.warning(
+                            "Slack file permalink lookup failed for %s",
+                            file_id,
+                            exc_info=True,
+                        )
+            if permalink:
+                messages.append(f"Download [{path.name}]({permalink}).")
+            else:
+                messages.append(f"Attached `{path.name}` to this thread.")
+        except Exception:  # noqa: BLE001 - report saved and delivered outcomes separately
+            reference = uuid.uuid4().hex[:8].upper()
+            logger.exception("Slack output upload failed [%s] for %s", reference, path)
+            messages.append(
+                f"`{path.name}` was saved locally, but Slack delivery failed "
+                f"(reference {reference}). Ask Tag to attach it again; an operator may need "
+                "to add `files:write`, reinstall the Slack app, or check Slack’s file limits."
+            )
+    return messages
+
+
 def retry_button_blocks(
     *,
     team: str,
@@ -1834,14 +2139,6 @@ def app_home_view(
                 {"type": "section", "text": {"type": "mrkdwn", "text": UNAUTHORIZED_USER_MESSAGE}},
             ],
         }
-    startup_reminder = {
-        "type": "section",
-        "text": {
-            "type": "mrkdwn",
-            "text": "*No reply from Tag?* Make sure Tag is running on its host computer. "
-            "Run `tag start`, check `tag status`, then mention me again.",
-        },
-    }
     if os.getenv("SLACK_CHANNEL_POLICY") == "invited":
         return {"type": "home", "blocks": [
             {"type": "header", "text": {"type": "plain_text", "text": "Tag"}},
@@ -1849,7 +2146,6 @@ def app_home_view(
                 "Invite Tag to a channel to enable replies and automatic channel memory. "
                 "Invitations are checked about every minute while Tag runs. "
                 "Only authorized users can request tasks; replies use this channel’s memory only."}},
-            startup_reminder,
         ]}
     selector: dict[str, Any] = {
         "type": "multi_conversations_select",
@@ -1890,7 +2186,6 @@ def app_home_view(
     ]
     if notice:
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": notice}})
-    blocks.append(startup_reminder)
     return {"type": "home", "blocks": blocks}
 
 
@@ -2087,6 +2382,148 @@ def create_app(
             )
         except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
             logger.warning("Could not open Open Tag settings modal: %s", exc)
+
+    # Keep the exact listener for buttons posted by older Tag versions while
+    # accepting the indexed IDs required for multiple actions in one block.
+    @app.action(OPEN_LOCAL_ARTIFACT_ACTION_ID)
+    @app.action(OPEN_LOCAL_ARTIFACT_ACTION_PATTERN)
+    def open_output_artifact(ack: Any, body: dict[str, Any], client: Any, logger: Any) -> None:
+        ack()
+        user_id = body.get("user", {}).get("id", "")
+        channel = body.get("channel", {}).get("id", "")
+        metadata: dict[str, Any] = {}
+        try:
+            metadata = json.loads(body["actions"][0]["value"])
+            expected_user = metadata["user"]
+            expected_channel = metadata["channel"]
+            thread_ts = metadata["thread_ts"]
+            raw_path = metadata["path"]
+            if not all(
+                isinstance(value, str) and value
+                for value in (
+                    user_id,
+                    channel,
+                    expected_user,
+                    expected_channel,
+                    thread_ts,
+                    raw_path,
+                )
+            ):
+                raise ValueError("invalid local artifact metadata")
+            if (
+                user_id != expected_user
+                or channel != expected_channel
+                or not slack_conversation_allowed(
+                    channel,
+                    direct_message=is_direct_message_channel(channel),
+                )
+                or not slack_user_allowed(user_id, allowed_user_ids)
+            ):
+                raise PermissionError("local artifact action is not authorized")
+            path = resolve_local_artifact(raw_path, default_workdir())
+            open_local_artifact(path)
+            client.chat_postEphemeral(
+                channel=channel,
+                user=user_id,
+                thread_ts=thread_ts,
+                text=f"Opened `{path.name}` on the machine running Tag.",
+            )
+        except Exception as exc:  # noqa: BLE001 - keep the action listener alive
+            logger.warning("Could not open local output artifact: %s", exc)
+            expected_channel = metadata.get("channel")
+            thread_ts = metadata.get("thread_ts")
+            if (
+                isinstance(channel, str)
+                and channel
+                and channel == expected_channel
+                and user_id == metadata.get("user")
+                and slack_conversation_allowed(
+                    channel,
+                    direct_message=is_direct_message_channel(channel),
+                )
+                and slack_user_allowed(user_id, allowed_user_ids)
+            ):
+                client.chat_postEphemeral(
+                    channel=channel,
+                    user=user_id,
+                    thread_ts=thread_ts if isinstance(thread_ts, str) else None,
+                    text=(
+                        "Tag couldn’t open that local file. It may have been moved or deleted, "
+                        "or the Tag host may not have a desktop application for it."
+                    ),
+                )
+
+    @app.action(OPEN_LOCAL_ARTIFACT_DIRECTORY_ACTION_ID)
+    def open_output_artifact_directory(
+        ack: Any,
+        body: dict[str, Any],
+        client: Any,
+        logger: Any,
+    ) -> None:
+        ack()
+        user_id = body.get("user", {}).get("id", "")
+        channel = body.get("channel", {}).get("id", "")
+        metadata: dict[str, Any] = {}
+        try:
+            metadata = json.loads(body["actions"][0]["value"])
+            expected_user = metadata["user"]
+            expected_channel = metadata["channel"]
+            thread_ts = metadata["thread_ts"]
+            raw_path = metadata["path"]
+            if not all(
+                isinstance(value, str) and value
+                for value in (
+                    user_id,
+                    channel,
+                    expected_user,
+                    expected_channel,
+                    thread_ts,
+                    raw_path,
+                )
+            ):
+                raise ValueError("invalid local artifact directory metadata")
+            if (
+                user_id != expected_user
+                or channel != expected_channel
+                or not slack_conversation_allowed(
+                    channel,
+                    direct_message=is_direct_message_channel(channel),
+                )
+                or not slack_user_allowed(user_id, allowed_user_ids)
+            ):
+                raise PermissionError("local artifact directory action is not authorized")
+            path = resolve_local_artifact_directory(raw_path, default_workdir())
+            open_local_artifact_directory(path)
+            client.chat_postEphemeral(
+                channel=channel,
+                user=user_id,
+                thread_ts=thread_ts,
+                text="Opened the output folder on the machine running Tag.",
+            )
+        except Exception as exc:  # noqa: BLE001 - keep the action listener alive
+            logger.warning("Could not open local output directory: %s", exc)
+            expected_channel = metadata.get("channel")
+            thread_ts = metadata.get("thread_ts")
+            if (
+                isinstance(channel, str)
+                and channel
+                and channel == expected_channel
+                and user_id == metadata.get("user")
+                and slack_conversation_allowed(
+                    channel,
+                    direct_message=is_direct_message_channel(channel),
+                )
+                and slack_user_allowed(user_id, allowed_user_ids)
+            ):
+                client.chat_postEphemeral(
+                    channel=channel,
+                    user=user_id,
+                    thread_ts=thread_ts if isinstance(thread_ts, str) else None,
+                    text=(
+                        "Tag couldn’t open that output folder. It may have been moved or "
+                        "deleted, or the Tag host may not have a desktop file browser."
+                    ),
+                )
 
     @app.action(SETTINGS_MODEL_ACTION_ID)
     def refresh_reasoning_options(
@@ -2288,6 +2725,9 @@ def create_app(
         )
         indicator.start()
         answer_stream: SlackAnswerStream | None = None
+        output_manifest = (
+            default_workdir() / f"{OUTPUT_ARTIFACT_MANIFEST_PREFIX}{uuid.uuid4().hex}.json"
+        )
 
         try:
             with tempfile.TemporaryDirectory(
@@ -2332,6 +2772,7 @@ def create_app(
                         on_answer_start=indicator.answer_started,
                         on_status=indicator.status,
                         fast_mode=agent_settings.fast_mode,
+                        output_manifest=output_manifest,
                         max_timeout=max_timeout,
                         scope_plan=scope_plan,
                     )
@@ -2347,21 +2788,44 @@ def create_app(
                         model=agent_settings.model,
                         reasoning_effort=agent_settings.reasoning_effort,
                         fast_mode=agent_settings.fast_mode,
+                        output_manifest=output_manifest,
                         max_timeout=max_timeout,
                         scope_plan=scope_plan,
                     )
+                artifact_button_blocks: list[dict[str, Any]] = []
+                if succeeded:
+                    artifact_paths, _artifact_errors = load_output_artifacts(
+                        output_manifest,
+                        default_workdir(),
+                    )
+                    delivery_messages = deliver_output_artifacts(
+                        client,
+                        channel,
+                        thread_ts,
+                        output_manifest,
+                        default_workdir(),
+                        logger,
+                    )
+                    if delivery_messages:
+                        answer = f"{answer.rstrip()}\n\n" + "\n".join(delivery_messages)
+                    artifact_button_blocks = output_artifact_button_blocks(
+                        artifact_paths,
+                        default_workdir(),
+                        user_id=user_id,
+                        channel=channel,
+                        thread_ts=thread_ts,
+                    )
                 indicator.clear()
                 if succeeded:
-                    footer_blocks = (
-                        settings_button_blocks(
+                    footer_blocks = artifact_button_blocks
+                    if backend == "codex":
+                        footer_blocks += settings_button_blocks(
                             team=team,
                             channel=channel,
                             thread_ts=thread_ts,
                             direct_message=direct_message,
                         )
-                        if backend == "codex"
-                        else None
-                    )
+                    footer_blocks = footer_blocks or None
                 elif answer.startswith("Stopped.") or answer.startswith("Stop requested"):
                     footer_blocks = None
                 else:
@@ -2434,6 +2898,8 @@ def create_app(
                     direct_message=direct_message,
                 ),
             )
+        finally:
+            output_manifest.unlink(missing_ok=True)
 
     @app.action(RETRY_ACTION_ID)
     def retry_request(ack: Any, body: dict[str, Any], client: Any, logger: Any) -> None:
@@ -2539,7 +3005,7 @@ def install_shutdown_handlers(shutdown_requested: threading.Event) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run the Tag Slack bridge.")
+    parser = argparse.ArgumentParser(description="Run Open Tag Slack Socket Mode bridge.")
     parser.add_argument(
         "--backend",
         choices=["claude", "codex"],
@@ -2556,7 +3022,7 @@ def main() -> None:
     parser.add_argument(
         "--ready-file",
         type=Path,
-        help="Write a short-lived Slack transport connection heartbeat to this path.",
+        help="Write a short-lived Socket Mode connection heartbeat to this path.",
     )
     parser.add_argument("--process-id", help=argparse.SUPPRESS)
     args = parser.parse_args()
@@ -2573,17 +3039,7 @@ def main() -> None:
         session_journal=session_journal,
     )
     print_live_summary(args.backend, allowed_user_ids)
-    if os.getenv("OPENTAG_RELAY_URL"):
-        try:
-            from .slack_relay import RelayHandler
-        except ImportError:
-            from slack_relay import RelayHandler
-        handler = RelayHandler(
-            app, require_env("OPENTAG_RELAY_URL"), require_env("OPENTAG_RELAY_TOKEN"),
-            require_env("SLACK_TEAM_ID"), require_env("SLACK_APP_ID"),
-        )
-    else:
-        handler = SocketModeHandler(app, require_env("SLACK_APP_TOKEN"))
+    handler = SocketModeHandler(app, require_env("SLACK_APP_TOKEN"))
     session_journal.reconcile(app.client, app.logger)
     shutdown_requested = threading.Event()
     install_shutdown_handlers(shutdown_requested)

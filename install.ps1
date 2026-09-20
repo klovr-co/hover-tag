@@ -3,6 +3,8 @@
 [CmdletBinding()]
 param(
     [string]$Version,
+    [ValidateSet('stable', 'beta', 'alpha', 'edge')]
+    [string]$Channel,
     [string]$BinDir,
     [switch]$SkipDependencies,
     [switch]$DependenciesOnly
@@ -30,10 +32,11 @@ if ($DependenciesOnly) {
 }
 $installerArgs = @()
 if ($Version) { $installerArgs += @('--version', $Version) }
+if ($Channel) { $installerArgs += @('--channel', $Channel) }
 if ($BinDir) { $installerArgs += @('--bin-dir', $BinDir) }
 if ($SkipDependencies) { $installerArgs += '--skip-dependencies' }
 if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot 'scripts/tag_install.py'))) {
-    if (-not $Version) { $installerArgs += @('--source', $PSScriptRoot) }
+    if (-not $Version -and -not $Channel) { $installerArgs += @('--source', $PSScriptRoot) }
     & python (Join-Path $PSScriptRoot 'scripts/tag_install.py') @installerArgs
     if ($LASTEXITCODE -ne 0) { throw "TAG installation failed ($LASTEXITCODE)" }
 } else {
@@ -41,7 +44,9 @@ if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot 'scripts/tag_install.
     New-Item -ItemType Directory -Path $tagDownload | Out-Null
     try {
         $installer = Join-Path $tagDownload 'tag_install.py'
+        $channels = Join-Path $tagDownload 'release-channels.json'
         Invoke-WebRequest 'https://raw.githubusercontent.com/klovr-co/tag/main/scripts/tag_install.py' -OutFile $installer
+        Invoke-WebRequest 'https://raw.githubusercontent.com/klovr-co/tag/main/release-channels.json' -OutFile $channels
         & python $installer @installerArgs
         if ($LASTEXITCODE -ne 0) { throw "TAG installation failed ($LASTEXITCODE)" }
     } finally {

@@ -73,6 +73,7 @@ def build_prompt(
     thread_text: str,
     attachments_dir: Path | None,
     allowed_scopes: str,
+    output_manifest: Path | None = None,
 ) -> str:
     try:
         slack_channel_labels = json.loads(os.getenv("OPENTAG_SLACK_CHANNEL_LABELS", "{}"))
@@ -80,6 +81,30 @@ def build_prompt(
         slack_channel_labels = {}
     image_results_dir = attachments_dir / "results" / "images" if attachments_dir else None
     artifact_results_dir = attachments_dir / "results" / "artifacts" if attachments_dir else None
+    artifact_instructions = ""
+    if output_manifest is not None:
+        artifact_instructions = f"""
+Generated file delivery:
+- When, and only when, the user explicitly asks you to create a file, save it
+  inside the workspace and then run
+  `{helper_command(skill_dir / "scripts" / "record_output_artifact.py")}`
+  with `--manifest {shlex.quote(str(output_manifest))}`,
+  `--workdir {shlex.quote(str(workdir))}`, and `--file` set to that output path.
+- Call the helper separately for every requested final deliverable, including
+  every file in a multi-file request. Never record supporting files or files
+  merely mentioned in the conversation. Any regular file type is supported.
+- By default, recording adds a host-local Open button but does not attach the
+  file to Slack. Add `--attach` only when the user explicitly asks to attach,
+  upload, send, return, or provide a downloadable copy of that file in Slack.
+  A request merely to create, save, edit, or update a file is not permission to
+  attach it. Apply the user's delivery instruction to every requested file.
+- Do not record anything if saving fails. If recording fails, say that the file
+  was saved but could not be made available through Tag. The Slack bridge
+  performs any requested upload after your run. Do not claim a file is attached
+  or downloadable until the bridge reports successful delivery.
+- Do not mention the manifest helper, its exit code, or manifest state; those
+  are internal transport details.
+"""
     canvas_instructions = f"""
 Canvas capability:
 - When the user asks to create a Canvas in this Slack channel, you may create
@@ -138,6 +163,7 @@ Available helper scripts:
 - {skill_dir / "scripts" / "mfs_cat.py"}
 - {skill_dir / "scripts" / "slack_post_message.py"}
 {canvas_instructions}
+{artifact_instructions}
 
 Local tools:
 - The backend may use the commands and skills installed in its environment, subject to
@@ -163,8 +189,9 @@ Slack thread context:
 Return only the final chat-ready answer.
 Do not add a Sources section by default. Include citations only when the user
 explicitly asks for sources/citations, or when a source-backed factual claim
-needs provenance. For command execution tasks, report the command result and
-stdout/stderr status; source citations are not needed.
+needs provenance. For commands the user explicitly asked you to run, report the
+result. Omit internal helper commands and empty stdout/stderr details; source
+citations are not needed.
 """.strip()
 
 
@@ -535,7 +562,7 @@ def run_codex_events(
     return last_code
 
 
-def codex_app_server_command(workdir: Path) -> list[str]:
+def codex_app_server_command(workdir: Path, *, fast_mode: bool = False) -> list[str]:
     """Build the installed CLI's stable stdio App Server command."""
     cmd = [
         "codex",
@@ -545,6 +572,12 @@ def codex_app_server_command(workdir: Path) -> list[str]:
         "shell_environment_policy.inherit=all",
     ]
     cmd.extend(codex_workspace_args(workdir))
+    cmd.extend([
+        "-c",
+        "features.fast_mode=true",
+        "-c",
+        f'service_tier="{"fast" if fast_mode else "default"}"',
+    ])
     return executable_command(cmd)
 
 
@@ -564,6 +597,7 @@ def run_codex_app_server_events(
     max_timeout: int | None = None,
     model: str | None = None,
     reasoning_effort: str | None = None,
+    fast_mode: bool = False,
     control_file: Path | None = None,
     run_id: str | None = None,
 ) -> int:
@@ -571,7 +605,7 @@ def run_codex_app_server_events(
     attempts = max(1, int(os.getenv("OPENTAG_BACKEND_ATTEMPTS", "3")))
     for attempt in range(1, attempts + 1):
         server = CodexAppServer(
-            codex_app_server_command(workdir),
+            codex_app_server_command(workdir, fast_mode=fast_mode),
             cwd=workdir,
             timeout=timeout,
             max_timeout=max_timeout,
@@ -765,6 +799,7 @@ def main() -> int:
     parser.add_argument("--channel-id", required=True)
     parser.add_argument("--thread-file", type=Path, required=True)
     parser.add_argument("--attachments-dir", type=Path)
+    parser.add_argument("--output-manifest", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--model", help="backend model override for this run")
     parser.add_argument(
         "--reasoning-effort",
@@ -813,6 +848,7 @@ def main() -> int:
         thread_text=read_text(args.thread_file),
         attachments_dir=args.attachments_dir.resolve() if args.attachments_dir else None,
         allowed_scopes=allowed_scopes,
+        output_manifest=args.output_manifest.resolve() if args.output_manifest else None,
     )
 
     try:
@@ -826,6 +862,7 @@ def main() -> int:
                         max_timeout=args.max_timeout,
                         model=args.model,
                         reasoning_effort=args.reasoning_effort,
+                        fast_mode=args.fast_mode == "on",
                         control_file=args.control_file,
                         run_id=args.run_id,
                     )

@@ -8,10 +8,6 @@ from urllib.parse import urlsplit
 
 SLACK_BRIDGE_ONLY_ENV = {
     "SLACK_APP_TOKEN",
-    "OPENTAG_RELAY_URL",
-    "OPENTAG_RELAY_TOKEN",
-    "OPENTAG_RELAY_APP_ID",
-    "OPENTAG_SLACK_CONNECTION",
     "SLACK_APP_ID",
     "SLACK_TEAM_ID",
     "SLACK_CHANNEL_ID",

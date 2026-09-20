@@ -1,20 +1,30 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
+import urllib.error
 import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
 from scripts.tag_install import (
     ADMIN_SKILL,
+    API_RELEASES,
+    FetchedRelease,
     LEGACY_ADMIN_SKILL,
+    ReleaseSelection,
+    _default_channel,
     command_owner,
+    download,
+    fetch_release,
     install,
+    resolve_channel,
+    resolve_version,
     unpack_release,
 )
 from scripts.tag_paths import (
@@ -29,6 +39,162 @@ from scripts.tag_migrate import legacy_config, migrate
 from scripts.opentag_setup import render_env
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def release_record(version: str, *, prerelease: bool, names: list[str] | None = None) -> dict:
+    names = names or []
+    return {
+        "tag_name": "v" + version,
+        "draft": False,
+        "prerelease": prerelease,
+        "assets": [
+            {"name": name, "browser_download_url": "https://downloads.example/" + name}
+            for name in names
+        ],
+    }
+
+
+class ReleaseResolutionTests(unittest.TestCase):
+    def test_repository_policy_defaults_bare_installs_to_alpha(self) -> None:
+        self.assertEqual(_default_channel(), "alpha")
+
+    def test_channels_select_the_newest_compatible_release(self) -> None:
+        releases = [
+            release_record("1.0.0", prerelease=False),
+            release_record("1.1.0-alpha.2", prerelease=True),
+            release_record("1.1.0-beta.1", prerelease=True),
+            {**release_record("9.0.0", prerelease=False), "draft": True},
+        ]
+        with patch("scripts.tag_install._json_download", return_value=releases):
+            self.assertEqual(resolve_channel("stable")["tag_name"], "v1.0.0")
+            self.assertEqual(resolve_channel("beta")["tag_name"], "v1.1.0-beta.1")
+            self.assertEqual(resolve_channel("alpha")["tag_name"], "v1.1.0-beta.1")
+
+    def test_channel_resolution_paginates_and_handles_no_stable_release(self) -> None:
+        first_page = [
+            {**release_record(f"0.0.{index}-alpha.1", prerelease=True), "draft": True}
+            for index in range(100)
+        ]
+        stable = release_record("1.0.0", prerelease=False)
+        with patch("scripts.tag_install._json_download", side_effect=[first_page, [stable]]) as request:
+            self.assertEqual(resolve_channel("stable")["tag_name"], "v1.0.0")
+            self.assertEqual(request.call_count, 2)
+        with patch(
+            "scripts.tag_install._json_download",
+            return_value=[release_record("1.1.0-alpha.1", prerelease=True)],
+        ):
+            with self.assertRaisesRegex(RuntimeError, "No published releases"):
+                resolve_channel("stable")
+
+    def test_exact_version_rejects_draft_and_release_type_mismatch(self) -> None:
+        beta = release_record("1.0.0-beta.1", prerelease=True)
+        with patch("scripts.tag_install._json_download", return_value=beta):
+            resolved, version, channel = resolve_version("v1.0.0-beta.1")
+        self.assertEqual(resolved, beta)
+        self.assertEqual((version, channel), ("1.0.0-beta.1", "beta"))
+
+        with patch(
+            "scripts.tag_install._json_download",
+            return_value={**release_record("1.0.0", prerelease=False), "draft": True},
+        ):
+            with self.assertRaisesRegex(ValueError, "still a draft"):
+                resolve_version("1.0.0")
+        with patch(
+            "scripts.tag_install._json_download",
+            return_value=release_record("1.0.0-beta.1", prerelease=False),
+        ):
+            with self.assertRaisesRegex(ValueError, "type does not match"):
+                resolve_version("1.0.0-beta.1")
+
+    def test_edge_requires_the_published_moving_prerelease(self) -> None:
+        edge = {"tag_name": "edge", "draft": False, "prerelease": True, "assets": []}
+        with patch("scripts.tag_install._json_download", return_value=edge):
+            self.assertEqual(resolve_channel("edge"), edge)
+        with patch(
+            "scripts.tag_install._json_download",
+            return_value={**edge, "prerelease": False},
+        ):
+            with self.assertRaisesRegex(ValueError, "not a published prerelease"):
+                resolve_channel("edge")
+
+    def test_fetch_rejects_missing_assets(self) -> None:
+        release = release_record("1.0.0", prerelease=False, names=["tag-1.0.0.zip"])
+        with tempfile.TemporaryDirectory() as temporary_directory, patch(
+            "scripts.tag_install.resolve_channel", return_value=release
+        ):
+            with self.assertRaisesRegex(ValueError, "SHA256SUMS"):
+                fetch_release(None, Path(temporary_directory), "stable")
+
+    def test_rate_limit_failure_is_actionable(self) -> None:
+        error = urllib.error.HTTPError(
+            API_RELEASES, 403, "rate limited", {"X-RateLimit-Remaining": "0"}, None
+        )
+        with patch("scripts.tag_install.urllib.request.urlopen", side_effect=error):
+            with self.assertRaisesRegex(RuntimeError, "rate limit exceeded"):
+                download(API_RELEASES)
+
+    def test_fetch_verifies_checksum_provenance_and_archive(self) -> None:
+        version = "1.2.0-alpha.1"
+        sha = "d" * 40
+        names = [f"tag-{version}.zip", "SHA256SUMS", "BUILD-PROVENANCE.json"]
+        release = release_record(version, prerelease=True, names=names)
+        release["target_commitish"] = sha
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            destination = Path(temporary_directory)
+            archive_path = destination / "fixture.zip"
+            with zipfile.ZipFile(archive_path, "w") as bundle:
+                bundle.writestr("VERSION", version + "\n")
+            archive = archive_path.read_bytes()
+            digest = hashlib.sha256(archive).hexdigest()
+            assets = {
+                "https://downloads.example/SHA256SUMS": f"{digest}  tag-{version}.zip\n".encode(),
+                "https://downloads.example/BUILD-PROVENANCE.json": json.dumps({
+                    "schema_version": 1,
+                    "channel": "release",
+                    "version": version,
+                    "commit_sha": sha,
+                    "source_ref": "refs/heads/main",
+                    "built_at": "2026-09-21T00:00:00Z",
+                    "archive": {"name": f"tag-{version}.zip", "sha256": digest},
+                }).encode(),
+                f"https://downloads.example/tag-{version}.zip": archive,
+            }
+            with patch("scripts.tag_install.resolve_channel", return_value=release), patch(
+                "scripts.tag_install.download", side_effect=lambda url: assets[url]
+            ):
+                fetched = fetch_release(None, destination / "download", "alpha")
+
+            self.assertIsInstance(fetched, FetchedRelease)
+            self.assertEqual(fetched.selection, ReleaseSelection("alpha", version, sha))
+            self.assertEqual((fetched.source / "VERSION").read_text().strip(), version)
+
+            release["target_commitish"] = "e" * 40
+            with patch("scripts.tag_install.resolve_channel", return_value=release), patch(
+                "scripts.tag_install.download", side_effect=lambda url: assets[url]
+            ):
+                with self.assertRaisesRegex(ValueError, "GitHub release target"):
+                    fetch_release(None, destination / "wrong-target", "alpha")
+            release["target_commitish"] = sha
+
+            valid_checksums = assets["https://downloads.example/SHA256SUMS"]
+            assets["https://downloads.example/SHA256SUMS"] = ("0" * 64 + f"  tag-{version}.zip\n").encode()
+            with patch("scripts.tag_install.resolve_channel", return_value=release), patch(
+                "scripts.tag_install.download", side_effect=lambda url: assets[url]
+            ):
+                with self.assertRaisesRegex(ValueError, "checksum verification failed"):
+                    fetch_release(None, destination / "bad-checksum", "alpha")
+            assets["https://downloads.example/SHA256SUMS"] = valid_checksums
+
+            bad_provenance = json.loads(assets["https://downloads.example/BUILD-PROVENANCE.json"])
+            bad_provenance["commit_sha"] = "not-a-sha"
+            assets["https://downloads.example/BUILD-PROVENANCE.json"] = json.dumps(
+                bad_provenance
+            ).encode()
+            with patch("scripts.tag_install.resolve_channel", return_value=release), patch(
+                "scripts.tag_install.download", side_effect=lambda url: assets[url]
+            ):
+                with self.assertRaisesRegex(ValueError, "invalid commit SHA"):
+                    fetch_release(None, destination / "invalid", "alpha")
 
 
 class TagHomeTests(unittest.TestCase):
@@ -50,6 +216,8 @@ class TagHomeTests(unittest.TestCase):
             skill = source / ".codex/skills/custom/SKILL.md"
             skill.parent.mkdir(parents=True)
             skill.write_text("custom")
+            source_codex_config = source / ".codex/config.toml"
+            source_codex_config.write_text('model_reasoning_effort = "high"\n')
             old = source / ".env"
             old.write_text(render_env({"OPENTAG_WORKDIR": str(source), "SLACK_BOT_TOKEN": "quote'and\nnewline"}))
             self.assertEqual(legacy_config(old)["SLACK_BOT_TOKEN"], "quote'and\nnewline")
@@ -57,6 +225,10 @@ class TagHomeTests(unittest.TestCase):
             self.assertEqual(json.loads((home / "config/settings.json").read_text())["OPENTAG_WORKDIR"], str(home / "workspace"))
             copied = home / "workspace/.agents/skills/custom/SKILL.md"
             self.assertEqual(copied.read_text(), "custom")
+            self.assertEqual(
+                (home / "workspace/.codex/config.toml").read_text(),
+                'model_reasoning_effort = "high"\n',
+            )
             copied.write_text("edited")
             migrate(source, home)
             self.assertEqual(copied.read_text(), "edited")
@@ -237,6 +409,46 @@ class TagHomeTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     install(ROOT, home, bin_dir)
             self.assertEqual((home / "current.json").read_text(), previous)
+
+    def test_remote_install_persists_channel_version_and_commit(self):
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp) / "home"
+            version = (ROOT / "VERSION").read_text().strip()
+            selection = ReleaseSelection("alpha", version, "a" * 40)
+
+            install(
+                ROOT, home, Path(temp) / "bin", dependencies=False,
+                selection=selection,
+            )
+            current = json.loads((home / "current.json").read_text())
+
+            install(
+                ROOT, home, Path(temp) / "bin", dependencies=False,
+                selection=ReleaseSelection("edge", version, "b" * 40),
+            )
+            previous = json.loads((home / "previous.json").read_text())
+            upgraded = json.loads((home / "current.json").read_text())
+
+        self.assertEqual(previous["channel"], "alpha")
+        self.assertEqual(current["channel"], "alpha")
+        self.assertEqual(current["installed_version"], version)
+        self.assertEqual(current["installed_commit"], "a" * 40)
+        self.assertTrue(current["checked_at"].endswith("Z"))
+        self.assertEqual(upgraded["channel"], "edge")
+        self.assertEqual(upgraded["installed_commit"], "b" * 40)
+
+    def test_dependency_install_falls_back_to_venv_and_pip_without_uv(self):
+        with tempfile.TemporaryDirectory() as temp, patch(
+            "scripts.tag_install.shutil.which", return_value=None
+        ), patch(
+            "scripts.tag_install.subprocess.run",
+            return_value=subprocess.CompletedProcess([], 0, "", ""),
+        ) as run:
+            install(ROOT, Path(temp) / "home", Path(temp) / "bin")
+
+        commands = [call.args[0] for call in run.call_args_list]
+        self.assertEqual(commands[0][1:3], ["-m", "venv"])
+        self.assertEqual(commands[1][1:4], ["-m", "pip", "install"])
 
     def test_background_lifecycle_and_stale_pid_safety(self):
         with tempfile.TemporaryDirectory() as temp:

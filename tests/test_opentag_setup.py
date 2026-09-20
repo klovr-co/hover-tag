@@ -24,6 +24,17 @@ from scripts.opentag_setup import (
 
 
 class OpenTagSetupTests(unittest.TestCase):
+    def test_uv_is_optional_when_managed_runtime_and_backend_are_available(self):
+        def executable(command: str) -> str | None:
+            return "/usr/local/bin/codex" if command == "codex" else None
+
+        with patch.object(opentag_setup.shutil, "which", side_effect=executable), patch.object(
+            opentag_setup.Path, "is_file", return_value=True
+        ), patch.object(opentag_setup.ui, "message") as message:
+            self.assertTrue(opentag_setup.check_prerequisites("codex"))
+
+        self.assertTrue(any("optional" in call.args[0] for call in message.call_args_list))
+
     def test_app_menu_does_not_offer_saved_or_backup_identities(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
