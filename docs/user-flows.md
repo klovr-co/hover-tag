@@ -327,7 +327,8 @@ sequenceDiagram
     T->>S: Download permitted text and image files
     T->>F: Store bounded images for this invocation
     T->>B: Send normalized text, markers, and file paths
-    B-->>T: Return grounded result or explain unavailable input
+    B-->>T: Return grounded result and declare requested output files
+    T->>S: Upload validated requested outputs to this thread
     T->>F: Remove invocation files
     T-->>S: Post result in the same thread
 ```
@@ -685,6 +686,7 @@ isolated chat location. Skip an optional step when its dependency is not set up.
 | Explicit channel restriction | Implemented | Setup requires one or more joined channel IDs and the bridge fails closed when none are configured. |
 | Thread text and text attachments | Implemented | Content is bounded and treated as untrusted. |
 | Image attachment understanding | Implemented bridge path | Images up to 15 MB are downloaded temporarily; successful interpretation still depends on the selected backend/model. |
+| Generated-file delivery | Implemented | Only explicitly declared regular files inside the workspace are uploaded to the invoking thread and returned as private Slack file links; each file is limited to 15 MB. |
 | Generated-image upload to Slack | Implemented bridge path | The backend saves up to 10 final PNG, JPEG, GIF, or WebP files in the invocation's dedicated result directory; the bridge validates files up to 15 MB and uploads them to the requesting thread. |
 | Slack loading state and answers | Implemented | Claude text can stream; Codex currently posts the complete final answer. |
 | Long-answer splitting | Implemented | Results remain in the invoking thread. |
