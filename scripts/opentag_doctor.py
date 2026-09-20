@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import importlib.util
 import io
 import json
 import os
@@ -15,9 +16,12 @@ from pathlib import Path
 from typing import Any
 
 CHECK_RESULTS: list[dict[str, Any]] | None = None
+RUNTIME_DEPENDENCIES = ("mfs_server", "psutil", "slack_bolt")
 
 
 def recovery_hint(label: str) -> str:
+    if label == "Tag runtime dependencies":
+        return "Re-run the Tag installer; for a source checkout, run ./install.sh --dependencies-only"
     if label.startswith("MFS"):
         return "Check tag config show, start MFS, and index the configured sources before retrying"
     if label.startswith("Slack") or label.startswith("SLACK_"):
@@ -48,6 +52,16 @@ def print_check(ok: bool, label: str, detail: str = "") -> None:
     status = "ok" if ok else "fail"
     suffix = f" - {detail}" if detail else ""
     print(f"[{status}] {label}{suffix}")
+
+
+def check_runtime_dependencies() -> bool:
+    missing = [name for name in RUNTIME_DEPENDENCIES if importlib.util.find_spec(name) is None]
+    print_check(
+        not missing,
+        "Tag runtime dependencies",
+        "available" if not missing else "missing: " + ", ".join(missing),
+    )
+    return not missing
 
 
 def request_json(
@@ -210,6 +224,7 @@ def check_offline(root: Path) -> bool:
     backend = env("OPENTAG_BACKEND")
     workspace = Path(env("OPENTAG_WORKDIR")).expanduser()
     scopes = [scope.strip() for scope in env("MFS_ALLOWED_SCOPES").split(",") if scope.strip()]
+    runtime_ok = check_runtime_dependencies()
     checks = {
         "supported transport": (env("OPENTAG_TRANSPORT") or "slack") == "slack",
         "supported backend": backend in {"codex", "claude"},
@@ -239,7 +254,7 @@ def check_offline(root: Path) -> bool:
     print_check(metadata_ok, "release metadata")
     for error in metadata_errors:
         print(f"       {error}")
-    return all(checks.values()) and metadata_ok
+    return runtime_ok and all(checks.values()) and metadata_ok
 
 
 def run_checks(offline: bool, channel_ids: list[str] | None) -> int:
@@ -249,7 +264,12 @@ def run_checks(offline: bool, channel_ids: list[str] | None) -> int:
         print_check(False, "OPENTAG_TRANSPORT", "must be slack")
         return 1
     scopes = [scope.strip() for scope in env("MFS_ALLOWED_SCOPES").split(",") if scope.strip()]
-    checks = [check_env(), check_mfs(scopes) if scopes else False, check_backend()]
+    checks = [
+        check_runtime_dependencies(),
+        check_env(),
+        check_mfs(scopes) if scopes else False,
+        check_backend(),
+    ]
     configured = channel_ids or []
     checks.extend(check_slack(channel_id) for channel_id in configured)
     if not configured:

@@ -156,6 +156,9 @@ run `tag` for status and next steps, or `tag setup` for resumable setup. Use `ta
 to back up the old setup and redo onboarding after confirmation. Windows users
 run `./install.ps1` from PowerShell instead. See [installation and TAG home](docs/installation.md)
 for platform paths, download installers, skills, MCP, and migration.
+Contributors running directly from a checkout must first run
+`./install.sh --dependencies-only`; `./tag` deliberately does not fall back to
+system Python or install dependencies during startup.
 `tag setup` owns the Slack journey. It reuses the installed Slack CLI, offers
 the CLI's real login flow when the sandbox workspace is not authorized, and
 then lets you create a manifest-based app or link an existing app by App ID.
@@ -192,7 +195,17 @@ Start Tag and inspect it with:
 tag start
 tag status
 tag logs
+tag logs --follow
 ```
+
+Prefer the dedicated `tag restart` command over chaining stop and start so the
+terminal presents one coherent operation. Use `tag doctor` for deeper
+diagnostics after the quick status and recent logs.
+
+When developing from a prepared source checkout, use `./tag dev`. It watches
+`scripts/**/*.py`, reloads only the Slack bridge after changes, and streams its
+output in the foreground. Press Ctrl-C to stop the development bridge; MFS is
+left running. This command is intentionally unavailable from managed releases.
 
 Mention `@OpenMax` in the sandbox channel you configured:
 
@@ -208,11 +221,14 @@ shows the native loading state and then posts its completed answer because the
 Codex CLI currently emits final-message events. Set
 `OPENTAG_SLACK_STREAMING=0` to retain buffered replies for troubleshooting.
 
-Codex replies also include a **Change model & thinking** button. Its modal saves
-model and reasoning choices for that Slack thread and applies them to the next
-mention. Operators can restrict the selectable models with
-`OPENTAG_CODEX_MODELS` and the reasoning levels with
-`OPENTAG_CODEX_REASONING_EFFORTS`.
+Codex replies also include a compact **Configure** button beneath the answer. It
+opens a modal that saves model, native Codex reasoning-level,
+and Fast Mode choices for that Slack user across channels and threads.
+The modal's **Reset to default** button restores every control before saving.
+Fast Mode is independent of
+reasoning level and uses increased usage for faster responses. Operators can
+restrict the selectable models with `OPENTAG_CODEX_MODELS` and the reasoning
+levels with `OPENTAG_CODEX_REASONING_EFFORTS`.
 
 Stop TAG-managed processes with `tag stop`. Independently started MFS servers
 are left running.

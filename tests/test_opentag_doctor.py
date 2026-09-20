@@ -5,10 +5,19 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from scripts import opentag_doctor
 from scripts.opentag_doctor import check_offline
 
 
 class OpenTagDoctorTests(unittest.TestCase):
+    def test_runtime_check_lists_missing_dependencies(self) -> None:
+        with patch.object(
+            opentag_doctor.importlib.util,
+            "find_spec",
+            side_effect=lambda name: None if name == "slack_bolt" else object(),
+        ):
+            self.assertFalse(opentag_doctor.check_runtime_dependencies())
+
     def test_offline_check_needs_no_credentials_or_network(self) -> None:
         root = Path(__file__).resolve().parents[1]
         environment = {

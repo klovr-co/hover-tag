@@ -98,6 +98,8 @@ class OpenTagAgentPromptTests(unittest.TestCase):
         self.assertEqual(0, code)
         self.assertEqual("done", output)
         self.assertIn("--approve-for-me", command)
+        self.assertIn("features.fast_mode=true", command)
+        self.assertIn('service_tier="default"', command)
         self.assertNotIn("--dangerously-bypass-approvals-and-sandbox", command)
 
 
@@ -187,7 +189,7 @@ class BackendStreamEventTests(unittest.TestCase):
         self.assertIn("--include-partial-messages", claude)
         self.assertNotIn("prompt", claude)
 
-    def test_codex_stream_command_applies_model_and_reasoning_overrides(self) -> None:
+    def test_codex_stream_command_applies_model_reasoning_and_fast_overrides(self) -> None:
         command = opentag_agent.codex_stream_command(
             "prompt",
             skill_dir=Path("/skill"),
@@ -196,7 +198,23 @@ class BackendStreamEventTests(unittest.TestCase):
             output_path=Path("/tmp/final.txt"),
             model="gpt-example",
             reasoning_effort="high",
+            fast_mode=True,
         )
 
         self.assertIn("gpt-example", command)
         self.assertIn('model_reasoning_effort="high"', command)
+        self.assertIn("features.fast_mode=true", command)
+        self.assertIn('service_tier="fast"', command)
+
+    def test_codex_stream_command_explicitly_turns_fast_mode_off(self) -> None:
+        command = opentag_agent.codex_stream_command(
+            "prompt",
+            skill_dir=Path("/skill"),
+            workdir=Path("/work"),
+            attachments_dir=None,
+            output_path=Path("/tmp/final.txt"),
+            fast_mode=False,
+        )
+
+        self.assertIn("features.fast_mode=true", command)
+        self.assertIn('service_tier="default"', command)

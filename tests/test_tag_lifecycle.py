@@ -70,14 +70,70 @@ class TagLifecycleTests(unittest.TestCase):
         self.assertIn("Not connected or unverified", output.getvalue())
 
     def test_failed_start_removes_process_identity(self) -> None:
-        with self.assertRaisesRegex(RuntimeError, "exited during startup"):
+        with self.assertRaisesRegex(RuntimeError, "fixture dependency exploded"):
             tag_cli.start_process(
                 self.home,
                 "fixture",
-                [sys.executable, "-c", "raise SystemExit(7)"],
+                [
+                    sys.executable,
+                    "-c",
+                    "import sys; print('fixture dependency exploded', file=sys.stderr); raise SystemExit(7)",
+                ],
             )
 
         self.assertFalse((self.home / "state/fixture.json").exists())
+
+    def test_failed_start_redacts_tokens_from_reported_log(self) -> None:
+        token = "xox" + "b-this-is-a-secret-token"
+        with self.assertRaises(RuntimeError) as raised:
+            tag_cli.start_process(
+                self.home,
+                "fixture",
+                [sys.executable, "-c", f"print('{token}'); raise SystemExit(7)"],
+            )
+
+        self.assertNotIn(token, str(raised.exception))
+        self.assertIn("<redacted>", str(raised.exception))
+
+    def test_legacy_slack_readiness_requires_a_fresh_connected_heartbeat(self) -> None:
+        path = self.home / "runtime/slack-connected.json"
+        path.parent.mkdir()
+        path.write_text(
+            json.dumps({"connected": True, "time": time.time()}), encoding="utf-8"
+        )
+        self.assertTrue(tag_cli.legacy_slack_ready(self.home))
+
+        path.write_text(
+            json.dumps({"connected": True, "time": time.time() - 60}),
+            encoding="utf-8",
+        )
+        self.assertFalse(tag_cli.legacy_slack_ready(self.home))
+
+    def test_start_rejects_an_incomplete_runtime_before_service_checks(self) -> None:
+        with patch.dict(os.environ, {"TAG_HOME": str(self.home)}, clear=False), patch.object(
+            sys, "argv", ["tag", "start"]
+        ), patch.object(
+            tag_cli, "missing_runtime_dependencies", return_value=("slack_bolt",)
+        ), patch.object(tag_cli, "healthy") as healthy:
+            with self.assertRaisesRegex(RuntimeError, "./install.sh --dependencies-only"):
+                tag_cli.main()
+
+        healthy.assert_not_called()
+
+    def test_paths_defaults_to_a_readable_screen_and_keeps_json_for_automation(self) -> None:
+        with patch.dict(os.environ, {"TAG_HOME": str(self.home)}, clear=False), patch.object(
+            sys, "argv", ["tag", "paths"]
+        ), redirect_stdout(StringIO()) as output:
+            self.assertEqual(tag_cli.main(), 0)
+        self.assertIn("tag  /  Paths", output.getvalue())
+        self.assertIn("tag paths --json", output.getvalue())
+        self.assertNotIn('"workspace":', output.getvalue())
+
+        with patch.dict(os.environ, {"TAG_HOME": str(self.home)}, clear=False), patch.object(
+            sys, "argv", ["tag", "paths", "--json"]
+        ), redirect_stdout(StringIO()) as output:
+            self.assertEqual(tag_cli.main(), 0)
+        self.assertEqual(json.loads(output.getvalue())["workspace"], str(self.home / "workspace"))
 
     def test_invitation_reconciliation_requires_a_registered_connector(self) -> None:
         status = self.home / "state/slack-memory.json"

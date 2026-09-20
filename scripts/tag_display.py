@@ -4,6 +4,7 @@ import sys
 import shutil
 import subprocess
 import textwrap
+from pathlib import Path
 
 try:
     from tag_mascot import PALETTE, PIXELS
@@ -86,6 +87,13 @@ def paragraph(text, code="", *, indent="  "):
         print(indent + styled(line, code) if code else indent + line)
 
 
+def short_path(value):
+    """Use a stable home-relative path when it is easier to scan."""
+    path = str(value)
+    home = str(Path.home())
+    return "~" + path[len(home):] if path == home or path.startswith(home + os.sep) else path
+
+
 def rule():
     print("  " + styled("─" * content_width(), MUTED))
 
@@ -100,13 +108,117 @@ def header(section, detail=""):
     rule()
     if detail:
         paragraph(detail, MUTED)
-        print()
 
 
 def status_row(name, value, good):
     marker = "●" if good else "!"
     code = SUCCESS if good else WARNING
-    paragraph(f"{marker}  {name:<9} {value}", code, indent="    ")
+    paragraph(f"{marker}  {name:<14} {value}", code, indent="    ")
+
+
+def section(label):
+    print()
+    paragraph(label.upper(), MUTED)
+
+
+def info_row(name, value, *, good=None):
+    """Render one aligned row for lifecycle and informational screens."""
+    if good is None:
+        if len(f"{name:<12} {value}") > content_width() - 4:
+            paragraph(name, MUTED, indent="    ")
+            paragraph(value, indent="      ")
+            return
+        paragraph(f"{name:<12} {value}", indent="    ")
+        return
+    marker = "✓" if good else "!"
+    code = SUCCESS if good else WARNING
+    paragraph(f"{marker}  {name:<14} {value}", code, indent="    ")
+
+
+def next_action(label, command, *, detail=""):
+    print()
+    rule()
+    paragraph(label, MUTED)
+    paragraph(f"› {command}", "1;" + ACCENT)
+    if detail:
+        paragraph(detail, MUTED)
+    print()
+
+
+def completion(title, detail="", *, next_label="", next_command=""):
+    print()
+    rule()
+    paragraph(f"✓  {title}", "1;" + SUCCESS)
+    if detail:
+        paragraph(detail, MUTED)
+    if next_command:
+        print()
+        paragraph(next_label or "Next step", MUTED)
+        paragraph(f"› {next_command}", "1;" + ACCENT)
+    print()
+
+
+def failure(title, detail, *, next_command=""):
+    header(title)
+    print()
+    paragraph("!  Needs attention", "1;" + WARNING)
+    paragraph(detail, MUTED)
+    if next_command:
+        next_action("Recommended next step", next_command)
+    else:
+        print()
+
+
+def doctor_summary(report, *, title="Doctor"):
+    """Collapse low-level probes into the product concepts operators recognize."""
+    checks = report.get("checks", [])
+
+    def matching(predicate):
+        return [item for item in checks if predicate(str(item.get("check", "")))]
+
+    groups = [
+        ("Runtime", matching(lambda label: label in {
+            "Tag runtime dependencies", "Tag command", "installer", "release metadata"
+        })),
+        ("Configuration", matching(lambda label: label.startswith(("SLACK_", "MFS_TOKEN")) or label in {
+            "supported transport", "agent workspace", "Slack app manifest", "Slack allowed users"
+        })),
+        ("Memory", matching(lambda label: label.startswith("MFS") and not label.startswith("MFS_TOKEN"))),
+        ("Agent", matching(lambda label: label.startswith("backend") or label in {"OPENTAG_BACKEND", "supported backend"})),
+        ("Slack", matching(lambda label: label.startswith("Slack") and label not in {"Slack app manifest", "Slack allowed users"})),
+    ]
+    header(title, "Verifying the runtime, connections, and permissions Tag needs.")
+    section("Readiness")
+    for name, items in groups:
+        if not items:
+            continue
+        good = all(bool(item.get("ok")) for item in items)
+        if name == "Slack":
+            channels = sum(
+                1
+                for item in items
+                if str(item.get("check", "")).startswith("Slack channel ")
+                and not str(item.get("check", "")).startswith("Slack channel history")
+            )
+            value = f"{channels} channel{'s' if channels != 1 else ''} accessible" if good else "Connection or channel access failed"
+        elif name == "Memory":
+            if report.get("offline"):
+                value = "Configuration valid" if good else "Configuration needs attention"
+            else:
+                value = "Healthy and scopes accessible" if good else "Server or scope access failed"
+        else:
+            value = "Ready" if good else "Needs attention"
+        info_row(name, value, good=good)
+
+    failed = [item for item in checks if not item.get("ok")]
+    if failed:
+        section("Attention")
+        for item in failed[:5]:
+            info_row(str(item.get("check", "Check")), "Failed", good=False)
+        action = failed[0].get("next_action") or "Run tag inspect --json"
+        next_action("Recommended next step", str(action))
+    else:
+        completion("All checks passed", "Tag is ready to start or continue running.")
 
 
 def backend_status(backend="codex", *, search_path=None):
