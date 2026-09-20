@@ -297,7 +297,7 @@ Run Tag with dedicated, least-privilege credentials in an isolated environment.
 The bridge app normally needs these bot scopes:
 
 - `app_mentions:read`
-- `users:read` (verify the app identity during hosted registration)
+- `users:read` (verify app identity and cross-channel caller visibility)
 - `assistant:write`
 - `chat:write`
 - `channels:read` and `channels:history`
@@ -347,6 +347,37 @@ control. Tag consumes indexed sources; it does not silently add new ones.
 The scope helper rejects reads and directory listings outside the configured
 roots. The underlying connector credentials and source allowlists remain an
 additional boundary.
+
+### Permission-aware Slack history search
+
+Slack history stays isolated to the channel that invoked Tag by default. A
+normal question, including one about a broad topic, receives exactly that
+channel's indexed scope. An authorized caller can expand the search explicitly:
+
+- `search #support and #engineering for the rollout decision`
+- `look across Slack for earlier reports of this error`
+- `check all channels I can access for the customer name`
+
+Tag resolves channel names to stable Slack channel IDs before starting Codex or
+Claude. The eligible set is the intersection of the installation's workspace,
+operator-approved channels, channel-specific MFS scopes, and channels whose
+visibility Tag can currently prove for the caller. Private channels and channels
+used by restricted or guest users require live membership proof. Archived,
+Slack Connect/shared, stale, unindexed, inaccessible, or API-unverifiable
+channels are omitted. If the request or a name is ambiguous, Tag asks for
+clarification and does not start a broader search. Typo suggestions can disclose
+only channels already proven eligible.
+
+Search results identify their source channel. Channel names are display
+metadata; authorization continues to use the stable ID, so a rename does not
+change the grant. Each installation accepts scopes only from its configured
+Slack workspace authority, preventing scopes from another deployed app or
+workspace from joining the search.
+
+This feature strengthens Tag's normal helper guardrails but does not change the
+[credential boundary](docs/adr/0001-credential-boundary.md): the local backend
+still inherits credentials in a trusted sandbox. The first implementation uses
+a backend-neutral Python policy module and CLI adapter; it does not add MCP.
 
 See [Memory](references/memory.md) for the retrieval model and the
 [MFS connector documentation](https://github.com/zilliztech/mfs/tree/main/docs/connectors/)

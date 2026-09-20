@@ -13,8 +13,19 @@ scratch. The bridge is intentionally thin. It only:
 5. Optionally streams normalized answer deltas, or posts the final answer when
    the selected backend provides only a completed response.
 
-The adapter does not answer questions itself. It passes the thread, channel id,
-and allowed MFS scopes to a fresh CLI agent.
+The adapter does not answer task questions itself. It passes the thread,
+channel id, and allowed MFS scopes to a fresh CLI agent. It does answer scope
+clarifications before backend startup, because scope expansion is a bridge-owned
+authorization decision rather than model behavior.
+
+By default, the bridge narrows Slack memory to the invoking channel exactly as
+before. For an explicit named-channel or all-permitted-channel search,
+`scripts/slack_search_scope.py` resolves current Slack names to IDs and computes
+the intersection of the installation workspace, `SLACK_CHANNEL_IDS`, indexed
+channel scopes, and caller visibility. Both Codex and Claude receive that same
+pre-authorized result. Ambiguous requests receive no MFS scopes and no backend
+run. The module also provides a thin JSON CLI for diagnostics and future
+adapters; policy must not be reimplemented in a prompt or adapter.
 
 The Slack app token and bot token are only for receiving invocations, reading
 the current thread, and posting replies. `tag setup` separately configures an MFS
@@ -186,6 +197,21 @@ fresh backend task, while replies reuse only that DM thread's bounded context
 
 The bridge does not need a model API key. The selected CLI backend handles model
 auth and tool execution.
+
+### Cross-channel failure behavior
+
+- Slack user or channel lookup failure denies the affected expansion.
+- Private channels require caller membership. Restricted and guest users require
+  membership for public channels too; pagination is followed to a definitive
+  result.
+- Shared, archived, deleted, unindexed, unapproved, or wrong-workspace channels
+  never enter the backend scope.
+- An unavailable requested name is reported generically. Suggestions are drawn
+  only from channels whose access was already proven.
+- MFS read or search failures remain ordinary retrieval failures and never cause
+  a retry with a wider scope.
+- Channel names in results are refreshed display metadata. IDs embedded in MFS
+  scopes remain the authorization key across renames.
 
 Optional:
 

@@ -50,7 +50,11 @@ the behavior contract for the fresh CLI agent launched by the bridge.
    summarize verification.
 7. If the deployment includes indexed Slack history or other permitted sources
    in `MFS_ALLOWED_SCOPES`, use those as retrievable context.
-8. Return only the final Slack-ready answer.
+8. An explicit named-channel or all-permitted-channel request may provide more
+   than one authorized Slack channel scope. Use only those scopes and preserve
+   the source-channel attribution printed by `mfs_search.py`. If the bridge asks
+   the user to clarify a scope, no backend is started.
+9. Return only the final Slack-ready answer.
 
 When a Slack user explicitly asks for a message to be posted, sent, or shared
 in the current channel, use the channel-post helper supplied in the runtime

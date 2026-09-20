@@ -27,11 +27,13 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 try:
     from .opentag_process_env import backend_environment
     from .slack_mrkdwn import to_mrkdwn
+    from .slack_search_scope import ScopePlan, plan_search_scopes
     from .tag_paths import tag_temp_dir
     from . import slack_channels
 except ImportError:  # Direct script execution does not create a package context.
     from opentag_process_env import backend_environment
     from slack_mrkdwn import to_mrkdwn
+    from slack_search_scope import ScopePlan, plan_search_scopes
     from tag_paths import tag_temp_dir
     import slack_channels
 
@@ -1416,6 +1418,7 @@ def run_backend(
     reasoning_effort: str | None = None,
     fast_mode: bool = False,
     max_timeout: int | None = None,
+    scope_plan: ScopePlan | None = None,
 ) -> tuple[str, bool]:
     if max_timeout is None:
         max_timeout = int(os.getenv("OPENTAG_MAX_TIMEOUT_SECONDS", "3600"))
@@ -1459,6 +1462,8 @@ def run_backend(
             transport="slack",
             conversation_id=channel,
             caller_id=caller_id,
+            authorized_scopes=scope_plan.allowed_scopes if scope_plan else None,
+            channel_labels=json.dumps(scope_plan.channel_labels, sort_keys=True) if scope_plan else None,
         )
         result = subprocess.run(
             cmd,
@@ -1501,6 +1506,7 @@ def run_backend_events(
     on_status: Callable[[str], None] | None = None,
     fast_mode: bool = False,
     max_timeout: int | None = None,
+    scope_plan: ScopePlan | None = None,
 ) -> tuple[str, bool]:
     """Consume normalized lifecycle events and forward only final-answer text."""
     if max_timeout is None:
@@ -1551,6 +1557,8 @@ def run_backend_events(
         transport="slack",
         conversation_id=channel,
         caller_id=caller_id,
+        authorized_scopes=scope_plan.allowed_scopes if scope_plan else None,
+        channel_labels=json.dumps(scope_plan.channel_labels, sort_keys=True) if scope_plan else None,
     )
     try:
         process = subprocess.Popen(
@@ -2238,6 +2246,33 @@ def create_app(
             return
         team = body.get("team_id") or event.get("team") or ""
         question = strip_mention(event.get("text", ""))
+        configured_team = os.getenv("SLACK_TEAM_ID", "").strip()
+        policy_team = team if not configured_team or configured_team == team else ""
+        configured_channels = os.getenv("SLACK_CHANNEL_IDS", "").strip()
+        if not configured_channels:
+            configured_channels = os.getenv("SLACK_CHANNEL_ID", "").strip()
+        scope_plan = plan_search_scopes(
+            request_text=question,
+            current_channel_id=channel,
+            caller_id=user_id,
+            team_id=policy_team,
+            configured_channels=configured_channels,
+            allowed_scopes=os.getenv("MFS_ALLOWED_SCOPES", ""),
+            client=client,
+        )
+        if scope_plan.clarification:
+            client.chat_postMessage(
+                channel=channel,
+                thread_ts=thread_ts,
+                text=scope_plan.clarification,
+            )
+            return
+        if scope_plan.notice:
+            client.chat_postMessage(
+                channel=channel,
+                thread_ts=thread_ts,
+                text=scope_plan.notice,
+            )
         agent_settings = normalize_settings(
             settings_store.get(team, user_id),
             models,
@@ -2298,6 +2333,7 @@ def create_app(
                         on_status=indicator.status,
                         fast_mode=agent_settings.fast_mode,
                         max_timeout=max_timeout,
+                        scope_plan=scope_plan,
                     )
                 else:
                     answer, succeeded = run_backend(
@@ -2312,6 +2348,7 @@ def create_app(
                         reasoning_effort=agent_settings.reasoning_effort,
                         fast_mode=agent_settings.fast_mode,
                         max_timeout=max_timeout,
+                        scope_plan=scope_plan,
                     )
                 indicator.clear()
                 if succeeded:

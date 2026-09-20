@@ -74,6 +74,10 @@ def build_prompt(
     attachments_dir: Path | None,
     allowed_scopes: str,
 ) -> str:
+    try:
+        slack_channel_labels = json.loads(os.getenv("OPENTAG_SLACK_CHANNEL_LABELS", "{}"))
+    except (TypeError, json.JSONDecodeError):
+        slack_channel_labels = {}
     image_results_dir = attachments_dir / "results" / "images" if attachments_dir else None
     artifact_results_dir = attachments_dir / "results" / "artifacts" if attachments_dir else None
     canvas_instructions = f"""
@@ -124,6 +128,7 @@ Runtime context:
 - Conversation id: {channel_id}
 - Workspace/repo root: {workdir}
 - Allowed MFS scopes: {allowed_scopes}
+- Authorized Slack channel labels: {json.dumps(slack_channel_labels, ensure_ascii=False, sort_keys=True)}
 - MFS URL: {os.getenv("MFS_URL", "http://127.0.0.1:13619")}
 - Slack image attachments directory: {attachments_dir or "(none)"}
 
@@ -140,6 +145,8 @@ Local tools:
 - Each tool's own credentials and OAuth grants determine what it can do; Open Tag does
   not add per-tool feature flags or caller allowlists.
 - Do not expose tokens or other credentials.
+- When multiple Slack channel scopes are present, search only through the MFS
+  helpers above and identify each result's channel using the helper output.
 
 Slack image attachments (only when the transport is Slack):
 - Attached images, when present, are stored in the attachment directory above.

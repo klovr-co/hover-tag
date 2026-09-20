@@ -8,6 +8,7 @@ Start with `./tag doctor`, then use the first failed check below.
 | MFS health fails | Nothing is listening at `MFS_URL` | Run `./tag start`; inspect `./tag logs` and `~/.mfs/server.log`. |
 | MFS status has no connectors | MFS has no indexed source | Add a source with MFS, then include its exact root in `MFS_ALLOWED_SCOPES`. |
 | MFS scope fails | The scope is absent, outside policy, or its connector credential is unavailable | Compare the exact URI with `mfs ls`; restart MFS after exporting credentials referenced by connector configuration. |
+| Cross-channel search asks for clarification | The wording is ambiguous, a channel name is inexact, or Tag cannot prove every requested channel | Name channels explicitly (for example, `search #support and #engineering`) or say `search all channels I can access`. Check bot membership, caller membership for private/guest access, indexing, and Slack connectivity. Tag will not broaden on failure. |
 | Slack app token fails | Socket Mode cannot connect | Create an `xapp-` app-level token with `connections:write`. |
 | Slack bot token fails | Web API calls cannot authenticate | Reinstall the Slack app and rerun `tag setup`; enter the `xoxb-` token only in its hidden prompt. |
 | Slack allowed users fails | No caller is authorized, so the bridge fails closed | Copy the owner's Slack member ID and set it in `SLACK_ALLOWED_USER_IDS`. |
