@@ -555,7 +555,7 @@ def run_codex_events(
     return last_code
 
 
-def codex_app_server_command(workdir: Path) -> list[str]:
+def codex_app_server_command(workdir: Path, *, fast_mode: bool = False) -> list[str]:
     """Build the installed CLI's stable stdio App Server command."""
     cmd = [
         "codex",
@@ -565,6 +565,12 @@ def codex_app_server_command(workdir: Path) -> list[str]:
         "shell_environment_policy.inherit=all",
     ]
     cmd.extend(codex_workspace_args(workdir))
+    cmd.extend([
+        "-c",
+        "features.fast_mode=true",
+        "-c",
+        f'service_tier="{"fast" if fast_mode else "default"}"',
+    ])
     return executable_command(cmd)
 
 
@@ -584,6 +590,7 @@ def run_codex_app_server_events(
     max_timeout: int | None = None,
     model: str | None = None,
     reasoning_effort: str | None = None,
+    fast_mode: bool = False,
     control_file: Path | None = None,
     run_id: str | None = None,
 ) -> int:
@@ -591,7 +598,7 @@ def run_codex_app_server_events(
     attempts = max(1, int(os.getenv("OPENTAG_BACKEND_ATTEMPTS", "3")))
     for attempt in range(1, attempts + 1):
         server = CodexAppServer(
-            codex_app_server_command(workdir),
+            codex_app_server_command(workdir, fast_mode=fast_mode),
             cwd=workdir,
             timeout=timeout,
             max_timeout=max_timeout,
@@ -848,6 +855,7 @@ def main() -> int:
                         max_timeout=args.max_timeout,
                         model=args.model,
                         reasoning_effort=args.reasoning_effort,
+                        fast_mode=args.fast_mode == "on",
                         control_file=args.control_file,
                         run_id=args.run_id,
                     )

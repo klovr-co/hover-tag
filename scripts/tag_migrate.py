@@ -67,7 +67,15 @@ def migrate(source: Path, home: Path) -> None:
         original, target = source / relative, home / "workspace" / relative
         if original.is_file():
             # The initializer's comment-only placeholder contains no user settings.
-            placeholder = target.exists() and target.read_text(encoding="utf-8") == "# TAG-only Codex MCP servers go here: [mcp_servers.NAME]\n"
+            placeholders = {
+                "# TAG-only Codex MCP servers go here: [mcp_servers.NAME]\n",
+                "# TAG-only Codex defaults and MCP servers go here.\n"
+                "# model = \"gpt-example\"\n"
+                "# model_reasoning_effort = \"high\"\n"
+                "# service_tier = \"default\"\n"
+                "# [mcp_servers.NAME]\n",
+            }
+            placeholder = target.exists() and target.read_text(encoding="utf-8") in placeholders
             if not target.exists() or placeholder:
                 shutil.copy2(original, target)
                 if os.name != "nt":
