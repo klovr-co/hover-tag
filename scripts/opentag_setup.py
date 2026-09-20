@@ -79,6 +79,7 @@ REQUIRED_APP_SETTINGS = {
     "replies": "chat:write",
     "canvas writing": "canvases:write",
     "file access": "files:read",
+    "file delivery": "files:write",
     "direct-message event": "message.im",
     "direct-message history": "im:history",
 }
