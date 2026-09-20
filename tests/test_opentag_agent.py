@@ -78,11 +78,28 @@ class OpenTagAgentPromptTests(unittest.TestCase):
         self.assertIn("new top-level channel message", prompt)
         self.assertIn("only when the user", prompt)
 
+    def test_slack_prompt_exposes_generated_image_result_directory(self) -> None:
+        prompt = opentag_agent.build_prompt(
+            skill_dir=Path("/tmp/open-tag"),
+            workdir=Path("/tmp/workspace"),
+            channel_id="C123",
+            question="Create a launch graphic",
+            thread_text="",
+            attachments_dir=Path("/tmp/invocation"),
+            allowed_scopes="file://local/tmp/workspace",
+        )
+
+        self.assertIn("/tmp/invocation/results/images", prompt)
+        self.assertIn("Slack bridge uploads supported files", prompt)
+        self.assertIn("Do not call Slack's API to upload them", prompt)
+        self.assertIn("/tmp/invocation/results/artifacts", prompt)
+        self.assertIn("including generated HTML", prompt)
+
     @patch("scripts.opentag_agent.backend_command", return_value=["codex"])
     def test_codex_backend_uses_automatic_workspace_safety_review(self, _backend) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
             root = Path(raw_dir)
-            with patch(
+            with patch.object(opentag_agent, "tag_temp_dir", return_value=root), patch(
                 "scripts.opentag_agent.subprocess.run",
                 return_value=SimpleNamespace(returncode=0, stdout="done"),
             ) as run:
