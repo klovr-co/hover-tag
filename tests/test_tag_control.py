@@ -130,6 +130,7 @@ class TagControlTests(unittest.TestCase):
         self.complete()
         original = self.path.read_bytes()
         for changes in ({"OPENTAG_BACKEND": "other"}, {"OPENTAG_TIMEOUT_SECONDS": "-1"},
+                        {"OPENTAG_CODEX_TRANSPORT": "socket"},
                         {"SLACK_ALLOWED_USER_IDS": ""}, {"MFS_URL": "http://user:secret@host"},
                         {"OPENTAG_WORKDIR": "/other"}, {"MFS_ALLOWED_SCOPES": "file://local/a/../b"}):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
@@ -296,16 +297,19 @@ class TagControlTests(unittest.TestCase):
             with self.subTest(backend=backend):
                 self.complete(backend)
                 with patch.object(sys, "argv", ["tag", "start"]), patch.object(
-                    tag_cli, "healthy", return_value=True
+                    tag_cli, "missing_runtime_dependencies", return_value=()
+                ), patch.object(tag_cli, "healthy", return_value=True
                 ), patch.object(tag_cli, "sync_configured_slack_memory"
-                ), patch.object(tag_cli, "doctor", return_value=0), patch.object(
+                ), patch.object(tag_cli, "doctor_report", return_value=(0, {"checks": []})), patch.object(
                     tag_cli, "slack_ready", side_effect=[False, True]
                 ), patch.object(tag_cli, "stop_process"), patch.object(
                     tag_cli, "start_process", return_value=True
-                ) as start, redirect_stdout(StringIO()):
+                ) as start, redirect_stdout(StringIO()) as output:
                     self.assertEqual(tag_cli.main(), 0)
                 command = start.call_args.args[2]
                 self.assertEqual(command[command.index("--backend") + 1], backend)
+                self.assertIn("Tag is connected", output.getvalue())
+                self.assertNotIn("[ok]", output.getvalue())
 
     def test_doctor_json_suppresses_raw_response_details(self):
         def checks(*args):

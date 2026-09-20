@@ -11,3 +11,8 @@ https://github.com/zilliztech/mfs/tree/main/examples/open-tag-skill
 Tag's modifications include additional chat transports, backend integrations,
 operational tooling, scoped MFS helpers, Slack message handling, tests, and
 release documentation. The repository history records those changes.
+
+The Codex App Server transport builds on safeguards from OpenTag
+(https://github.com/first-tree-ai/opentag), available under the Apache License,
+Version 2.0. Tag's request lifecycle and Slack event mapping are original to
+this project.

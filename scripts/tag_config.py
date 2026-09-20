@@ -15,6 +15,7 @@ except ImportError:
 
 DEFAULTS = {
     "OPENTAG_BACKEND": "codex", "OPENTAG_BOT_NAME": "OpenMax",
+    "OPENTAG_CODEX_TRANSPORT": "app-server",
     "OPENTAG_TRANSPORT": "slack", "OPENTAG_TIMEOUT_SECONDS": "420",
     "OPENTAG_BACKEND_ATTEMPTS": "3", "OPENTAG_SLACK_STREAMING": "1",
     "MFS_URL": "http://127.0.0.1:13619", "MFS_SLACK_HISTORY_DAYS": "30",
@@ -35,6 +36,7 @@ EDITABLE = PUBLIC - {"OPENTAG_WORKDIR"} | {
 }
 LABELS = {
     "OPENTAG_BACKEND": "Agent", "OPENTAG_BOT_NAME": "Bot name",
+    "OPENTAG_CODEX_TRANSPORT": "Codex transport (exec or app-server)",
     "SLACK_APP_TOKEN": "Slack app token", "SLACK_BOT_TOKEN": "Slack bot token",
     "SLACK_ALLOWED_USER_IDS": "Who can use Tag", "SLACK_CHANNEL_ID": "Legacy channel restriction",
     "SLACK_CHANNEL_IDS": "Selected channels", "SLACK_TEAM_ID": "Slack workspace",
@@ -77,6 +79,8 @@ def validation_error(key: str, value: str) -> str | None:
         return "Must not contain a null character"
     if key == "OPENTAG_BACKEND" and value not in {"codex", "claude"}:
         return "Choose codex or claude (experimental)"
+    if key == "OPENTAG_CODEX_TRANSPORT" and value not in {"exec", "app-server"}:
+        return "Choose exec or app-server"
     if key == "OPENTAG_TRANSPORT" and value != "slack":
         return "Only slack is supported"
     if key in {"OPENTAG_TIMEOUT_SECONDS", "OPENTAG_BACKEND_ATTEMPTS"} and (not value.isascii() or not value.isdigit() or int(value) < 1):

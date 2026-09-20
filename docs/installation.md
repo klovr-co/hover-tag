@@ -61,11 +61,37 @@ or `%LOCALAPPDATA%\Tag\bin` on Windows to your user PATH if it is not already
 present. It does not rewrite shell profiles or Windows PATH. Use `--bin-dir`
 (PowerShell: `-BinDir`) to choose a different command directory. Existing
 unrelated commands are never replaced.
+If `tag` is a symlink to a recognized legacy Tag checkout, the installer safely
+replaces that symlink with the managed launcher. The old checkout is left intact.
 
 Each release has its own Python environment with the pinned runtime requirements.
 The MFS Python server is used directly; installation does not require the
 Unix-only MFS CLI binary. Google Workspace CLI and third-party MCP packages are
 optional integrations, installed and authenticated separately.
+
+The installer keeps dependency-manager output behind a concise Install screen.
+Use `tag paths` for a readable location summary and `tag paths --json` for exact
+machine-readable paths. `tag start` and `tag doctor` group checks into runtime,
+configuration, memory, agent, and Slack rather than printing every successful
+API probe; failed checks remain visible with their recovery action.
+
+## Run from source
+
+Contributors can prepare the checkout's local runtime explicitly:
+
+```sh
+./install.sh --dependencies-only
+./tag status
+./tag dev
+```
+
+On Windows, use `./install.ps1 -DependenciesOnly` followed by `./tag.cmd status`.
+The source launcher only uses that checkout's `.venv`; it never falls back to a
+system Python and `tag start` never installs packages. For normal use, prefer the
+managed installer above so upgrades and runtime dependencies remain pinned.
+`./tag dev` starts the normal dependencies, watches Python source, reloads only
+the Slack bridge when files change, and shows bridge logs in the foreground.
+Ctrl-C stops that development bridge while leaving MFS running.
 
 ## Download installer
 
@@ -130,9 +156,12 @@ Run `tag` in a terminal for a menu based on the current installation state.
 Skills use `tag inspect --json` and `tag doctor --json` to plan the same steps.
 See [setup and management](tag-management.md) for the shared flow and commands.
 
-`tag paths` shows storage locations; `tag doctor` checks configuration and
+`tag paths` shows storage locations in a readable view; `tag paths --json`
+provides the same data for automation. `tag doctor` checks configuration and
 connectivity. `tag start` runs in the background until stopped or rebooted.
-Use `tag status`, `tag logs`, and `tag stop`. Automatic login startup is not
+Use `tag status`, `tag logs`, and `tag stop`. The dedicated `tag restart`
+command presents one operation and should be preferred to manually chaining
+stop and start. Automatic login startup is not
 configured. A separately managed MFS server is reused and never stopped by TAG.
 
 Rerun the installer to upgrade. Failed dependency installation leaves the active
@@ -149,8 +178,10 @@ tag migrate --from /absolute/path/to/old/tag
 This reads generated `export KEY=value` configuration as data, copies local
 skills and MCP files, preserves existing destination settings/skills, and leaves
 all originals untouched. Review copied MCP executable paths and `tag doctor`.
-Old `.runtime` process records and logs are not migrated; stop the old instance
-using its original launcher before starting the new installation.
+Old `.runtime` process records and logs are not migrated. Stop the old instance
+using its original launcher before starting the new installation. If its Slack
+heartbeat is still current, the new `tag start` refuses to launch and identifies
+the conflicting command instead of starting a second Slack connection.
 
 To uninstall, stop TAG, remove its managed command, and remove the selected TAG
 home after backing up any configuration and personal skills you want to keep.

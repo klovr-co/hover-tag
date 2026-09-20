@@ -4,6 +4,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from scripts.check_secrets import validate_secrets
 
@@ -19,6 +20,14 @@ class SecretCheckTests(unittest.TestCase):
             deleted.unlink()
 
             self.assertEqual([], validate_secrets(root))
+
+    def test_directory_entries_are_ignored(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory) / "skill-directory"
+            directory.mkdir()
+
+            with patch("scripts.check_secrets.tracked_files", return_value=[directory]):
+                self.assertEqual([], validate_secrets(directory.parent))
 
 
 if __name__ == "__main__":

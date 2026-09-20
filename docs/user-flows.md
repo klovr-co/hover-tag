@@ -153,7 +153,11 @@ flowchart LR
    MFS access, and Slack API access. A stopped MFS server must be started to pass
    these live checks; `tag start` handles the local server before its preflight.
 7. `tag start` starts MFS, runs preflight, and launches the Slack bridge.
-8. `tag status --json` and `tag logs` provide the first operational check.
+8. `tag status --json` and `tag logs` provide the first operational check;
+   `tag logs --limit N --follow` keeps a bounded initial history and then
+   streams new service output.
+   `tag restart` is a single user-facing flow rather than two complete stop and
+   start screens.
 
 Verify the complete journey by mentioning the bot in the permitted Slack channel
 and observing its reply. Executable discovery does not prove agent sign-in, and
@@ -253,8 +257,9 @@ Runtime behavior:
   thread continues with that thread's context.
 - The bridge strips the mention before sending the request to the backend.
 - Slack's native loading indicator is used while work is in progress.
-- Claude can stream answer text. Codex currently posts its complete final answer
-  because the CLI event stream does not expose answer-token deltas.
+- Claude can stream answer text. Codex uses App Server by default to stream
+  final-answer deltas and report observed tool activity without exposing raw
+  commentary, reasoning, or tool output.
 - Long answers are split into readable threaded replies.
 - Failures are returned in the same thread with a bounded error message.
 
@@ -470,31 +475,32 @@ The backend writes Markdown in the configured workspace and calls the Canvas
 helper. The helper creates a Canvas only in the invoking channel and enforces a
 500 KB content limit.
 
-## Flow 7: Change model and thinking for a Slack thread
+## Flow 7: Change a user's Codex settings
 
-After a successful Codex reply, an authorized teammate can select **Change model
-& thinking**.
+After a successful Codex reply, an authorized teammate can open the compact
+overflow menu and select **Codex settings…**.
 
 ### Level 1 · Journey
 
 ```mermaid
 flowchart LR
     Reply["Successful Codex reply"]
-    Choose["Open Change model<br/>& thinking"]
-    Save["Save a valid choice<br/>for this thread"]
-    Next["Next mention uses<br/>the saved setting"]
+    Choose["Open Codex settings<br/>from the overflow menu"]
+    Save["Save a valid choice<br/>for this user"]
+    Next["Future mentions use<br/>the saved setting"]
 
     Reply --> Choose --> Save --> Next
 ```
 
 ### Level 2 · Task flow
 
-1. Tag shows only available Codex models and their supported reasoning
-   levels, narrowed by operator allowlists when configured.
-2. The teammate selects a model, a reasoning level, or **Default**.
+1. Tag shows only available Codex models, their native reasoning levels,
+   and Fast Mode availability, narrowed by operator allowlists when configured.
+2. The teammate selects a model, a reasoning level or **Default**, and whether
+   Fast Mode is on or off.
 3. Validation prevents unsupported combinations from being saved.
-4. An ephemeral confirmation identifies the thread affected by the choice.
-5. The next mention in that thread uses the saved setting.
+4. An ephemeral confirmation identifies the saved choices.
+5. The user's future mentions use the saved setting across channels and threads.
 
 ### Level 3 · Service blueprint
 
@@ -505,20 +511,22 @@ sequenceDiagram
     participant T as Tag bridge
     participant N as Next Codex run
 
-    U->>S: Select Change model & thinking
-    S->>T: Submit model and reasoning choice
+    U->>S: Select Codex settings from overflow menu
+    S->>T: Submit model, reasoning, and Fast Mode choices
     T->>T: Validate against configured allowlists
-    T-->>U: Confirm setting for this thread
-    U->>T: Send the next mention
-    T->>N: Start run with saved thread setting
+    T-->>U: Confirm settings for this user
+    U->>T: Send a later mention in any allowed channel
+    T->>N: Start run with saved user settings
 ```
 
-Settings are thread-specific, so one conversation can use deeper reasoning
-without changing every other conversation. Any authorized teammate in that
-thread may update the shared thread setting. “Default” delegates model or
-reasoning selection to the Codex CLI. If a saved choice is no longer available,
-Tag normalizes it back to the applicable default. Claude replies do not
-show this control.
+Settings are user-specific, so each authorized teammate can choose a model,
+reasoning level, and Fast Mode without changing another teammate's settings.
+Saved choices follow that user across channels and threads and survive bridge
+restarts. Reasoning levels retain the names reported by Codex; Fast Mode is an
+independent latency setting that uses increased usage. “Default” delegates
+model or reasoning selection to the Codex CLI. If a saved choice is no longer
+available, Tag normalizes it back to the applicable default. Claude replies do
+not show this control.
 
 ## Flow 8: Denials, failures, and recovery
 
@@ -570,6 +578,9 @@ For a completely silent mention, debug event delivery first:
 If the event arrives but the task fails, debug runtime dependencies next:
 
 1. Run `./tag doctor` and correct the first failed check.
+   If a source checkout reports an incomplete runtime, run
+   `./install.sh --dependencies-only`; a managed installation should be repaired
+   by rerunning its installer. Startup never installs packages implicitly.
 2. Confirm the caller allowlist. An unauthorized Slack caller receives a
    threaded denial before Tag reads the thread or invokes the backend.
 3. Inspect the transport/backend error in `./tag logs`.
@@ -658,8 +669,8 @@ isolated chat location. Skip an optional step when its dependency is not set up.
    instead, confirm the installed bot has the
    `canvases:write` scope; reinstall the app if that scope was newly added.
 9. With the Codex backend, reinstall the updated manifest with Slack
-   interactivity enabled. Change the model/reasoning choice, then invoke the next
-   task in that thread.
+   interactivity enabled. Change the model, reasoning, and Fast Mode choices,
+   then invoke a later task as that user.
 10. If a separate non-allowlisted test account is available, mention the bot and
     show that the backend is not invoked.
 
@@ -673,16 +684,17 @@ isolated chat location. Skip an optional step when its dependency is not set up.
 | Thread text and text attachments | Implemented | Content is bounded and treated as untrusted. |
 | Image attachment understanding | Implemented bridge path | Images up to 15 MB are downloaded temporarily; successful interpretation still depends on the selected backend/model. |
 | Generated-image upload to Slack | **Not implemented by the bridge** | A backend may generate a local image, but Tag currently has no dedicated upload-and-attach result path. |
-| Slack loading state and answers | Implemented | Claude text can stream; Codex currently posts the complete final answer. |
+| Slack loading state and answers | Implemented | Claude streams text deltas; Codex App Server streams final-answer deltas and observed activity. |
 | Long-answer splitting | Implemented | Results remain in the invoking thread. |
-| Model/reasoning settings | Implemented for Codex | Requires Slack interactivity and a reinstalled updated manifest. |
+| Model/reasoning/Fast Mode settings | Implemented for Codex | Requires Slack interactivity and a reinstalled updated manifest; Fast Mode uses increased usage. |
 | Top-level channel posts | Implemented on explicit request | Restricted to the invoking channel. |
 | Slack Canvas creation | Implemented on explicit request | Restricted to the invoking channel; `canvases:write` required. |
 | Slack MFS search/read | Implemented; live acceptance pending | Setup creates selected-channel scopes; each reply receives only its current channel's Slack scope. ADR 0001 still applies. |
 | Workspace commands and edits | Implemented through backend | Uses local account permissions; not a hardened sandbox. |
 | Slack durable session | Not provided | Each mention launches a fresh agent; thread text and MFS restore context. |
 | Slack direct messages | Not implemented by the current manifest/handler | The bridge subscribes to channel `app_mention` events, not direct-message events. |
-| Duplicate-event idempotency and cancellation | Not implemented | Avoid concurrent mentions in the same thread; tasks stop on timeout or process termination rather than a user cancellation control. |
+| Duplicate-event idempotency | Not implemented | Avoid concurrent mentions in the same thread. |
+| Codex cancellation | Implemented with App Server | Slack's native Stop button interrupts the active Codex turn; the legacy exec transport remains a rollback path. |
 | Side-effect confirmation layer | Not provided by Tag | Workspace and connected-tool actions follow the selected backend/tool's permissions and confirmation behavior. |
 | Enterprise governance/audit/approvals | Not provided | Add external sandboxing and policy systems for production use. |
 
