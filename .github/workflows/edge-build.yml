@@ -1,0 +1,74 @@
+name: Edge build
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: edge-release
+  cancel-in-progress: true
+
+jobs:
+  publish-edge:
+    name: Publish edge artifact
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EDGE_SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.EDGE_SHA }}
+          fetch-depth: 0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Verify exact main commit and required workflows
+        run: |
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$EDGE_SHA"
+          python scripts/release_automation.py check-workflows \
+            --repository "$GITHUB_REPOSITORY" --sha "$EDGE_SHA" --wait-seconds 600
+      - name: Build reproducible edge archive
+        run: |
+          built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          python scripts/package_release.py --channel edge --commit-sha "$EDGE_SHA" \
+            --source-ref refs/heads/main --built-at "$built_at"
+          python scripts/release_automation.py validate-edge \
+            --directory out --sha "$EDGE_SHA" --version "$(head -n 1 VERSION)"
+      - name: Retain commit-specific promotion artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: tag-edge-${{ env.EDGE_SHA }}
+          path: |
+            out/tag-edge.zip
+            out/SHA256SUMS
+            out/BUILD-PROVENANCE.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Update public edge channel
+        run: |
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$EDGE_SHA"
+          short_sha=${EDGE_SHA:0:12}
+          printf '%s\n\n%s\n\n%s\n' \
+            "Moving development build from \`main\`." \
+            "Commit: \`$EDGE_SHA\`" \
+            'This is an unversioned test build, not an immutable release.' > out/EDGE-NOTES.md
+          if gh release view edge >/dev/null 2>&1; then
+            gh release upload edge out/tag-edge.zip out/SHA256SUMS out/BUILD-PROVENANCE.json --clobber
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/edge" \
+              -f sha="$EDGE_SHA" -F force=true >/dev/null
+            gh release edit edge --title "Tag edge ($short_sha)" \
+              --notes-file out/EDGE-NOTES.md --prerelease --latest=false
+          else
+            gh release create edge out/tag-edge.zip out/SHA256SUMS out/BUILD-PROVENANCE.json \
+              --target "$EDGE_SHA" --title "Tag edge ($short_sha)" \
+              --notes-file out/EDGE-NOTES.md --prerelease --latest=false
+          fi
