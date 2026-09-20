@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import io
 import json
 import os
 import subprocess
@@ -34,7 +36,7 @@ from scripts.tag_paths import (
     tag_home,
     tag_temp_dir,
 )
-from scripts.tag_cli import process_for, read_config, start_process, stop_process
+from scripts.tag_cli import process_for, read_config, start_process, stop_process, upgrade_command
 from scripts.tag_migrate import legacy_config, migrate
 from scripts.opentag_setup import render_env
 
@@ -165,8 +167,23 @@ class ReleaseResolutionTests(unittest.TestCase):
                 fetched = fetch_release(None, destination / "download", "alpha")
 
             self.assertIsInstance(fetched, FetchedRelease)
-            self.assertEqual(fetched.selection, ReleaseSelection("alpha", version, sha))
+            self.assertEqual(
+                fetched.selection,
+                ReleaseSelection("alpha", version, sha),
+            )
             self.assertEqual((fetched.source / "VERSION").read_text().strip(), version)
+
+            with patch(
+                "scripts.tag_install.resolve_version",
+                return_value=(release, version, "alpha"),
+            ), patch(
+                "scripts.tag_install.download", side_effect=lambda url: assets[url]
+            ):
+                pinned = fetch_release(version, destination / "pinned")
+            self.assertEqual(
+                pinned.selection,
+                ReleaseSelection("alpha", version, sha, "version"),
+            )
 
             release["target_commitish"] = "e" * 40
             with patch("scripts.tag_install.resolve_channel", return_value=release), patch(
@@ -436,6 +453,304 @@ class TagHomeTests(unittest.TestCase):
         self.assertTrue(current["checked_at"].endswith("Z"))
         self.assertEqual(upgraded["channel"], "edge")
         self.assertEqual(upgraded["installed_commit"], "b" * 40)
+
+    def test_upgrade_follows_saved_channel_and_preserves_personal_data(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            home, bin_dir = root / "home", root / "bin"
+            version = (ROOT / "VERSION").read_text().strip()
+            install(
+                ROOT,
+                home,
+                bin_dir,
+                dependencies=False,
+                selection=ReleaseSelection("edge", version, "a" * 40),
+            )
+            config = home / "config/settings.json"
+            config.write_text('{"OPENTAG_BACKEND":"codex"}', encoding="utf-8")
+            target = FetchedRelease(
+                ROOT,
+                ReleaseSelection("edge", version, "b" * 40),
+            )
+            output = io.StringIO()
+
+            with patch(
+                "scripts.tag_install.fetch_release", return_value=target
+            ), patch(
+                "scripts.tag_cli.process_for", return_value=None
+            ), contextlib.redirect_stdout(output):
+                self.assertEqual(
+                    upgrade_command(
+                        home, json_output=True, dependencies=False
+                    ),
+                    0,
+                )
+
+            result = json.loads(output.getvalue())
+            current = json.loads((home / "current.json").read_text())
+            previous = json.loads((home / "previous.json").read_text())
+            config_text = config.read_text()
+
+        self.assertEqual(result["status"], "upgraded")
+        self.assertEqual(current["channel"], "edge")
+        self.assertEqual(current["installed_commit"], "b" * 40)
+        self.assertEqual(previous["installed_commit"], "a" * 40)
+        self.assertEqual(config_text, '{"OPENTAG_BACKEND":"codex"}')
+
+    def test_upgrade_dry_run_and_exact_version_pin_do_not_install(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            home, bin_dir = root / "home", root / "bin"
+            version = (ROOT / "VERSION").read_text().strip()
+            install(
+                ROOT,
+                home,
+                bin_dir,
+                dependencies=False,
+                selection=ReleaseSelection("alpha", version, "a" * 40),
+            )
+            original = (home / "current.json").read_text()
+            target = FetchedRelease(
+                ROOT,
+                ReleaseSelection("alpha", version, "b" * 40),
+            )
+            output = io.StringIO()
+            with patch(
+                "scripts.tag_install.fetch_release", return_value=target
+            ), patch(
+                "scripts.tag_cli.process_for", return_value=None
+            ), patch(
+                "scripts.tag_install.install"
+            ) as installer, contextlib.redirect_stdout(output):
+                self.assertEqual(
+                    upgrade_command(home, dry_run=True, json_output=True),
+                    0,
+                )
+            installer.assert_not_called()
+            self.assertEqual((home / "current.json").read_text(), original)
+            self.assertEqual(json.loads(output.getvalue())["status"], "available")
+
+            pinned = json.loads(original)
+            pinned["selection"] = "version"
+            (home / "current.json").write_text(json.dumps(pinned), encoding="utf-8")
+            output = io.StringIO()
+            with patch(
+                "scripts.tag_install.fetch_release"
+            ) as fetch, contextlib.redirect_stdout(output):
+                self.assertEqual(upgrade_command(home, json_output=True), 0)
+            fetch.assert_not_called()
+            self.assertEqual(json.loads(output.getvalue())["status"], "pinned")
+
+    def test_upgrade_does_not_reinstall_the_current_release(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            home, bin_dir = root / "home", root / "bin"
+            version = (ROOT / "VERSION").read_text().strip()
+            selection = ReleaseSelection("edge", version, "a" * 40)
+            install(
+                ROOT,
+                home,
+                bin_dir,
+                dependencies=False,
+                selection=selection,
+            )
+            output = io.StringIO()
+            with patch(
+                "scripts.tag_install.fetch_release",
+                return_value=FetchedRelease(ROOT, selection),
+            ), patch(
+                "scripts.tag_install.install"
+            ) as installer, patch(
+                "scripts.tag_cli.process_for", return_value=None
+            ), contextlib.redirect_stdout(output):
+                self.assertEqual(upgrade_command(home, json_output=True), 0)
+
+        installer.assert_not_called()
+        self.assertEqual(json.loads(output.getvalue())["status"], "current")
+
+    def test_upgrade_restarts_running_services_by_default(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            home, bin_dir = root / "home", root / "bin"
+            version = (ROOT / "VERSION").read_text().strip()
+            install(
+                ROOT,
+                home,
+                bin_dir,
+                dependencies=False,
+                selection=ReleaseSelection("edge", version, "a" * 40),
+            )
+            target = FetchedRelease(
+                ROOT,
+                ReleaseSelection("edge", version, "b" * 40),
+            )
+            output = io.StringIO()
+            with patch(
+                "scripts.tag_install.fetch_release", return_value=target
+            ), patch(
+                "scripts.tag_install.install"
+            ) as installer, patch(
+                "scripts.tag_cli.process_for", return_value=object()
+            ), patch(
+                "scripts.tag_cli.subprocess.run",
+                return_value=subprocess.CompletedProcess([], 0, "", ""),
+            ) as run, contextlib.redirect_stdout(output):
+                self.assertEqual(
+                    upgrade_command(home, json_output=True, dependencies=False),
+                    0,
+                )
+
+        installer.assert_called_once()
+        self.assertEqual(run.call_args.args[0][-1], "restart")
+        result = json.loads(output.getvalue())
+        self.assertTrue(result["restarted"])
+        self.assertFalse(result["restart_required"])
+
+    def test_upgrade_blocks_older_exact_version_without_opt_in(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            home, bin_dir = root / "home", root / "bin"
+            version = (ROOT / "VERSION").read_text().strip()
+            install(
+                ROOT,
+                home,
+                bin_dir,
+                dependencies=False,
+                selection=ReleaseSelection("alpha", version, "a" * 40),
+            )
+            original = (home / "current.json").read_text()
+            target = FetchedRelease(
+                ROOT,
+                ReleaseSelection("stable", "0.1.0", "b" * 40, "version"),
+            )
+            output = io.StringIO()
+            with patch(
+                "scripts.tag_install.fetch_release", return_value=target
+            ), patch(
+                "scripts.tag_install.install"
+            ) as installer, patch(
+                "scripts.tag_cli.process_for", return_value=None
+            ), contextlib.redirect_stdout(output):
+                self.assertEqual(
+                    upgrade_command(
+                        home,
+                        version="0.1.0",
+                        json_output=True,
+                        dependencies=False,
+                    ),
+                    2,
+                )
+
+            result = json.loads(output.getvalue())
+            installer.assert_not_called()
+            self.assertEqual((home / "current.json").read_text(), original)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["status"], "downgrade-blocked")
+            self.assertTrue(result["downgrade"])
+            self.assertIn("--allow-downgrade", result["next_command"])
+
+    def test_channel_switch_keeps_newer_release_until_channel_catches_up(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            home, bin_dir = root / "home", root / "bin"
+            version = (ROOT / "VERSION").read_text().strip()
+            install(
+                ROOT,
+                home,
+                bin_dir,
+                dependencies=False,
+                selection=ReleaseSelection("alpha", version, "a" * 40),
+            )
+            target = FetchedRelease(
+                ROOT,
+                ReleaseSelection("stable", "0.1.0", "b" * 40),
+            )
+            output = io.StringIO()
+            with patch(
+                "scripts.tag_install.fetch_release", return_value=target
+            ), patch(
+                "scripts.tag_install.install"
+            ) as installer, patch(
+                "scripts.tag_cli.process_for", return_value=None
+            ), contextlib.redirect_stdout(output):
+                self.assertEqual(
+                    upgrade_command(
+                        home,
+                        channel="stable",
+                        json_output=True,
+                        dependencies=False,
+                    ),
+                    0,
+                )
+
+            result = json.loads(output.getvalue())
+            current = json.loads((home / "current.json").read_text())
+            installer.assert_not_called()
+            self.assertEqual(result["status"], "channel-updated")
+            self.assertTrue(result["policy_updated"])
+            self.assertEqual(current["channel"], "stable")
+            self.assertEqual(current["installed_version"], version)
+            self.assertEqual(current["installed_commit"], "a" * 40)
+
+    def test_upgrade_allows_an_explicit_downgrade_and_explains_the_override(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            home, bin_dir = root / "home", root / "bin"
+            version = (ROOT / "VERSION").read_text().strip()
+            install(
+                ROOT,
+                home,
+                bin_dir,
+                dependencies=False,
+                selection=ReleaseSelection("alpha", version, "a" * 40),
+            )
+            target = FetchedRelease(
+                ROOT,
+                ReleaseSelection("stable", "0.1.0", "b" * 40, "version"),
+            )
+            blocked_output = io.StringIO()
+            with patch(
+                "scripts.tag_install.fetch_release", return_value=target
+            ), patch(
+                "scripts.tag_install.install"
+            ) as installer, patch(
+                "scripts.tag_cli.process_for", return_value=None
+            ), contextlib.redirect_stdout(blocked_output):
+                self.assertEqual(
+                    upgrade_command(
+                        home,
+                        version="0.1.0",
+                        dependencies=False,
+                    ),
+                    2,
+                )
+            installer.assert_not_called()
+            screen = blocked_output.getvalue()
+            self.assertIn("Kept the newer installed release", screen)
+            self.assertIn("--allow-downgrade", screen)
+
+            allowed_output = io.StringIO()
+            with patch(
+                "scripts.tag_install.fetch_release", return_value=target
+            ), patch(
+                "scripts.tag_install.install"
+            ) as installer, patch(
+                "scripts.tag_cli.process_for", return_value=None
+            ), contextlib.redirect_stdout(allowed_output):
+                self.assertEqual(
+                    upgrade_command(
+                        home,
+                        version="0.1.0",
+                        allow_downgrade=True,
+                        json_output=True,
+                        dependencies=False,
+                    ),
+                    0,
+                )
+            installer.assert_called_once()
+            result = json.loads(allowed_output.getvalue())
+            self.assertEqual(result["status"], "upgraded")
+            self.assertTrue(result["downgrade"])
 
     def test_dependency_install_falls_back_to_venv_and_pip_without_uv(self):
         with tempfile.TemporaryDirectory() as temp, patch(

@@ -51,6 +51,7 @@ ADMIN_SKILL = (
     "Use `tag config init --json` for missing defaults and `tag config set` for targeted changes. "
     "Use stdin for secrets; never print credentials or place them in command arguments. "
     "Use `tag doctor --json` for diagnosis and `tag status --json` for service readiness. "
+    "Use `tag upgrade --dry-run --json` to check for updates and `tag upgrade` to apply one. "
     "The operator authorizes Slack and backend logins. Verify a real Slack reply separately.\n"
 )
 
@@ -60,6 +61,7 @@ class ReleaseSelection:
     channel: str
     version: str
     commit_sha: str
+    selector: str = "channel"
 
 
 @dataclass(frozen=True)
@@ -179,6 +181,11 @@ def _parsed_version(value: str) -> tuple[tuple[int, int, int, int, int], str]:
         (int(major), int(minor), int(patch), phase_rank, int(number or 0)),
         normalized_phase,
     )
+
+
+def release_version_key(value: str) -> tuple[int, int, int, int, int]:
+    """Return Tag's sortable semantic release key."""
+    return _parsed_version(value)[0]
 
 
 def _release_matches_channel(release: dict[str, Any], channel: str) -> bool:
@@ -325,8 +332,10 @@ def fetch_release(
         release, version, selected_channel = resolve_version(version)
         provenance_channel = "release"
         name = f"tag-{version}.zip"
+        selector = "version"
     else:
         selected_channel = channel or _default_channel()
+        selector = "channel"
         release = resolve_channel(selected_channel)
         if selected_channel == "edge":
             name = "tag-edge.zip"
@@ -368,7 +377,10 @@ def fetch_release(
     source = unpack_release(archive, destination / "source")
     if (source / "VERSION").read_text().strip() != version:
         raise ValueError("Release version does not match requested version")
-    return FetchedRelease(source, ReleaseSelection(selected_channel, version, commit_sha))
+    return FetchedRelease(
+        source,
+        ReleaseSelection(selected_channel, version, commit_sha, selector),
+    )
 
 
 def atomic_text(path: Path, text: str, mode: int = 0o600) -> None:
@@ -519,10 +531,15 @@ raise SystemExit(subprocess.call([record["python"], str(release / "scripts/tag_c
         current = home / "current.json"
         if current.exists():
             atomic_text(home / "previous.json", current.read_text(encoding="utf-8"))
-        current_record: dict[str, Any] = {"release": release.name, "python": str(python)}
+        current_record: dict[str, Any] = {
+            "release": release.name,
+            "python": str(python),
+            "bin_dir": str(bin_dir.resolve()),
+        }
         if selection is not None:
             current_record.update({
                 "channel": selection.channel,
+                "selection": selection.selector,
                 "installed_version": selection.version,
                 "installed_commit": selection.commit_sha,
                 "checked_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
