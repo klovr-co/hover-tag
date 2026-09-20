@@ -218,8 +218,10 @@ Try this:
 
 > `@<bot-name> summarize this thread and list decisions, owners, and open questions.`
 
-1. Mention the bot in a new message to start a fresh Slack thread, or inside an
-   existing thread to continue that conversation.
+1. Mention the bot in a new channel message to start a fresh Slack thread, or
+   inside an existing thread to continue that conversation. By default, an
+   authorized user may instead send a top-level message from OpenMax's Messages
+   tab without an `@mention`.
 2. Keep the request explicit about the deliverable, evidence, and whether any
    side effect such as posting or editing is intended.
 3. Watch Slack's loading state while the bounded backend run is active.
@@ -618,7 +620,7 @@ flowchart LR
 | Start | Preflight succeeds → MFS starts → Slack bridge starts. |
 | Stop | Slack bridge stops → local MFS process stops. |
 | Change configuration | Stop → edit private `.env`/rerun guided setup → doctor → start → realistic mention test. |
-| Change Slack scopes/interactivity | Update manifest in Slack → reinstall app → refresh tokens if required → restart → mention test. |
+| Change Slack scopes/interactivity | Ship a versioned additive manifest migration → `tag start` syncs it → Slack requests approval only for new OAuth permissions → Tag refreshes credentials → mention/DM test. |
 | Upgrade | Stop → pull the intended release → rerun installer → doctor → start → smoke test. Existing private `.env` is preserved. |
 | Uninstall | Stop → remove the clone; optionally remove MFS binaries/data separately. |
 
@@ -656,7 +658,7 @@ isolated chat location. Skip an optional step when its dependency is not set up.
    displayed bot identity matches the mention.
 2. Mention `@<bot-name>` and ask it to summarize a short discussion.
 3. In that thread, reply with `@<bot-name> turn that into three next actions.`
-   Every Slack invocation requires a mention.
+   Channel invocations require a mention; DMs from authorized users do not.
 4. Attach a supported screenshot or text file and mention `@<bot-name>` for an
    explanation grounded in the attachment. Use an image-capable backend/model
    for the screenshot path.
@@ -693,8 +695,8 @@ isolated chat location. Skip an optional step when its dependency is not set up.
 | Slack Canvas creation | Implemented on explicit request | Restricted to the invoking channel; `canvases:write` required. |
 | Slack MFS search/read | Implemented; live acceptance pending | Setup creates selected-channel scopes; each reply receives only its current channel's Slack scope. ADR 0001 still applies. |
 | Workspace commands and edits | Implemented through backend | Uses local account permissions; not a hardened sandbox. |
-| Slack durable session | Not provided | Each mention launches a fresh agent; thread text and MFS restore context. |
-| Slack direct messages | Not implemented by the current manifest/handler | The bridge subscribes to channel `app_mention` events, not direct-message events. |
+| Slack durable session | Not provided | Each invocation launches a fresh agent; thread text and MFS restore context. |
+| Slack direct messages | Implemented, enabled by default | Requires an allowlisted sender. `tag start` migrates existing linked apps to `message.im` + `im:history` and opens Slack approval when needed. Set `OPENTAG_SLACK_DM_ENABLED=0` to disable it. Top-level DMs are separate tasks; thread replies provide bounded context. |
 | Duplicate-event idempotency and cancellation | Not implemented | Avoid concurrent mentions in the same thread; tasks stop on timeout or process termination rather than a user cancellation control. |
 | Side-effect confirmation layer | Not provided by OpenTag | Workspace and connected-tool actions follow the selected backend/tool's permissions and confirmation behavior. |
 | Enterprise governance/audit/approvals | Not provided | Add external sandboxing and policy systems for production use. |

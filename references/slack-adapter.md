@@ -5,7 +5,7 @@
 Use this reference when setting up the Slack-facing side of Open Tag from
 scratch. The bridge is intentionally thin. It only:
 
-1. Receives `app_mention` events through Socket Mode.
+1. Receives `app_mention` and `message.im` events through Socket Mode.
 2. Reads the current thread through Slack Web API.
 3. Starts Slack's native working indicator, falling back to a temporary reply
    when that API is unavailable.
@@ -16,14 +16,15 @@ scratch. The bridge is intentionally thin. It only:
 The adapter does not answer questions itself. It passes the thread, channel id,
 and allowed MFS scopes to a fresh CLI agent.
 
-The Slack app token and bot token are only for receiving mentions, reading the
-current thread, and posting replies. `tag setup` separately configures an MFS
+The Slack app token and bot token are only for receiving invocations, reading
+the current thread, and posting replies. `tag setup` separately configures an MFS
 Slack-history credential, explicit channel-ID allowlist, and source URI.
 
 Relevant Slack docs:
 
 - Socket Mode: <https://docs.slack.dev/apis/events-api/using-socket-mode/>
 - App mentions: <https://docs.slack.dev/reference/events/app_mention/>
+- Direct messages: <https://docs.slack.dev/reference/events/message.im/>
 - OAuth scopes: <https://docs.slack.dev/reference/scopes/>
 
 ## Prerequisites
@@ -52,6 +53,8 @@ connector configuration; `tag start` registers it after starting MFS:
 7. Choose Codex (default) or experimental Claude, then run `tag start`.
 8. Mention the bot in each selected test channel and record an observed reply;
    service readiness alone is not an end-to-end pass.
+9. Send OpenMax a direct message and confirm an authorized caller receives a
+   threaded reply without an `@mention`.
 
 If the workspace blocks app creation or install approval, the user must ask a
 Slack workspace admin to approve the app. The skill can guide the setup and
@@ -79,11 +82,14 @@ Create or reuse a Slack app:
    - `files:write` — upload explicitly requested generated files, including images, and return private links in the current thread. Requested output files also receive separate **Open filename** actions that validate the requesting user and workspace path before opening the file on the Tag host.
    - `channels:read` + `channels:history` — read threads in public channels.
    - `groups:read` + `groups:history` — read threads in private channels.
+   - `im:history` — read direct-message threads when DM invocation is enabled.
 5. Open **Event Subscriptions** and subscribe to Bot Events:
    - `app_mention`
+   - `message.im`
    - `app_home_opened`
    - `agent_session_stopped`
-6. Install or reinstall the app to the workspace after changing scopes/events.
+6. Start Tag. It applies pending manifest migrations and, when a new scope is
+   required, opens Slack's reinstall approval flow automatically.
 7. Copy the **Bot User OAuth Token** (`xoxb-...`).
 8. Invite the bot to the sandbox channel:
    ```text
@@ -161,6 +167,7 @@ export OPENTAG_BACKEND="<backend>"   # claude | codex
 export OPENTAG_WORKDIR="/path/to/workspace"
 export SLACK_CHANNEL_IDS="<channel-id>,<another-channel-id>"
 export SLACK_ALLOWED_USER_IDS="<owner-member-id>"
+export OPENTAG_SLACK_DM_ENABLED=1
 ```
 
 `SLACK_ALLOWED_USER_IDS` is required and fails closed when empty. In Slack, open
@@ -170,13 +177,21 @@ intentionally shares access. Unauthorized mentions receive a denial without
 reading the thread or invoking the backend. Existing installations must add this
 setting before restarting Tag.
 
+Direct-message invocation is enabled by default for the same authorized users,
+who can invoke Tag without an `@mention` from OpenMax's Messages tab. The channel
+allowlist does not apply to DMs, but `SLACK_ALLOWED_USER_IDS` still does. Set
+`OPENTAG_SLACK_DM_ENABLED=0` to disable DM invocation. Each top-level DM starts a
+fresh backend task, while replies reuse only that DM thread's bounded context
+(up to 30 messages).
+
 The bridge does not need a model API key. The selected CLI backend handles model
 auth and tool execution.
 
 Optional:
 
 ```bash
-export OPENTAG_TIMEOUT_SECONDS=420
+export OPENTAG_TIMEOUT_SECONDS=420      # stop after this much backend inactivity
+export OPENTAG_MAX_TIMEOUT_SECONDS=3600 # absolute task limit, even with activity
 export OPENTAG_BACKEND_ATTEMPTS=3   # codex backend: retries on capacity/rate-limit
 export OPENTAG_SLACK_STREAMING=0    # optional: disable default Slack response streaming
 export OPENTAG_CODEX_TRANSPORT=exec # optional legacy rollback; App Server is the default
@@ -240,8 +255,10 @@ model cache. Reasoning levels retain Codex's native names. Fast Mode is a
 separate On/Off setting and uses increased usage when enabled. Set
 `OPENTAG_CODEX_MODELS` to restrict what Slack users can select.
 The modal's **Reset to default** button restores every control before saving.
-Reinstall the Slack app from `slack-app-manifest.yaml` when upgrading an existing
-installation so interactive components are enabled.
+When upgrading an existing app, run `tag start` in an interactive terminal.
+Tag merges pending required scopes and event subscriptions into the remote
+manifest without removing operator-owned settings. Slack may still require an
+owner or workspace admin to approve newly requested OAuth permissions.
 
 ## Preflight
 
@@ -281,6 +298,10 @@ Then mention the bot in Slack:
 
 Follow-up messages in the same Slack thread are passed to the next backend run
 through `conversations.replies`.
+
+By default, an authorized user can instead open OpenMax's Messages tab and send
+a top-level request without mentioning the bot. Use thread replies for
+follow-ups; send a new top-level DM to begin a separate task.
 
 ## Manual Non-Slack Test
 

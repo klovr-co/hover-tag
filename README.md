@@ -45,7 +45,8 @@ Slack. They do not disappear into my private Claude or ChatGPT history.
 
 ## What Tag can do
 
-- Respond when someone mentions `@OpenMax` in Slack.
+- Respond when someone mentions `@OpenMax` in Slack or sends it a direct message,
+  provided the sender is explicitly authorized.
 - Read the current thread, including text and image attachments.
 - Upload backend-generated PNG, JPEG, GIF, and WebP images to the requesting thread.
 - Summarize an indexed Slack channel instead of seeing only one thread.
@@ -214,6 +215,10 @@ Mention `@OpenMax` in the sandbox channel you configured:
 
 Only the owner member ID entered during setup can invoke Tag initially. Add
 other IDs to the comma-separated `SLACK_ALLOWED_USER_IDS` setting to share access.
+Those authorized users can also invoke Tag without an `@mention` from OpenMax's
+Messages tab. Each top-level DM starts a fresh task; replies in that DM thread
+provide bounded context only for that task. Set `OPENTAG_SLACK_DM_ENABLED=0` to
+disable direct-message invocation.
 
 While a task runs, Tag uses Slack's native loading indicator instead of posting
 a temporary bot message. Slack response streaming is enabled by default.
@@ -281,19 +286,28 @@ The bridge app normally needs these bot scopes:
 - `files:read` and `files:write`
 - `channels:read` and `channels:history`
 - `groups:read` and `groups:history` if you intentionally use private channels
+- `im:history` for requests from the app's Messages tab
 
-It also needs the `app_mention`, `app_home_opened`, and `agent_session_stopped`
-bot events and an app-level token with
+It also needs the `app_mention`, `message.im`, `app_home_opened`, and
+`agent_session_stopped` bot events and an app-level token with
 `connections:write`. Invite the bot only to channels where it should respond.
 `files:read` supports input attachments, while `files:write` supports explicitly
 requested generated-file delivery through private Slack file links, including
 backend-generated images. Each requested output also gets its own **Open
 filename** button. The button is restricted to the requesting Slack user and
 opens that workspace file with the default desktop application on the machine
-running Tag; the private Slack link remains available on other devices. The
-included app manifest also requests
-`canvases:write` for the explicit Canvas helper. Reinstall the Slack app after
-adding any scope.
+running Tag; the private Slack link remains available on other devices.
+Direct-message execution is enabled by default and can be disabled with
+`OPENTAG_SLACK_DM_ENABLED=0`.
+The included app manifest also requests `canvases:write` for the explicit Canvas
+helper. Reinstall the Slack app after adding any scope.
+
+On upgrade, `tag start` compares the linked app with Tag's versioned manifest
+requirements and applies pending additive migrations before services start.
+Existing app-specific settings are preserved. If a migration adds an OAuth
+scope, Slack still requires the owner or workspace admin to approve that new
+permission; Tag opens the reinstall flow and refreshes its saved credentials
+instead of requiring manual manifest editing.
 
 By default Slack lets workspace members install apps, but a workspace owner or
 Enterprise organization can require approval. In that case, request approval
@@ -342,6 +356,10 @@ Current safeguards include:
 - bounded attachment size and thread context;
 - task timeouts and limited retries;
 - automatic Codex workspace safety review.
+
+The default task watchdog stops a backend after seven minutes without a
+recognized lifecycle event, while a separate one-hour maximum still bounds an
+active task. Slack's processing-status refresh does not extend either deadline.
 
 The backend's inherited credentials can be used directly by tools or shell
 commands, bypassing Tag's scoped helpers. Tag does **not** provide a hardened

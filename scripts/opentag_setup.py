@@ -80,6 +80,8 @@ REQUIRED_APP_SETTINGS = {
     "canvas writing": "canvases:write",
     "file access": "files:read",
     "file delivery": "files:write",
+    "direct-message event": "message.im",
+    "direct-message history": "im:history",
 }
 
 
@@ -204,7 +206,7 @@ def inspect_slack_app(project: Path, app_id: str, *, issues: list[str] | None = 
         print()
         ui.message("In Slack app settings:")
         if any(label in missing for label in (
-            "app mentions", "App Home event (app_home_opened)", "agent stop event"
+            "app mentions", "App Home event (app_home_opened)", "agent stop event", "direct-message event"
         )):
             ui.message("Event Subscriptions → Subscribe to bot events:", indent="    ")
             if "app mentions" in missing:
@@ -213,6 +215,8 @@ def inspect_slack_app(project: Path, app_id: str, *, issues: list[str] | None = 
                 ui.message("Add app_home_opened to show Tag's Home tab controls.", indent="      ")
             if "agent stop event" in missing:
                 ui.message("Add agent_session_stopped to enable the native Stop button.", indent="      ")
+            if "direct-message event" in missing:
+                ui.message("Add message.im to receive direct messages.", indent="      ")
         if "Home tab enabled" in missing:
             ui.message("App Home → Show Tabs → enable Home Tab.", indent="    ")
         if "Messages tab enabled" in missing:

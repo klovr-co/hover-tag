@@ -784,6 +784,16 @@ def main() -> int:
             raise RuntimeError(f"Another start is in progress. If interrupted, remove {lock} and retry.")
         started = []
         try:
+            try:
+                import slack_manifest_migrations
+            except ImportError:
+                from scripts import slack_manifest_migrations
+            manifest_changed = slack_manifest_migrations.reconcile(home, config_path, values)
+            display.info_row(
+                "Slack app",
+                "Permissions migrated" if manifest_changed else "Permissions current",
+                good=True,
+            )
             url = os.getenv("MFS_URL", "http://127.0.0.1:13619")
             if not healthy(url):
                 if url.rstrip("/") not in ("http://localhost:13619", "http://127.0.0.1:13619"):
