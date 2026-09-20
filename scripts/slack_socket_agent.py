@@ -61,6 +61,7 @@ SETTINGS_EFFORT_ACTION_ID = "opentag_settings_effort"
 SETTINGS_FAST_ACTION_ID = "opentag_settings_fast_mode"
 SETTINGS_RESET_ACTION_ID = "opentag_settings_reset"
 RETRY_ACTION_ID = "opentag_retry_request"
+OPEN_LOCAL_ARTIFACT_ACTION_ID = "opentag_open_local_artifact"
 SETTINGS_VIEW_ID = "opentag_agent_settings"
 HOME_CHANNEL_ACTION_ID = "opentag_home_channel"
 UNAUTHORIZED_USER_MESSAGE = "Sorry, only users authorized by the Tag owner can use this bot."
@@ -653,6 +654,82 @@ def settings_button_blocks(
             ],
         },
     ]
+
+
+def output_artifact_button_blocks(
+    paths: list[Path],
+    workdir: Path,
+    *,
+    user_id: str,
+    channel: str,
+    thread_ts: str,
+) -> list[dict[str, Any]]:
+    """Build one host-local open action for each validated output artifact."""
+    root = workdir.expanduser().resolve()
+    blocks: list[dict[str, Any]] = []
+    for index, raw_path in enumerate(paths):
+        try:
+            path = raw_path.expanduser().resolve(strict=True)
+            relative_path = path.relative_to(root)
+            if not path.is_file():
+                continue
+        except (OSError, ValueError):
+            continue
+        metadata = {
+            "user": user_id,
+            "channel": channel,
+            "thread_ts": thread_ts,
+            "path": str(relative_path),
+        }
+        value = json.dumps(metadata, separators=(",", ":"))
+        if len(value.encode("utf-8")) > 2_000:
+            continue
+        label = f"Open {path.name}"
+        if len(label) > 75:
+            label = label[:74] + "…"
+        blocks.append(
+            {
+                "type": "actions",
+                "block_id": f"opentag_artifact_{index}_{thread_ts}",
+                "elements": [
+                    {
+                        "type": "button",
+                        "action_id": OPEN_LOCAL_ARTIFACT_ACTION_ID,
+                        "text": {"type": "plain_text", "text": label},
+                        "value": value,
+                    }
+                ],
+            }
+        )
+    return blocks
+
+
+def resolve_local_artifact(raw_path: str, workdir: Path) -> Path:
+    """Resolve an action path while keeping it inside the configured workspace."""
+    candidate = Path(raw_path)
+    if candidate.is_absolute():
+        raise ValueError("artifact action path must be relative")
+    root = workdir.expanduser().resolve(strict=True)
+    path = (root / candidate).resolve(strict=True)
+    path.relative_to(root)
+    if not path.is_file():
+        raise ValueError("artifact action path must be a regular file")
+    return path
+
+
+def open_local_artifact(path: Path) -> None:
+    """Open a file with the desktop application on the machine running Tag."""
+    if os.name == "nt":
+        os.startfile(path)  # type: ignore[attr-defined]
+        return
+    command = ["open", str(path)] if sys.platform == "darwin" else ["xdg-open", str(path)]
+    subprocess.run(
+        command,
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=10,
+    )
 
 
 def settings_action_value(action: dict[str, Any]) -> str:
@@ -2152,6 +2229,67 @@ def create_app(
         except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
             logger.warning("Could not open Open Tag settings modal: %s", exc)
 
+    @app.action(OPEN_LOCAL_ARTIFACT_ACTION_ID)
+    def open_output_artifact(ack: Any, body: dict[str, Any], client: Any, logger: Any) -> None:
+        ack()
+        user_id = body.get("user", {}).get("id", "")
+        channel = body.get("channel", {}).get("id", "")
+        metadata: dict[str, Any] = {}
+        try:
+            metadata = json.loads(body["actions"][0]["value"])
+            expected_user = metadata["user"]
+            expected_channel = metadata["channel"]
+            thread_ts = metadata["thread_ts"]
+            raw_path = metadata["path"]
+            if not all(
+                isinstance(value, str) and value
+                for value in (
+                    user_id,
+                    channel,
+                    expected_user,
+                    expected_channel,
+                    thread_ts,
+                    raw_path,
+                )
+            ):
+                raise ValueError("invalid local artifact metadata")
+            if (
+                user_id != expected_user
+                or channel != expected_channel
+                or not slack_channel_allowed(channel)
+                or not slack_user_allowed(user_id, allowed_user_ids)
+            ):
+                raise PermissionError("local artifact action is not authorized")
+            path = resolve_local_artifact(raw_path, default_workdir())
+            open_local_artifact(path)
+            client.chat_postEphemeral(
+                channel=channel,
+                user=user_id,
+                thread_ts=thread_ts,
+                text=f"Opened `{path.name}` on the machine running Tag.",
+            )
+        except Exception as exc:  # noqa: BLE001 - keep the action listener alive
+            logger.warning("Could not open local output artifact: %s", exc)
+            expected_channel = metadata.get("channel")
+            thread_ts = metadata.get("thread_ts")
+            if (
+                isinstance(channel, str)
+                and channel
+                and channel == expected_channel
+                and user_id == metadata.get("user")
+                and slack_channel_allowed(channel)
+                and slack_user_allowed(user_id, allowed_user_ids)
+            ):
+                client.chat_postEphemeral(
+                    channel=channel,
+                    user=user_id,
+                    thread_ts=thread_ts if isinstance(thread_ts, str) else None,
+                    text=(
+                        "Tag couldn’t open that local file. It may have been moved or deleted, "
+                        "or the Tag host may not have a desktop application for it."
+                    ),
+                )
+
     @app.action(SETTINGS_MODEL_ACTION_ID)
     def refresh_reasoning_options(
         ack: Any,
@@ -2387,7 +2525,12 @@ def create_app(
                         fast_mode=agent_settings.fast_mode,
                         output_manifest=output_manifest,
                     )
+                artifact_button_blocks: list[dict[str, Any]] = []
                 if succeeded:
+                    artifact_paths, _artifact_errors = load_output_artifacts(
+                        output_manifest,
+                        default_workdir(),
+                    )
                     delivery_messages = deliver_output_artifacts(
                         client,
                         channel,
@@ -2398,17 +2541,23 @@ def create_app(
                     )
                     if delivery_messages:
                         answer = f"{answer.rstrip()}\n\n" + "\n".join(delivery_messages)
+                    artifact_button_blocks = output_artifact_button_blocks(
+                        artifact_paths,
+                        default_workdir(),
+                        user_id=user_id,
+                        channel=channel,
+                        thread_ts=thread_ts,
+                    )
                 indicator.clear()
                 if succeeded:
-                    footer_blocks = (
-                        settings_button_blocks(
+                    footer_blocks = artifact_button_blocks
+                    if backend == "codex":
+                        footer_blocks += settings_button_blocks(
                             team=team,
                             channel=channel,
                             thread_ts=thread_ts,
                         )
-                        if backend == "codex"
-                        else None
-                    )
+                    footer_blocks = footer_blocks or None
                 elif answer.startswith("Stopped.") or answer.startswith("Stop requested"):
                     footer_blocks = None
                 else:

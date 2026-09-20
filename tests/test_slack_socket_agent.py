@@ -114,6 +114,114 @@ class SlackTextAttachmentTests(unittest.TestCase):
 
 
 class SlackOutputArtifactTests(unittest.TestCase):
+    def test_builds_one_local_open_button_per_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir).resolve()
+            first = root / "launch-checklist.md"
+            second = root / "owners.csv"
+            first.write_text("# Checklist\n", encoding="utf-8")
+            second.write_text("owner\nAda\n", encoding="utf-8")
+
+            blocks = slack_socket_agent.output_artifact_button_blocks(
+                [first, second],
+                root,
+                user_id="UOWNER",
+                channel="C123",
+                thread_ts="1.23",
+            )
+
+        self.assertEqual(2, len(blocks))
+        buttons = [block["elements"][0] for block in blocks]
+        self.assertEqual(
+            ["Open launch-checklist.md", "Open owners.csv"],
+            [button["text"]["text"] for button in buttons],
+        )
+        self.assertTrue(
+            all(
+                button["action_id"] == slack_socket_agent.OPEN_LOCAL_ARTIFACT_ACTION_ID
+                for button in buttons
+            )
+        )
+        self.assertEqual(
+            ["launch-checklist.md", "owners.csv"],
+            [json.loads(button["value"])["path"] for button in buttons],
+        )
+
+    def test_local_open_action_validates_user_and_workspace_path(self) -> None:
+        fake_app = FakeApp()
+        client = MagicMock()
+        logger = MagicMock()
+        with tempfile.TemporaryDirectory() as raw_dir, tempfile.TemporaryDirectory() as outside_dir:
+            root = Path(raw_dir).resolve()
+            artifact = root / "report.md"
+            artifact.write_text("# Report\n", encoding="utf-8")
+            outside = Path(outside_dir) / "outside.md"
+            outside.write_text("outside\n", encoding="utf-8")
+            with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+                os.environ,
+                {"SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_IDS": "C123"},
+                clear=True,
+            ), patch.object(
+                slack_socket_agent, "default_workdir", return_value=root
+            ), patch.object(slack_socket_agent, "open_local_artifact") as local_open:
+                slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER", "UOTHER"}))
+                handler = fake_app.actions[slack_socket_agent.OPEN_LOCAL_ARTIFACT_ACTION_ID]
+                metadata = {
+                    "user": "UOWNER",
+                    "channel": "C123",
+                    "thread_ts": "1.23",
+                    "path": "report.md",
+                }
+                ack = MagicMock()
+                handler(
+                    ack,
+                    {
+                        "user": {"id": "UOWNER"},
+                        "channel": {"id": "C123"},
+                        "actions": [{"value": json.dumps(metadata)}],
+                    },
+                    client,
+                    logger,
+                )
+                local_open.assert_called_once_with(artifact)
+                ack.assert_called_once_with()
+                self.assertIn(
+                    "Opened `report.md`",
+                    client.chat_postEphemeral.call_args.kwargs["text"],
+                )
+
+                local_open.reset_mock()
+                client.chat_postEphemeral.reset_mock()
+                handler(
+                    MagicMock(),
+                    {
+                        "user": {"id": "UOTHER"},
+                        "channel": {"id": "C123"},
+                        "actions": [{"value": json.dumps(metadata)}],
+                    },
+                    client,
+                    logger,
+                )
+                local_open.assert_not_called()
+                client.chat_postEphemeral.assert_not_called()
+
+                metadata["path"] = str(outside)
+                handler(
+                    MagicMock(),
+                    {
+                        "user": {"id": "UOWNER"},
+                        "channel": {"id": "C123"},
+                        "actions": [{"value": json.dumps(metadata)}],
+                    },
+                    client,
+                    logger,
+                )
+                local_open.assert_not_called()
+                self.assertIn(
+                    "couldn’t open that local file",
+                    client.chat_postEphemeral.call_args.kwargs["text"],
+                )
+
     def test_uploads_requested_binary_file_to_originating_thread_unchanged(self) -> None:
         client = MagicMock()
         logger = MagicMock()
@@ -322,6 +430,11 @@ class SlackOutputArtifactTests(unittest.TestCase):
         self.assertIn(
             "<https://workspace.slack.com/files/FCSV/requested.csv|requested.csv>",
             posted,
+        )
+        posted_blocks = client.chat_postMessage.call_args.kwargs["blocks"]
+        self.assertEqual(
+            "Open requested.csv",
+            posted_blocks[1]["elements"][0]["text"]["text"],
         )
 
 

@@ -287,7 +287,11 @@ bot events and an app-level token with
 `connections:write`. Invite the bot only to channels where it should respond.
 `files:read` supports input attachments, while `files:write` supports explicitly
 requested generated-file delivery through private Slack file links, including
-backend-generated images. The included app manifest also requests
+backend-generated images. Each requested output also gets its own **Open
+filename** button. The button is restricted to the requesting Slack user and
+opens that workspace file with the default desktop application on the machine
+running Tag; the private Slack link remains available on other devices. The
+included app manifest also requests
 `canvases:write` for the explicit Canvas helper. Reinstall the Slack app after
 adding any scope.
 
