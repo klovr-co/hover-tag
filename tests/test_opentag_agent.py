@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, call, patch
 
 from scripts import opentag_agent
 
@@ -98,10 +98,71 @@ class OpenTagAgentPromptTests(unittest.TestCase):
         self.assertEqual(0, code)
         self.assertEqual("done", output)
         self.assertIn("--approve-for-me", command)
+        self.assertIn("features.fast_mode=true", command)
+        self.assertIn('service_tier="default"', command)
         self.assertNotIn("--dangerously-bypass-approvals-and-sandbox", command)
 
 
 class BackendStreamEventTests(unittest.TestCase):
+    def test_retryable_failure_recognizes_structured_rate_limit_errors(self) -> None:
+        self.assertTrue(opentag_agent.retryable_backend_failure("rate_limit_exceeded"))
+        self.assertTrue(opentag_agent.retryable_backend_failure("HTTP 429: too many requests"))
+        self.assertFalse(opentag_agent.retryable_backend_failure("invalid authentication"))
+
+    def test_app_server_retries_capacity_before_work_begins(self) -> None:
+        server = MagicMock()
+        server.run.side_effect = [
+            ("failed", "selected model is at capacity"),
+            ("completed", ""),
+        ]
+        with patch.dict(os.environ, {"OPENTAG_BACKEND_ATTEMPTS": "3"}, clear=False), patch.object(
+            opentag_agent, "CodexAppServer", return_value=server
+        ) as server_class, patch.object(opentag_agent, "emit_event") as emit, patch.object(
+            opentag_agent.time, "sleep"
+        ):
+            result = opentag_agent.run_codex_app_server_events(
+                "prompt", workdir=Path("/work"), timeout=30
+            )
+
+        self.assertEqual(0, result)
+        self.assertEqual(2, server_class.call_count)
+        self.assertIn(
+            call("status", "Backend busy — retrying (2/3)…"),
+            emit.call_args_list,
+        )
+
+    def test_app_server_does_not_retry_after_observable_work(self) -> None:
+        server = MagicMock()
+
+        def fail_after_activity(*_args, **kwargs):
+            kwargs["emit"]({
+                "type": "activity_start",
+                "activity_id": "one",
+                "label": "Running a command…",
+            })
+            return "failed", "rate limit exceeded"
+
+        server.run.side_effect = fail_after_activity
+        with patch.dict(os.environ, {"OPENTAG_BACKEND_ATTEMPTS": "3"}, clear=False), patch.object(
+            opentag_agent, "CodexAppServer", return_value=server
+        ) as server_class, patch.object(opentag_agent, "emit_event") as emit:
+            result = opentag_agent.run_codex_app_server_events(
+                "prompt", workdir=Path("/work"), timeout=30
+            )
+
+        self.assertEqual(1, result)
+        server_class.assert_called_once()
+        self.assertNotIn("status", [item.args[0] for item in emit.call_args_list])
+
+    def test_codex_event_transport_defaults_to_app_server_and_keeps_exec_rollback(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual("app-server", opentag_agent.codex_event_transport())
+        with patch.dict(os.environ, {"OPENTAG_CODEX_TRANSPORT": "exec"}, clear=True):
+            self.assertEqual("exec", opentag_agent.codex_event_transport())
+        with patch.dict(os.environ, {"OPENTAG_CODEX_TRANSPORT": "socket"}, clear=True):
+            with self.assertRaisesRegex(ValueError, "exec or app-server"):
+                opentag_agent.codex_event_transport()
+
     def test_codex_exposes_only_completed_agent_messages(self) -> None:
         self.assertEqual(
             ("final", "Ready"),
@@ -187,7 +248,7 @@ class BackendStreamEventTests(unittest.TestCase):
         self.assertIn("--include-partial-messages", claude)
         self.assertNotIn("prompt", claude)
 
-    def test_codex_stream_command_applies_model_and_reasoning_overrides(self) -> None:
+    def test_codex_stream_command_applies_model_reasoning_and_fast_overrides(self) -> None:
         command = opentag_agent.codex_stream_command(
             "prompt",
             skill_dir=Path("/skill"),
@@ -196,7 +257,23 @@ class BackendStreamEventTests(unittest.TestCase):
             output_path=Path("/tmp/final.txt"),
             model="gpt-example",
             reasoning_effort="high",
+            fast_mode=True,
         )
 
         self.assertIn("gpt-example", command)
         self.assertIn('model_reasoning_effort="high"', command)
+        self.assertIn("features.fast_mode=true", command)
+        self.assertIn('service_tier="fast"', command)
+
+    def test_codex_stream_command_explicitly_turns_fast_mode_off(self) -> None:
+        command = opentag_agent.codex_stream_command(
+            "prompt",
+            skill_dir=Path("/skill"),
+            workdir=Path("/work"),
+            attachments_dir=None,
+            output_path=Path("/tmp/final.txt"),
+            fast_mode=False,
+        )
+
+        self.assertIn("features.fast_mode=true", command)
+        self.assertIn('service_tier="default"', command)

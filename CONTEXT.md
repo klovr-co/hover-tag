@@ -26,3 +26,5 @@ compatibility; they do not define a separate product name.
 
 - [Credential boundary](docs/adr/0001-credential-boundary.md)
 - [Local process supervision](docs/adr/0002-local-process-supervision.md)
+- [Installed application home](docs/adr/0003-installed-home.md)
+- [Codex App Server transport](docs/adr/0004-codex-app-server.md)

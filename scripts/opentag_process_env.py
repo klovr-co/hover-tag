@@ -3,14 +3,34 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from urllib.parse import urlsplit
 
 
 SLACK_BRIDGE_ONLY_ENV = {
     "SLACK_APP_TOKEN",
+    "SLACK_APP_ID",
+    "SLACK_TEAM_ID",
     "SLACK_CHANNEL_ID",
+    "SLACK_CHANNEL_IDS",
+    "SLACK_CHANNEL_POLICY",
     "SLACK_ALLOWED_USER_IDS",
     "OPENTAG_SLACK_DM_ENABLED",
+    "MFS_SLACK_TOKEN",
 }
+
+
+def current_channel_scopes(raw_scopes: str, conversation_id: str) -> str:
+    """Narrow Slack connector scopes to this invocation's channel directory."""
+    scopes = [scope.strip() for scope in raw_scopes.split(",") if scope.strip()]
+    narrowed: list[str] = []
+    for scope in scopes:
+        parsed = urlsplit(scope)
+        marker = f"__{conversation_id}"
+        if parsed.scheme == "slack" and any(
+            segment.endswith(marker) for segment in parsed.path.split("/")
+        ):
+            narrowed.append(scope)
+    return ",".join(narrowed)
 
 
 def isolated_environment(source: Mapping[str, str], *, transport: str) -> dict[str, str]:
@@ -33,4 +53,8 @@ def backend_environment(
         clean.pop(name, None)
     clean["OPENTAG_CURRENT_CHANNEL_ID"] = conversation_id
     clean["OPENTAG_CALLER_ID"] = caller_id
+    if clean.get("MFS_ALLOWED_SCOPES"):
+        clean["MFS_ALLOWED_SCOPES"] = current_channel_scopes(
+            clean["MFS_ALLOWED_SCOPES"], conversation_id
+        )
     return clean
