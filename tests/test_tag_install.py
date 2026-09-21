@@ -336,6 +336,16 @@ class TagHomeTests(unittest.TestCase):
                 self.assertEqual(tag_temp_dir(), home / "instances/default/tmp")
                 self.assertTrue((home / "instances/default/tmp").is_dir())
 
+    def test_temporary_root_restricts_home_and_temp_acls(self):
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp) / "instance"
+            with patch.dict(os.environ, {"TAG_INSTANCE_HOME": str(home)}), patch(
+                "scripts.tag_paths.restrict_windows_acl"
+            ) as restrict:
+                self.assertEqual(tag_temp_dir(), home / "tmp")
+
+            self.assertEqual([call.args[0] for call in restrict.call_args_list], [home, home / "tmp"])
+
     def test_scoped_mcp_overlay_preserves_global_home(self):
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp)
@@ -395,6 +405,19 @@ class TagHomeTests(unittest.TestCase):
                     folder = home / "workspace" / backend / "skills/open-tag-admin"
                     self.assertFalse((folder / "SKILL.md").exists())
                     self.assertEqual((folder / "personal-notes.md").read_text(), "keep this")
+
+    def test_upgrade_preserves_non_utf8_custom_admin_skill(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            home = root / "home"
+            skill = home / "workspace/.agents/skills/open-tag-admin/SKILL.md"
+            skill.parent.mkdir(parents=True)
+            custom = b"custom admin instructions: \xff\xfe"
+            skill.write_bytes(custom)
+
+            install(ROOT, home, root / "bin", dependencies=False)
+
+            self.assertEqual(skill.read_bytes(), custom)
 
     def test_install_upgrade_and_run_without_source(self):
         with tempfile.TemporaryDirectory(prefix="Tag install with spaces ") as temp:

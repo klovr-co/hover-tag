@@ -1,5 +1,7 @@
 # Changelog
 
+All notable changes to Tag are documented here.
+
 ## Unreleased
 
 ### Added
@@ -13,13 +15,6 @@
   data requires a one-time stopped-service migration.
 - Let existing-app setup enable Slack's Agent messaging experience through a
   targeted, verified manifest sync while preserving unrelated app settings.
-
-All notable changes to Tag are documented here.
-
-## Unreleased
-
-### Added
-
 - Let new-app setup propose **&lt;the operator's first name&gt;'s Tag**, render a
   deterministic identity from 144 curated Tag waterdrop bases and 16 subtle signatures,
   or choose a validated local PNG,

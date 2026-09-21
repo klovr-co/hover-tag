@@ -222,7 +222,7 @@ def config_command(home: Path, words: list[str], *, json_output: bool, stdin: bo
             ui.display.info_row(key, value or "not set")
         for key, problem in result["fields"].items():
             ui.display.info_row(key, problem, good=False)
-        ui.display.next_action("Edit settings interactively", "tag settings")
+        ui.display.next_action("Edit settings interactively", tag_command(tag_id, "settings"))
     elif action == "init":
         ui.display.header("Config", target_detail(identity, tag_id, suffix="Existing values are preserved"))
         ui.display.completion("Defaults saved", result["note"], next_label="Inspect configuration", next_command=result["next_command"])

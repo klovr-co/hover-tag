@@ -51,8 +51,10 @@ def tag_temp_dir() -> Path:
     """Return TAG's private temporary root, creating it for direct script runs."""
     home = instance_home()
     home.mkdir(parents=True, exist_ok=True, mode=0o700)
+    restrict_windows_acl(home)
     temporary = home / "tmp"
     temporary.mkdir(parents=True, exist_ok=True, mode=0o700)
+    restrict_windows_acl(temporary)
     return temporary
 
 

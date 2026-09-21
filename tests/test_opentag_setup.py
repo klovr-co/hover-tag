@@ -494,6 +494,25 @@ class OpenTagSetupTests(unittest.TestCase):
         self.assertIn("Add app_home_opened", output.getvalue())
         browser.assert_not_called()
 
+    def test_missing_agent_view_omits_redundant_manual_guidance(self) -> None:
+        manifest = (opentag_setup.ROOT / "slack-app-manifest.yaml").read_text().replace(
+            "  agent_view:\n    agent_description: Run approved Codex or Claude tasks from Slack.\n",
+            "",
+        )
+        with patch.object(
+            opentag_setup.subprocess,
+            "run",
+            return_value=subprocess.CompletedProcess([], 0, manifest, ""),
+        ), redirect_stdout(StringIO()) as output:
+            self.assertFalse(opentag_setup.inspect_slack_app(Path("."), "ATEST"))
+        rendered = output.getvalue()
+        self.assertNotIn("App configuration needs attention", rendered)
+        self.assertNotIn("Agent view enabled", rendered)
+        self.assertNotIn("Tag can enable Agent messaging", rendered)
+        self.assertNotIn("In Slack app settings", rendered)
+        self.assertNotIn("Agents & AI Apps", rendered)
+        self.assertNotIn("Keep existing settings", rendered)
+
     def test_multiple_app_issues_offer_only_browser_guidance(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
@@ -512,7 +531,7 @@ class OpenTagSetupTests(unittest.TestCase):
             self.assertEqual(choose.call_args_list[0].args[1], ["Open app settings", "Check again", "Save and exit"])
             browser.assert_called_once_with("https://api.slack.com/apps/ATEST")
 
-    def test_missing_agent_view_offers_cli_repair_and_rechecks(self) -> None:
+    def test_missing_agent_view_is_repaired_automatically_and_rechecked(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             config = home / "config/settings.json"
@@ -528,14 +547,58 @@ class OpenTagSetupTests(unittest.TestCase):
             inspect.calls = 0
             with patch.object(opentag_setup, "saved_slack_app", return_value=True), patch.object(
                 opentag_setup, "inspect_slack_app", side_effect=inspect
-            ), patch.object(opentag_setup.ui, "choose", return_value=0) as choose, patch.object(
+            ), patch.object(opentag_setup.ui, "choose") as choose, patch.object(
                 opentag_setup.slack_manifest_migrations, "enable_agent_view", return_value=True
             ) as enable, redirect_stdout(StringIO()):
                 self.assertEqual(opentag_setup.choose_slack_app(home, "TTEST", config), "ATEST")
-            self.assertEqual(choose.call_args.args[1][0], "Enable Agent messaging with Slack CLI")
+            choose.assert_not_called()
             enable.assert_called_once()
             self.assertEqual(enable.call_args.args[:3], (opentag_setup.slack_project(home), "ATEST", "TTEST"))
             self.assertTrue(callable(enable.call_args.kwargs["approve_legacy"]))
+
+    def test_already_enabled_agent_messaging_does_not_offer_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            config = home / "config/settings.json"
+            opentag_setup.settings.save_config(config, {"SLACK_APP_ID": "ATEST"})
+
+            def stale_check(project, app_id, *, issues):
+                issues[:] = ["Agent view enabled"]
+                return False
+
+            with patch.object(opentag_setup, "saved_slack_app", return_value=True), patch.object(
+                opentag_setup, "inspect_slack_app", side_effect=stale_check
+            ), patch.object(opentag_setup.ui, "choose") as choose, patch.object(
+                opentag_setup.slack_manifest_migrations, "enable_agent_view", return_value=False
+            ), redirect_stdout(StringIO()):
+                self.assertEqual(opentag_setup.choose_slack_app(home, "TTEST", config), "ATEST")
+            choose.assert_not_called()
+
+    def test_failed_automatic_agent_repair_offers_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            config = home / "config/settings.json"
+            opentag_setup.settings.save_config(config, {"SLACK_APP_ID": "ATEST"})
+
+            def failed_check(project, app_id, *, issues):
+                issues[:] = ["Agent view enabled"]
+                return False
+
+            with patch.object(opentag_setup, "saved_slack_app", return_value=True), patch.object(
+                opentag_setup, "inspect_slack_app", side_effect=failed_check
+            ), patch.object(opentag_setup.ui, "choose", return_value=3) as choose, patch.object(
+                opentag_setup.slack_manifest_migrations,
+                "enable_agent_view",
+                side_effect=RuntimeError("sync failed"),
+            ), redirect_stdout(StringIO()):
+                with self.assertRaises(opentag_setup.ui.Paused):
+                    opentag_setup.choose_slack_app(home, "TTEST", config)
+            self.assertEqual(choose.call_args.args[1], [
+                "Retry Agent messaging with Slack CLI",
+                "Open app settings",
+                "Check again",
+                "Save and exit",
+            ])
 
     def test_slack_project_repairs_missing_hooks_and_preserves_existing_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
