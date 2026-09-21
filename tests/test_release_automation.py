@@ -178,7 +178,7 @@ class ChannelIndexTests(unittest.TestCase):
             "assets": [{"name": name} for name in names],
         }
 
-    def test_builds_compatible_channel_pointers_and_edge(self) -> None:
+    def test_builds_phase_specific_channel_pointers_and_edge(self) -> None:
         stable = self.release("1.0.0", "a" * 40, prerelease=False)
         alpha = self.release("1.1.0-alpha.2", "b" * 40, prerelease=True)
         beta = self.release("1.1.0-beta.1", "c" * 40, prerelease=True)
@@ -204,7 +204,7 @@ class ChannelIndexTests(unittest.TestCase):
         self.assertEqual(index["repository"], "klovr-co/hover-tag")
         self.assertEqual(index["channels"]["stable"]["version"], "1.0.0")
         self.assertEqual(index["channels"]["beta"]["version"], "1.1.0-beta.1")
-        self.assertEqual(index["channels"]["alpha"]["version"], "1.1.0-beta.1")
+        self.assertEqual(index["channels"]["alpha"]["version"], "1.1.0-alpha.2")
         self.assertEqual(index["channels"]["edge"], {
             "version": "edge",
             "tag": "edge",
@@ -338,6 +338,20 @@ class ReleaseArtifactTests(unittest.TestCase):
             archive = temporary / "tag-0.2.0-alpha.11.zip"
             extracted = temporary / "extracted"
             build_archive(root, archive, version="0.2.0-alpha.11")
+            with zipfile.ZipFile(archive) as bundle:
+                bundle.extractall(extracted)
+
+            errors = validate_release(extracted)
+
+        self.assertEqual(errors, [])
+
+    def test_numbered_beta_archive_satisfies_release_contract(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary = Path(temporary_directory)
+            archive = temporary / "tag-0.2.0-beta.5.zip"
+            extracted = temporary / "extracted"
+            build_archive(root, archive, version="0.2.0-beta.5")
             with zipfile.ZipFile(archive) as bundle:
                 bundle.extractall(extracted)
 

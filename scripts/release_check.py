@@ -10,7 +10,7 @@ from pathlib import Path
 
 
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$")
-NUMBERED_ALPHA_RE = re.compile(r"^(\d+\.\d+\.\d+-alpha)\.\d+$")
+NUMBERED_PRERELEASE_RE = re.compile(r"^(\d+\.\d+\.\d+-(?:alpha|beta))\.\d+$")
 MODIFICATION_NOTICE = "Modified by klovr.co in 2026 for Tag."
 MODIFIED_UPSTREAM_FILES = (
     ".env.example",
@@ -34,8 +34,8 @@ def _read(root: Path, relative_path: str, errors: list[str]) -> str:
 
 def _release_contract_version(version: str) -> str:
     """Return the source-selected version that RELEASE.md must document."""
-    numbered_alpha = NUMBERED_ALPHA_RE.fullmatch(version)
-    return numbered_alpha.group(1) if numbered_alpha else version
+    numbered_prerelease = NUMBERED_PRERELEASE_RE.fullmatch(version)
+    return numbered_prerelease.group(1) if numbered_prerelease else version
 
 
 def validate_release(root: Path) -> list[str]:
