@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tag Release"
+  short_description: "Prepare and promote Tag release candidates"
+  default_prompt: "Use $tag-release to prepare the current Tag release for beta."
