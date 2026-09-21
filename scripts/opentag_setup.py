@@ -502,38 +502,28 @@ class WaterdropBackground:
 
 
 WATERDROP_BODIES = (
-    WaterdropBody("aqua", .52),
-    WaterdropBody("azure", .57),
-    WaterdropBody("cobalt", .62),
-    WaterdropBody("indigo", .68),
-    WaterdropBody("violet", .75),
-    WaterdropBody("orchid", .82),
-    WaterdropBody("berry", .91),
-    WaterdropBody("coral", .99),
-    WaterdropBody("tangerine", .06),
-    WaterdropBody("gold", .13, .92),
-    WaterdropBody("lime", .24, .90),
-    WaterdropBody("emerald", .40, .94),
+    WaterdropBody("metal", 0, .08),
+    WaterdropBody("wood", .36, .86),
+    WaterdropBody("water", .57),
+    WaterdropBody("fire", .01, .92),
+    WaterdropBody("soil", .13, .92),
 )
+WATERDROP_ELEMENTS = (
+    ("Metal · white", "metal"),
+    ("Wood · green", "wood"),
+    ("Water · blue (default)", "water"),
+    ("Fire · red", "fire"),
+    ("Soil · yellow", "soil"),
+)
+DEFAULT_WATERDROP_ELEMENT = "water"
 WATERDROP_BACKGROUNDS = (
     WaterdropBackground("mist", 0, .18, .96),
-    WaterdropBackground("counterpoint", .48, .14, .98),
-    WaterdropBackground("cream", .12, .10, 1.0),
-    WaterdropBackground("cloud", .60, .08, .97),
+    WaterdropBackground("haze", -.02, .12, .99),
+    WaterdropBackground("veil", .02, .08, 1.0),
 )
 WATERDROP_APPROVED_BACKGROUNDS = {
-    "aqua": ("mist", "cream", "cloud"),
-    "azure": ("mist", "counterpoint", "cream"),
-    "cobalt": ("mist", "counterpoint", "cream"),
-    "indigo": ("mist", "counterpoint", "cream"),
-    "violet": ("mist", "counterpoint", "cream"),
-    "orchid": ("mist", "counterpoint", "cloud"),
-    "berry": ("mist", "counterpoint", "cloud"),
-    "coral": ("mist", "counterpoint", "cloud"),
-    "tangerine": ("mist", "counterpoint", "cloud"),
-    "gold": ("counterpoint", "cloud", "mist"),
-    "lime": ("mist", "counterpoint", "cream"),
-    "emerald": ("mist", "counterpoint", "cream"),
+    element: ("mist", "haze", "veil")
+    for element in ("metal", "wood", "water", "fire", "soil")
 }
 WATERDROP_HIGHLIGHTS = ("glass", "pearl", "glow", "frost")
 WATERDROP_SIGNATURES = (
@@ -545,10 +535,11 @@ WATERDROP_SIGNATURES = (
 WATERDROP_BASE_COUNT = len(WATERDROP_BODIES) * 3 * len(WATERDROP_HIGHLIGHTS)
 WATERDROP_SIGNATURE_COUNT = len(WATERDROP_SIGNATURES)
 WATERDROP_RECIPE_COUNT = WATERDROP_BASE_COUNT * WATERDROP_SIGNATURE_COUNT
+WATERDROP_ELEMENT_RECIPE_COUNT = WATERDROP_RECIPE_COUNT // len(WATERDROP_BODIES)
 
 
 def waterdrop_recipe(seed: str, recipe_index: int | None = None) -> dict[str, object]:
-    """Choose one of 144 curated bases and one of 16 subtle signatures."""
+    """Choose one five-element waterdrop with a subtle, deterministic signature."""
     if recipe_index is None:
         recipe_index = int.from_bytes(hashlib.sha256(seed.encode("utf-8")).digest()[:8], "big")
     identity_index = recipe_index % WATERDROP_RECIPE_COUNT
@@ -588,6 +579,7 @@ def _remember_waterdrop_index(project: Path, seed: str, identity_index: int) -> 
     assignments[seed] = {
         "team_id": seed.partition(":")[0],
         "index": identity_index % WATERDROP_RECIPE_COUNT,
+        "element": waterdrop_recipe(seed, identity_index)["body"].name,
     }
     temporary = assignments_path.with_suffix(".json.tmp")
     temporary.write_text(json.dumps(assignments, indent=2, sort_keys=True) + "\n")
@@ -596,12 +588,36 @@ def _remember_waterdrop_index(project: Path, seed: str, identity_index: int) -> 
         assignments_path.chmod(0o600)
 
 
-def _assigned_waterdrop_index(project: Path, seed: str) -> int:
+def _element_identity_index(element: str, variation_index: int) -> int:
+    """Map an element-local variant onto the stable global recipe index."""
+    element_index = next(
+        (index for index, body in enumerate(WATERDROP_BODIES) if body.name == element),
+        None,
+    )
+    if element_index is None:
+        raise ValueError(f"Unknown waterdrop element: {element}")
+    variation_index %= WATERDROP_ELEMENT_RECIPE_COUNT
+    background_slot = variation_index % 3
+    highlight_slot = (variation_index // 3) % len(WATERDROP_HIGHLIGHTS)
+    signature_index = variation_index // (3 * len(WATERDROP_HIGHLIGHTS))
+    base_index = (
+        element_index
+        + len(WATERDROP_BODIES) * background_slot
+        + len(WATERDROP_BODIES) * 3 * highlight_slot
+    )
+    return base_index + WATERDROP_BASE_COUNT * signature_index
+
+
+def _assigned_waterdrop_index(
+    project: Path, seed: str, element: str = DEFAULT_WATERDROP_ELEMENT
+) -> int:
     """Keep an identity stable and avoid known local collisions per workspace."""
     _, assignments = _waterdrop_assignments(project)
     saved = assignments.get(seed)
     if isinstance(saved, dict) and isinstance(saved.get("index"), int):
-        return saved["index"] % WATERDROP_RECIPE_COUNT
+        saved_index = saved["index"] % WATERDROP_RECIPE_COUNT
+        if waterdrop_recipe(seed, saved_index)["body"].name == element:
+            return saved_index
     team_id = seed.partition(":")[0]
     occupied = {
         item["index"] % WATERDROP_RECIPE_COUNT
@@ -609,13 +625,14 @@ def _assigned_waterdrop_index(project: Path, seed: str) -> int:
         if isinstance(item, dict) and item.get("team_id") == team_id
         and isinstance(item.get("index"), int)
     }
-    identity_index = int.from_bytes(
+    variation_index = int.from_bytes(
         hashlib.sha256(seed.encode("utf-8")).digest()[:8], "big"
-    ) % WATERDROP_RECIPE_COUNT
-    for _ in range(WATERDROP_RECIPE_COUNT):
+    ) % WATERDROP_ELEMENT_RECIPE_COUNT
+    for _ in range(WATERDROP_ELEMENT_RECIPE_COUNT):
+        identity_index = _element_identity_index(element, variation_index)
         if identity_index not in occupied:
             break
-        identity_index = (identity_index + 1) % WATERDROP_RECIPE_COUNT
+        variation_index = (variation_index + 1) % WATERDROP_ELEMENT_RECIPE_COUNT
     _remember_waterdrop_index(project, seed, identity_index)
     return identity_index
 
@@ -637,8 +654,11 @@ def _waterdrop_palette(recipe: dict[str, object]) -> dict[str, bytes]:
     body = recipe["body"]
     background = recipe["background"]
     assert isinstance(body, WaterdropBody) and isinstance(background, WaterdropBackground)
-    background_hue = background.hue_offset if background.name in {"cream", "cloud"} else body.hue + background.hue_offset
-    background_color = _rgb_bytes(background_hue, background.saturation, background.value)
+    background_color = _rgb_bytes(
+        body.hue + background.hue_offset,
+        background.saturation * body.saturation,
+        background.value,
+    )
     palette = {
         key: background_color if key in "BCDEFG" else _body_color(value, body)
         for key, value in MASCOT_PALETTE.items()
@@ -660,7 +680,13 @@ def _png_chunk(kind: bytes, payload: bytes) -> bytes:
     return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", checksum)
 
 
-def branded_profile_icon(project: Path, seed: str, *, recipe_index: int | None = None) -> Path:
+def branded_profile_icon(
+    project: Path,
+    seed: str,
+    *,
+    recipe_index: int | None = None,
+    element: str = DEFAULT_WATERDROP_ELEMENT,
+) -> Path:
     """Render one curated, deterministic Tag waterdrop identity as a Slack icon."""
     width = height = 512
     scale = 12
@@ -668,7 +694,7 @@ def branded_profile_icon(project: Path, seed: str, *, recipe_index: int | None =
     left = (width - sprite_width * scale) // 2
     top = (height - sprite_height * scale) // 2
     if recipe_index is None:
-        recipe_index = _assigned_waterdrop_index(project, seed)
+        recipe_index = _assigned_waterdrop_index(project, seed, element)
     recipe = waterdrop_recipe(seed, recipe_index)
     palette = _waterdrop_palette(recipe)
     background = palette["E"]
@@ -854,21 +880,31 @@ def customize_new_app(
 
     while True:
         if saved is None:
-            action = ui.choose("Profile picture", [
-                "Use my Tag waterdrop", "Choose my own picture", "Save and exit",
-            ])
-            if action == 2:
+            element_default = next(
+                index for index, (_, element) in enumerate(WATERDROP_ELEMENTS)
+                if element == DEFAULT_WATERDROP_ELEMENT
+            )
+            action = ui.choose(
+                "Profile picture",
+                [label for label, _ in WATERDROP_ELEMENTS]
+                + ["Choose my own picture", "Save and exit"],
+                default=element_default,
+            )
+            if action == len(WATERDROP_ELEMENTS) + 1:
                 raise ui.Paused()
             if not slack_cli_supports_icon_upload():
                 ui.message("Profile-picture upload requires Slack CLI 4.7 or newer.")
                 ui.message("Upgrade Slack CLI, then run tag setup again. Your assistant name is saved.")
                 raise ui.Paused()
-            if action == 0:
+            if action < len(WATERDROP_ELEMENTS):
+                element = WATERDROP_ELEMENTS[action][1]
                 seed = f"{team_id}:{name}"
-                identity_index = _assigned_waterdrop_index(project, seed)
-                saved = branded_profile_icon(project, seed, recipe_index=identity_index)
+                identity_index = _assigned_waterdrop_index(project, seed, element)
+                saved = branded_profile_icon(
+                    project, seed, recipe_index=identity_index, element=element
+                )
                 picture_kind = "waterdrop"
-                picture_label = f"Tag waterdrop #{identity_index + 1:04d}"
+                picture_label = f"{element.title()} · Tag waterdrop #{identity_index + 1:04d}"
                 ui.message(f"✓ {picture_label} is ready")
             else:
                 ui.message("Drag a picture here, or paste its local path.")

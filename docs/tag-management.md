@@ -123,10 +123,11 @@ triggers deletion.
 Setup offers **Create a new Tag app**, **Use an existing app**, or **Save and exit**.
 Profile-picture selection and upload require Slack CLI 4.7 or newer.
 Before creating a new app, setup proposes **&lt;your first name&gt;'s Tag** and a
-curated version of Tag's waterdrop, selected from 144 approved base designs and
-16 subtle signatures (2,304 identities). Tag remembers the assignment and avoids
-known collisions for that workspace on the same installation. Choose **Use my Tag waterdrop** to
-keep that branded identity, or **Choose my own picture** and drag or paste one
+curated version of Tag's waterdrop. Choose Metal (white), Wood (green), Water
+(the default blue), Fire (red), or Soil (yellow). Backgrounds, highlights, and
+16 subtle signatures provide 960 identities. Tag remembers the assignment and
+avoids known collisions for that workspace on the same installation. Choose an
+element to keep that branded identity, or **Choose my own picture** and drag or paste one
 local PNG, JPEG, or GIF path into the terminal. Images must be 512–2000 pixels
 in each dimension. Before creating anything remotely, Tag reviews the chosen
 name and picture and offers to open the PNG in the system image viewer, change

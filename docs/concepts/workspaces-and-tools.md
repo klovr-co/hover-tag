@@ -14,21 +14,21 @@ Before a launch meeting, attach your existing brief as a text or Markdown file
 to a Slack message mentioning Tag. Ask it to flag anything you need to settle
 before launch, then answer its questions in the same thread.
 
-> **Maya attached launch-brief.txt**
+> **Iris attached launch-brief.txt**
 >
-> Launch: Monday. FAQ: Jules, due Tuesday. Signup testing: Maya, due Wednesday.
+> Launch: Monday. FAQ: Jules, due Tuesday. Signup testing: Iris, due Wednesday.
 > Support must be briefed before launch. Go/no-go approval is required.
 >
-> **Maya:** @Maya's Tag review this and save the open questions as open-questions.md in your workspace.
+> **Iris:** @Iris's Tag review this and save the open questions as open-questions.md in your workspace.
 >
-> **Maya's Tag:** Saved the questions in open-questions.md:
+> **Iris's Tag:** Saved the questions in open-questions.md:
 > - Are the FAQ and signup testing due the week before launch?
 > - Who will brief support, and when?
 > - Who makes the final call to launch?
 >
-> **Maya:** @Maya's Tag yes, both are due the week before. I'll brief support on Thursday. Update the file.
+> **Iris:** @Iris's Tag yes, both are due the week before. I'll brief support on Thursday. Update the file.
 >
-> **Maya's Tag:** Updated open-questions.md with those answers. Still open: who makes the final call to launch?
+> **Iris's Tag:** Updated open-questions.md with those answers. Still open: who makes the final call to launch?
 >
 > ↗️ open-questions.md · 📁 Open folder
 

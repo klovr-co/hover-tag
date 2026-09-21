@@ -149,7 +149,7 @@ class OpenTagSetupTests(unittest.TestCase):
             )
             pasted_path = repr(str(source))
             with patch.object(opentag_setup, "ask", side_effect=["Helper", pasted_path]), patch.object(
-                opentag_setup.ui, "choose", side_effect=[1, 0]
+                opentag_setup.ui, "choose", side_effect=[5, 0]
             ), patch.object(opentag_setup, "slack_cli_supports_icon_upload", return_value=True
             ), redirect_stdout(StringIO()):
                 opentag_setup.customize_new_app(project, config)
@@ -169,7 +169,7 @@ class OpenTagSetupTests(unittest.TestCase):
             with patch.object(
                 opentag_setup, "ask",
                 side_effect=["x" * 36, "Tag Two", str(small), str(valid)],
-            ), patch.object(opentag_setup.ui, "choose", side_effect=[1, 0]), patch.object(
+            ), patch.object(opentag_setup.ui, "choose", side_effect=[5, 0]), patch.object(
                 opentag_setup, "slack_cli_supports_icon_upload", return_value=True
             ), redirect_stdout(StringIO()) as output:
                 opentag_setup.customize_new_app(project, config)
@@ -186,7 +186,7 @@ class OpenTagSetupTests(unittest.TestCase):
             (assets / "tag-profile.png").write_bytes(b"old")
             (assets / "keep.png").write_bytes(b"keep")
             with patch.object(opentag_setup, "ask", return_value="Maxine's Tag"), patch.object(
-                opentag_setup.ui, "choose", return_value=0
+                opentag_setup.ui, "choose", side_effect=[2, 0]
             ), patch.object(
                 opentag_setup, "slack_cli_supports_icon_upload", return_value=True
             ), patch.object(
@@ -212,7 +212,7 @@ class OpenTagSetupTests(unittest.TestCase):
             with patch.object(
                 opentag_setup, "ask", side_effect=["First Tag", "Final Tag"]
             ), patch.object(
-                opentag_setup.ui, "choose", side_effect=[0, 3, 1, 0]
+                opentag_setup.ui, "choose", side_effect=[2, 3, 1, 0]
             ), patch.object(
                 opentag_setup, "slack_cli_supports_icon_upload", return_value=True
             ), patch.object(
@@ -249,7 +249,7 @@ class OpenTagSetupTests(unittest.TestCase):
             ), patch.object(
                 opentag_setup, "ask", side_effect=accept_default
             ), patch.object(
-                opentag_setup.ui, "choose", side_effect=[0, 0]
+                opentag_setup.ui, "choose", side_effect=[2, 0]
             ), patch.object(
                 opentag_setup, "slack_cli_supports_icon_upload", return_value=True
             ), redirect_stdout(StringIO()) as output:
@@ -260,17 +260,38 @@ class OpenTagSetupTests(unittest.TestCase):
             )
             self.assertIn("Continuing creates a real Slack app", output.getvalue())
 
-    def test_curated_waterdrop_catalog_has_144_bases_and_16_signatures(self):
-        self.assertEqual(opentag_setup.WATERDROP_BASE_COUNT, 144)
+    def test_profile_picture_menu_shows_five_elements_with_water_as_default(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            project = opentag_setup.slack_project(home)
+            with patch.object(opentag_setup, "ask", return_value="Maya's Tag"), patch.object(
+                opentag_setup.ui, "choose", side_effect=[2, 0]
+            ) as choose, patch.object(
+                opentag_setup, "slack_cli_supports_icon_upload", return_value=True
+            ), redirect_stdout(StringIO()):
+                opentag_setup.customize_new_app(project, home / "settings.json", "TTEST")
+
+            profile_call = choose.call_args_list[0]
+            self.assertEqual(profile_call.args[1][:5], [
+                "Metal · white",
+                "Wood · green",
+                "Water · blue (default)",
+                "Fire · red",
+                "Soil · yellow",
+            ])
+            self.assertEqual(profile_call.kwargs["default"], 2)
+
+    def test_curated_waterdrop_catalog_has_five_elements_and_16_signatures(self):
+        self.assertEqual(opentag_setup.WATERDROP_BASE_COUNT, 60)
         self.assertEqual(opentag_setup.WATERDROP_SIGNATURE_COUNT, 16)
-        self.assertEqual(opentag_setup.WATERDROP_RECIPE_COUNT, 2304)
+        self.assertEqual(opentag_setup.WATERDROP_RECIPE_COUNT, 960)
         expected = {
-            0: ("aqua", "mist", "glass", "clean"),
-            11: ("emerald", "mist", "glass", "clean"),
-            12: ("aqua", "cream", "glass", "clean"),
-            36: ("aqua", "mist", "pearl", "clean"),
-            144: ("aqua", "mist", "glass", "rose-cheeks"),
-            2303: ("emerald", "cream", "frost", "heart-mark"),
+            0: ("metal", "mist", "glass", "clean"),
+            2: ("water", "mist", "glass", "clean"),
+            4: ("soil", "mist", "glass", "clean"),
+            15: ("metal", "mist", "pearl", "clean"),
+            60: ("metal", "mist", "glass", "rose-cheeks"),
+            959: ("soil", "veil", "frost", "heart-mark"),
         }
         for index, identity in expected.items():
             with self.subTest(index=index):
@@ -283,6 +304,28 @@ class OpenTagSetupTests(unittest.TestCase):
                 )
                 self.assertEqual(actual, identity)
 
+    def test_waterdrop_body_and_background_share_the_element_color(self):
+        palettes = {
+            body.name: opentag_setup._waterdrop_palette(
+                opentag_setup.waterdrop_recipe("ignored", index)
+            )
+            for index, body in enumerate(opentag_setup.WATERDROP_BODIES)
+        }
+
+        for key in ("E", "P"):
+            with self.subTest(element="metal", palette_key=key):
+                self.assertLessEqual(max(palettes["metal"][key]) - min(palettes["metal"][key]), 20)
+        for element, dominant_channel in (("wood", 1), ("water", 2), ("fire", 0)):
+            for key in ("E", "P"):
+                with self.subTest(element=element, palette_key=key):
+                    color = palettes[element][key]
+                    self.assertEqual(color[dominant_channel], max(color))
+        for key in ("E", "P"):
+            with self.subTest(element="soil", palette_key=key):
+                red, green, blue = palettes["soil"][key]
+                self.assertGreater(red, blue)
+                self.assertGreater(green, blue)
+
     def test_waterdrop_assignments_avoid_known_collisions_inside_a_workspace(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(
             opentag_setup.hashlib, "sha256"
@@ -292,7 +335,7 @@ class OpenTagSetupTests(unittest.TestCase):
             first = opentag_setup._assigned_waterdrop_index(project, "TTEST:First")
             second = opentag_setup._assigned_waterdrop_index(project, "TTEST:Second")
             other_workspace = opentag_setup._assigned_waterdrop_index(project, "TOTHER:First")
-            self.assertEqual((first, second, other_workspace), (0, 1, 0))
+            self.assertEqual((first, second, other_workspace), (2, 7, 2))
             self.assertEqual(
                 opentag_setup._assigned_waterdrop_index(project, "TTEST:First"), first
             )

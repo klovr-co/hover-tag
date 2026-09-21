@@ -163,8 +163,9 @@ the CLI's real login flow when the sandbox workspace is not authorized, and
 then lets you create a manifest-based app or link an existing app by App ID.
 Profile-picture selection and upload require Slack CLI 4.7 or newer.
 For a new app, setup proposes **&lt;your first name&gt;'s Tag** and a uniquely
-curated Tag waterdrop, selected from 144 approved base designs and 16 subtle
-signatures. You can edit the name or choose your own picture by
+curated Tag waterdrop. Choose Metal (white), Wood (green), Water (the default
+blue), Fire (red), or Soil (yellow); 16 subtle signatures keep Tags within the
+same element distinct. You can edit the name or choose your own picture by
 dragging a local PNG, JPEG, or GIF into the terminal. The picture is copied into
 Tag's private application home and passed to Slack CLI during app creation.
 It pauses for every Slack approval that only a person or workspace admin can
