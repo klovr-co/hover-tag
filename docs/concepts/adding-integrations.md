@@ -37,10 +37,6 @@ does not forward other settings from that file.
 Learn more about configuring and authenticating MCP connections in the
 [official Codex MCP guide](https://developers.openai.com/codex/mcp).
 
-Once the integration is available, try a small Slack request that uses it and
-check the result. [Use Gmail from Slack](../tutorials/use-gmail-from-slack.md)
-shows a complete example.
-
 ## Make commands and logins available
 
 Follow the skill's setup instructions for any required tools. Make sure any
@@ -56,4 +52,8 @@ you can reuse it.
 The agent also inherits credentials available in Tag's process environment,
 such as API keys. See the [security policy](../../SECURITY.md) for details.
 
-Try it: [Use Gmail from Slack](../tutorials/use-gmail-from-slack.md).
+## Try an integration
+
+[Use Gmail from Slack](../tutorials/use-gmail-from-slack.md)
+
+Ask Tag to set up Gmail, find an email, and draft a reply from Slack.

@@ -215,9 +215,9 @@ This first request uses the local workspace configured during setup. A request
 to summarize the entire Slack channel requires that channel's history to be
 indexed separately through an MFS Slack connector.
 
-Only the owner member ID entered during setup can invoke Tag initially. Add
-other IDs to the comma-separated `SLACK_ALLOWED_USER_IDS` setting to share access.
-Those authorized users can also invoke Tag without an `@mention` from OpenMax's
+Tag currently supports owner-only access. Use the owner's member ID during
+setup; multi-user access is coming soon.
+The owner can also invoke Tag without an `@mention` from their Tag's
 Messages tab. Each top-level DM starts a fresh task; replies in that DM thread
 provide bounded context only for that task. Set `OPENTAG_SLACK_DM_ENABLED=0` to
 disable direct-message invocation.
