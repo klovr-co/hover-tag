@@ -146,9 +146,6 @@ You are being invoked by the Open Tag Slack bridge.
 First read and follow the runtime instructions at:
 {skill_dir / "references" / "runtime-agent.md"}
 
-The user-facing setup skill is:
-{skill_dir / "SKILL.md"}
-
 Runtime context:
 - Conversation id: {channel_id}
 - Workspace/repo root: {workdir}

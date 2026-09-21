@@ -6,7 +6,7 @@ a local coding-agent backend with optional MFS retrieval.
 ## Glossary
 
 - **Tag** — the product and repository. Use this name in new prose.
-- **OpenMax** — the default Slack bot display name. It is an identity inside
+- **Tag** — the default Slack bot display name. It is an identity inside
   Tag, not a synonym for the product.
 - **Slack bridge** — the long-running process that receives Socket Mode events,
   enforces Slack caller policy, invokes a backend, and renders replies.

@@ -50,7 +50,9 @@ class SlackAppCreationTests(unittest.TestCase):
     def test_new_app_uses_cli_and_saves_id_without_browser_or_manual_id(self):
         with patch.object(setup.ui, "choose", side_effect=[0, 0]), patch.object(
             setup, "run_slack_cli", side_effect=self.save_link
-        ) as run, patch.object(creation, "is_installed", return_value=True), patch.object(
+        ) as run, patch.object(setup, "customize_new_app"), patch.object(
+            creation, "is_installed", return_value=True
+        ), patch.object(
             setup, "inspect_slack_app", return_value=True
         ), patch.object(setup.webbrowser, "open") as browser, patch.object(setup, "ask_validated") as ask:
             self.assertEqual(setup.choose_slack_app(self.home, "TTEST", self.config), "ATEST")
