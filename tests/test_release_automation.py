@@ -364,6 +364,14 @@ class ReleaseArtifactTests(unittest.TestCase):
 
 
 class ReleasePreflightTests(unittest.TestCase):
+    def test_beta_guidance_uses_a_complete_source_version(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        for relative_path in ("RELEASE.md", ".agents/skills/tag-release/SKILL.md"):
+            guidance = (root / relative_path).read_text(encoding="utf-8")
+            self.assertIn("<major>.<minor>.<patch>-beta.1", guidance)
+            self.assertNotIn("`VERSION` set to\n`beta.1`", guidance)
+            self.assertNotIn("update `VERSION` to `beta.1`", guidance)
+
     def test_main_gates_preserve_every_push_and_cancel_stale_pr_runs(self) -> None:
         root = Path(__file__).resolve().parents[1]
         for relative_path in (".github/workflows/ci.yml", ".github/workflows/install-smoke.yml"):
