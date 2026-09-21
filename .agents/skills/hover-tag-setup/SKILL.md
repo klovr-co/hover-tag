@@ -61,7 +61,7 @@ Use a checkout only when the user requests a source installation or selects an
 existing checkout. For an existing checkout, use the user's selected directory
 and revision, check for local changes first because they become part of a source
 installation, and run that checkout's `./install.sh`. For a new source
-installation, clone https://github.com/klovr-co/tag.git into a new,
+installation, clone https://github.com/klovr-co/hover-tag.git into a new,
 nonconflicting directory and run its `./install.sh`. Do not overwrite an
 existing directory.
 
@@ -79,10 +79,12 @@ in `docs/installation.md`; do not adapt POSIX shell commands blindly.
 
 ## Connect Slack through guided setup
 
-Have the user run the installed `tag setup` in their own interactive terminal.
-Explain what remains, then resume inspection after they complete or pause it.
-Setup requires a terminal; do not pipe numbered answers, invent a noninteractive
-setup API, or automate the user's authorization choices.
+Run the installed `tag setup` in an interactive terminal when the current
+environment can present and respond to its prompts. Otherwise, ask the user to
+run it in their terminal, explain what remains, and resume inspection after they
+complete or pause it. Ask the user before answering authorization or policy
+prompts when their choice is not already explicit. Do not pipe numbered answers,
+invent a noninteractive setup API, or infer the user's authorization choices.
 
 Setup owns these steps:
 
@@ -174,5 +176,5 @@ For version-specific details, consult the installed CLI's `--help` and the
 matching Tag release's `docs/tag-management.md` and `docs/installation.md`.
 These are product references, not files bundled with this skill. In a checkout,
 read them locally; otherwise obtain them from the matching revision in
-https://github.com/klovr-co/tag. Keep setup mechanics in Tag rather than copying
+https://github.com/klovr-co/hover-tag. Keep setup mechanics in Tag rather than copying
 them into this skill.

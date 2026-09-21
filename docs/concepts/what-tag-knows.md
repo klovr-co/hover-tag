@@ -20,7 +20,7 @@ answer seems to have lost it.
 
 ## Find a discussion in another channel
 
-> @Jules's Tag find the launch decision in #product and compare it with the plan in
+> @Iris's Tag find the launch decision in #product and compare it with the plan in
 > your workspace. Show me which messages support the decision.
 
 Tag can search another channel's history when it has been indexed and made
@@ -33,9 +33,9 @@ find something, that alone does not mean the discussion never happened.
 
 ## Ask Tag to remember a decision
 
-> @Maya's Tag save our Friday report deadline in reporting-notes.md.
+> @Rowan's Tag save our Friday report deadline in reporting-notes.md.
 >
-> **Maya's Tag:** Saved in reporting-notes.md: Our weekly report is due Friday.
+> **Rowan's Tag:** Saved in reporting-notes.md: Our weekly report is due Friday.
 
 Tag does not provide a dedicated saved-note command or local memory store.
 For a decision you need later, ask Tag to write it to a specific workspace
@@ -58,7 +58,7 @@ configuration, and the tool's credentials and permissions.
 For example, with the Google Workspace CLI (`gws`) installed and authenticated,
 and the Gmail skill available to the agent, you could ask:
 
-> @Jules's Tag find the latest email about the launch schedule and summarize what
+> @Zara's Tag find the latest email about the launch schedule and summarize what
 > changed.
 
 The skill explains how to use `gws`; the Google login determines which email

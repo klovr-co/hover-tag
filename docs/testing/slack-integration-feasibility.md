@@ -1,6 +1,6 @@
 # Slack setup feasibility — 2026-09-19
 
-Feature: [#13](https://github.com/klovr-co/tag/issues/13).
+Feature: [#13](https://github.com/klovr-co/hover-tag/issues/13).
 Scope: official documentation, installed CLI help/version, and repository source.
 No login, credential reads, app creation, workspace changes, or live API checks.
 

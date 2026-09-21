@@ -1,6 +1,6 @@
 # Setup acceptance scenarios
 
-Feature: [Guided setup and management — #13](https://github.com/klovr-co/tag/issues/13).
+Feature: [Guided setup and management — #13](https://github.com/klovr-co/hover-tag/issues/13).
 
 These are BDD-style requirements, not executable Cucumber tests. Test the eight
 main journeys first, then the two live security checks. Results belong in
