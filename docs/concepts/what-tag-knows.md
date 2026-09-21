@@ -33,7 +33,9 @@ find something, that alone does not mean the discussion never happened.
 
 ## Ask Tag to remember a decision
 
-> @Maya's Tag remember that our weekly report is due Friday.
+> @Maya's Tag save our Friday report deadline in reporting-notes.md.
+>
+> **Maya's Tag:** Saved in reporting-notes.md: Our weekly report is due Friday.
 
 Tag does not provide a dedicated saved-note command or local memory store.
 For a decision you need later, ask Tag to write it to a specific workspace
@@ -47,7 +49,8 @@ indexed conversations can be searched without turning each one into a note.
 
 ## Use the tools already available to the agent
 
-Tag runs your local Codex or Claude CLI. The skills and MCP connections that
+Tag runs your local Codex agent. Claude support is coming soon.
+The skills and MCP connections that
 the CLI loads can help it carry out a request, alongside installed commands.
 Availability depends on the account running Tag, the selected backend's
 configuration, and the tool's credentials and permissions.

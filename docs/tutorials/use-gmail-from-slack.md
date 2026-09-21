@@ -1,95 +1,99 @@
 # Use Gmail from Slack
 
-This tutorial uses your existing Google login to find an email about a launch.
-It uses the `gws` command directly; an MCP connection is not needed.
+Ask Tag to help set up Gmail access, then find an email about a launch.
+This tutorial uses Google Workspace CLI (`gws`); an MCP connection is not needed.
 
 This guide uses Codex and assumes you have completed
-[your first Tag task](../getting-started/first-task.md). The terminal examples
-use macOS or Linux. See [Adding integrations](../concepts/adding-integrations.md)
+[your first Tag task](../getting-started/first-task.md).
+See [Adding integrations](../concepts/adding-integrations.md)
 for how Tag uses commands, skills, and tool configuration.
 
-## 1. Check Google Workspace CLI
+## 1. Ask Tag to set up Gmail
 
-On the machine running Tag, open a terminal and run:
+Open a DM with your Tag and send this request. You do not need to mention it
+in a DM. The example reply shows how Tag might hand the login step back to you:
 
-```sh
-gws --version
-```
+> Help me set up Gmail access using https://github.com/googleworkspace/cli.
+>
+> Check what's already installed and authenticated, install any missing tools
+> and the gws-shared and gws-gmail skills for Codex in your workspace, and
+> guide me through any login steps I need to complete.
+>
+> **Maya's Tag:** If gws isn't authenticated yet, complete its login on the machine
+> running Tag. Once you're signed in, ask me to check Gmail access.
 
-If it is not installed, one option is:
+Tag can attempt the setup using its available tools and permissions. If an
+installation needs approval or an interactive terminal, complete that step
+on the machine running Tag, following the
+[Google Workspace CLI installation guide](https://github.com/googleworkspace/cli#installation).
 
-```sh
-npm install -g @googleworkspace/cli
-```
+## 2. Complete authentication
 
-This option requires Node.js and npm. Other installation methods are in the
-[Google Workspace CLI guide](https://github.com/googleworkspace/cli#installation).
+If `gws` already has working Gmail access, reuse it. Otherwise, follow the
+[Google Workspace CLI authentication guide](https://github.com/googleworkspace/cli#authentication)
+and the setup instructions Tag provides. A Google browser login alone does
+not configure `gws`: it also needs OAuth credentials and consent for Gmail.
 
-### 2. Check Gmail access
+Complete any browser login or local terminal steps on the machine running Tag.
+Then return to the DM and ask Tag to check Gmail access. Keep passwords and
+credential files out of the conversation.
 
-If Gmail already works through `gws`, keep your existing login. Otherwise,
-follow its [authentication guide](https://github.com/googleworkspace/cli#authentication)
-to configure the Google Cloud OAuth client, then log in with Gmail selected:
+If setup changed the command search path or environment, run `tag restart`
+from the terminal with those changes before continuing.
 
-```sh
-gws auth login -s gmail
-```
+## 3. Find an email
 
-Check access with a small read request:
-
-```sh
-gws gmail users messages list --params '{"userId":"me","maxResults":1}'
-```
-
-A successful response confirms the request worked; an empty mailbox may have
-no messages to return.
-
-### 3. Add the Gmail skills
-
-If Codex already has the Gmail skills available, skip this step. Otherwise,
-change to the workspace path reported by `tag paths` and run:
-
-```sh
-npx skills add https://github.com/googleworkspace/cli/tree/main/skills/gws-shared
-npx skills add https://github.com/googleworkspace/cli/tree/main/skills/gws-gmail
-```
-
-In the installer, choose Codex and installation in the current project.
-Check that `.agents/skills` contains `gws-shared` and `gws-gmail`, each with a
-`SKILL.md` file. The shared skill supplies common command and authentication
-instructions. See the upstream
-[skills guide](https://github.com/googleworkspace/cli#ai-agent-skills) for more.
-
-### 4. Ask from Slack
-
-If you changed your terminal's command search path or environment, restart Tag
-from that terminal so the running service receives the changes:
-
-```sh
-tag restart
-```
-
-Use your own Tag's mention in place of `@Maya's Tag`. Then ask:
+In a channel where Tag is available, mention it and ask. Use your own Tag's
+mention in place of `@Maya's Tag`. The replies below are illustrative; Tag's
+answer will depend on your email and request.
 
 > @Maya's Tag use gws to find the latest email about the launch schedule. Summarize
 > what changed and include the sender, subject, and date.
+>
+> **Maya's Tag:** The launch moved from Friday to Monday so support has time to prepare.
+> The FAQ and signup testing deadlines are unchanged.
+>
+> From: Jules. Subject: Updated launch schedule. Date: September 17, 2026.
 
 Use a topic you know is in your mailbox, then compare the answer with the email.
-If there is no match, try a more specific subject or sender. If you saved open questions in the
-[attachment example](../concepts/workspaces-and-tools.md#turn-a-brief-into-questions-you-can-resolve),
-you can also ask Tag to update that file:
+If there is no match, try a more specific subject or sender.
 
-> @Maya's Tag use that email to update the open questions you saved from my brief.
-> Mark any questions it answers and keep the unresolved ones.
+## 4. Write an email
 
-### If something is missing
+In the same thread, ask Tag to draft a reply. Include the details you want it
+to use:
+
+> @Maya's Tag draft a reply to Jules acknowledging the Monday launch.
+> Say I'll brief support on Thursday. Show me the draft here before sending.
+>
+> **Maya's Tag:** Here's a draft for review:
+>
+> Subject: Re: Updated launch schedule
+>
+> Hi Jules,
+>
+> Thanks for the update. Monday works for me. I'll brief support on Thursday
+> so they're ready for launch.
+>
+> Thanks, Maya
+>
+> This is a draft in Slack; I haven't sent it.
+
+Review the recipient, dates, and wording, then ask for any changes in the same
+thread. This step writes the draft in Slack; it does not create a Gmail draft
+or send an email.
+
+## If something is missing
 
 | Symptom | What to check |
 | --- | --- |
 | Tag cannot find `gws` | Run `gws --version` in the terminal you use to start Tag; restart after changing the environment. |
-| Codex cannot find the Gmail skill | Check the workspace's `.agents/skills` directory and each skill's `SKILL.md`, then try a new mention. |
-| Gmail returns an authorization error | Try the read request above in your terminal and resolve the `gws` login or scope error there. |
+| Codex cannot find the Gmail skill | Check the workspace's `.agents/skills` directory and each skill's `SKILL.md`, then send a new request. |
+| Gmail returns an authorization error | Follow the [authentication guide](https://github.com/googleworkspace/cli#authentication) to resolve the `gws` login or scope error, then ask Tag to check Gmail access again. |
 | Gmail works in your terminal but fails through Tag | Check that Tag runs under the same local account with the same tool configuration and required environment variables. |
 
-`tag doctor` checks Tag's configuration and core services. The Gmail read
-request and Slack task above check the additional tool you have installed.
+`tag doctor` checks Tag's configuration and core services. The Gmail request
+in step 3 checks the additional tool you have installed.
+
+Learn more about commands, supported services, and agent skills in the
+[Google Workspace CLI GitHub repository](https://github.com/googleworkspace/cli).

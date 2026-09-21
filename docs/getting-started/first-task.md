@@ -11,19 +11,17 @@ Tag replies in the same thread, where your teammates can follow the work.
 
 ## Before you begin
 
-You need:
+Use a Mac or Linux computer that can stay awake and connected to the internet
+while Tag handles requests. Before starting, have these ready on that computer:
 
-- macOS or Linux;
-- Python 3.10 or later;
-- [`uv`](https://docs.astral.sh/uv/);
-- `curl`;
-- a working Codex CLI login;
-- permission to create or install a Slack app; and
-- a dedicated workspace directory where Tag may perform tasks.
+- [Codex CLI](https://learn.chatgpt.com/docs/codex/cli), installed, signed in, and able to run tasks.
+- [Python 3.10 or later](https://www.python.org/downloads/).
+- [`uv`](https://docs.astral.sh/uv/getting-started/installation/), which installs Tag's Python dependencies.
+- [Git](https://git-scm.com/downloads), to download Tag's source code.
+- [Slack CLI](https://docs.slack.dev/tools/slack-cli/), which connects setup to your Slack workspace.
 
-If you haven't used Codex yet, install the Codex CLI and sign in on the
-computer that will run Tag. Check that you can run a task in Codex before
-continuing. Tag uses that local agent and its available integrations.
+You'll also need permission to create and install a Slack app in your workspace.
+Your workplace may require an administrator to approve the app.
 
 This guide uses Codex. Claude support is coming soon.
 
@@ -35,7 +33,18 @@ cd tag
 ./install.sh
 ```
 
-The installer creates a persistent Tag home and installs the `tag` command.
+The installer creates a persistent Tag home, including a workspace folder for
+your files, and installs the `tag` command. It prints the command's location.
+If your terminal cannot find `tag`, add the default command directory to this
+terminal's path:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Add the same line to your shell configuration (`~/.zshrc` for zsh or
+`~/.bashrc` for bash) to keep it available in new terminals.
+
 Run `tag setup` to configure Slack and save settings. See
 [setup and management](../tag-management.md) for the full setup flow.
 
@@ -46,15 +55,15 @@ creating or linking an app, entering tokens, and selecting channels and the
 owner member ID. Approve the displayed channels and history window before
 Tag indexes Slack history. Use your installed bot's name when mentioning it.
 
-Use your own Slack member ID as the owner. At first, only you can request
+Use your own Slack member ID as the owner. Only you can request
 work from your Tag. This matters because the agent runs on the host computer
 with the file access, tools, and connected accounts available to its backend.
 Actual access depends on backend permissions, the local account, and
 credentials. Other channel members can still see your requests and Tag's replies.
 
-Each person brings their own Tag through a separate Slack app. You can also
-authorize teammates to use yours, but they would use the same agent's access.
-See [Your own Tag](../concepts/access.md) before sharing.
+Each person brings their own Tag through a separate Slack app. Multi-user
+access is coming soon. See [Your own Tag](../concepts/access.md) for how
+personal agents fit into shared conversations.
 
 For every scope and token detail, use the
 [Slack adapter reference](../../references/slack-adapter.md).

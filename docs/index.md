@@ -2,7 +2,7 @@
 
 ## @Tag, Slack is all you need.
 
-Tag lets your team work with an AI agent in a Slack thread. Discuss the work
+Tag brings your personal AI agent into a Slack thread. Discuss the work
 with your teammates, then mention your Tag to ask it to investigate a question,
 make a plan, or work on files. It uses the thread as context and replies where
 everyone can see the result and follow up.
@@ -31,7 +31,7 @@ where teammates can follow the work.
 You don’t need to code to use Tag. Follow the
 [setup guide](getting-started/first-task.md) to connect your agent to Slack.
 
-Only you can ask your Tag to work at first, because it uses your agent's
+Only you can ask your Tag to work, because it uses your agent's
 available files, tools, and connected accounts. Teammates can still see the
 conversation. Read more about [your own Tag](concepts/access.md).
 
@@ -42,7 +42,7 @@ You can ask Tag to:
 - summarize a discussion and turn it into decisions, owners, and next steps;
 - investigate a question across approved Slack history and other sources;
 - compare information from conversations, documents, issues, and repositories;
-- use locally installed tools available to Codex or Claude;
+- use locally installed tools available to Codex;
 - inspect or change files in its configured workspace when explicitly asked;
 - return an answer to the thread, post to the channel, or create a Slack Canvas.
 

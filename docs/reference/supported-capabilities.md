@@ -43,7 +43,8 @@ unavailable behavior.
 
 | Capability | Status | Notes |
 | --- | --- | --- |
-| Slack caller allowlist | Implemented | Setup starts with one owner member ID. |
+| Owner access | Supported | Configure the owner's Slack member ID during setup. |
+| Multi-user access | Coming soon | Additional callers are not part of the supported product flow yet, although the underlying allowlist accepts multiple IDs. |
 | Explicit channel restriction | Implemented | Configure `SLACK_CHANNEL_IDS`; the bridge fails closed without selected channels. |
 | MFS retrieval roots | Implemented | Configure `MFS_ALLOWED_SCOPES`. |
 | Backend timeout and retry settings | Implemented | Configure the corresponding `OPENTAG_` settings. |
