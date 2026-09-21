@@ -24,6 +24,21 @@ canonical record for discussion, specification, and implementation history.
 Use the repository's default five-role triage vocabulary. See
 `docs/agents/triage-labels.md`.
 
+### Destructive Slack app operations
+
+Always obtain a fresh, explicit confirmation from the user immediately before
+permanently deleting a Slack app. First resolve and display the exact app name,
+App ID, workspace name, and Team ID, and state that deletion is irreversible
+and recreating the app will produce a different App ID and bot identity. Wait
+for the user to confirm that exact target in chat; a previous general request,
+an inferred intention, or an agent answering an interactive CLI confirmation
+does not count.
+
+Treat resetting local Tag configuration and deleting the remote Slack app as
+separate actions. Default to keeping the remote app when resetting or removing
+a local workspace connection unless the user separately confirms permanent
+remote deletion using the requirements above.
+
 ### Pull request release behavior
 
 Every eligible PR merged into `main` automatically publishes an immutable,
