@@ -262,13 +262,8 @@ def build_channel_index(
         parsed.append((version, release))
 
     channels: dict[str, dict[str, str]] = {}
-    allowed_phases = {
-        "stable": {"stable"},
-        "beta": {"stable", "beta"},
-        "alpha": {"stable", "beta", "alpha"},
-    }
     for channel in SEMVER_CHANNELS:
-        candidates = [item for item in parsed if item[0].phase in allowed_phases[channel]]
+        candidates = [item for item in parsed if item[0].phase == channel]
         if candidates:
             version, release = max(candidates, key=lambda item: item[0].precedence())
             channels[channel] = _channel_entry(release, str(version))

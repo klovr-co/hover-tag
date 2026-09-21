@@ -200,12 +200,7 @@ def _release_matches_channel(release: dict[str, Any], channel: str) -> bool:
         return False
     if bool(release.get("prerelease")) != (phase != "stable"):
         return False
-    allowed = {
-        "stable": {"stable"},
-        "beta": {"stable", "beta"},
-        "alpha": {"stable", "beta", "alpha"},
-    }
-    return phase in allowed[channel]
+    return phase == channel
 
 
 class _ChannelHasNoRelease(RuntimeError):
