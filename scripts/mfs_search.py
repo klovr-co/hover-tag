@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import urllib.parse
 import urllib.request
@@ -35,6 +36,32 @@ def request_json(path: str, params: dict[str, Any]) -> dict[str, Any]:
     req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=60) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def channel_labels_from_env() -> dict[str, str]:
+    try:
+        payload = json.loads(os.getenv("OPENTAG_SLACK_CHANNEL_LABELS", "{}"))
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    return {
+        channel_id: name
+        for channel_id, name in payload.items()
+        if isinstance(channel_id, str)
+        and isinstance(name, str)
+        and channel_id
+        and name
+    }
+
+
+def source_channel_label(source: object, labels: dict[str, str]) -> str | None:
+    if not isinstance(source, str):
+        return None
+    for channel_id, name in labels.items():
+        if re.search(rf"__{re.escape(channel_id)}(?:/|$)", source):
+            return f"#{name} ({channel_id})"
+    return None
 
 
 def main() -> int:
@@ -77,17 +104,23 @@ def main() -> int:
         all_results.extend(data.get("results") or [])
 
     all_results.sort(key=lambda item: item.get("score") or 0, reverse=True)
+    channel_labels = channel_labels_from_env()
+    for hit in all_results:
+        channel_label = source_channel_label(hit.get("source"), channel_labels)
+        if channel_label:
+            hit["source_channel"] = channel_label
     if args.json:
         print(json.dumps({"results": all_results}, ensure_ascii=False, indent=2))
         return 0
 
     for idx, hit in enumerate(all_results[: args.top_k], start=1):
         source = hit.get("source", "unknown-source")
+        channel_label = source_channel_label(source, channel_labels)
         locator = hit.get("locator")
         content = " ".join((hit.get("content") or "").split())
         if len(content) > 360:
             content = content[:357].rstrip() + "..."
-        print(f"[{idx}] {source}")
+        print(f"[{idx}] {channel_label + ' · ' if channel_label else ''}{source}")
         if locator:
             print(f"    locator: {json.dumps(locator, ensure_ascii=False)}")
         if content:
