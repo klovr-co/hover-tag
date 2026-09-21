@@ -7,18 +7,18 @@ with your teammates, then mention your Tag to ask it to investigate a question,
 make a plan, or work on files. It uses the thread as context and replies where
 everyone can see the result and follow up.
 
-Jules and Maya discuss the launch, then Jules asks their Tag to pull it
+Jules and Maya discuss the launch, then Maya asks their Tag to pull it
 together:
 
-> **Jules:** I’ll finish the FAQ by Tuesday.
+> **Maya:** I’ll finish the FAQ by Tuesday.
 >
-> **Maya:** I’ll test signup on Wednesday. Support still needs a briefing.
+> **Jules:** I’ll test signup on Wednesday. Support still needs a briefing.
 >
-> **Jules:** @Jules's Tag pull this into a launch checklist with owners.
+> **Maya:** @Maya's Tag pull this into a launch checklist with owners.
 >
-> **Jules's Tag:** Here’s the shared checklist:
-> - **Jules:** Finish the FAQ by Tuesday.
-> - **Maya:** Test signup on Wednesday.
+> **Maya's Tag:** Here’s the shared checklist:
+> - **Maya:** Finish the FAQ by Tuesday.
+> - **Jules:** Test signup on Wednesday.
 > - **Unassigned:** Brief support before launch. Who can take this?
 
 ## Who it's for
