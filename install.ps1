@@ -27,6 +27,9 @@ if ($DependenciesOnly) {
     Write-Host 'Installing pinned Tag runtime dependencies...'
     & $runtimePython -m pip install -r (Join-Path $PSScriptRoot 'requirements-runtime.txt')
     if ($LASTEXITCODE -ne 0) { throw "Tag dependency installation failed ($LASTEXITCODE)" }
+    Write-Host 'Preparing the local MFS embedding model...'
+    & $runtimePython (Join-Path $PSScriptRoot 'scripts/preload_mfs_model.py')
+    if ($LASTEXITCODE -ne 0) { throw "MFS embedding model preparation failed ($LASTEXITCODE)" }
     Write-Host 'Pinned Tag dependencies are installed.'
     exit 0
 }
