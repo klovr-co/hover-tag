@@ -1,6 +1,6 @@
 # MFS Memory
 
-Open Tag's Memory is MFS retrieval from sources the operator has indexed and
+Tag's Memory is MFS retrieval from sources the operator has indexed and
 authorized, such as Slack history, repositories, docs, issues, databases, object
 stores, or web crawls.
 
