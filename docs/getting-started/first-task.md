@@ -28,7 +28,7 @@ Install the setup skill from your terminal. This command requires
 [Node.js and npm](https://nodejs.org/en/download):
 
 ```bash
-npx skills add klovr-co/tag --skill hover-tag-setup -a codex -g
+npx skills add klovr-co/hover-tag --skill hover-tag-setup -a codex -g
 ```
 
 Open a new Codex session and ask:

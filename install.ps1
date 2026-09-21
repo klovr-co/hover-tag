@@ -45,8 +45,8 @@ if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot 'scripts/tag_install.
     try {
         $installer = Join-Path $tagDownload 'tag_install.py'
         $channels = Join-Path $tagDownload 'release-channels.json'
-        Invoke-WebRequest 'https://raw.githubusercontent.com/klovr-co/tag/main/scripts/tag_install.py' -OutFile $installer
-        Invoke-WebRequest 'https://raw.githubusercontent.com/klovr-co/tag/main/release-channels.json' -OutFile $channels
+        Invoke-WebRequest 'https://raw.githubusercontent.com/klovr-co/hover-tag/main/scripts/tag_install.py' -OutFile $installer
+        Invoke-WebRequest 'https://raw.githubusercontent.com/klovr-co/hover-tag/main/release-channels.json' -OutFile $channels
         & python $installer @installerArgs
         if ($LASTEXITCODE -ne 0) { throw "TAG installation failed ($LASTEXITCODE)" }
     } finally {

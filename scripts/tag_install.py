@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-API_RELEASES = "https://api.github.com/repos/klovr-co/tag/releases"
+API_RELEASES = "https://api.github.com/repos/klovr-co/hover-tag/releases"
 CHANNELS = ("stable", "beta", "alpha", "edge")
 VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta)(?:\.(\d+))?)?$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")

@@ -1,6 +1,6 @@
 # Setup test results
 
-Scenarios: [setup-acceptance.md](setup-acceptance.md). Feature: [#13](https://github.com/klovr-co/tag/issues/13).
+Scenarios: [setup-acceptance.md](setup-acceptance.md). Feature: [#13](https://github.com/klovr-co/hover-tag/issues/13).
 
 ## Run R01 — 2026-09-18 — assistant
 
