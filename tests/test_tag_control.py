@@ -330,6 +330,7 @@ class TagControlTests(unittest.TestCase):
                 ), patch.object(tag_cli, "healthy", return_value=True
                 ), patch.object(tag_cli, "replace_unmanaged_local_mfs", return_value=False
                 ), patch.object(tag_cli, "sync_configured_slack_memory"
+                ), patch.object(tag_cli, "wait_for_configured_mfs_scopes", return_value=[]
                 ), patch.object(tag_cli, "doctor_report", return_value=(0, {"checks": []})), patch.object(
                     tag_cli, "slack_ready", side_effect=[False, True]
                 ), patch.object(tag_cli, "stop_process"), patch.object(
@@ -363,6 +364,8 @@ class TagControlTests(unittest.TestCase):
             tag_cli.time, "sleep"
         ), patch.object(
             tag_cli, "sync_configured_slack_memory"
+        ), patch.object(
+            tag_cli, "wait_for_configured_mfs_scopes", return_value=[]
         ), patch.object(
             tag_cli, "doctor_report", return_value=(0, {"checks": []})
         ), patch.object(
