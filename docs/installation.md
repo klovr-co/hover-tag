@@ -163,11 +163,12 @@ Invoke-WebRequest https://raw.githubusercontent.com/klovr-co/hover-tag/main/inst
 # Or: & $installer -Version 0.2.0-beta.1
 ```
 
-`stable` accepts stable releases, `beta` accepts beta or newer stable releases,
-`alpha` accepts alpha, beta, or stable releases, and `edge` follows the latest
-successful `main` build. The selected channel, installed version, source commit,
-and check time are stored atomically in `current.json`; rollback restores the
-previous record with the previous release.
+`stable`, `beta`, and `alpha` each follow only releases from their named phase;
+`edge` follows the latest successful `main` build. Switching to a phase whose
+latest release is older than the installed version requires `--allow-downgrade`.
+The selected channel, installed version, source commit, and check time are stored
+atomically in `current.json`; rollback restores the previous record with the
+previous release.
 
 Release downloads are checked against both the SHA-256 manifest and build
 provenance before extraction. This checks integrity and consistency; it is not an

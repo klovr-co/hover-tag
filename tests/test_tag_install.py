@@ -73,7 +73,7 @@ class ReleaseResolutionTests(unittest.TestCase):
         """Bare installs follow the repository's stable-channel policy."""
         self.assertEqual(_default_channel(), "stable")
 
-    def test_channels_select_the_newest_compatible_release(self) -> None:
+    def test_channels_select_the_newest_release_in_each_phase(self) -> None:
         releases = [
             release_record("1.0.0", prerelease=False),
             release_record("1.1.0-alpha.2", prerelease=True),
@@ -86,7 +86,7 @@ class ReleaseResolutionTests(unittest.TestCase):
         ), patch("scripts.tag_install._json_download", return_value=releases):
             self.assertEqual(resolve_channel("stable")["tag_name"], "v1.0.0")
             self.assertEqual(resolve_channel("beta")["tag_name"], "v1.1.0-beta.1")
-            self.assertEqual(resolve_channel("alpha")["tag_name"], "v1.1.0-beta.1")
+            self.assertEqual(resolve_channel("alpha")["tag_name"], "v1.1.0-alpha.2")
 
     def test_channels_prefer_public_index_without_calling_github_api(self) -> None:
         sha = "d" * 40
@@ -95,8 +95,8 @@ class ReleaseResolutionTests(unittest.TestCase):
             "repository": "klovr-co/hover-tag",
             "channels": {
                 "alpha": {
-                    "version": "1.2.0-beta.3",
-                    "tag": "v1.2.0-beta.3",
+                    "version": "1.2.0-alpha.3",
+                    "tag": "v1.2.0-alpha.3",
                     "commit_sha": sha,
                 },
             },
@@ -105,16 +105,39 @@ class ReleaseResolutionTests(unittest.TestCase):
             release = resolve_channel("alpha")
 
         request.assert_called_once_with(CHANNEL_INDEX_URL, timeout=120)
-        self.assertEqual(release["tag_name"], "v1.2.0-beta.3")
+        self.assertEqual(release["tag_name"], "v1.2.0-alpha.3")
         self.assertEqual(release["target_commitish"], sha)
         self.assertEqual(
             {asset["name"] for asset in release["assets"]},
-            {"tag-1.2.0-beta.3.zip", "SHA256SUMS", "BUILD-PROVENANCE.json"},
+            {"tag-1.2.0-alpha.3.zip", "SHA256SUMS", "BUILD-PROVENANCE.json"},
         )
         self.assertTrue(all(
-            "/releases/download/v1.2.0-beta.3/" in asset["browser_download_url"]
+            "/releases/download/v1.2.0-alpha.3/" in asset["browser_download_url"]
             for asset in release["assets"]
         ))
+
+    def test_channel_rejects_cross_phase_index_pointer(self) -> None:
+        index = {
+            "schema_version": 1,
+            "repository": "klovr-co/hover-tag",
+            "channels": {
+                "alpha": {
+                    "version": "1.2.0-beta.3",
+                    "tag": "v1.2.0-beta.3",
+                    "commit_sha": "b" * 40,
+                },
+            },
+        }
+        releases = [
+            release_record("1.2.0-alpha.4", prerelease=True),
+            release_record("1.2.0-beta.3", prerelease=True),
+        ]
+        with patch(
+            "scripts.tag_install._json_download", side_effect=[index, releases]
+        ):
+            release = resolve_channel("alpha")
+
+        self.assertEqual(release["tag_name"], "v1.2.0-alpha.4")
 
     def test_channel_index_avoids_an_exhausted_api_quota(self) -> None:
         index = {
