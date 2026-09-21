@@ -992,28 +992,41 @@ def choose_slack_app(
                 raise ui.Paused()
     settings.save_config(marker, {"app_id": app_id, "team_id": team_id})
     ui.message("✓ App linked")
+
+    def enable_agent_messaging() -> bool:
+        def approve_legacy() -> bool:
+            ui.notice(
+                "Slack currently uses the legacy Assistant messaging experience",
+                "Switching this app to Agent messaging cannot be reversed.",
+            )
+            return confirm("Switch permanently to Agent messaging?", default=False)
+
+        return slack_manifest_migrations.enable_agent_view(
+            project, app_id, team_id, approve_legacy=approve_legacy
+        )
+
     issues: list[str] = []
     while not inspect_slack_app(project, app_id, issues=issues):
+        can_enable_agent = "Agent view enabled" in issues
+        if can_enable_agent:
+            try:
+                changed = enable_agent_messaging()
+            except RuntimeError as exc:
+                ui.message(str(exc))
+            else:
+                if changed:
+                    ui.message("✓ Agent messaging enabled through Slack CLI")
+                    continue
         print()
         ui.message("Your app selection and link are saved.")
         while True:
-            can_enable_agent = "Agent view enabled" in issues
-            options = (["Enable Agent messaging with Slack CLI"] if can_enable_agent else []) + [
+            options = (["Retry Agent messaging with Slack CLI"] if can_enable_agent else []) + [
                 "Open app settings", "Check again", "Save and exit",
             ]
             choice = ui.choose("App settings need attention", options)
             if can_enable_agent and choice == 0:
-                def approve_legacy() -> bool:
-                    ui.notice(
-                        "Slack currently uses the legacy Assistant messaging experience",
-                        "Switching this app to Agent messaging cannot be reversed.",
-                    )
-                    return confirm("Switch permanently to Agent messaging?", default=False)
-
                 try:
-                    changed = slack_manifest_migrations.enable_agent_view(
-                        project, app_id, team_id, approve_legacy=approve_legacy
-                    )
+                    changed = enable_agent_messaging()
                 except RuntimeError as exc:
                     ui.message(str(exc))
                     continue
