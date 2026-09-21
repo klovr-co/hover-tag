@@ -18,6 +18,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class TagControlTests(unittest.TestCase):
+    def memory_ready(self):
+        return patch.object(
+            opentag_setup.subprocess,
+            "run",
+            return_value=subprocess.CompletedProcess([], 0, "", ""),
+        )
+
     def test_config_show_targets_named_tag_settings(self):
         self.complete()
         with patch.object(tag_control.ui.display, "next_action") as next_action, redirect_stdout(StringIO()):
@@ -215,7 +222,11 @@ class TagControlTests(unittest.TestCase):
             return_value=[opentag_setup.slack_channels.SlackChannel("CTEST", "team", False, True)],
         ), patch(
             "builtins.input", side_effect=["UOWNER", "1", "1"]
-        ), patch.object(opentag_setup, "finish_setup", return_value=0), patch.object(opentag_setup.getpass, "getpass") as secret, redirect_stdout(StringIO()):
+        ), patch.object(
+            opentag_setup, "finish_setup", return_value=0
+        ), self.memory_ready(), patch.object(
+            opentag_setup.getpass, "getpass"
+        ) as secret, redirect_stdout(StringIO()):
             self.assertEqual(opentag_setup.guided_setup(self.path), 0)
         secret.assert_not_called()
         self.assertEqual(tag_config.read_config(self.path), dict(values, SLACK_ALLOWED_USER_IDS="UOWNER"))
@@ -249,7 +260,9 @@ class TagControlTests(unittest.TestCase):
             opentag_setup.slack_channels, "slack_api", return_value={"ok": True}
         ), patch.object(opentag_setup, "write_slack_connector", return_value=Path(values["MFS_SLACK_CONNECTOR_CONFIG"])), patch(
             "builtins.input", side_effect=["1", "1"]
-        ), patch.object(opentag_setup, "finish_setup", return_value=0), redirect_stdout(StringIO()):
+        ), patch.object(
+            opentag_setup, "finish_setup", return_value=0
+        ), self.memory_ready(), redirect_stdout(StringIO()):
             self.assertEqual(opentag_setup.guided_setup(self.path), 0)
 
         self.assertEqual(picker.call_args.args, ("xoxb-fixture", ""))
@@ -264,7 +277,7 @@ class TagControlTests(unittest.TestCase):
         ), patch.object(opentag_setup.ui, "choose", return_value=1
         ), patch.object(opentag_setup, "validate_socket_token"), patch.object(
             opentag_setup.getpass, "getpass", side_effect=["xapp-fixture", KeyboardInterrupt]
-        ), patch.object(sys.stdin, "isatty", return_value=True), patch.object(
+        ), self.memory_ready(), patch.object(sys.stdin, "isatty", return_value=True), patch.object(
             sys, "argv", ["setup", "--config", str(self.path)]
         ), redirect_stdout(StringIO()):
             self.assertEqual(opentag_setup.main(), 130)
@@ -282,7 +295,7 @@ class TagControlTests(unittest.TestCase):
             opentag_setup.ui, "choose", side_effect=[2, 0, 1, 0, 0]
         ), patch.object(opentag_setup, "write_slack_connector", return_value=Path(values["MFS_SLACK_CONNECTOR_CONFIG"])) as connector, patch.object(
             opentag_setup, "finish_setup", return_value=0
-        ), redirect_stdout(StringIO()):
+        ), self.memory_ready(), redirect_stdout(StringIO()):
             self.assertEqual(opentag_setup.guided_setup(self.path), 0)
         saved = tag_config.read_config(self.path)
         self.assertEqual(saved["SLACK_APP_ID"], "ATEST")
@@ -291,7 +304,7 @@ class TagControlTests(unittest.TestCase):
         self.assertEqual(saved["MFS_SLACK_HISTORY_DAYS"], "7")
         connector.assert_called_once_with("TTEST", channels, "7", home=self.home)
 
-    def test_setup_exit_before_approval_does_not_index_or_start(self):
+    def test_setup_exit_before_approval_does_not_index_or_connect_slack(self):
         self.complete()
         channels = [opentag_setup.slack_channels.SlackChannel("CTEST", "team", False, True)]
         with patch.object(opentag_setup, "selected_backend_available", return_value=True), patch.object(
@@ -300,7 +313,9 @@ class TagControlTests(unittest.TestCase):
             opentag_setup.slack_channels, "list_channels", return_value=channels
         ), patch.object(opentag_setup.ui, "choose", return_value=3), patch.object(
             opentag_setup, "write_slack_connector"
-        ) as connector, patch.object(opentag_setup, "finish_setup") as start, redirect_stdout(StringIO()):
+        ) as connector, patch.object(
+            opentag_setup, "finish_setup"
+        ) as start, self.memory_ready(), redirect_stdout(StringIO()):
             with self.assertRaises(opentag_setup.ui.Paused):
                 opentag_setup.guided_setup(self.path)
         connector.assert_not_called()
