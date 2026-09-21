@@ -9,10 +9,11 @@ on:
 permissions:
   actions: read
   contents: write
+  pull-requests: read
 
 concurrency:
   group: edge-release
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   publish-edge:
@@ -33,16 +34,35 @@ jobs:
           python-version: '3.12'
       - name: Verify exact main commit and required workflows
         run: |
-          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$EDGE_SHA"
+          git fetch origin main --tags
+          python scripts/release_automation.py validate-commit --sha "$EDGE_SHA"
           python scripts/release_automation.py check-workflows \
             --repository "$GITHUB_REPOSITORY" --sha "$EDGE_SHA" --wait-seconds 600
+      - name: Resolve automatic release intent
+        run: |
+          mapfile -t labels < <(
+            gh api "repos/$GITHUB_REPOSITORY/commits/$EDGE_SHA/pulls" \
+              --jq '.[].labels[].name | select(startswith("release:"))'
+          )
+          arguments=()
+          for label in "${labels[@]}"; do arguments+=(--label "$label"); done
+          version=$(python scripts/release_automation.py next-alpha \
+            --base-version "$(head -n 1 VERSION)" "${arguments[@]}")
+          if [ "$version" = skip ]; then
+            echo "AUTO_PUBLISH=false" >> "$GITHUB_ENV"
+            echo "RELEASE_VERSION=$(head -n 1 VERSION)" >> "$GITHUB_ENV"
+          else
+            echo "AUTO_PUBLISH=true" >> "$GITHUB_ENV"
+            echo "RELEASE_VERSION=$version" >> "$GITHUB_ENV"
+          fi
       - name: Build reproducible edge archive
         run: |
           built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           python scripts/package_release.py --channel edge --commit-sha "$EDGE_SHA" \
-            --source-ref refs/heads/main --built-at "$built_at"
+            --source-ref refs/heads/main --built-at "$built_at" \
+            --version "$RELEASE_VERSION"
           python scripts/release_automation.py validate-edge \
-            --directory out --sha "$EDGE_SHA" --version "$(head -n 1 VERSION)"
+            --directory out --sha "$EDGE_SHA" --version "$RELEASE_VERSION"
       - name: Retain commit-specific promotion artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -55,7 +75,10 @@ jobs:
           retention-days: 90
       - name: Update public edge channel
         run: |
-          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$EDGE_SHA"
+          if [ "$(git ls-remote origin refs/heads/main | cut -f1)" != "$EDGE_SHA" ]; then
+            echo "A newer main commit exists; leaving the moving edge tag unchanged."
+            exit 0
+          fi
           short_sha=${EDGE_SHA:0:12}
           printf '%s\n\n%s\n\n%s\n' \
             "Moving development build from \`main\`." \
@@ -72,3 +95,26 @@ jobs:
               --target "$EDGE_SHA" --title "Tag edge ($short_sha)" \
               --notes-file out/EDGE-NOTES.md --prerelease --latest=false
           fi
+      - name: Publish immutable alpha release
+        if: env.AUTO_PUBLISH == 'true'
+        run: |
+          tag="v$RELEASE_VERSION"
+          if release=$(gh release view "$tag" --json targetCommitish,isDraft,isPrerelease 2>/dev/null); then
+            test "$(jq -r .targetCommitish <<<"$release")" = "$EDGE_SHA"
+            test "$(jq -r .isDraft <<<"$release")" = false
+            test "$(jq -r .isPrerelease <<<"$release")" = true
+            echo "$tag is already published for this commit."
+          else
+            python scripts/release_automation.py promote-edge \
+              --directory out --output release --version "$RELEASE_VERSION"
+            python scripts/release_automation.py validate-release \
+              --directory release --version "$RELEASE_VERSION" --sha "$EDGE_SHA"
+            gh release create "$tag" release/* --target "$EDGE_SHA" \
+              --title "Tag $tag" --generate-notes --prerelease --latest=false
+          fi
+          mkdir published
+          gh release download "$tag" --dir published \
+            --pattern "tag-$RELEASE_VERSION.zip" \
+            --pattern SHA256SUMS --pattern BUILD-PROVENANCE.json
+          python scripts/release_automation.py validate-release \
+            --directory published --version "$RELEASE_VERSION" --sha "$EDGE_SHA"

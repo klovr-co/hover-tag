@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from scripts import mfs_cat, mfs_ls, mfs_search
 
@@ -62,6 +63,23 @@ class MfsScopePolicyTests(unittest.TestCase):
         self.assertTrue(mfs_search.is_scope_allowed("--all", ["--all"]))
         self.assertFalse(
             mfs_search.is_scope_allowed("--all", ["file://local/repo/allowed"])
+        )
+
+    def test_search_result_channel_label_uses_authorized_id_mapping(self) -> None:
+        with patch.dict(
+            "os.environ", {"OPENTAG_SLACK_CHANNEL_LABELS": '{"C2": "renamed-support"}'}, clear=False
+        ):
+            labels = mfs_search.channel_labels_from_env()
+        self.assertEqual(
+            "#renamed-support (C2)",
+            mfs_search.source_channel_label(
+                "slack://tag-t1/channels/old-support__C2/messages.jsonl", labels
+            ),
+        )
+        self.assertIsNone(
+            mfs_search.source_channel_label(
+                "slack://tag-t1/channels/other__C20/messages.jsonl", labels
+            )
         )
 
 

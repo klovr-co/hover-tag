@@ -222,8 +222,11 @@ diagnostics after the quick status and recent logs.
 
 When developing from a prepared source checkout, use `./tag dev`. It watches
 `scripts/**/*.py`, reloads only the Slack bridge after changes, and streams its
-output in the foreground. Press Ctrl-C to stop the development bridge; MFS is
-left running. This command is intentionally unavailable from managed releases.
+output in the foreground. For the default loopback endpoint, Tag owns MFS as
+well: an identifiable untracked server is replaced with the checkout's runtime,
+and Ctrl-C stops both development services. Explicit remote MFS endpoints remain
+externally managed. This command is intentionally unavailable from managed
+releases.
 
 Mention `@OpenMax` in the sandbox channel you configured:
 
@@ -272,10 +275,15 @@ cannot create or approve a Slack app on behalf of your workspace administrator.
 
 ### Upgrade or uninstall
 
-To upgrade, rerun the installer, then `tag stop` and `tag start`. Configuration,
-personal skills, MCP settings, and state are preserved. `tag rollback` selects
-the previous release while stopped. Use `tag migrate --from /path/to/old/checkout`
-to copy legacy configuration and skills without deleting the originals.
+Install Tag once, then use `tag upgrade`; it follows the channel selected during
+installation, verifies the release, preserves configuration and personal data,
+and restarts running Tag services on the new release. Use
+`tag upgrade --dry-run` to check first, `tag upgrade --channel stable` to switch
+channels, or `tag upgrade --version X.Y.Z` to install and pin an exact release.
+Tag blocks older versions unless `--allow-downgrade` is explicitly supplied;
+prefer `tag rollback` for the immediately previous release. Use
+`tag migrate --from /path/to/old/checkout` to copy legacy configuration and
+skills without deleting the originals.
 
 To uninstall, stop TAG, back up personal files, then remove its managed launcher
 and application home. See [installation](docs/installation.md) for details.
@@ -301,6 +309,7 @@ Run Tag with dedicated, least-privilege credentials in an isolated environment.
 The bridge app normally needs these bot scopes:
 
 - `app_mentions:read`
+- `users:read` (verify app identity and cross-channel caller visibility)
 - `assistant:write`
 - `chat:write`
 - `files:read` and `files:write`
@@ -356,6 +365,43 @@ control. Tag consumes indexed sources; it does not silently add new ones.
 The scope helper rejects reads and directory listings outside the configured
 roots. The underlying connector credentials and source allowlists remain an
 additional boundary.
+
+### Permission-aware Slack history search
+
+Slack history stays isolated to the channel that invoked Tag by default. A
+normal question, including one about a broad topic, receives exactly that
+channel's indexed scope. An authorized caller can expand the search explicitly:
+
+- `search #support and #engineering for the rollout decision`
+- `look across Slack for earlier reports of this error`
+- `check all channels I can access for the customer name`
+
+The runtime agent understands the request and decides whether to use the normal
+current-channel MFS helper or `scripts/slack_history_search.py`. That dedicated
+helper searches all permitted indexed channels by default, or named channels
+selected with repeated `--channel` arguments. The model decides when to call the
+tool, but it cannot add channels to the tool's bridge-generated grant.
+
+Before starting Codex or Claude, Tag resolves the permitted grant to stable
+Slack channel IDs. The eligible set is the intersection of the installation's workspace,
+operator-approved channels, channel-specific MFS scopes, and channels whose
+visibility Tag can currently prove for the caller. Private channels and channels
+used by restricted or guest users require live membership proof. Archived,
+Slack Connect/shared, stale, unindexed, inaccessible, or API-unverifiable
+channels are omitted. A named channel that is absent or non-unique in that grant
+is rejected by the helper without searching. The agent can then ask the user to
+clarify without receiving data from an unverified channel.
+
+Search results identify their source channel. Channel names are display
+metadata; authorization continues to use the stable ID, so a rename does not
+change the grant. Each installation accepts scopes only from its configured
+Slack workspace authority, preventing scopes from another deployed app or
+workspace from joining the search.
+
+This feature strengthens Tag's normal helper guardrails but does not change the
+[credential boundary](docs/adr/0001-credential-boundary.md): the local backend
+still inherits credentials in a trusted sandbox. The first implementation uses
+a backend-neutral Python policy module and CLI adapter; it does not add MCP.
 
 See [Memory](references/memory.md) for the retrieval model and the
 [MFS connector documentation](https://github.com/zilliztech/mfs/tree/main/docs/connectors/)

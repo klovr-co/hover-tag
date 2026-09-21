@@ -9,7 +9,8 @@ import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import psutil
 
@@ -95,6 +96,111 @@ class TagLifecycleTests(unittest.TestCase):
         self.assertNotIn(token, str(raised.exception))
         self.assertIn("<redacted>", str(raised.exception))
 
+    def test_local_mfs_endpoint_excludes_remote_and_non_http_urls(self) -> None:
+        self.assertTrue(tag_cli.local_mfs_endpoint("http://127.0.0.1:13619"))
+        self.assertTrue(tag_cli.local_mfs_endpoint("http://localhost:13619"))
+        self.assertTrue(tag_cli.local_mfs_endpoint("http://localhost:13619/"))
+        self.assertFalse(tag_cli.local_mfs_endpoint("https://mfs.example.com"))
+        self.assertFalse(tag_cli.local_mfs_endpoint("file://local/mfs"))
+        self.assertFalse(tag_cli.local_mfs_endpoint("http://localhost:14000"))
+        self.assertFalse(tag_cli.local_mfs_endpoint("http://[::1]:13619"))
+        self.assertFalse(tag_cli.local_mfs_endpoint("http://localhost:13619/api"))
+        self.assertFalse(tag_cli.local_mfs_endpoint("http://localhost:13619?mode=test"))
+
+    def test_local_mfs_listener_matches_the_resolved_configured_address(self) -> None:
+        expected = MagicMock(pid=22)
+        expected.cmdline.return_value = ["python", "-m", "mfs_server", "run"]
+        with patch.object(
+            tag_cli.shutil, "which", return_value="/usr/sbin/lsof"
+        ), patch.object(
+            tag_cli.socket,
+            "getaddrinfo",
+            return_value=[(None, None, None, None, ("127.0.0.1", 13619))],
+        ), patch.object(
+            tag_cli.subprocess,
+            "run",
+            return_value=SimpleNamespace(stdout="22\n"),
+        ) as run, patch.object(
+            psutil, "Process", return_value=expected
+        ) as process:
+            listener = tag_cli.local_mfs_listener("http://127.0.0.1:13619")
+
+        self.assertIs(expected, listener)
+        run.assert_called_once_with(
+            [
+                "lsof",
+                "-nP",
+                "-iTCP@127.0.0.1:13619",
+                "-sTCP:LISTEN",
+                "-t",
+            ],
+            check=False,
+            text=True,
+            stdout=tag_cli.subprocess.PIPE,
+            stderr=tag_cli.subprocess.DEVNULL,
+        )
+        process.assert_called_once_with(22)
+
+    def test_local_mfs_listener_rejects_multiple_matching_processes(self) -> None:
+        first = MagicMock(pid=11)
+        first.cmdline.return_value = ["mfs-server", "run"]
+        second = MagicMock(pid=22)
+        second.cmdline.return_value = ["mfs-server", "run"]
+        connections = [
+            SimpleNamespace(
+                status=psutil.CONN_LISTEN,
+                pid=11,
+                laddr=SimpleNamespace(ip="127.0.0.1", port=13619),
+            ),
+            SimpleNamespace(
+                status=psutil.CONN_LISTEN,
+                pid=22,
+                laddr=SimpleNamespace(ip="127.0.0.1", port=13619),
+            ),
+        ]
+        with patch.object(tag_cli.shutil, "which", return_value=None), patch.object(
+            tag_cli.socket,
+            "getaddrinfo",
+            return_value=[(None, None, None, None, ("127.0.0.1", 13619))],
+        ), patch.object(psutil, "net_connections", return_value=connections), patch.object(
+            psutil, "Process", side_effect=[first, second]
+        ):
+            listener = tag_cli.local_mfs_listener("http://127.0.0.1:13619")
+
+        self.assertIsNone(listener)
+
+    def test_unmanaged_local_mfs_is_adopted_then_stopped(self) -> None:
+        process = MagicMock(pid=1234)
+        process.create_time.return_value = 42.0
+        with patch.object(tag_cli, "healthy", return_value=True), patch.object(
+            tag_cli, "process_for", side_effect=[None]
+        ), patch.object(tag_cli, "local_mfs_listener", return_value=process), patch.object(
+            tag_cli, "stop_process"
+        ) as stop:
+            self.assertTrue(
+                tag_cli.replace_unmanaged_local_mfs(
+                    self.home, "http://127.0.0.1:13619"
+                )
+            )
+
+        stop.assert_called_once_with(self.home, "mfs")
+        record = json.loads((self.home / "state/mfs.json").read_text(encoding="utf-8"))
+        self.assertEqual(
+            {"pid": 1234, "created": 42.0, "adopted": True}, record
+        )
+
+    def test_remote_mfs_is_never_adopted(self) -> None:
+        with patch.object(tag_cli, "healthy") as healthy, patch.object(
+            tag_cli, "local_mfs_listener"
+        ) as listener:
+            self.assertFalse(
+                tag_cli.replace_unmanaged_local_mfs(
+                    self.home, "https://mfs.example.com"
+                )
+            )
+        healthy.assert_not_called()
+        listener.assert_not_called()
+
     def test_legacy_slack_readiness_requires_a_fresh_connected_heartbeat(self) -> None:
         path = self.home / "runtime/slack-connected.json"
         path.parent.mkdir()
@@ -108,6 +214,34 @@ class TagLifecycleTests(unittest.TestCase):
             encoding="utf-8",
         )
         self.assertFalse(tag_cli.legacy_slack_ready(self.home))
+
+    def test_legacy_slack_readiness_rejects_orphaned_fresh_heartbeat(self) -> None:
+        legacy = self.home / "legacy"
+        legacy.mkdir()
+        command = legacy / "tag"
+        command.write_text("#!/bin/sh\n", encoding="utf-8")
+        (self.home / "state/legacy-command.json").write_text(
+            json.dumps({"command": str(command)}), encoding="utf-8"
+        )
+        heartbeat = self.home / "runtime/slack-connected.json"
+        heartbeat.parent.mkdir()
+        heartbeat.write_text(
+            json.dumps({"connected": True, "time": time.time()}), encoding="utf-8"
+        )
+
+        with patch.object(psutil, "process_iter", return_value=[]):
+            self.assertFalse(tag_cli.legacy_slack_ready(self.home))
+
+        legacy_process = SimpleNamespace(
+            info={
+                "cmdline": [
+                    sys.executable,
+                    str(legacy / "scripts/slack_socket_agent.py"),
+                ]
+            }
+        )
+        with patch.object(psutil, "process_iter", return_value=[legacy_process]):
+            self.assertTrue(tag_cli.legacy_slack_ready(self.home))
 
     def test_start_rejects_an_incomplete_runtime_before_service_checks(self) -> None:
         with patch.dict(os.environ, {"TAG_HOME": str(self.home)}, clear=False), patch.object(
@@ -125,7 +259,8 @@ class TagLifecycleTests(unittest.TestCase):
             sys, "argv", ["tag", "paths"]
         ), redirect_stdout(StringIO()) as output:
             self.assertEqual(tag_cli.main(), 0)
-        self.assertIn("tag  /  Paths", output.getvalue())
+        self.assertIn("@Tag by Hover  /  Paths", output.getvalue())
+        self.assertIn("https://hover.team/tag", output.getvalue())
         self.assertIn("tag paths --json", output.getvalue())
         self.assertNotIn('"workspace":', output.getvalue())
 
