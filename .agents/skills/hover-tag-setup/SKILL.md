@@ -79,10 +79,12 @@ in `docs/installation.md`; do not adapt POSIX shell commands blindly.
 
 ## Connect Slack through guided setup
 
-Have the user run the installed `tag setup` in their own interactive terminal.
-Explain what remains, then resume inspection after they complete or pause it.
-Setup requires a terminal; do not pipe numbered answers, invent a noninteractive
-setup API, or automate the user's authorization choices.
+Run the installed `tag setup` in an interactive terminal when the current
+environment can present and respond to its prompts. Otherwise, ask the user to
+run it in their terminal, explain what remains, and resume inspection after they
+complete or pause it. Ask the user before answering authorization or policy
+prompts when their choice is not already explicit. Do not pipe numbered answers,
+invent a noninteractive setup API, or infer the user's authorization choices.
 
 Setup owns these steps:
 
