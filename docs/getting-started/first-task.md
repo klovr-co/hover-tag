@@ -17,7 +17,7 @@ while Tag handles requests. Before starting, have these ready on that computer:
 - [Codex CLI](https://learn.chatgpt.com/docs/codex/cli), installed, signed in, and able to run tasks.
 - [Python 3.10 or later](https://www.python.org/downloads/).
 - [`uv`](https://docs.astral.sh/uv/getting-started/installation/), which installs Tag's Python dependencies.
-- [Git](https://git-scm.com/downloads), to download Tag's source code.
+- [`curl`](https://curl.se/download.html), to download Tag's installer.
 - [Slack CLI](https://docs.slack.dev/tools/slack-cli/), which connects setup to your Slack workspace.
 
 You'll also need permission to create and install a Slack app in your workspace.
@@ -28,9 +28,7 @@ This guide uses Codex. Claude support is coming soon.
 ## 1. Install Tag
 
 ```bash
-git clone https://github.com/klovr-co/tag.git
-cd tag
-./install.sh
+curl -fsSL https://hover.team/tag/install | sh
 ```
 
 The installer creates a persistent Tag home, including a workspace folder for
@@ -87,9 +85,9 @@ The workspace folder is the agent's starting directory, not a security sandbox.
 ## 4. Check and start Tag
 
 ```bash
-./tag doctor
-./tag start
-./tag status
+tag doctor
+tag start
+tag status
 ```
 
 `doctor` checks the backend, Slack credentials, authorized users, MFS service,
@@ -133,9 +131,9 @@ those helpers.
 Run:
 
 ```bash
-./tag status
-./tag logs
-./tag doctor
+tag status
+tag logs
+tag doctor
 ```
 
 Then match the first failed check in [Troubleshooting](../troubleshooting.md).
@@ -143,5 +141,5 @@ Then match the first failed check in [Troubleshooting](../troubleshooting.md).
 Stop Tag with:
 
 ```bash
-./tag stop
+tag stop
 ```
