@@ -266,12 +266,41 @@ def find_edge_artifact(repository: str, sha: str) -> tuple[int, str] | None:
     candidates = [
         artifact for artifact in payload.get("artifacts", [])
         if not artifact.get("expired")
-        and artifact.get("workflow_run", {}).get("head_sha") == sha
+        and artifact.get("name") == name
+        and artifact.get("workflow_run", {}).get("id") is not None
     ]
     if not candidates:
         return None
     artifact = max(candidates, key=lambda item: item.get("created_at", ""))
     return int(artifact["workflow_run"]["id"]), name
+
+
+def wait_for_predecessor(repository: str, sha: str, wait_seconds: int) -> list[str]:
+    """Wait until the preceding main commit is ineligible or fully processed."""
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        gate_states = []
+        for workflow in REQUIRED_WORKFLOWS:
+            payload = _github_json(repository, f"actions/workflows/{workflow}/runs", {
+                "head_sha": sha, "event": "push", "per_page": "20"
+            })
+            gate_states.append(workflow_gate_state(payload.get("workflow_runs", []), sha))
+
+        if "failure" in gate_states:
+            return []
+
+        if gate_states and all(state == "success" for state in gate_states):
+            artifact = find_edge_artifact(repository, sha)
+            if artifact is not None:
+                run = _github_json(repository, f"actions/runs/{artifact[0]}")
+                if run.get("status") == "completed":
+                    if run.get("conclusion") == "success":
+                        return []
+                    return [f"edge build did not pass for predecessor {sha}"]
+
+        if time.monotonic() >= deadline:
+            return [f"predecessor {sha} has not completed release processing"]
+        time.sleep(min(15, max(0, deadline - time.monotonic())))
 
 
 def _load_provenance(path: Path) -> tuple[dict[str, Any] | None, list[str]]:
@@ -442,6 +471,11 @@ def main() -> int:
     workflows.add_argument("--sha", required=True)
     workflows.add_argument("--wait-seconds", type=int, default=0)
 
+    predecessor = subparsers.add_parser("wait-for-predecessor")
+    predecessor.add_argument("--repository", required=True)
+    predecessor.add_argument("--sha", required=True)
+    predecessor.add_argument("--wait-seconds", type=int, default=0)
+
     artifact = subparsers.add_parser("find-edge-artifact")
     artifact.add_argument("--repository", required=True)
     artifact.add_argument("--sha", required=True)
@@ -493,6 +527,10 @@ def main() -> int:
         return _print_errors(validate_selected_sha(args.sha, resolved, on_main))
     if args.command == "check-workflows":
         return _print_errors(check_workflows(args.repository, args.sha, args.wait_seconds))
+    if args.command == "wait-for-predecessor":
+        return _print_errors(wait_for_predecessor(
+            args.repository, args.sha, args.wait_seconds
+        ))
     if args.command == "find-edge-artifact":
         found = find_edge_artifact(args.repository, args.sha)
         if not found:
