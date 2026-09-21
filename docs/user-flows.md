@@ -79,13 +79,13 @@ A few rules matter:
 flowchart LR
     A["1 · Install<br/>OpenTag + prerequisites"]
     B["2 · Connect Slack<br/>Create or approve the app"]
-    C["3 · App connected<br/>OpenMax + workspace"]
+    C["3 · App connected<br/>Tag + workspace"]
     D["4 · Choose destination<br/>Visual channel picker"]
     E["5 · Choose the agent<br/>Codex or Claude"]
     F["6 · Set boundaries<br/>Users, workspace, MFS"]
     G{"7 · Run doctor<br/>All checks pass?"}
     H["8 · Start<br/>Launch MFS + chat bridge"]
-    I["9 · Test<br/>Mention OpenMax in the channel"]
+    I["9 · Test<br/>Mention Tag in the channel"]
 
     A --> B --> C --> D --> E --> F --> G
     G -->|No: fix the first failure| F
@@ -120,13 +120,13 @@ CLI contract and recovery flow.
 flowchart LR
     Install["Install<br/>OpenTag + prerequisites"]
     Slack["Connect Slack<br/>Create or approve app"]
-    Connected["App connected<br/>OpenMax + workspace"]
+    Connected["App connected<br/>Tag + workspace"]
     Channel["Choose destination<br/>Visual channel picker"]
     Agent["Review settings<br/>Codex default, Claude experimental"]
     Guardrails["Set boundaries<br/>Users, workspace, MFS roots"]
     Doctor{"Run doctor<br/>Checks pass?"}
     Start["Start services<br/>MFS + Slack bridge"]
-    Test["Mention OpenMax<br/>in the selected channel"]
+    Test["Mention Tag<br/>in the selected channel"]
 
     Install --> Slack --> Connected --> Channel --> Agent --> Guardrails --> Doctor
     Doctor -->|No| Guardrails
@@ -144,8 +144,12 @@ flowchart LR
    workspace in its application home.
 4. `tag setup` reuses Slack CLI authorization (or launches its real login
    handoff), creates or links the app with explicit approval, and validates the
-   Socket Mode and bot credentials separately. Slack CLI can hand them off
-   privately after approval; hidden prompts are an explicit fallback.
+   Socket Mode and bot credentials separately. Before creating a new app, the
+   operator can customize its name, use a curated waterdrop, or drag or paste a
+   local profile-picture path. A review screen can open the selected picture in
+   the system viewer and change either choice before remote creation. Slack CLI
+   can hand credentials off privately after approval; hidden
+   prompts are an explicit fallback.
 5. The operator selects one or more joined channels by name. Setup separately
    validates the Slack-history credential and asks before writing/indexing an
    MFS connector limited to those channel IDs and the chosen history window.
@@ -181,7 +185,7 @@ sequenceDiagram
     S-->>I: Return connected app identity and visible channels
     I-->>O: Show app connected + visual channel picker
     O->>I: Select one or more destination channels
-    I->>S: Verify OpenMax is invited to every channel
+    I->>S: Verify Tag is invited to every channel
     S-->>I: Confirm channel memberships
     O->>I: Approve selected-channel history indexing
     I->>M: Register the bounded Slack connector on start
@@ -220,7 +224,7 @@ Try this:
 
 1. Mention the bot in a new channel message to start a fresh Slack thread, or
    inside an existing thread to continue that conversation. By default, an
-   authorized user may instead send a top-level message from OpenMax's Messages
+   authorized user may instead send a top-level message from Tag's Messages
    tab without an `@mention`.
 2. Keep the request explicit about the deliverable, evidence, and whether any
    side effect such as posting or editing is intended.

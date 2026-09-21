@@ -53,8 +53,8 @@ connector configuration; `tag start` registers it after starting MFS:
 7. Choose Codex (default) or experimental Claude, then run `tag start`.
 8. Mention the bot in each selected test channel and record an observed reply;
    service readiness alone is not an end-to-end pass.
-9. Send OpenMax a direct message and confirm an authorized caller receives a
-   threaded reply without an `@mention`.
+9. Send Tag (or the customized app name) a direct message and confirm an
+   authorized caller receives a threaded reply without an `@mention`.
 
 If the workspace blocks app creation or install approval, the user must ask a
 Slack workspace admin to approve the app. The skill can guide the setup and
@@ -69,9 +69,11 @@ bot membership first. Raw IDs remain available for automation with
 Create or reuse a Slack app:
 
 1. Go to <https://api.slack.com/apps>.
-2. Create a new app from scratch in the target workspace. Name it **OpenMax** so
-   the teammate identity stays stable when the backend changes. The name is
-   cosmetic—Tag strips the mention before invoking the configured backend.
+2. Create a new app from scratch in the target workspace. The default name is
+   the authenticated operator's first name plus **Tag** and uses a uniquely
+   curated Tag waterdrop identity; setup can customize both before creation.
+   The name is cosmetic—Tag strips the mention before invoking the configured
+   backend.
 3. Open **Socket Mode**, enable it, and create an app-level token with:
    - `connections:write`
 4. Open **OAuth & Permissions** and add Bot Token Scopes:
@@ -178,7 +180,7 @@ reading the thread or invoking the backend. Existing installations must add this
 setting before restarting Tag.
 
 Direct-message invocation is enabled by default for the same authorized users,
-who can invoke Tag without an `@mention` from OpenMax's Messages tab. The channel
+who can invoke Tag without an `@mention` from Tag's Messages tab. The channel
 allowlist does not apply to DMs, but `SLACK_ALLOWED_USER_IDS` still does. Set
 `OPENTAG_SLACK_DM_ENABLED=0` to disable DM invocation. Each top-level DM starts a
 fresh backend task, while replies reuse only that DM thread's bounded context
@@ -299,7 +301,7 @@ Then mention the bot in Slack:
 Follow-up messages in the same Slack thread are passed to the next backend run
 through `conversations.replies`.
 
-By default, an authorized user can instead open OpenMax's Messages tab and send
+By default, an authorized user can instead open Tag's Messages tab and send
 a top-level request without mentioning the bot. Use thread replies for
 follow-ups; send a new top-level DM to begin a separate task.
 

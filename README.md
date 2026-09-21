@@ -45,7 +45,7 @@ Slack. They do not disappear into my private Claude or ChatGPT history.
 
 ## What Tag can do
 
-- Respond when someone mentions `@OpenMax` in Slack or sends it a direct message,
+- Respond when someone mentions `@Tag` in Slack or sends it a direct message,
   provided the sender is explicitly authorized.
 - Read the current thread, including text and image attachments.
 - Upload backend-generated PNG, JPEG, GIF, and WebP images to the requesting thread.
@@ -90,7 +90,7 @@ returns the result where the rest of the team can read and continue the work.
 
 ```text
        ┌──────────────┐
-       │    Slack     │    @OpenMax <task>
+       │    Slack     │    @Tag <task>
        │              │ ◄──── answer ──────┐
        └──────┬───────┘                    │
               │ mention                    │
@@ -164,6 +164,11 @@ system Python or install dependencies during startup.
 `tag setup` owns the Slack journey. It reuses the installed Slack CLI, offers
 the CLI's real login flow when the sandbox workspace is not authorized, and
 then lets you create a manifest-based app or link an existing app by App ID.
+For a new app, setup proposes **&lt;your first name&gt;'s Tag** and a uniquely
+curated Tag waterdrop, selected from 144 approved base designs and 16 subtle
+signatures. You can edit the name or choose your own picture by
+dragging a local PNG, JPEG, or GIF into the terminal. The picture is copied into
+Tag's private application home and passed to Slack CLI during app creation.
 It pauses for every Slack approval that only a person or workspace admin can
 grant. Tokens are entered only through hidden terminal prompts.
 
@@ -209,13 +214,13 @@ When developing from a prepared source checkout, use `./tag dev`. It watches
 output in the foreground. Press Ctrl-C to stop the development bridge; MFS is
 left running. This command is intentionally unavailable from managed releases.
 
-Mention `@OpenMax` in the sandbox channel you configured:
+Mention `@Tag` (or the name you chose during setup) in the sandbox channel you configured:
 
-> @OpenMax summarize this channel and list the decisions and open questions.
+> @Tag summarize this channel and list the decisions and open questions.
 
 Only the owner member ID entered during setup can invoke Tag initially. Add
 other IDs to the comma-separated `SLACK_ALLOWED_USER_IDS` setting to share access.
-Those authorized users can also invoke Tag without an `@mention` from OpenMax's
+Those authorized users can also invoke Tag without an `@mention` from the app's
 Messages tab. Each top-level DM starts a fresh task; replies in that DM thread
 provide bounded context only for that task. Set `OPENTAG_SLACK_DM_ENABLED=0` to
 disable direct-message invocation.

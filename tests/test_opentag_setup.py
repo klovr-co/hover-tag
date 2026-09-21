@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import stat
 import json
+import struct
 import subprocess
 import os
 import tempfile
@@ -24,6 +25,11 @@ from scripts.opentag_setup import (
 
 
 class OpenTagSetupTests(unittest.TestCase):
+    def test_text_entry_prompts_share_the_tui_content_gutter(self):
+        with patch("builtins.input", return_value="") as entered:
+            self.assertEqual(opentag_setup.ask("Assistant name", "Maxine's Tag"), "Maxine's Tag")
+        entered.assert_called_once_with("  Assistant name [Maxine's Tag]: ")
+
     def test_app_menu_does_not_offer_saved_or_backup_identities(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
@@ -97,12 +103,238 @@ class OpenTagSetupTests(unittest.TestCase):
             home = Path(directory)
             with patch.object(opentag_setup.ui, "choose", return_value=0), patch.object(
                 opentag_setup.slack_app_create, "create_app", return_value="ANEW"
-            ) as create, patch.object(opentag_setup, "ask_validated") as manual, patch.object(
+            ) as create, patch.object(opentag_setup, "customize_new_app") as customize, patch.object(
+                opentag_setup, "ask_validated"
+            ) as manual, patch.object(
                 opentag_setup, "saved_slack_app", return_value=True
             ), patch.object(opentag_setup, "inspect_slack_app", return_value=True), redirect_stdout(StringIO()):
                 self.assertEqual(opentag_setup.choose_slack_app(home, "TTEST"), "ANEW")
             create.assert_called_once()
+            customize.assert_called_once_with(
+                home / "integrations/slack-cli", home / "config/settings.json", "TTEST"
+            )
             manual.assert_not_called()
+
+    def test_new_app_customization_saves_name_and_copies_dragged_icon(self):
+        with tempfile.TemporaryDirectory(prefix="Tag icon ") as directory:
+            home = Path(directory)
+            project = opentag_setup.slack_project(home)
+            config = home / "config/settings.json"
+            source = home / "My profile.png"
+            source.write_bytes(
+                b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\rIHDR"
+                + struct.pack(">II", 512, 512) + b"\x08\x06\x00\x00\x00"
+            )
+            pasted_path = repr(str(source))
+            with patch.object(opentag_setup, "ask", side_effect=["Helper", pasted_path]), patch.object(
+                opentag_setup.ui, "choose", side_effect=[1, 0]
+            ), patch.object(opentag_setup, "slack_cli_supports_icon_upload", return_value=True
+            ), redirect_stdout(StringIO()):
+                opentag_setup.customize_new_app(project, config)
+            self.assertEqual(opentag_setup.settings.load_config(config)["OPENTAG_BOT_NAME"], "Helper")
+            saved = project / "assets/tag-profile.png"
+            self.assertEqual(saved.read_bytes(), source.read_bytes())
+
+    def test_new_app_customization_reprompts_for_invalid_name_and_icon(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            project = opentag_setup.slack_project(home)
+            config = home / "settings.json"
+            small = home / "small.gif"
+            small.write_bytes(b"GIF89a" + struct.pack("<HH", 64, 64))
+            valid = home / "valid.gif"
+            valid.write_bytes(b"GIF89a" + struct.pack("<HH", 512, 700))
+            with patch.object(
+                opentag_setup, "ask",
+                side_effect=["x" * 36, "Tag Two", str(small), str(valid)],
+            ), patch.object(opentag_setup.ui, "choose", side_effect=[1, 0]), patch.object(
+                opentag_setup, "slack_cli_supports_icon_upload", return_value=True
+            ), redirect_stdout(StringIO()) as output:
+                opentag_setup.customize_new_app(project, config)
+            self.assertIn("1 to 35 characters", output.getvalue())
+            self.assertIn("512×512", output.getvalue())
+            self.assertTrue((project / "assets/tag-profile.gif").is_file())
+
+    def test_default_choice_renders_a_deterministic_branded_waterdrop(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            project = opentag_setup.slack_project(home)
+            assets = project / "assets"
+            assets.mkdir()
+            (assets / "tag-profile.png").write_bytes(b"old")
+            (assets / "keep.png").write_bytes(b"keep")
+            with patch.object(opentag_setup, "ask", return_value="Maxine's Tag"), patch.object(
+                opentag_setup.ui, "choose", return_value=0
+            ), patch.object(
+                opentag_setup, "slack_cli_supports_icon_upload", return_value=True
+            ), patch.object(
+                opentag_setup, "suggested_assistant_name", return_value="Maxine's Tag"
+            ), redirect_stdout(StringIO()):
+                opentag_setup.customize_new_app(project, home / "settings.json", "TTEST")
+            first = (assets / "tag-profile.png").read_bytes()
+            self.assertEqual(opentag_setup.image_dimensions(assets / "tag-profile.png"), (512, 512))
+            self.assertNotEqual(first, b"old")
+            self.assertTrue((assets / "keep.png").exists())
+            self.assertEqual(
+                opentag_setup.branded_profile_icon(project, "TTEST:Maxine's Tag").read_bytes(), first
+            )
+            self.assertNotEqual(
+                opentag_setup.branded_profile_icon(project, "TOTHER:Maxine's Tag").read_bytes(), first
+            )
+
+    def test_identity_review_can_preview_and_change_name_without_rerolling(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            project = opentag_setup.slack_project(home)
+            config = home / "settings.json"
+            with patch.object(
+                opentag_setup, "ask", side_effect=["First Tag", "Final Tag"]
+            ), patch.object(
+                opentag_setup.ui, "choose", side_effect=[0, 3, 1, 0]
+            ), patch.object(
+                opentag_setup, "slack_cli_supports_icon_upload", return_value=True
+            ), patch.object(
+                opentag_setup.webbrowser, "open", return_value=True
+            ) as browser, redirect_stdout(StringIO()) as output:
+                opentag_setup.customize_new_app(project, config, "TTEST")
+            self.assertEqual(
+                opentag_setup.settings.load_config(config)["OPENTAG_BOT_NAME"], "Final Tag"
+            )
+            browser.assert_called_once_with((project / "assets/tag-profile.png").resolve().as_uri())
+            assignments = json.loads(
+                (project / "assets/tag-waterdrop-identities.json").read_text()
+            )
+            self.assertEqual(
+                assignments["TTEST:First Tag"]["index"],
+                assignments["TTEST:Final Tag"]["index"],
+            )
+            review = output.getvalue()
+            self.assertIn("YOUR TAG", review)
+            self.assertIn("Nothing is created in Slack until you continue.", review)
+
+    def test_test_mode_makes_the_default_name_and_remote_warning_obvious(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            project = opentag_setup.slack_project(home)
+            config = home / "settings.json"
+
+            def accept_default(prompt, default=None):
+                self.assertEqual((prompt, default), ("Assistant name", "TEST · Maxine's Tag"))
+                return default
+
+            with patch.object(
+                opentag_setup, "suggested_assistant_name", return_value="Maxine's Tag"
+            ), patch.object(
+                opentag_setup, "ask", side_effect=accept_default
+            ), patch.object(
+                opentag_setup.ui, "choose", side_effect=[0, 0]
+            ), patch.object(
+                opentag_setup, "slack_cli_supports_icon_upload", return_value=True
+            ), redirect_stdout(StringIO()) as output:
+                opentag_setup.customize_new_app(project, config, "TTEST", test_mode=True)
+            self.assertEqual(
+                opentag_setup.settings.load_config(config)["OPENTAG_BOT_NAME"],
+                "TEST · Maxine's Tag",
+            )
+            self.assertIn("Continuing creates a real Slack app", output.getvalue())
+
+    def test_curated_waterdrop_catalog_has_144_bases_and_16_signatures(self):
+        self.assertEqual(opentag_setup.WATERDROP_BASE_COUNT, 144)
+        self.assertEqual(opentag_setup.WATERDROP_SIGNATURE_COUNT, 16)
+        self.assertEqual(opentag_setup.WATERDROP_RECIPE_COUNT, 2304)
+        expected = {
+            0: ("aqua", "mist", "glass", "clean"),
+            11: ("emerald", "mist", "glass", "clean"),
+            12: ("aqua", "cream", "glass", "clean"),
+            36: ("aqua", "mist", "pearl", "clean"),
+            144: ("aqua", "mist", "glass", "rose-cheeks"),
+            2303: ("emerald", "cream", "frost", "heart-mark"),
+        }
+        for index, identity in expected.items():
+            with self.subTest(index=index):
+                recipe = opentag_setup.waterdrop_recipe("ignored", index)
+                actual = (
+                    recipe["body"].name,
+                    recipe["background"].name,
+                    recipe["highlight"],
+                    recipe["signature"],
+                )
+                self.assertEqual(actual, identity)
+
+    def test_waterdrop_assignments_avoid_known_collisions_inside_a_workspace(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            opentag_setup.hashlib, "sha256"
+        ) as digest:
+            digest.return_value.digest.return_value = b"\x00" * 32
+            project = Path(directory)
+            first = opentag_setup._assigned_waterdrop_index(project, "TTEST:First")
+            second = opentag_setup._assigned_waterdrop_index(project, "TTEST:Second")
+            other_workspace = opentag_setup._assigned_waterdrop_index(project, "TOTHER:First")
+            self.assertEqual((first, second, other_workspace), (0, 1, 0))
+            self.assertEqual(
+                opentag_setup._assigned_waterdrop_index(project, "TTEST:First"), first
+            )
+
+    def test_first_100_curated_waterdrops_are_visually_distinct(self):
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            icons = {
+                opentag_setup.branded_profile_icon(
+                    project, "preview", recipe_index=index
+                ).read_bytes()
+                for index in range(100)
+            }
+            self.assertEqual(len(icons), 100)
+
+    def test_assistant_name_uses_the_authenticated_slack_user(self):
+        payload = json.dumps({"ok": True, "team_id": "TTEST", "user": "maxine.tan", "user_id": "U1"})
+        with patch.object(
+            opentag_setup.subprocess, "run",
+            return_value=subprocess.CompletedProcess([], 0, payload, ""),
+        ):
+            self.assertEqual(opentag_setup.suggested_assistant_name("TTEST"), "Maxine's Tag")
+
+    def test_assistant_name_falls_back_to_the_local_first_name(self):
+        with patch.object(
+            opentag_setup.subprocess, "run", side_effect=OSError("missing")
+        ), patch.object(opentag_setup.getpass, "getuser", return_value="river_song"):
+            self.assertEqual(opentag_setup.suggested_assistant_name("TTEST"), "River's Tag")
+
+    def test_profile_upload_pauses_cleanly_for_an_old_slack_cli(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            project = opentag_setup.slack_project(home)
+            config = home / "settings.json"
+            with patch.object(opentag_setup, "ask", return_value="Tag"), patch.object(
+                opentag_setup.ui, "choose", return_value=0
+            ), patch.object(
+                opentag_setup, "slack_cli_supports_icon_upload", return_value=False
+            ), redirect_stdout(StringIO()) as output, self.assertRaises(opentag_setup.ui.Paused):
+                opentag_setup.customize_new_app(project, config)
+            self.assertIn("Slack CLI 4.7 or newer", output.getvalue())
+            self.assertEqual(opentag_setup.settings.load_config(config)["OPENTAG_BOT_NAME"], "Tag")
+
+    def test_icon_upload_version_check_parses_slack_cli_output(self):
+        for output, expected in (("Using slack v4.7.0", True), ("Using slack v4.6.9", False)):
+            with self.subTest(output=output), patch.object(
+                opentag_setup.subprocess, "run",
+                return_value=subprocess.CompletedProcess([], 0, output, ""),
+            ):
+                self.assertIs(opentag_setup.slack_cli_supports_icon_upload(), expected)
+
+    def test_slack_cli_receives_the_tag_managed_icon_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            assets = project / "assets"
+            assets.mkdir()
+            icon = assets / "tag-profile.png"
+            icon.write_bytes(b"icon")
+            completed = subprocess.CompletedProcess([], 0, "", "")
+            with patch.object(opentag_setup.shutil, "which", return_value="/bin/slack"), patch.object(
+                opentag_setup.subprocess, "run", return_value=completed
+            ) as run:
+                self.assertEqual(opentag_setup.run_slack_cli(["app", "install"], cwd=project), 0)
+            self.assertEqual(run.call_args.kwargs["env"]["SLACK_CLI_APP_ICON_PATH"], str(icon))
 
 
     def test_members_are_scoped_deduplicated_and_never_inferred_from_bot(self):

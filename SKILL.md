@@ -50,10 +50,14 @@ Slack-first onboarding configures that source itself:
 
 ## Bot name convention
 
-The default Slack identity is **OpenMax**, so teammates use `@OpenMax <task>`
-regardless of whether Codex or Claude Code is configured underneath. Slack
-routes the mention by bot user ID, and Tag strips the mention before invoking
-the backend. Set `OPENTAG_BOT_NAME` if your Slack app uses another display name.
+New-app setup proposes **&lt;the operator's first name&gt;'s Tag** and a uniquely
+curated Tag waterdrop selected from 144 approved bases and 16 subtle signatures,
+so the Slack identity stays personal without losing the
+brand. The operator can edit the name or choose a local PNG, JPEG, or GIF, then
+review both choices and open the picture in the system viewer before creation.
+Slack routes the mention by bot user ID, and Tag strips the mention before
+invoking the backend. Set `OPENTAG_BOT_NAME` if an existing Slack app uses
+another display name.
 
 ## Setup and management workflow
 

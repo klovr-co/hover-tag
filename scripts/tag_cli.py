@@ -691,11 +691,14 @@ def main() -> int:
                            if not key.startswith(("SLACK_", "MFS_", "OPENTAG_"))}
             environment.update(runtime_environment(test_home))
             config_path = test_home / "config/settings.json"
-            print(f"Test setup: {test_home}", flush=True)
-            print("No services or indexing. Slack actions are real; existing CLI sign-ins are shared.", flush=True)
+            print(f"TEST MODE: {test_home}", flush=True)
+            print("Local settings are isolated. No services or indexing.", flush=True)
+            print("WARNING: Slack actions are real and create or install real apps.", flush=True)
         command = [sys.executable, str(ROOT / "scripts/opentag_setup.py"), "--config", str(config_path)]
         if args.no_start or args.test:
             command.append("--no-start")
+        if args.test:
+            command.append("--test-mode")
         if args.review:
             command.append("--review")
         return subprocess.call(command, env=environment)
@@ -871,7 +874,7 @@ def main() -> int:
                     + (f":\n{detail}" if detail else "; run tag logs")
                 )
             display.info_row("Slack", "Connected", good=True)
-            bot_name = os.getenv("OPENTAG_BOT_NAME", "OpenMax")
+            bot_name = os.getenv("OPENTAG_BOT_NAME", "Tag")
             display.completion(
                 "Tag restarted" if restart_flow else "Tag is connected",
                 "Running in the background · first reply not verified yet.",
