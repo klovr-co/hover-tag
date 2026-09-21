@@ -160,6 +160,7 @@ class InvitationMemory:
                 try:
                     self.tick()
                 except Exception:
+                    self.ready_event.clear()
                     self.restrict([])
                 self.stop_event.wait(60)
         self.thread = threading.Thread(target=work, name="tag-invitation-memory", daemon=True)
