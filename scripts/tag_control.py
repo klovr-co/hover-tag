@@ -28,6 +28,11 @@ def target_detail(values: dict[str, str], tag_id: str = "default", *, suffix: st
     )
 
 
+def tag_command(tag_id: str, action: str) -> str:
+    target = "" if tag_id == "default" else f"{tag_id} "
+    return f"tag {target}{action}"
+
+
 def inspect(home: Path, lifecycle, *, offline: bool = False, tag_id: str = "default") -> dict:
     path = settings.config_path(home)
     values, error = {}, None
@@ -79,9 +84,9 @@ def inspect(home: Path, lifecycle, *, offline: bool = False, tag_id: str = "defa
             pass
         if memory_sync["state"] in {"needs_attention", "settings_changed", "stale"} and state == "running":
             state, action = "needs_attention", "status"
-    suffix = "" if tag_id == "default" else f" --tag {tag_id}"
     return {
-        "schema_version": 1, "tag": tag_id, "state": state, "next_command": f"tag {action}{suffix}",
+        "schema_version": 1, "tag": tag_id, "state": state,
+        "next_command": tag_command(tag_id, action),
         "configuration": {"path": str(path), "exists": path.exists(), "error": error,
                           "complete": not error and not errors, "fields": errors},
         "workspace": str(home / "workspace"),
@@ -106,8 +111,7 @@ def status_report(home: Path, lifecycle, *, tag_id: str = "default") -> dict:
         report["backend"].update(status=message, ready=ready,
                                  authentication="signed_in" if ready else "unverified")
         if not ready and report["state"] == "running":
-            suffix = "" if tag_id == "default" else f" --tag {tag_id}"
-            report.update(state="needs_attention", next_command=f"tag doctor{suffix}")
+            report.update(state="needs_attention", next_command=tag_command(tag_id, "doctor"))
     return report
 
 
@@ -173,14 +177,14 @@ def config_command(home: Path, words: list[str], *, json_output: bool, stdin: bo
     action = words[0] if words else "show"
     if stdin and action != "set":
         raise ValueError("--stdin is only supported for config set")
-    suffix = "" if tag_id == "default" else f" --tag {tag_id}"
     try:
         identity = settings.load_config(path)
     except (OSError, ValueError):
         identity = {}
     if action == "init" and len(words) == 1:
         settings.update_config(path, settings.DEFAULTS, only_missing=True)
-        result = {"schema_version": 1, "tag": tag_id, "next_command": f"tag inspect --json{suffix}",
+        result = {"schema_version": 1, "tag": tag_id,
+                  "next_command": tag_command(tag_id, "inspect --json"),
                   "note": "Missing defaults saved. Existing settings preserved."}
     elif action == "keys" and len(words) == 1:
         result = {"schema_version": 1, "tag": tag_id, "editable": sorted(settings.EDITABLE),
@@ -196,8 +200,9 @@ def config_command(home: Path, words: list[str], *, json_output: bool, stdin: bo
         value = sys.stdin.read().rstrip("\r\n") if stdin else words[2]
         settings.update_config(path, {key: value})
         result = {"schema_version": 1, "tag": tag_id, "updated": [key],
-                  "next_command": f"tag inspect --json{suffix}",
-                  "note": f"Changes apply on next start. If running, use tag stop{suffix} then tag start{suffix}."}
+                  "next_command": tag_command(tag_id, "inspect --json"),
+                  "note": "Changes apply on next start. If running, use "
+                          f"{tag_command(tag_id, 'stop')} then {tag_command(tag_id, 'start')}."}
     else:
         raise ValueError("Use tag config init, tag config show, tag config keys, or tag config set KEY VALUE (secrets: --stdin)")
     if not json_output:

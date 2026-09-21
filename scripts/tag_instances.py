@@ -19,6 +19,11 @@ except ImportError:
 DEFAULT_TAG = "default"
 SCHEMA_VERSION = 1
 NAME_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?")
+RESERVED_NAMES = frozenset({
+    "add", "list", "memory", "settings", "inspect", "config", "setup",
+    "reset", "migrate", "upgrade", "rollback", "version", "paths",
+    "doctor", "start", "stop", "restart", "status", "logs", "dev",
+})
 
 
 @dataclass(frozen=True)
@@ -36,8 +41,11 @@ class InstanceContext:
         return self.installation_root / "shared/mfs"
 
     def command(self, action: str) -> str:
-        suffix = "" if self.is_default else f" --tag {self.tag_id}"
-        return f"tag {action}{suffix}"
+        target = "" if self.is_default else f"{self.tag_id} "
+        return f"tag {target}{action}"
+
+    def command_arguments(self, action: str) -> list[str]:
+        return [action] if self.is_default else [self.tag_id, action]
 
 
 def validate_name(name: str, *, allow_default: bool = True) -> str:
@@ -47,6 +55,8 @@ def validate_name(name: str, *, allow_default: bool = True) -> str:
         )
     if name == DEFAULT_TAG and not allow_default:
         raise ValueError("The name 'default' is reserved for the built-in Tag")
+    if name in RESERVED_NAMES:
+        raise ValueError(f"The name '{name}' is reserved for a Tag command")
     return name
 
 

@@ -8,21 +8,21 @@ The reserved `default` Tag uses the same isolated layout as every named Tag:
 ```sh
 tag add personal
 tag list
-tag setup --tag personal
-tag start --tag personal
-tag status --tag personal
-tag logs --tag personal
-tag stop --tag personal
+tag personal setup
+tag personal start
+tag personal status
+tag personal logs
+tag personal stop
 ```
 
-Omitting `--tag` selects `<TAG_HOME>/instances/default`. A local Tag name is a stable,
+Omitting the name selects `<TAG_HOME>/instances/default`. A local Tag name is a stable,
 lowercase identifier; it is independent of both the Slack app's display name
 and Slack workspace name. Paused onboarding appears in `tag list` and resumes
 with the targeted setup command. Each Tag has its own settings, Slack app,
 agent working folder, conversations, logs, and lifecycle. Use Slack's settings
 for that specific app to change its remote name or profile image.
 
-MFS is shared by the installation. `tag stop --tag NAME`, restart, reset, and
+MFS is shared by the installation. `tag NAME stop`, restart, reset, and
 failed startup leave shared memory and other Tags running. Inspect it with
 `tag memory status`; after stopping every Tag bridge, an installation-owned
 service can be stopped explicitly with `tag memory stop`. Tag refuses to stop
@@ -36,7 +36,7 @@ in the security model; they are not hardened tenants from one another.
 For automation, `tag list --json` returns `schema_version`, the installation
 root, and one independently readable record per Tag. Existing inspect/status
 objects retain their fields and add `tag` plus nullable `slack_workspace`;
-their `next_command` includes `--tag NAME` for named Tags. A malformed Tag is
+their `next_command` starts with `tag NAME` for named Tags. A malformed Tag is
 returned with its own error and does not suppress other records.
 
 The CLI, guided settings, and admin skill share the same settings and lifecycle

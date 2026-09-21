@@ -38,6 +38,7 @@ except ImportError:
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_DEPENDENCIES = ("mfs_server", "psutil", "slack_bolt")
 UPGRADE_CHANNELS = ("stable", "beta", "alpha", "edge")
+COMMANDS = tuple(sorted(tag_instances.RESERVED_NAMES))
 TOKEN_PATTERN = re.compile(r"\b(?:xox[a-z]-|xapp-)[A-Za-z0-9-]+")
 MFS_HISTORY_CREDENTIAL_MESSAGE = (
     "MFS is already running without Tag's Slack-history credential. "
@@ -526,8 +527,9 @@ def development_loop(home: Path) -> int:
         selected_target(home, suffix="Watching Python source and reloading the Slack bridge"),
     )
     display.section("Bootstrap")
-    target = [] if os.getenv("TAG_ID", "default") == "default" else ["--tag", os.environ["TAG_ID"]]
-    command = [sys.executable, str(ROOT / "scripts/tag_cli.py"), "start", *target]
+    tag_id = os.getenv("TAG_ID", "default")
+    target = [] if tag_id == "default" else [tag_id]
+    command = [sys.executable, str(ROOT / "scripts/tag_cli.py"), *target, "start"]
     result = subprocess.call(command, env=os.environ.copy())
     if result:
         return result
@@ -1152,10 +1154,10 @@ def upgrade_command(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Tag: set up, inspect, and manage your Slack teammate.",
-                                     epilog="Use tag for status and the next step. Start with tag setup; change configuration with tag settings.")
-    parser.add_argument("command", nargs="?", choices=("add", "list", "memory", "settings", "inspect", "config", "setup", "reset", "migrate", "upgrade", "rollback", "version", "paths", "doctor", "start", "stop", "restart", "status", "logs", "dev"))
+                                     usage="tag [TAG] [COMMAND] [OPTIONS]",
+                                     epilog="Use tag for default status, or tag NAME status for a named Tag. Start with tag setup; change configuration with tag settings.")
+    parser.add_argument("command", nargs="?", choices=COMMANDS)
     parser.add_argument("arguments", nargs="*", help="add: NAME; memory: status | stop; config: init | show | keys | set KEY VALUE")
-    parser.add_argument("--tag", default="default", dest="tag_id", help="local Tag name (default: default)")
     parser.add_argument("--offline", action="store_true")
     parser.add_argument("--json", action="store_true", dest="json_output", help="structured output for inspect, status, doctor, config, paths, and upgrade")
     parser.add_argument("--stdin", action="store_true", help="read a config value from stdin")
@@ -1171,7 +1173,14 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="upgrade: verify and report the target without installing")
     parser.add_argument("--no-restart", action="store_true", help="upgrade: leave running services on the previous code")
     parser.add_argument("--allow-downgrade", action="store_true", help="upgrade: explicitly permit installing an older release")
-    args = parser.parse_args()
+    raw_arguments = sys.argv[1:]
+    explicit_tag = bool(
+        raw_arguments
+        and not raw_arguments[0].startswith("-")
+        and raw_arguments[0] not in COMMANDS
+    )
+    tag_id = raw_arguments.pop(0) if explicit_tag else "default"
+    args = parser.parse_args(raw_arguments)
     if (args.no_start or args.test or args.review) and args.command != "setup":
         parser.error("--no-start, --test and --review are only for setup")
     if args.arguments and args.command not in {"add", "memory", "config"}:
@@ -1189,10 +1198,9 @@ def main() -> int:
     if args.limit is not None and args.limit < 1:
         parser.error("--limit must be at least 1")
     installation_root = tag_home()
-    tag_instances.validate_name(args.tag_id)
-    target_option_used = any(value == "--tag" or value.startswith("--tag=") for value in sys.argv[1:])
-    if args.command in {"version", "upgrade", "rollback", "migrate", "list", "add", "memory"} and target_option_used:
-        parser.error(f"--tag is not supported for installation-wide command '{args.command}'")
+    tag_instances.validate_name(tag_id)
+    if args.command in {"version", "upgrade", "rollback", "migrate", "list", "add", "memory"} and explicit_tag:
+        parser.error(f"Tag selection is not supported for installation-wide command '{args.command}'")
     try:
         import tag_control as control
         import tag_config as settings
@@ -1205,7 +1213,7 @@ def main() -> int:
         install_instance_integrations(context)
         display.header("Add", f"Created independent Tag '{context.tag_id}'.")
         display.info_row("Home", display.short_path(context.home), good=True)
-        command = [sys.executable, str(ROOT / "scripts/tag_cli.py"), "setup", "--tag", context.tag_id]
+        command = [sys.executable, str(ROOT / "scripts/tag_cli.py"), *context.command_arguments("setup")]
         return subprocess.call(command, env=instance_environment(context))
     if args.command == "list":
         if args.arguments:
@@ -1235,7 +1243,7 @@ def main() -> int:
                 display.info_row(str(row["id"]), detail, good=bool(row.get("valid")))
             display.next_action("Create another Tag", "tag add NAME")
         return 0
-    context = tag_instances.resolve(installation_root, args.tag_id)
+    context = tag_instances.resolve(installation_root, tag_id)
     home = context.home
     environment = instance_environment(context)
     os.environ.clear()
@@ -1298,9 +1306,8 @@ def main() -> int:
         command = [sys.executable, str(ROOT / "scripts/tag_cli.py")]
         environment = os.environ.copy()
         environment["TAG_RESTART_FLOW"] = "1"
-        target = [] if context.is_default else ["--tag", context.tag_id]
-        result = subprocess.call(command + ["stop", *target], env=environment)
-        return result if result else subprocess.call(command + ["start", *target], env=environment)
+        result = subprocess.call(command + context.command_arguments("stop"), env=environment)
+        return result if result else subprocess.call(command + context.command_arguments("start"), env=environment)
     if args.command == "config":
         # Initialize the private home before writing, including Windows ACLs.
         if args.arguments and args.arguments[0] in {"init", "set"}:

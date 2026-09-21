@@ -213,8 +213,8 @@ runtime, create and target a named Tag:
 ```sh
 tag add personal
 tag list
-tag start --tag personal
-tag status --tag personal
+tag personal start
+tag personal status
 ```
 
 Unqualified commands operate on the default Tag at `instances/default`. Every
@@ -272,7 +272,7 @@ reasoning level and uses increased usage for faster responses. Operators can
 restrict the selectable models with `OPENTAG_CODEX_MODELS` and the reasoning
 levels with `OPENTAG_CODEX_REASONING_EFFORTS`.
 
-Stop one bridge with `tag stop` (or `tag stop --tag NAME`). Shared memory stays
+Stop one bridge with `tag stop` (or `tag NAME stop`). Shared memory stays
 online for other Tags; inspect or explicitly stop an installation-owned service
 with `tag memory status` / `tag memory stop`. Independently started MFS servers
 are left running.

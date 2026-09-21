@@ -40,7 +40,7 @@ class TagInstanceTests(unittest.TestCase):
         self.assertEqual(json.loads((personal.home / "instance.json").read_text())["id"], "personal")
 
     def test_invalid_unknown_duplicate_and_symlink_names_do_not_create_data(self) -> None:
-        for name in ("Default", "../escape", "two words", "", "a" * 33):
+        for name in ("Default", "../escape", "two words", "", "a" * 33, "status"):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 tag_instances.create(self.root, name)
         self.assertFalse((self.root.parent / "escape").exists())
@@ -119,12 +119,12 @@ class TagInstanceTests(unittest.TestCase):
             sys, "argv", ["tag", "add", "personal"]
         ), patch.object(tag_cli.subprocess, "call", return_value=0) as call, redirect_stdout(StringIO()):
             self.assertEqual(tag_cli.main(), 0)
-        self.assertEqual(call.call_args.args[0][-3:], ["setup", "--tag", "personal"])
+        self.assertEqual(call.call_args.args[0][-2:], ["personal", "setup"])
         self.assertEqual(call.call_args.kwargs["env"]["TAG_INSTANCE_HOME"],
                          str(self.root / "instances/personal"))
 
         with patch.dict(os.environ, {"TAG_HOME": str(self.root)}, clear=False), patch.object(
-            sys, "argv", ["tag", "status", "--tag", "missing"]
+            sys, "argv", ["tag", "missing", "status"]
         ), self.assertRaisesRegex(ValueError, "Unknown Tag"):
             tag_cli.main()
         self.assertFalse((self.root / "instances/missing").exists())
@@ -132,7 +132,7 @@ class TagInstanceTests(unittest.TestCase):
     def test_cli_stop_targets_only_the_selected_bridge(self) -> None:
         home = tag_instances.create(self.root, "personal").home
         with patch.dict(os.environ, {"TAG_HOME": str(self.root)}, clear=False), patch.object(
-            sys, "argv", ["tag", "stop", "--tag", "personal"]
+            sys, "argv", ["tag", "personal", "stop"]
         ), patch.object(tag_cli, "stop_process") as stop, redirect_stdout(StringIO()):
             self.assertEqual(tag_cli.main(), 0)
         stop.assert_called_once_with(home, "slack")

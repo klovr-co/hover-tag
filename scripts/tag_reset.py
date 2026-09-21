@@ -210,5 +210,6 @@ def reset_and_setup(home: Path, lifecycle) -> int:
         ui.message("Existing Slack apps are kept. Choose Use an existing app and paste its App ID to reconnect.")
     ui.message("If setup pauses, run tag setup to continue.")
     print()
-    target = [] if os.getenv("TAG_ID", "default") == "default" else ["--tag", os.environ["TAG_ID"]]
-    return subprocess.call([sys.executable, str(lifecycle.ROOT / "scripts/tag_cli.py"), "setup", *target])
+    tag_id = os.getenv("TAG_ID", "default")
+    target = [] if tag_id == "default" else [tag_id]
+    return subprocess.call([sys.executable, str(lifecycle.ROOT / "scripts/tag_cli.py"), *target, "setup"])

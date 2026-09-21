@@ -206,8 +206,8 @@ See [setup and management](tag-management.md) for the shared flow and commands.
 `tag paths` shows storage locations in a readable view; `tag paths --json`
 provides the same data for automation. `tag doctor` checks configuration and
 connectivity. `tag start` runs in the background until stopped or rebooted.
-Use `tag status`, `tag logs`, and `tag stop`. Add `--tag NAME` to operate a
-named Tag; `tag list` shows all independent configurations. The dedicated `tag restart`
+Use `tag status`, `tag logs`, and `tag stop`. Put `NAME` before the command to
+operate a named Tag, such as `tag personal status`; `tag list` shows all independent configurations. The dedicated `tag restart`
 command presents one operation and should be preferred to manually chaining
 stop and start. Automatic login startup is not
 configured. A separately managed MFS server is reused and never stopped by TAG.
