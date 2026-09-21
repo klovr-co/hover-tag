@@ -124,7 +124,7 @@ Python's standard `venv` and pip. Clone Tag first:
 
 ```bash
 git clone https://github.com/klovr-co/hover-tag.git
-cd tag
+cd hover-tag
 ```
 
 ### Agent-guided setup (recommended)
