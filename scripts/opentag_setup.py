@@ -4,15 +4,19 @@
 from __future__ import annotations
 
 import argparse
+import colorsys
 import getpass
+import hashlib
 import json
 import os
 import re
 import shlex
 import shutil
+import struct
 import subprocess
 import sys
 import webbrowser
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,6 +32,7 @@ try:
     import slack_app_create
     import slack_credentials
     import tag_credentials
+    from tag_mascot import PALETTE as MASCOT_PALETTE, PIXELS as MASCOT_PIXELS
 except ImportError:
     from scripts.tag_paths import instance_home, initialize_instance
     from scripts import slack_channels, tag_config as settings
@@ -36,6 +41,7 @@ except ImportError:
     from scripts import slack_app_create
     from scripts import slack_credentials
     from scripts import tag_credentials
+    from scripts.tag_mascot import PALETTE as MASCOT_PALETTE, PIXELS as MASCOT_PIXELS
 
 
 @dataclass(frozen=True)
@@ -99,7 +105,7 @@ def runtime_requirement(package: str) -> str:
 
 def ask(prompt: str, default: str | None = None) -> str:
     suffix = f" [{default}]" if default else ""
-    value = input(f"{prompt}{suffix}: ").strip()
+    value = input(f"  {prompt}{suffix}: ").strip()
     return value or (default or "")
 
 
@@ -126,7 +132,8 @@ def choose_backend() -> str:
         "claude code": "claude",
     }
     while True:
-        answer = ask("\nAgent", "1").lower()
+        print()
+        answer = ask("Agent", "1").lower()
         backend = aliases.get(answer)
         if backend:
             return backend
@@ -147,7 +154,7 @@ def selected_backend_available(backend: str) -> bool:
 
 def ask_secret(prompt: str, prefix: str) -> str:
     while True:
-        value = getpass.getpass(f"{prompt}: ").strip()
+        value = getpass.getpass(f"  {prompt}: ").strip()
         if value.startswith(prefix):
             return value
         ui.message(f"Enter the {prefix} token issued by Slack.")
@@ -155,7 +162,7 @@ def ask_secret(prompt: str, prefix: str) -> str:
 
 def confirm(prompt: str, default: bool = True) -> bool:
     choice = "Y/n" if default else "y/N"
-    answer = input(f"{prompt} [{choice}]: ").strip().lower()
+    answer = input(f"  {prompt} [{choice}]: ").strip().lower()
     return default if not answer else answer in {"y", "yes"}
 
 
@@ -168,9 +175,16 @@ def safe_cli_output(value: str) -> str:
 
 def run_slack_cli(arguments: list[str], *, cwd: Path | None = None, interactive: bool = False, quiet: bool = False) -> int:
     command = [shutil.which("slack") or "slack", *arguments, "--skip-update"]
+    environment = None
+    if cwd:
+        icons = sorted((cwd / "assets").glob("tag-profile.*"))
+        if icons:
+            environment = dict(os.environ, SLACK_CLI_APP_ICON_PATH=str(icons[0]))
     if interactive:
-        return subprocess.run(command, cwd=cwd, check=False).returncode
-    completed = subprocess.run(command, cwd=cwd, check=False, text=True, capture_output=True)
+        return subprocess.run(command, cwd=cwd, env=environment, check=False).returncode
+    completed = subprocess.run(
+        command, cwd=cwd, env=environment, check=False, text=True, capture_output=True
+    )
     output = safe_cli_output("\n".join(part for part in (completed.stdout, completed.stderr) if part).strip())
     if output and (not quiet or completed.returncode):
         ui.message(output)
@@ -349,6 +363,549 @@ def slack_project(home: Path) -> Path:
     return project
 
 
+SUPPORTED_ICON_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".gif"})
+MIN_ICON_DIMENSION = 512
+MAX_ICON_DIMENSION = 2000
+
+
+def _jpeg_dimensions(path: Path) -> tuple[int, int] | None:
+    """Read JPEG dimensions without adding an image-processing dependency."""
+    size_markers = frozenset({
+        0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7,
+        0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF,
+    })
+    with path.open("rb") as image:
+        if image.read(2) != b"\xff\xd8":
+            return None
+        while True:
+            byte = image.read(1)
+            if not byte:
+                return None
+            if byte != b"\xff":
+                continue
+            while byte == b"\xff":
+                byte = image.read(1)
+            if not byte or byte[0] in {0xD8, 0xD9}:
+                continue
+            length_bytes = image.read(2)
+            if len(length_bytes) != 2:
+                return None
+            length = int.from_bytes(length_bytes, "big")
+            if length < 2:
+                return None
+            if byte[0] in size_markers:
+                header = image.read(5)
+                if len(header) != 5:
+                    return None
+                return int.from_bytes(header[3:5], "big"), int.from_bytes(header[1:3], "big")
+            image.seek(length - 2, os.SEEK_CUR)
+
+
+def image_dimensions(path: Path) -> tuple[int, int] | None:
+    """Return dimensions for the formats accepted by Slack CLI icon upload."""
+    with path.open("rb") as image:
+        header = image.read(24)
+    if header.startswith(b"\x89PNG\r\n\x1a\n") and len(header) >= 24:
+        return struct.unpack(">II", header[16:24])
+    if header[:6] in {b"GIF87a", b"GIF89a"} and len(header) >= 10:
+        return struct.unpack("<HH", header[6:10])
+    if header.startswith(b"\xff\xd8"):
+        return _jpeg_dimensions(path)
+    return None
+
+
+def parse_local_path(value: str) -> Path | None:
+    """Accept quoted or backslash-escaped paths pasted by terminal drag-and-drop."""
+    if os.name == "nt":
+        candidate = value.strip()
+        if len(candidate) >= 2 and candidate[0] == candidate[-1] and candidate[0] in {'"', "'"}:
+            candidate = candidate[1:-1]
+        return Path(candidate).expanduser() if candidate else None
+    try:
+        pieces = shlex.split(value)
+    except ValueError:
+        return None
+    if len(pieces) != 1:
+        return None
+    return Path(pieces[0]).expanduser()
+
+
+def slack_cli_supports_icon_upload() -> bool:
+    """Require the first Slack CLI release with stable non-hosted app icons."""
+    try:
+        result = subprocess.run(
+            [shutil.which("slack") or "slack", "version", "--skip-update", "--no-color"],
+            check=False, text=True, capture_output=True, timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    match = re.search(r"\bv(\d+)\.(\d+)(?:\.\d+)?\b", result.stdout + "\n" + result.stderr)
+    return result.returncode == 0 and bool(match) and tuple(map(int, match.groups())) >= (4, 7)
+
+
+def slack_user_first_name(team_id: str) -> str:
+    """Best-effort name for the Slack CLI authorization selected in setup."""
+    if team_id:
+        try:
+            result = subprocess.run(
+                [shutil.which("slack") or "slack", "api", "auth.test", "--team", team_id,
+                 "--skip-update", "--no-color"],
+                check=False, text=True, capture_output=True, timeout=15,
+            )
+            output = result.stdout + "\n" + result.stderr
+            start, end = output.find("{"), output.rfind("}")
+            payload = json.loads(output[start:end + 1]) if start >= 0 and end > start else {}
+            candidate = payload.get("user") if result.returncode == 0 and payload.get("ok") else ""
+            if payload.get("team_id") != team_id or payload.get("bot_id"):
+                candidate = ""
+        except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
+            candidate = ""
+        if isinstance(candidate, str) and candidate.strip():
+            first = re.split(r"[\s._-]+", candidate.strip(), maxsplit=1)[0]
+            if first:
+                return first[:1].upper() + first[1:]
+    local = re.split(r"[\s._-]+", getpass.getuser().strip(), maxsplit=1)[0]
+    return local[:1].upper() + local[1:] if local else ""
+
+
+def suggested_assistant_name(team_id: str) -> str:
+    first_name = slack_user_first_name(team_id)
+    suggestion = f"{first_name}'s Tag" if first_name else settings.DEFAULTS["OPENTAG_BOT_NAME"]
+    return suggestion if len(suggestion) <= 35 else settings.DEFAULTS["OPENTAG_BOT_NAME"]
+
+
+@dataclass(frozen=True)
+class WaterdropBody:
+    name: str
+    hue: float
+    saturation: float = 1.0
+
+
+@dataclass(frozen=True)
+class WaterdropBackground:
+    name: str
+    hue_offset: float
+    saturation: float
+    value: float
+
+
+WATERDROP_BODIES = (
+    WaterdropBody("aqua", .52),
+    WaterdropBody("azure", .57),
+    WaterdropBody("cobalt", .62),
+    WaterdropBody("indigo", .68),
+    WaterdropBody("violet", .75),
+    WaterdropBody("orchid", .82),
+    WaterdropBody("berry", .91),
+    WaterdropBody("coral", .99),
+    WaterdropBody("tangerine", .06),
+    WaterdropBody("gold", .13, .92),
+    WaterdropBody("lime", .24, .90),
+    WaterdropBody("emerald", .40, .94),
+)
+WATERDROP_BACKGROUNDS = (
+    WaterdropBackground("mist", 0, .18, .96),
+    WaterdropBackground("counterpoint", .48, .14, .98),
+    WaterdropBackground("cream", .12, .10, 1.0),
+    WaterdropBackground("cloud", .60, .08, .97),
+)
+WATERDROP_APPROVED_BACKGROUNDS = {
+    "aqua": ("mist", "cream", "cloud"),
+    "azure": ("mist", "counterpoint", "cream"),
+    "cobalt": ("mist", "counterpoint", "cream"),
+    "indigo": ("mist", "counterpoint", "cream"),
+    "violet": ("mist", "counterpoint", "cream"),
+    "orchid": ("mist", "counterpoint", "cloud"),
+    "berry": ("mist", "counterpoint", "cloud"),
+    "coral": ("mist", "counterpoint", "cloud"),
+    "tangerine": ("mist", "counterpoint", "cloud"),
+    "gold": ("counterpoint", "cloud", "mist"),
+    "lime": ("mist", "counterpoint", "cream"),
+    "emerald": ("mist", "counterpoint", "cream"),
+}
+WATERDROP_HIGHLIGHTS = ("glass", "pearl", "glow", "frost")
+WATERDROP_SIGNATURES = (
+    "clean", "rose-cheeks", "peach-cheeks", "freckles",
+    "north-sparkle", "east-sparkle", "west-sparkle", "twin-sparkles",
+    "left-bubble", "right-bubbles", "twin-bubbles", "bubble-trail",
+    "gold-crown", "side-stripe", "twin-dots", "heart-mark",
+)
+WATERDROP_BASE_COUNT = len(WATERDROP_BODIES) * 3 * len(WATERDROP_HIGHLIGHTS)
+WATERDROP_SIGNATURE_COUNT = len(WATERDROP_SIGNATURES)
+WATERDROP_RECIPE_COUNT = WATERDROP_BASE_COUNT * WATERDROP_SIGNATURE_COUNT
+
+
+def waterdrop_recipe(seed: str, recipe_index: int | None = None) -> dict[str, object]:
+    """Choose one of 144 curated bases and one of 16 subtle signatures."""
+    if recipe_index is None:
+        recipe_index = int.from_bytes(hashlib.sha256(seed.encode("utf-8")).digest()[:8], "big")
+    identity_index = recipe_index % WATERDROP_RECIPE_COUNT
+    base_index = identity_index % WATERDROP_BASE_COUNT
+    signature_index = identity_index // WATERDROP_BASE_COUNT
+    body = WATERDROP_BODIES[base_index % len(WATERDROP_BODIES)]
+    background_slot = (base_index // len(WATERDROP_BODIES)) % 3
+    background_name = WATERDROP_APPROVED_BACKGROUNDS[body.name][background_slot]
+    background = next(item for item in WATERDROP_BACKGROUNDS if item.name == background_name)
+    highlight = WATERDROP_HIGHLIGHTS[base_index // (len(WATERDROP_BODIES) * 3)]
+    return {
+        "index": identity_index,
+        "base_index": base_index,
+        "signature_index": signature_index,
+        "body": body,
+        "background": background,
+        "highlight": highlight,
+        "signature": WATERDROP_SIGNATURES[signature_index],
+    }
+
+
+def _waterdrop_assignments(project: Path) -> tuple[Path, dict[str, object]]:
+    assets = project / "assets"
+    assets.mkdir(parents=True, exist_ok=True, mode=0o700)
+    assignments_path = assets / "tag-waterdrop-identities.json"
+    try:
+        assignments = json.loads(assignments_path.read_text())
+        if not isinstance(assignments, dict):
+            assignments = {}
+    except (OSError, json.JSONDecodeError):
+        assignments = {}
+    return assignments_path, assignments
+
+
+def _remember_waterdrop_index(project: Path, seed: str, identity_index: int) -> None:
+    assignments_path, assignments = _waterdrop_assignments(project)
+    assignments[seed] = {
+        "team_id": seed.partition(":")[0],
+        "index": identity_index % WATERDROP_RECIPE_COUNT,
+    }
+    temporary = assignments_path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(assignments, indent=2, sort_keys=True) + "\n")
+    os.replace(temporary, assignments_path)
+    if os.name != "nt":
+        assignments_path.chmod(0o600)
+
+
+def _assigned_waterdrop_index(project: Path, seed: str) -> int:
+    """Keep an identity stable and avoid known local collisions per workspace."""
+    _, assignments = _waterdrop_assignments(project)
+    saved = assignments.get(seed)
+    if isinstance(saved, dict) and isinstance(saved.get("index"), int):
+        return saved["index"] % WATERDROP_RECIPE_COUNT
+    team_id = seed.partition(":")[0]
+    occupied = {
+        item["index"] % WATERDROP_RECIPE_COUNT
+        for item in assignments.values()
+        if isinstance(item, dict) and item.get("team_id") == team_id
+        and isinstance(item.get("index"), int)
+    }
+    identity_index = int.from_bytes(
+        hashlib.sha256(seed.encode("utf-8")).digest()[:8], "big"
+    ) % WATERDROP_RECIPE_COUNT
+    for _ in range(WATERDROP_RECIPE_COUNT):
+        if identity_index not in occupied:
+            break
+        identity_index = (identity_index + 1) % WATERDROP_RECIPE_COUNT
+    _remember_waterdrop_index(project, seed, identity_index)
+    return identity_index
+
+
+def _rgb_bytes(hue: float, saturation: float, value: float) -> bytes:
+    red, green, blue = colorsys.hsv_to_rgb(hue % 1, max(0, min(1, saturation)), max(0, min(1, value)))
+    return bytes(round(channel * 255) for channel in (red, green, blue))
+
+
+def _body_color(value: str, body: WaterdropBody) -> bytes:
+    red, green, blue = (int(value[index:index + 2], 16) / 255 for index in (1, 3, 5))
+    original_hue, saturation, brightness = colorsys.rgb_to_hsv(red, green, blue)
+    base_hue = colorsys.rgb_to_hsv(0x20 / 255, 0xCA / 255, 0xFE / 255)[0]
+    hue_delta = ((original_hue - base_hue + .5) % 1) - .5
+    return _rgb_bytes(body.hue + hue_delta * .24, saturation * body.saturation, brightness)
+
+
+def _waterdrop_palette(recipe: dict[str, object]) -> dict[str, bytes]:
+    body = recipe["body"]
+    background = recipe["background"]
+    assert isinstance(body, WaterdropBody) and isinstance(background, WaterdropBackground)
+    background_hue = background.hue_offset if background.name in {"cream", "cloud"} else body.hue + background.hue_offset
+    background_color = _rgb_bytes(background_hue, background.saturation, background.value)
+    palette = {
+        key: background_color if key in "BCDEFG" else _body_color(value, body)
+        for key, value in MASCOT_PALETTE.items()
+    }
+    highlight = recipe["highlight"]
+    if highlight == "glass":
+        palette["A"] = bytes((250, 253, 253))
+    elif highlight == "pearl":
+        palette["A"] = bytes((255, 247, 219))
+    elif highlight == "glow":
+        palette["A"] = _rgb_bytes(body.hue + .08, .18, 1)
+    else:
+        palette["A"] = _rgb_bytes(body.hue + .50, .12, .98)
+    return palette
+
+
+def _png_chunk(kind: bytes, payload: bytes) -> bytes:
+    checksum = zlib.crc32(kind + payload) & 0xFFFFFFFF
+    return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", checksum)
+
+
+def branded_profile_icon(project: Path, seed: str, *, recipe_index: int | None = None) -> Path:
+    """Render one curated, deterministic Tag waterdrop identity as a Slack icon."""
+    width = height = 512
+    scale = 12
+    sprite_width, sprite_height = len(MASCOT_PIXELS[0]), len(MASCOT_PIXELS)
+    left = (width - sprite_width * scale) // 2
+    top = (height - sprite_height * scale) // 2
+    if recipe_index is None:
+        recipe_index = _assigned_waterdrop_index(project, seed)
+    recipe = waterdrop_recipe(seed, recipe_index)
+    palette = _waterdrop_palette(recipe)
+    background = palette["E"]
+    rows = []
+    for y in range(height):
+        source_y = (y - top) // scale
+        row = bytearray(background * width)
+        if 0 <= source_y < sprite_height:
+            for source_x, key in enumerate(MASCOT_PIXELS[source_y]):
+                start = left + source_x * scale
+                row[start * 3:(start + scale) * 3] = palette[key] * scale
+        rows.append(row)
+
+    def paint_cell(column: int, row: int, color: bytes, *, cells_wide: int = 1, cells_high: int = 1) -> None:
+        x_start, y_start = left + column * scale, top + row * scale
+        for pixel_y in range(max(0, y_start), min(height, y_start + cells_high * scale)):
+            start = max(0, x_start) * 3
+            end = min(width, x_start + cells_wide * scale) * 3
+            rows[pixel_y][start:end] = color * ((end - start) // 3)
+
+    body = recipe["body"]
+    assert isinstance(body, WaterdropBody)
+    signature = recipe["signature"]
+
+    def sparkle(column: int, row: int, color: bytes) -> None:
+        """Paint a four-cell-wide mark that survives Slack-size downsampling."""
+        paint_cell(column, row - 1, color, cells_wide=2)
+        paint_cell(column - 1, row, color, cells_wide=4, cells_high=2)
+        paint_cell(column, row + 2, color, cells_wide=2)
+
+    def bubble_mark(column: int, row: int) -> None:
+        """Paint a small diamond bubble with a readable white glint."""
+        paint_cell(column + 1, row, bubble, cells_wide=2)
+        paint_cell(column, row + 1, bubble, cells_wide=4, cells_high=2)
+        paint_cell(column + 1, row + 3, bubble, cells_wide=2)
+        paint_cell(column + 1, row + 1, palette["A"])
+
+    cheek = _rgb_bytes(body.hue + .38, .48, 1)
+    peach = _rgb_bytes(.04, .38, 1)
+    bubble = _rgb_bytes(body.hue + .04, .72, .96)
+    accent = _rgb_bytes(body.hue + .38, .78, .94)
+    gold = _rgb_bytes(.13, .88, 1)
+    if signature == "rose-cheeks":
+        paint_cell(5, 21, cheek, cells_wide=3, cells_high=2)
+        paint_cell(20, 21, cheek, cells_wide=3, cells_high=2)
+    elif signature == "peach-cheeks":
+        paint_cell(5, 21, peach, cells_wide=3, cells_high=2)
+        paint_cell(20, 21, peach, cells_wide=3, cells_high=2)
+    elif signature == "freckles":
+        for column, row in ((6, 21), (9, 22), (17, 22), (20, 21)):
+            paint_cell(column, row, cheek, cells_wide=2)
+    elif signature == "north-sparkle":
+        sparkle(24, 9, palette["A"])
+    elif signature == "east-sparkle":
+        sparkle(24, 16, palette["A"])
+    elif signature == "west-sparkle":
+        sparkle(2, 14, palette["A"])
+    elif signature == "twin-sparkles":
+        sparkle(2, 14, palette["A"])
+        sparkle(24, 9, palette["A"])
+    elif signature == "left-bubble":
+        bubble_mark(1, 11)
+    elif signature == "right-bubbles":
+        bubble_mark(23, 13)
+    elif signature == "twin-bubbles":
+        bubble_mark(1, 12)
+        bubble_mark(23, 14)
+    elif signature == "bubble-trail":
+        bubble_mark(1, 16)
+        paint_cell(3, 13, bubble, cells_wide=2, cells_high=2)
+        paint_cell(5, 10, bubble, cells_wide=2, cells_high=2)
+    elif signature == "gold-crown":
+        paint_cell(11, 13, gold, cells_wide=2, cells_high=3)
+        paint_cell(14, 12, gold, cells_wide=2, cells_high=4)
+        paint_cell(17, 13, gold, cells_wide=2, cells_high=3)
+        paint_cell(11, 16, gold, cells_wide=8, cells_high=2)
+    elif signature == "side-stripe":
+        paint_cell(3, 16, accent, cells_wide=3, cells_high=2)
+        paint_cell(4, 18, accent, cells_wide=4, cells_high=2)
+        paint_cell(5, 20, accent, cells_wide=4, cells_high=2)
+    elif signature == "twin-dots":
+        paint_cell(7, 14, gold, cells_wide=3, cells_high=3)
+        paint_cell(19, 16, accent, cells_wide=3, cells_high=3)
+    elif signature == "heart-mark":
+        paint_cell(16, 23, accent, cells_wide=2, cells_high=2)
+        paint_cell(19, 23, accent, cells_wide=2, cells_high=2)
+        paint_cell(16, 25, accent, cells_wide=5, cells_high=2)
+        paint_cell(17, 27, accent, cells_wide=3)
+        paint_cell(18, 28, accent)
+
+    filtered_rows = [b"\x00" + bytes(row) for row in rows]
+    png = (
+        b"\x89PNG\r\n\x1a\n"
+        + _png_chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+        + _png_chunk(b"IDAT", zlib.compress(b"".join(filtered_rows), level=9))
+        + _png_chunk(b"IEND", b"")
+    )
+    assets = project / "assets"
+    assets.mkdir(parents=True, exist_ok=True, mode=0o700)
+    temporary = assets / ".tag-profile.png.tmp"
+    destination = assets / "tag-profile.png"
+    try:
+        temporary.write_bytes(png)
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+    if os.name != "nt":
+        destination.chmod(0o600)
+    for previous in assets.glob("tag-profile.*"):
+        if previous != destination:
+            previous.unlink()
+    return destination
+
+
+def validate_profile_icon(path: Path) -> str | None:
+    if not path.is_file():
+        return "Choose an existing image file."
+    if path.suffix.lower() not in SUPPORTED_ICON_SUFFIXES:
+        return "Use a PNG, JPEG, or GIF image."
+    try:
+        dimensions = image_dimensions(path)
+    except OSError:
+        dimensions = None
+    if dimensions is None:
+        return "That file is not a readable PNG, JPEG, or GIF image."
+    width, height = dimensions
+    if not (MIN_ICON_DIMENSION <= width <= MAX_ICON_DIMENSION
+            and MIN_ICON_DIMENSION <= height <= MAX_ICON_DIMENSION):
+        return "Use an image between 512×512 and 2000×2000 pixels."
+    return None
+
+
+def save_profile_icon(project: Path, source: Path) -> Path:
+    """Copy a chosen icon into Tag-owned storage for Slack CLI auto-detection."""
+    assets = project / "assets"
+    assets.mkdir(parents=True, exist_ok=True, mode=0o700)
+    destination = assets / f"tag-profile{source.suffix.lower()}"
+    temporary = assets / f".tag-profile{source.suffix.lower()}.tmp"
+    try:
+        shutil.copyfile(source, temporary)
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+    if os.name != "nt":
+        destination.chmod(0o600)
+    for previous in assets.glob("tag-profile.*"):
+        if previous != destination:
+            previous.unlink()
+    return destination
+
+
+def customize_new_app(
+    project: Path, config_path: Path, team_id: str = "", *, test_mode: bool = False
+) -> None:
+    """Collect the Slack identity before its creation transaction begins."""
+    values = settings.load_config(config_path)
+    current_name = values.get("OPENTAG_BOT_NAME", settings.DEFAULTS["OPENTAG_BOT_NAME"])
+    if current_name == settings.DEFAULTS["OPENTAG_BOT_NAME"]:
+        current_name = suggested_assistant_name(team_id)
+        if test_mode:
+            current_name = f"TEST · {current_name}"
+            if len(current_name) > 35:
+                current_name = "TEST · Tag"
+
+    def choose_name(default: str) -> str:
+        while True:
+            candidate = ask("Assistant name", default).strip()
+            if error := settings.validation_error("OPENTAG_BOT_NAME", candidate):
+                ui.message(error)
+                continue
+            settings.update_config(config_path, {"OPENTAG_BOT_NAME": candidate})
+            return candidate
+
+    print()
+    ui.message("Make this Slack assistant yours.")
+    if test_mode:
+        ui.message("TEST MODE · This name will identify a real Slack test app.", code=ui.display.WARNING)
+    name = choose_name(current_name)
+    saved: Path | None = None
+    picture_kind = ""
+    picture_label = ""
+    identity_index: int | None = None
+
+    while True:
+        if saved is None:
+            action = ui.choose("Profile picture", [
+                "Use my Tag waterdrop", "Choose my own picture", "Save and exit",
+            ])
+            if action == 2:
+                raise ui.Paused()
+            if not slack_cli_supports_icon_upload():
+                ui.message("Profile-picture upload requires Slack CLI 4.7 or newer.")
+                ui.message("Upgrade Slack CLI, then run tag setup again. Your assistant name is saved.")
+                raise ui.Paused()
+            if action == 0:
+                seed = f"{team_id}:{name}"
+                identity_index = _assigned_waterdrop_index(project, seed)
+                saved = branded_profile_icon(project, seed, recipe_index=identity_index)
+                picture_kind = "waterdrop"
+                picture_label = f"Tag waterdrop #{identity_index + 1:04d}"
+                ui.message(f"✓ {picture_label} is ready")
+            else:
+                ui.message("Drag a picture here, or paste its local path.")
+                ui.message("PNG, JPEG, or GIF · 512–2000 px in each dimension")
+                while True:
+                    source = parse_local_path(ask("Picture path"))
+                    error = "Enter one local image path." if source is None else validate_profile_icon(source)
+                    if error:
+                        ui.message(error)
+                        continue
+                    saved = save_profile_icon(project, source)
+                    picture_kind = "custom"
+                    picture_label = source.name
+                    identity_index = None
+                    ui.message(f"✓ Profile picture ready: {saved.name}")
+                    break
+
+        print()
+        ui.display.section("Your Tag")
+        ui.display.info_row("Name", name)
+        ui.display.info_row("Picture", picture_label)
+        if test_mode:
+            ui.message("TEST MODE · Continuing creates a real Slack app.", code=ui.display.WARNING)
+        ui.message("Nothing is created in Slack until you continue.", code=ui.display.MUTED)
+        review = ui.choose("Ready?", [
+            "Create this Tag", "Change name", "Change picture",
+            "Open picture preview", "Save and exit",
+        ])
+        if review == 0:
+            return
+        if review == 1:
+            name = choose_name(name)
+            if picture_kind == "waterdrop" and identity_index is not None:
+                _remember_waterdrop_index(project, f"{team_id}:{name}", identity_index)
+            continue
+        if review == 2:
+            saved = None
+            continue
+        if review == 3:
+            try:
+                opened = webbrowser.open(saved.resolve().as_uri())
+            except (OSError, ValueError):
+                opened = False
+            if not opened:
+                ui.message(f"Could not open the image viewer. Preview: {saved}")
+            continue
+        raise ui.Paused()
+
+
 def saved_slack_app(project: Path, team_id: str, app_id: str) -> bool:
     """Reuse Slack CLI's own link records, including links made before Tag checkpoints."""
     saved_ids = slack_app_create.saved_app_ids(project, team_id)
@@ -360,7 +917,9 @@ def saved_slack_app(project: Path, team_id: str, app_id: str) -> bool:
     return False
 
 
-def choose_slack_app(home: Path, team_id: str, config_path: Path | None = None) -> str:
+def choose_slack_app(
+    home: Path, team_id: str, config_path: Path | None = None, *, test_mode: bool = False
+) -> str:
     config_path = config_path or settings.config_path(home)
     values = settings.load_config(config_path)
     app_id = values.get("SLACK_APP_ID", "")
@@ -375,11 +934,16 @@ def choose_slack_app(home: Path, team_id: str, config_path: Path | None = None) 
     if not app_id:
         ui.message(f"Workspace: {team_id}")
         action = ui.choose("Slack app", [
-            "Create a new Tag app", "Use an existing app", "Save and exit",
+            "Create a new TEST Tag app" if test_mode else "Create a new Tag app",
+            "Use an existing app", "Save and exit",
         ])
         if action == 2:
             raise ui.Paused()
         if action == 0:
+            if test_mode:
+                customize_new_app(project, config_path, team_id, test_mode=True)
+            else:
+                customize_new_app(project, config_path, team_id)
             app_id = slack_app_create.create_app(project, team_id, config_path, run_slack_cli)
         else:
             print()
@@ -602,7 +1166,10 @@ def write_config(path: Path, values: dict[str, str]) -> None:
     ui.message(f"Wrote private configuration: {path}")
 
 
-def guided_setup(config_path: Path, *, start_services: bool = True, review_channels: bool = False) -> int:
+def guided_setup(
+    config_path: Path, *, start_services: bool = True,
+    review_channels: bool = False, test_mode: bool = False,
+) -> int:
     values = settings.load_config(config_path)
     channel_policy = values.get("SLACK_CHANNEL_POLICY", "selected" if values.get("MFS_SLACK_CONNECTOR_CONFIG") else "invited")
     home = instance_home()
@@ -630,7 +1197,7 @@ def guided_setup(config_path: Path, *, start_services: bool = True, review_chann
             ui.message("Slack authorization is required; run tag setup again when ready.")
             return 1
         values = settings.update_config(config_path, {"SLACK_TEAM_ID": team_id})
-        app_id = choose_slack_app(home, team_id, config_path)
+        app_id = choose_slack_app(home, team_id, config_path, test_mode=test_mode)
         values = settings.update_config(config_path, {"SLACK_APP_ID": app_id})
         values = connect_app_credentials(home, config_path, team_id, app_id)
         if any(settings.validation_error(key, values.get(key, "")) for key in ("SLACK_APP_TOKEN", "SLACK_BOT_TOKEN")):
@@ -860,7 +1427,7 @@ def finish_setup(config_path: Path, values: dict[str, str], channels: list[slack
             ui.message("MFS healthy · Slack connected")
             ui.message("In any selected channel (" + ", ".join(f"#{c.name}" for c in channels) + "), send:")
             print()
-            ui.message(f"@{values.get('OPENTAG_BOT_NAME', 'OpenMax')} say hello", indent="    ")
+            ui.message(f"@{values.get('OPENTAG_BOT_NAME', 'Tag')} say hello", indent="    ")
             print()
             ui.message("First reply: not verified yet. Observe the reply in Slack.")
             return 0
@@ -898,6 +1465,7 @@ def main() -> int:
     parser.add_argument("--config", type=Path, default=instance_home() / "config/settings.json", help="configuration file to create")
     parser.add_argument("--no-start", action="store_true", help="save setup choices without starting services or indexing history")
     parser.add_argument("--review", action="store_true", help="review completed setup choices")
+    parser.add_argument("--test-mode", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--review-channels", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--completion-file", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
@@ -913,7 +1481,13 @@ def main() -> int:
                 return completed
         progress = config_path.with_name("setup-progress.json")
         settings.save_config(progress, {"completed": False})
-        result = guided_setup(config_path, start_services=not args.no_start, review_channels=args.review_channels)
+        setup_options = {
+            "start_services": not args.no_start,
+            "review_channels": args.review_channels,
+        }
+        if args.test_mode:
+            setup_options["test_mode"] = True
+        result = guided_setup(config_path, **setup_options)
         if result == 0:
             settings.save_config(progress, {"completed": True, "services_requested": not args.no_start})
         if result == 0 and args.completion_file:

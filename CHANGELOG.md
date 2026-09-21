@@ -11,6 +11,17 @@
 
 All notable changes to Tag are documented here.
 
+## Unreleased
+
+### Added
+
+- Let new-app setup propose **&lt;the operator's first name&gt;'s Tag**, render a
+  deterministic identity from 144 curated Tag waterdrop bases and 16 subtle signatures,
+  or choose a validated local PNG,
+  JPEG, or GIF profile picture for upload through Slack CLI.
+- Mark test onboarding throughout the creation flow and prefix its proposed app
+  name with `TEST ·`, since approved Slack operations in test mode remain real.
+
 ## [0.1.1-alpha] - 2026-09-18
 
 ### Security

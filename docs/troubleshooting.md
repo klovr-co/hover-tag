@@ -20,7 +20,7 @@ Start with `./tag doctor`, then use the first failed check below.
 | Codex missing | The supported backend is not available | Install/login to Codex CLI and confirm `codex --version` works in the same shell. |
 | Bridge immediately stops | Runtime dependency or configuration failed after preflight | Run `./tag logs`; rerun `./scripts/ci_check.sh` before reporting a bug. |
 | Mention is denied | The caller is not in the Slack user allowlist | Add their exact member ID to `SLACK_ALLOWED_USER_IDS` only if the owner intends to share access. |
-| Mention receives no reply | Slack did not emit an event or the bridge rejected the channel | Confirm Socket Mode is connected, mention `@OpenMax` from a human account, and verify the channel is in `SLACK_CHANNEL_IDS`. |
+| Mention receives no reply | Slack did not emit an event or the bridge rejected the channel | Confirm Socket Mode is connected, mention `@Tag` (or the customized app name) from a human account, and verify the channel is in `SLACK_CHANNEL_IDS`. |
 | Direct message receives no reply | DM invocation was disabled, its automatic Slack migration is pending, or the sender is not authorized | Ensure `OPENTAG_SLACK_DM_ENABLED` is not `0`, run `tag restart` in an interactive terminal and approve Slack's permission prompt if shown, then confirm the sender is in `SLACK_ALLOWED_USER_IDS`. |
 
 When reporting a problem, include the Tag version, operating system, Python
