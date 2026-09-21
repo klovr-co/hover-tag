@@ -19,7 +19,7 @@ in a DM. The example reply shows how Tag might hand the login step back to you:
 > and the gws-shared and gws-gmail skills for Codex in your workspace, and
 > guide me through any login steps I need to complete.
 >
-> **Maya's Tag:** If gws isn't authenticated yet, complete its login on the machine
+> **Zara's Tag:** If gws isn't authenticated yet, complete its login on the machine
 > running Tag. Once you're signed in, ask me to check Gmail access.
 
 Tag can attempt the setup using its available tools and permissions. If an
@@ -44,13 +44,13 @@ from the terminal with those changes before continuing.
 ## 3. Find an email
 
 In a channel where Tag is available, mention it and ask. Use your own Tag's
-mention in place of `@Maya's Tag`. The replies below are illustrative; Tag's
+mention in place of `@Zara's Tag`. The replies below are illustrative; Tag's
 answer will depend on your email and request.
 
-> @Maya's Tag use gws to find the latest email about the launch schedule. Summarize
+> @Zara's Tag use gws to find the latest email about the launch schedule. Summarize
 > what changed and include the sender, subject, and date.
 >
-> **Maya's Tag:** The launch moved from Friday to Monday so support has time to prepare.
+> **Zara's Tag:** The launch moved from Friday to Monday so support has time to prepare.
 > The FAQ and signup testing deadlines are unchanged.
 >
 > From: Jules. Subject: Updated launch schedule. Date: September 17, 2026.
@@ -63,10 +63,10 @@ If there is no match, try a more specific subject or sender.
 In the same thread, ask Tag to draft a reply. Include the details you want it
 to use:
 
-> @Maya's Tag draft a reply to Jules acknowledging the Monday launch.
+> @Zara's Tag draft a reply to Jules acknowledging the Monday launch.
 > Say I'll brief support on Thursday. Show me the draft here before sending.
 >
-> **Maya's Tag:** Here's a draft for review:
+> **Zara's Tag:** Here's a draft for review:
 >
 > Subject: Re: Updated launch schedule
 >
@@ -75,7 +75,7 @@ to use:
 > Thanks for the update. Monday works for me. I'll brief support on Thursday
 > so they're ready for launch.
 >
-> Thanks, Maya
+> Thanks, Zara
 >
 > This is a draft in Slack; I haven't sent it.
 

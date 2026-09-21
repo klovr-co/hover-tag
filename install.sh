@@ -1,5 +1,5 @@
 #!/bin/sh
-# Copyright 2026 Open Tag contributors
+# Copyright 2026 klovr.co
 # SPDX-License-Identifier: Apache-2.0
 set -eu
 command -v python3 >/dev/null 2>&1 || { printf 'Python 3.10+ is required.\n' >&2; exit 1; }
@@ -23,9 +23,9 @@ fi
 tag_download=$(mktemp -d "${TMPDIR:-/tmp}/tag-bootstrap.XXXXXX")
 trap 'rm -f "$tag_download/tag_install.py" "$tag_download/release-channels.json"; rmdir "$tag_download"' EXIT HUP INT TERM
 curl --proto '=https' --tlsv1.2 -fsSL \
-    https://raw.githubusercontent.com/klovr-co/tag/main/scripts/tag_install.py \
+    https://raw.githubusercontent.com/klovr-co/hover-tag/main/scripts/tag_install.py \
     -o "$tag_download/tag_install.py"
 curl --proto '=https' --tlsv1.2 -fsSL \
-    https://raw.githubusercontent.com/klovr-co/tag/main/release-channels.json \
+    https://raw.githubusercontent.com/klovr-co/hover-tag/main/release-channels.json \
     -o "$tag_download/release-channels.json"
 python3 "$tag_download/tag_install.py" "$@"

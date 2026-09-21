@@ -2,8 +2,8 @@
 
 - Status: Accepted
 - Date: 2026-09-20
-- Tracking: [Response streaming #24](https://github.com/klovr-co/tag/issues/24),
-  [Task cancellation #29](https://github.com/klovr-co/tag/issues/29)
+- Tracking: [Response streaming #24](https://github.com/klovr-co/hover-tag/issues/24),
+  [Task cancellation #29](https://github.com/klovr-co/hover-tag/issues/29)
 
 ## Context
 
