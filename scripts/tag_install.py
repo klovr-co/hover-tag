@@ -145,14 +145,14 @@ def install_step(command: list[str], label: str) -> None:
         raise RuntimeError(f"{label} failed" + (f":\n{detail}" if detail else ""))
 
 
-def download(url: str) -> bytes:
+def download(url: str, *, timeout: float = 120) -> bytes:
     request = urllib.request.Request(url, headers={
         "Accept": "application/vnd.github+json",
         "User-Agent": "tag-installer",
         "X-GitHub-Api-Version": "2022-11-28",
     })
     try:
-        with urllib.request.urlopen(request, timeout=120) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             if not response.url.startswith("https://"):
                 raise ValueError("Download redirected away from HTTPS")
             return response.read()
@@ -164,9 +164,9 @@ def download(url: str) -> bytes:
         raise RuntimeError(f"Download failed with HTTP {error.code}: {url}") from error
 
 
-def _json_download(url: str) -> Any:
+def _json_download(url: str, *, timeout: float = 120) -> Any:
     try:
-        return json.loads(download(url).decode("utf-8"))
+        return json.loads(download(url, timeout=timeout).decode("utf-8"))
     except (UnicodeError, json.JSONDecodeError) as error:
         raise ValueError(f"GitHub returned malformed JSON for {url}") from error
 
@@ -206,11 +206,18 @@ def _release_matches_channel(release: dict[str, Any], channel: str) -> bool:
     return phase in allowed[channel]
 
 
-def resolve_channel(channel: str) -> dict[str, Any]:
+def resolve_channel(
+    channel: str,
+    *,
+    timeout: float = 120,
+    page_limit: int = 100,
+) -> dict[str, Any]:
     if channel not in CHANNELS:
         raise ValueError(f"Unknown release channel: {channel}")
+    if page_limit < 1:
+        raise ValueError("Release page limit must be positive")
     if channel == "edge":
-        release = _json_download(API_RELEASES + "/tags/edge")
+        release = _json_download(API_RELEASES + "/tags/edge", timeout=timeout)
         if (
             not isinstance(release, dict)
             or release.get("tag_name") != "edge"
@@ -220,15 +227,19 @@ def resolve_channel(channel: str) -> dict[str, Any]:
             raise ValueError("The edge channel is not a published prerelease")
         return release
     releases: list[dict[str, Any]] = []
-    for page in range(1, 101):
-        payload = _json_download(f"{API_RELEASES}?per_page=100&page={page}")
+    for page in range(1, page_limit + 1):
+        payload = _json_download(f"{API_RELEASES}?per_page=100&page={page}", timeout=timeout)
         if not isinstance(payload, list):
             raise ValueError("GitHub releases response is not a list")
         releases.extend(item for item in payload if isinstance(item, dict))
         if len(payload) < 100:
             break
     else:
-        raise RuntimeError("GitHub release pagination exceeded 100 pages")
+        # Bounded callers such as the interactive reminder intentionally use
+        # only GitHub's newest page. Full installer resolution retains the
+        # defensive pagination ceiling.
+        if page_limit >= 100:
+            raise RuntimeError("GitHub release pagination exceeded 100 pages")
     matches = [release for release in releases if _release_matches_channel(release, channel)]
     if not matches:
         raise RuntimeError(f"No published releases are available for channel {channel}")
@@ -503,13 +514,17 @@ def install(
             # Explicit test/development mode; never advertised as a complete install.
             python = Path(sys.executable)
             row("Runtime", "Development mode · dependencies skipped")
-        instance_homes = [home, *(
-            Path(str(item["home"])) for item in tag_instances.discover(home)
+        contexts = [
+            tag_instances.resolve(home, str(item["id"]))
+            for item in tag_instances.discover(home)
             if item.get("valid")
-        )]
-        for instance in instance_homes:
+        ]
+        workspace_homes = [home / "workspace"]
+        for context in contexts:
+            workspace_homes.append(context.workspace)
+        for workspace in workspace_homes:
             for backend in (".agents", ".claude"):
-                bundled = instance / "workspace" / backend / "skills/open-tag-admin"
+                bundled = workspace / backend / "skills/open-tag-admin"
                 skill = bundled / "SKILL.md"
                 try:
                     managed = skill.is_file() and skill.read_bytes() in {

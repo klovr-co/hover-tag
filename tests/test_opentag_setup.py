@@ -765,6 +765,48 @@ class OpenTagSetupTests(unittest.TestCase):
         self.assertEqual(result, 1)
         mock_ask_secret.assert_not_called()
 
+    def test_guided_setup_expands_and_validates_workspace_override(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            home = root / "app/instances/default"
+            user_home = root / "person"
+            config = home / "config/settings.json"
+            environment = {
+                "HOME": str(user_home),
+                "TAG_HOME": str(root / "app"),
+                "TAG_INSTANCE_HOME": str(home),
+                "OPENTAG_WORKDIR": "~/chosen",
+            }
+            with patch.dict(os.environ, environment, clear=True), patch(
+                "pathlib.Path.home", return_value=user_home
+            ), patch.object(
+                opentag_setup.ui, "screen", side_effect=RuntimeError("stop after initialization")
+            ), self.assertRaisesRegex(RuntimeError, "stop after initialization"):
+                opentag_setup.guided_setup(config)
+
+            self.assertTrue((user_home / "chosen/.codex/config.toml").is_file())
+
+            for invalid in ("relative", ""):
+                with self.subTest(invalid=invalid), patch.dict(
+                    os.environ, {**environment, "OPENTAG_WORKDIR": invalid}, clear=True
+                ), self.assertRaisesRegex(ValueError, "must be an absolute path"):
+                    opentag_setup.guided_setup(config)
+
+    def test_guided_setup_uses_platform_workspace_without_override(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            user_home = Path(temporary_directory) / "person"
+            instance = user_home / "Library/Application Support/Tag/instances/default"
+            environment = {"HOME": str(user_home)}
+            with patch.dict(os.environ, environment, clear=True), patch(
+                "pathlib.Path.home", return_value=user_home
+            ), patch("sys.platform", "darwin"), patch.object(
+                opentag_setup.ui, "screen", side_effect=RuntimeError("stop after initialization")
+            ), self.assertRaisesRegex(RuntimeError, "stop after initialization"):
+                opentag_setup.guided_setup(instance / "config/settings.json")
+
+            self.assertTrue((user_home / "Tag/default/.codex/config.toml").is_file())
+            self.assertFalse((instance / "workspace").exists())
+
     @patch("builtins.input", side_effect=["", "UOWNER"])
     def test_required_owner_id_reprompts_until_set(self, _mock_input: object) -> None:
         self.assertEqual("UOWNER", ask_required("Owner Slack member ID"))
