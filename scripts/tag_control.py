@@ -89,7 +89,7 @@ def inspect(home: Path, lifecycle, *, offline: bool = False, tag_id: str = "defa
         "next_command": tag_command(tag_id, action),
         "configuration": {"path": str(path), "exists": path.exists(), "error": error,
                           "complete": not error and not errors, "fields": errors},
-        "workspace": str(home / "workspace"),
+        "workspace": os.getenv("OPENTAG_WORKDIR", str(home / "workspace")),
         "backend": {"selected": backend if backend in {"codex", "claude"} else None,
                     "experimental": backend == "claude", "executable_found": installed,
                     "authentication": "not_checked", "task_execution": "not_checked"},

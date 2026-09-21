@@ -6,6 +6,9 @@ All notable changes to Tag are documented here.
 
 ### Added
 
+- Keep normal-install agent workspaces in the visible `~/Tag/NAME` user
+  directory while retaining configuration, credentials, and runtime state in
+  platform application data.
 - Manage independent workspace aliases for multiple Slack workspaces with `tag add`,
   `tag list`, and target-aware lifecycle, setup, settings, logs, and diagnostics.
 - Share one explicitly owned MFS lifecycle across Tags, with per-Tag
@@ -15,6 +18,9 @@ All notable changes to Tag are documented here.
   data requires a one-time stopped-service migration.
 - Let existing-app setup enable Slack's Agent messaging experience through a
   targeted, verified manifest sync while preserving unrelated app settings.
+- Check the saved release channel at most daily during normal status, inspect,
+  setup, and start flows, and show a non-blocking upgrade reminder when a newer
+  release is available.
 - Let new-app setup propose **&lt;the operator's first name&gt;'s Tag**, render a
   deterministic identity from 144 curated Tag waterdrop bases and 16 subtle signatures,
   or choose a validated local PNG,

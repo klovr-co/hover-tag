@@ -11,9 +11,11 @@ from pathlib import Path
 
 try:
     from opentag_setup import write_config
+    from tag_paths import initialize_workspace
     import tag_display as display
 except ImportError:
     from scripts.opentag_setup import write_config
+    from scripts.tag_paths import initialize_workspace
     from scripts import tag_display as display
 
 
@@ -32,10 +34,12 @@ def legacy_config(path: Path) -> dict[str, str]:
     return values
 
 
-def migrate(source: Path, home: Path) -> None:
+def migrate(source: Path, home: Path, workspace: Path | None = None) -> None:
     source = source.expanduser().resolve()
     if not source.is_dir():
         raise ValueError("Migration source must be an existing checkout")
+    workspace = workspace or home / "workspace"
+    initialize_workspace(workspace)
     display.header("Migrate", "Copying reusable settings and integrations into Tag home.")
     display.info_row("Source", display.short_path(source))
     display.info_row("Destination", display.short_path(home))
@@ -46,7 +50,7 @@ def migrate(source: Path, home: Path) -> None:
             display.info_row("Settings", "Kept existing file")
         else:
             values = legacy_config(source / ".env")
-            values["OPENTAG_WORKDIR"] = str(home / "workspace")
+            values["OPENTAG_WORKDIR"] = str(workspace)
             with redirect_stdout(StringIO()):
                 write_config(config, values)
             display.info_row("Settings", "Copied", good=True)
@@ -56,7 +60,7 @@ def migrate(source: Path, home: Path) -> None:
         if not directory.is_dir():
             continue
         for skill in directory.iterdir():
-            target = home / "workspace" / new / skill.name
+            target = workspace / new / skill.name
             if skill.is_dir() and (skill / "SKILL.md").is_file():
                 if target.exists():
                     display.info_row("Skill", f"Kept {skill.name}")
@@ -64,7 +68,7 @@ def migrate(source: Path, home: Path) -> None:
                     shutil.copytree(skill, target)
                     display.info_row("Skill", f"Copied {skill.name}", good=True)
     for relative in (".codex/config.toml", ".mcp.json"):
-        original, target = source / relative, home / "workspace" / relative
+        original, target = source / relative, workspace / relative
         if original.is_file():
             # The initializer's comment-only placeholder contains no user settings.
             placeholders = {
