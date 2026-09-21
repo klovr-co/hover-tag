@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scripts.package_release import build_archive
+from scripts.release_check import validate_release
 from scripts.release_automation import (
     Version,
     derive_next_version,
@@ -192,6 +193,20 @@ class ReleaseArtifactTests(unittest.TestCase):
 
         self.assertEqual(packaged_version, "9.8.7-alpha.6\n")
         self.assertEqual((root / "VERSION").read_text(encoding="utf-8"), source_version)
+
+    def test_numbered_alpha_archive_satisfies_release_contract(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary = Path(temporary_directory)
+            archive = temporary / "tag-0.2.0-alpha.11.zip"
+            extracted = temporary / "extracted"
+            build_archive(root, archive, version="0.2.0-alpha.11")
+            with zipfile.ZipFile(archive) as bundle:
+                bundle.extractall(extracted)
+
+            errors = validate_release(extracted)
+
+        self.assertEqual(errors, [])
 
     def test_package_rejects_missing_files_but_skips_symlinks_and_gitlinks(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

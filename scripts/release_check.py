@@ -10,6 +10,7 @@ from pathlib import Path
 
 
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$")
+NUMBERED_ALPHA_RE = re.compile(r"^(\d+\.\d+\.\d+-alpha)\.\d+$")
 MODIFICATION_NOTICE = "Modified by klovr.co in 2026 for Tag."
 MODIFIED_UPSTREAM_FILES = (
     ".env.example",
@@ -29,6 +30,12 @@ def _read(root: Path, relative_path: str, errors: list[str]) -> str:
         errors.append(f"missing required file: {relative_path}")
         return ""
     return path.read_text(encoding="utf-8")
+
+
+def _release_contract_version(version: str) -> str:
+    """Return the source-selected version that RELEASE.md must document."""
+    numbered_alpha = NUMBERED_ALPHA_RE.fullmatch(version)
+    return numbered_alpha.group(1) if numbered_alpha else version
 
 
 def validate_release(root: Path) -> list[str]:
@@ -63,9 +70,10 @@ def validate_release(root: Path) -> list[str]:
             errors.append(f"NOTICE is missing attribution: {token!r}")
 
     release = _read(root, "RELEASE.md", errors)
+    contract_version = _release_contract_version(version)
     for token in (
         "Slack + Codex CLI + a local MFS server",
-        f"v{version}" if version else "## v",
+        f"v{contract_version}" if contract_version else "## v",
         "explicit owner action",
     ):
         if release and token not in release:
