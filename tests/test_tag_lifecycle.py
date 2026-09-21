@@ -215,6 +215,34 @@ class TagLifecycleTests(unittest.TestCase):
         )
         self.assertFalse(tag_cli.legacy_slack_ready(self.home))
 
+    def test_legacy_slack_readiness_rejects_orphaned_fresh_heartbeat(self) -> None:
+        legacy = self.home / "legacy"
+        legacy.mkdir()
+        command = legacy / "tag"
+        command.write_text("#!/bin/sh\n", encoding="utf-8")
+        (self.home / "state/legacy-command.json").write_text(
+            json.dumps({"command": str(command)}), encoding="utf-8"
+        )
+        heartbeat = self.home / "runtime/slack-connected.json"
+        heartbeat.parent.mkdir()
+        heartbeat.write_text(
+            json.dumps({"connected": True, "time": time.time()}), encoding="utf-8"
+        )
+
+        with patch.object(psutil, "process_iter", return_value=[]):
+            self.assertFalse(tag_cli.legacy_slack_ready(self.home))
+
+        legacy_process = SimpleNamespace(
+            info={
+                "cmdline": [
+                    sys.executable,
+                    str(legacy / "scripts/slack_socket_agent.py"),
+                ]
+            }
+        )
+        with patch.object(psutil, "process_iter", return_value=[legacy_process]):
+            self.assertTrue(tag_cli.legacy_slack_ready(self.home))
+
     def test_start_rejects_an_incomplete_runtime_before_service_checks(self) -> None:
         with patch.dict(os.environ, {"TAG_HOME": str(self.home)}, clear=False), patch.object(
             sys, "argv", ["tag", "start"]

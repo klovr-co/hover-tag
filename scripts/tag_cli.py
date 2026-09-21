@@ -64,8 +64,45 @@ def runtime_dependency_message(missing: tuple[str, ...]) -> str:
     )
 
 
+def legacy_process_running(home: Path) -> bool | None:
+    """Return whether the recorded legacy checkout has a live Tag process."""
+    import psutil
+
+    try:
+        record = json.loads(
+            (home / "state/legacy-command.json").read_text(encoding="utf-8")
+        )
+        raw_command = record["command"]
+        if not isinstance(raw_command, str) or not raw_command:
+            return None
+        command = Path(raw_command).expanduser().resolve()
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+    expected = {
+        command,
+        command.parent / "scripts/tag_cli.py",
+        command.parent / "scripts/slack_socket_agent.py",
+    }
+    try:
+        for process in psutil.process_iter(attrs=["cmdline"]):
+            command_line = process.info.get("cmdline") or ()
+            for argument in command_line:
+                if not isinstance(argument, str) or not argument:
+                    continue
+                try:
+                    candidate = Path(argument).expanduser().resolve()
+                except (OSError, RuntimeError):
+                    continue
+                if candidate in expected:
+                    return True
+    except psutil.Error:
+        return None
+    return False
+
+
 def legacy_slack_ready(home: Path, maximum_age: float = 15.0) -> bool:
-    """Detect the heartbeat written by pre-supervisor Tag releases."""
+    """Detect a live pre-supervisor Tag release with a current heartbeat."""
     try:
         record = json.loads((home / "runtime/slack-connected.json").read_text(encoding="utf-8"))
         heartbeat = float(
@@ -74,7 +111,10 @@ def legacy_slack_ready(home: Path, maximum_age: float = 15.0) -> bool:
                 record.get("timestamp", record.get("updated_at", record.get("heartbeat"))),
             )
         )
-        return bool(record.get("connected")) and 0 <= time.time() - heartbeat <= maximum_age
+        fresh = bool(record.get("connected")) and 0 <= time.time() - heartbeat <= maximum_age
+        if not fresh:
+            return False
+        return legacy_process_running(home) is not False
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
         return False
 
