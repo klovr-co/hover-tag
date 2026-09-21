@@ -48,13 +48,19 @@ class TagInstanceTests(unittest.TestCase):
         tag_instances.create(self.root, "work")
         with self.assertRaisesRegex(ValueError, "already exists"):
             tag_instances.create(self.root, "work")
-        with self.assertRaisesRegex(ValueError, "Unknown Tag"):
+        with self.assertRaisesRegex(ValueError, "Unknown workspace alias"):
             tag_instances.resolve(self.root, "missing")
 
         link = self.root / "instances/link"
         link.symlink_to(self.root.parent)
         with self.assertRaisesRegex(ValueError, "symlink"):
             tag_instances.resolve(self.root, "link")
+
+    def test_workspace_alias_suggestion_uses_workspace_name_and_avoids_collisions(self) -> None:
+        self.assertEqual(tag_instances.suggest_name(self.root, "Maxine Personal"), "maxine-personal")
+        tag_instances.create(self.root, "maxine-personal")
+        self.assertEqual(tag_instances.suggest_name(self.root, "Maxine Personal"), "maxine-personal-2")
+        self.assertEqual(tag_instances.suggest_name(self.root, "Status"), "workspace")
 
     def test_discovery_reports_one_malformed_instance_without_hiding_others(self) -> None:
         tag_instances.create(self.root, "healthy")
@@ -116,16 +122,24 @@ class TagInstanceTests(unittest.TestCase):
 
     def test_cli_add_targets_setup_and_unknown_target_creates_nothing(self) -> None:
         with patch.dict(os.environ, {"TAG_HOME": str(self.root)}, clear=False), patch.object(
-            sys, "argv", ["tag", "add", "personal"]
+            sys, "argv", ["tag", "add"]
+        ), patch.object(
+            opentag_setup, "connect_slack_workspace", return_value=("T123", "Personal")
+        ), patch.object(
+            opentag_setup, "ask", return_value="personal"
         ), patch.object(tag_cli.subprocess, "call", return_value=0) as call, redirect_stdout(StringIO()):
             self.assertEqual(tag_cli.main(), 0)
         self.assertEqual(call.call_args.args[0][-2:], ["personal", "setup"])
         self.assertEqual(call.call_args.kwargs["env"]["TAG_INSTANCE_HOME"],
                          str(self.root / "instances/personal"))
+        self.assertEqual(
+            json.loads((self.root / "instances/personal/config/settings.json").read_text())["SLACK_TEAM_ID"],
+            "T123",
+        )
 
         with patch.dict(os.environ, {"TAG_HOME": str(self.root)}, clear=False), patch.object(
             sys, "argv", ["tag", "missing", "status"]
-        ), self.assertRaisesRegex(ValueError, "Unknown Tag"):
+        ), self.assertRaisesRegex(ValueError, "Unknown workspace alias"):
             tag_cli.main()
         self.assertFalse((self.root / "instances/missing").exists())
 

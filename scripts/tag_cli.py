@@ -668,19 +668,6 @@ def bridge_processes(installation_root: Path) -> list[str]:
     return running
 
 
-def install_instance_integrations(context: tag_instances.InstanceContext) -> None:
-    """Install release-bundled admin guidance into a newly created workspace."""
-    try:
-        from tag_install import ADMIN_SKILL
-    except ImportError:
-        from scripts.tag_install import ADMIN_SKILL
-    for backend in (".agents", ".claude"):
-        skill = context.home / "workspace" / backend / "skills/open-tag-admin/SKILL.md"
-        skill.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        if not skill.exists():
-            skill.write_text(ADMIN_SKILL, encoding="utf-8")
-
-
 def assert_unique_slack_app(context: tag_instances.InstanceContext, values: dict[str, str]) -> None:
     """Reject one Slack App ID being activated by two local Tag instances."""
     app_id = values.get("SLACK_APP_ID", "")
@@ -722,8 +709,8 @@ def ensure_connector_credential(home: Path, values: dict[str, str]) -> None:
     if not raw:
         return
     connector = Path(raw).expanduser()
-    url = values.get("MFS_URL", "http://127.0.0.1:13619").rstrip("/")
-    local = url in {"http://localhost:13619", "http://127.0.0.1:13619"}
+    url = values.get("MFS_URL", "http://127.0.0.1:13619")
+    local = local_mfs_endpoint(url)
     try:
         owned = connector.resolve().is_relative_to((home / "integrations").resolve())
     except OSError:
@@ -1157,7 +1144,7 @@ def main() -> int:
                                      usage="tag [TAG] [COMMAND] [OPTIONS]",
                                      epilog="Use tag for default status, or tag NAME status for a named Tag. Start with tag setup; change configuration with tag settings.")
     parser.add_argument("command", nargs="?", choices=COMMANDS)
-    parser.add_argument("arguments", nargs="*", help="add: NAME; memory: status | stop; config: init | show | keys | set KEY VALUE")
+    parser.add_argument("arguments", nargs="*", help="memory: status | stop; config: init | show | keys | set KEY VALUE")
     parser.add_argument("--offline", action="store_true")
     parser.add_argument("--json", action="store_true", dest="json_output", help="structured output for inspect, status, doctor, config, paths, and upgrade")
     parser.add_argument("--stdin", action="store_true", help="read a config value from stdin")
@@ -1207,12 +1194,30 @@ def main() -> int:
     except ImportError:
         from scripts import tag_control as control, tag_config as settings
     if args.command == "add":
-        if len(args.arguments) != 1:
-            parser.error("add requires exactly one NAME")
-        context = tag_instances.create(installation_root, args.arguments[0])
-        install_instance_integrations(context)
-        display.header("Add", f"Created independent Tag '{context.tag_id}'.")
+        if args.arguments:
+            parser.error("add does not accept a name; the workspace alias is chosen during onboarding")
+        try:
+            import opentag_setup as setup
+        except ImportError:
+            from scripts import opentag_setup as setup
+        selected = setup.connect_slack_workspace()
+        if not selected:
+            return 1
+        team_id, workspace_name = selected
+        suggestion = tag_instances.suggest_name(installation_root, workspace_name)
+        display.header("Add", f"Slack workspace connected: {workspace_name}")
+        display.paragraph("Choose a workspace alias. It is used in commands and does not change your assistant's Slack name.")
+        while True:
+            alias = setup.ask("Workspace alias", suggestion).strip()
+            try:
+                context = tag_instances.create(installation_root, alias)
+                break
+            except ValueError as exc:
+                display.paragraph(str(exc), display.WARNING)
+        settings.update_config(settings.config_path(context.home), {"SLACK_TEAM_ID": team_id})
+        display.header("Add", f"Created workspace alias '{context.tag_id}'.")
         display.info_row("Home", display.short_path(context.home), good=True)
+        display.info_row("Command", context.command("setup"), good=True)
         command = [sys.executable, str(ROOT / "scripts/tag_cli.py"), *context.command_arguments("setup")]
         return subprocess.call(command, env=instance_environment(context))
     if args.command == "list":
@@ -1241,7 +1246,7 @@ def main() -> int:
                 workspace = row.get("slack_workspace") or "Slack not configured"
                 detail = f"{row['state']} · {workspace}" if row.get("valid") else str(row.get("error"))
                 display.info_row(str(row["id"]), detail, good=bool(row.get("valid")))
-            display.next_action("Create another Tag", "tag add NAME")
+            display.next_action("Connect another Slack workspace", "tag add")
         return 0
     context = tag_instances.resolve(installation_root, tag_id)
     home = context.home
@@ -1271,6 +1276,11 @@ def main() -> int:
             display.header("Memory", "Shared by every Tag in this installation.")
             display.info_row("Service", "Managed and running" if result["managed"] else "Not managed", good=result["managed"])
             display.info_row("Active Tags", ", ".join(bridges) if bridges else "None")
+            detail = log_tail(home, "mfs", 20, state_dir=context.shared_mfs_home)
+            if detail:
+                display.section("Recent memory output")
+                for line in detail.splitlines():
+                    print("    " + line)
         return 0
     if args.command in {"start", "dev"}:
         missing = missing_runtime_dependencies()
@@ -1329,7 +1339,7 @@ def main() -> int:
         paths.update(tag=context.tag_id, installation_root=str(installation_root),
                      instance_home=str(home), releases=str(installation_root / "releases"),
                      shared_mfs=str(context.shared_mfs_home))
-        paths.update(admin_skill=str(ROOT / "SKILL.md"), management_guide=str(ROOT / "docs/tag-management.md"))
+        paths.update(management_guide=str(ROOT / "docs/tag-management.md"))
         paths["runtime"] = runtime_identity(installation_root)
         if args.json_output:
             print(json.dumps(paths, indent=2))
@@ -1348,7 +1358,6 @@ def main() -> int:
         display.info_row("Workspace", display.short_path(paths["workspace"]))
         display.info_row("State", display.short_path(paths["state"]))
         display.section("Agent")
-        display.info_row("Admin skill", display.short_path(paths["admin_skill"]))
         display.info_row("Guide", display.short_path(paths["management_guide"]))
         display.next_action("Machine-readable paths", "tag paths --json")
         return 0

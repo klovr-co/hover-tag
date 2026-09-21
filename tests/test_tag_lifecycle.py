@@ -99,6 +99,7 @@ class TagLifecycleTests(unittest.TestCase):
     def test_local_mfs_endpoint_excludes_remote_and_non_http_urls(self) -> None:
         self.assertTrue(tag_cli.local_mfs_endpoint("http://127.0.0.1:13619"))
         self.assertTrue(tag_cli.local_mfs_endpoint("http://localhost:13619"))
+        self.assertTrue(tag_cli.local_mfs_endpoint("http://Localhost:13619"))
         self.assertTrue(tag_cli.local_mfs_endpoint("http://localhost:13619/"))
         self.assertFalse(tag_cli.local_mfs_endpoint("https://mfs.example.com"))
         self.assertFalse(tag_cli.local_mfs_endpoint("file://local/mfs"))
@@ -106,6 +107,21 @@ class TagLifecycleTests(unittest.TestCase):
         self.assertFalse(tag_cli.local_mfs_endpoint("http://[::1]:13619"))
         self.assertFalse(tag_cli.local_mfs_endpoint("http://localhost:13619/api"))
         self.assertFalse(tag_cli.local_mfs_endpoint("http://localhost:13619?mode=test"))
+
+    def test_memory_status_includes_redacted_shared_log_tail(self) -> None:
+        shared = self.root / "shared/mfs"
+        shared.mkdir(parents=True)
+        secret = "xoxb-shared-log-secret"
+        (shared / "mfs.log").write_text(f"startup failed: {secret}\n", encoding="utf-8")
+
+        with patch.dict(os.environ, {"TAG_HOME": str(self.root)}, clear=False), patch.object(
+            sys, "argv", ["tag", "memory", "status"]
+        ), patch.object(tag_cli, "healthy", return_value=False), redirect_stdout(StringIO()) as output:
+            self.assertEqual(tag_cli.main(), 0)
+
+        self.assertIn("RECENT MEMORY OUTPUT", output.getvalue())
+        self.assertIn("startup failed: <redacted>", output.getvalue())
+        self.assertNotIn(secret, output.getvalue())
 
     def test_local_mfs_listener_matches_the_resolved_configured_address(self) -> None:
         expected = MagicMock(pid=22)
