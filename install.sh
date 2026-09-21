@@ -1,5 +1,5 @@
 #!/bin/sh
-# Copyright 2026 Open Tag contributors
+# Copyright 2026 klovr.co
 # SPDX-License-Identifier: Apache-2.0
 set -eu
 command -v python3 >/dev/null 2>&1 || { printf 'Python 3.10+ is required.\n' >&2; exit 1; }
