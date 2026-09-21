@@ -110,8 +110,11 @@ After confirmation, Tag stops its managed services, moves saved settings and
 local Slack CLI app-link/creation checkpoints into a private timestamped backup
 under `config/backups/` in the Tag home, and launches setup from the beginning.
 It also archives the old invitation-memory sync status. Your workspace, skills,
-indexed memory, connector files, and CLI sign-ins are kept. A separate prompt
-offers to keep or permanently delete the Slack app, defaulting to **Keep**.
+connector files, and CLI sign-ins are kept. Tag unregisters this instance's
+Slack history connector from shared MFS, removing the indexed records owned by
+that connector without stopping shared memory or affecting other Tags. A
+separate prompt offers to keep or permanently delete the Slack app, defaulting
+to **Keep**.
 It shows the saved bot name, App ID, and workspace Team ID. Deletion requires
 typing the exact App ID and matching saved Slack CLI app-link metadata. Tag
 backs up the local setup first, then calls Slack CLI with that explicit app and

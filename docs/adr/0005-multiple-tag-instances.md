@@ -25,7 +25,10 @@ receive the path explicitly through
 `TAG_INSTANCE_HOME` and receive the stable local identifier through `TAG_ID`.
 Instance-scoped Slack, MFS, and OpenTag variables are scrubbed before the saved
 settings for the selected instance are loaded; `default` has no environment
-inheritance exception.
+inheritance exception. The two startup-attempt tuning variables are explicit
+operational overrides: `OPENTAG_MFS_STARTUP_ATTEMPTS` and
+`OPENTAG_STARTUP_ATTEMPTS` are carried across the scrub and take precedence
+over saved extension keys.
 
 Named instances are created through a staging directory and an atomic rename.
 Their versioned, non-secret `instance.json` is the discovery authority. Invalid
@@ -42,7 +45,9 @@ not strengthen the trusted-sandbox credential boundary accepted in ADR 0001.
 One locally managed MFS service is shared. Its process identity, startup lock,
 and logs live under `shared/mfs/`. Instance start may ensure that service is
 healthy, but instance stop, restart, reset, failed bridge startup, and
-development cleanup affect only that instance's Slack bridge. Explicit
+development cleanup never stop that shared process. Reset also unregisters the
+selected instance's connector and removes the records owned by that connector;
+it does not affect other connectors. Explicit
 `tag memory stop` refuses while any bridge is running and refuses to claim an
 externally managed process. A legacy default-instance process record is moved
 only after its PID, creation time, and command identity are verified.

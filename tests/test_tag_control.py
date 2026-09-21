@@ -18,6 +18,17 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class TagControlTests(unittest.TestCase):
+    def test_config_show_targets_named_tag_settings(self):
+        self.complete()
+        with patch.object(tag_control.ui.display, "next_action") as next_action, redirect_stdout(StringIO()):
+            tag_control.config_command(
+                self.home, ["show"], json_output=False, stdin=False, tag_id="personal"
+            )
+
+        next_action.assert_called_once_with(
+            "Edit settings interactively", "tag personal settings"
+        )
+
     def test_settings_keyboard_agent_choice_saves_and_returns(self):
         self.complete()
         with patch.object(tag_control.ui, "keyboard_available", return_value=True), patch.object(

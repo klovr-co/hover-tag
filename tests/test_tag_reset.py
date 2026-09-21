@@ -149,6 +149,39 @@ class ResetTests(unittest.TestCase):
         self.assertFalse((self.home / "state/start.lock").exists())
         self.assertFalse(self.config.with_suffix(".json.lock").exists())
 
+    def test_archive_unregisters_only_instance_connector_before_moving_settings(self):
+        self.seed()
+        self.config.write_text(json.dumps({
+            "MFS_URL": "http://127.0.0.1:13619",
+            "MFS_SLACK_CONNECTOR_URI": "slack://tag-ttest-aold",
+        }))
+        completed = SimpleNamespace(returncode=0, stdout="", stderr="")
+        with patch.object(tag_reset.shutil, "which", return_value="/fixture/mfs"), patch.object(
+            tag_reset.subprocess, "run", return_value=completed
+        ) as run:
+            backup = tag_reset.archive_setup(self.home, self.lifecycle)
+
+        self.assertTrue((backup / "settings.json").exists())
+        run.assert_called_once()
+        self.assertEqual(
+            run.call_args.args[0],
+            ["/fixture/mfs", "connector", "remove", "slack://tag-ttest-aold", "--yes"],
+        )
+        self.assertNotIn("mfs", [call.args[1] for call in self.lifecycle.stop_process.call_args_list])
+
+    def test_connector_removal_failure_keeps_setup_for_retry(self):
+        self.seed()
+        self.config.write_text(json.dumps({"MFS_SLACK_CONNECTOR_URI": "slack://tag-ttest-aold"}))
+        completed = SimpleNamespace(returncode=1, stdout="", stderr="service unavailable")
+        with patch.object(tag_reset.shutil, "which", return_value="/fixture/mfs"), patch.object(
+            tag_reset.subprocess, "run", return_value=completed
+        ), self.assertRaisesRegex(RuntimeError, "could not be removed"):
+            tag_reset.archive_setup(self.home, self.lifecycle)
+
+        self.assertTrue(self.config.exists())
+        self.assertTrue((self.home / "integrations/slack-cli/tag-create.json").exists())
+        self.assertFalse((self.home / "state/start.lock").exists())
+
     def test_cancel_and_pause_do_not_initialize_or_stop(self):
         for response in (0, tag_reset.ui.Paused(), KeyboardInterrupt()):
             with self.subTest(response=response), patch.object(tag_reset.ui, "choose") as choose, redirect_stdout(StringIO()):
