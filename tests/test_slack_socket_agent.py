@@ -576,6 +576,7 @@ class SlackOutputArtifactTests(unittest.TestCase):
     def test_uploads_requested_binary_file_to_originating_thread_unchanged(self) -> None:
         client = MagicMock()
         logger = MagicMock()
+        upload_started = MagicMock()
         observed = b""
         with tempfile.TemporaryDirectory() as raw_dir:
             root = Path(raw_dir)
@@ -599,10 +600,17 @@ class SlackOutputArtifactTests(unittest.TestCase):
 
             client.files_upload_v2.side_effect = capture_upload
             messages = slack_socket_agent.deliver_output_artifacts(
-                client, "C123", "1.23", manifest, root, logger
+                client,
+                "C123",
+                "1.23",
+                manifest,
+                root,
+                logger,
+                on_upload_start=upload_started,
             )
 
         self.assertEqual(expected, observed)
+        upload_started.assert_called_once_with()
         client.files_upload_v2.assert_called_once_with(
             channel="C123",
             thread_ts="1.23",
@@ -620,6 +628,7 @@ class SlackOutputArtifactTests(unittest.TestCase):
     def test_local_only_outputs_get_buttons_without_slack_attachments(self) -> None:
         client = MagicMock()
         logger = MagicMock()
+        upload_started = MagicMock()
         with tempfile.TemporaryDirectory() as raw_dir:
             root = Path(raw_dir)
             first = root / "launch-checklist.md"
@@ -639,12 +648,19 @@ class SlackOutputArtifactTests(unittest.TestCase):
 
             paths, errors = slack_socket_agent.load_output_artifacts(manifest, root)
             messages = slack_socket_agent.deliver_output_artifacts(
-                client, "C123", "1.23", manifest, root, logger
+                client,
+                "C123",
+                "1.23",
+                manifest,
+                root,
+                logger,
+                on_upload_start=upload_started,
             )
 
         self.assertEqual([first.resolve(), second.resolve()], paths)
         self.assertEqual([], errors)
         self.assertEqual([], messages)
+        upload_started.assert_not_called()
         client.files_upload_v2.assert_not_called()
 
     def test_explicit_multi_file_delivery_uploads_every_output(self) -> None:
@@ -1687,6 +1703,72 @@ class SlackWorkingIndicatorTests(unittest.TestCase):
         timer.return_value.start.assert_called_once()
         timer.return_value.cancel.assert_called_once()
         client.chat_postMessage.assert_not_called()
+
+    def test_retries_terminal_status_after_transient_slack_failure(self) -> None:
+        client = MagicMock()
+        client.api_call.side_effect = RuntimeError("temporary network failure")
+        client.assistant_threads_setStatus.side_effect = RuntimeError(
+            "temporary network failure"
+        )
+        journal = MagicMock()
+        indicator = slack_socket_agent.WorkingIndicator(
+            client,
+            "C123",
+            "1.23",
+            MagicMock(),
+            journal=journal,
+            team="T123",
+        )
+        indicator.native = indicator.session_api = indicator.legacy_status = True
+
+        with patch("scripts.slack_socket_agent.threading.Timer") as timer:
+            indicator.clear()
+            retry = timer.call_args.args[1]
+
+        self.assertEqual(
+            slack_socket_agent.STATUS_CLEANUP_RETRY_DELAYS[0],
+            timer.call_args.args[0],
+        )
+        journal.remove.assert_not_called()
+
+        client.api_call.side_effect = None
+        client.assistant_threads_setStatus.side_effect = None
+        retry()
+
+        client.api_call.assert_called_with(
+            "agents.sessions.setStatus",
+            json={"channel_id": "C123", "thread_ts": "1.23", "status": "active"},
+        )
+        client.assistant_threads_setStatus.assert_called_with(
+            channel_id="C123", thread_ts="1.23", status=""
+        )
+        journal.remove.assert_called_once_with("T123", "C123", "1.23")
+
+    def test_progress_message_changes_when_custom_status_is_unavailable(self) -> None:
+        client = MagicMock()
+        client.assistant_threads_setStatus.side_effect = RuntimeError(
+            "unsupported for this thread"
+        )
+        client.chat_postMessage.return_value = {"ts": "2.34"}
+        indicator = slack_socket_agent.WorkingIndicator(
+            client, "C123", "1.23", MagicMock()
+        )
+
+        with patch("scripts.slack_socket_agent.threading.Timer"):
+            indicator.start()
+            indicator.activity(
+                "activity_start", "search", "Searching workspace history…"
+            )
+            indicator.flush_activity()
+
+        self.assertTrue(indicator.session_api)
+        self.assertFalse(indicator.legacy_status)
+        client.chat_postMessage.assert_called_once_with(
+            channel="C123", thread_ts="1.23", text="Working on this…"
+        )
+        client.chat_update.assert_called_once_with(
+            channel="C123", ts="2.34", text="Searching workspace history…"
+        )
 
 
     def test_falls_back_to_temporary_message_when_native_status_fails(self) -> None:
