@@ -1662,8 +1662,21 @@ class SlackWorkingIndicatorTests(unittest.TestCase):
             indicator.start()
             indicator.clear()
 
-        journal.add.assert_called_once_with("T123", "C123", "1.23")
-        journal.remove.assert_called_once_with("T123", "C123", "1.23")
+        self.assertEqual(2, journal.add.call_count)
+        journal.add.assert_called_with(
+            "T123",
+            "C123",
+            "1.23",
+            pending_session_api=True,
+            pending_legacy_status=True,
+        )
+        journal.set_pending.assert_called_once_with(
+            "T123",
+            "C123",
+            "1.23",
+            pending_session_api=False,
+            pending_legacy_status=False,
+        )
 
     def test_backend_retry_status_replaces_generic_working_copy(self) -> None:
         client = MagicMock()
@@ -1729,7 +1742,13 @@ class SlackWorkingIndicatorTests(unittest.TestCase):
             slack_socket_agent.STATUS_CLEANUP_RETRY_DELAYS[0],
             timer.call_args.args[0],
         )
-        journal.remove.assert_not_called()
+        journal.set_pending.assert_called_once_with(
+            "T123",
+            "C123",
+            "1.23",
+            pending_session_api=True,
+            pending_legacy_status=True,
+        )
 
         client.api_call.side_effect = None
         client.assistant_threads_setStatus.side_effect = None
@@ -1742,7 +1761,49 @@ class SlackWorkingIndicatorTests(unittest.TestCase):
         client.assistant_threads_setStatus.assert_called_with(
             channel_id="C123", thread_ts="1.23", status=""
         )
-        journal.remove.assert_called_once_with("T123", "C123", "1.23")
+        journal.set_pending.assert_called_with(
+            "T123",
+            "C123",
+            "1.23",
+            pending_session_api=False,
+            pending_legacy_status=False,
+        )
+
+    def test_refresh_failure_does_not_discard_cleanup_obligation(self) -> None:
+        client = MagicMock()
+        client.api_call.side_effect = [
+            None,
+            RuntimeError("temporary refresh failure"),
+            None,
+        ]
+        journal = MagicMock()
+        indicator = slack_socket_agent.WorkingIndicator(
+            client,
+            "C123",
+            "1.23",
+            MagicMock(),
+            journal=journal,
+            team="T123",
+        )
+
+        with patch("scripts.slack_socket_agent.threading.Timer"):
+            indicator.start()
+            indicator.refresh()
+            self.assertFalse(indicator.session_api)
+            self.assertTrue(indicator.cleanup_session_api)
+            indicator.clear()
+
+        self.assertEqual(
+            ["processing", "processing", "active"],
+            [call.kwargs["json"]["status"] for call in client.api_call.call_args_list],
+        )
+        journal.set_pending.assert_called_once_with(
+            "T123",
+            "C123",
+            "1.23",
+            pending_session_api=False,
+            pending_legacy_status=False,
+        )
 
     def test_progress_message_changes_when_custom_status_is_unavailable(self) -> None:
         client = MagicMock()
@@ -1919,6 +1980,61 @@ class SlackSessionJournalTests(unittest.TestCase):
 
             self.assertEqual(0, journal.reconcile(client, MagicMock()))
             self.assertTrue(path.exists())
+
+    def test_reconcile_persists_and_retries_only_the_failed_cleanup(self) -> None:
+        client = MagicMock()
+        client.api_call.side_effect = RuntimeError("session API unavailable")
+        with tempfile.TemporaryDirectory() as raw_dir:
+            path = Path(raw_dir) / "active-sessions.json"
+            journal = slack_socket_agent.SlackSessionJournal(path)
+            journal.add("T1", "C1", "1.23")
+
+            self.assertEqual(0, journal.reconcile(client, MagicMock()))
+            persisted = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                {
+                    "pending_session_api": True,
+                    "pending_legacy_status": False,
+                },
+                {
+                    key: persisted["T1:C1:1.23"][key]
+                    for key in ("pending_session_api", "pending_legacy_status")
+                },
+            )
+
+            client.api_call.side_effect = None
+            recovered = slack_socket_agent.SlackSessionJournal(path)
+            self.assertEqual(1, recovered.reconcile(client, MagicMock()))
+            self.assertFalse(path.exists())
+
+        self.assertEqual(2, client.api_call.call_count)
+        client.assistant_threads_setStatus.assert_called_once_with(
+            channel_id="C1", thread_ts="1.23", status=""
+        )
+
+    def test_legacy_journal_entries_retry_both_cleanup_operations(self) -> None:
+        client = MagicMock()
+        with tempfile.TemporaryDirectory() as raw_dir:
+            path = Path(raw_dir) / "active-sessions.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "T1:C1:1.23": {
+                            "team": "T1",
+                            "channel": "C1",
+                            "thread_ts": "1.23",
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            journal = slack_socket_agent.SlackSessionJournal(path)
+            self.assertEqual(1, journal.reconcile(client, MagicMock()))
+            self.assertFalse(path.exists())
+
+        client.api_call.assert_called_once()
+        client.assistant_threads_setStatus.assert_called_once()
 
 
 class SlackAnswerStreamTests(unittest.TestCase):

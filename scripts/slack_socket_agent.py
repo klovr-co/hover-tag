@@ -1110,31 +1110,40 @@ def selected_fast_mode(view: dict[str, Any]) -> bool:
     )
 
 
-def clear_slack_session(client: Any, channel: str, thread_ts: str, logger: Any) -> bool:
-    """Best-effort completion for an active or orphaned Slack agent session."""
-    succeeded = False
-    try:
-        client.api_call(
-            "agents.sessions.setStatus",
-            json={
-                "channel_id": channel,
-                "thread_ts": thread_ts,
-                "status": "active",
-            },
-        )
-        succeeded = True
-    except Exception as exc:  # noqa: BLE001 - legacy cleanup may still work
-        logger.warning("Could not close Slack agent session: %s", exc)
-    try:
-        client.assistant_threads_setStatus(
-            channel_id=channel,
-            thread_ts=thread_ts,
-            status="",
-        )
-        succeeded = True
-    except Exception as exc:  # noqa: BLE001 - Agent Sessions may have worked
-        logger.warning("Could not clear Slack loading status: %s", exc)
-    return succeeded
+def clear_slack_session(
+    client: Any,
+    channel: str,
+    thread_ts: str,
+    logger: Any,
+    *,
+    pending_session_api: bool = True,
+    pending_legacy_status: bool = True,
+) -> tuple[bool, bool]:
+    """Return the cleanup operations that remain pending after best-effort calls."""
+    if pending_session_api:
+        try:
+            client.api_call(
+                "agents.sessions.setStatus",
+                json={
+                    "channel_id": channel,
+                    "thread_ts": thread_ts,
+                    "status": "active",
+                },
+            )
+            pending_session_api = False
+        except Exception as exc:  # noqa: BLE001 - legacy cleanup may still work
+            logger.warning("Could not close Slack agent session: %s", exc)
+    if pending_legacy_status:
+        try:
+            client.assistant_threads_setStatus(
+                channel_id=channel,
+                thread_ts=thread_ts,
+                status="",
+            )
+            pending_legacy_status = False
+        except Exception as exc:  # noqa: BLE001 - Agent Sessions may have worked
+            logger.warning("Could not clear Slack loading status: %s", exc)
+    return pending_session_api, pending_legacy_status
 
 
 class SlackSessionJournal:
@@ -1149,23 +1158,39 @@ class SlackSessionJournal:
     def key(team: str, channel: str, thread_ts: str) -> str:
         return f"{team}:{channel}:{thread_ts}"
 
-    def _load(self) -> dict[str, dict[str, str]]:
+    def _load(self) -> dict[str, dict[str, Any]]:
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError):
             return {}
         if not isinstance(payload, dict):
             return {}
-        return {
-            key: value
-            for key, value in payload.items()
-            if isinstance(key, str)
-            and isinstance(value, dict)
-            and all(
-                isinstance(value.get(field), str) and value[field]
-                for field in ("team", "channel", "thread_ts")
-            )
-        }
+        sessions: dict[str, dict[str, Any]] = {}
+        for key, value in payload.items():
+            if not (
+                isinstance(key, str)
+                and isinstance(value, dict)
+                and all(
+                    isinstance(value.get(field), str) and value[field]
+                    for field in ("team", "channel", "thread_ts")
+                )
+            ):
+                continue
+            pending_session_api = value.get("pending_session_api", True)
+            pending_legacy_status = value.get("pending_legacy_status", True)
+            if not (
+                isinstance(pending_session_api, bool)
+                and isinstance(pending_legacy_status, bool)
+            ):
+                continue
+            sessions[key] = {
+                "team": value["team"],
+                "channel": value["channel"],
+                "thread_ts": value["thread_ts"],
+                "pending_session_api": pending_session_api,
+                "pending_legacy_status": pending_legacy_status,
+            }
+        return sessions
 
     def _save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -1185,14 +1210,46 @@ class SlackSessionJournal:
         finally:
             Path(temporary).unlink(missing_ok=True)
 
-    def add(self, team: str, channel: str, thread_ts: str) -> None:
+    def add(
+        self,
+        team: str,
+        channel: str,
+        thread_ts: str,
+        *,
+        pending_session_api: bool = True,
+        pending_legacy_status: bool = True,
+    ) -> None:
+        """Record exactly which status transitions must survive a restart."""
         with self.lock:
             self.sessions[self.key(team, channel, thread_ts)] = {
                 "team": team,
                 "channel": channel,
                 "thread_ts": thread_ts,
+                "pending_session_api": pending_session_api,
+                "pending_legacy_status": pending_legacy_status,
             }
             self._save()
+
+    def set_pending(
+        self,
+        team: str,
+        channel: str,
+        thread_ts: str,
+        *,
+        pending_session_api: bool,
+        pending_legacy_status: bool,
+    ) -> None:
+        """Persist remaining work, or retire the entry when both calls succeeded."""
+        if pending_session_api or pending_legacy_status:
+            self.add(
+                team,
+                channel,
+                thread_ts,
+                pending_session_api=pending_session_api,
+                pending_legacy_status=pending_legacy_status,
+            )
+        else:
+            self.remove(team, channel, thread_ts)
 
     def remove(self, team: str, channel: str, thread_ts: str) -> None:
         with self.lock:
@@ -1205,16 +1262,28 @@ class SlackSessionJournal:
             pending = list(self.sessions.items())
         cleared = 0
         for key, session in pending:
-            if clear_slack_session(
-                client, session["channel"], session["thread_ts"], logger
-            ):
-                with self.lock:
+            pending_session_api, pending_legacy_status = clear_slack_session(
+                client,
+                session["channel"],
+                session["thread_ts"],
+                logger,
+                pending_session_api=session["pending_session_api"],
+                pending_legacy_status=session["pending_legacy_status"],
+            )
+            with self.lock:
+                if pending_session_api or pending_legacy_status:
+                    self.sessions[key] = {
+                        **session,
+                        "pending_session_api": pending_session_api,
+                        "pending_legacy_status": pending_legacy_status,
+                    }
+                else:
                     self.sessions.pop(key, None)
-                    try:
-                        self._save()
-                    except OSError as exc:
-                        logger.warning("Could not update the Slack session journal: %s", exc)
-                cleared += 1
+                    cleared += 1
+                try:
+                    self._save()
+                except OSError as exc:
+                    logger.warning("Could not update the Slack session journal: %s", exc)
         return cleared
 
 
@@ -1266,13 +1335,39 @@ class WorkingIndicator:
         self.last_status_at = float("-inf")
         self.lock = threading.RLock()
 
-    def journal_add(self) -> None:
+    def journal_add(
+        self,
+        *,
+        pending_session_api: bool = True,
+        pending_legacy_status: bool = True,
+    ) -> None:
         if self.journal is None:
             return
         try:
-            self.journal.add(self.team, self.channel, self.thread_ts)
+            self.journal.add(
+                self.team,
+                self.channel,
+                self.thread_ts,
+                pending_session_api=pending_session_api,
+                pending_legacy_status=pending_legacy_status,
+            )
         except OSError as exc:
             self.logger.warning("Could not record the active Slack session: %s", exc)
+
+    def journal_set_pending(self) -> None:
+        """Persist the cleanup flags before relying on restart recovery."""
+        if self.journal is None:
+            return
+        try:
+            self.journal.set_pending(
+                self.team,
+                self.channel,
+                self.thread_ts,
+                pending_session_api=self.cleanup_session_api,
+                pending_legacy_status=self.cleanup_legacy_status,
+            )
+        except OSError as exc:
+            self.logger.warning("Could not update the Slack session journal: %s", exc)
 
     def journal_remove(self) -> None:
         if self.journal is None:
@@ -1454,6 +1549,12 @@ class WorkingIndicator:
                 self.logger.warning("Custom Slack loading copy is unavailable: %s", exc)
             self.native = self.session_api or self.legacy_status
             if self.native:
+                self.cleanup_session_api = self.session_api
+                self.cleanup_legacy_status = self.legacy_status
+                self.journal_add(
+                    pending_session_api=self.cleanup_session_api,
+                    pending_legacy_status=self.cleanup_legacy_status,
+                )
                 self.schedule_refresh()
             if not self.legacy_status:
                 try:
@@ -1512,8 +1613,9 @@ class WorkingIndicator:
                         "Could not clear native Slack loading status: %s", exc
                     )
             if not self.cleanup_session_api and not self.cleanup_legacy_status:
-                self.journal_remove()
+                self.journal_set_pending()
                 return
+            self.journal_set_pending()
             self.schedule_cleanup_retry()
 
     def clear(self, *, complete_session: bool = True) -> None:
@@ -1524,37 +1626,40 @@ class WorkingIndicator:
             if self.refresh_timer is not None:
                 self.refresh_timer.cancel()
                 self.refresh_timer = None
-            if not self.native and not self.session_api and not self.legacy_status:
+            if not (
+                self.native
+                or self.session_api
+                or self.legacy_status
+                or self.cleanup_session_api
+                or self.cleanup_legacy_status
+            ):
                 return
             # Flip state before the API call so an already-running timer cannot
             # restore a status after final-answer streaming has begun.
             self.native = False
             if not complete_session:
                 return
-            remove_journal = False
-            if self.session_api:
+            self.cleanup_session_api = self.cleanup_session_api or self.session_api
+            self.cleanup_legacy_status = self.cleanup_legacy_status or self.legacy_status
+            if self.cleanup_session_api:
                 try:
                     self.set_session_status("active")
-                    remove_journal = True
+                    self.cleanup_session_api = False
                 except Exception as exc:  # noqa: BLE001 - final replies must still be delivered
                     self.logger.warning("Could not complete Slack agent session status: %s", exc)
-                    self.cleanup_session_api = True
-            if self.legacy_status:
+            if self.cleanup_legacy_status:
                 try:
                     self.client.assistant_threads_setStatus(
                         channel_id=self.channel,
                         thread_ts=self.thread_ts,
                         status="",
                     )
-                    if not self.session_api:
-                        remove_journal = True
+                    self.cleanup_legacy_status = False
                 except Exception as exc:  # noqa: BLE001 - final replies must still be delivered
                     self.logger.warning("Could not clear native Slack loading status: %s", exc)
-                    self.cleanup_legacy_status = True
             cleanup_pending = self.cleanup_session_api or self.cleanup_legacy_status
-            if remove_journal and not cleanup_pending:
-                self.journal_remove()
-            elif cleanup_pending:
+            self.journal_set_pending()
+            if cleanup_pending:
                 self.schedule_cleanup_retry()
             self.session_api = False
             self.legacy_status = False
@@ -2541,7 +2646,10 @@ def create_app(
             event.get("event_ts") if isinstance(event.get("event_ts"), str) else None,
         ):
             logger.info("No active Tag run matched the Slack stop event")
-            if clear_slack_session(client, channel, thread_ts, logger):
+            pending_session_api, pending_legacy_status = clear_slack_session(
+                client, channel, thread_ts, logger
+            )
+            if not pending_session_api and not pending_legacy_status:
                 if session_journal is not None:
                     try:
                         session_journal.remove(str(team), channel, thread_ts)
@@ -2549,7 +2657,13 @@ def create_app(
                         logger.warning("Could not update the Slack session journal: %s", exc)
             elif session_journal is not None:
                 try:
-                    session_journal.add(str(team), channel, thread_ts)
+                    session_journal.add(
+                        str(team),
+                        channel,
+                        thread_ts,
+                        pending_session_api=pending_session_api,
+                        pending_legacy_status=pending_legacy_status,
+                    )
                 except OSError as exc:
                     logger.warning("Could not record the orphaned Slack session: %s", exc)
     settings_store = UserAgentSettingsStore()
