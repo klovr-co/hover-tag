@@ -5,6 +5,7 @@ import json
 import os
 import re
 import tempfile
+import unicodedata
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -84,7 +85,9 @@ def validation_error(key: str, value: str) -> str | None:
     if key == "OPENTAG_BACKEND" and value not in {"codex", "claude"}:
         return "Choose codex or claude (experimental)"
     if key == "OPENTAG_BOT_NAME" and (
-        not value.strip() or len(value) > 35 or any(ord(character) < 32 for character in value)
+        not value.strip()
+        or len(value) > 35
+        or any(unicodedata.category(character) in {"Cc", "Zl", "Zp"} for character in value)
     ):
         return "Use a name from 1 to 35 characters without line breaks"
     if key == "OPENTAG_CODEX_TRANSPORT" and value not in {"exec", "app-server"}:

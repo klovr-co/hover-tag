@@ -25,6 +25,17 @@ from scripts.opentag_setup import (
 
 
 class OpenTagSetupTests(unittest.TestCase):
+    def test_bot_name_rejects_unicode_controls_and_line_separators(self):
+        error = "Use a name from 1 to 35 characters without line breaks"
+        for character in ("\x7f", "\x85", "\u2028", "\u2029"):
+            with self.subTest(character=ascii(character)):
+                self.assertEqual(
+                    opentag_setup.settings.validation_error(
+                        "OPENTAG_BOT_NAME", f"Tag{character}Name"
+                    ),
+                    error,
+                )
+
     def test_text_entry_prompts_share_the_tui_content_gutter(self):
         with patch("builtins.input", return_value="") as entered:
             self.assertEqual(opentag_setup.ask("Assistant name", "Maxine's Tag"), "Maxine's Tag")

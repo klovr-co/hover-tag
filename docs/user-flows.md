@@ -144,11 +144,12 @@ flowchart LR
    workspace in its application home.
 4. `tag setup` reuses Slack CLI authorization (or launches its real login
    handoff), creates or links the app with explicit approval, and validates the
-   Socket Mode and bot credentials separately. Before creating a new app, the
-   operator can customize its name, use a curated waterdrop, or drag or paste a
-   local profile-picture path. A review screen can open the selected picture in
-   the system viewer and change either choice before remote creation. Slack CLI
-   can hand credentials off privately after approval; hidden
+   Socket Mode and bot credentials separately. Profile-picture selection and
+   upload require Slack CLI 4.7 or newer. Before creating a new app, the operator
+   can customize its name, use a curated waterdrop, or drag or paste a local
+   profile-picture path. A review screen can open the selected picture in the
+   system viewer and change either choice before remote creation. Slack CLI can
+   hand credentials off privately after approval; hidden
    prompts are an explicit fallback.
 5. The operator selects one or more joined channels by name. Setup separately
    validates the Slack-history credential and asks before writing/indexing an

@@ -80,6 +80,7 @@ not restart; check the app in Slack before running `tag setup`. The backup's
 `app-deletion.json` records the outcome. Missing or ambiguous identity never
 triggers deletion.
 Setup offers **Create a new Tag app**, **Use an existing app**, or **Save and exit**.
+Profile-picture selection and upload require Slack CLI 4.7 or newer.
 Before creating a new app, setup proposes **&lt;your first name&gt;'s Tag** and a
 curated version of Tag's waterdrop, selected from 144 approved base designs and
 16 subtle signatures (2,304 identities). Tag remembers the assignment and avoids

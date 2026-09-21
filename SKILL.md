@@ -50,6 +50,7 @@ Slack-first onboarding configures that source itself:
 
 ## Bot name convention
 
+Profile-picture selection and upload require Slack CLI 4.7 or newer.
 New-app setup proposes **&lt;the operator's first name&gt;'s Tag** and a uniquely
 curated Tag waterdrop selected from 144 approved bases and 16 subtle signatures,
 so the Slack identity stays personal without losing the

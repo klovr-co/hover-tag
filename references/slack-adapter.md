@@ -83,6 +83,7 @@ bot membership first. Raw IDs remain available for automation with
 ## Slack App Setup
 
 Create or reuse a Slack app:
+Profile-picture selection and upload require Slack CLI 4.7 or newer.
 
 1. Go to <https://api.slack.com/apps>.
 2. Create a new app from scratch in the target workspace. The default name is

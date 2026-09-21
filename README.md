@@ -165,6 +165,7 @@ system Python or install dependencies during startup.
 `tag setup` owns the Slack journey. It reuses the installed Slack CLI, offers
 the CLI's real login flow when the sandbox workspace is not authorized, and
 then lets you create a manifest-based app or link an existing app by App ID.
+Profile-picture selection and upload require Slack CLI 4.7 or newer.
 For a new app, setup proposes **&lt;your first name&gt;'s Tag** and a uniquely
 curated Tag waterdrop, selected from 144 approved base designs and 16 subtle
 signatures. You can edit the name or choose your own picture by
