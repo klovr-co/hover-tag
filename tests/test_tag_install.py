@@ -59,8 +59,8 @@ def release_record(version: str, *, prerelease: bool, names: list[str] | None = 
 
 
 class ReleaseResolutionTests(unittest.TestCase):
-    def test_repository_policy_defaults_bare_installs_to_alpha(self) -> None:
-        self.assertEqual(_default_channel(), "alpha")
+    def test_repository_policy_defaults_bare_installs_to_stable(self) -> None:
+        self.assertEqual(_default_channel(), "stable")
 
     def test_channels_select_the_newest_compatible_release(self) -> None:
         releases = [
