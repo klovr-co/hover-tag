@@ -430,6 +430,7 @@ def install(
     sys.path.insert(0, scripts_dir)
     try:
         from tag_paths import initialize
+        import tag_instances
         from release_check import validate_release
     finally:
         sys.path.remove(scripts_dir)
@@ -442,6 +443,7 @@ def install(
     if (command.exists() or command.is_symlink()) and existing_owner is None:
         raise RuntimeError(f"Refusing to replace unrelated command: {command}. Choose --bin-dir.")
     initialize(home)
+    tag_instances.ensure_default(home)
     if legacy_command:
         atomic_text(
             home / "state/legacy-command.json",
@@ -501,13 +503,20 @@ def install(
             # Explicit test/development mode; never advertised as a complete install.
             python = Path(sys.executable)
             row("Runtime", "Development mode · dependencies skipped")
-        for backend in (".agents", ".claude"):
-            bundled = home / "workspace" / backend / "skills/open-tag-admin"
-            skill = bundled / "SKILL.md"
-            if skill.is_file() and skill.read_text(encoding="utf-8") in (LEGACY_ADMIN_SKILL, ADMIN_SKILL):
-                skill.unlink()
-                if not any(bundled.iterdir()):
-                    bundled.rmdir()
+        instance_homes = [home, *(
+            Path(str(item["home"])) for item in tag_instances.discover(home)
+            if item.get("valid")
+        )]
+        for instance in instance_homes:
+            for backend in (".agents", ".claude"):
+                bundled = instance / "workspace" / backend / "skills/open-tag-admin"
+                skill = bundled / "SKILL.md"
+                if skill.is_file() and skill.read_text(encoding="utf-8") in (
+                    LEGACY_ADMIN_SKILL, ADMIN_SKILL
+                ):
+                    skill.unlink()
+                    if not any(bundled.iterdir()):
+                        bundled.rmdir()
         # Keep the launcher fixed while the pointer changes atomically on upgrade.
         launcher = home / "bin/tag-launch.py"
         launcher_text = '''# TAG managed launcher

@@ -12,6 +12,7 @@ import sys
 import tempfile
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 
 try:
     import slack_app_create
@@ -25,6 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MIGRATION_VERSION = 1
 DM_SCOPE = "im:history"
 DM_EVENT = "message.im"
+AGENT_DESCRIPTION = "Run approved Codex or Claude tasks from Slack."
 
 
 def migrate_manifest(remote: dict) -> tuple[dict, bool]:
@@ -45,6 +47,38 @@ def migrate_manifest(remote: dict) -> tuple[dict, bool]:
     if DM_EVENT not in events:
         events.append(DM_EVENT)
     return migrated, migrated != remote
+
+
+def migrate_agent_view(remote: dict) -> tuple[dict, bool, bool]:
+    """Enable Agent messaging while preserving compatible legacy presentation."""
+    migrated = json.loads(json.dumps(remote))
+    try:
+        features = migrated.setdefault("features", {})
+    except AttributeError as exc:
+        raise RuntimeError("Slack returned a malformed app manifest; no settings were changed") from exc
+    if not isinstance(features, dict):
+        raise RuntimeError("Slack returned a malformed app manifest; no settings were changed")
+    current = features.get("agent_view")
+    if current is not None:
+        if not isinstance(current, dict):
+            raise RuntimeError("Slack returned a malformed agent_view; no settings were changed")
+        if "assistant_view" in features:
+            raise RuntimeError("Slack returned conflicting messaging experiences; no settings were changed")
+        return migrated, False, False
+    legacy = features.get("assistant_view")
+    if legacy is not None and not isinstance(legacy, dict):
+        raise RuntimeError("Slack returned a malformed assistant_view; no settings were changed")
+    agent_view = {"agent_description": AGENT_DESCRIPTION}
+    if legacy is not None:
+        description = legacy.get("assistant_description")
+        if isinstance(description, str) and description.strip():
+            agent_view["agent_description"] = description
+        for key in ("actions", "suggested_prompts"):
+            if key in legacy:
+                agent_view[key] = legacy[key]
+        del features["assistant_view"]
+    features["agent_view"] = agent_view
+    return migrated, True, legacy is not None
 
 
 def _json_output(output: str) -> dict:
@@ -143,6 +177,44 @@ def _marker_matches(marker: Path, team_id: str, app_id: str) -> bool:
     except (OSError, json.JSONDecodeError):
         return False
     return value == {"version": MIGRATION_VERSION, "team_id": team_id, "app_id": app_id}
+
+
+def enable_agent_view(
+    project: Path,
+    app_id: str,
+    team_id: str,
+    *,
+    approve_legacy: Callable[[], bool],
+) -> bool:
+    """Targetedly enable Agent messaging and verify the remote manifest."""
+    slack = shutil.which("slack")
+    if not slack:
+        raise RuntimeError("Slack CLI is required to enable Agent messaging")
+    remote = remote_manifest(slack, project, app_id)
+    migrated, changed, replaces_legacy = migrate_agent_view(remote)
+    if not changed:
+        return False
+    if replaces_legacy and not approve_legacy():
+        return False
+    with tempfile.TemporaryDirectory(prefix="tag-agent-view-") as directory:
+        migration_project = _migration_project(
+            project, migrated, team_id, app_id, Path(directory)
+        )
+        result = _run(
+            _sync_command(slack, migration_project, app_id, team_id),
+            cwd=migration_project,
+        )
+        if result.returncode:
+            raise RuntimeError(
+                "Slack CLI could not enable Agent messaging; open app settings or retry after `slack login`"
+            )
+    verified = remote_manifest(slack, project, app_id)
+    features = verified.get("features", {})
+    if not isinstance(features, dict) or not isinstance(features.get("agent_view"), dict):
+        raise RuntimeError("Slack did not save Agent messaging; no local success was recorded")
+    if "assistant_view" in features:
+        raise RuntimeError("Slack still reports the legacy Assistant messaging experience")
+    return True
 
 
 def reconcile(home: Path, config_path: Path, values: dict[str, str], *, interactive: bool | None = None) -> bool:

@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Manage independent workspace aliases for multiple Slack workspaces with `tag add`,
+  `tag list`, and target-aware lifecycle, setup, settings, logs, and diagnostics.
+- Share one explicitly owned MFS lifecycle across Tags, with per-Tag
+  credential files and an administrative `tag memory` command.
+- Give the built-in `default` Tag the same `instances/default` isolation and
+  scrubbed runtime environment as every named Tag; existing root-level default
+  data requires a one-time stopped-service migration.
+- Let existing-app setup enable Slack's Agent messaging experience through a
+  targeted, verified manifest sync while preserving unrelated app settings.
+
 All notable changes to Tag are documented here.
 
 ## Unreleased

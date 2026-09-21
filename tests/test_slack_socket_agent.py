@@ -939,7 +939,11 @@ class SlackGeneratedImageTests(unittest.TestCase):
         self.assertEqual("C123", upload["channel"])
         self.assertEqual("1.23", upload["thread_ts"])
         self.assertEqual("chart.png", upload["filename"])
-        self.assertTrue(Path(upload["file"]).is_relative_to(Path(raw_home) / "tmp"))
+        self.assertTrue(
+            Path(upload["file"]).is_relative_to(
+                Path(raw_home) / "instances/default/tmp"
+            )
+        )
 
     def test_failed_backend_does_not_upload_partial_image_result(self) -> None:
         fake_app = FakeApp()

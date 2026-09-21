@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import json
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -10,13 +11,35 @@ import sys
 import tempfile
 
 try:
-    from . import tag_config as settings, tag_cli as lifecycle, setup_ui as ui
-    from .tag_paths import initialize, runtime_environment
+    from . import tag_config as settings, tag_cli as lifecycle, setup_ui as ui, tag_credentials
+    from .tag_paths import initialize_instance, runtime_environment
 except ImportError:
     import tag_config as settings
     import tag_cli as lifecycle
     import setup_ui as ui
-    from tag_paths import initialize, runtime_environment
+    import tag_credentials
+    from tag_paths import initialize_instance, runtime_environment
+
+
+def managed_connector_credential(home: Path, connector: Path) -> Path | None:
+    """Return a regular credential owned by this instance, if referenced."""
+    try:
+        content = connector.read_text(encoding="utf-8")
+        match = re.search(r"(?m)^token = (.+)$", content)
+        reference = json.loads(match.group(1)) if match else ""
+        credential = Path(reference.removeprefix("file:"))
+        credential_root = (home / "config/credentials").resolve()
+        resolved = credential.resolve(strict=True)
+        if (
+            reference.startswith("file:")
+            and credential.is_file()
+            and not credential.is_symlink()
+            and resolved.is_relative_to(credential_root)
+        ):
+            return credential
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        pass
+    return None
 
 
 def commit(home: Path, draft: Path, original: dict[str, str]) -> None:
@@ -42,17 +65,46 @@ def commit(home: Path, draft: Path, original: dict[str, str]) -> None:
         locked = True
         if settings.load_config(config) != original:
             raise RuntimeError("Settings changed while editing. Active settings were kept; reopen Settings.")
-        if any(lifecycle.process_for(home / "state" / f"{name}.json") for name in ("slack", "mfs")):
+        if lifecycle.process_for(home / "state/slack.json"):
             raise RuntimeError("Tag started while editing. Stop Tag before applying changes.")
         values = settings.read_config(draft / "config/settings.json")
         if settings.config_errors(values):
             raise RuntimeError("Draft settings are incomplete. Active settings were kept.")
+        previous_credential = managed_connector_credential(
+            home, Path(original.get("MFS_SLACK_CONNECTOR_CONFIG", ""))
+        )
         source = Path(values["MFS_SLACK_CONNECTOR_CONFIG"])
         if not source.resolve().is_relative_to(draft.resolve()):
             raise RuntimeError("Draft connector must belong to the draft home.")
         destination = home / "integrations/mfs/connectors" / f"{draft.name}.toml"
         destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         shutil.copy2(source, destination)
+        destination.chmod(0o600)
+        connector_text = destination.read_text(encoding="utf-8")
+        local_mfs = lifecycle.local_mfs_endpoint(
+            values.get("MFS_URL", settings.DEFAULTS["MFS_URL"])
+        )
+        credential = None
+        if local_mfs:
+            # Use a new final-home credential generation. The live connector
+            # keeps its previous file until the settings commit succeeds.
+            credential = tag_credentials.write_slack_history(
+                home, values["MFS_SLACK_TOKEN"],
+                name="mfs-slack-token-" + re.sub(r"[^a-z0-9.-]", "-", draft.name.lower()),
+            )
+            connector_text, replacements = re.subn(
+                r'(?m)^token = "(?:env:MFS_SLACK_TOKEN|file:[^"]+)"$',
+                "token = " + json.dumps("file:" + str(credential)),
+                connector_text,
+            )
+            if replacements != 1:
+                raise RuntimeError("Draft connector credential reference is malformed")
+        elif values.get("MFS_SLACK_TOKEN") != original.get("MFS_SLACK_TOKEN"):
+            raise RuntimeError(
+                "Remote MFS credential rotation needs a server-resolvable reference; "
+                "the active settings were kept."
+            )
+        destination.write_text(connector_text, encoding="utf-8")
         destination.chmod(0o600)
         values["MFS_SLACK_CONNECTOR_CONFIG"] = str(destination)
         settings.save_config(draft / "previous-settings.json", original)
@@ -64,6 +116,18 @@ def commit(home: Path, draft: Path, original: dict[str, str]) -> None:
         installed = True
         shutil.copytree(draft / "integrations/slack-cli", project)
         settings.save_config(config, values)
+        credential_reused = (
+            previous_credential is not None
+            and credential is not None
+            and previous_credential.resolve() == credential.resolve()
+        )
+        if previous_credential is not None and not credential_reused:
+            try:
+                previous_credential.unlink()
+            except OSError:
+                # Settings already point at the new credential; stale-secret
+                # cleanup must not roll back a successfully committed change.
+                pass
     except BaseException:
         # Only our newly copied project is moved; nothing is recursively deleted.
         if project.exists() and (installed or moved):
@@ -78,14 +142,23 @@ def commit(home: Path, draft: Path, original: dict[str, str]) -> None:
 
 
 def edit(home: Path, kind: str) -> None:
-    if any(lifecycle.process_for(home / "state" / f"{name}.json") for name in ("slack", "mfs")):
-        ui.notice("Stop Tag before changing Slack or memory", "Run tag stop, then reopen tag settings. Your current setup is unchanged.")
+    tag_id = os.getenv("TAG_ID", "default")
+    target = "" if tag_id == "default" else f"{tag_id} "
+    if lifecycle.process_for(home / "state/slack.json"):
+        ui.notice("Stop Tag before changing Slack or memory",
+                  f"Run tag {target}stop, then reopen tag {target}settings. Your current setup is unchanged.")
         return
     path = settings.config_path(home)
     original = settings.load_config(path)
     if not original:
-        ui.message("Run tag setup first.")
+        ui.message(f"Run tag {target}setup first.")
         return
+    ui.message("Target: " + ui.display.target_detail(
+        os.getenv("TAG_ID", "default"),
+        original.get("SLACK_TEAM_ID", ""),
+        original.get("SLACK_APP_ID", ""),
+        original.get("OPENTAG_BOT_NAME", ""),
+    ))
     root = home / "integrations/setup-drafts"
     pointer = home / "state/settings-draft.json"
     resumable = None
@@ -124,7 +197,7 @@ def edit(home: Path, kind: str) -> None:
         return
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     draft = Path(tempfile.mkdtemp(prefix="settings-", dir=root))
-    initialize(draft)
+    initialize_instance(draft)
     project = home / "integrations/slack-cli"
     if kind == "app":
         for key in ("SLACK_APP_ID", "SLACK_TEAM_ID", "SLACK_APP_TOKEN", "SLACK_BOT_TOKEN",
@@ -171,6 +244,8 @@ def run_draft(home: Path, draft: Path, kind: str, original: dict[str, str]) -> N
     draft_config = draft / "config/settings.json"
     environment = {key: value for key, value in os.environ.items()
                    if not key.startswith(("SLACK_", "MFS_", "OPENTAG_"))}
+    # A setup draft is an explicit, private staging installation. Keeping both
+    # roots on the draft prevents setup helpers from resolving back to live data.
     environment.update(runtime_environment(draft), OPENTAG_ENV_FILE=str(draft_config))
     receipt = draft / "state/setup-approved.json"
     receipt.unlink(missing_ok=True)
@@ -191,4 +266,6 @@ def run_draft(home: Path, draft: Path, kind: str, original: dict[str, str]) -> N
     if pointer.is_file() and json.loads(pointer.read_text()).get("path") == str(draft):
         pointer.unlink()
     ui.message(f"Changes saved. Previous settings and app links are kept in: {draft}")
-    ui.message("Run tag start to connect and apply the approved memory configuration.")
+    tag_id = os.getenv("TAG_ID", "default")
+    target = "" if tag_id == "default" else f"{tag_id} "
+    ui.message(f"Run tag {target}start to connect and apply the approved memory configuration.")
