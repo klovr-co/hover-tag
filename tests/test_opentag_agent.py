@@ -12,6 +12,20 @@ from scripts import opentag_agent
 
 
 class OpenTagAgentPromptTests(unittest.TestCase):
+    def test_slack_prompt_requires_clarification_for_ambiguous_scope(self) -> None:
+        prompt = opentag_agent.build_prompt(
+            skill_dir=Path("/tmp/open-tag"),
+            workdir=Path("/tmp/workspace"),
+            channel_id="C123",
+            question="search general workspace all",
+            thread_text="",
+            attachments_dir=None,
+            allowed_scopes="slack://tag-t1/channels/general__C123",
+        )
+        self.assertIn("search general workspace all", prompt)
+        self.assertIn("ask a short scope", prompt)
+        self.assertIn("do not call a search helper", prompt)
+
     def test_windows_npm_backend_bypasses_command_shell(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

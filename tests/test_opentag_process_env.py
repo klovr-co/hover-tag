@@ -69,3 +69,20 @@ class CurrentChannelMemoryTests(unittest.TestCase):
                 "file://local/private,slack://tag-t1/channels/team__C1", "C1"
             ),
         )
+
+    def test_pre_authorized_cross_channel_scopes_replace_default_narrowing(self) -> None:
+        environment = backend_environment(
+            {"MFS_ALLOWED_SCOPES": "slack://tag-t1/channels/current__C1"},
+            transport="slack",
+            conversation_id="C1",
+            caller_id="U1",
+            authorized_scopes="slack://tag-t1/channels/support__C2",
+            channel_labels='{"C2": "support"}',
+            slack_search_grant='{"mode": "all"}',
+        )
+        self.assertEqual(
+            "slack://tag-t1/channels/support__C2",
+            environment["MFS_ALLOWED_SCOPES"],
+        )
+        self.assertEqual('{"C2": "support"}', environment["OPENTAG_SLACK_CHANNEL_LABELS"])
+        self.assertEqual('{"mode": "all"}', environment["OPENTAG_SLACK_SEARCH_GRANT"])

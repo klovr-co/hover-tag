@@ -9,11 +9,13 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 import warnings
@@ -67,8 +69,45 @@ def runtime_dependency_message(missing: tuple[str, ...]) -> str:
     )
 
 
+def legacy_process_running(home: Path) -> bool | None:
+    """Return whether the recorded legacy checkout has a live Tag process."""
+    import psutil
+
+    try:
+        record = json.loads(
+            (home / "state/legacy-command.json").read_text(encoding="utf-8")
+        )
+        raw_command = record["command"]
+        if not isinstance(raw_command, str) or not raw_command:
+            return None
+        command = Path(raw_command).expanduser().resolve()
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+    expected = {
+        command,
+        command.parent / "scripts/tag_cli.py",
+        command.parent / "scripts/slack_socket_agent.py",
+    }
+    try:
+        for process in psutil.process_iter(attrs=["cmdline"]):
+            command_line = process.info.get("cmdline") or ()
+            for argument in command_line:
+                if not isinstance(argument, str) or not argument:
+                    continue
+                try:
+                    candidate = Path(argument).expanduser().resolve()
+                except (OSError, RuntimeError):
+                    continue
+                if candidate in expected:
+                    return True
+    except psutil.Error:
+        return None
+    return False
+
+
 def legacy_slack_ready(home: Path, maximum_age: float = 15.0) -> bool:
-    """Detect the heartbeat written by pre-supervisor Tag releases."""
+    """Detect a live pre-supervisor Tag release with a current heartbeat."""
     try:
         record = json.loads((home / "runtime/slack-connected.json").read_text(encoding="utf-8"))
         heartbeat = float(
@@ -77,7 +116,10 @@ def legacy_slack_ready(home: Path, maximum_age: float = 15.0) -> bool:
                 record.get("timestamp", record.get("updated_at", record.get("heartbeat"))),
             )
         )
-        return bool(record.get("connected")) and 0 <= time.time() - heartbeat <= maximum_age
+        fresh = bool(record.get("connected")) and 0 <= time.time() - heartbeat <= maximum_age
+        if not fresh:
+            return False
+        return legacy_process_running(home) is not False
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
         return False
 
@@ -198,6 +240,104 @@ def stop_process(home: Path, name: str) -> None:
     record.unlink(missing_ok=True)
     if name == "slack":
         (home / "state/slack.ready").unlink(missing_ok=True)
+
+
+def local_mfs_endpoint(url: str) -> bool:
+    """Return whether Tag may manage the process behind this loopback endpoint."""
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        return (
+            parsed.scheme == "http"
+            and parsed.hostname in {"127.0.0.1", "localhost"}
+            and parsed.port == 13619
+            and parsed.path in {"", "/"}
+            and not parsed.username
+            and not parsed.password
+            and not parsed.query
+            and not parsed.fragment
+        )
+    except ValueError:
+        return False
+
+
+def local_mfs_listener(url: str):
+    """Find an identifiable MFS server listening at a configured local endpoint."""
+    import psutil
+
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        port = parsed.port or 80
+        addresses = {
+            address[4][0]
+            for address in socket.getaddrinfo(
+                parsed.hostname, port, type=socket.SOCK_STREAM
+            )
+        }
+    except (OSError, TypeError, ValueError):
+        return None
+    candidate_pids: set[int] = set()
+    if os.name != "nt" and shutil.which("lsof"):
+        for address in addresses:
+            endpoint = f"[{address}]" if ":" in address else address
+            result = subprocess.run(
+                [
+                    "lsof",
+                    "-nP",
+                    f"-iTCP@{endpoint}:{port}",
+                    "-sTCP:LISTEN",
+                    "-t",
+                ],
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+            candidate_pids.update(
+                int(value) for value in result.stdout.split() if value.isdigit()
+            )
+    else:
+        try:
+            connections = psutil.net_connections(kind="tcp")
+        except psutil.Error:
+            connections = []
+        candidate_pids.update(
+            connection.pid
+            for connection in connections
+            if connection.status == psutil.CONN_LISTEN
+            and connection.pid is not None
+            and connection.laddr
+            and connection.laddr.port == port
+            and connection.laddr.ip in addresses
+        )
+    candidates = []
+    for pid in sorted(candidate_pids):
+        try:
+            process = psutil.Process(pid)
+            command = " ".join(process.cmdline()).casefold()
+        except psutil.Error:
+            continue
+        if "mfs-server" in command or "mfs_server" in command:
+            candidates.append(process)
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def replace_unmanaged_local_mfs(home: Path, url: str) -> bool:
+    """Replace an untracked loopback MFS so Tag owns runtime and cleanup."""
+    record = home / "state/mfs.json"
+    if not local_mfs_endpoint(url) or process_for(record) is not None or not healthy(url):
+        return False
+    process = local_mfs_listener(url)
+    if process is None:
+        raise RuntimeError(
+            "The local MFS endpoint is healthy but its process is not an identifiable "
+            "mfs-server. Stop that service or configure a separate MFS_URL before starting Tag."
+        )
+    record.write_text(
+        json.dumps({"pid": process.pid, "created": process.create_time(), "adopted": True}),
+        encoding="utf-8",
+    )
+    stop_process(home, "mfs")
+    return True
 
 
 def slack_ready(home: Path, maximum_age: float = 5.0) -> bool:
@@ -411,6 +551,7 @@ def development_loop(home: Path) -> int:
                 log_position = 0
     finally:
         stop_process(home, "slack")
+        stop_process(home, "mfs")
 
 
 def healthy(url: str) -> bool:
@@ -1076,6 +1217,7 @@ def main() -> int:
                 good=True,
             )
             url = os.getenv("MFS_URL", "http://127.0.0.1:13619")
+            replace_unmanaged_local_mfs(home, url)
             if not healthy(url):
                 if url.rstrip("/") not in ("http://localhost:13619", "http://127.0.0.1:13619"):
                     raise RuntimeError("Configured MFS endpoint is unavailable; start that server first")
@@ -1084,12 +1226,23 @@ def main() -> int:
                     raise RuntimeError("MFS server is unavailable; run ./install.sh --dependencies-only")
                 if start_process(home, "mfs", [executable, "run"]):
                     started.append("mfs")
-                for _ in range(30):
+                attempts = int(os.getenv("OPENTAG_MFS_STARTUP_ATTEMPTS", "90"))
+                for _ in range(attempts):
                     if healthy(url):
                         break
+                    if process_for(home / "state/mfs.json") is None:
+                        detail = log_tail(home, "mfs")
+                        raise RuntimeError(
+                            "MFS exited before becoming healthy"
+                            + (f":\n{detail}" if detail else "; run tag logs")
+                        )
                     time.sleep(1)
                 else:
-                    raise RuntimeError("MFS did not become healthy; run tag logs")
+                    detail = log_tail(home, "mfs")
+                    raise RuntimeError(
+                        f"MFS did not become healthy within {attempts} seconds"
+                        + (f":\n{detail}" if detail else "; run tag logs")
+                    )
             display.info_row("Memory", "Healthy", good=True)
             if os.getenv("SLACK_CHANNEL_POLICY") == "invited":
                 reconcile_invitation_memory(home)
@@ -1175,7 +1328,7 @@ if __name__ == "__main__":
         if len(sys.argv) > 1 and sys.argv[1] == "logs":
             print("\nStopped following logs.", file=sys.stderr)
         elif len(sys.argv) > 1 and sys.argv[1] == "dev":
-            print("\nDevelopment bridge stopped. Memory was left running.", file=sys.stderr)
+            print("\nDevelopment services stopped.", file=sys.stderr)
         else:
             print("\nInterrupted. Run tag setup to resume saved setup.", file=sys.stderr)
         raise SystemExit(130)

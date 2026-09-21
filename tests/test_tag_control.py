@@ -302,6 +302,7 @@ class TagControlTests(unittest.TestCase):
                     tag_cli, "missing_runtime_dependencies", return_value=()
                 ), patch.object(slack_manifest_migrations, "reconcile", return_value=False
                 ), patch.object(tag_cli, "healthy", return_value=True
+                ), patch.object(tag_cli, "replace_unmanaged_local_mfs", return_value=False
                 ), patch.object(tag_cli, "sync_configured_slack_memory"
                 ), patch.object(tag_cli, "doctor_report", return_value=(0, {"checks": []})), patch.object(
                     tag_cli, "slack_ready", side_effect=[False, True]
@@ -313,6 +314,35 @@ class TagControlTests(unittest.TestCase):
                 self.assertEqual(command[command.index("--backend") + 1], backend)
                 self.assertIn("Tag is connected", output.getvalue())
                 self.assertNotIn("[ok]", output.getvalue())
+
+    def test_start_allows_mfs_cold_initialization_beyond_thirty_seconds(self):
+        self.complete()
+        tag_cli.initialize(self.home)
+        health_checks = [False, *([False] * 31), True]
+        with patch.object(sys, "argv", ["tag", "start"]), patch.object(
+            tag_cli, "missing_runtime_dependencies", return_value=()
+        ), patch.object(
+            slack_manifest_migrations, "reconcile", return_value=False
+        ), patch.object(
+            tag_cli, "replace_unmanaged_local_mfs", return_value=False
+        ), patch.object(
+            tag_cli, "mfs_server_executable", return_value="/fixture/mfs-server"
+        ), patch.object(
+            tag_cli, "start_process", return_value=True
+        ), patch.object(
+            tag_cli, "process_for", return_value=object()
+        ), patch.object(
+            tag_cli, "healthy", side_effect=health_checks
+        ), patch.object(
+            tag_cli.time, "sleep"
+        ), patch.object(
+            tag_cli, "sync_configured_slack_memory"
+        ), patch.object(
+            tag_cli, "doctor_report", return_value=(0, {"checks": []})
+        ), patch.object(
+            tag_cli, "slack_ready", return_value=True
+        ), patch.object(tag_cli, "stop_process"), redirect_stdout(StringIO()):
+            self.assertEqual(tag_cli.main(), 0)
 
     def test_doctor_json_suppresses_raw_response_details(self):
         def checks(*args):
