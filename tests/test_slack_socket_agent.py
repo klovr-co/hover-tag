@@ -957,6 +957,205 @@ class SlackChannelAllowlistTests(unittest.TestCase):
         self.assertFalse(slack_socket_agent.slack_channel_allowed("C999"))
 
 
+class SlackCrossChannelSearchTests(unittest.TestCase):
+    def configured_client(self) -> MagicMock:
+        client = MagicMock()
+        client.users_info.return_value = {
+            "user": {"id": "UOWNER", "team_id": "T123"}
+        }
+        client.conversations_info.side_effect = lambda *, channel: {
+            "channel": {
+                "id": channel,
+                "name": {"C123": "general", "C456": "support"}[channel],
+                "is_private": False,
+                "is_member": True,
+            }
+        }
+        return client
+
+    def test_working_indicator_starts_before_all_channel_scope_resolution(self) -> None:
+        fake_app = FakeApp()
+        client = self.configured_client()
+        indicator = MagicMock()
+        indicator.native = False
+        indicator.message_ts = None
+        events: list[str] = []
+        indicator.start.side_effect = lambda: events.append("indicator")
+        plan_search_scopes = slack_socket_agent.plan_search_scopes
+
+        def tracked_plan(**kwargs: object):
+            events.append(f"plan:{kwargs['intent'].mode}")
+            return plan_search_scopes(**kwargs)
+
+        with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+            os.environ,
+            {
+                "SLACK_BOT_TOKEN": "xoxb-test",
+                "SLACK_TEAM_ID": "T123",
+                "SLACK_CHANNEL_IDS": "C123,C456",
+                "MFS_ALLOWED_SCOPES": (
+                    "slack://tag-t123/channels/general__C123,"
+                    "slack://tag-t123/channels/support__C456"
+                ),
+                "OPENTAG_SLACK_STREAMING": "0",
+            },
+            clear=True,
+        ), patch(
+            "scripts.slack_search_scope.resolve_mfs_channel_scope",
+            side_effect=lambda channel: channel.scope,
+        ), patch.object(
+            slack_socket_agent, "WorkingIndicator", return_value=indicator
+        ), patch.object(
+            slack_socket_agent, "plan_search_scopes", side_effect=tracked_plan
+        ), patch.object(
+            slack_socket_agent, "build_thread_text", return_value="thread"
+        ), patch.object(
+            slack_socket_agent, "run_backend", return_value=("done", True)
+        ):
+            slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+            fake_app.events["app_mention"](
+                {
+                    "channel": "C123",
+                    "ts": "1.23",
+                    "user": "UOWNER",
+                    "text": "<@BOT> search all channels for launch notes",
+                },
+                {"team_id": "T123"},
+                client,
+                MagicMock(),
+            )
+
+        self.assertEqual(["plan:current", "indicator", "plan:all"], events[:3])
+
+    def test_explicit_named_scope_reaches_backend_for_claude(self) -> None:
+        fake_app = FakeApp()
+        client = self.configured_client()
+        with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+            os.environ,
+            {
+                "SLACK_BOT_TOKEN": "xoxb-test",
+                "SLACK_TEAM_ID": "T123",
+                "SLACK_CHANNEL_IDS": "C123,C456",
+                "MFS_ALLOWED_SCOPES": (
+                    "slack://tag-t123/channels/general__C123,"
+                    "slack://tag-t123/channels/old-support__C456"
+                ),
+                "OPENTAG_SLACK_STREAMING": "0",
+            },
+            clear=True,
+        ), patch(
+            "scripts.slack_search_scope.resolve_mfs_channel_scope",
+            side_effect=lambda channel: channel.scope,
+        ), patch.object(
+            slack_socket_agent, "build_thread_text", return_value="thread"
+        ), patch.object(
+            slack_socket_agent, "run_backend", return_value=("done", True)
+        ) as run_backend:
+            slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+            fake_app.events["app_mention"](
+                {
+                    "channel": "C123",
+                    "ts": "1.23",
+                    "user": "UOWNER",
+                    "text": "<@BOT> search #support for launch notes",
+                },
+                {"team_id": "T123"},
+                client,
+                MagicMock(),
+            )
+
+        plan = run_backend.call_args.kwargs["scope_plan"]
+        grant = run_backend.call_args.kwargs["slack_search_grant"]
+        self.assertEqual("current", plan.mode)
+        self.assertEqual(("slack://tag-t123/channels/general__C123",), plan.scopes)
+        self.assertEqual("all", grant.mode)
+        self.assertEqual({"C123": "general", "C456": "support"}, grant.channel_labels)
+
+    def test_natural_all_channel_wording_reaches_agent_with_authorized_grant(self) -> None:
+        fake_app = FakeApp()
+        client = self.configured_client()
+        with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+            os.environ,
+            {
+                "SLACK_BOT_TOKEN": "xoxb-test",
+                "SLACK_TEAM_ID": "T123",
+                "SLACK_CHANNEL_IDS": "C123,C456",
+                "MFS_ALLOWED_SCOPES": (
+                    "slack://tag-t123/channels/general__C123,"
+                    "slack://tag-t123/channels/support__C456"
+                ),
+                "OPENTAG_SLACK_STREAMING": "0",
+            },
+            clear=True,
+        ), patch(
+            "scripts.slack_search_scope.resolve_mfs_channel_scope",
+            side_effect=lambda channel: channel.scope,
+        ), patch.object(
+            slack_socket_agent, "build_thread_text", return_value="thread"
+        ), patch.object(
+            slack_socket_agent, "run_backend", return_value=("done", True)
+        ) as run_backend:
+            slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+            fake_app.events["app_mention"](
+                {
+                    "channel": "C123",
+                    "ts": "1.23",
+                    "user": "UOWNER",
+                    "text": "<@BOT> ANYTHING RELATED TO MARKETING ACROSS ALL CHANNELS",
+                },
+                {"team_id": "T123"},
+                client,
+                MagicMock(),
+            )
+
+        plan = run_backend.call_args.kwargs["scope_plan"]
+        grant = run_backend.call_args.kwargs["slack_search_grant"]
+        self.assertEqual("current", plan.mode)
+        self.assertEqual(("slack://tag-t123/channels/general__C123",), plan.scopes)
+        self.assertEqual("all", grant.mode)
+        self.assertEqual(
+            (
+                "slack://tag-t123/channels/general__C123",
+                "slack://tag-t123/channels/support__C456",
+            ),
+            grant.scopes,
+        )
+
+    def test_scope_meaning_is_left_to_runtime_agent(self) -> None:
+        fake_app = FakeApp()
+        client = self.configured_client()
+        with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+            os.environ,
+            {
+                "SLACK_BOT_TOKEN": "xoxb-test",
+                "SLACK_CHANNEL_IDS": "C123,C456",
+                "OPENTAG_SLACK_STREAMING": "0",
+            },
+            clear=True,
+        ), patch.object(
+            slack_socket_agent, "build_thread_text", return_value="thread"
+        ), patch.object(
+            slack_socket_agent, "run_backend", return_value=("please clarify", True)
+        ) as run_backend:
+            slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+            fake_app.events["app_mention"](
+                {
+                    "channel": "C123",
+                    "ts": "1.23",
+                    "user": "UOWNER",
+                    "text": "<@BOT> search general workspace all",
+                },
+                {"team_id": "T123"},
+                client,
+                MagicMock(),
+            )
+
+        run_backend.assert_called_once()
+        self.assertEqual(
+            "search general workspace all", run_backend.call_args.args[3]
+        )
+
+
 class SlackAppHomeTests(unittest.TestCase):
     def test_invited_policy_replaces_picker_and_ignores_stale_actions(self):
         fake_app = FakeApp()
