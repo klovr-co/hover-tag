@@ -120,6 +120,7 @@ class ResetTests(unittest.TestCase):
 
     def seed(self):
         tag_paths.initialize_instance(self.home)
+        tag_paths.initialize_workspace(self.home / "workspace")
         self.config = self.home / "config/settings.json"
         self.config.write_text('{"SLACK_BOT_TOKEN":"xoxb-private"}')
         project = self.home / "integrations/slack-cli"

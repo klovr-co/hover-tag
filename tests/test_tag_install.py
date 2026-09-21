@@ -331,6 +331,8 @@ class TagHomeTests(unittest.TestCase):
                 self.assertEqual(tag_home(), fake / ".local/share/tag")
             with patch("sys.platform", "win32"), patch.dict(os.environ, {"LOCALAPPDATA": str(fake / "local")}):
                 self.assertEqual(tag_home(), fake / "local/Tag")
+            with patch("sys.platform", "win32"), patch.dict(os.environ, {"LOCALAPPDATA": "relative"}):
+                self.assertEqual(tag_home(), fake / "AppData/Local/Tag")
             with patch.dict(os.environ, {"TAG_HOME": str(fake / "custom/tag")}):
                 self.assertEqual(tag_home(), fake / "custom/tag")
             with patch.dict(os.environ, {"TAG_HOME": "relative"}):
@@ -596,6 +598,24 @@ class TagHomeTests(unittest.TestCase):
             }), encoding="utf-8")
             self.assertIsNone(upgrade_reminder(home))
 
+    def test_upgrade_reminder_checks_alpha_when_source_has_no_current_file(self):
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            release = release_record("0.2.0-alpha.2", prerelease=True)
+            release["target_commitish"] = "b" * 40
+
+            with patch(
+                "scripts.tag_install.resolve_channel", return_value=release
+            ) as resolve:
+                reminder = upgrade_reminder(home, now=1000)
+
+        resolve.assert_called_once_with("alpha", timeout=2, page_limit=1)
+        self.assertEqual(reminder, {
+            "status": "available",
+            "version": "0.2.0-alpha.2",
+            "command": "tag upgrade --channel alpha",
+        })
+
     def test_upgrade_reminder_ignores_network_failure(self):
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp)
@@ -609,8 +629,63 @@ class TagHomeTests(unittest.TestCase):
             with patch(
                 "scripts.tag_install.resolve_channel",
                 side_effect=RuntimeError("offline"),
-            ):
+            ) as resolve:
                 self.assertIsNone(upgrade_reminder(home, now=2000))
+                self.assertIsNone(upgrade_reminder(home, now=2001))
+
+            cached = json.loads((home / "state/update-check.json").read_text())
+
+        resolve.assert_called_once_with("alpha", timeout=2, page_limit=1)
+        self.assertEqual(cached["checked_at"], 2000)
+        self.assertEqual(cached["channel"], "alpha")
+        self.assertNotIn("target_version", cached)
+
+    def test_upgrade_reminder_failure_retains_only_same_channel_target(self):
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            (home / "state").mkdir()
+            current = home / "current.json"
+            current.write_text(json.dumps({
+                "installed_version": "0.2.0-alpha.1",
+                "channel": "alpha",
+                "selection": "channel",
+            }), encoding="utf-8")
+            cache = home / "state/update-check.json"
+            cache.write_text(json.dumps({
+                "schema_version": 1,
+                "checked_at": 0,
+                "channel": "alpha",
+                "target_version": "0.2.0-alpha.2",
+                "target_commit": "b" * 40,
+            }), encoding="utf-8")
+
+            with patch(
+                "scripts.tag_install.resolve_channel",
+                side_effect=RuntimeError("offline"),
+            ):
+                self.assertEqual(upgrade_reminder(home, now=100000), {
+                    "status": "available",
+                    "version": "0.2.0-alpha.2",
+                    "command": "tag upgrade",
+                })
+            retained = json.loads(cache.read_text())
+
+            current.write_text(json.dumps({
+                "installed_version": "0.2.0-beta.1",
+                "channel": "beta",
+                "selection": "channel",
+            }), encoding="utf-8")
+            with patch(
+                "scripts.tag_install.resolve_channel",
+                side_effect=RuntimeError("offline"),
+            ):
+                self.assertIsNone(upgrade_reminder(home, now=200000))
+            replaced = json.loads(cache.read_text())
+
+        self.assertEqual(retained["checked_at"], 100000)
+        self.assertEqual(retained["target_version"], "0.2.0-alpha.2")
+        self.assertEqual(replaced["channel"], "beta")
+        self.assertNotIn("target_version", replaced)
 
     def test_upgrade_follows_saved_channel_and_preserves_personal_data(self):
         with tempfile.TemporaryDirectory() as temp:
