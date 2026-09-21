@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import ipaddress
 import importlib.util
 import io
 import json
@@ -847,11 +848,10 @@ def reconcile_invitation_memory(home: Path) -> None:
         raise MfsHistoryCredentialUnavailable(MFS_HISTORY_CREDENTIAL_MESSAGE)
     if status.get("check") == "mfs_slack_connector":
         raise MfsSlackConnectorUnavailable(MFS_SLACK_CONNECTOR_MESSAGE)
-    if status.get("check") == "index_submission":
-        raise RuntimeError(
-            "The MFS Slack history sync could not be confirmed. Run mfs status, then retry tag start."
-        )
-    if status.get("state") != "sync_requested":
+    if (
+        status.get("state") != "sync_requested"
+        and status.get("check") != "index_submission"
+    ):
         raise RuntimeError(
             "Invitation memory could not be prepared. Check Slack membership and history access, then retry tag start."
         )
@@ -888,45 +888,142 @@ def doctor_report(offline: bool) -> tuple[int, dict[str, object]]:
     return completed.returncode, report
 
 
-def mfs_scope_indexed(scope: str) -> bool:
-    """Return whether MFS exposes at least one indexed object below a scope."""
-    base = os.getenv("MFS_URL", "http://127.0.0.1:13619").rstrip("/")
+def authenticated_mfs_url() -> str:
+    """Return an MFS base URL that is safe to receive a bearer token."""
+    raw = os.getenv("MFS_URL", "http://127.0.0.1:13619").rstrip("/")
+    try:
+        parsed = urllib.parse.urlsplit(raw)
+        host = parsed.hostname
+        parsed.port  # Validate malformed port syntax before request construction.
+    except ValueError as error:
+        raise RuntimeError("MFS_URL must be a valid HTTP(S) URL") from error
+    if (
+        not host
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise RuntimeError(
+            "MFS_URL must be a valid HTTP(S) URL without credentials, query, or fragment"
+        )
+    if parsed.scheme.casefold() == "https":
+        return raw
+    loopback = host.casefold() == "localhost"
+    if not loopback:
+        try:
+            loopback = ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            loopback = False
+    if parsed.scheme.casefold() != "http" or not loopback:
+        raise RuntimeError(
+            "MFS_URL must use HTTPS unless it points to localhost or a loopback IP; "
+            "refusing to send the MFS bearer token"
+        )
+    return raw
+
+
+def mfs_request_json(path: str, parameters: dict[str, str]) -> dict[str, object] | None:
+    """Call an authenticated MFS endpoint after enforcing its transport boundary."""
+    base = authenticated_mfs_url()
     token = os.getenv("MFS_TOKEN", "").strip()
     if not token:
         try:
             token = (Path.home() / ".mfs/server.token").read_text(encoding="utf-8").strip()
         except OSError:
-            return False
-    query = urllib.parse.urlencode({"path": scope})
+            return None
+    query = urllib.parse.urlencode(parameters)
     request = urllib.request.Request(
-        f"{base}/v1/ls?{query}", headers={"Authorization": f"Bearer {token}"}
+        f"{base}{path}?{query}", headers={"Authorization": f"Bearer {token}"}
     )
     try:
-        with urllib.request.urlopen(request, timeout=2) as response:
+        with urllib.request.urlopen(request, timeout=2) as response:  # noqa: S310
             payload = json.loads(response.read().decode("utf-8"))
     except (OSError, ValueError, urllib.error.URLError):
-        return False
-    entries = payload.get("entries", []) if isinstance(payload, dict) else []
-    return bool(entries) and all(
-        isinstance(entry, dict) and entry.get("search_status") == "indexed"
-        for entry in entries
-    )
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def resolve_indexed_mfs_scope(scope: str) -> str | None:
+    """Resolve a Slack scope by stable channel ID and require indexed messages."""
+    parsed = urllib.parse.urlsplit(scope)
+    final_segment = parsed.path.rstrip("/").rsplit("/", 1)[-1]
+    _, marker, channel_id = final_segment.rpartition("__")
+    current_scope = scope.rstrip("/")
+    if marker and re.fullmatch(r"[CG][A-Z0-9]+", channel_id):
+        parent_path = parsed.path.rstrip("/").rsplit("/", 1)[0] or "/"
+        parent_scope = parsed._replace(path=parent_path, query="", fragment="").geturl()
+        parent = mfs_request_json("/v1/ls", {"path": parent_scope})
+        entries = parent.get("entries") if isinstance(parent, dict) else None
+        if not isinstance(entries, list):
+            return None
+        stable_suffix = f"__{channel_id}"
+        current_scope = ""
+        for entry in entries:
+            candidate = entry.get("path") if isinstance(entry, dict) else None
+            if not isinstance(candidate, str):
+                continue
+            candidate_parsed = urllib.parse.urlsplit(candidate)
+            if (
+                candidate_parsed.scheme.casefold() == parsed.scheme.casefold()
+                and candidate_parsed.netloc.casefold() == parsed.netloc.casefold()
+                and candidate_parsed.path.rstrip("/")
+                .rsplit("/", 1)[-1]
+                .endswith(stable_suffix)
+            ):
+                current_scope = candidate.rstrip("/")
+                break
+        if not current_scope:
+            return None
+    listing = mfs_request_json("/v1/ls", {"path": current_scope})
+    children = listing.get("entries") if isinstance(listing, dict) else None
+    if not isinstance(children, list):
+        return None
+    if any(
+        isinstance(child, dict)
+        and child.get("name") == "messages.jsonl"
+        and child.get("search_status") == "indexed"
+        for child in children
+    ):
+        return current_scope
+    return None
+
+
+def mfs_scope_indexed(scope: str) -> bool:
+    """Return whether MFS exposes indexed Slack messages below a scope."""
+    return resolve_indexed_mfs_scope(scope) is not None
 
 
 def wait_for_configured_mfs_scopes(*, attempts: int | None = None) -> list[str]:
     """Wait for an asynchronous connector sync to make every scope readable."""
-    scopes = list(dict.fromkeys(
+    configured = [
         scope.strip()
         for scope in os.getenv("MFS_ALLOWED_SCOPES", "").split(",")
-        if scope.strip() and urllib.parse.urlsplit(scope.strip()).scheme == "slack"
-    ))
+        if scope.strip()
+    ]
+    scopes = list(
+        dict.fromkeys(
+            scope
+            for scope in configured
+            if urllib.parse.urlsplit(scope).scheme == "slack"
+        )
+    )
     remaining = scopes
+    resolved: dict[str, str] = {}
     limit = attempts if attempts is not None else int(
         os.getenv("OPENTAG_MFS_STARTUP_ATTEMPTS", "90")
     )
     for attempt in range(max(1, limit)):
-        remaining = [scope for scope in scopes if not mfs_scope_indexed(scope)]
+        resolved = {
+            scope: current
+            for scope in scopes
+            if (current := resolve_indexed_mfs_scope(scope)) is not None
+        }
+        remaining = [scope for scope in scopes if scope not in resolved]
         if not remaining:
+            os.environ["MFS_ALLOWED_SCOPES"] = ",".join(
+                resolved.get(scope, scope) for scope in configured
+            )
             return []
         if attempt + 1 < max(1, limit):
             time.sleep(1)

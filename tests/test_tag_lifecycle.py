@@ -306,8 +306,7 @@ class TagLifecycleTests(unittest.TestCase):
         with patch.dict(sys.modules, {"slack_invitation_memory": slack_invitation_memory}), patch.object(
             slack_invitation_memory.InvitationMemory, "tick"
         ):
-            with self.assertRaisesRegex(RuntimeError, "MFS Slack history sync could not be confirmed"):
-                tag_cli.reconcile_invitation_memory(self.home)
+            tag_cli.reconcile_invitation_memory(self.home)
 
         status.write_text(json.dumps({"state": "needs_attention", "check": "mfs_history_credential"}), encoding="utf-8")
         with patch.dict(sys.modules, {"slack_invitation_memory": slack_invitation_memory}), patch.object(
@@ -327,7 +326,14 @@ class TagLifecycleTests(unittest.TestCase):
         with patch.dict(os.environ, {
             "MFS_ALLOWED_SCOPES": "slack://tag-test/channels/one,slack://tag-test/channels/two",
         }, clear=False), patch.object(
-            tag_cli, "mfs_scope_indexed", side_effect=[False, True, True, True]
+            tag_cli,
+            "resolve_indexed_mfs_scope",
+            side_effect=[
+                None,
+                "slack://tag-test/channels/two",
+                "slack://tag-test/channels/one",
+                "slack://tag-test/channels/two",
+            ],
         ) as indexed, patch.object(tag_cli.time, "sleep") as sleep:
             self.assertEqual(tag_cli.wait_for_configured_mfs_scopes(attempts=2), [])
 
@@ -340,7 +346,7 @@ class TagLifecycleTests(unittest.TestCase):
             "entries": [{"name": "messages.jsonl", "search_status": "indexing"}],
         }).encode()
         with patch.dict(os.environ, {
-            "MFS_URL": "http://mfs.test", "MFS_TOKEN": "fixture-token",
+            "MFS_URL": "https://mfs.test", "MFS_TOKEN": "fixture-token",
         }, clear=False), patch.object(tag_cli.urllib.request, "urlopen", return_value=response):
             self.assertFalse(tag_cli.mfs_scope_indexed("slack://tag-test/channels/one"))
 
@@ -348,16 +354,69 @@ class TagLifecycleTests(unittest.TestCase):
             "entries": [{"name": "messages.jsonl", "search_status": "indexed"}],
         }).encode()
         with patch.dict(os.environ, {
-            "MFS_URL": "http://mfs.test", "MFS_TOKEN": "fixture-token",
+            "MFS_URL": "https://mfs.test", "MFS_TOKEN": "fixture-token",
         }, clear=False), patch.object(tag_cli.urllib.request, "urlopen", return_value=response):
             self.assertTrue(tag_cli.mfs_scope_indexed("slack://tag-test/channels/one"))
+
+    def test_mfs_scope_resolution_survives_a_channel_rename(self) -> None:
+        old_scope = "slack://tag-test/channels/old-name__C123"
+        current_scope = "slack://tag-test/channels/new-name__C123"
+        with patch.dict(os.environ, {
+            "MFS_ALLOWED_SCOPES": old_scope + ",file:///approved",
+        }, clear=False), patch.object(
+            tag_cli,
+            "mfs_request_json",
+            side_effect=[
+                {"entries": [{"path": current_scope}]},
+                {"entries": [{"name": "messages.jsonl", "search_status": "indexed"}]},
+            ],
+        ) as request:
+            self.assertEqual(tag_cli.wait_for_configured_mfs_scopes(attempts=1), [])
+            self.assertEqual(
+                os.environ["MFS_ALLOWED_SCOPES"], current_scope + ",file:///approved"
+            )
+
+        self.assertEqual(
+            request.call_args_list,
+            [
+                unittest.mock.call(
+                    "/v1/ls", {"path": "slack://tag-test/channels"}
+                ),
+                unittest.mock.call("/v1/ls", {"path": current_scope}),
+            ],
+        )
+
+    def test_authenticated_mfs_request_rejects_insecure_remote_urls(self) -> None:
+        for url in ("http://mfs.example.com", "file://mfs.example.com/data"):
+            with self.subTest(url=url), patch.dict(os.environ, {
+                "MFS_URL": url,
+                "MFS_TOKEN": "fixture-token",
+            }, clear=False), patch.object(tag_cli.urllib.request, "Request") as request:
+                with self.assertRaisesRegex(RuntimeError, "HTTPS"):
+                    tag_cli.mfs_scope_indexed("slack://tag-test/channels/one")
+                request.assert_not_called()
+
+    def test_authenticated_mfs_request_allows_loopback_http(self) -> None:
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = json.dumps({
+            "entries": [{"name": "messages.jsonl", "search_status": "indexed"}],
+        }).encode()
+        with patch.dict(os.environ, {
+            "MFS_URL": "http://[::1]:13619", "MFS_TOKEN": "fixture-token",
+        }, clear=False), patch.object(
+            tag_cli.urllib.request, "urlopen", return_value=response
+        ) as urlopen:
+            self.assertTrue(tag_cli.mfs_scope_indexed("slack://tag-test/channels/one"))
+        urlopen.assert_called_once()
 
     def test_wait_for_configured_mfs_scopes_returns_the_exact_failed_scope(self) -> None:
         failed = "slack://tag-test/channels/two"
         with patch.dict(os.environ, {
             "MFS_ALLOWED_SCOPES": "slack://tag-test/channels/one," + failed,
         }, clear=False), patch.object(
-            tag_cli, "mfs_scope_indexed", side_effect=lambda scope: scope != failed
+            tag_cli,
+            "resolve_indexed_mfs_scope",
+            side_effect=lambda scope: scope if scope != failed else None,
         ), patch.object(tag_cli.time, "sleep"):
             self.assertEqual(tag_cli.wait_for_configured_mfs_scopes(attempts=2), [failed])
 
