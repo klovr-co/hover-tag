@@ -113,6 +113,161 @@ class SlackTextAttachmentTests(unittest.TestCase):
         self.assertTrue(text[0].endswith("[Attachment text truncated]"))
 
 
+class SlackBinaryAttachmentTests(unittest.TestCase):
+    def test_downloads_binary_attachment_to_invocation_directory(self) -> None:
+        messages = [{"files": [{
+            "id": "FZIP",
+            "name": "tag-feature-catalog.zip",
+            "mimetype": "application/zip",
+            "url_private_download": "https://files.slack.com/FZIP",
+        }]}]
+        client = MagicMock()
+        client.conversations_replies.return_value = {"messages": messages}
+        with tempfile.TemporaryDirectory() as raw_dir, patch(
+            "scripts.slack_socket_agent.download_file_bytes",
+            return_value=b"PK\x03\x04archive",
+        ), patch.dict(os.environ, {"SLACK_BOT_TOKEN": "xoxb-test"}, clear=False):
+            thread_text = slack_socket_agent.build_thread_text(
+                client, "C123", "1.23", Path(raw_dir)
+            )
+            downloaded = Path(raw_dir) / "tag-feature-catalog.zip"
+
+            self.assertEqual(b"PK\x03\x04archive", downloaded.read_bytes())
+            self.assertIn(
+                f"[Slack file attachment: tag-feature-catalog.zip (application/zip) at {downloaded}]",
+                thread_text,
+            )
+
+    def test_streamed_bytes_over_limit_are_rejected_instead_of_becoming_prompt_text(self) -> None:
+        messages = [{"files": [{
+            "id": "FZIP",
+            "name": "example.zip",
+            "mimetype": "application/zip",
+            "url_private_download": "https://files.slack.com/FZIP",
+        }]}]
+        client = MagicMock()
+        client.conversations_replies.return_value = {"messages": messages}
+        with tempfile.TemporaryDirectory() as raw_dir, patch.object(
+            slack_socket_agent, "MAX_ATTACHMENT_BYTES", 4
+        ), patch(
+            "scripts.slack_socket_agent.urllib.request.urlopen",
+            return_value=FakeResponse(b"12345"),
+        ), patch.dict(os.environ, {"SLACK_BOT_TOKEN": "xoxb-test"}, clear=False):
+            with self.assertRaisesRegex(
+                slack_socket_agent.AttachmentLimitError,
+                "example.zip.*15 MB attachment limit",
+            ):
+                slack_socket_agent.build_thread_text(
+                    client, "C123", "1.23", Path(raw_dir)
+                )
+
+
+class SlackAttachmentLimitTests(unittest.TestCase):
+    def test_rejects_too_many_or_too_large_a_combined_attachment_set(self) -> None:
+        too_many = [
+            {"id": f"F{index}", "name": f"file-{index}.txt", "size": 1}
+            for index in range(slack_socket_agent.MAX_ATTACHMENTS_PER_REQUEST + 1)
+        ]
+        with self.assertRaisesRegex(
+            slack_socket_agent.AttachmentLimitError, "at most 10 files"
+        ):
+            slack_socket_agent.validate_attachment_metadata(too_many)
+
+        each_size = slack_socket_agent.MAX_TOTAL_ATTACHMENT_BYTES // 3 + 1
+        combined_too_large = [
+            {"id": f"F{index}", "name": f"file-{index}.zip", "size": each_size}
+            for index in range(3)
+        ]
+        with self.assertRaisesRegex(
+            slack_socket_agent.AttachmentLimitError, "30 MB per-request limit"
+        ):
+            slack_socket_agent.validate_attachment_metadata(combined_too_large)
+
+    def test_declared_oversized_file_is_rejected_before_work_starts(self) -> None:
+        fake_app = FakeApp()
+        client = MagicMock()
+        event = {
+            "channel": "C123",
+            "ts": "1.23",
+            "user": "UOWNER",
+            "text": "<@BOT> inspect this",
+            "files": [{
+                "id": "FZIP",
+                "name": "example.zip",
+                "mimetype": "application/zip",
+                "size": slack_socket_agent.MAX_ATTACHMENT_BYTES + 1,
+            }],
+        }
+        with patch.object(
+            slack_socket_agent, "App", return_value=fake_app
+        ), patch.dict(
+            os.environ,
+            {"SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_IDS": "C123"},
+            clear=True,
+        ), patch.object(
+            slack_socket_agent, "WorkingIndicator"
+        ) as working_indicator, patch.object(
+            slack_socket_agent, "run_backend"
+        ) as run_backend:
+            slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+            fake_app.events["app_mention"](
+                event,
+                {"team_id": "T123"},
+                client,
+                MagicMock(),
+            )
+
+        client.chat_postMessage.assert_called_once_with(
+            channel="C123",
+            thread_ts="1.23",
+            text=(
+                "I couldn’t process example.zip because it exceeds Tag’s 15 MB "
+                "attachment limit. Upload a smaller file or provide a local path/link."
+            ),
+        )
+        working_indicator.assert_not_called()
+        run_backend.assert_not_called()
+
+    def test_download_discovered_oversize_gets_direct_reply_without_retry(self) -> None:
+        fake_app = FakeApp()
+        client = MagicMock()
+        indicator = MagicMock()
+        indicator.message_ts = None
+        limit_error = slack_socket_agent.AttachmentLimitError.for_file("example.zip")
+        with patch.object(
+            slack_socket_agent, "App", return_value=fake_app
+        ), patch.dict(
+            os.environ,
+            {"SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_IDS": "C123"},
+            clear=True,
+        ), patch.object(
+            slack_socket_agent, "WorkingIndicator", return_value=indicator
+        ), patch.object(
+            slack_socket_agent, "build_thread_text", side_effect=limit_error
+        ), patch.object(
+            slack_socket_agent, "run_backend"
+        ) as run_backend:
+            slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+            fake_app.events["app_mention"](
+                {
+                    "channel": "C123",
+                    "ts": "1.23",
+                    "user": "UOWNER",
+                    "text": "<@BOT> inspect this",
+                    "files": [{"id": "FZIP", "name": "example.zip"}],
+                },
+                {"team_id": "T123"},
+                client,
+                MagicMock(),
+            )
+
+        indicator.clear.assert_called_once()
+        run_backend.assert_not_called()
+        posted = client.chat_postMessage.call_args.kwargs
+        self.assertEqual(str(limit_error), posted["text"])
+        self.assertIsNone(posted["blocks"])
+
+
 class SlackOutputArtifactTests(unittest.TestCase):
     def test_local_artifact_actions_allow_enabled_direct_messages(self) -> None:
         fake_app = FakeApp()
@@ -1516,6 +1671,10 @@ class SlackWorkingIndicatorTests(unittest.TestCase):
 
         first_call = client.assistant_threads_setStatus.call_args_list[0].kwargs
         self.assertEqual("is working on this…", first_call["status"])
+        self.assertEqual(
+            "",
+            client.assistant_threads_setStatus.call_args_list[-1].kwargs["status"],
+        )
         self.assertEqual(slack_socket_agent.LOADING_MESSAGES, first_call["loading_messages"])
         self.assertEqual(
             ["processing", "active"],
