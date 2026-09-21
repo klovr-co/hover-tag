@@ -20,8 +20,8 @@ a local coding-agent backend with optional MFS retrieval.
   the PID, process start time, and expected command identity.
 - **Tag** — one local Slack identity, configuration, agent working folder,
   conversation state, and bridge lifecycle. Every Tag, including `default`,
-  owns mutable data below `instances/NAME`; implementation code calls this an
-  instance.
+  owns app-managed data below `instances/NAME` and a user-owned working folder;
+  implementation code calls this an instance.
 
 Historical filenames and environment variables containing `opentag` remain for
 compatibility; they do not define a separate product name.
@@ -33,3 +33,4 @@ compatibility; they do not define a separate product name.
 - [Installed application home](docs/adr/0003-installed-home.md)
 - [Codex App Server transport](docs/adr/0004-codex-app-server.md)
 - [Multiple Tags](docs/adr/0005-multiple-tag-instances.md)
+- [User-owned workspaces](docs/adr/0006-user-owned-workspaces.md)
