@@ -23,13 +23,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 try:
-    from tag_paths import initialize_instance, runtime_environment, tag_home
+    from tag_paths import initialize_instance, initialize_workspace, runtime_environment, tag_home
     import tag_instances
     from tag_config import read_config
     import tag_credentials
     import tag_display as display
 except ImportError:
-    from scripts.tag_paths import initialize_instance, runtime_environment, tag_home
+    from scripts.tag_paths import initialize_instance, initialize_workspace, runtime_environment, tag_home
     from scripts import tag_instances
     from scripts.tag_config import read_config
     from scripts import tag_credentials
@@ -38,6 +38,7 @@ except ImportError:
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_DEPENDENCIES = ("mfs_server", "psutil", "slack_bolt")
 UPGRADE_CHANNELS = ("stable", "beta", "alpha", "edge")
+UPDATE_CHECK_INTERVAL_SECONDS = 24 * 60 * 60
 COMMANDS = tuple(sorted(tag_instances.RESERVED_NAMES))
 STARTUP_ATTEMPT_ENV_KEYS = (
     "OPENTAG_MFS_STARTUP_ATTEMPTS", "OPENTAG_STARTUP_ATTEMPTS"
@@ -214,7 +215,10 @@ def start_process(
         return False
     options = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS} if os.name == "nt" else {"start_new_session": True}
     with (state / f"{name}.log").open("ab") as log:
-        child = subprocess.Popen(command, cwd=cwd or home / "workspace", stdin=subprocess.DEVNULL,
+        process_cwd = cwd or Path((environment or os.environ).get("OPENTAG_WORKDIR", str(home / "workspace")))
+        if cwd is None:
+            process_cwd.mkdir(parents=True, exist_ok=True, mode=0o700)
+        child = subprocess.Popen(command, cwd=process_cwd, stdin=subprocess.DEVNULL,
                                  stdout=log, stderr=subprocess.STDOUT, env=environment, **options)
     process = psutil.Process(child.pid)
     marker_source = command[1] if len(command) > 1 and command[1].endswith(".py") else command[0]
@@ -623,6 +627,7 @@ def instance_environment(
         context.home,
         installation_root=context.installation_root,
         tag_id=context.tag_id,
+        workspace=context.workspace,
     ))
     if values:
         environment.update(values)
@@ -890,6 +895,117 @@ def doctor(home: Path, offline: bool, json_output: bool = False, *, tag_id: str 
     display.doctor_summary(report)
     display.info_row("Target", selected_target(home, tag_id))
     return result
+
+
+def upgrade_reminder(
+    installation_root: Path,
+    *,
+    now: float | None = None,
+    max_age: float = UPDATE_CHECK_INTERVAL_SECONDS,
+) -> dict[str, str] | None:
+    """Return a best-effort cached reminder without authorizing an upgrade."""
+    try:
+        from tag_install import atomic_text, release_version_key, resolve_channel
+    except ImportError:
+        from scripts.tag_install import atomic_text, release_version_key, resolve_channel
+
+    current_path = installation_root / "current.json"
+    try:
+        current = json.loads(current_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        try:
+            current = {
+                "installed_version": (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+            }
+        except (OSError, UnicodeError):
+            return None
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(current, dict) or current.get("selection") == "version":
+        return None
+    saved_channel = current.get("channel")
+    channel = saved_channel if saved_channel in UPGRADE_CHANNELS else "alpha"
+    current_version = current.get("installed_version")
+    current_commit = current.get("installed_commit")
+
+    checked_at = time.time() if now is None else now
+    cache_path = installation_root / "state/update-check.json"
+    cached: dict[str, object] = {}
+    try:
+        candidate = json.loads(cache_path.read_text(encoding="utf-8"))
+        if isinstance(candidate, dict):
+            cached = candidate
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        pass
+    fresh = (
+        cached.get("channel") == channel
+        and isinstance(cached.get("checked_at"), (int, float))
+        and 0 <= checked_at - float(cached["checked_at"]) < max_age
+    )
+    if not fresh:
+        try:
+            release = resolve_channel(channel, timeout=2, page_limit=1)
+            target_version = (
+                "edge" if channel == "edge"
+                else str(release["tag_name"]).removeprefix("v")
+            )
+            cached = {
+                "schema_version": 1,
+                "checked_at": checked_at,
+                "channel": channel,
+                "target_version": target_version,
+                "target_commit": release.get("target_commitish"),
+            }
+            cache_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            atomic_text(cache_path, json.dumps(cached, indent=2, sort_keys=True) + "\n")
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError):
+            previous = cached if cached.get("channel") == channel else {}
+            cached = {
+                "schema_version": 1,
+                "checked_at": checked_at,
+                "channel": channel,
+            }
+            for key in ("target_version", "target_commit"):
+                if key in previous:
+                    cached[key] = previous[key]
+            try:
+                cache_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                atomic_text(cache_path, json.dumps(cached, indent=2, sort_keys=True) + "\n")
+            except OSError:
+                pass
+
+    target_version = cached.get("target_version")
+    target_commit = cached.get("target_commit")
+    if channel == "edge":
+        available = bool(target_commit and target_commit != current_commit)
+    else:
+        try:
+            available = release_version_key(str(target_version)) > release_version_key(
+                str(current_version)
+            )
+        except ValueError:
+            return None
+    if not available:
+        return None
+    return {
+        "status": "available",
+        "version": str(target_version),
+        "command": (
+            "tag upgrade"
+            if saved_channel in UPGRADE_CHANNELS
+            else "tag upgrade --channel alpha"
+        ),
+    }
+
+
+def show_upgrade_reminder(installation_root: Path) -> None:
+    reminder = upgrade_reminder(installation_root)
+    if not reminder:
+        return
+    display.section("Updates")
+    label = "New edge build" if reminder["version"] == "edge" else f"Tag v{reminder['version']}"
+    display.info_row("Available", label, good=False)
+    display.next_action("Upgrade when ready", reminder["command"])
 
 
 def upgrade_command(
@@ -1317,6 +1433,7 @@ def main() -> int:
             print(json.dumps(report, indent=2))
         else:
             control.show_status(report)
+            show_upgrade_reminder(installation_root)
         return int(args.command == "status" and report["state"] != "running")
     if args.command in {"setup", "settings", "reset"} and not sys.stdin.isatty():
         print("Interactive setup requires a terminal. Use tag inspect --json and tag config set for automation.", file=sys.stderr)
@@ -1350,12 +1467,14 @@ def main() -> int:
             print(json.dumps(report, indent=2))
         else:
             control.show_inspection(report)
+            show_upgrade_reminder(installation_root)
         return int(args.command == "status" and not all(report["services"].values()))
     if args.command == "version":
         print("Tag v" + (ROOT / "VERSION").read_text().strip())
         return 0
     if args.command == "paths":
-        paths = {key: str(home / key) for key in ("config", "workspace", "integrations", "state", "tmp")}
+        paths = {key: str(home / key) for key in ("config", "integrations", "state", "tmp")}
+        paths["workspace"] = str(context.workspace)
         paths.update(tag=context.tag_id, installation_root=str(installation_root),
                      instance_home=str(home), releases=str(installation_root / "releases"),
                      shared_mfs=str(context.shared_mfs_home))
@@ -1392,6 +1511,7 @@ def main() -> int:
             json_output=args.json_output,
         )
     initialize_instance(home)
+    initialize_workspace(context.workspace)
     if args.command == "rollback":
         named = [str(item["id"]) for item in tag_instances.discover(installation_root)
                  if item.get("valid") and item["id"] != "default"]
@@ -1432,7 +1552,7 @@ def main() -> int:
             from tag_migrate import migrate
         except ImportError:
             from scripts.tag_migrate import migrate
-        migrate(args.source, installation_root)
+        migrate(args.source, home, context.workspace)
         return 0
     config_path = Path(os.getenv("OPENTAG_ENV_FILE", str(home / "config/settings.json")))
     if args.command == "setup":
@@ -1455,7 +1575,10 @@ def main() -> int:
             command.append("--test-mode")
         if args.review:
             command.append("--review")
-        return subprocess.call(command, env=environment)
+        result = subprocess.call(command, env=environment)
+        if result == 0 and not args.test:
+            show_upgrade_reminder(installation_root)
+        return result
     if args.command == "doctor" and args.json_output:
         report = control.inspect(home, sys.modules[__name__], offline=True, tag_id=context.tag_id)
         if not report["configuration"]["complete"]:
@@ -1475,7 +1598,7 @@ def main() -> int:
     elif args.command in {"start", "dev"} or (args.command == "doctor" and not args.offline):
         raise RuntimeError(f"Missing configuration: {config_path}. Run tag setup.")
     # A TAG installation always has one stable integration workspace.
-    os.environ["OPENTAG_WORKDIR"] = str(home / "workspace")
+    os.environ["OPENTAG_WORKDIR"] = str(context.workspace)
     if args.command == "doctor":
         result = doctor(home, args.offline, args.json_output, tag_id=context.tag_id)
         if not args.offline and not args.json_output and sys.stdin.isatty():
@@ -1585,7 +1708,7 @@ def main() -> int:
                     if not healthy(url):
                         start_process(home, "mfs", [executable, "run"],
                                       environment=os.environ.copy(), state_dir=shared,
-                                      cwd=home / "workspace")
+                                      cwd=context.workspace)
                     attempts = int(os.getenv("OPENTAG_MFS_STARTUP_ATTEMPTS", "90"))
                     for _ in range(attempts):
                         if healthy(url):
@@ -1680,6 +1803,7 @@ def main() -> int:
             raise
         finally:
             lock.rmdir()
+        show_upgrade_reminder(installation_root)
     return 0
 
 

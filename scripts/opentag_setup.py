@@ -24,7 +24,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 try:
-    from tag_paths import instance_home, initialize_instance
+    from tag_paths import (
+        instance_home,
+        initialize_instance,
+        initialize_workspace,
+        tag_home,
+        workspace_home,
+    )
     import tag_config as settings
     import slack_channels
     import setup_ui as ui
@@ -36,7 +42,13 @@ try:
     import tag_cli as lifecycle
     from tag_mascot import PALETTE as MASCOT_PALETTE, PIXELS as MASCOT_PIXELS
 except ImportError:
-    from scripts.tag_paths import instance_home, initialize_instance
+    from scripts.tag_paths import (
+        instance_home,
+        initialize_instance,
+        initialize_workspace,
+        tag_home,
+        workspace_home,
+    )
     from scripts import slack_channels, tag_config as settings
     from scripts import setup_ui as ui
     from scripts import slack_permissions
@@ -1232,6 +1244,15 @@ def guided_setup(
     channel_policy = values.get("SLACK_CHANNEL_POLICY", "selected" if values.get("MFS_SLACK_CONNECTOR_CONFIG") else "invited")
     home = instance_home()
     initialize_instance(home)
+    default_workspace = workspace_home(
+        home, tag_home(), os.getenv("TAG_ID", "default")
+    )
+    workspace = Path(
+        os.getenv("OPENTAG_WORKDIR", str(default_workspace))
+    ).expanduser()
+    if not workspace.is_absolute():
+        raise ValueError("OPENTAG_WORKDIR must be an absolute path")
+    initialize_workspace(workspace)
     ui.screen(
         1,
         "Let’s connect Tag to Slack.",
