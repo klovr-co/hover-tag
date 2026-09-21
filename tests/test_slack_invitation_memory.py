@@ -129,6 +129,29 @@ class InvitationMemoryTests(unittest.TestCase):
         self.worker.tick()
         self.sync.assert_not_called()
 
+    def test_background_failure_revokes_previous_readiness(self):
+        calls = 0
+
+        def tick():
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                self.worker.ready_event.set()
+                return
+            raise RuntimeError("settings unreadable")
+
+        with patch.object(self.worker, "tick", side_effect=tick), patch.object(
+            self.worker.stop_event, "is_set", side_effect=[False, False, True]
+        ), patch.object(self.worker.stop_event, "wait"), patch.object(
+            memory.threading, "Thread"
+        ) as thread:
+            self.worker.start()
+            thread.call_args.kwargs["target"]()
+
+        self.assertFalse(self.worker.ready_for_requests())
+        self.assertEqual(self.env["SLACK_CHANNEL_IDS"], "")
+        self.assertEqual(self.env["MFS_ALLOWED_SCOPES"], "")
+
 
 class BackgroundIdentityTests(unittest.TestCase):
     def test_wrong_workspace_and_missing_scope_fail_without_prompt(self):
