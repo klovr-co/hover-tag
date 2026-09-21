@@ -945,12 +945,23 @@ def main() -> int:
                     raise RuntimeError("MFS server is unavailable; run ./install.sh --dependencies-only")
                 if start_process(home, "mfs", [executable, "run"]):
                     started.append("mfs")
-                for _ in range(30):
+                attempts = int(os.getenv("OPENTAG_MFS_STARTUP_ATTEMPTS", "90"))
+                for _ in range(attempts):
                     if healthy(url):
                         break
+                    if process_for(home / "state/mfs.json") is None:
+                        detail = log_tail(home, "mfs")
+                        raise RuntimeError(
+                            "MFS exited before becoming healthy"
+                            + (f":\n{detail}" if detail else "; run tag logs")
+                        )
                     time.sleep(1)
                 else:
-                    raise RuntimeError("MFS did not become healthy; run tag logs")
+                    detail = log_tail(home, "mfs")
+                    raise RuntimeError(
+                        f"MFS did not become healthy within {attempts} seconds"
+                        + (f":\n{detail}" if detail else "; run tag logs")
+                    )
             display.info_row("Memory", "Healthy", good=True)
             if os.getenv("SLACK_CHANNEL_POLICY") == "invited":
                 reconcile_invitation_memory(home)
