@@ -58,10 +58,12 @@ release version or switch to edge unless requested. If downloading or release
 verification fails, report the failure rather than silently installing source.
 
 Use a checkout only when the user requests a source installation or selects an
-existing checkout. That path requires Git: clone https://github.com/klovr-co/tag.git
-into a new, nonconflicting directory and run its `./install.sh`. Check for local
-changes first because they become part of a source installation. Do not overwrite
-an existing directory.
+existing checkout. For an existing checkout, use the user's selected directory
+and revision, check for local changes first because they become part of a source
+installation, and run that checkout's `./install.sh`. For a new source
+installation, clone https://github.com/klovr-co/tag.git into a new,
+nonconflicting directory and run its `./install.sh`. Do not overwrite an
+existing directory.
 
 The installer creates a persistent home, workspace, and managed runtime.
 Use the launcher path it prints for subsequent commands. The default POSIX
@@ -101,8 +103,9 @@ selected-channel policy; preserve it unless the user requests a change.
 
 Setup saves completed answers; rerunning it resumes. Use `tag setup --review`
 only when the user wants to revisit choices. `tag setup --no-start` saves choices
-without starting services or indexing. `--test` is not a Slack sandbox: approved
-Slack actions remain real and CLI sign-ins are shared.
+without starting services or indexing. `tag setup --test` implies `--no-start`
+and requires a separate MFS server before you run `tag start`. This is not a
+Slack sandbox: approved Slack actions remain real and CLI sign-ins are shared.
 
 For compatibility or permission failures, follow the displayed checklist and
 have the user or workspace admin make the required Slack changes. Do not loop
