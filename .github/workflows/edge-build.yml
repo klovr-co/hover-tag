@@ -12,7 +12,7 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: edge-release
+  group: edge-release-${{ github.event.workflow_run.head_sha }}
   cancel-in-progress: false
 
 jobs:
@@ -20,7 +20,7 @@ jobs:
     name: Publish edge artifact
     if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     env:
       GH_TOKEN: ${{ github.token }}
       EDGE_SHA: ${{ github.event.workflow_run.head_sha }}
@@ -36,6 +36,9 @@ jobs:
         run: |
           git fetch origin main --tags
           python scripts/release_automation.py validate-commit --sha "$EDGE_SHA"
+          previous_sha=$(git rev-parse "$EDGE_SHA^")
+          python scripts/release_automation.py wait-for-predecessor \
+            --repository "$GITHUB_REPOSITORY" --sha "$previous_sha" --wait-seconds 600
           python scripts/release_automation.py check-workflows \
             --repository "$GITHUB_REPOSITORY" --sha "$EDGE_SHA" --wait-seconds 600
       - name: Resolve automatic release intent

@@ -11,9 +11,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scripts.package_release import build_archive
+from scripts.release_check import validate_release
 from scripts.release_automation import (
     Version,
     derive_next_version,
+    find_edge_artifact,
     promote_edge_bundle,
     select_auto_alpha,
     successful_run,
@@ -23,6 +25,7 @@ from scripts.release_automation import (
     validate_release_tag,
     validate_selected_sha,
     validate_transition,
+    wait_for_predecessor,
     workflow_gate_state,
 )
 
@@ -164,6 +167,59 @@ class SelectedCommitTests(unittest.TestCase):
         runs[-1].update(status="completed", conclusion="success")
         self.assertEqual(workflow_gate_state(runs, sha), "success")
 
+    def test_historical_edge_artifact_is_found_by_exact_name(self) -> None:
+        sha = "b" * 40
+        with patch("scripts.release_automation._github_json", return_value={
+            "artifacts": [{
+                "name": f"tag-edge-{sha}",
+                "expired": False,
+                "created_at": "2026-09-21T00:00:00Z",
+                "workflow_run": {"id": 42, "head_sha": "c" * 40},
+            }]
+        }):
+            self.assertEqual(find_edge_artifact("klovr-co/tag", sha), (
+                42, f"tag-edge-{sha}"
+            ))
+
+    def test_predecessor_waits_for_successful_edge_processing(self) -> None:
+        sha = "b" * 40
+
+        def github_response(repository, path, parameters=None):
+            if path.startswith("actions/workflows/"):
+                return {"workflow_runs": [{
+                    "id": 1,
+                    "head_sha": sha,
+                    "event": "push",
+                    "status": "completed",
+                    "conclusion": "success",
+                }]}
+            if path == "actions/artifacts":
+                return {"artifacts": [{
+                    "name": f"tag-edge-{sha}",
+                    "expired": False,
+                    "created_at": "2026-09-21T00:00:00Z",
+                    "workflow_run": {"id": 42},
+                }]}
+            if path == "actions/runs/42":
+                return {"status": "completed", "conclusion": "success"}
+            raise AssertionError(path)
+
+        with patch("scripts.release_automation._github_json", side_effect=github_response):
+            self.assertEqual(wait_for_predecessor("klovr-co/tag", sha, 0), [])
+
+    def test_failed_predecessor_gate_does_not_block_later_commit(self) -> None:
+        sha = "b" * 40
+        with patch("scripts.release_automation._github_json", return_value={
+            "workflow_runs": [{
+                "id": 1,
+                "head_sha": sha,
+                "event": "push",
+                "status": "completed",
+                "conclusion": "failure",
+            }]
+        }):
+            self.assertEqual(wait_for_predecessor("klovr-co/tag", sha, 0), [])
+
 
 class ReleaseArtifactTests(unittest.TestCase):
     def test_package_is_reproducible_for_the_same_commit(self) -> None:
@@ -192,6 +248,20 @@ class ReleaseArtifactTests(unittest.TestCase):
 
         self.assertEqual(packaged_version, "9.8.7-alpha.6\n")
         self.assertEqual((root / "VERSION").read_text(encoding="utf-8"), source_version)
+
+    def test_numbered_alpha_archive_satisfies_release_contract(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary = Path(temporary_directory)
+            archive = temporary / "tag-0.2.0-alpha.11.zip"
+            extracted = temporary / "extracted"
+            build_archive(root, archive, version="0.2.0-alpha.11")
+            with zipfile.ZipFile(archive) as bundle:
+                bundle.extractall(extracted)
+
+            errors = validate_release(extracted)
+
+        self.assertEqual(errors, [])
 
     def test_package_rejects_missing_files_but_skips_symlinks_and_gitlinks(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -270,6 +340,16 @@ class ReleaseArtifactTests(unittest.TestCase):
 
 
 class ReleasePreflightTests(unittest.TestCase):
+    def test_main_gates_preserve_every_push_and_cancel_stale_pr_runs(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        for relative_path in (".github/workflows/ci.yml", ".github/workflows/install-smoke.yml"):
+            workflow = (root / relative_path).read_text(encoding="utf-8")
+            self.assertIn("github.event.pull_request.number || github.sha", workflow)
+            self.assertIn(
+                "cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
+                workflow,
+            )
+
     def test_edge_workflow_auto_publishes_alpha_and_supports_skip_label(self) -> None:
         workflow = (
             Path(__file__).resolve().parents[1]
@@ -280,6 +360,8 @@ class ReleasePreflightTests(unittest.TestCase):
         self.assertIn('if: env.AUTO_PUBLISH == \'true\'', workflow)
         self.assertIn("gh release create", workflow)
         self.assertIn('startswith("release:")', workflow)
+        self.assertIn("edge-release-${{ github.event.workflow_run.head_sha }}", workflow)
+        self.assertIn("wait-for-predecessor", workflow)
 
     def test_prepare_workflow_uses_candidate_preflight(self) -> None:
         workflow = (

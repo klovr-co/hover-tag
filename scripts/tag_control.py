@@ -89,7 +89,7 @@ def inspect(home: Path, lifecycle, *, offline: bool = False, tag_id: str = "defa
         "next_command": tag_command(tag_id, action),
         "configuration": {"path": str(path), "exists": path.exists(), "error": error,
                           "complete": not error and not errors, "fields": errors},
-        "workspace": str(home / "workspace"),
+        "workspace": os.getenv("OPENTAG_WORKDIR", str(home / "workspace")),
         "backend": {"selected": backend if backend in {"codex", "claude"} else None,
                     "experimental": backend == "claude", "executable_found": installed,
                     "authentication": "not_checked", "task_execution": "not_checked"},
@@ -222,7 +222,7 @@ def config_command(home: Path, words: list[str], *, json_output: bool, stdin: bo
             ui.display.info_row(key, value or "not set")
         for key, problem in result["fields"].items():
             ui.display.info_row(key, problem, good=False)
-        ui.display.next_action("Edit settings interactively", "tag settings")
+        ui.display.next_action("Edit settings interactively", tag_command(tag_id, "settings"))
     elif action == "init":
         ui.display.header("Config", target_detail(identity, tag_id, suffix="Existing values are preserved"))
         ui.display.completion("Defaults saved", result["note"], next_label="Inspect configuration", next_command=result["next_command"])
