@@ -3464,7 +3464,11 @@ def main() -> None:
         handler.connect()
         while not shutdown_requested.is_set():
             if args.ready_file:
-                if handler.client.is_connected():
+                invitation_ready = (
+                    invitation_memory is None
+                    or invitation_memory.ready_for_requests()
+                )
+                if handler.client.is_connected() and invitation_ready:
                     instance_id = args.process_id or require_env("OPENTAG_PROCESS_ID")
                     temporary = args.ready_file.with_name(
                         f"{args.ready_file.name}.tmp.{os.getpid()}"

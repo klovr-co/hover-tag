@@ -36,6 +36,7 @@ class InvitationMemoryTests(unittest.TestCase):
                                       SlackChannel("GPRIVATE", "private", True, True),
                                       SlackChannel("COTHER", "other", False, False)]
         self.worker.tick()
+        self.assertTrue(self.worker.ready_for_requests())
         saved = tag_config.load_config(self.path)
         self.assertEqual(saved["SLACK_CHANNEL_IDS"], "CNEW,GPRIVATE")
         self.assertEqual(saved["SLACK_ALLOWED_USER_IDS"], "UOWNER")
@@ -73,6 +74,7 @@ class InvitationMemoryTests(unittest.TestCase):
     def test_failed_membership_lookup_does_not_reuse_stale_access(self):
         self.channels.side_effect = RuntimeError("sensitive-detail")
         self.worker.tick()
+        self.assertFalse(self.worker.ready_for_requests())
         self.assertEqual(self.env["SLACK_CHANNEL_IDS"], "")
         self.sync.assert_not_called()
         self.assertNotIn("sensitive-detail", (self.home / "state/slack-memory.json").read_text())
