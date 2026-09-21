@@ -14,6 +14,7 @@ from scripts.package_release import build_archive
 from scripts.release_check import validate_release
 from scripts.release_automation import (
     Version,
+    build_channel_index,
     derive_next_version,
     find_edge_artifact,
     promote_edge_bundle,
@@ -163,6 +164,63 @@ class VersionTransitionTests(unittest.TestCase):
             )
         with self.assertRaisesRegex(ValueError, "unknown automatic release labels"):
             select_auto_prerelease("0.2.0-alpha", ["v0.1.0"], ["release:maybe"])
+
+
+class ChannelIndexTests(unittest.TestCase):
+    @staticmethod
+    def release(version: str, sha: str, *, prerelease: bool) -> dict:
+        names = [f"tag-{version}.zip", "SHA256SUMS", "BUILD-PROVENANCE.json"]
+        return {
+            "tag_name": f"v{version}",
+            "draft": False,
+            "prerelease": prerelease,
+            "target_commitish": sha,
+            "assets": [{"name": name} for name in names],
+        }
+
+    def test_builds_compatible_channel_pointers_and_edge(self) -> None:
+        stable = self.release("1.0.0", "a" * 40, prerelease=False)
+        alpha = self.release("1.1.0-alpha.2", "b" * 40, prerelease=True)
+        beta = self.release("1.1.0-beta.1", "c" * 40, prerelease=True)
+        edge = {
+            "tag_name": "edge",
+            "draft": False,
+            "prerelease": True,
+            "target_commitish": "d" * 40,
+            "assets": [
+                {"name": "tag-edge.zip"},
+                {"name": "SHA256SUMS"},
+                {"name": "BUILD-PROVENANCE.json"},
+            ],
+        }
+
+        index = build_channel_index(
+            [stable, alpha, beta, edge],
+            repository="klovr-co/hover-tag",
+            generated_at="2026-09-22T00:00:00Z",
+        )
+
+        self.assertEqual(index["schema_version"], 1)
+        self.assertEqual(index["repository"], "klovr-co/hover-tag")
+        self.assertEqual(index["channels"]["stable"]["version"], "1.0.0")
+        self.assertEqual(index["channels"]["beta"]["version"], "1.1.0-beta.1")
+        self.assertEqual(index["channels"]["alpha"]["version"], "1.1.0-beta.1")
+        self.assertEqual(index["channels"]["edge"], {
+            "version": "edge",
+            "tag": "edge",
+            "commit_sha": "d" * 40,
+        })
+
+    def test_rejects_selected_release_with_missing_verified_assets(self) -> None:
+        release = self.release("1.1.0-alpha.1", "a" * 40, prerelease=True)
+        release["assets"] = [{"name": "tag-1.1.0-alpha.1.zip"}]
+
+        with self.assertRaisesRegex(ValueError, "missing required assets"):
+            build_channel_index(
+                [release],
+                repository="klovr-co/hover-tag",
+                generated_at="2026-09-22T00:00:00Z",
+            )
 
 
 class SelectedCommitTests(unittest.TestCase):
@@ -415,6 +473,18 @@ class ReleasePreflightTests(unittest.TestCase):
 
         self.assertIn("validate-release-tag", workflow)
         self.assertIn("--source-version", workflow)
+
+    def test_channel_index_workflow_publishes_a_fixed_public_asset(self) -> None:
+        workflow = (
+            Path(__file__).resolve().parents[1]
+            / ".github/workflows/channel-index.yml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("workflows: [Edge build, Release package]", workflow)
+        self.assertIn("write-channel-index", workflow)
+        self.assertIn("tag-release-channels.json", workflow)
+        self.assertIn("gh release upload channels", workflow)
+        self.assertIn("--clobber", workflow)
 
     def test_draft_preparation_does_not_require_publication_approval(self) -> None:
         source_root = Path(__file__).resolve().parents[1]
