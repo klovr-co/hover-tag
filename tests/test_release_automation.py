@@ -17,7 +17,7 @@ from scripts.release_automation import (
     derive_next_version,
     find_edge_artifact,
     promote_edge_bundle,
-    select_auto_alpha,
+    select_auto_prerelease,
     successful_run,
     validate_candidate,
     validate_edge_bundle,
@@ -84,19 +84,19 @@ class VersionTransitionTests(unittest.TestCase):
 
     def test_automatic_alpha_starts_configured_line_then_increments_it(self) -> None:
         self.assertEqual(
-            str(select_auto_alpha(
+            str(select_auto_prerelease(
                 "0.2.0-alpha", ["v0.1.0-alpha"], []
             )),
             "0.2.0-alpha.1",
         )
         self.assertEqual(
-            str(select_auto_alpha(
+            str(select_auto_prerelease(
                 "0.2.0-alpha", ["v0.2.0-alpha.1", "v0.2.0-alpha.2"], []
             )),
             "0.2.0-alpha.3",
         )
         self.assertEqual(
-            str(select_auto_alpha(
+            str(select_auto_prerelease(
                 "0.3.0-alpha", ["v0.2.0-alpha.4"], []
             )),
             "0.3.0-alpha.1",
@@ -110,35 +110,59 @@ class VersionTransitionTests(unittest.TestCase):
             validate_release_tag("0.2.0-alpha.2", "v0.2.0-alpha.4"), []
         )
         self.assertEqual(validate_release_tag("0.2.0-beta", "v0.2.0-beta"), [])
+        self.assertEqual(validate_release_tag("0.2.0-beta", "v0.2.0-beta.1"), [])
+        self.assertEqual(validate_release_tag("0.2.0-beta.1", "v0.2.0-beta.4"), [])
         self.assertEqual(validate_release_tag("0.2.0", "v0.2.0"), [])
         self.assertTrue(validate_release_tag("0.2.0-alpha", "v0.3.0-alpha.1"))
         self.assertTrue(validate_release_tag("0.2.0-alpha", "v0.2.0-beta"))
-        self.assertTrue(validate_release_tag("0.2.0-beta", "v0.2.0-beta.1"))
 
     def test_automatic_alpha_honors_explicit_line_and_skip_labels(self) -> None:
         tags = ["v0.2.0-alpha.4"]
 
         self.assertEqual(
-            str(select_auto_alpha("0.2.0-alpha", tags, ["release:next-patch"])),
+            str(select_auto_prerelease("0.2.0-alpha", tags, ["release:next-patch"])),
             "0.2.1-alpha.1",
         )
         self.assertEqual(
-            str(select_auto_alpha("0.2.0-alpha", tags, ["release:next-minor"])),
+            str(select_auto_prerelease("0.2.0-alpha", tags, ["release:next-minor"])),
             "0.3.0-alpha.1",
         )
-        self.assertIsNone(select_auto_alpha(
+        self.assertIsNone(select_auto_prerelease(
             "0.2.0-alpha", tags, ["release:skip"]
         ))
-        self.assertIsNone(select_auto_alpha("0.2.0-beta.1", tags, []))
+        self.assertIsNone(select_auto_prerelease("0.2.0", tags, []))
+
+    def test_automatic_beta_starts_after_alpha_and_then_increments(self) -> None:
+        self.assertEqual(
+            str(select_auto_prerelease(
+                "0.2.0-beta.1", ["v0.2.0-alpha.12"], []
+            )),
+            "0.2.0-beta.1",
+        )
+        self.assertEqual(
+            str(select_auto_prerelease(
+                "0.2.0-beta.1", ["v0.2.0-alpha.12", "v0.2.0-beta.1"], []
+            )),
+            "0.2.0-beta.2",
+        )
+        self.assertIsNone(select_auto_prerelease(
+            "0.2.0-beta.1", ["v0.2.0-beta.1"], ["release:skip"]
+        ))
+        with self.assertRaisesRegex(ValueError, "beta line only supports"):
+            select_auto_prerelease(
+                "0.2.0-beta.1", ["v0.2.0-beta.1"], ["release:next-minor"]
+            )
+        with self.assertRaisesRegex(ValueError, "requires a published alpha"):
+            select_auto_prerelease("0.2.0-beta.1", [], [])
 
     def test_automatic_alpha_rejects_conflicting_release_labels(self) -> None:
         with self.assertRaisesRegex(ValueError, "conflicting automatic release labels"):
-            select_auto_alpha(
+            select_auto_prerelease(
                 "0.2.0-alpha", ["v0.1.0"],
                 ["release:next-patch", "release:skip"],
             )
         with self.assertRaisesRegex(ValueError, "unknown automatic release labels"):
-            select_auto_alpha("0.2.0-alpha", ["v0.1.0"], ["release:maybe"])
+            select_auto_prerelease("0.2.0-alpha", ["v0.1.0"], ["release:maybe"])
 
 
 class SelectedCommitTests(unittest.TestCase):
@@ -350,13 +374,14 @@ class ReleasePreflightTests(unittest.TestCase):
                 workflow,
             )
 
-    def test_edge_workflow_auto_publishes_alpha_and_supports_skip_label(self) -> None:
+    def test_edge_workflow_auto_publishes_prereleases_and_supports_skip_label(self) -> None:
         workflow = (
             Path(__file__).resolve().parents[1]
             / ".github/workflows/edge-build.yml"
         ).read_text(encoding="utf-8")
 
-        self.assertIn("next-alpha", workflow)
+        self.assertIn("next-prerelease", workflow)
+        self.assertIn("Publish immutable prerelease", workflow)
         self.assertIn('if: env.AUTO_PUBLISH == \'true\'', workflow)
         self.assertIn("gh release create", workflow)
         self.assertIn('startswith("release:")', workflow)
@@ -371,6 +396,8 @@ class ReleasePreflightTests(unittest.TestCase):
 
         self.assertIn("run: ./scripts/release_preflight.sh\n", workflow)
         self.assertNotIn("release_preflight.sh --publish", workflow)
+        self.assertIn("RELEASE_PHASE: stable", workflow)
+        self.assertNotIn("options: [beta, stable]", workflow)
 
     def test_release_workflow_validates_tag_against_source_version(self) -> None:
         workflow = (

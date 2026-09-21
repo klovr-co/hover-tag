@@ -1,4 +1,4 @@
-name: Prepare release
+name: Prepare stable release
 
 on:
   workflow_dispatch:
@@ -7,11 +7,6 @@ on:
         description: Full SHA of the tested main commit to promote
         required: true
         type: string
-      phase:
-        description: Release phase encoded by VERSION
-        required: true
-        type: choice
-        options: [beta, stable]
 
 permissions:
   actions: read
@@ -23,13 +18,13 @@ concurrency:
 
 jobs:
   prepare:
-    name: Prepare immutable release draft
+    name: Prepare immutable stable release draft
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
       GH_TOKEN: ${{ github.token }}
       RELEASE_SHA: ${{ inputs.commit_sha }}
-      RELEASE_PHASE: ${{ inputs.phase }}
+      RELEASE_PHASE: stable
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
