@@ -302,6 +302,13 @@ class TagLifecycleTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "Invitation memory could not be prepared"):
                 tag_cli.reconcile_invitation_memory(self.home)
 
+        status.write_text(json.dumps({"state": "needs_attention", "check": "index_submission"}), encoding="utf-8")
+        with patch.dict(sys.modules, {"slack_invitation_memory": slack_invitation_memory}), patch.object(
+            slack_invitation_memory.InvitationMemory, "tick"
+        ):
+            with self.assertRaisesRegex(RuntimeError, "MFS Slack history sync could not be confirmed"):
+                tag_cli.reconcile_invitation_memory(self.home)
+
         status.write_text(json.dumps({"state": "needs_attention", "check": "mfs_history_credential"}), encoding="utf-8")
         with patch.dict(sys.modules, {"slack_invitation_memory": slack_invitation_memory}), patch.object(
             slack_invitation_memory.InvitationMemory, "tick"
@@ -315,6 +322,44 @@ class TagLifecycleTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(tag_cli.MfsSlackConnectorUnavailable, "Slack connector support is not installed"):
                 tag_cli.reconcile_invitation_memory(self.home)
+
+    def test_wait_for_configured_mfs_scopes_allows_asynchronous_indexing(self) -> None:
+        with patch.dict(os.environ, {
+            "MFS_ALLOWED_SCOPES": "slack://tag-test/channels/one,slack://tag-test/channels/two",
+        }, clear=False), patch.object(
+            tag_cli, "mfs_scope_indexed", side_effect=[False, True, True, True]
+        ) as indexed, patch.object(tag_cli.time, "sleep") as sleep:
+            self.assertEqual(tag_cli.wait_for_configured_mfs_scopes(attempts=2), [])
+
+        self.assertEqual(indexed.call_count, 4)
+        sleep.assert_called_once_with(1)
+
+    def test_mfs_scope_requires_an_indexed_entry(self) -> None:
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = json.dumps({
+            "entries": [{"name": "messages.jsonl", "search_status": "indexing"}],
+        }).encode()
+        with patch.dict(os.environ, {
+            "MFS_URL": "http://mfs.test", "MFS_TOKEN": "fixture-token",
+        }, clear=False), patch.object(tag_cli.urllib.request, "urlopen", return_value=response):
+            self.assertFalse(tag_cli.mfs_scope_indexed("slack://tag-test/channels/one"))
+
+        response.__enter__.return_value.read.return_value = json.dumps({
+            "entries": [{"name": "messages.jsonl", "search_status": "indexed"}],
+        }).encode()
+        with patch.dict(os.environ, {
+            "MFS_URL": "http://mfs.test", "MFS_TOKEN": "fixture-token",
+        }, clear=False), patch.object(tag_cli.urllib.request, "urlopen", return_value=response):
+            self.assertTrue(tag_cli.mfs_scope_indexed("slack://tag-test/channels/one"))
+
+    def test_wait_for_configured_mfs_scopes_returns_the_exact_failed_scope(self) -> None:
+        failed = "slack://tag-test/channels/two"
+        with patch.dict(os.environ, {
+            "MFS_ALLOWED_SCOPES": "slack://tag-test/channels/one," + failed,
+        }, clear=False), patch.object(
+            tag_cli, "mfs_scope_indexed", side_effect=lambda scope: scope != failed
+        ), patch.object(tag_cli.time, "sleep"):
+            self.assertEqual(tag_cli.wait_for_configured_mfs_scopes(attempts=2), [failed])
 
     def test_sync_explains_when_the_running_mfs_server_lacks_history_credential(self) -> None:
         config = self.home / "connector.toml"

@@ -847,6 +847,10 @@ def reconcile_invitation_memory(home: Path) -> None:
         raise MfsHistoryCredentialUnavailable(MFS_HISTORY_CREDENTIAL_MESSAGE)
     if status.get("check") == "mfs_slack_connector":
         raise MfsSlackConnectorUnavailable(MFS_SLACK_CONNECTOR_MESSAGE)
+    if status.get("check") == "index_submission":
+        raise RuntimeError(
+            "The MFS Slack history sync could not be confirmed. Run mfs status, then retry tag start."
+        )
     if status.get("state") != "sync_requested":
         raise RuntimeError(
             "Invitation memory could not be prepared. Check Slack membership and history access, then retry tag start."
@@ -882,6 +886,51 @@ def doctor_report(offline: bool) -> tuple[int, dict[str, object]]:
     if not isinstance(report, dict):
         raise RuntimeError("Doctor did not return a valid report")
     return completed.returncode, report
+
+
+def mfs_scope_indexed(scope: str) -> bool:
+    """Return whether MFS exposes at least one indexed object below a scope."""
+    base = os.getenv("MFS_URL", "http://127.0.0.1:13619").rstrip("/")
+    token = os.getenv("MFS_TOKEN", "").strip()
+    if not token:
+        try:
+            token = (Path.home() / ".mfs/server.token").read_text(encoding="utf-8").strip()
+        except OSError:
+            return False
+    query = urllib.parse.urlencode({"path": scope})
+    request = urllib.request.Request(
+        f"{base}/v1/ls?{query}", headers={"Authorization": f"Bearer {token}"}
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=2) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, ValueError, urllib.error.URLError):
+        return False
+    entries = payload.get("entries", []) if isinstance(payload, dict) else []
+    return bool(entries) and all(
+        isinstance(entry, dict) and entry.get("search_status") == "indexed"
+        for entry in entries
+    )
+
+
+def wait_for_configured_mfs_scopes(*, attempts: int | None = None) -> list[str]:
+    """Wait for an asynchronous connector sync to make every scope readable."""
+    scopes = list(dict.fromkeys(
+        scope.strip()
+        for scope in os.getenv("MFS_ALLOWED_SCOPES", "").split(",")
+        if scope.strip() and urllib.parse.urlsplit(scope.strip()).scheme == "slack"
+    ))
+    remaining = scopes
+    limit = attempts if attempts is not None else int(
+        os.getenv("OPENTAG_MFS_STARTUP_ATTEMPTS", "90")
+    )
+    for attempt in range(max(1, limit)):
+        remaining = [scope for scope in scopes if not mfs_scope_indexed(scope)]
+        if not remaining:
+            return []
+        if attempt + 1 < max(1, limit):
+            time.sleep(1)
+    return remaining
 
 
 def doctor(home: Path, offline: bool, json_output: bool = False, *, tag_id: str = "default") -> int:
@@ -1733,6 +1782,13 @@ def main() -> int:
                 reconcile_invitation_memory(home)
             else:
                 sync_configured_slack_memory()
+            unavailable_scopes = wait_for_configured_mfs_scopes()
+            if unavailable_scopes:
+                raise RuntimeError(
+                    "MFS scope did not become readable after indexing: "
+                    + unavailable_scopes[0]
+                    + ". Run mfs status and tag doctor, then retry tag start."
+                )
             preflight_result, preflight = doctor_report(False)
             if preflight_result:
                 failed = [item for item in preflight.get("checks", []) if not item.get("ok")]
