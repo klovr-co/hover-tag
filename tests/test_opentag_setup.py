@@ -556,6 +556,24 @@ class OpenTagSetupTests(unittest.TestCase):
             self.assertEqual(enable.call_args.args[:3], (opentag_setup.slack_project(home), "ATEST", "TTEST"))
             self.assertTrue(callable(enable.call_args.kwargs["approve_legacy"]))
 
+    def test_already_enabled_agent_messaging_does_not_offer_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            config = home / "config/settings.json"
+            opentag_setup.settings.save_config(config, {"SLACK_APP_ID": "ATEST"})
+
+            def stale_check(project, app_id, *, issues):
+                issues[:] = ["Agent view enabled"]
+                return False
+
+            with patch.object(opentag_setup, "saved_slack_app", return_value=True), patch.object(
+                opentag_setup, "inspect_slack_app", side_effect=stale_check
+            ), patch.object(opentag_setup.ui, "choose") as choose, patch.object(
+                opentag_setup.slack_manifest_migrations, "enable_agent_view", return_value=False
+            ), redirect_stdout(StringIO()):
+                self.assertEqual(opentag_setup.choose_slack_app(home, "TTEST", config), "ATEST")
+            choose.assert_not_called()
+
     def test_failed_automatic_agent_repair_offers_retry(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
