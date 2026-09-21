@@ -1035,7 +1035,7 @@ def main() -> int:
         return 0
     if args.command == "paths":
         paths = {key: str(home / key) for key in ("config", "workspace", "integrations", "state", "tmp", "releases")}
-        paths.update(admin_skill=str(ROOT / "SKILL.md"), management_guide=str(ROOT / "docs/tag-management.md"))
+        paths.update(management_guide=str(ROOT / "docs/tag-management.md"))
         paths["runtime"] = runtime_identity(home)
         if args.json_output:
             print(json.dumps(paths, indent=2))
@@ -1054,7 +1054,6 @@ def main() -> int:
         display.info_row("Workspace", display.short_path(paths["workspace"]))
         display.info_row("State", display.short_path(paths["state"]))
         display.section("Agent")
-        display.info_row("Admin skill", display.short_path(paths["admin_skill"]))
         display.info_row("Guide", display.short_path(paths["management_guide"]))
         display.next_action("Machine-readable paths", "tag paths --json")
         return 0
