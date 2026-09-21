@@ -600,10 +600,10 @@ class TagHomeTests(unittest.TestCase):
             }), encoding="utf-8")
             self.assertIsNone(upgrade_reminder(home))
 
-    def test_upgrade_reminder_checks_alpha_when_source_has_no_current_file(self):
+    def test_upgrade_reminder_does_not_downgrade_beta_source_without_current_file(self):
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp)
-            release = release_record("0.2.0-alpha.2", prerelease=True)
+            release = release_record("0.2.0-alpha.11", prerelease=True)
             release["target_commitish"] = "b" * 40
 
             with patch(
@@ -612,11 +612,7 @@ class TagHomeTests(unittest.TestCase):
                 reminder = upgrade_reminder(home, now=1000)
 
         resolve.assert_called_once_with("alpha", timeout=2, page_limit=1)
-        self.assertEqual(reminder, {
-            "status": "available",
-            "version": "0.2.0-alpha.2",
-            "command": "tag upgrade --channel alpha",
-        })
+        self.assertIsNone(reminder)
 
     def test_upgrade_reminder_ignores_network_failure(self):
         with tempfile.TemporaryDirectory() as temp:
