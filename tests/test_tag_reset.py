@@ -115,11 +115,11 @@ class ResetTests(unittest.TestCase):
         self.environment = patch.dict(os.environ, environment, clear=True)
         self.environment.start()
         self.addCleanup(self.environment.stop)
-        self.lifecycle = SimpleNamespace(initialize=tag_paths.initialize, stop_process=Mock(),
+        self.lifecycle = SimpleNamespace(initialize_instance=tag_paths.initialize_instance, stop_process=Mock(),
                                          ROOT=Path(__file__).resolve().parents[1])
 
     def seed(self):
-        tag_paths.initialize(self.home)
+        tag_paths.initialize_instance(self.home)
         self.config = self.home / "config/settings.json"
         self.config.write_text('{"SLACK_BOT_TOKEN":"xoxb-private"}')
         project = self.home / "integrations/slack-cli"

@@ -33,6 +33,19 @@ def selected_app(home: Path) -> dict | None:
     return {"app_id": app_id, "team_id": team_id, "saved_bot_name": name}
 
 
+def target_detail(home: Path) -> str:
+    try:
+        values = settings.load_config(settings.config_path(home))
+    except (OSError, ValueError):
+        values = {}
+    return ui.display.target_detail(
+        os.getenv("TAG_ID", "default"),
+        values.get("SLACK_TEAM_ID", ""),
+        values.get("SLACK_APP_ID", ""),
+        values.get("OPENTAG_BOT_NAME", ""),
+    )
+
+
 def check_app_link(project: Path, app: dict) -> None:
     if not project.is_dir() or project.is_symlink():
         raise RuntimeError("Slack app-link metadata is unavailable. Nothing was reset or deleted.")
@@ -71,7 +84,7 @@ def delete_slack_app(home: Path, backup: Path, app: dict, executable: str) -> bo
 
 def archive_setup(home: Path, lifecycle, *, expected_app: dict | None = None) -> Path:
     """Serialize with starts/settings writes and move exact setup targets to backup."""
-    lifecycle.initialize(home)
+    lifecycle.initialize_instance(home)
     config = settings.config_path(home).absolute()
     targets = (
         (config, "settings.json"),
@@ -134,13 +147,14 @@ def archive_setup(home: Path, lifecycle, *, expected_app: dict | None = None) ->
 
 def reset_and_setup(home: Path, lifecycle) -> int:
     ui.notice("Reset Tag setup?",
-              "Tag will stop its managed services and back up saved answers and local Slack app-link checkpoints. "
+              target_detail(home) + "\n"
+              "Tag will stop its Slack bridge and back up saved answers and local Slack app-link checkpoints. "
               "Then setup will start from the beginning.\n"
               "Your workspace, skills, indexed memory, and CLI sign-ins are kept. "
               "Deleting the Slack app is optional and requires a separate confirmation.",
               footer=f"Settings: {settings.config_path(home)}")
     try:
-        if ui.choose("Continue?", ["Cancel", "Reset and redo setup"], default=0) != 1:
+        if ui.choose("Reset this Tag?", ["Cancel", "Reset and redo setup"], default=0) != 1:
             ui.message("Reset cancelled. Nothing changed.")
             return 0
         app = selected_app(home)
@@ -150,7 +164,7 @@ def reset_and_setup(home: Path, lifecycle) -> int:
             ui.notice("Which Slack app will this affect?",
                       f"Saved bot name: {app['saved_bot_name']}\n"
                       f"App ID: {app['app_id']}\nWorkspace Team ID: {app['team_id']}",
-                      footer="These are the saved identifiers for this Tag installation.")
+                      footer=f"Target: {target_detail(home)}")
             action = ui.choose("Delete this Slack app too?",
                                ["Keep the Slack app", "Permanently delete this Slack app", "Cancel reset"], default=0)
             if action == 2:

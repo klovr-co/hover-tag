@@ -923,7 +923,11 @@ def choose_slack_app(
     config_path = config_path or settings.config_path(home)
     values = settings.load_config(config_path)
     app_id = values.get("SLACK_APP_ID", "")
-    ui.screen(2, "Which app should Tag use?")
+    ui.screen(
+        2,
+        "Which app should Tag use?",
+        target=ui.display.target_detail(os.getenv("TAG_ID", "default"), team_id),
+    )
     project = slack_project(home)
     creation = project / "tag-create.json"
     if creation.exists():
@@ -1174,7 +1178,17 @@ def guided_setup(
     channel_policy = values.get("SLACK_CHANNEL_POLICY", "selected" if values.get("MFS_SLACK_CONNECTOR_CONFIG") else "invited")
     home = instance_home()
     initialize_instance(home)
-    ui.screen(1, "Let’s connect Tag to Slack.", "Your progress is saved. Ctrl-C pauses setup.")
+    ui.screen(
+        1,
+        "Let’s connect Tag to Slack.",
+        "Your progress is saved. Ctrl-C pauses setup.",
+        target=ui.display.target_detail(
+            os.getenv("TAG_ID", "default"),
+            values.get("SLACK_TEAM_ID", ""),
+            values.get("SLACK_APP_ID", ""),
+            values.get("OPENTAG_BOT_NAME", ""),
+        ),
+    )
 
     # Defaults are not repeatedly prompted and never replace saved choices.
     defaults = {key: value for key, value in settings.DEFAULTS.items() if key not in values}
@@ -1246,7 +1260,17 @@ def guided_setup(
     if inferred:
         values = settings.update_config(config_path, inferred)
 
-    ui.screen(3, "Where should Tag respond?", f"App {values.get('SLACK_APP_ID', '')} · Slack connected")
+    ui.screen(
+        3,
+        "Where should Tag respond?",
+        "Slack connected",
+        target=ui.display.target_detail(
+            os.getenv("TAG_ID", "default"),
+            values.get("SLACK_TEAM_ID", ""),
+            values.get("SLACK_APP_ID", ""),
+            values.get("OPENTAG_BOT_NAME", ""),
+        ),
+    )
     if settings.validation_error("SLACK_ALLOWED_USER_IDS", values.get("SLACK_ALLOWED_USER_IDS", "")):
         owner_id = choose_allowed_users(values.get("SLACK_TEAM_ID", ""))
         values = settings.update_config(config_path, {"SLACK_ALLOWED_USER_IDS": owner_id})
@@ -1318,7 +1342,17 @@ def guided_setup(
                 if channel_policy == "invited":
                     values = settings.update_config(config_path, {"SLACK_CHANNEL_POLICY": channel_policy})
                 break
-    ui.screen(4, "Finishing setup", "Your Slack app and channel choices are saved.")
+    ui.screen(
+        4,
+        "Finishing setup",
+        "Your Slack app and channel choices are saved.",
+        target=ui.display.target_detail(
+            os.getenv("TAG_ID", "default"),
+            values.get("SLACK_TEAM_ID", ""),
+            values.get("SLACK_APP_ID", ""),
+            values.get("OPENTAG_BOT_NAME", ""),
+        ),
+    )
     ui.message("✓ Slack connected\n◌ Preparing Slack memory…")
     uri = connector_uri(values["SLACK_TEAM_ID"], values.get("SLACK_APP_ID", ""))
     required_scopes = [connector_scope(values["SLACK_TEAM_ID"], channel,

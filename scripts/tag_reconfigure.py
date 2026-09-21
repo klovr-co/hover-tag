@@ -12,13 +12,13 @@ import tempfile
 
 try:
     from . import tag_config as settings, tag_cli as lifecycle, setup_ui as ui, tag_credentials
-    from .tag_paths import initialize, runtime_environment
+    from .tag_paths import initialize_instance, runtime_environment
 except ImportError:
     import tag_config as settings
     import tag_cli as lifecycle
     import setup_ui as ui
     import tag_credentials
-    from tag_paths import initialize, runtime_environment
+    from tag_paths import initialize_instance, runtime_environment
 
 
 def commit(home: Path, draft: Path, original: dict[str, str]) -> None:
@@ -115,6 +115,12 @@ def edit(home: Path, kind: str) -> None:
     if not original:
         ui.message(f"Run tag setup{suffix} first.")
         return
+    ui.message("Target: " + ui.display.target_detail(
+        os.getenv("TAG_ID", "default"),
+        original.get("SLACK_TEAM_ID", ""),
+        original.get("SLACK_APP_ID", ""),
+        original.get("OPENTAG_BOT_NAME", ""),
+    ))
     root = home / "integrations/setup-drafts"
     pointer = home / "state/settings-draft.json"
     resumable = None
@@ -153,7 +159,7 @@ def edit(home: Path, kind: str) -> None:
         return
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     draft = Path(tempfile.mkdtemp(prefix="settings-", dir=root))
-    initialize(draft)
+    initialize_instance(draft)
     project = home / "integrations/slack-cli"
     if kind == "app":
         for key in ("SLACK_APP_ID", "SLACK_TEAM_ID", "SLACK_APP_TOKEN", "SLACK_BOT_TOKEN",

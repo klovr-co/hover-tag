@@ -18,9 +18,10 @@ a local coding-agent backend with optional MFS retrieval.
   MFS answers its health check and the bridge has a live Socket Mode connection.
 - **Managed process** — a service Tag started and may later stop after validating
   the PID, process start time, and expected command identity.
-- **Tag instance** — one local Slack identity, configuration, agent working
-  folder, conversation state, and bridge lifecycle. The `default` instance
-  retains the original installed-home paths; named instances live below it.
+- **Tag** — one local Slack identity, configuration, agent working folder,
+  conversation state, and bridge lifecycle. Every Tag, including `default`,
+  owns mutable data below `instances/NAME`; implementation code calls this an
+  instance.
 
 Historical filenames and environment variables containing `opentag` remain for
 compatibility; they do not define a separate product name.
@@ -31,4 +32,4 @@ compatibility; they do not define a separate product name.
 - [Local process supervision](docs/adr/0002-local-process-supervision.md)
 - [Installed application home](docs/adr/0003-installed-home.md)
 - [Codex App Server transport](docs/adr/0004-codex-app-server.md)
-- [Multiple Tag instances](docs/adr/0005-multiple-tag-instances.md)
+- [Multiple Tags](docs/adr/0005-multiple-tag-instances.md)

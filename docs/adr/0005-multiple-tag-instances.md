@@ -18,11 +18,14 @@ folder, conversation state, and lifecycle. These terms are not interchangeable.
 
 ## Decision
 
-`TAG_HOME` continues to mean the installation root. The `default` instance
-keeps the historical `config/`, `workspace/`, `integrations/`, `state/`, and
-`tmp/` paths at that root. A validated lowercase local name resolves to
-`instances/NAME/`; child processes receive that path explicitly through
+`TAG_HOME` continues to mean the installation root. Every instance, including
+the built-in `default`, owns its mutable data below `instances/NAME/`. A
+validated lowercase local name resolves to that directory; child processes
+receive the path explicitly through
 `TAG_INSTANCE_HOME` and receive the stable local identifier through `TAG_ID`.
+Instance-scoped Slack, MFS, and OpenTag variables are scrubbed before the saved
+settings for the selected instance are loaded; `default` has no environment
+inheritance exception.
 
 Named instances are created through a staging directory and an atomic rename.
 Their versioned, non-secret `instance.json` is the discovery authority. Invalid
@@ -57,7 +60,8 @@ decision and explicit operator authorization.
 
 ## Consequences
 
-- Unqualified commands remain compatible with the existing default Tag.
+- Unqualified commands select `instances/default`; installations using the old
+  root-level mutable layout require a one-time, stopped-service migration.
 - Upgrade and rollback stay installation-wide; rollback is blocked while any
   managed bridge or shared MFS process is running.
 - Separate Slack apps may use different names and profile images, but remote

@@ -11,9 +11,9 @@ TAG installs independently of any Git checkout. Its default home is:
 Set `TAG_HOME` to an absolute path before installing to choose another home.
 Use an isolated `TAG_HOME` for development. WSL uses the Linux layout.
 
-`TAG_HOME` always names the installation root. The original `default` Tag keeps
-its mutable data there; named Tags live under `<TAG_HOME>/instances/NAME` and
-share releases, launchers, backend account authentication, and managed MFS.
+`TAG_HOME` always names the installation root. Every Tag, including `default`,
+lives under `<TAG_HOME>/instances/NAME`; all Tags share releases,
+launchers, backend account authentication, and managed MFS.
 Do not point concurrent old and new CLI releases at the same home while
 upgrading the shared service ownership record.
 
@@ -23,16 +23,28 @@ Tag/
   current.json
   previous.json
   bin/
-  config/settings.json
-  workspace/
-    .agents/skills/          # Codex skills
-    .codex/config.toml      # TAG-only Codex MCP definitions
-    .claude/skills/         # Claude skills
-    .mcp.json              # Claude project MCP definitions, when configured
-  integrations/bin/        # optional TAG-only tool executables; prepended to PATH
-  state/                   # logs, process identities, conversation settings
-  tmp/                     # disposable task files, generated artifacts, and attachments
+  instances/
+    default/
+      instance.json
+      config/settings.json
+      workspace/
+        .agents/skills/     # Codex skills
+        .codex/config.toml  # TAG-only Codex MCP definitions
+        .claude/skills/     # Claude skills
+        .mcp.json           # Claude project MCP definitions, when configured
+      integrations/bin/     # optional TAG-only tools; prepended to PATH
+      state/                # bridge logs, identity, and conversation settings
+      tmp/                  # disposable task files and generated artifacts
+    NAME/                   # the same layout for each additional Tag
+  shared/mfs/               # installation-owned MFS process state and logs
 ```
+
+Installations created before the uniform Tag layout may still have
+`config/`, `workspace/`, `integrations/`, `state/`, and `tmp/` directly under
+`TAG_HOME`. The new CLI does not read those paths as the default Tag.
+Stop the old Slack bridge and MFS process, back up `TAG_HOME`, then migrate that
+data once into `instances/default` before starting the new CLI. Do not merge
+live process records or start old and new releases concurrently.
 
 Configuration is JSON on every platform and is never executed as shell code.
 POSIX installations create private directories; Windows uses the account's ACL.
@@ -228,7 +240,7 @@ tag migrate --from /absolute/path/to/old/tag
 This reads generated `export KEY=value` configuration as data, copies local
 skills and MCP files, preserves existing destination settings/skills, and leaves
 all originals untouched. Review copied MCP executable paths and `tag doctor`.
-Old `.runtime` process records and logs are not migrated. Stop the old instance
+Old `.runtime` process records and logs are not migrated. Stop the old Tag
 using its original launcher before starting the new installation. If its Slack
 heartbeat is still current, the new `tag start` refuses to launch and identifies
 the conflicting command instead of starting a second Slack connection.
