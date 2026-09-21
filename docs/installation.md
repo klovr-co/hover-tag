@@ -12,13 +12,14 @@ Set `TAG_HOME` to an absolute path before installing to choose another home.
 Use an isolated `TAG_HOME` for development. WSL uses the Linux layout.
 
 `TAG_HOME` always names the installation root. Every Tag, including `default`,
-lives under `<TAG_HOME>/instances/NAME`; all Tags share releases,
-launchers, backend account authentication, and managed MFS.
+lives under `<TAG_HOME>/instances/NAME`, while its user-editable workspace lives
+at `~/Tag/NAME`. All Tags share releases, launchers, backend account
+authentication, and managed MFS.
 Do not point concurrent old and new CLI releases at the same home while
 upgrading the shared service ownership record.
 
 ```text
-Tag/
+~/Library/Application Support/Tag/     # platform application-data home
   releases/<version>-<installation-id>/
   current.json
   previous.json
@@ -27,17 +28,24 @@ Tag/
     default/
       instance.json
       config/settings.json
-      workspace/
-        .agents/skills/     # Codex skills
-        .codex/config.toml  # TAG-only Codex MCP definitions
-        .claude/skills/     # Claude skills
-        .mcp.json           # Claude project MCP definitions, when configured
       integrations/bin/     # optional TAG-only tools; prepended to PATH
       state/                # bridge logs, identity, and conversation settings
       tmp/                  # disposable task files and generated artifacts
     NAME/                   # the same layout for each additional Tag
   shared/mfs/               # installation-owned MFS process state and logs
+
+~/Tag/
+  default/                  # user-owned agent workspace
+    .agents/skills/         # Codex skills
+    .codex/config.toml      # Tag-only Codex MCP definitions
+    .claude/skills/         # Claude skills
+    .mcp.json               # Claude project MCP definitions, when configured
+  NAME/                     # workspace for each additional Tag
 ```
+
+An explicit non-standard `TAG_HOME` remains self-contained and keeps workspaces
+below `instances/NAME/workspace`; this preserves isolation for development,
+testing, and portable installations.
 
 Installations created before the uniform Tag layout may still have
 `config/`, `workspace/`, `integrations/`, `state/`, and `tmp/` directly under
@@ -45,6 +53,17 @@ Installations created before the uniform Tag layout may still have
 Stop the old Slack bridge and MFS process, back up `TAG_HOME`, then migrate that
 data once into `instances/default` before starting the new CLI. Do not merge
 live process records or start old and new releases concurrently.
+
+For the alpha layout change, stop Tag and move an existing default workspace
+once before installing the updated release:
+
+```sh
+mkdir -p "$HOME/Tag"
+mv "$HOME/Library/Application Support/Tag/instances/default/workspace" \
+  "$HOME/Tag/default"
+```
+
+The installer does not merge or remove old workspace directories.
 
 Configuration is JSON on every platform and is never executed as shell code.
 POSIX installations create private directories; Windows uses the account's ACL.
@@ -119,13 +138,15 @@ A configured remote MFS endpoint remains externally managed.
 These endpoints become usable after this implementation is merged and a release
 with `tag-<version>.zip`, `SHA256SUMS`, and `BUILD-PROVENANCE.json` has been
 published. The bare command follows the default in `release-channels.json`, which
-is currently `alpha`:
+is always `stable`. It does not fall back to a prerelease when no stable release
+exists; alpha, beta, and edge installations must select their channel explicitly:
 
 ```sh
 curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/klovr-co/tag/main/install.sh | sh
 
 # Choose an update channel explicitly.
 curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/klovr-co/tag/main/install.sh | sh -s -- --channel beta
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/klovr-co/tag/main/install.sh | sh -s -- --channel alpha
 curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/klovr-co/tag/main/install.sh | sh -s -- --channel edge
 
 # Reproduce one immutable release.
@@ -152,14 +173,14 @@ remain trust inputs.
 
 ## Integrations
 
-Place TAG-specific Codex skills in `workspace/.agents/skills/<name>/SKILL.md`.
+Place Tag-specific Codex skills in `~/Tag/NAME/.agents/skills/<name>/SKILL.md`.
 The installer creates TAG's administration skill there; upgrades preserve
 existing skill directories, including locally installed skills and edits.
 Global backend skills and authentication remain available, subject to the
 backend's own discovery rules and context limits.
 
 Put Tag-specific Codex defaults and MCP definitions in
-`workspace/.codex/config.toml`:
+`~/Tag/NAME/.codex/config.toml`:
 
 ```toml
 model = "gpt-5.6-sol"
@@ -226,6 +247,18 @@ intentional older install requires `--allow-downgrade`; prefer `tag rollback`
 when returning to the immediately previous known-good release. `tag rollback`
 selects the previous release only after all Tag bridges and the
 installation-owned shared MFS service are stopped with `tag memory stop`.
+
+Human-readable `tag`, `tag status`, `tag inspect`, and successful `tag setup`
+and `tag start` runs also check the saved channel at most once every 24 hours.
+When a newer release is published they show a non-fatal `tag upgrade` reminder;
+offline or failed checks never prevent the requested command. Source installs
+without a saved channel are compared with the default alpha channel; when a
+newer numbered release exists, the suggested `tag upgrade --channel alpha`
+command both installs it and saves the channel for future checks. The reminder
+reads release metadata only; `tag upgrade` still downloads and checks the
+release checksum and provenance before selecting it. JSON output never contains
+reminder text.
+
 Rollback is blocked while named Tags exist because an older selected CLI may
 not understand their lifecycle; use a coordinated supported upgrade path
 instead of mixing old and new lifecycle commands. Older releases remain

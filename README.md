@@ -215,9 +215,9 @@ tag personal status
 ```
 
 Unqualified commands operate on the default Tag at `instances/default`. Every
-Tag keeps separate settings, Slack identities, workspaces, conversations, and
-bridge lifecycles; they reuse one installation-owned MFS service without
-gaining cross-workspace retrieval. See
+Tag keeps separate settings, Slack identities, conversations, and bridge
+lifecycles there, with its user-editable workspace at `~/Tag/NAME`; they reuse
+one installation-owned MFS service without gaining cross-workspace retrieval. See
 [Tag management](docs/tag-management.md#multiple-slack-workspaces).
 
 Prefer the dedicated `tag restart` command over chaining stop and start so the
@@ -268,7 +268,7 @@ Codex replies also include a compact **Configure** button beneath the answer. It
 opens a modal that saves model, native Codex reasoning-level,
 and Fast Mode choices for that Slack user across channels and threads.
 The modal's **Reset to default** button restores every control before saving.
-Its defaults come from `workspace/.codex/config.toml`, layered over the user's
+Its defaults come from `~/Tag/NAME/.codex/config.toml`, layered over the user's
 global `~/.codex/config.toml`; restart Tag after editing the local file.
 Fast Mode is independent of
 reasoning level and uses increased usage for faster responses. Operators can
@@ -294,6 +294,13 @@ Tag blocks older versions unless `--allow-downgrade` is explicitly supplied;
 prefer `tag rollback` for the immediately previous release. Use
 `tag migrate --from /path/to/old/checkout` to copy legacy configuration and
 skills without deleting the originals.
+
+Tag checks the saved release channel at most daily during normal human-readable
+status, inspection, setup, and start flows. A newer published release produces
+an advisory `tag upgrade` prompt; offline checks are silently skipped and never
+block the command. Source installs without a saved channel are compared with
+the default alpha channel and, when behind, prompted to run
+`tag upgrade --channel alpha`. Machine-readable JSON remains clean.
 
 To uninstall, stop TAG, back up personal files, then remove its managed launcher
 and application home. See [installation](docs/installation.md) for details.

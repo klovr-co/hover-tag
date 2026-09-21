@@ -12,9 +12,9 @@ import tempfile
 import unicodedata
 
 try:
-    from .tag_paths import initialize_instance
+    from .tag_paths import initialize_instance, initialize_workspace, workspace_home
 except ImportError:
-    from tag_paths import initialize_instance
+    from tag_paths import initialize_instance, initialize_workspace, workspace_home
 
 
 DEFAULT_TAG = "default"
@@ -40,6 +40,10 @@ class InstanceContext:
     @property
     def shared_mfs_home(self) -> Path:
         return self.installation_root / "shared/mfs"
+
+    @property
+    def workspace(self) -> Path:
+        return workspace_home(self.home, self.installation_root, self.tag_id)
 
     def command(self, action: str) -> str:
         target = "" if self.is_default else f"{self.tag_id} "
@@ -116,6 +120,7 @@ def ensure_default(installation_root: Path) -> InstanceContext:
         if not home.is_dir() or home.is_symlink():
             raise ValueError(f"Tag instance path must be a regular directory: {home}")
         initialize_instance(home)
+        initialize_workspace(workspace_home(home, root, DEFAULT_TAG))
         metadata = home / "instance.json"
         if not metadata.exists():
             _write_metadata(metadata, DEFAULT_TAG)
@@ -162,7 +167,15 @@ def _create(installation_root: Path, tag_id: str) -> InstanceContext:
     finally:
         if staging.exists():
             shutil.rmtree(staging)
-    return resolve(root, tag_id)
+    context = resolve(root, tag_id)
+    try:
+        initialize_workspace(context.workspace)
+    except Exception:
+        # The destination did not exist before this creation attempt, so
+        # restoring the pre-call state is safe and preserves atomic creation.
+        shutil.rmtree(destination)
+        raise
+    return context
 
 
 def discover(installation_root: Path) -> list[dict[str, object]]:

@@ -13,9 +13,10 @@ separately. Hosted operation, enterprise policy, automated Slack OAuth,
 and production-grade sandboxing are out of scope.
 
 The canonical source repository is <https://github.com/klovr-co/tag>. `VERSION`
-selects the active release line (`0.2.0-alpha`), while automatic releases append
-a monotonically increasing candidate number such as `v0.2.0-alpha.3`. Alpha
-releases are GitHub prereleases and remain explicitly experimental.
+selects the current release candidate (`v0.2.0-beta.1`). On an alpha source
+line, automatic releases append a monotonically increasing candidate number
+such as `v0.2.0-alpha.3`. Alpha releases are GitHub prereleases and remain
+explicitly experimental.
 
 Published releases trigger `.github/workflows/release-package.yml`, which
 verifies or creates `tag-<version>.zip`, `SHA256SUMS`, and

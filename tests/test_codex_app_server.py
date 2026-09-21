@@ -143,7 +143,7 @@ class CodexEventMapperTests(unittest.TestCase):
 
         self.assertEqual("Searching connected knowledge…", started[0]["label"])
         self.assertNotIn("command", started[0])
-        self.assertEqual("Running a command…", activity_label({
+        self.assertEqual("Reading files…", activity_label({
             "type": "commandExecution", "command": "cat private.txt"
         }))
 
@@ -171,7 +171,7 @@ class CodexEventMapperTests(unittest.TestCase):
 
     def test_helper_mentions_do_not_claim_execution(self) -> None:
         for command in [
-            "echo mfs_search.py", "cat mfs_search.py", "python -c 'mfs_search.py'",
+            "echo mfs_search.py", "python -c 'mfs_search.py'",
             "python unrelated.py mfs_search.py", "python mfs_search.py.bak query",
             "false && python mfs_search.py query", "python mfs_search.py query; echo done",
             "python 'unterminated", "bash -lc 'echo mfs_search.py'",
@@ -190,6 +190,20 @@ class CodexEventMapperTests(unittest.TestCase):
         ]:
             with self.subTest(command=command):
                 self.assertEqual("Searching connected knowledge…", activity_label({
+                    "type": "commandExecution", "command": command,
+                }))
+
+    def test_recognizes_safe_file_document_and_test_commands(self) -> None:
+        for command, expected in [
+            ("cat notes.txt", "Reading files…"),
+            ("cp draft.md final.md", "Writing files…"),
+            ("python create_launch_document_docx.py", "Creating a document…"),
+            ("python -m pytest tests", "Running tests…"),
+            ("pnpm test", "Running tests…"),
+            ("cargo build", "Running a command…"),
+        ]:
+            with self.subTest(command=command):
+                self.assertEqual(expected, activity_label({
                     "type": "commandExecution", "command": command,
                 }))
 

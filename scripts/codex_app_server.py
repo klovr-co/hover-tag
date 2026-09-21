@@ -50,6 +50,16 @@ COMMAND_LABELS = {
     "slack_canvas.py": "Creating a Slack canvas…",
     "slack_post_message.py": "Posting to Slack…",
 }
+DOCUMENT_HELPER_RE = re.compile(
+    r"(?:create|generate|render|build|export)[-_].*(?:docx|document|pdf|pptx|xlsx)"
+    r"|(?:docx|document|pdf|pptx|xlsx)[-_].*(?:create|generate|render|build|export)",
+    re.IGNORECASE,
+)
+FILE_READ_COMMANDS = frozenset({"cat", "head", "tail"})
+FILE_WRITE_COMMANDS = frozenset({"cp", "install", "mkdir", "mv", "tee", "touch"})
+TEST_COMMANDS = frozenset({
+    "cargo", "go", "jest", "mocha", "npm", "pnpm", "pytest", "swift", "vitest", "yarn",
+})
 
 
 def command_activity_label(command: Any, depth: int = 0) -> str:
@@ -73,10 +83,25 @@ def command_activity_label(command: Any, depth: int = 0) -> str:
     if any(char in command for char in "\n\r;&|<>`$"):
         return fallback
     if re.fullmatch(r"python(?:3(?:\.\d+)?)?(?:\.exe)?", executable):
+        if len(argv) >= 3 and argv[1] == "-m" and argv[2] in {"pytest", "unittest"}:
+            return "Running tests…"
         if len(argv) < 2 or argv[1].startswith("-"):
             return fallback
         executable = argv[1].replace("\\", "/").rsplit("/", 1)[-1]
-    return COMMAND_LABELS.get(executable, fallback)
+    if executable in COMMAND_LABELS:
+        return COMMAND_LABELS[executable]
+    if DOCUMENT_HELPER_RE.search(executable):
+        return "Creating a document…"
+    if executable in FILE_READ_COMMANDS:
+        return "Reading files…"
+    if executable in FILE_WRITE_COMMANDS:
+        return "Writing files…"
+    if executable in TEST_COMMANDS:
+        if executable in {"cargo", "go", "npm", "pnpm", "swift", "yarn"}:
+            if len(argv) < 2 or argv[1] not in {"test", "t"}:
+                return fallback
+        return "Running tests…"
+    return fallback
 
 
 def mcp_activity_label(item: dict[str, Any]) -> str:
