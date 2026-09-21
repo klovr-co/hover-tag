@@ -129,10 +129,10 @@ cd tag
 
 ### Agent-guided setup (recommended)
 
-Install Tag's admin skill for Codex:
+Install Tag's setup skill for Codex:
 
 ```bash
-npx skills add klovr-co/tag --skill open-tag-admin -a codex -g
+npx skills add klovr-co/tag --skill hover-tag-setup -a codex -g
 ```
 
 Open a new Codex task in the cloned repository and ask: `Set up Tag for me.`
@@ -161,6 +161,12 @@ system Python or install dependencies during startup.
 `tag setup` owns the Slack journey. It reuses the installed Slack CLI, offers
 the CLI's real login flow when the sandbox workspace is not authorized, and
 then lets you create a manifest-based app or link an existing app by App ID.
+Profile-picture selection and upload require Slack CLI 4.7 or newer.
+For a new app, setup proposes **&lt;your first name&gt;'s Tag** and a uniquely
+curated Tag waterdrop, selected from 144 approved base designs and 16 subtle
+signatures. You can edit the name or choose your own picture by
+dragging a local PNG, JPEG, or GIF into the terminal. The picture is copied into
+Tag's private application home and passed to Slack CLI during app creation.
 It pauses for every Slack approval that only a person or workspace admin can
 grant. Tokens are entered only through hidden terminal prompts.
 
@@ -219,9 +225,9 @@ This first request uses the local workspace configured during setup. A request
 to summarize the entire Slack channel requires that channel's history to be
 indexed separately through an MFS Slack connector.
 
-Tag currently supports owner-only access. Use the owner's member ID during
-setup; multi-user access is coming soon.
-The owner can also invoke Tag without an `@mention` from their Tag's
+Only the owner member ID entered during setup can invoke Tag initially. Add
+other IDs to the comma-separated `SLACK_ALLOWED_USER_IDS` setting to share access.
+Authorized users can also invoke Tag without an `@mention` from the app's
 Messages tab. Each top-level DM starts a fresh task; replies in that DM thread
 provide bounded context only for that task. Set `OPENTAG_SLACK_DM_ENABLED=0` to
 disable direct-message invocation.

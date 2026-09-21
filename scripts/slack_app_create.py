@@ -158,7 +158,7 @@ def create_app(project: Path, team_id: str, config_path: Path, run_cli) -> str:
     elif app_id:
         raise RuntimeError("An app is already linked to this workspace. Link its App ID instead of creating another.")
     else:
-        manifest = prepare_project(project, values.get("OPENTAG_BOT_NAME", "OpenMax"))
+        manifest = prepare_project(project, values.get("OPENTAG_BOT_NAME", "Tag"))
         print()
         ui.message(f"Create {manifest['display_information']['name']} in workspace {team_id}?")
         ui.message("Slack CLI will create and install the app. Tag still runs on this computer.")
