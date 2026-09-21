@@ -28,9 +28,13 @@ arguments select exact names from it. Missing, malformed, ambiguous, or
 ungranted names fail without searching. Authorization policy is enforced by
 code and must not be reimplemented in a prompt or adapter.
 
-The Slack app token and bot token are only for receiving invocations, reading
-the current thread, and posting replies. `tag setup` separately configures an MFS
-Slack-history credential, explicit channel-ID allowlist, and source URI.
+The Slack app token opens Socket Mode for receiving invocations. The bot token
+authenticates the bot, reads current threads, checks app and workspace identity
+and caller visibility for authorized cross-channel search, and posts replies.
+The local backend inherits the bot token; Tag withholds the app token and bridge
+access-control settings as described in [Security](../SECURITY.md#credential-boundary).
+`tag setup` separately configures an MFS Slack-history credential, explicit
+channel-ID allowlist, and source URI.
 
 Relevant Slack docs:
 

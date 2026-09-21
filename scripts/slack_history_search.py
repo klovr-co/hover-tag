@@ -54,8 +54,14 @@ def requested_channel_names(raw_grant: str) -> tuple[str, ...]:
     request_text = payload.get("request_text") if isinstance(payload, dict) else None
     if not isinstance(request_text, str):
         return ()
+    authorized_names = {
+        normalize_channel_name(channel["name"])
+        for channel in authorized_channels(raw_grant)
+    }
     return tuple(
-        name for name in explicit_channel_names(request_text) if not name.isdigit()
+        name
+        for name in explicit_channel_names(request_text)
+        if not name.isdigit() or normalize_channel_name(name) in authorized_names
     )
 
 

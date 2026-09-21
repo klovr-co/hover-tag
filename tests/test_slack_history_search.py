@@ -63,6 +63,35 @@ class SlackHistorySearchTests(unittest.TestCase):
         )
         self.assertEqual(("marketing",), requested_channel_names(grant))
 
+    def test_authorized_numeric_channel_name_is_preserved_and_selected(self) -> None:
+        grant = json.dumps(
+            {
+                "mode": "all",
+                "channels": [
+                    *json.loads(GRANT)["channels"],
+                    {
+                        "id": "C3",
+                        "name": "1234",
+                        "scope": "slack://tag-t1/channels/1234__C3",
+                    },
+                ],
+                "request_text": "Search #1234 for launch notes",
+            }
+        )
+        channels = authorized_channels(grant)
+        original_names = requested_channel_names(grant)
+
+        self.assertEqual(("1234",), original_names)
+        self.assertEqual(
+            ("C3",),
+            tuple(
+                channel["id"]
+                for channel in select_channels_for_request(
+                    channels, ["1234"], original_names
+                )
+            ),
+        )
+
     def test_typo_cannot_be_silently_corrected_by_the_agent(self) -> None:
         channels = authorized_channels(GRANT)
         with self.assertRaisesRegex(ValueError, r"did you mean #general"):
