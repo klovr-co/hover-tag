@@ -757,6 +757,8 @@ def ensure_connector_credential(home: Path, values: dict[str, str]) -> None:
 def selected_workspace(home: Path) -> str:
     try:
         return read_config(home / "config/settings.json").get("SLACK_TEAM_ID", "") or "not configured"
+    except FileNotFoundError:
+        return "not configured"
     except (OSError, ValueError):
         return "configuration unreadable"
 
@@ -1222,9 +1224,20 @@ def main() -> int:
         return 0
     context = tag_instances.resolve(installation_root, args.tag_id)
     home = context.home
-    environment = instance_environment(context)
-    os.environ.clear()
-    os.environ.update(environment)
+    if context.is_default:
+        # The default Tag retains the original CLI contract: operators may
+        # supply configuration through the environment when no settings file
+        # exists. Named Tags instead receive a scrubbed environment so one
+        # instance cannot accidentally inherit another instance's settings.
+        os.environ.update(runtime_environment(
+            context.home,
+            installation_root=context.installation_root,
+            tag_id=context.tag_id,
+        ))
+    else:
+        environment = instance_environment(context)
+        os.environ.clear()
+        os.environ.update(environment)
     if args.command == "memory":
         action = args.arguments[0] if len(args.arguments) == 1 else "status" if not args.arguments else ""
         if action not in {"status", "stop"}:

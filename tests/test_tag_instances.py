@@ -69,6 +69,26 @@ class TagInstanceTests(unittest.TestCase):
         with patch.dict(os.environ, environment, clear=True):
             self.assertEqual(instance_home(), home)
 
+    def test_default_cli_preserves_legacy_environment_configuration(self) -> None:
+        configured = {
+            "TAG_HOME": str(self.root),
+            "OPENTAG_BACKEND": "codex",
+            "MFS_URL": "http://127.0.0.1:13619",
+            "MFS_ALLOWED_SCOPES": "file://local/test",
+            "SLACK_ALLOWED_USER_IDS": "UOWNER",
+        }
+
+        def doctor_report(_offline: bool) -> tuple[int, dict[str, object]]:
+            for name, value in configured.items():
+                self.assertEqual(os.environ.get(name), value)
+            return 0, {"checks": []}
+
+        with patch.dict(os.environ, configured, clear=True), patch.object(
+            sys, "argv", ["tag", "doctor", "--offline"]
+        ), patch.object(tag_cli, "doctor_report", side_effect=doctor_report), redirect_stdout(StringIO()) as output:
+            self.assertEqual(tag_cli.main(), 0)
+        self.assertIn("Slack workspace not configured", output.getvalue())
+
     def test_connector_uses_private_instance_credential_file(self) -> None:
         home = tag_instances.create(self.root, "work").home
         credential = tag_credentials.write_slack_history(home, "xoxb-secret")
