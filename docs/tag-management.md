@@ -158,9 +158,9 @@ The printed backup contains `restore-paths.json`, mapping each saved item to its
 original location. To recover the previous setup, stop Tag and move those items
 back, first keeping a copy of any newer configuration you want to preserve.
 
-The terminal initializes shared memory first, then follows four steps:
-Connect Slack → App → Channels → Finish. Starting memory for the first time can
-take a couple of minutes; doing it up front avoids that wait at Finish.
+The terminal follows four steps: Connect Slack → App → Channels → Finish.
+After you approve Finish setup, Tag initializes shared memory before connecting
+to Slack. Starting memory for the first time can take a couple of minutes.
 Channels Tag has already joined are included automatically and cannot be
 removed from setup. Use arrow keys and Enter to continue; Space opens an
 optional checklist only after choosing **Add public channels**. Plain terminals

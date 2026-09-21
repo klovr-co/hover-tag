@@ -25,23 +25,27 @@ from scripts.opentag_setup import (
 
 
 class OpenTagSetupTests(unittest.TestCase):
-    def test_finish_setup_connects_slack_after_memory_was_initialized_earlier(self):
+    def test_finish_setup_initializes_memory_before_connecting_named_tag(self):
         channel = opentag_setup.slack_channels.SlackChannel(
             "C123", "general", False, True
         )
         values = {"OPENTAG_BACKEND": "claude", "OPENTAG_BOT_NAME": "Tag"}
         started = subprocess.CompletedProcess([], 0, "", "")
 
-        with patch.object(
+        with patch.dict(os.environ, {"TAG_ID": "personal"}), patch.object(
             opentag_setup, "selected_backend_available", return_value=True
         ), patch.object(
             opentag_setup.subprocess, "run", return_value=started
-        ), redirect_stdout(StringIO()) as output:
+        ) as run, redirect_stdout(StringIO()) as output:
             result = opentag_setup.finish_setup(Path("settings.json"), values, [channel])
 
         self.assertEqual(result, 0)
+        commands = [call.args[0] for call in run.call_args_list]
+        self.assertEqual(commands[0][-2:], ["memory", "start"])
+        self.assertNotIn("personal", commands[0])
+        self.assertEqual(commands[1][-2:], ["personal", "start"])
+        self.assertIn("Memory · Initializing", output.getvalue())
         self.assertIn("Connecting Tag to Slack", output.getvalue())
-        self.assertNotIn("Memory · Starting", output.getvalue())
 
     def test_bot_name_rejects_unicode_controls_and_line_separators(self):
         error = "Use a name from 1 to 35 characters without line breaks"
@@ -768,7 +772,6 @@ class OpenTagSetupTests(unittest.TestCase):
     @patch("scripts.opentag_setup.choose_backend", return_value="claude")
     @patch(
         "scripts.opentag_setup.subprocess.run",
-        return_value=subprocess.CompletedProcess([], 0, "", ""),
     )
     def test_setup_stops_before_secrets_when_backend_is_missing(
         self,
@@ -786,7 +789,7 @@ class OpenTagSetupTests(unittest.TestCase):
                     result = main()
 
         self.assertEqual(result, 1)
-        self.assertEqual(mock_run.call_args.args[0][-2:], ["memory", "start"])
+        mock_run.assert_not_called()
         mock_ask_secret.assert_not_called()
 
     def test_no_start_setup_does_not_initialize_memory(self) -> None:

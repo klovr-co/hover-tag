@@ -1269,31 +1269,6 @@ def guided_setup(
     defaults = {key: value for key, value in settings.DEFAULTS.items() if key not in values}
     if defaults:
         values = settings.update_config(config_path, defaults, only_missing=True)
-    if start_services:
-        ui.message("◌ Memory · Initializing…")
-        ui.message(
-            "First start can take a couple of minutes. This happens now so "
-            "memory is ready before Tag connects to Slack.",
-            indent="    ",
-        )
-        tag_id = os.getenv("TAG_ID", "default")
-        target = [] if tag_id == "default" else [tag_id]
-        result = subprocess.run(
-            [
-                sys.executable,
-                str(ROOT / "scripts/tag_cli.py"),
-                *target,
-                "memory",
-                "start",
-            ],
-            env=dict(os.environ, OPENTAG_ENV_FILE=str(config_path)),
-            text=True,
-            capture_output=True,
-        )
-        if result.returncode:
-            ui.message(safe_cli_output(result.stdout + "\n" + result.stderr))
-            raise RuntimeError("Memory could not initialize; run tag memory status for details")
-        ui.message("✓ Memory ready")
     if settings.validation_error("OPENTAG_BACKEND", values["OPENTAG_BACKEND"]):
         values = settings.update_config(config_path, {"OPENTAG_BACKEND": choose_backend()})
     backend = values["OPENTAG_BACKEND"]
@@ -1534,7 +1509,27 @@ def guided_setup(
 
 
 def finish_setup(config_path: Path, values: dict[str, str], channels: list[slack_channels.SlackChannel]) -> int:
+    """Start approved services, then wait for the Slack bridge to be ready."""
     ui.message("✓ Slack memory configured")
+    environment = dict(os.environ, OPENTAG_ENV_FILE=str(config_path))
+    ui.message("◌ Memory · Initializing…")
+    ui.message(
+        "First start can take a couple of minutes. This happens now so "
+        "memory is ready before Tag connects to Slack.",
+        indent="    ",
+    )
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "scripts/tag_cli.py"), "memory", "start"],
+        env=environment,
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode:
+        ui.message(safe_cli_output(result.stdout + "\n" + result.stderr))
+        raise RuntimeError(
+            "Memory could not initialize; run tag memory status for details"
+        )
+    ui.message("✓ Memory ready")
     backend = values["OPENTAG_BACKEND"]
     while not selected_backend_available(backend):
         if ui.choose("Agent needs installation", ["Check again", "Save and exit"]) == 1:
@@ -1550,7 +1545,6 @@ def finish_setup(config_path: Path, values: dict[str, str], channels: list[slack
         ui.message("✓ Codex signed in · first task still unverified")
     else:
         ui.message("✓ Claude executable available · sign-in will be checked by its first task")
-    environment = dict(os.environ, OPENTAG_ENV_FILE=str(config_path))
     while True:
         ui.message("◌ Connecting Tag to Slack…")
         tag_id = os.getenv("TAG_ID", "default")
