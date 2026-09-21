@@ -201,6 +201,21 @@ tag logs
 tag logs --follow
 ```
 
+To connect another independent Slack workspace/app through the same installed
+runtime, create and target a named Tag:
+
+```sh
+tag add personal
+tag list
+tag start --tag personal
+tag status --tag personal
+```
+
+Unqualified commands still operate on `default`. Named Tags keep separate
+settings, Slack identities, workspaces, conversations, and bridge lifecycles;
+they reuse one installation-owned MFS service without gaining cross-workspace
+retrieval. See [Tag management](docs/tag-management.md#multiple-slack-workspaces).
+
 Prefer the dedicated `tag restart` command over chaining stop and start so the
 terminal presents one coherent operation. Use `tag doctor` for deeper
 diagnostics after the quick status and recent logs.
@@ -247,7 +262,9 @@ reasoning level and uses increased usage for faster responses. Operators can
 restrict the selectable models with `OPENTAG_CODEX_MODELS` and the reasoning
 levels with `OPENTAG_CODEX_REASONING_EFFORTS`.
 
-Stop TAG-managed processes with `tag stop`. Independently started MFS servers
+Stop one bridge with `tag stop` (or `tag stop --tag NAME`). Shared memory stays
+online for other Tags; inspect or explicitly stop an installation-owned service
+with `tag memory status` / `tag memory stop`. Independently started MFS servers
 are left running.
 
 The admin skill also supports later configuration and troubleshooting. It

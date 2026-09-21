@@ -141,7 +141,9 @@ class ResetTests(unittest.TestCase):
         self.assertTrue((backup / "restore-paths.json").exists())
         self.assertEqual((self.home / "workspace/notes.txt").read_text(), "keep workspace")
         self.assertEqual((self.home / "state/memory/index.db").read_text(), "keep indexed data")
-        self.assertEqual([call.args[1] for call in self.lifecycle.stop_process.call_args_list], ["slack", "mfs"])
+        # Reset owns only this instance's bridge. Shared MFS must remain online
+        # for other Tag instances.
+        self.assertEqual([call.args[1] for call in self.lifecycle.stop_process.call_args_list], ["slack"])
         if os.name != "nt":
             self.assertEqual(backup.stat().st_mode & 0o777, 0o700)
         self.assertFalse((self.home / "state/start.lock").exists())

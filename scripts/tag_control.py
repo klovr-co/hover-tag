@@ -18,7 +18,7 @@ except ImportError:
     from scripts import slack_channels, tag_config as settings, setup_ui as ui
 
 
-def inspect(home: Path, lifecycle, *, offline: bool = False) -> dict:
+def inspect(home: Path, lifecycle, *, offline: bool = False, tag_id: str = "default") -> dict:
     path = settings.config_path(home)
     values, error = {}, None
     try:
@@ -38,7 +38,7 @@ def inspect(home: Path, lifecycle, *, offline: bool = False) -> dict:
             services["mfs"] = lifecycle.healthy(values.get("MFS_URL", settings.DEFAULTS["MFS_URL"]))
         try:
             services["slack"] = lifecycle.slack_ready(home)
-            managed = any(lifecycle.process_for(home / "state" / f"{name}.json") for name in ("slack", "mfs"))
+            managed = lifecycle.process_for(home / "state/slack.json") is not None
         except ImportError:
             dependency_error = "Runtime dependencies missing; rerun the Tag installer"
     if error:
@@ -69,8 +69,9 @@ def inspect(home: Path, lifecycle, *, offline: bool = False) -> dict:
             pass
         if memory_sync["state"] in {"needs_attention", "settings_changed", "stale"} and state == "running":
             state, action = "needs_attention", "status"
+    suffix = "" if tag_id == "default" else f" --tag {tag_id}"
     return {
-        "schema_version": 1, "state": state, "next_command": f"tag {action}",
+        "schema_version": 1, "tag": tag_id, "state": state, "next_command": f"tag {action}{suffix}",
         "configuration": {"path": str(path), "exists": path.exists(), "error": error,
                           "complete": not error and not errors, "fields": errors},
         "workspace": str(home / "workspace"),
@@ -81,18 +82,20 @@ def inspect(home: Path, lifecycle, *, offline: bool = False) -> dict:
         "runtime": {"mfs_executable_found": mfs_installed, "error": dependency_error},
         "first_reply": "not_verified",
         "memory_sync": memory_sync,
+        "slack_workspace": values.get("SLACK_TEAM_ID") or None,
     }
 
 
-def status_report(home: Path, lifecycle) -> dict:
-    report = inspect(home, lifecycle)
+def status_report(home: Path, lifecycle, *, tag_id: str = "default") -> dict:
+    report = inspect(home, lifecycle, tag_id=tag_id)
     if report["configuration"]["exists"]:
         message, ready = ui.display.backend_status(report["backend"]["selected"],
             search_path=str(home / "integrations/bin") + os.pathsep + os.environ.get("PATH", ""))
         report["backend"].update(status=message, ready=ready,
                                  authentication="signed_in" if ready else "unverified")
         if not ready and report["state"] == "running":
-            report.update(state="needs_attention", next_command="tag doctor")
+            suffix = "" if tag_id == "default" else f" --tag {tag_id}"
+            report.update(state="needs_attention", next_command=f"tag doctor{suffix}")
     return report
 
 
@@ -103,6 +106,8 @@ def show_status(report: dict) -> None:
                        slack=services.get("slack"), memory=services.get("mfs"),
                        backend=backend["selected"] if report["configuration"]["exists"] else None,
                        agent=(backend["status"], backend["ready"]) if "status" in backend else None)
+    print(f"  Tag: {report.get('tag', 'default')} · Slack workspace: "
+          f"{report.get('slack_workspace') or 'not configured'}")
     if report.get("memory_sync", {}).get("policy") == "invited":
         print("  Invitation memory: " + report["memory_sync"]["state"].replace("_", " "))
     print("  First reply: not verified by this status check.")
@@ -111,6 +116,8 @@ def show_status(report: dict) -> None:
 def show_inspection(report: dict) -> None:
     ui.display.header("Inspect", "Configuration and runtime facts without making changes.")
     ui.display.section("Installation")
+    ui.display.info_row("Tag", report.get("tag", "default"))
+    ui.display.info_row("Slack workspace", report.get("slack_workspace") or "Not configured")
     ui.display.info_row("State", report["state"].replace("_", " "))
     ui.display.info_row("Workspace", ui.display.short_path(report["workspace"]))
     if report["configuration"]["error"]:
@@ -134,21 +141,23 @@ def show_inspection(report: dict) -> None:
     ui.display.next_action("Recommended next step", report["next_command"])
 
 
-def config_command(home: Path, words: list[str], *, json_output: bool, stdin: bool) -> int:
+def config_command(home: Path, words: list[str], *, json_output: bool, stdin: bool,
+                   tag_id: str = "default") -> int:
     path = settings.config_path(home)
     action = words[0] if words else "show"
     if stdin and action != "set":
         raise ValueError("--stdin is only supported for config set")
+    suffix = "" if tag_id == "default" else f" --tag {tag_id}"
     if action == "init" and len(words) == 1:
         settings.update_config(path, settings.DEFAULTS, only_missing=True)
-        result = {"schema_version": 1, "next_command": "tag inspect --json",
+        result = {"schema_version": 1, "tag": tag_id, "next_command": f"tag inspect --json{suffix}",
                   "note": "Missing defaults saved. Existing settings preserved."}
     elif action == "keys" and len(words) == 1:
-        result = {"schema_version": 1, "editable": sorted(settings.EDITABLE),
+        result = {"schema_version": 1, "tag": tag_id, "editable": sorted(settings.EDITABLE),
                   "secret_input": "Use tag config set KEY --stdin; values are never returned"}
     elif action == "show" and len(words) <= 1:
         values = settings.load_config(path)
-        result = {"schema_version": 1, "path": str(path), "settings": settings.public_config(values),
+        result = {"schema_version": 1, "tag": tag_id, "path": str(path), "settings": settings.public_config(values),
                   "fields": settings.config_errors(values)}
     elif action == "set" and ((stdin and len(words) == 2) or (not stdin and len(words) == 3)):
         key = words[1]
@@ -156,9 +165,9 @@ def config_command(home: Path, words: list[str], *, json_output: bool, stdin: bo
             raise ValueError("Use --stdin for secret settings so they do not enter shell history")
         value = sys.stdin.read().rstrip("\r\n") if stdin else words[2]
         settings.update_config(path, {key: value})
-        result = {"schema_version": 1, "updated": [key],
-                  "next_command": "tag inspect --json",
-                  "note": "Changes apply on next start. If running, use tag stop then tag start."}
+        result = {"schema_version": 1, "tag": tag_id, "updated": [key],
+                  "next_command": f"tag inspect --json{suffix}",
+                  "note": f"Changes apply on next start. If running, use tag stop{suffix} then tag start{suffix}."}
     else:
         raise ValueError("Use tag config init, tag config show, tag config keys, or tag config set KEY VALUE (secrets: --stdin)")
     if json_output:
@@ -212,7 +221,12 @@ def _settings_menu(home: Path) -> None:
                       "OPENTAG_CODEX_TRANSPORT")),
     )
     while True:
-        ui.display.header("Settings", "Manage your Slack assistant. Changes apply on next start.")
+        tag_id = os.getenv("TAG_ID", "default")
+        try:
+            workspace = settings.load_config(settings.config_path(home)).get("SLACK_TEAM_ID", "")
+        except (OSError, ValueError):
+            workspace = ""
+        ui.display.header("Settings", f"Tag '{tag_id}' · Slack workspace {workspace or 'not configured'}. Changes apply on next start.")
         if ui.keyboard_available():
             choice = ui.choose("What would you like to manage?", [name for name, _ in groups] + ["Back"])
             selection = str(choice + 1) if choice < len(groups) else "0"
