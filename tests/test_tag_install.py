@@ -1039,6 +1039,10 @@ class TagHomeTests(unittest.TestCase):
         commands = [call.args[0] for call in run.call_args_list]
         self.assertEqual(commands[0][1:3], ["-m", "venv"])
         self.assertEqual(commands[1][1:4], ["-m", "pip", "install"])
+        self.assertEqual(
+            Path(commands[2][1]).name,
+            "preload_mfs_model.py",
+        )
 
     def test_background_lifecycle_and_stale_pid_safety(self):
         with tempfile.TemporaryDirectory() as temp:

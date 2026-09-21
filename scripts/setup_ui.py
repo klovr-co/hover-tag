@@ -16,6 +16,14 @@ class Paused(Exception):
     """The operator chose to keep progress and leave setup."""
 
 
+SAVE_AND_EXIT = "Exit · finish setup later"
+
+
+def _setup_label(label: str) -> str:
+    """Make setup-only exit actions explicit without changing option values."""
+    return SAVE_AND_EXIT if label == "Save and exit" else label
+
+
 def message(text: str, *, code: str = "", indent: str = "  ") -> None:
     """Print setup prose in the same gutter as the header and prompts."""
     # ``display.paragraph`` deliberately owns wrapping, while this helper owns
@@ -77,9 +85,11 @@ def keyboard_available() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty() and os.getenv("TERM") != "dumb"
 
 
-def _instructions(*, multiple: bool = False) -> str:
+def _instructions(*, multiple: bool = False, setup_incomplete: bool = False) -> str:
     actions = ["↑/↓ Move", *(["Space Toggle"] if multiple else []),
-               "Enter Continue" if multiple else "Enter Select", "q Exit"]
+               "Enter Continue" if multiple else "Enter Select",
+               ("q Exit · finish setup later"
+                if setup_incomplete else "q Exit")]
     width = max(12, shutil.get_terminal_size((80, 24)).columns - 8)
     lines, line = [], ""
     for action in actions:
@@ -141,30 +151,36 @@ def _ask(question):
 
 
 def choose(title: str, options: list[str], *, default: int = 0) -> int:
+    setup_incomplete = "Save and exit" in options
+    labels = [_setup_label(label) for label in options]
     print()
     if not keyboard_available():
         print(f"  {title}\n")
-        for index, label in enumerate(options, 1):
+        for index, label in enumerate(labels, 1):
             print(f"  {index}. {label}")
         while True:
-            answer = input(f"Choice [{default + 1}] (q to save and exit): ").strip()
+            exit_hint = (
+                "q to exit and finish setup later"
+                if setup_incomplete else "q to exit"
+            )
+            answer = input(f"Choice [{default + 1}] ({exit_hint}): ").strip()
             if answer.lower() == "q":
                 raise Paused()
             if not answer:
                 print()
                 return default
-            if answer.isascii() and answer.isdigit() and 1 <= int(answer) <= len(options):
+            if answer.isascii() and answer.isdigit() and 1 <= int(answer) <= len(labels):
                 print()
                 return int(answer) - 1
             message("Choose a displayed number.")
     import questionary
 
-    choices = [questionary.Choice(label, value=index) for index, label in enumerate(options)]
+    choices = [questionary.Choice(label, value=index) for index, label in enumerate(labels)]
     return _ask(questionary.select(
         title,
         choices=choices,
         default=choices[default],
-        instruction=_instructions(),
+        instruction=_instructions(setup_incomplete=setup_incomplete),
         **_prompt_options(single=True),
     ))
 
@@ -177,7 +193,9 @@ def checklist(labels: list[str], selected: set[int]) -> set[int]:
         while True:
             for index, label in enumerate(labels):
                 print(f"  {index + 1}. [{'x' if index in selected else ' '}] {label}")
-            answer = input("Toggle numbers (1,3), Enter to continue, q to save and exit: ").strip()
+            answer = input(
+                "Toggle numbers (1,3), Enter to continue, q to exit and finish setup later: "
+            ).strip()
             if answer.lower() == "q":
                 raise Paused()
             if not answer:
@@ -199,7 +217,7 @@ def checklist(labels: list[str], selected: set[int]) -> set[int]:
     return set(_ask(questionary.checkbox(
         "Choose channels",
         choices=choices,
-        instruction=_instructions(multiple=True),
+        instruction=_instructions(multiple=True, setup_incomplete=True),
         validate=lambda values: bool(values) or "Select at least one channel.",
         **_prompt_options(),
     )))

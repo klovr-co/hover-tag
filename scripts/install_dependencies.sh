@@ -159,6 +159,9 @@ fi
 say "Installing pinned Tag runtime dependencies..."
 uv pip install --python "$RUNTIME_PYTHON" -r "$ROOT/requirements-runtime.txt"
 
+say "Preparing the local MFS embedding model..."
+"$RUNTIME_PYTHON" "$ROOT/scripts/preload_mfs_model.py"
+
 # Reinstalling this managed tool ensures optional connector extras (Slack in
 # particular) are present even when the base version already matches.
 say "Ensuring MFS server v$MFS_VERSION with Slack connector support..."
