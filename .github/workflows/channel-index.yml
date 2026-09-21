@@ -1,0 +1,45 @@
+name: Publish channel index
+
+on:
+  workflow_run:
+    workflows: [Edge build, Release package]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tag-channel-index
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish public release channel index
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Generate channel index from published releases
+        run: |
+          python scripts/release_automation.py write-channel-index \
+            --repository "$GITHUB_REPOSITORY" \
+            --output channel-index/tag-release-channels.json
+      - name: Publish fixed public index URL
+        run: |
+          notes='Mutable channel pointers for the Tag public installer. Numbered release artifacts remain immutable.'
+          if gh release view channels >/dev/null 2>&1; then
+            gh release upload channels channel-index/tag-release-channels.json --clobber
+          else
+            gh release create channels channel-index/tag-release-channels.json \
+              --target main --title 'Tag release channels' --notes "$notes" \
+              --prerelease --latest=false
+          fi
