@@ -2461,6 +2461,17 @@ def slack_channel_allowed(channel: str) -> bool:
     return bool(allowed_channels) and channel in allowed_channels
 
 
+def newly_invited_channel_allowed(channel: str, client: Any) -> bool:
+    """Confirm a joined channel while invitation-memory polling catches up."""
+    if os.getenv("SLACK_CHANNEL_POLICY") != "invited":
+        return False
+    try:
+        conversation = client.conversations_info(channel=channel).get("channel") or {}
+        return isinstance(conversation, dict) and conversation.get("is_member") is True
+    except Exception:  # noqa: BLE001 - a failed Slack check must fail closed
+        return False
+
+
 def direct_messages_enabled() -> bool:
     """Enable authorized DM invocation unless the operator explicitly disables it."""
     return env_enabled("OPENTAG_SLACK_DM_ENABLED", default=True)
@@ -3377,7 +3388,10 @@ def create_app(
         logger: Any,
     ) -> None:
         channel = event["channel"]
-        if not slack_conversation_allowed(channel):
+        if not (
+            slack_conversation_allowed(channel)
+            or newly_invited_channel_allowed(channel, client)
+        ):
             logger.warning("Ignoring Open Tag mention from unapproved Slack channel %s", channel)
             return
         handle_invocation(event, body, client, logger, direct_message=False)
