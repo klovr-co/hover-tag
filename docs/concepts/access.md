@@ -4,37 +4,37 @@ Tag lets you work with your Codex agent from Slack. You ask it for help in
 a thread, and it replies there. It can use the tools and accounts connected
 to your Codex setup.
 
-You have your own Tag. Jules has Jules's Tag; Maya can have Maya's Tag.
+You have your own Tag. Maya has Maya's Tag; Jules can have Jules's Tag.
 Each person asks their own Tag to work, in the conversations they share.
 
 ## Work together in the thread
 
-Jules and Maya are planning a launch. Jules asks Jules's Tag to make a
+Jules and Maya are planning a launch. Maya asks Maya's Tag to make a
 checklist from their discussion:
 
-> **Jules:** I’ll finish the FAQ by Tuesday.
+> **Maya:** I’ll finish the FAQ by Tuesday.
 >
-> **Maya:** I’ll test signup on Wednesday. Support still needs a briefing.
+> **Jules:** I’ll test signup on Wednesday. Support still needs a briefing.
 >
-> **Jules:** @Jules's Tag pull this into a launch checklist with owners.
+> **Maya:** @Maya's Tag pull this into a launch checklist with owners.
 >
-> **Jules's Tag:** Here’s the shared checklist:
-> - **Jules:** Finish the FAQ by Tuesday.
-> - **Maya:** Test signup on Wednesday.
+> **Maya's Tag:** Here’s the shared checklist:
+> - **Maya:** Finish the FAQ by Tuesday.
+> - **Jules:** Test signup on Wednesday.
 > - **Unassigned:** Brief support before launch. Who can take this?
 >
-> **Maya:** I'll brief support. We're also missing the go/no-go review. Jules, can you own that?
+> **Jules:** I'll brief support. We're also missing the go/no-go review. Maya, can you own that?
 
-Maya can read the checklist, volunteer for a task, and point out what's
-missing. She doesn't need to use Jules's Tag to join the discussion.
+Jules can read the checklist, volunteer for a task, and point out what's
+missing. He doesn't need to use Maya's Tag to join the discussion.
 
 The request and result stay in the thread, so neither person has to copy
 them back from a separate AI chat.
 
 ## Only you can give your Tag instructions
 
-Today, only the owner can ask their Tag to do work. Maya can reply to Jules
-in the thread, but she can't give Jules's Tag a task. Sharing one Tag with
+Today, only the owner can ask their Tag to do work. Jules can reply to Maya
+in the thread, but he can't give Maya's Tag a task. Sharing one Tag with
 other people is coming soon.
 
 This matters because your Tag may use your files and connected accounts.
