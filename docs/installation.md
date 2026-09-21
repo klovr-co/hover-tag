@@ -251,6 +251,13 @@ when returning to the immediately previous known-good release. `tag rollback`
 selects the previous release only after all Tag bridges and the
 installation-owned shared MFS service are stopped with `tag memory stop`.
 
+Channel selection reads a public `tag-release-channels.json` index from the
+moving `channels` GitHub release, then downloads immutable numbered assets
+directly. Public installation therefore does not require GitHub authentication
+and does not normally consume the anonymous REST API quota. Tag falls back to
+the GitHub Releases API if the index cannot be fetched or validated during
+rollout, while checksum and provenance verification remain mandatory.
+
 Human-readable `tag`, `tag status`, `tag inspect`, and successful `tag setup`
 and `tag start` runs also check the saved channel at most once every 24 hours.
 When a newer release is published they show a non-fatal `tag upgrade` reminder;
