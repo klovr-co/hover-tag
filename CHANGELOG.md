@@ -13,6 +13,8 @@
   data requires a one-time stopped-service migration.
 - Let existing-app setup enable Slack's Agent messaging experience through a
   targeted, verified manifest sync while preserving unrelated app settings.
+- Let each new Tag choose a five-element waterdrop identity: Metal (white),
+  Wood (green), Water (default blue), Fire (red), or Soil (yellow).
 
 All notable changes to Tag are documented here.
 

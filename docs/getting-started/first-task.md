@@ -100,14 +100,24 @@ Follow the prompts to:
 Setup saves completed answers. If you pause or encounter an error, run
 `tag setup` again to resume.
 
-When setup reports that Tag is connected, check its status:
+For detailed setup options, see [Set up and manage Tag](../tag-management.md).
+
+## Start Tag
+
+Once setup is saved, this is the command to bring Tag online:
 
 ```bash
-tag status
+tag start
 ```
 
-If setup is complete but Tag is stopped, run `tag start`.
-For detailed setup options, see [Set up and manage Tag](../tag-management.md).
+Tag runs in the background, so you can close this terminal. Keep the computer
+awake and connected. After restarting your computer, run `tag start` again;
+you don't need to repeat setup.
+
+If guided setup already started Tag, you're ready to continue. You can check
+the connection anytime with `tag status`.
+
+Try the task below to check that your Tag answers in Slack.
 
 ## Try your Tag in Slack
 
@@ -118,9 +128,18 @@ this example or write one for your own work:
 > Jules will test signup by Wednesday. Nobody has taken the support briefing yet.
 
 Reply in that message's thread and mention your Tag. These examples use
-Maya's Tag; select your own app's mention from Slack's suggestions:
+Maya's Tag; select your own app's mention from Slack's suggestions. The replies
+below are illustrative:
 
 > @Maya's Tag turn this into a checklist with owners and deadlines. Flag anything missing.
+>
+> **Maya's Tag:** Here's the launch checklist:
+>
+> ☐ Finish the FAQ — Maya, by Tuesday.
+>
+> ☐ Test signup — Jules, by Wednesday.
+>
+> ☐ Brief support — owner and deadline missing. Who will take this, and by when?
 
 Check that the reply appears in the same thread, keeps the two assigned tasks
 and their deadlines, and flags the missing owner and deadline for the support
@@ -130,6 +149,16 @@ result to Slack.
 Continue in the same thread:
 
 > @Maya's Tag I'll handle the support briefing on Thursday. Update the checklist.
+>
+> **Maya's Tag:** Updated the checklist:
+>
+> ☐ Finish the FAQ — Maya, by Tuesday.
+>
+> ☐ Test signup — Jules, by Wednesday.
+>
+> ☐ Brief support — Maya, on Thursday.
+>
+> All three tasks now have an owner and a deadline.
 
 The updated checklist should include your follow-up alongside the earlier
 tasks. Tag uses the thread messages as context.
