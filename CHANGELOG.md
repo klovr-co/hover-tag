@@ -21,10 +21,10 @@ All notable changes to Tag are documented here.
 - Check the saved release channel at most daily during normal status, inspect,
   setup, and start flows, and show a non-blocking upgrade reminder when a newer
   release is available.
-- Let new-app setup propose **&lt;the operator's first name&gt;'s Tag**, render a
-  deterministic identity from 144 curated Tag waterdrop bases and 16 subtle signatures,
-  or choose a validated local PNG,
-  JPEG, or GIF profile picture for upload through Slack CLI.
+- Let new-app setup propose **&lt;the operator's first name&gt;'s Tag**, choose a
+  deterministic five-element waterdrop identity with 16 subtle signatures, or
+  choose a validated local PNG, JPEG, or GIF profile picture for upload through
+  Slack CLI.
 - Mark test onboarding throughout the creation flow and prefix its proposed app
   name with `TEST ·`, since approved Slack operations in test mode remain real.
 
@@ -81,5 +81,5 @@ All notable changes to Tag are documented here.
 - This alpha is explicitly limited to trusted sandbox use and is not a
   production security boundary.
 
-[0.1.1-alpha]: https://github.com/klovr-co/tag/releases/tag/v0.1.1-alpha
-[0.1.0-alpha]: https://github.com/klovr-co/tag/releases/tag/v0.1.0-alpha
+[0.1.1-alpha]: https://github.com/klovr-co/hover-tag/releases/tag/v0.1.1-alpha
+[0.1.0-alpha]: https://github.com/klovr-co/hover-tag/releases/tag/v0.1.0-alpha

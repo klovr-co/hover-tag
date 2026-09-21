@@ -12,7 +12,7 @@ v0.2 alpha qualification unless its live checks are recorded
 separately. Hosted operation, enterprise policy, automated Slack OAuth,
 and production-grade sandboxing are out of scope.
 
-The canonical source repository is <https://github.com/klovr-co/tag>. `VERSION`
+The canonical source repository is <https://github.com/klovr-co/hover-tag>. `VERSION`
 selects the current release candidate (`v0.2.0-beta.1`). On an alpha source
 line, automatic releases append a monotonically increasing candidate number
 such as `v0.2.0-alpha.3`. Alpha releases are GitHub prereleases and remain
@@ -36,7 +36,7 @@ records the full commit SHA, build time, source ref, base version, and archive
 digest. A commit-specific copy is retained as a GitHub Actions artifact for 90
 days, which is the repository's maximum configured retention period.
 Testers can always retrieve the current edge build from
-`https://github.com/klovr-co/tag/releases/download/edge/tag-edge.zip` and should
+`https://github.com/klovr-co/hover-tag/releases/download/edge/tag-edge.zip` and should
 verify it with the adjacent checksum and provenance assets.
 
 Automatic alpha releases use the exact bytes retained for their commit-specific

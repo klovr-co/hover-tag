@@ -177,7 +177,7 @@ class SelectedCommitTests(unittest.TestCase):
                 "workflow_run": {"id": 42, "head_sha": "c" * 40},
             }]
         }):
-            self.assertEqual(find_edge_artifact("klovr-co/tag", sha), (
+            self.assertEqual(find_edge_artifact("klovr-co/hover-tag", sha), (
                 42, f"tag-edge-{sha}"
             ))
 
@@ -205,7 +205,7 @@ class SelectedCommitTests(unittest.TestCase):
             raise AssertionError(path)
 
         with patch("scripts.release_automation._github_json", side_effect=github_response):
-            self.assertEqual(wait_for_predecessor("klovr-co/tag", sha, 0), [])
+            self.assertEqual(wait_for_predecessor("klovr-co/hover-tag", sha, 0), [])
 
     def test_failed_predecessor_gate_does_not_block_later_commit(self) -> None:
         sha = "b" * 40
@@ -218,7 +218,7 @@ class SelectedCommitTests(unittest.TestCase):
                 "conclusion": "failure",
             }]
         }):
-            self.assertEqual(wait_for_predecessor("klovr-co/tag", sha, 0), [])
+            self.assertEqual(wait_for_predecessor("klovr-co/hover-tag", sha, 0), [])
 
 
 class ReleaseArtifactTests(unittest.TestCase):

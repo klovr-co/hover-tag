@@ -61,7 +61,7 @@ Use a checkout only when the user requests a source installation or selects an
 existing checkout. For an existing checkout, use the user's selected directory
 and revision, check for local changes first because they become part of a source
 installation, and run that checkout's `./install.sh`. For a new source
-installation, clone https://github.com/klovr-co/tag.git into a new,
+installation, clone https://github.com/klovr-co/hover-tag.git into a new,
 nonconflicting directory and run its `./install.sh`. Do not overwrite an
 existing directory.
 
@@ -176,5 +176,5 @@ For version-specific details, consult the installed CLI's `--help` and the
 matching Tag release's `docs/tag-management.md` and `docs/installation.md`.
 These are product references, not files bundled with this skill. In a checkout,
 read them locally; otherwise obtain them from the matching revision in
-https://github.com/klovr-co/tag. Keep setup mechanics in Tag rather than copying
+https://github.com/klovr-co/hover-tag. Keep setup mechanics in Tag rather than copying
 them into this skill.

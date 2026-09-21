@@ -142,20 +142,20 @@ is always `stable`. It does not fall back to a prerelease when no stable release
 exists; alpha, beta, and edge installations must select their channel explicitly:
 
 ```sh
-curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/klovr-co/tag/main/install.sh | sh
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/klovr-co/hover-tag/main/install.sh | sh
 
 # Choose an update channel explicitly.
-curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/klovr-co/tag/main/install.sh | sh -s -- --channel beta
-curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/klovr-co/tag/main/install.sh | sh -s -- --channel alpha
-curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/klovr-co/tag/main/install.sh | sh -s -- --channel edge
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/klovr-co/hover-tag/main/install.sh | sh -s -- --channel beta
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/klovr-co/hover-tag/main/install.sh | sh -s -- --channel alpha
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/klovr-co/hover-tag/main/install.sh | sh -s -- --channel edge
 
 # Reproduce one immutable release.
-curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/klovr-co/tag/main/install.sh | sh -s -- --version 0.2.0-beta.1
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/klovr-co/hover-tag/main/install.sh | sh -s -- --version 0.2.0-beta.1
 ```
 
 ```powershell
 $installer = Join-Path $env:TEMP 'tag-install.ps1'
-Invoke-WebRequest https://raw.githubusercontent.com/klovr-co/tag/main/install.ps1 -OutFile $installer
+Invoke-WebRequest https://raw.githubusercontent.com/klovr-co/hover-tag/main/install.ps1 -OutFile $installer
 & $installer -Channel beta
 # Or: & $installer -Version 0.2.0-beta.1
 ```
