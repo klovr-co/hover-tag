@@ -54,6 +54,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def release_record(version: str, *, prerelease: bool, names: list[str] | None = None) -> dict:
+    """Build a minimal GitHub release payload for installer resolution tests."""
     names = names or []
     return {
         "tag_name": "v" + version,
@@ -67,8 +68,9 @@ def release_record(version: str, *, prerelease: bool, names: list[str] | None = 
 
 
 class ReleaseResolutionTests(unittest.TestCase):
-    def test_repository_policy_defaults_bare_installs_to_alpha(self) -> None:
-        self.assertEqual(_default_channel(), "alpha")
+    def test_repository_policy_defaults_bare_installs_to_stable(self) -> None:
+        """Bare installs follow the repository's stable-channel policy."""
+        self.assertEqual(_default_channel(), "stable")
 
     def test_channels_select_the_newest_compatible_release(self) -> None:
         releases = [
