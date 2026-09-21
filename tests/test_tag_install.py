@@ -34,11 +34,19 @@ from scripts.tag_paths import (
     codex_workspace_args,
     initialize,
     initialize_instance,
+    initialize_workspace,
     runtime_environment,
     tag_home,
     tag_temp_dir,
 )
-from scripts.tag_cli import process_for, read_config, start_process, stop_process, upgrade_command
+from scripts.tag_cli import (
+    process_for,
+    read_config,
+    start_process,
+    stop_process,
+    upgrade_command,
+    upgrade_reminder,
+)
 from scripts.tag_migrate import legacy_config, migrate
 from scripts.opentag_setup import render_env
 
@@ -340,6 +348,7 @@ class TagHomeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp)
             initialize_instance(home)
+            initialize_workspace(home / "workspace")
             (home / "workspace/.codex/config.toml").write_text('[mcp_servers.example]\ncommand="python"\nargs=["server.py"]\n')
             with patch.dict(os.environ, {
                 "TAG_HOME": str(home.parent),
@@ -486,6 +495,99 @@ class TagHomeTests(unittest.TestCase):
         self.assertTrue(current["checked_at"].endswith("Z"))
         self.assertEqual(upgraded["channel"], "edge")
         self.assertEqual(upgraded["installed_commit"], "b" * 40)
+
+    def test_upgrade_reminder_uses_fresh_installation_cache(self):
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            (home / "state").mkdir()
+            (home / "current.json").write_text(json.dumps({
+                "installed_version": "0.2.0-alpha.1",
+                "installed_commit": "a" * 40,
+                "channel": "alpha",
+                "selection": "channel",
+            }), encoding="utf-8")
+            (home / "state/update-check.json").write_text(json.dumps({
+                "schema_version": 1,
+                "checked_at": 1000,
+                "channel": "alpha",
+                "target_version": "0.2.0-alpha.2",
+                "target_commit": "b" * 40,
+            }), encoding="utf-8")
+
+            with patch("scripts.tag_install.resolve_channel") as resolve:
+                reminder = upgrade_reminder(home, now=1001)
+
+        resolve.assert_not_called()
+        self.assertEqual(reminder, {
+            "status": "available",
+            "version": "0.2.0-alpha.2",
+            "command": "tag upgrade",
+        })
+
+    def test_upgrade_reminder_refreshes_stale_cache_with_a_bounded_check(self):
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            home.mkdir(exist_ok=True)
+            (home / "current.json").write_text(json.dumps({
+                "installed_version": "0.2.0-alpha.1",
+                "installed_commit": "a" * 40,
+                "channel": "alpha",
+                "selection": "channel",
+            }), encoding="utf-8")
+            release = release_record("0.2.0-alpha.3", prerelease=True)
+            release["target_commitish"] = "c" * 40
+
+            with patch(
+                "scripts.tag_install.resolve_channel", return_value=release
+            ) as resolve:
+                reminder = upgrade_reminder(home, now=2000)
+
+            cached = json.loads((home / "state/update-check.json").read_text())
+
+        resolve.assert_called_once_with("alpha", timeout=2, page_limit=1)
+        self.assertEqual(reminder["version"], "0.2.0-alpha.3")
+        self.assertEqual(cached["target_commit"], "c" * 40)
+
+    def test_upgrade_reminder_checks_alpha_for_source_and_ignores_pinned_installs(self):
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            current = home / "current.json"
+            current.write_text(json.dumps({
+                "installed_version": "0.2.0-alpha",
+            }), encoding="utf-8")
+            release = release_record("0.2.0-alpha.2", prerelease=True)
+            release["target_commitish"] = "b" * 40
+            with patch(
+                "scripts.tag_install.resolve_channel", return_value=release
+            ) as resolve:
+                self.assertEqual(upgrade_reminder(home, now=1000), {
+                    "status": "available",
+                    "version": "0.2.0-alpha.2",
+                    "command": "tag upgrade --channel alpha",
+                })
+            resolve.assert_called_once_with("alpha", timeout=2, page_limit=1)
+
+            current.write_text(json.dumps({
+                "installed_version": "0.2.0-alpha.1",
+                "selection": "version",
+            }), encoding="utf-8")
+            self.assertIsNone(upgrade_reminder(home))
+
+    def test_upgrade_reminder_ignores_network_failure(self):
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            (home / "current.json").write_text(json.dumps({
+                "installed_version": "0.2.0-alpha.1",
+                "installed_commit": "a" * 40,
+                "channel": "alpha",
+                "selection": "channel",
+            }), encoding="utf-8")
+
+            with patch(
+                "scripts.tag_install.resolve_channel",
+                side_effect=RuntimeError("offline"),
+            ):
+                self.assertIsNone(upgrade_reminder(home, now=2000))
 
     def test_upgrade_follows_saved_channel_and_preserves_personal_data(self):
         with tempfile.TemporaryDirectory() as temp:

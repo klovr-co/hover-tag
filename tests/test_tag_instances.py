@@ -39,6 +39,17 @@ class TagInstanceTests(unittest.TestCase):
         self.assertFalse((self.root / "workspace").exists())
         self.assertEqual(json.loads((personal.home / "instance.json").read_text())["id"], "personal")
 
+    def test_native_install_creates_editable_workspace_in_user_directory(self) -> None:
+        user_home = self.root.parent / "person"
+        installation = user_home / "Library/Application Support/Tag"
+
+        with patch("pathlib.Path.home", return_value=user_home), patch("sys.platform", "darwin"):
+            context = tag_instances.ensure_default(installation)
+            workspace = context.workspace
+
+        self.assertEqual(workspace, user_home / "Tag/default")
+        self.assertTrue((workspace / ".codex/config.toml").is_file())
+
     def test_invalid_unknown_duplicate_and_symlink_names_do_not_create_data(self) -> None:
         for name in ("Default", "../escape", "two words", "", "a" * 33, "status"):
             with self.subTest(name=name), self.assertRaises(ValueError):
