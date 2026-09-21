@@ -347,7 +347,8 @@ class TagLifecycleTests(unittest.TestCase):
         }).encode()
         with patch.dict(os.environ, {
             "MFS_URL": "https://mfs.test", "MFS_TOKEN": "fixture-token",
-        }, clear=False), patch.object(tag_cli.urllib.request, "urlopen", return_value=response):
+        }, clear=False), patch.object(tag_cli.urllib.request, "build_opener") as build_opener:
+            build_opener.return_value.open.return_value = response
             self.assertFalse(tag_cli.mfs_scope_indexed("slack://tag-test/channels/one"))
 
         response.__enter__.return_value.read.return_value = json.dumps({
@@ -355,7 +356,8 @@ class TagLifecycleTests(unittest.TestCase):
         }).encode()
         with patch.dict(os.environ, {
             "MFS_URL": "https://mfs.test", "MFS_TOKEN": "fixture-token",
-        }, clear=False), patch.object(tag_cli.urllib.request, "urlopen", return_value=response):
+        }, clear=False), patch.object(tag_cli.urllib.request, "build_opener") as build_opener:
+            build_opener.return_value.open.return_value = response
             self.assertTrue(tag_cli.mfs_scope_indexed("slack://tag-test/channels/one"))
 
     def test_mfs_scope_resolution_survives_a_channel_rename(self) -> None:
@@ -404,10 +406,36 @@ class TagLifecycleTests(unittest.TestCase):
         with patch.dict(os.environ, {
             "MFS_URL": "http://[::1]:13619", "MFS_TOKEN": "fixture-token",
         }, clear=False), patch.object(
-            tag_cli.urllib.request, "urlopen", return_value=response
-        ) as urlopen:
+            tag_cli.urllib.request, "build_opener"
+        ) as build_opener:
+            build_opener.return_value.open.return_value = response
             self.assertTrue(tag_cli.mfs_scope_indexed("slack://tag-test/channels/one"))
-        urlopen.assert_called_once()
+        self.assertIsInstance(
+            build_opener.call_args.args[0], tag_cli.RejectMfsRedirects
+        )
+        build_opener.return_value.open.assert_called_once()
+
+    def test_authenticated_mfs_request_rejects_redirects(self) -> None:
+        request = tag_cli.urllib.request.Request(
+            "https://mfs.example.com/v1/ls",
+            headers={"Authorization": "Bearer fixture-token"},
+        )
+        handler = tag_cli.RejectMfsRedirects()
+        for target in (
+            "https://attacker.example/collect",
+            "http://mfs.example.com/collect",
+        ):
+            with self.subTest(target=target):
+                with self.assertRaises(tag_cli.urllib.error.HTTPError) as raised:
+                    handler.redirect_request(
+                        request,
+                        None,
+                        302,
+                        "Found",
+                        {"Location": target},
+                        target,
+                    )
+                raised.exception.close()
 
     def test_wait_for_configured_mfs_scopes_returns_the_exact_failed_scope(self) -> None:
         failed = "slack://tag-test/channels/two"

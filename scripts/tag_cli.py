@@ -923,6 +923,19 @@ def authenticated_mfs_url() -> str:
     return raw
 
 
+class RejectMfsRedirects(urllib.request.HTTPRedirectHandler):
+    """Prevent bearer-authenticated MFS requests from following redirects."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(
+            req.full_url,
+            code,
+            "MFS bearer-authenticated requests do not follow redirects",
+            headers,
+            fp,
+        )
+
+
 def mfs_request_json(path: str, parameters: dict[str, str]) -> dict[str, object] | None:
     """Call an authenticated MFS endpoint after enforcing its transport boundary."""
     base = authenticated_mfs_url()
@@ -936,8 +949,9 @@ def mfs_request_json(path: str, parameters: dict[str, str]) -> dict[str, object]
     request = urllib.request.Request(
         f"{base}{path}?{query}", headers={"Authorization": f"Bearer {token}"}
     )
+    opener = urllib.request.build_opener(RejectMfsRedirects())
     try:
-        with urllib.request.urlopen(request, timeout=2) as response:  # noqa: S310
+        with opener.open(request, timeout=2) as response:  # noqa: S310
             payload = json.loads(response.read().decode("utf-8"))
     except (OSError, ValueError, urllib.error.URLError):
         return None
