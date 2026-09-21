@@ -18,9 +18,10 @@ Use the published GitHub releases, not `VERSION` alone, to identify the latest i
 ## Preserve the release model
 
 - An alpha, beta, or stable release is a new immutable release. Never rename, replace, or delete an earlier release as part of promotion.
-- Ordinary merges on an alpha source line publish the next numbered alpha automatically. There is no `release:beta` or `release:stable` PR label.
-- Beta and stable are explicit owner actions through **Prepare release**.
-- The source version and the release notes must describe the intended beta or stable version before the candidate is tested.
+- Ordinary merges on an alpha or beta source line publish the next numbered prerelease automatically. There is no `release:beta` or `release:stable` PR label.
+- Moving from alpha to beta requires a focused source change to `VERSION`; its merge publishes `beta.1` automatically after CI and clean-install checks pass. Later eligible merges publish the next numbered beta.
+- Stable is an explicit owner action through **Prepare stable release**.
+- The source version and the release notes must describe the intended stable version before the candidate is tested.
 - Only the matching evidence file may change after live candidate testing. Any other change requires a new candidate and another live qualification.
 - Reuse the retained artifact for the exact promoted commit. Never rebuild locally and attach substitute assets.
 
@@ -39,7 +40,19 @@ gh run list --repo klovr-co/hover-tag --limit 30
 
 Do not expose tokens or dump unbounded logs.
 
-## Prepare beta or stable
+## Prepare beta
+
+Derive the next beta version from the latest published release and confirm it
+with the repository validator. Prepare a focused change with `VERSION` set to
+the complete semantic beta version `<major>.<minor>.<patch>-beta.1` (for example,
+`0.2.0-beta.1`) and factual release notes at `docs/releases/v<VERSION>.md`. Keep
+the default channel set to `stable`. Do not create release evidence or dispatch
+a manual workflow. After the change merges, CI, clean-install checks, and the
+edge workflow publish the immutable beta from the retained artifact
+automatically. Verify the published tag, target commit, prerelease setting, and
+assets.
+
+## Prepare stable
 
 Derive the next version from the latest published release and confirm it with the repository validator. For the same version core, the expected progression is numbered alpha to `beta.1`, later numbered betas if supported by the contract, then stable with no prerelease suffix. Do not invent a transition when published history is ambiguous.
 
@@ -52,7 +65,7 @@ Do not claim qualification before it has happened. Keep the default channel set 
 
 ```sh
 python3 scripts/release_automation.py validate-candidate \
-  --version "$(sed -n '1p' VERSION)" --phase <beta-or-stable>
+  --version "$(sed -n '1p' VERSION)" --phase stable
 ```
 
 Prepare a commit or PR when requested. Do not merge it unless the user requested the merge and repository checks permit it.
@@ -71,18 +84,17 @@ After qualification, ensure the evidence file is the only path changed from the 
 
 If any non-evidence path changed, stop and require a new candidate and live qualification.
 
-## Create the GitHub draft
+## Create the stable GitHub draft
 
 Use the exact promoted `main` commit, not the earlier live candidate SHA when an evidence-only commit followed it. Verify CI, clean-install checks, and retained artifact availability for that promoted SHA. Then dispatch:
 
 ```sh
 gh workflow run prepare-release.yml \
   --repo klovr-co/hover-tag \
-  -f phase=<beta-or-stable> \
   -f commit_sha=<full-promoted-main-sha>
 ```
 
-Wait for the workflow when the user asked for draft creation, inspect its result, and return the draft URL. Confirm beta drafts are prereleases and stable drafts are not. A successful workflow creates a draft; it does not authorize publication.
+Wait for the workflow when the user asked for draft creation, inspect its result, and return the draft URL. Confirm the stable draft is not a prerelease. A successful workflow creates a draft; it does not authorize publication.
 
 ## Publish only with explicit approval
 

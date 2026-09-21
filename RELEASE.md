@@ -29,7 +29,8 @@ publishing them. The active installation is independent of the checkout; see
 
 `main` is the only permanent development branch. After both CI and clean-install
 smoke tests pass for a merged commit, `.github/workflows/edge-build.yml`
-publishes an immutable numbered alpha by default. It also updates the moving
+publishes an immutable numbered alpha or beta by default, according to the
+phase selected in `VERSION`. It also updates the moving
 `edge` prerelease when that commit is still the head of `main`. The `edge` tag and its stable-named assets
 are intentionally replaceable and are not SemVer releases. `BUILD-PROVENANCE.json`
 records the full commit SHA, build time, source ref, base version, and archive
@@ -39,34 +40,43 @@ Testers can always retrieve the current edge build from
 `https://github.com/klovr-co/hover-tag/releases/download/edge/tag-edge.zip` and should
 verify it with the adjacent checksum and provenance assets.
 
-Automatic alpha releases use the exact bytes retained for their commit-specific
+Automatic prereleases use the exact bytes retained for their commit-specific
 edge artifact. A merged PR needs no release label for the normal path. Apply
-`release:skip` to publish no alpha, `release:next-patch` to start the next patch
-line, or `release:next-minor` to start the next minor line. Conflicting release
-labels fail closed and publish nothing. Once a line exists, unlabeled merges
-advance its alpha candidate number.
+`release:skip` to publish no prerelease, `release:next-patch` to start the next
+patch line, or `release:next-minor` to start the next minor line. Conflicting release
+labels fail closed and publish nothing. Patch and minor labels apply only to
+alpha lines. Once a line exists, unlabeled merges advance its alpha or beta
+candidate number.
 
-Beta and stable releases remain explicit owner actions. A maintainer prepares
-one by updating `VERSION`, completing live evidence, and running the `Prepare
+Moving from alpha to beta is a source change: update `VERSION` to the complete
+semantic beta version `<major>.<minor>.<patch>-beta.1` (for example,
+`0.2.0-beta.1`) and merge it normally. After the standard CI and clean-install
+gates pass, the edge workflow publishes the beta automatically from the
+retained artifact. Later eligible merges on that source line publish `beta.2`,
+`beta.3`, and so on. Betas do not require a live Slack probe, evidence-only
+follow-up, draft, or separate publication approval.
+
+Stable releases remain explicit owner actions. A maintainer prepares one by
+updating `VERSION`, completing live evidence, and running the `Prepare stable
 release` workflow with the full tested `main` commit SHA. The workflow requires
 successful CI and install-smoke runs for that exact SHA, validates the version
 transition, reruns the release-candidate preflight, and creates a draft from the
 retained archive. A maintainer must inspect and publish that draft explicitly.
 
-Live validation evidence for beta and stable names the candidate commit that was exercised. Because
-a commit cannot contain its own SHA, the release commit may follow that candidate
+Live validation evidence for stable names the candidate commit that was
+exercised. Because a commit cannot contain its own SHA, the release commit may follow that candidate
 only to record its evidence file; the preflight rejects changes to every other
 path between the named candidate and the promoted commit. CI, install smoke, and
 the retained edge artifact are still required for the exact promoted SHA.
 
-The alpha release line is selected in source and may be advanced explicitly by
-PR label. Candidate numbers are derived from immutable published tags. Beta and
-stable versions are still selected in source before their candidate commit is
-tested. The existing unnumbered `v0.1.x-alpha` releases remain supported as a
-legacy format, but new lines use numbered candidates.
+The prerelease line and phase are selected in source; alpha lines may be
+advanced explicitly by PR label. Candidate numbers are derived from immutable
+published tags. Stable versions are selected in source before their candidate
+commit is tested. The existing unnumbered `v0.1.x-alpha` releases remain
+supported as a legacy format, but new lines use numbered candidates.
 
-The automatic workflow downloads and verifies the published alpha assets after
-upload. Manually published releases trigger `.github/workflows/release-package.yml`,
+The automatic workflow downloads and verifies the published prerelease assets
+after upload. Manually published releases trigger `.github/workflows/release-package.yml`,
 which verifies attached archives, checksums, provenance, internal versions, and
 the prerelease setting instead of rebuilding. Older releases without prepared
 assets retain the original build-on-publication fallback.
