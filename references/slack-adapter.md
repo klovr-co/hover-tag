@@ -13,19 +13,20 @@ scratch. The bridge is intentionally thin. It only:
 5. Optionally streams normalized answer deltas, or posts the final answer when
    the selected backend provides only a completed response.
 
-The adapter does not answer task questions itself. It passes the thread,
-channel id, and allowed MFS scopes to a fresh CLI agent. It does answer scope
-clarifications before backend startup, because scope expansion is a bridge-owned
-authorization decision rather than model behavior.
+The adapter does not answer task questions or classify their meaning. It passes
+the thread, current-channel MFS scope, and a separate cross-channel search grant
+to a fresh CLI agent. The runtime agent understands the request and chooses
+whether to call the dedicated Slack-history helper.
 
-By default, the bridge narrows Slack memory to the invoking channel exactly as
-before. For an explicit named-channel or all-permitted-channel search,
-`scripts/slack_search_scope.py` resolves current Slack names to IDs and computes
-the intersection of the installation workspace, `SLACK_CHANNEL_IDS`, indexed
-channel scopes, and caller visibility. Both Codex and Claude receive that same
-pre-authorized result. Ambiguous requests receive no MFS scopes and no backend
-run. The module also provides a thin JSON CLI for diagnostics and future
-adapters; policy must not be reimplemented in a prompt or adapter.
+By default, `scripts/mfs_search.py` remains narrowed to the invoking channel
+exactly as before. Independently, `scripts/slack_search_scope.py` computes the
+intersection of the installation workspace, `SLACK_CHANNEL_IDS`, indexed
+channel scopes, and live caller visibility. Both Codex and Claude receive that
+same pre-authorized result through `scripts/slack_history_search.py`. With no
+`--channel` argument the helper searches the entire grant; repeated `--channel`
+arguments select exact names from it. Missing, malformed, ambiguous, or
+ungranted names fail without searching. Authorization policy is enforced by
+code and must not be reimplemented in a prompt or adapter.
 
 The Slack app token and bot token are only for receiving invocations, reading
 the current thread, and posting replies. `tag setup` separately configures an MFS

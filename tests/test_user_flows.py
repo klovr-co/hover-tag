@@ -91,7 +91,14 @@ class FlowTests(unittest.TestCase):
             with self.assertRaises(KeyboardInterrupt):
                 tag_cli.development_loop(self.home)
         start.assert_called_once_with(self.home)
-        self.assertEqual(stop.call_args_list, [unittest.mock.call(self.home, "slack"), unittest.mock.call(self.home, "slack")])
+        self.assertEqual(
+            stop.call_args_list,
+            [
+                unittest.mock.call(self.home, "slack"),
+                unittest.mock.call(self.home, "slack"),
+                unittest.mock.call(self.home, "mfs"),
+            ],
+        )
 
     def test_logs_are_bounded_redacted_and_offer_follow_mode(self):
         log = self.home / "state/slack.log"

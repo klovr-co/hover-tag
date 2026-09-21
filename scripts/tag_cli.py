@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 import warnings
@@ -193,6 +194,79 @@ def stop_process(home: Path, name: str) -> None:
     record.unlink(missing_ok=True)
     if name == "slack":
         (home / "state/slack.ready").unlink(missing_ok=True)
+
+
+def local_mfs_endpoint(url: str) -> bool:
+    """Return whether Tag may manage the process behind this loopback endpoint."""
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        return parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "localhost", "::1"}
+    except ValueError:
+        return False
+
+
+def local_mfs_listener(url: str):
+    """Find an identifiable MFS server listening at a configured local endpoint."""
+    import psutil
+
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        port = parsed.port or 80
+    except ValueError:
+        return None
+    candidate_pids: set[int] = set()
+    if os.name != "nt" and shutil.which("lsof"):
+        result = subprocess.run(
+            ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+        candidate_pids.update(
+            int(value) for value in result.stdout.split() if value.isdigit()
+        )
+    else:
+        try:
+            connections = psutil.net_connections(kind="tcp")
+        except psutil.Error:
+            connections = []
+        candidate_pids.update(
+            connection.pid
+            for connection in connections
+            if connection.status == psutil.CONN_LISTEN
+            and connection.pid is not None
+            and connection.laddr
+            and connection.laddr.port == port
+        )
+    for pid in candidate_pids:
+        try:
+            process = psutil.Process(pid)
+            command = " ".join(process.cmdline()).casefold()
+        except psutil.Error:
+            continue
+        if "mfs-server" in command or "mfs_server" in command:
+            return process
+    return None
+
+
+def replace_unmanaged_local_mfs(home: Path, url: str) -> bool:
+    """Replace an untracked loopback MFS so Tag owns runtime and cleanup."""
+    record = home / "state/mfs.json"
+    if not local_mfs_endpoint(url) or process_for(record) is not None or not healthy(url):
+        return False
+    process = local_mfs_listener(url)
+    if process is None:
+        raise RuntimeError(
+            "The local MFS endpoint is healthy but its process is not an identifiable "
+            "mfs-server. Stop that service or configure a separate MFS_URL before starting Tag."
+        )
+    record.write_text(
+        json.dumps({"pid": process.pid, "created": process.create_time(), "adopted": True}),
+        encoding="utf-8",
+    )
+    stop_process(home, "mfs")
+    return True
 
 
 def slack_ready(home: Path, maximum_age: float = 5.0) -> bool:
@@ -406,6 +480,7 @@ def development_loop(home: Path) -> int:
                 log_position = 0
     finally:
         stop_process(home, "slack")
+        stop_process(home, "mfs")
 
 
 def healthy(url: str) -> bool:
@@ -795,6 +870,7 @@ def main() -> int:
                 good=True,
             )
             url = os.getenv("MFS_URL", "http://127.0.0.1:13619")
+            replace_unmanaged_local_mfs(home, url)
             if not healthy(url):
                 if url.rstrip("/") not in ("http://localhost:13619", "http://127.0.0.1:13619"):
                     raise RuntimeError("Configured MFS endpoint is unavailable; start that server first")
@@ -894,7 +970,7 @@ if __name__ == "__main__":
         if len(sys.argv) > 1 and sys.argv[1] == "logs":
             print("\nStopped following logs.", file=sys.stderr)
         elif len(sys.argv) > 1 and sys.argv[1] == "dev":
-            print("\nDevelopment bridge stopped. Memory was left running.", file=sys.stderr)
+            print("\nDevelopment services stopped.", file=sys.stderr)
         else:
             print("\nInterrupted. Run tag setup to resume saved setup.", file=sys.stderr)
         raise SystemExit(130)

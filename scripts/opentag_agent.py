@@ -161,6 +161,7 @@ Available helper scripts:
 - {skill_dir / "scripts" / "mfs_ls.py"}
 - {skill_dir / "scripts" / "mfs_search.py"}
 - {skill_dir / "scripts" / "mfs_cat.py"}
+- {skill_dir / "scripts" / "slack_history_search.py"}
 - {skill_dir / "scripts" / "slack_post_message.py"}
 {canvas_instructions}
 {artifact_instructions}
@@ -171,8 +172,21 @@ Local tools:
 - Each tool's own credentials and OAuth grants determine what it can do; Open Tag does
   not add per-tool feature flags or caller allowlists.
 - Do not expose tokens or other credentials.
-- When multiple Slack channel scopes are present, search only through the MFS
-  helpers above and identify each result's channel using the helper output.
+- `mfs_search.py` remains restricted to the current Slack channel by default.
+- When the user asks to search named channels or across Slack/all channels, infer
+  that intent normally and call `slack_history_search.py`. With no `--channel`
+  arguments it searches all permitted indexed channels; repeat `--channel NAME`
+  to select named channels. Its runtime grant enforces authorization and its
+  output identifies every result's source channel.
+- For a named-channel request, pass every channel name exactly as the user wrote
+  it. Never silently fix a typo, substitute a different channel, or omit one of
+  the requested channels. If the helper rejects a name or suggests a correction,
+  ask the user to confirm it and do not retry the search in the same run.
+- Search all permitted channels only when the user clearly says `across Slack`,
+  `all channels`, or an equivalent unambiguous phrase. Conflicting or fragmentary
+  wording such as `search general workspace all` is ambiguous: ask a short scope
+  question and do not call a search helper. A broad topic alone never expands
+  the current-channel default.
 
 Slack image attachments (only when the transport is Slack):
 - Attached images, when present, are stored in the attachment directory above.

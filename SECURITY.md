@@ -19,11 +19,13 @@ inherited credentials directly. Run Tag under a dedicated local account or
 external sandbox and give every credential only the permissions appropriate
 for that environment.
 
-For explicit cross-channel history search, the bridge—not the model—intersects
-stable channel IDs across the configured workspace, operator approval, indexed
-MFS scopes, and live caller visibility before launching the backend. Failures
-deny expansion. This is still an application guardrail under ADR 0001, not a
-credential broker or hardened isolation boundary.
+For cross-channel history search, the bridge—not the model—intersects stable
+channel IDs across the configured workspace, operator approval, indexed MFS
+scopes, and live caller visibility before launching the backend. The model can
+choose to invoke the cross-channel helper, but that helper can search only the
+bridge-generated grant; failures deny expansion. This is still an application
+guardrail under ADR 0001, not a credential broker or hardened isolation
+boundary.
 
 ## Reporting a vulnerability
 

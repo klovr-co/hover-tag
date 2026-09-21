@@ -78,9 +78,11 @@ class CurrentChannelMemoryTests(unittest.TestCase):
             caller_id="U1",
             authorized_scopes="slack://tag-t1/channels/support__C2",
             channel_labels='{"C2": "support"}',
+            slack_search_grant='{"mode": "all"}',
         )
         self.assertEqual(
             "slack://tag-t1/channels/support__C2",
             environment["MFS_ALLOWED_SCOPES"],
         )
         self.assertEqual('{"C2": "support"}', environment["OPENTAG_SLACK_CHANNEL_LABELS"])
+        self.assertEqual('{"mode": "all"}', environment["OPENTAG_SLACK_SEARCH_GRANT"])

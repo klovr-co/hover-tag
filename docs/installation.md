@@ -93,7 +93,8 @@ system Python and `tag start` never installs packages. For normal use, prefer th
 managed installer above so upgrades and runtime dependencies remain pinned.
 `./tag dev` starts the normal dependencies, watches Python source, reloads only
 the Slack bridge when files change, and shows bridge logs in the foreground.
-Ctrl-C stops that development bridge while leaving MFS running.
+For a loopback `MFS_URL`, it owns the MFS process and Ctrl-C stops both services.
+A configured remote MFS endpoint remains externally managed.
 
 ## Download installer
 

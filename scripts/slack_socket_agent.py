@@ -27,13 +27,13 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 try:
     from .opentag_process_env import backend_environment
     from .slack_mrkdwn import to_mrkdwn
-    from .slack_search_scope import ScopePlan, plan_search_scopes
+    from .slack_search_scope import ScopePlan, SearchIntent, plan_search_scopes
     from .tag_paths import tag_temp_dir
     from . import slack_channels
 except ImportError:  # Direct script execution does not create a package context.
     from opentag_process_env import backend_environment
     from slack_mrkdwn import to_mrkdwn
-    from slack_search_scope import ScopePlan, plan_search_scopes
+    from slack_search_scope import ScopePlan, SearchIntent, plan_search_scopes
     from tag_paths import tag_temp_dir
     import slack_channels
 
@@ -1561,6 +1561,13 @@ def cancel_active_run(key: RunKey, event_ts: str | None = None) -> bool:
     return True
 
 
+def slack_search_grant_json(plan: ScopePlan, request_text: str) -> str:
+    """Bind a pre-authorized channel grant to the original Slack request."""
+    payload = plan.as_dict()
+    payload["request_text"] = request_text
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
 def run_backend(
     backend: str,
     channel: str,
@@ -1575,6 +1582,7 @@ def run_backend(
     output_manifest: Path | None = None,
     max_timeout: int | None = None,
     scope_plan: ScopePlan | None = None,
+    slack_search_grant: ScopePlan | None = None,
 ) -> tuple[str, bool]:
     if max_timeout is None:
         max_timeout = int(os.getenv("OPENTAG_MAX_TIMEOUT_SECONDS", "3600"))
@@ -1621,7 +1629,16 @@ def run_backend(
             conversation_id=channel,
             caller_id=caller_id,
             authorized_scopes=scope_plan.allowed_scopes if scope_plan else None,
-            channel_labels=json.dumps(scope_plan.channel_labels, sort_keys=True) if scope_plan else None,
+            channel_labels=(
+                json.dumps(slack_search_grant.channel_labels, sort_keys=True)
+                if slack_search_grant
+                else None
+            ),
+            slack_search_grant=(
+                slack_search_grant_json(slack_search_grant, question)
+                if slack_search_grant and slack_search_grant.mode == "all"
+                else None
+            ),
         )
         result = subprocess.run(
             cmd,
@@ -1666,6 +1683,7 @@ def run_backend_events(
     output_manifest: Path | None = None,
     max_timeout: int | None = None,
     scope_plan: ScopePlan | None = None,
+    slack_search_grant: ScopePlan | None = None,
 ) -> tuple[str, bool]:
     """Consume normalized lifecycle events and forward only final-answer text."""
     if max_timeout is None:
@@ -1719,7 +1737,16 @@ def run_backend_events(
         conversation_id=channel,
         caller_id=caller_id,
         authorized_scopes=scope_plan.allowed_scopes if scope_plan else None,
-        channel_labels=json.dumps(scope_plan.channel_labels, sort_keys=True) if scope_plan else None,
+        channel_labels=(
+            json.dumps(slack_search_grant.channel_labels, sort_keys=True)
+            if slack_search_grant
+            else None
+        ),
+        slack_search_grant=(
+            slack_search_grant_json(slack_search_grant, question)
+            if slack_search_grant and slack_search_grant.mode == "all"
+            else None
+        ),
     )
     try:
         process = subprocess.Popen(
@@ -2696,25 +2723,22 @@ def create_app(
             configured_channels=configured_channels,
             allowed_scopes=os.getenv("MFS_ALLOWED_SCOPES", ""),
             client=client,
+            intent=SearchIntent("current"),
         )
-        if scope_plan.clarification:
-            client.chat_postMessage(
-                channel=channel,
-                thread_ts=thread_ts,
-                text=scope_plan.clarification,
-            )
-            return
-        if scope_plan.notice:
-            client.chat_postMessage(
-                channel=channel,
-                thread_ts=thread_ts,
-                text=scope_plan.notice,
-            )
+        slack_search_grant = plan_search_scopes(
+            request_text=question,
+            current_channel_id=channel,
+            caller_id=user_id,
+            team_id=policy_team,
+            configured_channels=configured_channels,
+            allowed_scopes=os.getenv("MFS_ALLOWED_SCOPES", ""),
+            client=client,
+            intent=SearchIntent("all"),
+        )
         agent_settings = normalize_settings(
             settings_store.get(team, user_id),
             models,
         )
-
         indicator = WorkingIndicator(
             client,
             channel,
@@ -2775,6 +2799,7 @@ def create_app(
                         output_manifest=output_manifest,
                         max_timeout=max_timeout,
                         scope_plan=scope_plan,
+                        slack_search_grant=slack_search_grant,
                     )
                 else:
                     answer, succeeded = run_backend(
@@ -2791,6 +2816,7 @@ def create_app(
                         output_manifest=output_manifest,
                         max_timeout=max_timeout,
                         scope_plan=scope_plan,
+                        slack_search_grant=slack_search_grant,
                     )
                 artifact_button_blocks: list[dict[str, Any]] = []
                 if succeeded:

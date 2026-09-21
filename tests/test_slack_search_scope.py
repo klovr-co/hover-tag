@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import patch
 
 from scripts.slack_search_scope import (
+    explicit_channel_names,
     indexed_slack_channels,
     mfs_scope_is_indexed,
     parse_search_intent,
@@ -78,6 +79,12 @@ SCOPES = ",".join(
 
 
 class SearchIntentTests(unittest.TestCase):
+    def test_explicit_names_support_slack_markup_without_treating_ids_as_names(self) -> None:
+        self.assertEqual(
+            ("general", "support"),
+            explicit_channel_names("search <#C123|general> and #support"),
+        )
+
     def test_ordinary_request_keeps_current_channel(self) -> None:
         self.assertEqual("current", parse_search_intent("What did we decide yesterday?").mode)
 
@@ -107,6 +114,11 @@ class SearchIntentTests(unittest.TestCase):
         ):
             with self.subTest(request=request):
                 self.assertEqual("all", parse_search_intent(request).mode)
+
+    def test_distribution_request_does_not_expand_read_scope(self) -> None:
+        self.assertEqual(
+            "current", parse_search_intent("Post this announcement across all channels").mode
+        )
 
     def test_vague_broad_words_require_clarification(self) -> None:
         self.assertEqual("clarify", parse_search_intent("search general workspace all").mode)

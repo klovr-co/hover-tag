@@ -16,6 +16,7 @@ SLACK_BRIDGE_ONLY_ENV = {
     "SLACK_ALLOWED_USER_IDS",
     "OPENTAG_SLACK_DM_ENABLED",
     "MFS_SLACK_TOKEN",
+    "OPENTAG_SLACK_SEARCH_GRANT",
 }
 
 
@@ -47,6 +48,7 @@ def backend_environment(
     caller_id: str,
     authorized_scopes: str | None = None,
     channel_labels: str | None = None,
+    slack_search_grant: str | None = None,
 ) -> dict[str, str]:
     clean = isolated_environment(source, transport=transport)
     # The backend may use SLACK_BOT_TOKEN through channel-restricted helpers,
@@ -65,4 +67,8 @@ def backend_environment(
         clean["OPENTAG_SLACK_CHANNEL_LABELS"] = channel_labels
     else:
         clean.pop("OPENTAG_SLACK_CHANNEL_LABELS", None)
+    if slack_search_grant:
+        clean["OPENTAG_SLACK_SEARCH_GRANT"] = slack_search_grant
+    else:
+        clean.pop("OPENTAG_SLACK_SEARCH_GRANT", None)
     return clean

@@ -33,6 +33,9 @@ except ImportError:  # Direct execution: python3 scripts/slack_search_scope.py
 
 CHANNEL_ID_RE = re.compile(r"^[CG][A-Z0-9]+$")
 CHANNEL_REF_RE = re.compile(r"(?<![\w])#([\w][\w-]{0,79})", re.IGNORECASE)
+SLACK_CHANNEL_REF_RE = re.compile(
+    r"<#[CG][A-Z0-9]+\|([^>]+)>", re.IGNORECASE
+)
 CHANNEL_NAME = r"[\w][\w-]{0,79}"
 NAMED_CHANNELS_RE = (
     re.compile(
@@ -152,6 +155,14 @@ def normalize_channel_name(value: str) -> str:
     return value.strip().lstrip("#").casefold()
 
 
+def explicit_channel_names(text: str) -> tuple[str, ...]:
+    """Return explicit channel names without mistaking Slack IDs for names."""
+    names = [normalize_channel_name(name) for name in SLACK_CHANNEL_REF_RE.findall(text)]
+    plain_text = SLACK_CHANNEL_REF_RE.sub(" ", text)
+    names.extend(normalize_channel_name(name) for name in CHANNEL_REF_RE.findall(plain_text))
+    return tuple(dict.fromkeys(name for name in names if name))
+
+
 def _plain_channel_names(text: str) -> tuple[str, ...]:
     for pattern in NAMED_CHANNELS_RE:
         match = pattern.search(text)
@@ -167,16 +178,16 @@ def _plain_channel_names(text: str) -> tuple[str, ...]:
 
 def parse_search_intent(text: str) -> SearchIntent:
     """Recognize only explicit broadening; uncertain wording asks for clarification."""
-    names = tuple(dict.fromkeys(normalize_channel_name(name) for name in CHANNEL_REF_RE.findall(text)))
+    names = explicit_channel_names(text)
     if not names:
         names = _plain_channel_names(text)
     if names and all(name in {"all", "every"} for name in names):
         names = ()
-    has_search_verb = bool(SEARCH_VERB_RE.search(text))
+    has_retrieval_cue = bool(SEARCH_VERB_RE.search(text))
     requests_all = bool(ALL_CHANNELS_RE.search(text))
     if names and requests_all:
         return SearchIntent("clarify")
-    if names and has_search_verb:
+    if names and has_retrieval_cue:
         return SearchIntent("named", names)
     if requests_all:
         return SearchIntent("all")
@@ -185,7 +196,7 @@ def parse_search_intent(text: str) -> SearchIntent:
         bool(re.search(pattern, text, re.IGNORECASE))
         for pattern in (r"\ball\b", r"\bacross\b", r"\bworkspace\b", r"\bslack\b", r"\bchannels?\b")
     )
-    if has_search_verb and broad_terms >= 2:
+    if has_retrieval_cue and broad_terms >= 2:
         return SearchIntent("clarify")
     return SearchIntent("current")
 
@@ -353,11 +364,12 @@ def plan_search_scopes(
     configured_channels: str,
     allowed_scopes: str,
     client: SlackClient,
+    intent: SearchIntent | None = None,
     scope_is_indexed: Callable[[str], bool] | None = None,
     resolve_indexed_scope: Callable[[IndexedChannel], str | None] | None = None,
 ) -> ScopePlan:
     """Resolve an explicit request to the least set of proven channel scopes."""
-    intent = parse_search_intent(request_text)
+    intent = intent or parse_search_intent(request_text)
     if intent.mode == "current":
         narrowed = current_channel_scopes(allowed_scopes, current_channel_id)
         return ScopePlan("current", tuple(parse_scopes(narrowed)))

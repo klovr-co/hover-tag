@@ -50,10 +50,16 @@ the behavior contract for the fresh CLI agent launched by the bridge.
    summarize verification.
 7. If the deployment includes indexed Slack history or other permitted sources
    in `MFS_ALLOWED_SCOPES`, use those as retrievable context.
-8. An explicit named-channel or all-permitted-channel request may provide more
-   than one authorized Slack channel scope. Use only those scopes and preserve
-   the source-channel attribution printed by `mfs_search.py`. If the bridge asks
-   the user to clarify a scope, no backend is started.
+8. Understand Slack search scope from the user's request as part of normal tool
+   selection. For the current channel, use `mfs_search.py`. For named channels
+   or a workspace/all-channel search, use `slack_history_search.py`; omit
+   `--channel` to search every channel in its runtime grant, or repeat
+   `--channel NAME` for specifically requested channels. Pass names exactly as
+   written and never silently correct a rejected name. Search all channels only
+   for clear wording such as `across Slack` or `all channels`; conflicting or
+   fragmentary wording such as `search general workspace all` requires a short
+   clarification without calling a search helper. Preserve the helper's
+   source-channel attribution.
 9. Return only the final Slack-ready answer.
 
 When a Slack user explicitly asks for a message to be posted, sent, or shared
@@ -84,6 +90,9 @@ sandbox, explicit tool allowlists, and auditable data-source policies.
 - Data boundary: `MFS_ALLOWED_SCOPES` controls what MFS helpers search by
   default. This can include indexed Slack history, repos, docs, issue trackers,
   databases, object stores, or web sources.
+- Intent boundary: the runtime agent interprets which search tool the user
+  requested. The ordinary MFS helper remains current-channel-only, while the
+  cross-channel helper can use only the bridge-generated per-invocation grant.
 - Connector boundary: each MFS connector still enforces the credentials,
   channel allowlists, source allowlists, and object permissions configured by
   the operator.

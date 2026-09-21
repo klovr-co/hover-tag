@@ -207,8 +207,11 @@ diagnostics after the quick status and recent logs.
 
 When developing from a prepared source checkout, use `./tag dev`. It watches
 `scripts/**/*.py`, reloads only the Slack bridge after changes, and streams its
-output in the foreground. Press Ctrl-C to stop the development bridge; MFS is
-left running. This command is intentionally unavailable from managed releases.
+output in the foreground. For the default loopback endpoint, Tag owns MFS as
+well: an identifiable untracked server is replaced with the checkout's runtime,
+and Ctrl-C stops both development services. Explicit remote MFS endpoints remain
+externally managed. This command is intentionally unavailable from managed
+releases.
 
 Mention `@OpenMax` in the sandbox channel you configured:
 
@@ -351,15 +354,21 @@ channel's indexed scope. An authorized caller can expand the search explicitly:
 - `look across Slack for earlier reports of this error`
 - `check all channels I can access for the customer name`
 
-Tag resolves channel names to stable Slack channel IDs before starting Codex or
-Claude. The eligible set is the intersection of the installation's workspace,
+The runtime agent understands the request and decides whether to use the normal
+current-channel MFS helper or `scripts/slack_history_search.py`. That dedicated
+helper searches all permitted indexed channels by default, or named channels
+selected with repeated `--channel` arguments. The model decides when to call the
+tool, but it cannot add channels to the tool's bridge-generated grant.
+
+Before starting Codex or Claude, Tag resolves the permitted grant to stable
+Slack channel IDs. The eligible set is the intersection of the installation's workspace,
 operator-approved channels, channel-specific MFS scopes, and channels whose
 visibility Tag can currently prove for the caller. Private channels and channels
 used by restricted or guest users require live membership proof. Archived,
 Slack Connect/shared, stale, unindexed, inaccessible, or API-unverifiable
-channels are omitted. If the request or a name is ambiguous, Tag asks for
-clarification and does not start a broader search. Typo suggestions can disclose
-only channels already proven eligible.
+channels are omitted. A named channel that is absent or non-unique in that grant
+is rejected by the helper without searching. The agent can then ask the user to
+clarify without receiving data from an unverified channel.
 
 Search results identify their source channel. Channel names are display
 metadata; authorization continues to use the stable ID, so a rename does not

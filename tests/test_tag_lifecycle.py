@@ -9,7 +9,7 @@ import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import psutil
 
@@ -94,6 +94,44 @@ class TagLifecycleTests(unittest.TestCase):
 
         self.assertNotIn(token, str(raised.exception))
         self.assertIn("<redacted>", str(raised.exception))
+
+    def test_local_mfs_endpoint_excludes_remote_and_non_http_urls(self) -> None:
+        self.assertTrue(tag_cli.local_mfs_endpoint("http://127.0.0.1:13619"))
+        self.assertTrue(tag_cli.local_mfs_endpoint("http://localhost:13619"))
+        self.assertFalse(tag_cli.local_mfs_endpoint("https://mfs.example.com"))
+        self.assertFalse(tag_cli.local_mfs_endpoint("file://local/mfs"))
+
+    def test_unmanaged_local_mfs_is_adopted_then_stopped(self) -> None:
+        process = MagicMock(pid=1234)
+        process.create_time.return_value = 42.0
+        with patch.object(tag_cli, "healthy", return_value=True), patch.object(
+            tag_cli, "process_for", side_effect=[None]
+        ), patch.object(tag_cli, "local_mfs_listener", return_value=process), patch.object(
+            tag_cli, "stop_process"
+        ) as stop:
+            self.assertTrue(
+                tag_cli.replace_unmanaged_local_mfs(
+                    self.home, "http://127.0.0.1:13619"
+                )
+            )
+
+        stop.assert_called_once_with(self.home, "mfs")
+        record = json.loads((self.home / "state/mfs.json").read_text(encoding="utf-8"))
+        self.assertEqual(
+            {"pid": 1234, "created": 42.0, "adopted": True}, record
+        )
+
+    def test_remote_mfs_is_never_adopted(self) -> None:
+        with patch.object(tag_cli, "healthy") as healthy, patch.object(
+            tag_cli, "local_mfs_listener"
+        ) as listener:
+            self.assertFalse(
+                tag_cli.replace_unmanaged_local_mfs(
+                    self.home, "https://mfs.example.com"
+                )
+            )
+        healthy.assert_not_called()
+        listener.assert_not_called()
 
     def test_legacy_slack_readiness_requires_a_fresh_connected_heartbeat(self) -> None:
         path = self.home / "runtime/slack-connected.json"
