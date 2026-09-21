@@ -153,6 +153,20 @@ class ReleaseResolutionTests(unittest.TestCase):
 
         api.assert_not_called()
 
+    def test_channel_index_transport_failures_fall_back_to_api(self) -> None:
+        expected = release_record("1.0.0", prerelease=False)
+        for error in (urllib.error.URLError("offline"), TimeoutError("timed out")):
+            with self.subTest(error=type(error).__name__), patch(
+                "scripts.tag_install._resolve_channel_from_index", side_effect=error
+            ), patch(
+                "scripts.tag_install._resolve_channel_from_api", return_value=expected
+            ) as api, contextlib.redirect_stderr(io.StringIO()) as stderr:
+                self.assertEqual(resolve_channel("stable"), expected)
+
+            api.assert_called_once_with("stable", timeout=120, page_limit=100)
+            self.assertIn("Channel index unavailable:", stderr.getvalue())
+            self.assertIn("falling back to the GitHub Releases API", stderr.getvalue())
+
     def test_channel_resolution_paginates_and_handles_no_stable_release(self) -> None:
         first_page = [
             {**release_record(f"0.0.{index}-alpha.1", prerelease=True), "draft": True}

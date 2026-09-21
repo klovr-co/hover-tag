@@ -312,9 +312,13 @@ def resolve_channel(
         return _resolve_channel_from_index(channel, timeout=timeout)
     except _ChannelHasNoRelease:
         raise
-    except (RuntimeError, ValueError):
+    except (RuntimeError, ValueError, urllib.error.URLError, TimeoutError) as error:
         # Compatibility path while the public index is unavailable during
         # rollout. Public installations normally avoid the rate-limited API.
+        print(
+            f"Channel index unavailable: {error}; falling back to the GitHub Releases API",
+            file=sys.stderr,
+        )
         return _resolve_channel_from_api(
             channel, timeout=timeout, page_limit=page_limit
         )
