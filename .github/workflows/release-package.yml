@@ -28,9 +28,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          test "$RELEASE_TAG" = "v$(head -n 1 VERSION)"
           python scripts/release_check.py
-          version=$(head -n 1 VERSION)
+          source_version=$(head -n 1 VERSION)
+          python scripts/release_automation.py validate-release-tag \
+            --source-version "$source_version" --tag "$RELEASE_TAG"
+          version=${RELEASE_TAG#v}
           case "$version" in
             *-alpha*|*-beta*) expected_prerelease=true ;;
             *) expected_prerelease=false ;;
@@ -42,7 +44,7 @@ jobs:
           asset_count=$(gh release view "$RELEASE_TAG" --json assets --jq '.assets | length')
           if [ "$asset_count" -eq 0 ]; then
             python scripts/package_release.py --commit-sha "$(git rev-parse HEAD)" \
-              --source-ref refs/heads/main
+              --source-ref refs/heads/main --version "$version"
             gh release upload "$RELEASE_TAG" \
               out/*.zip out/SHA256SUMS out/BUILD-PROVENANCE.json
           else

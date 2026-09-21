@@ -13,12 +13,28 @@ scratch. The bridge is intentionally thin. It only:
 5. Optionally streams normalized answer deltas, or posts the final answer when
    the selected backend provides only a completed response.
 
-The adapter does not answer questions itself. It passes the thread, channel id,
-and allowed MFS scopes to a fresh CLI agent.
+The adapter does not answer task questions or classify their meaning. It passes
+the thread, current-channel MFS scope, and a separate cross-channel search grant
+to a fresh CLI agent. The runtime agent understands the request and chooses
+whether to call the dedicated Slack-history helper.
 
-The Slack app token and bot token are only for receiving invocations, reading
-the current thread, and posting replies. `tag setup` separately configures an MFS
-Slack-history credential, explicit channel-ID allowlist, and source URI.
+By default, `scripts/mfs_search.py` remains narrowed to the invoking channel
+exactly as before. Independently, `scripts/slack_search_scope.py` computes the
+intersection of the installation workspace, `SLACK_CHANNEL_IDS`, indexed
+channel scopes, and live caller visibility. Both Codex and Claude receive that
+same pre-authorized result through `scripts/slack_history_search.py`. With no
+`--channel` argument the helper searches the entire grant; repeated `--channel`
+arguments select exact names from it. Missing, malformed, ambiguous, or
+ungranted names fail without searching. Authorization policy is enforced by
+code and must not be reimplemented in a prompt or adapter.
+
+The Slack app token opens Socket Mode for receiving invocations. The bot token
+authenticates the bot, reads current threads, checks app and workspace identity
+and caller visibility for authorized cross-channel search, and posts replies.
+The local backend inherits the bot token; Tag withholds the app token and bridge
+access-control settings as described in [Security](../SECURITY.md#credential-boundary).
+`tag setup` separately configures an MFS Slack-history credential, explicit
+channel-ID allowlist, and source URI.
 
 Relevant Slack docs:
 
@@ -83,6 +99,7 @@ Create or reuse a Slack app:
    - `channels:read` + `channels:history` — read threads in public channels.
    - `groups:read` + `groups:history` — read threads in private channels.
    - `im:history` — read direct-message threads when DM invocation is enabled.
+   - `users:read` — verify app identity and caller visibility for cross-channel search.
 5. Open **Event Subscriptions** and subscribe to Bot Events:
    - `app_mention`
    - `message.im`
@@ -186,6 +203,21 @@ fresh backend task, while replies reuse only that DM thread's bounded context
 
 The bridge does not need a model API key. The selected CLI backend handles model
 auth and tool execution.
+
+### Cross-channel failure behavior
+
+- Slack user or channel lookup failure denies the affected expansion.
+- Private channels require caller membership. Restricted and guest users require
+  membership for public channels too; pagination is followed to a definitive
+  result.
+- Shared, archived, deleted, unindexed, unapproved, or wrong-workspace channels
+  never enter the backend scope.
+- An unavailable requested name is reported generically. Suggestions are drawn
+  only from channels whose access was already proven.
+- MFS read or search failures remain ordinary retrieval failures and never cause
+  a retry with a wider scope.
+- Channel names in results are refreshed display metadata. IDs embedded in MFS
+  scopes remain the authorization key across renames.
 
 Optional:
 

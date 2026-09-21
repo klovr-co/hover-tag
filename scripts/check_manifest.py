@@ -22,6 +22,7 @@ REQUIRED_SCOPES = {
     "groups:history",
     "groups:read",
     "im:history",
+    "users:read",
 }
 
 

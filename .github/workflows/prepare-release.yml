@@ -11,7 +11,7 @@ on:
         description: Release phase encoded by VERSION
         required: true
         type: choice
-        options: [alpha, beta, stable]
+        options: [beta, stable]
 
 permissions:
   actions: read
