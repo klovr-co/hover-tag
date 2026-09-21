@@ -74,7 +74,7 @@ def validate_release(root: Path) -> list[str]:
     for token in (
         "Slack + Codex CLI + a local MFS server",
         f"v{contract_version}" if contract_version else "## v",
-        "explicit owner action",
+        "Stable releases remain explicit owner actions",
     ):
         if release and token not in release:
             errors.append(f"RELEASE.md is missing contract text: {token!r}")

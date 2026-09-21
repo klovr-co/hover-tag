@@ -139,8 +139,8 @@ def validate_release_tag(source_version: str, release_tag: str) -> list[str]:
     except ValueError as error:
         return [str(error)]
 
-    if tagged.phase == "alpha" and tagged.number is not None:
-        if source.phase == "alpha" and source.core == tagged.core:
+    if tagged.phase in {"alpha", "beta"} and tagged.number is not None:
+        if source.phase == tagged.phase and source.core == tagged.core:
             return []
     elif source == tagged:
         return []
@@ -149,10 +149,10 @@ def validate_release_tag(source_version: str, release_tag: str) -> list[str]:
     ]
 
 
-def select_auto_alpha(
+def select_auto_prerelease(
     base_version: str, tags: Iterable[str], labels: Iterable[str]
 ) -> Version | None:
-    """Select the next automatic alpha, or None when publication is skipped."""
+    """Select the next automatic alpha or beta, or skip publication."""
     base = Version.parse(base_version)
     supplied_labels = set(labels)
     unknown_labels = supplied_labels - AUTO_RELEASE_LABELS
@@ -165,8 +165,11 @@ def select_auto_alpha(
         raise ValueError(
             "conflicting automatic release labels: " + ", ".join(sorted(selected_labels))
         )
-    if "release:skip" in selected_labels or base.phase != "alpha":
+    if "release:skip" in selected_labels or base.phase == "stable":
         return None
+
+    if base.phase == "beta" and selected_labels:
+        raise ValueError("a beta line only supports the release:skip label")
 
     published: list[Version] = []
     for tag in tags:
@@ -176,6 +179,20 @@ def select_auto_alpha(
             continue
 
     previous = max(published, key=Version.precedence, default=None)
+    if base.phase == "beta":
+        if previous is None:
+            raise ValueError("a beta line requires a published alpha candidate")
+        existing_numbers = [
+            item.number or 0
+            for item in published
+            if item.core == base.core and item.phase == "beta"
+        ]
+        selected = Version(*base.core, "beta", max(existing_numbers, default=0) + 1)
+        errors = validate_transition(previous, selected)
+        if errors:
+            raise ValueError("; ".join(errors))
+        return selected
+
     if previous is None:
         core = base.core
     elif "release:next-patch" in selected_labels:
@@ -454,7 +471,7 @@ def main() -> int:
     candidate.add_argument("--phase", choices=("alpha", "beta", "stable"), required=True)
     candidate.add_argument("--allow-existing-version", action="store_true")
 
-    automatic = subparsers.add_parser("next-alpha")
+    automatic = subparsers.add_parser("next-prerelease")
     automatic.add_argument("--base-version", required=True)
     automatic.add_argument("--label", action="append", default=[])
 
@@ -502,10 +519,10 @@ def main() -> int:
         return _print_errors(validate_candidate(
             args.version, args.phase, tags, args.allow_existing_version
         ))
-    if args.command == "next-alpha":
+    if args.command == "next-prerelease":
         tags = subprocess.check_output(["git", "tag", "--list", "v*"], text=True).splitlines()
         try:
-            version = select_auto_alpha(args.base_version, tags, args.label)
+            version = select_auto_prerelease(args.base_version, tags, args.label)
         except ValueError as error:
             return _print_errors([str(error)])
         print(version if version is not None else "skip")
