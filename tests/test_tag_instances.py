@@ -49,6 +49,7 @@ class TagInstanceTests(unittest.TestCase):
 
         self.assertEqual(workspace, user_home / "Tag/default")
         self.assertTrue((workspace / ".codex/config.toml").is_file())
+        self.assertFalse((context.home / "workspace").exists())
 
     def test_invalid_unknown_duplicate_and_symlink_names_do_not_create_data(self) -> None:
         for name in ("Default", "../escape", "two words", "", "a" * 33, "status"):

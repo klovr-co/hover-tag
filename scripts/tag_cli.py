@@ -912,6 +912,13 @@ def upgrade_reminder(
     current_path = installation_root / "current.json"
     try:
         current = json.loads(current_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        try:
+            current = {
+                "installed_version": (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+            }
+        except (OSError, UnicodeError):
+            return None
     except (OSError, UnicodeError, json.JSONDecodeError):
         return None
     if not isinstance(current, dict) or current.get("selection") == "version":
@@ -952,8 +959,20 @@ def upgrade_reminder(
             cache_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             atomic_text(cache_path, json.dumps(cached, indent=2, sort_keys=True) + "\n")
         except (OSError, ValueError, RuntimeError, KeyError, TypeError):
-            if not cached or cached.get("channel") != channel:
-                return None
+            previous = cached if cached.get("channel") == channel else {}
+            cached = {
+                "schema_version": 1,
+                "checked_at": checked_at,
+                "channel": channel,
+            }
+            for key in ("target_version", "target_commit"):
+                if key in previous:
+                    cached[key] = previous[key]
+            try:
+                cache_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                atomic_text(cache_path, json.dumps(cached, indent=2, sort_keys=True) + "\n")
+            except OSError:
+                pass
 
     target_version = cached.get("target_version")
     target_commit = cached.get("target_commit")

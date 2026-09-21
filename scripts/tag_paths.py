@@ -13,7 +13,12 @@ from pathlib import Path
 def platform_tag_home() -> Path:
     """Return the platform-native installation root without applying overrides."""
     if sys.platform == "win32":
-        return Path(os.getenv("LOCALAPPDATA", str(Path.home() / "AppData/Local"))) / "Tag"
+        data = Path(
+            os.getenv("LOCALAPPDATA", str(Path.home() / "AppData/Local"))
+        ).expanduser()
+        if not data.is_absolute():
+            data = Path.home() / "AppData/Local"
+        return data / "Tag"
     if sys.platform == "darwin":
         return Path.home() / "Library/Application Support/Tag"
     data = Path(os.getenv("XDG_DATA_HOME", str(Path.home() / ".local/share")))
@@ -107,9 +112,6 @@ def initialize_instance(home: Path) -> None:
     for name in ("config", "integrations/bin", "state", "tmp"):
         (home / name).mkdir(parents=True, exist_ok=True, mode=0o700)
     restrict_windows_acl(home)
-    selected = Path(os.getenv("OPENTAG_WORKDIR", str(home / "workspace"))).expanduser()
-    if selected.resolve(strict=False) == (home / "workspace").resolve(strict=False):
-        initialize_workspace(selected)
 
 
 def restrict_windows_acl(home: Path) -> None:
