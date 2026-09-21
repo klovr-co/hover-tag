@@ -22,6 +22,8 @@ class OpenTagAgentPromptTests(unittest.TestCase):
             attachments_dir=None,
             allowed_scopes="slack://tag-t1/channels/general__C123",
         )
+        self.assertIn("/tmp/open-tag/references/runtime-agent.md", prompt)
+        self.assertNotIn("/tmp/open-tag/SKILL.md", prompt)
         self.assertIn("search general workspace all", prompt)
         self.assertIn("ask a short scope", prompt)
         self.assertIn("do not call a search helper", prompt)

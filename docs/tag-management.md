@@ -1,9 +1,10 @@
 # Set up and manage Tag
 
-The CLI, guided settings, and admin skill share the same settings and lifecycle
-operations. Use `tag` for a status summary and next command, or ask an assistant with the
-`open-tag-admin` skill to set up, change, or diagnose Tag. Both begin by inspecting
-what is already configured.
+The CLI and guided settings share the same settings and lifecycle operations.
+Use `tag` for a status summary and next command. An assistant managing Tag should
+begin with `tag inspect --json` to inspect what is already configured.
+Slack runtime agents load the runtime contract; Tag does not bundle an admin
+skill into their workspace.
 
 ## The journey
 
