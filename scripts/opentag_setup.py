@@ -30,6 +30,7 @@ try:
     import setup_ui as ui
     import slack_permissions
     import slack_app_create
+    import slack_manifest_migrations
     import slack_credentials
     import tag_credentials
     import tag_cli as lifecycle
@@ -40,6 +41,7 @@ except ImportError:
     from scripts import setup_ui as ui
     from scripts import slack_permissions
     from scripts import slack_app_create
+    from scripts import slack_manifest_migrations
     from scripts import slack_credentials
     from scripts import tag_credentials
     from scripts import tag_cli as lifecycle
@@ -220,7 +222,10 @@ def inspect_slack_app(project: Path, app_id: str, *, issues: list[str] | None = 
         ui.message("App configuration needs attention: " + ", ".join(missing))
         if issues is not None:
             issues.extend(missing)
-        ui.message("Open app settings, make the listed changes, then choose Check again.")
+        if "Agent view enabled" in missing:
+            ui.message("Tag can enable Agent messaging with Slack CLI from the next menu.")
+        if any(label != "Agent view enabled" for label in missing):
+            ui.message("Open app settings, make the other listed changes, then choose Check again.")
         print()
         ui.message("In Slack app settings:")
         if any(label in missing for label in (
@@ -990,10 +995,34 @@ def choose_slack_app(
         print()
         ui.message("Your app selection and link are saved.")
         while True:
-            choice = ui.choose("App settings need attention", ["Open app settings", "Check again", "Save and exit"])
-            if choice == 0:
+            can_enable_agent = "Agent view enabled" in issues
+            options = (["Enable Agent messaging with Slack CLI"] if can_enable_agent else []) + [
+                "Open app settings", "Check again", "Save and exit",
+            ]
+            choice = ui.choose("App settings need attention", options)
+            if can_enable_agent and choice == 0:
+                def approve_legacy() -> bool:
+                    ui.notice(
+                        "Slack currently uses the legacy Assistant messaging experience",
+                        "Switching this app to Agent messaging cannot be reversed.",
+                    )
+                    return confirm("Switch permanently to Agent messaging?", default=False)
+
+                try:
+                    changed = slack_manifest_migrations.enable_agent_view(
+                        project, app_id, team_id, approve_legacy=approve_legacy
+                    )
+                except RuntimeError as exc:
+                    ui.message(str(exc))
+                    continue
+                if changed:
+                    ui.message("✓ Agent messaging enabled through Slack CLI")
+                    break
+                continue
+            browser_choice = choice - int(can_enable_agent)
+            if browser_choice == 0:
                 webbrowser.open(f"https://api.slack.com/apps/{app_id}")
-            elif choice == 1:
+            elif browser_choice == 1:
                 break
             else:
                 raise ui.Paused()

@@ -11,6 +11,8 @@
 - Give the built-in `default` Tag the same `instances/default` isolation and
   scrubbed runtime environment as every named Tag; existing root-level default
   data requires a one-time stopped-service migration.
+- Let existing-app setup enable Slack's Agent messaging experience through a
+  targeted, verified manifest sync while preserving unrelated app settings.
 
 All notable changes to Tag are documented here.
 

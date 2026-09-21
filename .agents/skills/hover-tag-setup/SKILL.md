@@ -91,6 +91,9 @@ Setup owns these steps:
 - App compatibility checks and automatic credential handoff. Hidden terminal
   token entry is a recovery option, not the default. Never request tokens in
   chat or put literal credentials in shell arguments, history, or files in this skill.
+- A targeted Slack CLI repair when Agent messaging is missing. Setup preserves
+  unrelated manifest settings and asks before replacing the irreversible legacy
+  Assistant experience; other compatibility changes remain guided manual steps.
 - Owner identity, channels, history window, and memory-policy approval.
   Preserve the caller allowlist; widen access only on explicit user request.
 - Finish approval, which starts services and indexing unless `--no-start` is used.
@@ -114,9 +117,10 @@ name, and then continues setup. The alias appears in commands such as
 `tag klovr status`; it is separate from the assistant display name, so multiple
 workspaces may all use a Slack name such as “Maya's Tag.”
 
-For compatibility or permission failures, follow the displayed checklist and
-have the user or workspace admin make the required Slack changes. Do not loop
-on app creation, automatically broaden scopes, or reset the installation.
+For compatibility or permission failures, use setup's targeted Agent messaging
+repair when offered. Otherwise follow the displayed checklist and have the user
+or workspace admin make the required Slack changes. Do not loop on app creation,
+automatically broaden scopes, or reset the installation.
 When app creation has an uncertain outcome, inspect the saved identity before
 attempting creation again. Resume with the existing app when possible.
 
