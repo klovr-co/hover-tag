@@ -2819,6 +2819,17 @@ def create_app(
                 text=UNAUTHORIZED_USER_MESSAGE,
             )
             return
+        try:
+            validate_attachment_metadata(
+                [file for file in event.get("files") or [] if isinstance(file, dict)]
+            )
+        except AttachmentLimitError as exc:
+            client.chat_postMessage(
+                channel=channel,
+                thread_ts=thread_ts,
+                text=str(exc),
+            )
+            return
         team = body.get("team_id") or event.get("team") or ""
         question = strip_mention(event.get("text", ""))
         agent_settings = normalize_settings(
@@ -2984,6 +2995,18 @@ def create_app(
                                 + "; ".join(upload_errors)
                             ),
                         )
+        except AttachmentLimitError as exc:
+            indicator.clear()
+            if answer_stream is not None:
+                answer_stream.abort()
+            post_final_reply(
+                client,
+                channel,
+                thread_ts,
+                str(exc),
+                indicator.message_ts,
+                None,
+            )
         except Exception as exc:
             error_reference = uuid.uuid4().hex[:8].upper()
             logger.exception("Open Tag failed [%s]", error_reference)

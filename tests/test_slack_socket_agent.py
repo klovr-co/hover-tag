@@ -163,6 +163,26 @@ class SlackBinaryAttachmentTests(unittest.TestCase):
 
 
 class SlackAttachmentLimitTests(unittest.TestCase):
+    def test_rejects_too_many_or_too_large_a_combined_attachment_set(self) -> None:
+        too_many = [
+            {"id": f"F{index}", "name": f"file-{index}.txt", "size": 1}
+            for index in range(slack_socket_agent.MAX_ATTACHMENTS_PER_REQUEST + 1)
+        ]
+        with self.assertRaisesRegex(
+            slack_socket_agent.AttachmentLimitError, "at most 10 files"
+        ):
+            slack_socket_agent.validate_attachment_metadata(too_many)
+
+        each_size = slack_socket_agent.MAX_TOTAL_ATTACHMENT_BYTES // 3 + 1
+        combined_too_large = [
+            {"id": f"F{index}", "name": f"file-{index}.zip", "size": each_size}
+            for index in range(3)
+        ]
+        with self.assertRaisesRegex(
+            slack_socket_agent.AttachmentLimitError, "30 MB per-request limit"
+        ):
+            slack_socket_agent.validate_attachment_metadata(combined_too_large)
+
     def test_declared_oversized_file_is_rejected_before_work_starts(self) -> None:
         fake_app = FakeApp()
         client = MagicMock()
@@ -212,7 +232,7 @@ class SlackAttachmentLimitTests(unittest.TestCase):
         fake_app = FakeApp()
         client = MagicMock()
         indicator = MagicMock()
-        indicator.message_ts = "loading-ts"
+        indicator.message_ts = None
         limit_error = slack_socket_agent.AttachmentLimitError.for_file("example.zip")
         with patch.object(
             slack_socket_agent, "App", return_value=fake_app
