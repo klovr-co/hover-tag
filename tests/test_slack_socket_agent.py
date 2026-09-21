@@ -113,6 +113,32 @@ class SlackTextAttachmentTests(unittest.TestCase):
         self.assertTrue(text[0].endswith("[Attachment text truncated]"))
 
 
+class SlackBinaryAttachmentTests(unittest.TestCase):
+    def test_downloads_binary_attachment_to_invocation_directory(self) -> None:
+        messages = [{"files": [{
+            "id": "FZIP",
+            "name": "tag-feature-catalog.zip",
+            "mimetype": "application/zip",
+            "url_private_download": "https://files.slack.com/FZIP",
+        }]}]
+        client = MagicMock()
+        client.conversations_replies.return_value = {"messages": messages}
+        with tempfile.TemporaryDirectory() as raw_dir, patch(
+            "scripts.slack_socket_agent.download_file_bytes",
+            return_value=b"PK\x03\x04archive",
+        ), patch.dict(os.environ, {"SLACK_BOT_TOKEN": "xoxb-test"}, clear=False):
+            thread_text = slack_socket_agent.build_thread_text(
+                client, "C123", "1.23", Path(raw_dir)
+            )
+            downloaded = Path(raw_dir) / "tag-feature-catalog.zip"
+
+            self.assertEqual(b"PK\x03\x04archive", downloaded.read_bytes())
+            self.assertIn(
+                f"[Slack file attachment: tag-feature-catalog.zip (application/zip) at {downloaded}]",
+                thread_text,
+            )
+
+
 class SlackOutputArtifactTests(unittest.TestCase):
     def test_local_artifact_actions_allow_enabled_direct_messages(self) -> None:
         fake_app = FakeApp()
@@ -1317,6 +1343,10 @@ class SlackWorkingIndicatorTests(unittest.TestCase):
 
         first_call = client.assistant_threads_setStatus.call_args_list[0].kwargs
         self.assertEqual("is working on this…", first_call["status"])
+        self.assertEqual(
+            "",
+            client.assistant_threads_setStatus.call_args_list[-1].kwargs["status"],
+        )
         self.assertEqual(slack_socket_agent.LOADING_MESSAGES, first_call["loading_messages"])
         self.assertEqual(
             ["processing", "active"],

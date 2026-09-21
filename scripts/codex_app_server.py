@@ -20,9 +20,10 @@ from typing import Any
 
 
 # Prompts are controlled by Tag, while completed tool and image events may
-# legitimately contain substantially larger output from Codex.
+# legitimately contain substantially larger output from Codex. The response
+# bound accommodates Tag's 15 MiB image limit after base64 expansion.
 MAX_REQUEST_LINE_BYTES = 1024 * 1024
-MAX_RESPONSE_LINE_BYTES = 16 * 1024 * 1024
+MAX_RESPONSE_LINE_BYTES = 32 * 1024 * 1024
 MAX_STDERR_BYTES = 64 * 1024
 REQUEST_TIMEOUT_SECONDS = 60.0
 INTERRUPT_GRACE_SECONDS = 5.0

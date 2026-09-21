@@ -536,6 +536,40 @@ def download_thread_text_files(messages: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
+def download_thread_binary_files(
+    messages: list[dict[str, Any]], attachment_dir: Path
+) -> list[str]:
+    """Download non-image, non-text Slack files without interpreting them."""
+    lines: list[str] = []
+    seen_file_ids: set[str] = set()
+    token = require_env("SLACK_BOT_TOKEN")
+
+    for message in messages:
+        for file in message.get("files") or []:
+            file_id = file.get("id")
+            if not file_id or file_id in seen_file_ids:
+                continue
+            seen_file_ids.add(file_id)
+            mime_type = (file.get("mimetype") or "application/octet-stream").lower()
+            if mime_type.startswith("image/") or is_text_file(file):
+                continue
+            name = attachment_name(file, len(seen_file_ids))
+            url = file.get("url_private_download") or file.get("url_private")
+            if not url:
+                lines.append(f"[Slack file attachment could not be downloaded: {name}]")
+                continue
+            target = attachment_dir / name
+            try:
+                target.write_bytes(download_file_bytes(url, token))
+                lines.append(
+                    f"[Slack file attachment: {name} ({mime_type}) at {target}]"
+                )
+            except (OSError, urllib.error.URLError, ValueError) as exc:
+                target.unlink(missing_ok=True)
+                lines.append(f"[Could not retrieve Slack file {name}: {exc}]")
+    return lines
+
+
 def generated_images_dir(attachment_dir: Path) -> Path:
     """Return the backend/bridge handoff directory for generated images."""
     return attachment_dir / "results" / "images"
@@ -604,6 +638,7 @@ def build_thread_text(client: Any, channel: str, thread_ts: str, attachment_dir:
         lines.extend(format_message_attachments(message))
     lines.extend(download_thread_text_files(messages))
     lines.extend(download_thread_images(messages, attachment_dir))
+    lines.extend(download_thread_binary_files(messages, attachment_dir))
     return "\n".join(lines)
 
 
@@ -1304,22 +1339,26 @@ class WorkingIndicator:
             self.native = False
             if not complete_session:
                 return
+            remove_journal = False
             if self.session_api:
                 try:
                     self.set_session_status("active")
-                    self.journal_remove()
+                    remove_journal = True
                 except Exception as exc:  # noqa: BLE001 - final replies must still be delivered
                     self.logger.warning("Could not complete Slack agent session status: %s", exc)
-            elif self.legacy_status:
+            if self.legacy_status:
                 try:
                     self.client.assistant_threads_setStatus(
                         channel_id=self.channel,
                         thread_ts=self.thread_ts,
                         status="",
                     )
-                    self.journal_remove()
+                    if not self.session_api:
+                        remove_journal = True
                 except Exception as exc:  # noqa: BLE001 - final replies must still be delivered
                     self.logger.warning("Could not clear native Slack loading status: %s", exc)
+            if remove_journal:
+                self.journal_remove()
             self.session_api = False
             self.legacy_status = False
 

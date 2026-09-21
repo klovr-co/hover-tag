@@ -260,11 +260,12 @@ for raw in sys.stdin:
             raise SystemExit(7)
         if "wait-for-interrupt" not in prompt:
             if "large-image-event" in prompt:
+                encoded_image_bytes = ((15 * 1024 * 1024 + 2) // 3) * 4
                 send({"method": "item/completed", "params": {
                     "threadId": "thread-1", "turnId": "turn-1", "completedAtMs": 2,
                     "item": {
                         "id": "image-large", "type": "imageGeneration", "status": "completed",
-                        "result": "data:image/png;base64," + "x" * (1024 * 1024),
+                        "result": "data:image/png;base64," + "x" * encoded_image_bytes,
                     }
                 }})
             print("malformed diagnostic", flush=True)
