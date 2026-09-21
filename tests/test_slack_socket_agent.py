@@ -48,8 +48,8 @@ class FakeApp:
 class SlackBotNameTests(unittest.TestCase):
     def test_openmax_is_the_backend_independent_default(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(slack_socket_agent.suggested_bot_name("codex"), "OpenMax")
-            self.assertEqual(slack_socket_agent.suggested_bot_name("claude"), "OpenMax")
+            self.assertEqual(slack_socket_agent.suggested_bot_name("codex"), "Tag")
+            self.assertEqual(slack_socket_agent.suggested_bot_name("claude"), "Tag")
 
     def test_operator_can_override_the_display_name(self) -> None:
         with patch.dict(os.environ, {"OPENTAG_BOT_NAME": "TeamBot"}, clear=True):
