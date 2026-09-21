@@ -18,6 +18,7 @@ from scripts import tag_instances
 from scripts.tag_install import (
     ADMIN_SKILL,
     API_RELEASES,
+    CHANNEL_INDEX_URL,
     FetchedRelease,
     LEGACY_ADMIN_SKILL,
     ReleaseSelection,
@@ -79,10 +80,92 @@ class ReleaseResolutionTests(unittest.TestCase):
             release_record("1.1.0-beta.1", prerelease=True),
             {**release_record("9.0.0", prerelease=False), "draft": True},
         ]
-        with patch("scripts.tag_install._json_download", return_value=releases):
+        with patch(
+            "scripts.tag_install._resolve_channel_from_index",
+            side_effect=RuntimeError("channel index unavailable"),
+        ), patch("scripts.tag_install._json_download", return_value=releases):
             self.assertEqual(resolve_channel("stable")["tag_name"], "v1.0.0")
             self.assertEqual(resolve_channel("beta")["tag_name"], "v1.1.0-beta.1")
             self.assertEqual(resolve_channel("alpha")["tag_name"], "v1.1.0-beta.1")
+
+    def test_channels_prefer_public_index_without_calling_github_api(self) -> None:
+        sha = "d" * 40
+        index = {
+            "schema_version": 1,
+            "repository": "klovr-co/hover-tag",
+            "channels": {
+                "alpha": {
+                    "version": "1.2.0-beta.3",
+                    "tag": "v1.2.0-beta.3",
+                    "commit_sha": sha,
+                },
+            },
+        }
+        with patch("scripts.tag_install._json_download", return_value=index) as request:
+            release = resolve_channel("alpha")
+
+        request.assert_called_once_with(CHANNEL_INDEX_URL, timeout=120)
+        self.assertEqual(release["tag_name"], "v1.2.0-beta.3")
+        self.assertEqual(release["target_commitish"], sha)
+        self.assertEqual(
+            {asset["name"] for asset in release["assets"]},
+            {"tag-1.2.0-beta.3.zip", "SHA256SUMS", "BUILD-PROVENANCE.json"},
+        )
+        self.assertTrue(all(
+            "/releases/download/v1.2.0-beta.3/" in asset["browser_download_url"]
+            for asset in release["assets"]
+        ))
+
+    def test_channel_index_avoids_an_exhausted_api_quota(self) -> None:
+        index = {
+            "schema_version": 1,
+            "repository": "klovr-co/hover-tag",
+            "channels": {
+                "alpha": {
+                    "version": "1.2.0-alpha.4",
+                    "tag": "v1.2.0-alpha.4",
+                    "commit_sha": "a" * 40,
+                },
+            },
+        }
+
+        def response(url: str, *, timeout: float = 120):
+            if url == CHANNEL_INDEX_URL:
+                return index
+            raise RuntimeError("GitHub API rate limit exceeded; try again later")
+
+        with patch("scripts.tag_install._json_download", side_effect=response) as request:
+            self.assertEqual(resolve_channel("alpha")["tag_name"], "v1.2.0-alpha.4")
+
+        self.assertEqual(request.call_count, 1)
+
+    def test_valid_index_does_not_fall_back_when_channel_has_no_release(self) -> None:
+        index = {
+            "schema_version": 1,
+            "repository": "klovr-co/hover-tag",
+            "channels": {},
+        }
+        with patch("scripts.tag_install._json_download", return_value=index), patch(
+            "scripts.tag_install._resolve_channel_from_api"
+        ) as api:
+            with self.assertRaisesRegex(RuntimeError, "No published releases"):
+                resolve_channel("stable")
+
+        api.assert_not_called()
+
+    def test_channel_index_transport_failures_fall_back_to_api(self) -> None:
+        expected = release_record("1.0.0", prerelease=False)
+        for error in (urllib.error.URLError("offline"), TimeoutError("timed out")):
+            with self.subTest(error=type(error).__name__), patch(
+                "scripts.tag_install._resolve_channel_from_index", side_effect=error
+            ), patch(
+                "scripts.tag_install._resolve_channel_from_api", return_value=expected
+            ) as api, contextlib.redirect_stderr(io.StringIO()) as stderr:
+                self.assertEqual(resolve_channel("stable"), expected)
+
+            api.assert_called_once_with("stable", timeout=120, page_limit=100)
+            self.assertIn("Channel index unavailable:", stderr.getvalue())
+            self.assertIn("falling back to the GitHub Releases API", stderr.getvalue())
 
     def test_channel_resolution_paginates_and_handles_no_stable_release(self) -> None:
         first_page = [
@@ -90,10 +173,16 @@ class ReleaseResolutionTests(unittest.TestCase):
             for index in range(100)
         ]
         stable = release_record("1.0.0", prerelease=False)
-        with patch("scripts.tag_install._json_download", side_effect=[first_page, [stable]]) as request:
+        with patch(
+            "scripts.tag_install._resolve_channel_from_index",
+            side_effect=RuntimeError("channel index unavailable"),
+        ), patch("scripts.tag_install._json_download", side_effect=[first_page, [stable]]) as request:
             self.assertEqual(resolve_channel("stable")["tag_name"], "v1.0.0")
             self.assertEqual(request.call_count, 2)
         with patch(
+            "scripts.tag_install._resolve_channel_from_index",
+            side_effect=RuntimeError("channel index unavailable"),
+        ), patch(
             "scripts.tag_install._json_download",
             return_value=[release_record("1.1.0-alpha.1", prerelease=True)],
         ):
@@ -122,9 +211,15 @@ class ReleaseResolutionTests(unittest.TestCase):
 
     def test_edge_requires_the_published_moving_prerelease(self) -> None:
         edge = {"tag_name": "edge", "draft": False, "prerelease": True, "assets": []}
-        with patch("scripts.tag_install._json_download", return_value=edge):
+        with patch(
+            "scripts.tag_install._resolve_channel_from_index",
+            side_effect=RuntimeError("channel index unavailable"),
+        ), patch("scripts.tag_install._json_download", return_value=edge):
             self.assertEqual(resolve_channel("edge"), edge)
         with patch(
+            "scripts.tag_install._resolve_channel_from_index",
+            side_effect=RuntimeError("channel index unavailable"),
+        ), patch(
             "scripts.tag_install._json_download",
             return_value={**edge, "prerelease": False},
         ):

@@ -295,6 +295,12 @@ prefer `tag rollback` for the immediately previous release. Use
 `tag migrate --from /path/to/old/checkout` to copy legacy configuration and
 skills without deleting the originals.
 
+Channel installs and upgrades use a small public release index plus immutable
+GitHub release URLs, so users do not need a GitHub account or API token. Tag
+still verifies the downloaded checksum and build provenance before selecting a
+release. The GitHub Releases API remains a compatibility fallback if the public
+index is temporarily unavailable.
+
 Tag checks the saved release channel at most daily during normal human-readable
 status, inspection, setup, and start flows. A newer published release produces
 an advisory `tag upgrade` prompt; offline checks are silently skipped and never
