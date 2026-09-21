@@ -14,7 +14,6 @@ MODIFICATION_NOTICE = "Modified by klovr.co in 2026 for Tag."
 MODIFIED_UPSTREAM_FILES = (
     ".env.example",
     "README.md",
-    "SKILL.md",
     "references/runtime-agent.md",
     "references/slack-adapter.md",
     "scripts/opentag_agent.py",

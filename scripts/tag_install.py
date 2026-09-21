@@ -37,6 +37,7 @@ ASCII_FALLBACK = str.maketrans({
     "…": "...",
 })
 
+# Historical installer-owned wrappers, retained only to recognize them on upgrade.
 LEGACY_ADMIN_SKILL = (
     "---\nname: open-tag-admin\ndescription: Configure and diagnose this TAG installation.\n---\n"
     "Use `tag paths` to find this installation, `tag doctor` to check it, and "
@@ -467,7 +468,7 @@ def install(
             shutil.copytree(source / name, release / name,
                             ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         for name in ("VERSION", "LICENSE", "NOTICE", "README.md", "RELEASE.md", "SECURITY.md",
-                     "SKILL.md", ".env.example", "requirements-runtime.txt", "slack-app-manifest.yaml",
+                     ".env.example", "requirements-runtime.txt", "slack-app-manifest.yaml",
                      "tag", "tag.cmd", "install.sh", "install.ps1", "release-channels.json"):
             shutil.copy2(source / name, release / name)
         (release / "tag").chmod(0o755)
@@ -503,9 +504,10 @@ def install(
         for backend in (".agents", ".claude"):
             bundled = home / "workspace" / backend / "skills/open-tag-admin"
             skill = bundled / "SKILL.md"
-            if not bundled.exists() or (skill.is_file() and skill.read_text(encoding="utf-8") == LEGACY_ADMIN_SKILL):
-                bundled.mkdir(parents=True, exist_ok=True)
-                skill.write_text(ADMIN_SKILL, encoding="utf-8")
+            if skill.is_file() and skill.read_text(encoding="utf-8") in (LEGACY_ADMIN_SKILL, ADMIN_SKILL):
+                skill.unlink()
+                if not any(bundled.iterdir()):
+                    bundled.rmdir()
         # Keep the launcher fixed while the pointer changes atomically on upgrade.
         launcher = home / "bin/tag-launch.py"
         launcher_text = '''# TAG managed launcher
