@@ -494,6 +494,25 @@ class OpenTagSetupTests(unittest.TestCase):
         self.assertIn("Add app_home_opened", output.getvalue())
         browser.assert_not_called()
 
+    def test_missing_agent_view_omits_redundant_manual_guidance(self) -> None:
+        manifest = (opentag_setup.ROOT / "slack-app-manifest.yaml").read_text().replace(
+            "  agent_view:\n    agent_description: Run approved Codex or Claude tasks from Slack.\n",
+            "",
+        )
+        with patch.object(
+            opentag_setup.subprocess,
+            "run",
+            return_value=subprocess.CompletedProcess([], 0, manifest, ""),
+        ), redirect_stdout(StringIO()) as output:
+            self.assertFalse(opentag_setup.inspect_slack_app(Path("."), "ATEST"))
+        rendered = output.getvalue()
+        self.assertNotIn("App configuration needs attention", rendered)
+        self.assertNotIn("Agent view enabled", rendered)
+        self.assertNotIn("Tag can enable Agent messaging", rendered)
+        self.assertNotIn("In Slack app settings", rendered)
+        self.assertNotIn("Agents & AI Apps", rendered)
+        self.assertNotIn("Keep existing settings", rendered)
+
     def test_multiple_app_issues_offer_only_browser_guidance(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
