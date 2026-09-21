@@ -138,13 +138,15 @@ A configured remote MFS endpoint remains externally managed.
 These endpoints become usable after this implementation is merged and a release
 with `tag-<version>.zip`, `SHA256SUMS`, and `BUILD-PROVENANCE.json` has been
 published. The bare command follows the default in `release-channels.json`, which
-is currently `alpha`:
+is always `stable`. It does not fall back to a prerelease when no stable release
+exists; alpha, beta, and edge installations must select their channel explicitly:
 
 ```sh
 curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/klovr-co/tag/main/install.sh | sh
 
 # Choose an update channel explicitly.
 curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/klovr-co/tag/main/install.sh | sh -s -- --channel beta
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/klovr-co/tag/main/install.sh | sh -s -- --channel alpha
 curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/klovr-co/tag/main/install.sh | sh -s -- --channel edge
 
 # Reproduce one immutable release.
