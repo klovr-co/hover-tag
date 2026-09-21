@@ -46,7 +46,9 @@ saves approved choices without starting services or indexing. For a separate,
 resumable test configuration, use `tag setup --test`; it keeps data under
 `<TAG_HOME>/testing/onboarding` and implies `--no-start`. This is not a Slack
 sandbox: CLI sign-ins are shared and approved Slack app/channel operations are
-real. A test home needs a separate MFS server before you deliberately start it.
+real. Test mode labels its banner, app-creation choice, review warning, and
+default app name (`TEST · <first name>'s Tag`) accordingly. A test home needs a
+separate MFS server before you deliberately start it.
 
 Settings offers guided app/workspace changes, credential reconnection,
 multi-channel selection, history windows and invitation-memory policy.
@@ -79,6 +81,17 @@ not restart; check the app in Slack before running `tag setup`. The backup's
 `app-deletion.json` records the outcome. Missing or ambiguous identity never
 triggers deletion.
 Setup offers **Create a new Tag app**, **Use an existing app**, or **Save and exit**.
+Profile-picture selection and upload require Slack CLI 4.7 or newer.
+Before creating a new app, setup proposes **&lt;your first name&gt;'s Tag** and a
+curated version of Tag's waterdrop, selected from 144 approved base designs and
+16 subtle signatures (2,304 identities). Tag remembers the assignment and avoids
+known collisions for that workspace on the same installation. Choose **Use my Tag waterdrop** to
+keep that branded identity, or **Choose my own picture** and drag or paste one
+local PNG, JPEG, or GIF path into the terminal. Images must be 512–2000 pixels
+in each dimension. Before creating anything remotely, Tag reviews the chosen
+name and picture and offers to open the PNG in the system image viewer, change
+either choice, continue, or save and exit. Tag copies the result into its private
+Slack CLI project and the Slack CLI uploads it during the approved app creation.
 For an existing app, open https://api.slack.com/apps, sign in if asked, and select
 an app you manage for the chosen workspace. In **Basic Information → App Credentials**,
 copy the **App ID** (starting with `A`) and paste it into Tag. This is not a token

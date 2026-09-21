@@ -5,6 +5,7 @@ import json
 import os
 import re
 import tempfile
+import unicodedata
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -14,7 +15,7 @@ except ImportError:
     from scripts.mfs_scope_policy import canonical_uri, parse_scopes
 
 DEFAULTS = {
-    "OPENTAG_BACKEND": "codex", "OPENTAG_BOT_NAME": "OpenMax",
+    "OPENTAG_BACKEND": "codex", "OPENTAG_BOT_NAME": "Tag",
     "OPENTAG_CODEX_TRANSPORT": "app-server",
     "OPENTAG_TRANSPORT": "slack", "OPENTAG_TIMEOUT_SECONDS": "420",
     "OPENTAG_MAX_TIMEOUT_SECONDS": "3600",
@@ -83,6 +84,12 @@ def validation_error(key: str, value: str) -> str | None:
         return "Must not contain a null character"
     if key == "OPENTAG_BACKEND" and value not in {"codex", "claude"}:
         return "Choose codex or claude (experimental)"
+    if key == "OPENTAG_BOT_NAME" and (
+        not value.strip()
+        or len(value) > 35
+        or any(unicodedata.category(character) in {"Cc", "Zl", "Zp"} for character in value)
+    ):
+        return "Use a name from 1 to 35 characters without line breaks"
     if key == "OPENTAG_CODEX_TRANSPORT" and value not in {"exec", "app-server"}:
         return "Choose exec or app-server"
     if key == "OPENTAG_TRANSPORT" and value != "slack":
