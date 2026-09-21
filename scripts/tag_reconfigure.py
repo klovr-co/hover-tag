@@ -105,15 +105,16 @@ def commit(home: Path, draft: Path, original: dict[str, str]) -> None:
 
 
 def edit(home: Path, kind: str) -> None:
-    suffix = "" if os.getenv("TAG_ID", "default") == "default" else f" --tag {os.environ['TAG_ID']}"
+    tag_id = os.getenv("TAG_ID", "default")
+    target = "" if tag_id == "default" else f"{tag_id} "
     if lifecycle.process_for(home / "state/slack.json"):
         ui.notice("Stop Tag before changing Slack or memory",
-                  f"Run tag stop{suffix}, then reopen tag settings{suffix}. Your current setup is unchanged.")
+                  f"Run tag {target}stop, then reopen tag {target}settings. Your current setup is unchanged.")
         return
     path = settings.config_path(home)
     original = settings.load_config(path)
     if not original:
-        ui.message(f"Run tag setup{suffix} first.")
+        ui.message(f"Run tag {target}setup first.")
         return
     ui.message("Target: " + ui.display.target_detail(
         os.getenv("TAG_ID", "default"),
@@ -228,5 +229,6 @@ def run_draft(home: Path, draft: Path, kind: str, original: dict[str, str]) -> N
     if pointer.is_file() and json.loads(pointer.read_text()).get("path") == str(draft):
         pointer.unlink()
     ui.message(f"Changes saved. Previous settings and app links are kept in: {draft}")
-    suffix = "" if os.getenv("TAG_ID", "default") == "default" else f" --tag {os.environ['TAG_ID']}"
-    ui.message(f"Run tag start{suffix} to connect and apply the approved memory configuration.")
+    tag_id = os.getenv("TAG_ID", "default")
+    target = "" if tag_id == "default" else f"{tag_id} "
+    ui.message(f"Run tag {target}start to connect and apply the approved memory configuration.")

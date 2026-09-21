@@ -169,8 +169,9 @@ class TagControlTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn("tag setup", result.stdout)
         self.assertFalse(self.path.exists())
-        for command in ("setup", "settings", "menu"):
+        for command in ("setup", "settings"):
             self.assertEqual(self.cli(command).returncode, 2)
+        self.assertEqual(self.cli("menu").returncode, 1)
         result = self.cli("inspect", "--offline", "--json")
         self.assertEqual(json.loads(result.stdout)["state"], "not_configured")
         result = self.cli("doctor", "--offline", "--json")

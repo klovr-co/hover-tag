@@ -1453,8 +1453,9 @@ def finish_setup(config_path: Path, values: dict[str, str], channels: list[slack
     environment = dict(os.environ, OPENTAG_ENV_FILE=str(config_path))
     while True:
         ui.message("◌ Starting memory and connecting Tag…")
-        target = [] if os.getenv("TAG_ID", "default") == "default" else ["--tag", os.environ["TAG_ID"]]
-        result = subprocess.run([sys.executable, str(ROOT / "scripts/tag_cli.py"), "start", *target], env=environment, text=True, capture_output=True)
+        tag_id = os.getenv("TAG_ID", "default")
+        target = [] if tag_id == "default" else [tag_id]
+        result = subprocess.run([sys.executable, str(ROOT / "scripts/tag_cli.py"), *target, "start"], env=environment, text=True, capture_output=True)
         if result.returncode == 0:
             print()
             ui.message("✓ Tag is connected.")
