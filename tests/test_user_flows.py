@@ -10,18 +10,18 @@ from contextlib import redirect_stdout
 from io import StringIO
 from unittest.mock import patch
 
-from scripts import tag_cli, tag_control, tag_config, tag_reconfigure, opentag_setup
-from scripts.tag_paths import initialize
+from scripts import tag_cli, tag_control, tag_config, tag_instances, tag_reconfigure, opentag_setup
+from scripts.tag_paths import initialize_instance
 
 
 class FlowTests(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
-        self.home = Path(temp.name) / "home"
-        initialize(self.home)
+        self.root = Path(temp.name) / "home"
+        self.home = tag_instances.ensure_default(self.root).home
         self.config = self.home / "config/settings.json"
-        self.env = patch.dict(os.environ, {"TAG_HOME": str(self.home), "OPENTAG_ENV_FILE": str(self.config)})
+        self.env = patch.dict(os.environ, {"TAG_HOME": str(self.root), "OPENTAG_ENV_FILE": str(self.config)})
         self.env.start()
         self.addCleanup(self.env.stop)
 
@@ -199,7 +199,7 @@ class FlowTests(unittest.TestCase):
     def make_draft(self):
         original = self.seed()
         draft = self.home / "integrations/setup-drafts/settings-fixture"
-        initialize(draft)
+        initialize_instance(draft)
         opentag_setup.slack_project(draft)
         connector = opentag_setup.write_slack_connector("TOLD", [opentag_setup.slack_channels.SlackChannel("CNEW", "new", False, True)], "7", home=draft)
         values = dict(original, SLACK_CHANNEL_IDS="CNEW", MFS_SLACK_CONNECTOR_CONFIG=str(connector), MFS_SLACK_HISTORY_DAYS="7")

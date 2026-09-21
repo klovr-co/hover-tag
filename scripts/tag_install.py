@@ -442,6 +442,7 @@ def install(
     if (command.exists() or command.is_symlink()) and existing_owner is None:
         raise RuntimeError(f"Refusing to replace unrelated command: {command}. Choose --bin-dir.")
     initialize(home)
+    tag_instances.ensure_default(home)
     if legacy_command:
         atomic_text(
             home / "state/legacy-command.json",

@@ -69,8 +69,9 @@ Read `docs/tag-management.md` for the command/output contract.
 
 1. If Tag is not installed, run the repository's `./install.sh` (Windows:
    `./install.ps1`) and use the printed launcher. Installation creates a private
-   persistent home and runtime; configuration is `config/settings.json` there,
-   not `.env` in the source checkout.
+   persistent installation and runtime; default Tag configuration is
+   `instances/default/config/settings.json` there, not `.env` in the source
+   checkout.
 2. Run `tag inspect --json`. Read `state`, `configuration.fields`, `backend`,
    `services`, and `next_command`. Use `--offline` for a local-only inspection.
    Do not ask for values already saved. Redacted `[set]` values are present,

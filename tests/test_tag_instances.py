@@ -22,14 +22,21 @@ class TagInstanceTests(unittest.TestCase):
         self.root = Path(temporary.name) / "Tag"
         self.root.mkdir()
 
-    def test_default_keeps_legacy_paths_and_named_instances_are_separate(self) -> None:
-        default = tag_instances.resolve(self.root)
+    def test_default_and_named_instances_use_the_same_isolated_layout(self) -> None:
+        default = tag_instances.ensure_default(self.root)
         personal = tag_instances.create(self.root, "personal")
 
-        self.assertEqual(default.home, self.root)
+        self.assertEqual(default.home, self.root / "instances/default")
         self.assertEqual(personal.home, self.root / "instances/personal")
-        self.assertTrue((personal.home / "workspace/.codex/config.toml").is_file())
-        self.assertFalse((personal.home / "releases").exists())
+        for context in (default, personal):
+            self.assertTrue((context.home / "workspace/.codex/config.toml").is_file())
+            self.assertFalse((context.home / "releases").exists())
+            self.assertEqual(
+                json.loads((context.home / "instance.json").read_text())["id"],
+                context.tag_id,
+            )
+        self.assertFalse((self.root / "config").exists())
+        self.assertFalse((self.root / "workspace").exists())
         self.assertEqual(json.loads((personal.home / "instance.json").read_text())["id"], "personal")
 
     def test_invalid_unknown_duplicate_and_symlink_names_do_not_create_data(self) -> None:
@@ -69,7 +76,8 @@ class TagInstanceTests(unittest.TestCase):
         with patch.dict(os.environ, environment, clear=True):
             self.assertEqual(instance_home(), home)
 
-    def test_default_cli_preserves_legacy_environment_configuration(self) -> None:
+    def test_default_cli_scrubs_inherited_instance_configuration(self) -> None:
+        default = tag_instances.ensure_default(self.root)
         configured = {
             "TAG_HOME": str(self.root),
             "OPENTAG_BACKEND": "codex",
@@ -79,8 +87,11 @@ class TagInstanceTests(unittest.TestCase):
         }
 
         def doctor_report(_offline: bool) -> tuple[int, dict[str, object]]:
-            for name, value in configured.items():
-                self.assertEqual(os.environ.get(name), value)
+            self.assertEqual(os.environ.get("TAG_HOME"), str(self.root))
+            self.assertEqual(os.environ.get("TAG_INSTANCE_HOME"), str(default.home))
+            self.assertEqual(os.environ.get("TAG_ID"), "default")
+            for name in configured.keys() - {"TAG_HOME"}:
+                self.assertNotIn(name, os.environ)
             return 0, {"checks": []}
 
         with patch.dict(os.environ, configured, clear=True), patch.object(

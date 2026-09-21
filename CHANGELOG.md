@@ -6,8 +6,11 @@
 
 - Manage independent named Tags for multiple Slack workspaces with `tag add`,
   `tag list`, and target-aware lifecycle, setup, settings, logs, and diagnostics.
-- Share one explicitly owned MFS lifecycle across instances, with per-instance
+- Share one explicitly owned MFS lifecycle across Tags, with per-Tag
   credential files and an administrative `tag memory` command.
+- Give the built-in `default` Tag the same `instances/default` isolation and
+  scrubbed runtime environment as every named Tag; existing root-level default
+  data requires a one-time stopped-service migration.
 
 All notable changes to Tag are documented here.
 

@@ -36,11 +36,11 @@ def instance_home() -> Path:
     """Return the explicitly selected mutable instance home.
 
     Child processes receive ``TAG_INSTANCE_HOME`` from the CLI.  Direct and
-    legacy script invocations retain the historical default-home behavior.
+    direct script invocations select the built-in default instance.
     """
     override = os.getenv("TAG_INSTANCE_HOME")
     if not override:
-        return tag_home()
+        return tag_home() / "instances/default"
     path = Path(override).expanduser()
     if not path.is_absolute():
         raise ValueError("TAG_INSTANCE_HOME must be an absolute path")
@@ -57,21 +57,11 @@ def tag_temp_dir() -> Path:
 
 
 def initialize(home: Path) -> None:
+    """Create installation-wide paths, never instance-owned mutable data."""
     home.mkdir(parents=True, exist_ok=True, mode=0o700)
-    for name in ("releases", "config", "workspace/.agents/skills", "workspace/.codex",
-                 "workspace/.claude/skills", "integrations/bin", "state", "tmp", "bin"):
+    for name in ("releases", "instances", "shared/mfs", "state", "bin"):
         (home / name).mkdir(parents=True, exist_ok=True, mode=0o700)
     restrict_windows_acl(home)
-    config = home / "workspace/.codex/config.toml"
-    if not config.exists():
-        config.write_text(
-            "# TAG-only Codex defaults and MCP servers go here.\n"
-            "# model = \"gpt-example\"\n"
-            "# model_reasoning_effort = \"high\"\n"
-            "# service_tier = \"default\"\n"
-            "# [mcp_servers.NAME]\n",
-            encoding="utf-8",
-        )
 
 
 def initialize_instance(home: Path) -> None:

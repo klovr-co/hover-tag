@@ -217,10 +217,11 @@ tag start --tag personal
 tag status --tag personal
 ```
 
-Unqualified commands still operate on `default`. Named Tags keep separate
-settings, Slack identities, workspaces, conversations, and bridge lifecycles;
-they reuse one installation-owned MFS service without gaining cross-workspace
-retrieval. See [Tag management](docs/tag-management.md#multiple-slack-workspaces).
+Unqualified commands operate on the default Tag at `instances/default`. Every
+Tag keeps separate settings, Slack identities, workspaces, conversations, and
+bridge lifecycles; they reuse one installation-owned MFS service without
+gaining cross-workspace retrieval. See
+[Tag management](docs/tag-management.md#multiple-slack-workspaces).
 
 Prefer the dedicated `tag restart` command over chaining stop and start so the
 terminal presents one coherent operation. Use `tag doctor` for deeper

@@ -14,6 +14,7 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
+from scripts import tag_instances
 from scripts.tag_install import (
     ADMIN_SKILL,
     API_RELEASES,
@@ -32,6 +33,7 @@ from scripts.tag_install import (
 from scripts.tag_paths import (
     codex_workspace_args,
     initialize,
+    initialize_instance,
     runtime_environment,
     tag_home,
     tag_temp_dir,
@@ -229,7 +231,7 @@ class TagHomeTests(unittest.TestCase):
     def test_migration_preserves_originals_and_existing_skills(self):
         with tempfile.TemporaryDirectory() as temp:
             home, source = Path(temp) / "home", Path(temp) / "old checkout"
-            initialize(home)
+            initialize_instance(home)
             skill = source / ".codex/skills/custom/SKILL.md"
             skill.parent.mkdir(parents=True)
             skill.write_text("custom")
@@ -331,15 +333,19 @@ class TagHomeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp) / "home"
             with patch.dict(os.environ, {"TAG_HOME": str(home)}):
-                self.assertEqual(tag_temp_dir(), home / "tmp")
-                self.assertTrue((home / "tmp").is_dir())
+                self.assertEqual(tag_temp_dir(), home / "instances/default/tmp")
+                self.assertTrue((home / "instances/default/tmp").is_dir())
 
     def test_scoped_mcp_overlay_preserves_global_home(self):
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp)
-            initialize(home)
+            initialize_instance(home)
             (home / "workspace/.codex/config.toml").write_text('[mcp_servers.example]\ncommand="python"\nargs=["server.py"]\n')
-            with patch.dict(os.environ, {"TAG_HOME": str(home), "CODEX_HOME": "global-config"}):
+            with patch.dict(os.environ, {
+                "TAG_HOME": str(home.parent),
+                "TAG_INSTANCE_HOME": str(home),
+                "CODEX_HOME": "global-config",
+            }):
                 args = codex_workspace_args(home / "workspace")
                 self.assertIn('mcp_servers.example=', args[1])
                 self.assertEqual(os.environ["CODEX_HOME"], "global-config")
@@ -359,7 +365,8 @@ class TagHomeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp)
             initialize(home)
-            (home / "config/settings.json").write_text("invalid JSON")
+            default = tag_instances.ensure_default(home).home
+            (default / "config/settings.json").write_text("invalid JSON")
             with patch.dict(os.environ, {"TAG_HOME": str(home)}), patch.object(sys, "argv", ["tag", "stop"]):
                 self.assertEqual(main(), 0)
 
@@ -378,15 +385,16 @@ class TagHomeTests(unittest.TestCase):
             root = Path(temp)
             home, bin_dir = root / "home", root / "bin"
             first = install(ROOT, home, bin_dir, dependencies=False)
-            admin = home / "workspace/.agents/skills/open-tag-admin/SKILL.md"
+            default = home / "instances/default"
+            admin = default / "workspace/.agents/skills/open-tag-admin/SKILL.md"
             self.assertEqual(admin.read_text(), ADMIN_SKILL)
             admin.write_text(LEGACY_ADMIN_SKILL)
-            custom_admin = home / "workspace/.claude/skills/open-tag-admin/SKILL.md"
+            custom_admin = default / "workspace/.claude/skills/open-tag-admin/SKILL.md"
             custom_admin.write_text("personal admin instructions")
-            skill = home / "workspace/.agents/skills/personal/SKILL.md"
+            skill = default / "workspace/.agents/skills/personal/SKILL.md"
             skill.parent.mkdir()
             skill.write_text("personal skill")
-            config = home / "config/settings.json"
+            config = default / "config/settings.json"
             config.write_text('{"OPENTAG_BACKEND":"codex"}')
             second = install(ROOT, home, bin_dir, dependencies=False)
             self.assertEqual(admin.read_text(), ADMIN_SKILL)
@@ -405,7 +413,7 @@ class TagHomeTests(unittest.TestCase):
             self.assertIn("Tag v", result.stdout)
             result = subprocess.run([str(command), "paths", "--json"], cwd=root, capture_output=True, text=True, check=True)
             paths = json.loads(result.stdout)
-            self.assertEqual(Path(paths["workspace"]).resolve(), (home / "workspace").resolve())
+            self.assertEqual(Path(paths["workspace"]).resolve(), (default / "workspace").resolve())
             self.assertTrue(Path(paths["management_guide"]).is_file())
             self.assertEqual(paths["runtime"]["mode"], "managed")
             self.assertTrue(paths["runtime"]["active_release"])
@@ -471,7 +479,7 @@ class TagHomeTests(unittest.TestCase):
                 dependencies=False,
                 selection=ReleaseSelection("edge", version, "a" * 40),
             )
-            config = home / "config/settings.json"
+            config = home / "instances/default/config/settings.json"
             config.write_text('{"OPENTAG_BACKEND":"codex"}', encoding="utf-8")
             target = FetchedRelease(
                 ROOT,
@@ -817,7 +825,7 @@ class TagHomeTests(unittest.TestCase):
     def test_background_lifecycle_and_stale_pid_safety(self):
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp)
-            initialize(home)
+            initialize_instance(home)
             try:
                 self.assertTrue(start_process(home, "test", [sys.executable, "-c", "import time; time.sleep(90)"]))
                 self.assertFalse(start_process(home, "test", ["must-not-run"]))

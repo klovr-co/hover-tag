@@ -123,6 +123,22 @@ def short_path(value):
     return "~" + path[len(home):] if path == home or path.startswith(home + os.sep) else path
 
 
+def target_detail(
+    tag_id="default", team_id="", app_id="", app_name="", *, suffix=""
+):
+    """Format one consistent, user-facing command target description."""
+    parts = [f"Tag '{tag_id}'"]
+    parts.append(
+        f"Slack workspace {team_id}" if team_id else "Slack workspace not configured"
+    )
+    if app_id:
+        label = f"{app_name} ({app_id})" if app_name else app_id
+        parts.append(f"App {label}")
+    if suffix:
+        parts.append(suffix)
+    return " · ".join(parts)
+
+
 def rule():
     emit("  " + styled("─" * content_width(), MUTED))
 

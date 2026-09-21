@@ -23,13 +23,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 try:
-    from tag_paths import initialize, initialize_instance, runtime_environment, tag_home
+    from tag_paths import initialize_instance, runtime_environment, tag_home
     import tag_instances
     from tag_config import read_config
     import tag_credentials
     import tag_display as display
 except ImportError:
-    from scripts.tag_paths import initialize, initialize_instance, runtime_environment, tag_home
+    from scripts.tag_paths import initialize_instance, runtime_environment, tag_home
     from scripts import tag_instances
     from scripts.tag_config import read_config
     from scripts import tag_credentials
@@ -521,7 +521,10 @@ def development_loop(home: Path) -> int:
             "Run ./install.sh --dependencies-only, then ./tag dev in the repository."
         )
 
-    display.header("Dev", "Watching Python source and reloading the Slack bridge.")
+    display.header(
+        "Dev",
+        selected_target(home, suffix="Watching Python source and reloading the Slack bridge"),
+    )
     display.section("Bootstrap")
     target = [] if os.getenv("TAG_ID", "default") == "default" else ["--tag", os.environ["TAG_ID"]]
     command = [sys.executable, str(ROOT / "scripts/tag_cli.py"), "start", *target]
@@ -621,7 +624,7 @@ def migrate_legacy_mfs_record(context: tag_instances.InstanceContext) -> None:
     """Recoverably transfer the default home’s managed MFS identity."""
     if not context.is_default:
         return
-    legacy = context.home / "state/mfs.json"
+    legacy = context.installation_root / "state/mfs.json"
     shared = context.shared_mfs_home
     destination = shared / "mfs.json"
     pending = shared / "mfs.migrating"
@@ -647,7 +650,7 @@ def migrate_legacy_mfs_record(context: tag_instances.InstanceContext) -> None:
         # `.migrating` record rather than two shutdown authorities.
         os.replace(legacy, pending)
     os.replace(pending, destination)
-    old_log = context.home / "state/mfs.log"
+    old_log = context.installation_root / "state/mfs.log"
     if old_log.exists() and not (shared / "mfs.log").exists():
         os.replace(old_log, shared / "mfs.log")
 
@@ -754,13 +757,23 @@ def ensure_connector_credential(home: Path, values: dict[str, str]) -> None:
             temporary.unlink(missing_ok=True)
 
 
-def selected_workspace(home: Path) -> str:
+def selected_target(home: Path, tag_id: str | None = None, *, suffix: str = "") -> str:
+    """Return a consistent visible identity for the selected Tag and Slack app."""
     try:
-        return read_config(home / "config/settings.json").get("SLACK_TEAM_ID", "") or "not configured"
+        values = read_config(home / "config/settings.json")
     except FileNotFoundError:
-        return "not configured"
+        values = {}
     except (OSError, ValueError):
-        return "configuration unreadable"
+        return display.target_detail(
+            tag_id or os.getenv("TAG_ID", "default"), suffix="Configuration unreadable"
+        )
+    return display.target_detail(
+        tag_id or os.getenv("TAG_ID", "default"),
+        values.get("SLACK_TEAM_ID", ""),
+        values.get("SLACK_APP_ID", ""),
+        values.get("OPENTAG_BOT_NAME", ""),
+        suffix=suffix,
+    )
 
 
 def sync_configured_slack_memory(environment: dict[str, str] | None = None) -> None:
@@ -875,7 +888,7 @@ def doctor(home: Path, offline: bool, json_output: bool = False, *, tag_id: str 
         return result
     result, report = doctor_report(offline)
     display.doctor_summary(report)
-    display.info_row("Tag", f"{tag_id} · Slack workspace {selected_workspace(home)}")
+    display.info_row("Target", selected_target(home, tag_id))
     return result
 
 
@@ -1142,7 +1155,7 @@ def main() -> int:
                                      epilog="Use tag for status and the next step. Start with tag setup; change configuration with tag settings.")
     parser.add_argument("command", nargs="?", choices=("add", "list", "memory", "settings", "inspect", "config", "setup", "reset", "migrate", "upgrade", "rollback", "version", "paths", "doctor", "start", "stop", "restart", "status", "logs", "dev"))
     parser.add_argument("arguments", nargs="*", help="add: NAME; memory: status | stop; config: init | show | keys | set KEY VALUE")
-    parser.add_argument("--tag", default="default", dest="tag_id", help="local Tag instance (default: default)")
+    parser.add_argument("--tag", default="default", dest="tag_id", help="local Tag name (default: default)")
     parser.add_argument("--offline", action="store_true")
     parser.add_argument("--json", action="store_true", dest="json_output", help="structured output for inspect, status, doctor, config, paths, and upgrade")
     parser.add_argument("--stdin", action="store_true", help="read a config value from stdin")
@@ -1209,7 +1222,7 @@ def main() -> int:
                 except (OSError, ValueError, RuntimeError) as exc:
                     record.update(valid=False, state="invalid_configuration", error=str(exc))
             else:
-                record["state"] = "invalid_instance"
+                record["state"] = "invalid_tag"
             rows.append(record)
         result = {"schema_version": 1, "installation_root": str(installation_root), "tags": rows}
         if args.json_output:
@@ -1224,20 +1237,9 @@ def main() -> int:
         return 0
     context = tag_instances.resolve(installation_root, args.tag_id)
     home = context.home
-    if context.is_default:
-        # The default Tag retains the original CLI contract: operators may
-        # supply configuration through the environment when no settings file
-        # exists. Named Tags instead receive a scrubbed environment so one
-        # instance cannot accidentally inherit another instance's settings.
-        os.environ.update(runtime_environment(
-            context.home,
-            installation_root=context.installation_root,
-            tag_id=context.tag_id,
-        ))
-    else:
-        environment = instance_environment(context)
-        os.environ.clear()
-        os.environ.update(environment)
+    environment = instance_environment(context)
+    os.environ.clear()
+    os.environ.update(environment)
     if args.command == "memory":
         action = args.arguments[0] if len(args.arguments) == 1 else "status" if not args.arguments else ""
         if action not in {"status", "stop"}:
@@ -1288,11 +1290,11 @@ def main() -> int:
             from scripts.tag_reset import reset_and_setup
         return reset_and_setup(home, sys.modules[__name__])
     if args.command == "settings":
-        (initialize if context.is_default else initialize_instance)(home)
+        initialize_instance(home)
         control.settings_menu(home)
         return 0
     if args.command == "restart":
-        display.header("Restart", f"Tag '{context.tag_id}' · Slack workspace {selected_workspace(home)}.")
+        display.header("Restart", selected_target(home, context.tag_id))
         command = [sys.executable, str(ROOT / "scripts/tag_cli.py")]
         environment = os.environ.copy()
         environment["TAG_RESTART_FLOW"] = "1"
@@ -1302,7 +1304,7 @@ def main() -> int:
     if args.command == "config":
         # Initialize the private home before writing, including Windows ACLs.
         if args.arguments and args.arguments[0] in {"init", "set"}:
-            (initialize if context.is_default else initialize_instance)(home)
+            initialize_instance(home)
         return control.config_command(home, args.arguments, json_output=args.json_output,
                                       stdin=args.stdin, tag_id=context.tag_id)
     if args.command == "inspect" or (args.command == "status" and args.json_output):
@@ -1326,7 +1328,7 @@ def main() -> int:
             print(json.dumps(paths, indent=2))
             return 0
         runtime = paths["runtime"]
-        display.header("Paths", f"Installation and data paths for Tag '{context.tag_id}'.")
+        display.header("Paths", selected_target(home, context.tag_id))
         display.section("Installation")
         display.info_row("Installation", display.short_path(installation_root))
         display.info_row(
@@ -1353,7 +1355,7 @@ def main() -> int:
             allow_downgrade=args.allow_downgrade,
             json_output=args.json_output,
         )
-    (initialize if context.is_default else initialize_instance)(home)
+    initialize_instance(home)
     if args.command == "rollback":
         named = [str(item["id"]) for item in tag_instances.discover(installation_root)
                  if item.get("valid") and item["id"] != "default"]
@@ -1449,7 +1451,7 @@ def main() -> int:
                 report["services"]["mfs"], (home / "state").glob("*.log")))
         return result
     if args.command == "logs":
-        display.header("Logs", f"Tag '{context.tag_id}' · Slack workspace {selected_workspace(home)}.")
+        display.header("Logs", selected_target(home, context.tag_id))
         logs = sorted((home / "state").glob("*.log"))
         if not logs:
             display.section("Services")
@@ -1475,7 +1477,10 @@ def main() -> int:
         if restart_flow:
             display.section("Stopping")
         else:
-            display.header("Stop", f"Tag '{context.tag_id}' · Slack workspace {selected_workspace(home)}. Shared memory stays online.")
+            display.header(
+                "Stop",
+                selected_target(home, context.tag_id, suffix="Shared memory stays online"),
+            )
             display.section("Services")
         stop_process(home, "slack")
         display.info_row("Slack", "Stopped or already offline", good=True)
@@ -1493,7 +1498,7 @@ def main() -> int:
         if restart_flow:
             display.section("Starting")
         else:
-            display.header("Start", f"Tag '{context.tag_id}' · Slack workspace {selected_workspace(home)}.")
+            display.header("Start", selected_target(home, context.tag_id))
             display.section("Readiness")
         display.info_row("Runtime", "Dependencies available", good=True)
         # Serialize starts so concurrent invocations cannot create orphan services.
