@@ -1,0 +1,96 @@
+name: Prepare release
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: Full SHA of the tested main commit to promote
+        required: true
+        type: string
+      phase:
+        description: Release phase encoded by VERSION
+        required: true
+        type: choice
+        options: [beta, stable]
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: release-preparation
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Prepare immutable release draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_SHA: ${{ inputs.commit_sha }}
+      RELEASE_PHASE: ${{ inputs.phase }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Validate selected commit, version, and remote gates
+        run: |
+          git fetch origin main --tags
+          python scripts/release_automation.py validate-commit --sha "$RELEASE_SHA"
+          python scripts/release_automation.py check-workflows \
+            --repository "$GITHUB_REPOSITORY" --sha "$RELEASE_SHA"
+          git checkout --detach "$RELEASE_SHA"
+          version=$(head -n 1 VERSION)
+          tag="v$version"
+          retry=()
+          if release_json=$(gh release view "$tag" --json isDraft,targetCommitish 2>/dev/null); then
+            test "$(jq -r .isDraft <<<"$release_json")" = true
+            test "$(jq -r .targetCommitish <<<"$release_json")" = "$RELEASE_SHA"
+            retry=(--allow-existing-version)
+          fi
+          python scripts/release_automation.py validate-candidate \
+            --version "$version" --phase "$RELEASE_PHASE" "${retry[@]}"
+          test -f "docs/releases/v$version.md"
+      - name: Download exact edge artifact
+        run: |
+          artifact=$(python scripts/release_automation.py find-edge-artifact \
+            --repository "$GITHUB_REPOSITORY" --sha "$RELEASE_SHA")
+          run_id=${artifact%%$'\t'*}
+          artifact_name=${artifact#*$'\t'}
+          gh run download "$run_id" --name "$artifact_name" --dir candidate
+          version=$(head -n 1 VERSION)
+          python scripts/release_automation.py validate-edge \
+            --directory candidate --sha "$RELEASE_SHA" --version "$version"
+      - name: Run release-candidate preflight
+        run: ./scripts/release_preflight.sh
+      - name: Prepare immutable release assets
+        run: |
+          version=$(head -n 1 VERSION)
+          python scripts/release_automation.py promote-edge \
+            --directory candidate --output release --version "$version"
+          python scripts/release_automation.py validate-release \
+            --directory release --version "$version" --sha "$RELEASE_SHA"
+      - name: Create or refresh draft release
+        run: |
+          version=$(head -n 1 VERSION)
+          tag="v$version"
+          prerelease=()
+          if [ "$RELEASE_PHASE" != stable ]; then prerelease=(--prerelease); fi
+          if release_json=$(gh release view "$tag" --json isDraft,targetCommitish 2>/dev/null); then
+            test "$(jq -r .isDraft <<<"$release_json")" = true
+            test "$(jq -r .targetCommitish <<<"$release_json")" = "$RELEASE_SHA"
+            gh release edit "$tag" --title "Tag $tag" \
+              --notes-file "docs/releases/$tag.md" --draft "${prerelease[@]}"
+            gh release upload "$tag" release/* --clobber
+          else
+            gh release create "$tag" release/* --target "$RELEASE_SHA" \
+              --title "Tag $tag" --notes-file "docs/releases/$tag.md" \
+              --draft --latest=false "${prerelease[@]}"
+          fi
+          printf 'Draft ready: %s\n' "$(gh release view "$tag" --json url --jq .url)" >> "$GITHUB_STEP_SUMMARY"
+          printf 'A maintainer must inspect and publish this draft explicitly.\n' >> "$GITHUB_STEP_SUMMARY"

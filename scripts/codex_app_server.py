@@ -19,7 +19,11 @@ from pathlib import Path
 from typing import Any
 
 
-MAX_LINE_BYTES = 1024 * 1024
+# Prompts are controlled by Tag, while completed tool and image events may
+# legitimately contain substantially larger output from Codex. The response
+# bound accommodates Tag's 15 MiB image limit after base64 expansion.
+MAX_REQUEST_LINE_BYTES = 1024 * 1024
+MAX_RESPONSE_LINE_BYTES = 32 * 1024 * 1024
 MAX_STDERR_BYTES = 64 * 1024
 REQUEST_TIMEOUT_SECONDS = 60.0
 INTERRUPT_GRACE_SECONDS = 5.0
@@ -101,7 +105,7 @@ class CodexAppServerError(RuntimeError):
 class JsonLineDecoder:
     """Decode fragmented JSONL without allowing an unbounded partial line."""
 
-    def __init__(self, max_line_bytes: int = MAX_LINE_BYTES) -> None:
+    def __init__(self, max_line_bytes: int = MAX_RESPONSE_LINE_BYTES) -> None:
         self.max_line_bytes = max_line_bytes
         self.buffer = bytearray()
 
@@ -416,7 +420,7 @@ class CodexAppServer:
     def _send(self, payload: dict[str, Any]) -> None:
         assert self.process is not None and self.process.stdin is not None
         raw = json.dumps(payload, separators=(",", ":")).encode() + b"\n"
-        if len(raw) > MAX_LINE_BYTES:
+        if len(raw) > MAX_REQUEST_LINE_BYTES:
             raise CodexAppServerError("Codex App Server request exceeds the JSONL line limit")
         with self.write_lock:
             try:

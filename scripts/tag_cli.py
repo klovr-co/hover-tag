@@ -2,18 +2,24 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 import warnings
+from datetime import datetime, timezone
 from pathlib import Path
 
 try:
@@ -27,6 +33,7 @@ except ImportError:
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_DEPENDENCIES = ("mfs_server", "psutil", "slack_bolt")
+UPGRADE_CHANNELS = ("stable", "beta", "alpha", "edge")
 TOKEN_PATTERN = re.compile(r"\b(?:xox[a-z]-|xapp-)[A-Za-z0-9-]+")
 MFS_HISTORY_CREDENTIAL_MESSAGE = (
     "MFS is already running without Tag's Slack-history credential. "
@@ -62,8 +69,45 @@ def runtime_dependency_message(missing: tuple[str, ...]) -> str:
     )
 
 
+def legacy_process_running(home: Path) -> bool | None:
+    """Return whether the recorded legacy checkout has a live Tag process."""
+    import psutil
+
+    try:
+        record = json.loads(
+            (home / "state/legacy-command.json").read_text(encoding="utf-8")
+        )
+        raw_command = record["command"]
+        if not isinstance(raw_command, str) or not raw_command:
+            return None
+        command = Path(raw_command).expanduser().resolve()
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+    expected = {
+        command,
+        command.parent / "scripts/tag_cli.py",
+        command.parent / "scripts/slack_socket_agent.py",
+    }
+    try:
+        for process in psutil.process_iter(attrs=["cmdline"]):
+            command_line = process.info.get("cmdline") or ()
+            for argument in command_line:
+                if not isinstance(argument, str) or not argument:
+                    continue
+                try:
+                    candidate = Path(argument).expanduser().resolve()
+                except (OSError, RuntimeError):
+                    continue
+                if candidate in expected:
+                    return True
+    except psutil.Error:
+        return None
+    return False
+
+
 def legacy_slack_ready(home: Path, maximum_age: float = 15.0) -> bool:
-    """Detect the heartbeat written by pre-supervisor Tag releases."""
+    """Detect a live pre-supervisor Tag release with a current heartbeat."""
     try:
         record = json.loads((home / "runtime/slack-connected.json").read_text(encoding="utf-8"))
         heartbeat = float(
@@ -72,7 +116,10 @@ def legacy_slack_ready(home: Path, maximum_age: float = 15.0) -> bool:
                 record.get("timestamp", record.get("updated_at", record.get("heartbeat"))),
             )
         )
-        return bool(record.get("connected")) and 0 <= time.time() - heartbeat <= maximum_age
+        fresh = bool(record.get("connected")) and 0 <= time.time() - heartbeat <= maximum_age
+        if not fresh:
+            return False
+        return legacy_process_running(home) is not False
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
         return False
 
@@ -193,6 +240,104 @@ def stop_process(home: Path, name: str) -> None:
     record.unlink(missing_ok=True)
     if name == "slack":
         (home / "state/slack.ready").unlink(missing_ok=True)
+
+
+def local_mfs_endpoint(url: str) -> bool:
+    """Return whether Tag may manage the process behind this loopback endpoint."""
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        return (
+            parsed.scheme == "http"
+            and parsed.hostname in {"127.0.0.1", "localhost"}
+            and parsed.port == 13619
+            and parsed.path in {"", "/"}
+            and not parsed.username
+            and not parsed.password
+            and not parsed.query
+            and not parsed.fragment
+        )
+    except ValueError:
+        return False
+
+
+def local_mfs_listener(url: str):
+    """Find an identifiable MFS server listening at a configured local endpoint."""
+    import psutil
+
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        port = parsed.port or 80
+        addresses = {
+            address[4][0]
+            for address in socket.getaddrinfo(
+                parsed.hostname, port, type=socket.SOCK_STREAM
+            )
+        }
+    except (OSError, TypeError, ValueError):
+        return None
+    candidate_pids: set[int] = set()
+    if os.name != "nt" and shutil.which("lsof"):
+        for address in addresses:
+            endpoint = f"[{address}]" if ":" in address else address
+            result = subprocess.run(
+                [
+                    "lsof",
+                    "-nP",
+                    f"-iTCP@{endpoint}:{port}",
+                    "-sTCP:LISTEN",
+                    "-t",
+                ],
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+            candidate_pids.update(
+                int(value) for value in result.stdout.split() if value.isdigit()
+            )
+    else:
+        try:
+            connections = psutil.net_connections(kind="tcp")
+        except psutil.Error:
+            connections = []
+        candidate_pids.update(
+            connection.pid
+            for connection in connections
+            if connection.status == psutil.CONN_LISTEN
+            and connection.pid is not None
+            and connection.laddr
+            and connection.laddr.port == port
+            and connection.laddr.ip in addresses
+        )
+    candidates = []
+    for pid in sorted(candidate_pids):
+        try:
+            process = psutil.Process(pid)
+            command = " ".join(process.cmdline()).casefold()
+        except psutil.Error:
+            continue
+        if "mfs-server" in command or "mfs_server" in command:
+            candidates.append(process)
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def replace_unmanaged_local_mfs(home: Path, url: str) -> bool:
+    """Replace an untracked loopback MFS so Tag owns runtime and cleanup."""
+    record = home / "state/mfs.json"
+    if not local_mfs_endpoint(url) or process_for(record) is not None or not healthy(url):
+        return False
+    process = local_mfs_listener(url)
+    if process is None:
+        raise RuntimeError(
+            "The local MFS endpoint is healthy but its process is not an identifiable "
+            "mfs-server. Stop that service or configure a separate MFS_URL before starting Tag."
+        )
+    record.write_text(
+        json.dumps({"pid": process.pid, "created": process.create_time(), "adopted": True}),
+        encoding="utf-8",
+    )
+    stop_process(home, "mfs")
+    return True
 
 
 def slack_ready(home: Path, maximum_age: float = 5.0) -> bool:
@@ -406,6 +551,7 @@ def development_loop(home: Path) -> int:
                 log_position = 0
     finally:
         stop_process(home, "slack")
+        stop_process(home, "mfs")
 
 
 def healthy(url: str) -> bool:
@@ -534,13 +680,271 @@ def doctor(home: Path, offline: bool, json_output: bool = False) -> int:
     return result
 
 
+def upgrade_command(
+    home: Path,
+    *,
+    channel: str | None = None,
+    version: str | None = None,
+    dry_run: bool = False,
+    no_restart: bool = False,
+    allow_downgrade: bool = False,
+    json_output: bool = False,
+    dependencies: bool = True,
+) -> int:
+    """Check or install a verified release using the saved update policy."""
+    try:
+        from tag_install import atomic_text, fetch_release, install, release_version_key
+    except ImportError:
+        from scripts.tag_install import atomic_text, fetch_release, install, release_version_key
+
+    current_path = home / "current.json"
+    try:
+        current = json.loads(current_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as error:
+        raise RuntimeError(
+            "Tag is not managed by the installer. Install it once before using tag upgrade."
+        ) from error
+    except (UnicodeError, json.JSONDecodeError) as error:
+        raise RuntimeError(f"Invalid managed release record: {current_path}") from error
+    if not isinstance(current, dict):
+        raise RuntimeError(f"Invalid managed release record: {current_path}")
+
+    current_version = current.get("installed_version")
+    if current_version is None:
+        release_name = current.get("release")
+        if not isinstance(release_name, str) or not release_name:
+            raise RuntimeError("The managed release record has no active release")
+        version_path = home / "releases" / release_name / "VERSION"
+        try:
+            current_version = version_path.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeError) as error:
+            raise RuntimeError(
+                f"Cannot read the installed release version: {version_path}"
+            ) from error
+    current_commit = current.get("installed_commit")
+    current_channel = current.get("channel")
+    selection = current.get("selection", "channel")
+    if channel is None and version is None and selection == "version":
+        result = {
+            "schema_version": 1,
+            "ok": True,
+            "status": "pinned",
+            "current": {
+                "version": current_version,
+                "commit": current_commit,
+                "channel": current_channel,
+                "selection": "version",
+            },
+            "next_command": f"tag upgrade --channel {current_channel or 'alpha'}",
+        }
+        if json_output:
+            print(json.dumps(result, indent=2))
+        else:
+            display.header("Upgrade", "Checking the managed Tag release.")
+            display.section("Release")
+            display.info_row("Current", f"Tag v{current_version or 'unknown'}")
+            display.info_row("Updates", "Pinned to an exact version")
+            display.next_action("Follow an update channel", result["next_command"])
+        return 0
+
+    selected_channel = channel or (None if version is not None else current_channel)
+    if version is None and selected_channel not in UPGRADE_CHANNELS:
+        raise RuntimeError(
+            "The installed release has no saved update channel. "
+            "Run tag upgrade --channel alpha (or stable, beta, edge)."
+        )
+    if not json_output:
+        display.header("Upgrade", "Checking for a verified Tag release.")
+        display.section("Selection")
+        display.info_row("Current", f"Tag v{current_version or 'unknown'}")
+        display.info_row(
+            "Requested",
+            f"v{version}" if version is not None else f"{selected_channel} channel",
+        )
+
+    with tempfile.TemporaryDirectory(prefix="tag-upgrade-") as temporary:
+        fetched = fetch_release(version, Path(temporary), selected_channel)
+        target = fetched.selection
+        policy_matches = (
+            current_channel == target.channel
+            and selection == target.selector
+        )
+        artifact_matches = (
+            current_commit == target.commit_sha
+            and current_version == target.version
+        )
+        try:
+            downgrade = release_version_key(target.version) < release_version_key(
+                str(current_version)
+            )
+        except ValueError as error:
+            raise RuntimeError(
+                f"Cannot compare installed release version: {current_version or 'missing'}"
+            ) from error
+        running = any(
+            process_for(home / "state" / f"{name}.json")
+            for name in ("slack", "mfs")
+        )
+        result = {
+            "schema_version": 1,
+            "ok": True,
+            "status": "current" if artifact_matches and policy_matches else "available",
+            "dry_run": dry_run,
+            "current": {
+                "version": current_version,
+                "commit": current_commit,
+                "channel": current_channel,
+                "selection": selection,
+            },
+            "target": {
+                "version": target.version,
+                "commit": target.commit_sha,
+                "channel": target.channel,
+                "selection": target.selector,
+            },
+            "services_running": running,
+            "restart_required": False,
+            "downgrade": downgrade,
+        }
+        if downgrade and not allow_downgrade:
+            policy_updated = bool(
+                channel is not None and not dry_run and not policy_matches
+            )
+            if policy_updated:
+                current.update({
+                    "channel": target.channel,
+                    "selection": target.selector,
+                    "checked_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                })
+                atomic_text(
+                    current_path,
+                    json.dumps(current, indent=2, sort_keys=True) + "\n",
+                )
+            exact_version_blocked = version is not None
+            result.update({
+                "ok": not exact_version_blocked,
+                "status": "downgrade-blocked" if exact_version_blocked else (
+                    "channel-updated" if policy_updated else "ahead"
+                ),
+                "policy_updated": policy_updated,
+                "next_command": (
+                    f"tag upgrade --version {target.version} --allow-downgrade"
+                    if exact_version_blocked
+                    else f"tag upgrade --channel {target.channel} --allow-downgrade"
+                ),
+            })
+            if json_output:
+                print(json.dumps(result, indent=2))
+            else:
+                display.section("Decision")
+                display.info_row("Installed", f"Tag v{current_version}", good=True)
+                display.info_row("Candidate", f"Tag v{target.version}", good=False)
+                display.info_row("Action", "Kept the newer installed release", good=True)
+                if policy_updated:
+                    display.info_row(
+                        "Channel", f"Now following {target.channel}; waiting for it to catch up"
+                    )
+                display.next_action(
+                    "Install the older release anyway",
+                    result["next_command"],
+                    detail="Older code may not understand data written by a newer Tag release.",
+                )
+            return 2 if exact_version_blocked else 0
+        if dry_run:
+            if json_output:
+                print(json.dumps(result, indent=2))
+            elif result["status"] == "current":
+                display.completion("Tag is up to date", "No installation changes were made.")
+            else:
+                display.completion(
+                    "Upgrade available",
+                    f"Tag v{target.version} passed checksum and provenance verification.",
+                    next_label="Install it",
+                    next_command="tag upgrade",
+                )
+            return 0
+
+        if artifact_matches:
+            if not policy_matches:
+                current.update({
+                    "channel": target.channel,
+                    "selection": target.selector,
+                    "installed_version": target.version,
+                    "installed_commit": target.commit_sha,
+                    "checked_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                })
+                atomic_text(
+                    current_path,
+                    json.dumps(current, indent=2, sort_keys=True) + "\n",
+                )
+                result["status"] = "policy-updated"
+            if json_output:
+                print(json.dumps(result, indent=2))
+            else:
+                detail = (
+                    f"Future upgrades will follow the {target.channel} channel."
+                    if result["status"] == "policy-updated"
+                    else "The installed commit already matches the selected release."
+                )
+                display.completion("Tag is up to date", detail)
+            return 0
+
+        raw_bin_dir = current.get("bin_dir")
+        if raw_bin_dir is not None and not isinstance(raw_bin_dir, str):
+            raise RuntimeError("The managed release record contains an invalid bin_dir")
+        bin_dir = (
+            Path(raw_bin_dir).expanduser()
+            if raw_bin_dir
+            else (home / "bin" if os.name == "nt" else Path.home() / ".local/bin")
+        )
+        # Upgrade owns the summary; suppress the installer's first-install screen.
+        with contextlib.redirect_stdout(io.StringIO()):
+            install(
+                fetched.source,
+                home,
+                bin_dir.resolve(),
+                dependencies=dependencies,
+                selection=target,
+            )
+        result["status"] = "upgraded"
+        result["restart_required"] = running and no_restart
+        result["restarted"] = False
+        if running and not no_restart:
+            command = [sys.executable, str(home / "bin/tag-launch.py"), "restart"]
+            completed = subprocess.run(
+                command,
+                capture_output=json_output,
+                text=True,
+                check=False,
+            )
+            if completed.returncode:
+                detail = (completed.stderr or completed.stdout or "").strip()
+                raise RuntimeError(
+                    "Tag was upgraded, but its services did not restart. "
+                    "Run tag stop, then tag rollback."
+                    + (f"\n{detail}" if detail else "")
+                )
+            result["restarted"] = True
+
+    if json_output:
+        print(json.dumps(result, indent=2))
+    else:
+        display.completion(
+            "Tag upgraded",
+            f"Now using Tag v{result['target']['version']}. Configuration and workspace data were preserved.",
+            next_label="Activate the new release" if result["restart_required"] else "",
+            next_command="tag restart" if result["restart_required"] else "",
+        )
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Tag: set up, inspect, and manage your Slack teammate.",
                                      epilog="Use tag for status and the next step. Start with tag setup; change configuration with tag settings.")
-    parser.add_argument("command", nargs="?", choices=("settings", "inspect", "config", "setup", "reset", "migrate", "rollback", "version", "paths", "doctor", "start", "stop", "restart", "status", "logs", "dev"))
+    parser.add_argument("command", nargs="?", choices=("settings", "inspect", "config", "setup", "reset", "migrate", "upgrade", "rollback", "version", "paths", "doctor", "start", "stop", "restart", "status", "logs", "dev"))
     parser.add_argument("arguments", nargs="*", help="config: init | show | keys | set KEY VALUE")
     parser.add_argument("--offline", action="store_true")
-    parser.add_argument("--json", action="store_true", dest="json_output", help="structured output for inspect, status, doctor, config, and paths")
+    parser.add_argument("--json", action="store_true", dest="json_output", help="structured output for inspect, status, doctor, config, paths, and upgrade")
     parser.add_argument("--stdin", action="store_true", help="read a config value from stdin")
     parser.add_argument("--from", dest="source", type=Path)
     parser.add_argument("--no-start", action="store_true", help="setup: save choices without starting services or indexing")
@@ -548,19 +952,27 @@ def main() -> int:
     parser.add_argument("--review", action="store_true", help="setup: review choices even when already configured")
     parser.add_argument("--follow", action="store_true", help="logs: continue streaming new service output")
     parser.add_argument("--limit", type=int, help="logs: number of recent lines per service (default: 50)")
+    upgrade_selector = parser.add_mutually_exclusive_group()
+    upgrade_selector.add_argument("--channel", choices=UPGRADE_CHANNELS, help="upgrade: switch to this release channel")
+    upgrade_selector.add_argument("--version", dest="target_version", help="upgrade: install and pin this exact version")
+    parser.add_argument("--dry-run", action="store_true", help="upgrade: verify and report the target without installing")
+    parser.add_argument("--no-restart", action="store_true", help="upgrade: leave running services on the previous code")
+    parser.add_argument("--allow-downgrade", action="store_true", help="upgrade: explicitly permit installing an older release")
     args = parser.parse_args()
     if (args.no_start or args.test or args.review) and args.command != "setup":
         parser.error("--no-start, --test and --review are only for setup")
     if args.arguments and args.command != "config":
         parser.error("Only config accepts additional positional arguments")
-    if args.json_output and args.command not in {"inspect", "status", "doctor", "config", "paths"}:
-        parser.error("--json supports inspect, status, doctor, config, and paths")
+    if args.json_output and args.command not in {"inspect", "status", "doctor", "config", "paths", "upgrade"}:
+        parser.error("--json supports inspect, status, doctor, config, paths, and upgrade")
     if args.stdin and args.command != "config":
         parser.error("--stdin is only for config set")
     if args.offline and args.command not in {"inspect", "doctor"}:
         parser.error("--offline supports inspect and doctor")
     if (args.follow or args.limit is not None) and args.command != "logs":
         parser.error("--follow and --limit are only for logs")
+    if (args.channel or args.target_version or args.dry_run or args.no_restart or args.allow_downgrade) and args.command != "upgrade":
+        parser.error("--channel, --version, --dry-run, --no-restart, and --allow-downgrade are only for upgrade")
     if args.limit is not None and args.limit < 1:
         parser.error("--limit must be at least 1")
     home = tag_home()
@@ -646,6 +1058,16 @@ def main() -> int:
         display.info_row("Guide", display.short_path(paths["management_guide"]))
         display.next_action("Machine-readable paths", "tag paths --json")
         return 0
+    if args.command == "upgrade":
+        return upgrade_command(
+            home,
+            channel=args.channel,
+            version=args.target_version,
+            dry_run=args.dry_run,
+            no_restart=args.no_restart,
+            allow_downgrade=args.allow_downgrade,
+            json_output=args.json_output,
+        )
     initialize(home)
     os.environ.update(runtime_environment(home))
     if args.command == "rollback":
@@ -795,6 +1217,7 @@ def main() -> int:
                 good=True,
             )
             url = os.getenv("MFS_URL", "http://127.0.0.1:13619")
+            replace_unmanaged_local_mfs(home, url)
             if not healthy(url):
                 if url.rstrip("/") not in ("http://localhost:13619", "http://127.0.0.1:13619"):
                     raise RuntimeError("Configured MFS endpoint is unavailable; start that server first")
@@ -803,12 +1226,23 @@ def main() -> int:
                     raise RuntimeError("MFS server is unavailable; run ./install.sh --dependencies-only")
                 if start_process(home, "mfs", [executable, "run"]):
                     started.append("mfs")
-                for _ in range(30):
+                attempts = int(os.getenv("OPENTAG_MFS_STARTUP_ATTEMPTS", "90"))
+                for _ in range(attempts):
                     if healthy(url):
                         break
+                    if process_for(home / "state/mfs.json") is None:
+                        detail = log_tail(home, "mfs")
+                        raise RuntimeError(
+                            "MFS exited before becoming healthy"
+                            + (f":\n{detail}" if detail else "; run tag logs")
+                        )
                     time.sleep(1)
                 else:
-                    raise RuntimeError("MFS did not become healthy; run tag logs")
+                    detail = log_tail(home, "mfs")
+                    raise RuntimeError(
+                        f"MFS did not become healthy within {attempts} seconds"
+                        + (f":\n{detail}" if detail else "; run tag logs")
+                    )
             display.info_row("Memory", "Healthy", good=True)
             if os.getenv("SLACK_CHANNEL_POLICY") == "invited":
                 reconcile_invitation_memory(home)
@@ -894,7 +1328,7 @@ if __name__ == "__main__":
         if len(sys.argv) > 1 and sys.argv[1] == "logs":
             print("\nStopped following logs.", file=sys.stderr)
         elif len(sys.argv) > 1 and sys.argv[1] == "dev":
-            print("\nDevelopment bridge stopped. Memory was left running.", file=sys.stderr)
+            print("\nDevelopment services stopped.", file=sys.stderr)
         else:
             print("\nInterrupted. Run tag setup to resume saved setup.", file=sys.stderr)
         raise SystemExit(130)
