@@ -9,6 +9,7 @@ import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import psutil
@@ -98,8 +99,75 @@ class TagLifecycleTests(unittest.TestCase):
     def test_local_mfs_endpoint_excludes_remote_and_non_http_urls(self) -> None:
         self.assertTrue(tag_cli.local_mfs_endpoint("http://127.0.0.1:13619"))
         self.assertTrue(tag_cli.local_mfs_endpoint("http://localhost:13619"))
+        self.assertTrue(tag_cli.local_mfs_endpoint("http://localhost:13619/"))
         self.assertFalse(tag_cli.local_mfs_endpoint("https://mfs.example.com"))
         self.assertFalse(tag_cli.local_mfs_endpoint("file://local/mfs"))
+        self.assertFalse(tag_cli.local_mfs_endpoint("http://localhost:14000"))
+        self.assertFalse(tag_cli.local_mfs_endpoint("http://[::1]:13619"))
+        self.assertFalse(tag_cli.local_mfs_endpoint("http://localhost:13619/api"))
+        self.assertFalse(tag_cli.local_mfs_endpoint("http://localhost:13619?mode=test"))
+
+    def test_local_mfs_listener_matches_the_resolved_configured_address(self) -> None:
+        expected = MagicMock(pid=22)
+        expected.cmdline.return_value = ["python", "-m", "mfs_server", "run"]
+        with patch.object(
+            tag_cli.shutil, "which", return_value="/usr/sbin/lsof"
+        ), patch.object(
+            tag_cli.socket,
+            "getaddrinfo",
+            return_value=[(None, None, None, None, ("127.0.0.1", 13619))],
+        ), patch.object(
+            tag_cli.subprocess,
+            "run",
+            return_value=SimpleNamespace(stdout="22\n"),
+        ) as run, patch.object(
+            psutil, "Process", return_value=expected
+        ) as process:
+            listener = tag_cli.local_mfs_listener("http://127.0.0.1:13619")
+
+        self.assertIs(expected, listener)
+        run.assert_called_once_with(
+            [
+                "lsof",
+                "-nP",
+                "-iTCP@127.0.0.1:13619",
+                "-sTCP:LISTEN",
+                "-t",
+            ],
+            check=False,
+            text=True,
+            stdout=tag_cli.subprocess.PIPE,
+            stderr=tag_cli.subprocess.DEVNULL,
+        )
+        process.assert_called_once_with(22)
+
+    def test_local_mfs_listener_rejects_multiple_matching_processes(self) -> None:
+        first = MagicMock(pid=11)
+        first.cmdline.return_value = ["mfs-server", "run"]
+        second = MagicMock(pid=22)
+        second.cmdline.return_value = ["mfs-server", "run"]
+        connections = [
+            SimpleNamespace(
+                status=psutil.CONN_LISTEN,
+                pid=11,
+                laddr=SimpleNamespace(ip="127.0.0.1", port=13619),
+            ),
+            SimpleNamespace(
+                status=psutil.CONN_LISTEN,
+                pid=22,
+                laddr=SimpleNamespace(ip="127.0.0.1", port=13619),
+            ),
+        ]
+        with patch.object(tag_cli.shutil, "which", return_value=None), patch.object(
+            tag_cli.socket,
+            "getaddrinfo",
+            return_value=[(None, None, None, None, ("127.0.0.1", 13619))],
+        ), patch.object(psutil, "net_connections", return_value=connections), patch.object(
+            psutil, "Process", side_effect=[first, second]
+        ):
+            listener = tag_cli.local_mfs_listener("http://127.0.0.1:13619")
+
+        self.assertIsNone(listener)
 
     def test_unmanaged_local_mfs_is_adopted_then_stopped(self) -> None:
         process = MagicMock(pid=1234)

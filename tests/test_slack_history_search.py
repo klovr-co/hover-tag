@@ -54,6 +54,15 @@ class SlackHistorySearchTests(unittest.TestCase):
         )
         self.assertEqual(("general", "marketing"), requested_channel_names(grant))
 
+    def test_issue_references_are_not_treated_as_channel_names(self) -> None:
+        grant = json.dumps(
+            {
+                **json.loads(GRANT),
+                "request_text": "Search #1234 and #marketing for launch notes",
+            }
+        )
+        self.assertEqual(("marketing",), requested_channel_names(grant))
+
     def test_typo_cannot_be_silently_corrected_by_the_agent(self) -> None:
         channels = authorized_channels(GRANT)
         with self.assertRaisesRegex(ValueError, r"did you mean #general"):

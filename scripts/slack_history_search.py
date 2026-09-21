@@ -52,7 +52,11 @@ def requested_channel_names(raw_grant: str) -> tuple[str, ...]:
     except (json.JSONDecodeError, TypeError):
         return ()
     request_text = payload.get("request_text") if isinstance(payload, dict) else None
-    return explicit_channel_names(request_text) if isinstance(request_text, str) else ()
+    if not isinstance(request_text, str):
+        return ()
+    return tuple(
+        name for name in explicit_channel_names(request_text) if not name.isdigit()
+    )
 
 
 def _selection_error(

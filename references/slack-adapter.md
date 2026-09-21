@@ -95,6 +95,7 @@ Create or reuse a Slack app:
    - `channels:read` + `channels:history` — read threads in public channels.
    - `groups:read` + `groups:history` — read threads in private channels.
    - `im:history` — read direct-message threads when DM invocation is enabled.
+   - `users:read` — verify app identity and caller visibility for cross-channel search.
 5. Open **Event Subscriptions** and subscribe to Bot Events:
    - `app_mention`
    - `message.im`

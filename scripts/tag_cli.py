@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -200,7 +201,16 @@ def local_mfs_endpoint(url: str) -> bool:
     """Return whether Tag may manage the process behind this loopback endpoint."""
     try:
         parsed = urllib.parse.urlsplit(url)
-        return parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "localhost", "::1"}
+        return (
+            parsed.scheme == "http"
+            and parsed.hostname in {"127.0.0.1", "localhost"}
+            and parsed.port == 13619
+            and parsed.path in {"", "/"}
+            and not parsed.username
+            and not parsed.password
+            and not parsed.query
+            and not parsed.fragment
+        )
     except ValueError:
         return False
 
@@ -212,20 +222,34 @@ def local_mfs_listener(url: str):
     try:
         parsed = urllib.parse.urlsplit(url)
         port = parsed.port or 80
-    except ValueError:
+        addresses = {
+            address[4][0]
+            for address in socket.getaddrinfo(
+                parsed.hostname, port, type=socket.SOCK_STREAM
+            )
+        }
+    except (OSError, TypeError, ValueError):
         return None
     candidate_pids: set[int] = set()
     if os.name != "nt" and shutil.which("lsof"):
-        result = subprocess.run(
-            ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
-            check=False,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-        )
-        candidate_pids.update(
-            int(value) for value in result.stdout.split() if value.isdigit()
-        )
+        for address in addresses:
+            endpoint = f"[{address}]" if ":" in address else address
+            result = subprocess.run(
+                [
+                    "lsof",
+                    "-nP",
+                    f"-iTCP@{endpoint}:{port}",
+                    "-sTCP:LISTEN",
+                    "-t",
+                ],
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+            candidate_pids.update(
+                int(value) for value in result.stdout.split() if value.isdigit()
+            )
     else:
         try:
             connections = psutil.net_connections(kind="tcp")
@@ -238,16 +262,18 @@ def local_mfs_listener(url: str):
             and connection.pid is not None
             and connection.laddr
             and connection.laddr.port == port
+            and connection.laddr.ip in addresses
         )
-    for pid in candidate_pids:
+    candidates = []
+    for pid in sorted(candidate_pids):
         try:
             process = psutil.Process(pid)
             command = " ".join(process.cmdline()).casefold()
         except psutil.Error:
             continue
         if "mfs-server" in command or "mfs_server" in command:
-            return process
-    return None
+            candidates.append(process)
+    return candidates[0] if len(candidates) == 1 else None
 
 
 def replace_unmanaged_local_mfs(home: Path, url: str) -> bool:

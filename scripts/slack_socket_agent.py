@@ -2725,16 +2725,6 @@ def create_app(
             client=client,
             intent=SearchIntent("current"),
         )
-        slack_search_grant = plan_search_scopes(
-            request_text=question,
-            current_channel_id=channel,
-            caller_id=user_id,
-            team_id=policy_team,
-            configured_channels=configured_channels,
-            allowed_scopes=os.getenv("MFS_ALLOWED_SCOPES", ""),
-            client=client,
-            intent=SearchIntent("all"),
-        )
         agent_settings = normalize_settings(
             settings_store.get(team, user_id),
             models,
@@ -2748,6 +2738,16 @@ def create_app(
             team=team,
         )
         indicator.start()
+        slack_search_grant = plan_search_scopes(
+            request_text=question,
+            current_channel_id=channel,
+            caller_id=user_id,
+            team_id=policy_team,
+            configured_channels=configured_channels,
+            allowed_scopes=os.getenv("MFS_ALLOWED_SCOPES", ""),
+            client=client,
+            intent=SearchIntent("all"),
+        )
         answer_stream: SlackAnswerStream | None = None
         output_manifest = (
             default_workdir() / f"{OUTPUT_ARTIFACT_MANIFEST_PREFIX}{uuid.uuid4().hex}.json"
