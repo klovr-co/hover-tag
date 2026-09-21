@@ -104,6 +104,9 @@ If `tag` is a symlink to a recognized legacy Tag checkout, the installer safely
 replaces that symlink with the managed launcher. The old checkout is left intact.
 
 Each release has its own Python environment with the pinned runtime requirements.
+Installation also downloads and validates MFS's default local embedding model
+into its reusable cache, so the first `tag start` does not wait for a cold model
+download. Later installs reuse the cached model.
 The MFS Python server is used directly; installation does not require the
 Unix-only MFS CLI binary. Google Workspace CLI and third-party MCP packages are
 optional integrations, installed and authenticated separately.

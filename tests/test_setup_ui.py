@@ -17,11 +17,11 @@ class SetupUITests(unittest.TestCase):
     def test_narrow_screen_keeps_current_step_and_keyboard_help_visible(self):
         with patch.object(setup_ui.shutil, "get_terminal_size", return_value=os.terminal_size((48, 24))), redirect_stdout(StringIO()) as output:
             setup_ui.screen(3, "Where should Tag respond?", "Slack connected")
-            print(setup_ui._instructions(multiple=True))
+            print(setup_ui._instructions(multiple=True, setup_incomplete=True))
         text = output.getvalue()
         self.assertIn("STEP 3/4 · Channels", text)
         self.assertIn("Space Toggle", text)
-        self.assertIn("q Exit", text)
+        self.assertIn("q Exit · finish setup later", text)
         self.assertTrue(all(len(line) < 48 for line in text.splitlines()))
 
     def test_notice_wraps_prose_and_separates_error_code(self):
@@ -47,6 +47,21 @@ class SetupUITests(unittest.TestCase):
         self.assertIn("\n", options["instruction"])
         self.assertIn(("pointer", "fg:#38cff1 bold"), options["style"].style_rules)
         self.assertIn(("selected", "fg:default bg:default noreverse nobold"), options["style"].style_rules)
+        self.assertIn("q Exit", options["instruction"])
+
+    def test_save_and_exit_is_rendered_as_incomplete_without_changing_its_value(self):
+        with patch.object(setup_ui, "keyboard_available", return_value=True), patch(
+            "questionary.select"
+        ) as prompt, redirect_stdout(StringIO()):
+            prompt.return_value.unsafe_ask.return_value = 1
+            result = setup_ui.choose("Continue?", ["Continue", "Save and exit"])
+
+        self.assertEqual(result, 1)
+        self.assertEqual(
+            prompt.call_args.kwargs["choices"][1].title,
+            "Exit · finish setup later",
+        )
+        self.assertIn("finish setup later", prompt.call_args.kwargs["instruction"])
 
     def test_message_uses_the_shared_two_space_content_gutter(self):
         with redirect_stdout(StringIO()) as output:
@@ -87,8 +102,9 @@ class SetupUITests(unittest.TestCase):
     def test_plain_menu_can_pause(self):
         with patch.object(setup_ui, "keyboard_available", return_value=False), patch(
             "builtins.input", return_value="q"
-        ), redirect_stdout(StringIO()), self.assertRaises(setup_ui.Paused):
+        ), redirect_stdout(StringIO()) as output, self.assertRaises(setup_ui.Paused):
             setup_ui.choose("Continue?", ["Continue", "Save and exit"])
+        self.assertIn("Exit · finish setup later", output.getvalue())
 
     @unittest.skipIf(os.name == "nt", "POSIX PTY test")
     def test_real_terminal_arrow_space_enter_and_terminal_restoration(self):
