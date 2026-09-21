@@ -40,6 +40,9 @@ RUNTIME_DEPENDENCIES = ("mfs_server", "psutil", "slack_bolt")
 UPGRADE_CHANNELS = ("stable", "beta", "alpha", "edge")
 UPDATE_CHECK_INTERVAL_SECONDS = 24 * 60 * 60
 COMMANDS = tuple(sorted(tag_instances.RESERVED_NAMES))
+STARTUP_ATTEMPT_ENV_KEYS = (
+    "OPENTAG_MFS_STARTUP_ATTEMPTS", "OPENTAG_STARTUP_ATTEMPTS"
+)
 TOKEN_PATTERN = re.compile(r"\b(?:xox[a-z]-|xapp-)[A-Za-z0-9-]+")
 MFS_HISTORY_CREDENTIAL_MESSAGE = (
     "MFS is already running without Tag's Slack-history credential. "
@@ -611,6 +614,11 @@ def instance_environment(
     """Build a fresh child environment without cross-instance Tag settings."""
     inherited = os.environ if source is None else source
     blocked = ("SLACK_", "MFS_", "OPENTAG_")
+    cli_overrides = {
+        key: inherited[key]
+        for key in STARTUP_ATTEMPT_ENV_KEYS
+        if key in inherited
+    }
     environment = {
         key: value for key, value in inherited.items()
         if not key.startswith(blocked) and key not in {"TAG_INSTANCE_HOME", "TAG_ID"}
@@ -623,6 +631,7 @@ def instance_environment(
     ))
     if values:
         environment.update(values)
+    environment.update(cli_overrides)
     environment["OPENTAG_ENV_FILE"] = str(context.home / "config/settings.json")
     return environment
 
@@ -684,7 +693,9 @@ def assert_unique_slack_app(context: tag_instances.InstanceContext, values: dict
     try:
         lock.mkdir()
     except FileExistsError:
-        raise RuntimeError("Another Tag is activating a Slack app; retry shortly") from None
+        raise RuntimeError(
+            f"Another Tag is activating a Slack app. If interrupted, remove {lock} and retry."
+        ) from None
     try:
         for item in tag_instances.discover(context.installation_root):
             if not item.get("valid") or item["id"] == context.tag_id:
@@ -1293,6 +1304,12 @@ def main() -> int:
     if args.command == "add":
         if args.arguments:
             parser.error("add does not accept a name; the workspace alias is chosen during onboarding")
+        if not sys.stdin.isatty():
+            print(
+                "Interactive setup requires a terminal. Use tag inspect --json and tag config set for automation.",
+                file=sys.stderr,
+            )
+            return 2
         try:
             import opentag_setup as setup
         except ImportError:
@@ -1348,6 +1365,9 @@ def main() -> int:
     context = tag_instances.resolve(installation_root, tag_id)
     home = context.home
     environment = instance_environment(context)
+    startup_attempt_overrides = {
+        key: environment[key] for key in STARTUP_ATTEMPT_ENV_KEYS if key in environment
+    }
     os.environ.clear()
     os.environ.update(environment)
     if args.command == "memory":
@@ -1555,6 +1575,7 @@ def main() -> int:
         if args.command in {"start", "dev"}:
             assert_unique_slack_app(context, values)
         os.environ.update(values)
+        os.environ.update(startup_attempt_overrides)
     elif args.command in {"start", "dev"} or (args.command == "doctor" and not args.offline):
         raise RuntimeError(f"Missing configuration: {config_path}. Run tag setup.")
     # A TAG installation always has one stable integration workspace.
@@ -1659,7 +1680,9 @@ def main() -> int:
                 try:
                     mfs_lock.mkdir()
                 except FileExistsError:
-                    raise RuntimeError("Another shared memory start is in progress; retry shortly") from None
+                    raise RuntimeError(
+                        f"Another shared memory start is in progress. If interrupted, remove {mfs_lock} and retry."
+                    ) from None
                 try:
                     # Recheck after acquiring the installation-wide lock. A
                     # different Tag may have completed startup while we waited.

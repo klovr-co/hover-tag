@@ -93,6 +93,26 @@ class TagInstanceTests(unittest.TestCase):
         with patch.dict(os.environ, environment, clear=True):
             self.assertEqual(instance_home(), home)
 
+    def test_instance_environment_preserves_only_supported_startup_overrides(self) -> None:
+        context = tag_instances.create(self.root, "work")
+        environment = tag_cli.instance_environment(context, values={
+            "OPENTAG_STARTUP_ATTEMPTS": "99",
+            "OPENTAG_MFS_STARTUP_ATTEMPTS": "101",
+        }, source={
+            "PATH": "/fixture/bin",
+            "OPENTAG_STARTUP_ATTEMPTS": "7",
+            "OPENTAG_MFS_STARTUP_ATTEMPTS": "11",
+            "OPENTAG_ENV_FILE": "/wrong/settings.json",
+            "OPENTAG_BACKEND": "claude",
+        })
+
+        self.assertEqual(environment["OPENTAG_STARTUP_ATTEMPTS"], "7")
+        self.assertEqual(environment["OPENTAG_MFS_STARTUP_ATTEMPTS"], "11")
+        self.assertEqual(
+            environment["OPENTAG_ENV_FILE"], str(context.home / "config/settings.json")
+        )
+        self.assertNotIn("OPENTAG_BACKEND", environment)
+
     def test_default_cli_scrubs_inherited_instance_configuration(self) -> None:
         default = tag_instances.ensure_default(self.root)
         configured = {
@@ -135,6 +155,8 @@ class TagInstanceTests(unittest.TestCase):
         with patch.dict(os.environ, {"TAG_HOME": str(self.root)}, clear=False), patch.object(
             sys, "argv", ["tag", "add"]
         ), patch.object(
+            sys.stdin, "isatty", return_value=True
+        ), patch.object(
             opentag_setup, "connect_slack_workspace", return_value=("T123", "Personal")
         ), patch.object(
             opentag_setup, "ask", return_value="personal"
@@ -153,6 +175,17 @@ class TagInstanceTests(unittest.TestCase):
         ), self.assertRaisesRegex(ValueError, "Unknown workspace alias"):
             tag_cli.main()
         self.assertFalse((self.root / "instances/missing").exists())
+
+    def test_cli_add_requires_terminal_before_connecting_slack(self) -> None:
+        with patch.dict(os.environ, {"TAG_HOME": str(self.root)}, clear=False), patch.object(
+            sys, "argv", ["tag", "add"]
+        ), patch.object(sys.stdin, "isatty", return_value=False), patch.object(
+            opentag_setup, "connect_slack_workspace"
+        ) as connect:
+            self.assertEqual(tag_cli.main(), 2)
+
+        connect.assert_not_called()
+        self.assertFalse((self.root / "instances/default").exists())
 
     def test_cli_stop_targets_only_the_selected_bridge(self) -> None:
         home = tag_instances.create(self.root, "personal").home

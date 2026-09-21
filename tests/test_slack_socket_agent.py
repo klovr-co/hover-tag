@@ -46,7 +46,7 @@ class FakeApp:
 
 
 class SlackBotNameTests(unittest.TestCase):
-    def test_openmax_is_the_backend_independent_default(self) -> None:
+    def test_tag_is_the_backend_independent_default(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
             self.assertEqual(slack_socket_agent.suggested_bot_name("codex"), "Tag")
             self.assertEqual(slack_socket_agent.suggested_bot_name("claude"), "Tag")

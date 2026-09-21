@@ -1,5 +1,7 @@
 # Changelog
 
+All notable changes to Tag are documented here.
+
 ## Unreleased
 
 ### Added
@@ -19,13 +21,6 @@
 - Check the saved release channel at most daily during normal status, inspect,
   setup, and start flows, and show a non-blocking upgrade reminder when a newer
   release is available.
-
-All notable changes to Tag are documented here.
-
-## Unreleased
-
-### Added
-
 - Let new-app setup propose **&lt;the operator's first name&gt;'s Tag**, render a
   deterministic identity from 144 curated Tag waterdrop bases and 16 subtle signatures,
   or choose a validated local PNG,

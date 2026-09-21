@@ -15,7 +15,7 @@ the behavior contract for the fresh CLI agent launched by the bridge.
   issues, databases, object stores, or web sources.
 - **Tools**: external systems exposed through MFS connectors for read/search, and
   any command, skill, or file tool available to the backend in the workspace.
-  A tool's own credentials and grants determine its capabilities; Open Tag does not
+  A tool's own credentials and grants determine its capabilities; Tag does not
   add per-tool caller allowlists.
 
 ## Runtime Inputs
@@ -81,7 +81,7 @@ current channel. Do not post a message merely because you created a summary.
 
 ## Boundary Model
 
-Open Tag relies on the selected backend process boundary and the workspace
+Tag relies on the selected backend process boundary and the workspace
 permissions granted by the operator. Production deployments should add a real
 sandbox, explicit tool allowlists, and auditable data-source policies.
 

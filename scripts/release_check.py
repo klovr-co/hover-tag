@@ -76,7 +76,7 @@ def validate_release(root: Path) -> list[str]:
         errors.append("SECURITY.md must link to private vulnerability reporting")
 
     readme = _read(root, "README.md", errors)
-    for token in ("# tag", "https://github.com/klovr-co/tag.git", "Apache License 2.0"):
+    for token in ("# Tag", "https://github.com/klovr-co/tag.git", "Apache License 2.0"):
         if readme and token not in readme:
             errors.append(f"README.md is missing release identity: {token!r}")
 
