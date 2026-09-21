@@ -71,7 +71,8 @@ command directory is `~/.local/bin`; if PATH omits it, use the absolute launcher
 or add that directory to the current shell's PATH. Persist shell-profile changes
 only when needed for the requested setup. Use installed `tag`, not the checkout's
 `./tag`, after installation. `tag paths --json` provides the actual locations;
-configuration lives in the Tag home's `config/settings.json`, not a checkout `.env`.
+default configuration lives in the Tag home's `instances/default/config/settings.json`,
+not a checkout `.env`.
 
 For Windows requests, use the checkout's `install.ps1` and platform instructions
 in `docs/installation.md`; do not adapt POSIX shell commands blindly.
@@ -90,6 +91,9 @@ Setup owns these steps:
 - App compatibility checks and automatic credential handoff. Hidden terminal
   token entry is a recovery option, not the default. Never request tokens in
   chat or put literal credentials in shell arguments, history, or files in this skill.
+- A targeted Slack CLI repair when Agent messaging is missing. Setup preserves
+  unrelated manifest settings and asks before replacing the irreversible legacy
+  Assistant experience; other compatibility changes remain guided manual steps.
 - Owner identity, channels, history window, and memory-policy approval.
   Preserve the caller allowlist; widen access only on explicit user request.
 - Finish approval, which starts services and indexing unless `--no-start` is used.
@@ -107,9 +111,16 @@ without starting services or indexing. `tag setup --test` implies `--no-start`
 and requires a separate MFS server before you run `tag start`. This is not a
 Slack sandbox: approved Slack actions remain real and CLI sign-ins are shared.
 
-For compatibility or permission failures, follow the displayed checklist and
-have the user or workspace admin make the required Slack changes. Do not loop
-on app creation, automatically broaden scopes, or reset the installation.
+To connect an additional Slack workspace, run `tag add`. The flow selects the
+workspace first, suggests a lowercase local workspace alias from its real Slack
+name, and then continues setup. The alias appears in commands such as
+`tag klovr status`; it is separate from the assistant display name, so multiple
+workspaces may all use a Slack name such as “Maya's Tag.”
+
+For compatibility or permission failures, use setup's targeted Agent messaging
+repair when offered. Otherwise follow the displayed checklist and have the user
+or workspace admin make the required Slack changes. Do not loop on app creation,
+automatically broaden scopes, or reset the installation.
 When app creation has an uncertain outcome, inspect the saved identity before
 attempting creation again. Resume with the existing app when possible.
 

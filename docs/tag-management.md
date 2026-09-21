@@ -1,5 +1,45 @@
 # Set up and manage Tag
 
+## Multiple Slack workspaces
+
+One installation can run independent Tags for separate Slack apps/workspaces.
+The reserved `default` Tag uses the same isolated layout as every named Tag:
+
+```sh
+tag add
+tag list
+tag personal setup
+tag personal start
+tag personal status
+tag personal logs
+tag personal stop
+```
+
+Omitting the alias selects `<TAG_HOME>/instances/default`. During `tag add`, Tag connects
+Slack first and suggests a lowercase workspace alias derived from the selected workspace's
+name. The alias is only used in local commands; it is independent of the Slack app's display
+name. Paused onboarding appears in `tag list` and resumes
+with the targeted setup command. Each Tag has its own settings, Slack app,
+agent working folder, conversations, logs, and lifecycle. Use Slack's settings
+for that specific app to change its remote name or profile image.
+
+MFS is shared by the installation. `tag NAME stop`, restart, reset, and
+failed startup leave shared memory and other Tags running. Inspect it with
+`tag memory status`; after stopping every Tag bridge, an installation-owned
+service can be stopped explicitly with `tag memory stop`. Tag refuses to stop
+an externally managed MFS process.
+
+Shared storage does not authorize cross-workspace retrieval. Normal Slack
+retrieval remains limited to the selected Tag's approved workspace/channel
+scopes. These local Tags share the trusted-sandbox limitations described
+in the security model; they are not hardened tenants from one another.
+
+For automation, `tag list --json` returns `schema_version`, the installation
+root, and one independently readable record per Tag. Existing inspect/status
+objects retain their fields and add `tag` plus nullable `slack_workspace`;
+their `next_command` starts with `tag NAME` for named Tags. A malformed Tag is
+returned with its own error and does not suppress other records.
+
 The CLI and guided settings share the same settings and lifecycle operations.
 Use `tag` for a status summary and next command. An assistant managing Tag should
 begin with `tag inspect --json` to inspect what is already configured.
@@ -10,7 +50,7 @@ skill into their workspace.
 
 ```mermaid
 flowchart TD
-    Request[Open Tag or ask the admin skill] --> Inspect[Inspect existing settings and services]
+    Request[Open Tag or ask the setup assistant] --> Inspect[Inspect existing settings and services]
     Inspect --> Missing[Not configured or incomplete]
     Inspect --> Stopped[Configured and stopped]
     Inspect --> Running[Running and connected]
@@ -99,11 +139,15 @@ or Client ID. Tag asks before linking and checks the app's configuration afterwa
 No browser-session integration is needed. Saved or archived app identities are
 not presented as a list of your Slack apps.
 When the compatibility check finds missing settings, it shows the full
-checklist and offers **Open app settings**, **Check again**, or **Save and
-exit**. Open app settings takes you to the selected Slack app; make every
-listed change there, save it, then choose Check again. If bot scopes are
-listed, reinstall the app in Slack afterward so they take effect. Tag never
-requests a configuration token or changes an existing Slack app's manifest.
+checklist. If Agent messaging is missing, setup offers **Enable Agent messaging
+with Slack CLI**. Tag exports the remote manifest, adds only the Agent view while
+preserving unrelated settings, syncs it, and verifies Slack's saved state. A
+legacy Assistant view requires explicit confirmation because Slack does not
+allow that conversion to be reversed. Other missing settings still offer
+**Open app settings**, **Check again**, or **Save and exit**. Open app settings
+takes you to the selected Slack app; make every listed change there, save it,
+then choose Check again. If bot scopes are listed, reinstall the app in Slack
+afterward so they take effect. Tag never requests a configuration token.
 If setup pauses or fails, run
 `tag setup` to resume the new answers. Reset requires an interactive terminal.
 The printed backup contains `restore-paths.json`, mapping each saved item to its

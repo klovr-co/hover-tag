@@ -24,21 +24,27 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 try:
-    from tag_paths import tag_home, initialize
+    from tag_paths import instance_home, initialize_instance
     import tag_config as settings
     import slack_channels
     import setup_ui as ui
     import slack_permissions
     import slack_app_create
+    import slack_manifest_migrations
     import slack_credentials
+    import tag_credentials
+    import tag_cli as lifecycle
     from tag_mascot import PALETTE as MASCOT_PALETTE, PIXELS as MASCOT_PIXELS
 except ImportError:
-    from scripts.tag_paths import tag_home, initialize
+    from scripts.tag_paths import instance_home, initialize_instance
     from scripts import slack_channels, tag_config as settings
     from scripts import setup_ui as ui
     from scripts import slack_permissions
     from scripts import slack_app_create
+    from scripts import slack_manifest_migrations
     from scripts import slack_credentials
+    from scripts import tag_credentials
+    from scripts import tag_cli as lifecycle
     from scripts.tag_mascot import PALETTE as MASCOT_PALETTE, PIXELS as MASCOT_PIXELS
 
 
@@ -216,7 +222,10 @@ def inspect_slack_app(project: Path, app_id: str, *, issues: list[str] | None = 
         ui.message("App configuration needs attention: " + ", ".join(missing))
         if issues is not None:
             issues.extend(missing)
-        ui.message("Open app settings, make the listed changes, then choose Check again.")
+        if "Agent view enabled" in missing:
+            ui.message("Tag can enable Agent messaging with Slack CLI from the next menu.")
+        if any(label != "Agent view enabled" for label in missing):
+            ui.message("Open app settings, make the other listed changes, then choose Check again.")
         print()
         ui.message("In Slack app settings:")
         if any(label in missing for label in (
@@ -312,7 +321,7 @@ def choose_allowed_users(team_id: str, current: str = "") -> str:
     )
 
 
-def connect_slack_cli(current: str = "") -> str | None:
+def connect_slack_workspace(current: str = "") -> tuple[str, str] | None:
     if not shutil.which("slack"):
         ui.message("Slack CLI is required for workspace authorization: https://docs.slack.dev/tools/slack-cli/")
         return None
@@ -330,12 +339,17 @@ def connect_slack_cli(current: str = "") -> str | None:
         if index < len(accounts):
             name, team_id = accounts[index]
             ui.message(f"✓ {name}")
-            return team_id
+            return team_id, name
         if index == len(accounts) + 1:
             return None
         if run_slack_cli(["auth", "login"], interactive=True):
             ui.message("Slack CLI authorization was not completed. Run tag setup to try again.")
             return None
+
+
+def connect_slack_cli(current: str = "") -> str | None:
+    selected = connect_slack_workspace(current)
+    return selected[0] if selected else None
 
 
 def ask_validated(prompt: str, key: str, default: str | None = None) -> str:
@@ -921,7 +935,11 @@ def choose_slack_app(
     config_path = config_path or settings.config_path(home)
     values = settings.load_config(config_path)
     app_id = values.get("SLACK_APP_ID", "")
-    ui.screen(2, "Which app should Tag use?")
+    ui.screen(
+        2,
+        "Which app should Tag use?",
+        target=ui.display.target_detail(os.getenv("TAG_ID", "default"), team_id),
+    )
     project = slack_project(home)
     creation = project / "tag-create.json"
     if creation.exists():
@@ -977,10 +995,34 @@ def choose_slack_app(
         print()
         ui.message("Your app selection and link are saved.")
         while True:
-            choice = ui.choose("App settings need attention", ["Open app settings", "Check again", "Save and exit"])
-            if choice == 0:
+            can_enable_agent = "Agent view enabled" in issues
+            options = (["Enable Agent messaging with Slack CLI"] if can_enable_agent else []) + [
+                "Open app settings", "Check again", "Save and exit",
+            ]
+            choice = ui.choose("App settings need attention", options)
+            if can_enable_agent and choice == 0:
+                def approve_legacy() -> bool:
+                    ui.notice(
+                        "Slack currently uses the legacy Assistant messaging experience",
+                        "Switching this app to Agent messaging cannot be reversed.",
+                    )
+                    return confirm("Switch permanently to Agent messaging?", default=False)
+
+                try:
+                    changed = slack_manifest_migrations.enable_agent_view(
+                        project, app_id, team_id, approve_legacy=approve_legacy
+                    )
+                except RuntimeError as exc:
+                    ui.message(str(exc))
+                    continue
+                if changed:
+                    ui.message("✓ Agent messaging enabled through Slack CLI")
+                    break
+                continue
+            browser_choice = choice - int(can_enable_agent)
+            if browser_choice == 0:
                 webbrowser.open(f"https://api.slack.com/apps/{app_id}")
-            elif choice == 1:
+            elif browser_choice == 1:
                 break
             else:
                 raise ui.Paused()
@@ -1043,20 +1085,26 @@ def connect_app_credentials(home: Path, config_path: Path, team_id: str, app_id:
         return values
 
 
-def connector_scope(team_id: str, channel: slack_channels.SlackChannel) -> str:
+def connector_uri(team_id: str, app_id: str = "") -> str:
+    suffix = f"-{app_id.lower()}" if app_id else ""
+    return f"slack://tag-{team_id.lower()}{suffix}"
+
+
+def connector_scope(team_id: str, channel: slack_channels.SlackChannel, app_id: str = "") -> str:
     safe_name = re.sub(r"[^\w.-]+", "-", channel.name).strip("-") or "unnamed"
-    return f"slack://tag-{team_id.lower()}/channels/{safe_name}__{channel.channel_id}"
+    return f"{connector_uri(team_id, app_id)}/channels/{safe_name}__{channel.channel_id}"
 
 
-def render_slack_connector(team_id: str, channels: list[slack_channels.SlackChannel], days: str) -> str:
+def render_slack_connector(team_id: str, channels: list[slack_channels.SlackChannel], days: str,
+                           *, credential: Path | None = None, app_id: str = "") -> str:
     ids = ", ".join(json.dumps(channel.channel_id) for channel in channels)
     types = sorted({"private_channel" if channel.is_private else "public_channel" for channel in channels})
     channel_types = ", ".join(json.dumps(value) for value in types)
     return "\n".join((
         "# mfs-server connector config — slack",
-        f"# URI: slack://tag-{team_id.lower()}",
-        "# Generated by Tag. Contains no token; the credential is read from the Tag environment.",
-        'token = "env:MFS_SLACK_TOKEN"',
+        f"# URI: {connector_uri(team_id, app_id)}",
+        "# Generated by Tag. Contains no token; the credential is read from a private reference.",
+        f"token = {json.dumps('file:' + str(credential) if credential else 'env:MFS_SLACK_TOKEN')}",
         f"channel_types = [{channel_types}]",
         f"channel_ids = [{ids}]",
         f'oldest = "now-{days}d"',
@@ -1065,13 +1113,24 @@ def render_slack_connector(team_id: str, channels: list[slack_channels.SlackChan
     ))
 
 
-def write_slack_connector(team_id: str, channels: list[slack_channels.SlackChannel], days: str, *, home: Path | None = None) -> Path:
+def write_slack_connector(team_id: str, channels: list[slack_channels.SlackChannel], days: str, *,
+                          home: Path | None = None, app_id: str = "",
+                          credential: Path | None = None) -> Path:
     if not re.fullmatch(r"T[A-Z0-9]+", team_id):
         raise ValueError("Invalid Slack workspace ID")
-    connector_dir = (home or tag_home()) / "integrations/mfs/connectors"
+    selected_home = home or instance_home()
+    if not app_id:
+        try:
+            app_id = settings.load_config(selected_home / "config/settings.json").get("SLACK_APP_ID", "")
+        except (OSError, ValueError):
+            pass
+    connector_dir = selected_home / "integrations/mfs/connectors"
     connector_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-    path = connector_dir / f"tag-{team_id.lower()}.toml"
-    content = render_slack_connector(team_id, channels, days)
+    identity = f"{team_id.lower()}-{app_id.lower()}" if app_id else team_id.lower()
+    path = connector_dir / f"tag-{identity}.toml"
+    default_credential = tag_credentials.slack_history_path(selected_home)
+    reference = credential or (default_credential if default_credential.is_file() else None)
+    content = render_slack_connector(team_id, channels, days, credential=reference, app_id=app_id)
     if path.exists() and path.read_text(encoding="utf-8") != content:
         backup = path.with_suffix(".toml.bak")
         shutil.copy2(path, backup)
@@ -1153,9 +1212,19 @@ def guided_setup(
 ) -> int:
     values = settings.load_config(config_path)
     channel_policy = values.get("SLACK_CHANNEL_POLICY", "selected" if values.get("MFS_SLACK_CONNECTOR_CONFIG") else "invited")
-    home = tag_home()
-    initialize(home)
-    ui.screen(1, "Let’s connect Tag to Slack.", "Your progress is saved. Ctrl-C pauses setup.")
+    home = instance_home()
+    initialize_instance(home)
+    ui.screen(
+        1,
+        "Let’s connect Tag to Slack.",
+        "Your progress is saved. Ctrl-C pauses setup.",
+        target=ui.display.target_detail(
+            os.getenv("TAG_ID", "default"),
+            values.get("SLACK_TEAM_ID", ""),
+            values.get("SLACK_APP_ID", ""),
+            values.get("OPENTAG_BOT_NAME", ""),
+        ),
+    )
 
     # Defaults are not repeatedly prompted and never replace saved choices.
     defaults = {key: value for key, value in settings.DEFAULTS.items() if key not in values}
@@ -1227,7 +1296,17 @@ def guided_setup(
     if inferred:
         values = settings.update_config(config_path, inferred)
 
-    ui.screen(3, "Where should Tag respond?", f"App {values.get('SLACK_APP_ID', '')} · Slack connected")
+    ui.screen(
+        3,
+        "Where should Tag respond?",
+        "Slack connected",
+        target=ui.display.target_detail(
+            os.getenv("TAG_ID", "default"),
+            values.get("SLACK_TEAM_ID", ""),
+            values.get("SLACK_APP_ID", ""),
+            values.get("OPENTAG_BOT_NAME", ""),
+        ),
+    )
     if settings.validation_error("SLACK_ALLOWED_USER_IDS", values.get("SLACK_ALLOWED_USER_IDS", "")):
         owner_id = choose_allowed_users(values.get("SLACK_TEAM_ID", ""))
         values = settings.update_config(config_path, {"SLACK_ALLOWED_USER_IDS": owner_id})
@@ -1299,17 +1378,42 @@ def guided_setup(
                 if channel_policy == "invited":
                     values = settings.update_config(config_path, {"SLACK_CHANNEL_POLICY": channel_policy})
                 break
-    ui.screen(4, "Finishing setup", "Your Slack app and channel choices are saved.")
+    ui.screen(
+        4,
+        "Finishing setup",
+        "Your Slack app and channel choices are saved.",
+        target=ui.display.target_detail(
+            os.getenv("TAG_ID", "default"),
+            values.get("SLACK_TEAM_ID", ""),
+            values.get("SLACK_APP_ID", ""),
+            values.get("OPENTAG_BOT_NAME", ""),
+        ),
+    )
     ui.message("✓ Slack connected\n◌ Preparing Slack memory…")
-    required_scopes = [connector_scope(values["SLACK_TEAM_ID"], channel) for channel in selected_channels]
+    uri = connector_uri(values["SLACK_TEAM_ID"], values.get("SLACK_APP_ID", ""))
+    required_scopes = [connector_scope(values["SLACK_TEAM_ID"], channel,
+                                       values.get("SLACK_APP_ID", "")) for channel in selected_channels]
+    legacy_scopes = [connector_scope(values["SLACK_TEAM_ID"], channel)
+                     for channel in selected_channels]
     saved_scopes = [scope.strip() for scope in values.get("MFS_ALLOWED_SCOPES", "").split(",") if scope.strip()]
     saved_connector = Path(values.get("MFS_SLACK_CONNECTOR_CONFIG", ""))
+    legacy_uri = connector_uri(values["SLACK_TEAM_ID"])
+    expected_connectors = {
+        render_slack_connector(
+            values["SLACK_TEAM_ID"], selected_channels, values["MFS_SLACK_HISTORY_DAYS"],
+            credential=tag_credentials.slack_history_path(home),
+            app_id=values.get("SLACK_APP_ID", ""),
+        ),
+        render_slack_connector(values["SLACK_TEAM_ID"], selected_channels,
+                               values["MFS_SLACK_HISTORY_DAYS"]),
+    }
     memory_incomplete = (
         not values.get("MFS_SLACK_TOKEN")
-        or values.get("MFS_SLACK_CONNECTOR_URI") != f"slack://tag-{values['SLACK_TEAM_ID'].lower()}"
+        or values.get("MFS_SLACK_CONNECTOR_URI") not in {uri, legacy_uri}
         or not saved_connector.is_file()
-        or not set(required_scopes).issubset(saved_scopes)
-        or saved_connector.read_text() != render_slack_connector(values["SLACK_TEAM_ID"], selected_channels, values["MFS_SLACK_HISTORY_DAYS"])
+        or not (set(required_scopes).issubset(saved_scopes)
+                or set(legacy_scopes).issubset(saved_scopes))
+        or saved_connector.read_text() not in expected_connectors
     )
     if memory_incomplete:
         history_token = values.get("MFS_SLACK_TOKEN") or values["SLACK_BOT_TOKEN"]
@@ -1328,6 +1432,14 @@ def guided_setup(
                     raise ui.Paused()
                 if action == 1:
                     history_token = ask_secret("Slack-history token (hidden)", "xox")
+        if not lifecycle.local_mfs_endpoint(
+            values.get("MFS_URL", settings.DEFAULTS["MFS_URL"])
+        ):
+            raise RuntimeError(
+                "Slack history for a remote MFS endpoint needs a server-resolvable credential reference; "
+                "a local Tag credential file cannot be used remotely."
+            )
+        tag_credentials.write_slack_history(home, history_token)
         connector = write_slack_connector(
             values["SLACK_TEAM_ID"], selected_channels, values["MFS_SLACK_HISTORY_DAYS"], home=home
         )
@@ -1337,7 +1449,7 @@ def guided_setup(
             {
                 "MFS_SLACK_TOKEN": history_token,
                 "MFS_ALLOWED_SCOPES": scopes,
-                "MFS_SLACK_CONNECTOR_URI": f"slack://tag-{values['SLACK_TEAM_ID'].lower()}",
+                "MFS_SLACK_CONNECTOR_URI": uri,
                 "MFS_SLACK_CONNECTOR_CONFIG": str(connector),
             },
         )
@@ -1377,7 +1489,9 @@ def finish_setup(config_path: Path, values: dict[str, str], channels: list[slack
     environment = dict(os.environ, OPENTAG_ENV_FILE=str(config_path))
     while True:
         ui.message("◌ Starting memory and connecting Tag…")
-        result = subprocess.run([sys.executable, str(ROOT / "scripts/tag_cli.py"), "start"], env=environment, text=True, capture_output=True)
+        tag_id = os.getenv("TAG_ID", "default")
+        target = [] if tag_id == "default" else [tag_id]
+        result = subprocess.run([sys.executable, str(ROOT / "scripts/tag_cli.py"), *target, "start"], env=environment, text=True, capture_output=True)
         if result.returncode == 0:
             print()
             ui.message("✓ Tag is connected.")
@@ -1410,7 +1524,7 @@ def completed_setup_status(config_path: Path) -> int | None:
         from . import tag_control, tag_cli
     except ImportError:
         import tag_control, tag_cli
-    report = tag_control.status_report(tag_home(), tag_cli)
+    report = tag_control.status_report(instance_home(), tag_cli, tag_id=os.getenv("TAG_ID", "default"))
     ui.message("Your setup is already saved. Checking readiness; no settings were changed.")
     tag_control.show_status(report)
     ui.message("Change choices with tag settings, or review with tag setup --review.")
@@ -1419,7 +1533,7 @@ def completed_setup_status(config_path: Path) -> int | None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Set up Tag or resume missing configuration.")
-    parser.add_argument("--config", type=Path, default=tag_home() / "config/settings.json", help="configuration file to create")
+    parser.add_argument("--config", type=Path, default=instance_home() / "config/settings.json", help="configuration file to create")
     parser.add_argument("--no-start", action="store_true", help="save setup choices without starting services or indexing history")
     parser.add_argument("--review", action="store_true", help="review completed setup choices")
     parser.add_argument("--test-mode", action="store_true", help=argparse.SUPPRESS)

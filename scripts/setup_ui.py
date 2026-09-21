@@ -51,8 +51,11 @@ def notice(title: str, body: str, *, code: str = "", footer: str = "") -> None:
         paragraph(footer)
 
 
-def screen(step: int, title: str, detail: str = "") -> None:
-    display.header("Setup")
+def screen(step: int, title: str, detail: str = "", *, target: str = "") -> None:
+    display.header(
+        "Setup",
+        target or display.target_detail(os.getenv("TAG_ID", "default")),
+    )
     stages = ("Connect Slack", "App", "Channels", "Finish")
     print()
     if display.content_width() < 60:
