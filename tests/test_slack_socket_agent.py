@@ -6,6 +6,7 @@ import signal
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 try:
@@ -110,6 +111,591 @@ class SlackTextAttachmentTests(unittest.TestCase):
             )
 
         self.assertTrue(text[0].endswith("[Attachment text truncated]"))
+
+
+class SlackOutputArtifactTests(unittest.TestCase):
+    def test_local_artifact_actions_allow_enabled_direct_messages(self) -> None:
+        fake_app = FakeApp()
+        client = MagicMock()
+        logger = MagicMock()
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir).resolve()
+            artifact = root / "report.md"
+            artifact.write_text("# Report\n", encoding="utf-8")
+            with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+                os.environ,
+                {"SLACK_BOT_TOKEN": "xoxb-test", "OPENTAG_SLACK_DM_ENABLED": "1"},
+                clear=True,
+            ), patch.object(
+                slack_socket_agent, "default_workdir", return_value=root
+            ), patch.object(
+                slack_socket_agent, "open_local_artifact"
+            ) as local_open, patch.object(
+                slack_socket_agent, "open_local_artifact_directory"
+            ) as directory_open:
+                slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+                metadata = {
+                    "user": "UOWNER",
+                    "channel": "D123",
+                    "thread_ts": "1.23",
+                    "path": "report.md",
+                }
+                body = {
+                    "user": {"id": "UOWNER"},
+                    "channel": {"id": "D123"},
+                    "actions": [{"value": json.dumps(metadata)}],
+                }
+
+                file_handler = fake_app.actions[
+                    slack_socket_agent.OPEN_LOCAL_ARTIFACT_ACTION_ID
+                ]
+                file_handler(MagicMock(), body, client, logger)
+                metadata["path"] = "."
+                body["actions"][0]["value"] = json.dumps(metadata)
+                directory_handler = fake_app.actions[
+                    slack_socket_agent.OPEN_LOCAL_ARTIFACT_DIRECTORY_ACTION_ID
+                ]
+                directory_handler(MagicMock(), body, client, logger)
+
+            local_open.assert_called_once_with(artifact)
+            directory_open.assert_called_once_with(root)
+            self.assertEqual(2, client.chat_postEphemeral.call_count)
+
+    def test_local_artifact_actions_report_failures_in_enabled_direct_messages(self) -> None:
+        fake_app = FakeApp()
+        client = MagicMock()
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir).resolve()
+            with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+                os.environ,
+                {"SLACK_BOT_TOKEN": "xoxb-test", "OPENTAG_SLACK_DM_ENABLED": "1"},
+                clear=True,
+            ), patch.object(slack_socket_agent, "default_workdir", return_value=root):
+                slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+                metadata = {
+                    "user": "UOWNER",
+                    "channel": "D123",
+                    "thread_ts": "1.23",
+                    "path": "missing",
+                }
+                body = {
+                    "user": {"id": "UOWNER"},
+                    "channel": {"id": "D123"},
+                    "actions": [{"value": json.dumps(metadata)}],
+                }
+
+                fake_app.actions[slack_socket_agent.OPEN_LOCAL_ARTIFACT_ACTION_ID](
+                    MagicMock(), body, client, MagicMock()
+                )
+                fake_app.actions[
+                    slack_socket_agent.OPEN_LOCAL_ARTIFACT_DIRECTORY_ACTION_ID
+                ](MagicMock(), body, client, MagicMock())
+
+            self.assertEqual(2, client.chat_postEphemeral.call_count)
+            messages = [
+                call.kwargs["text"] for call in client.chat_postEphemeral.call_args_list
+            ]
+            self.assertTrue(any("local file" in message for message in messages))
+            self.assertTrue(any("output folder" in message for message in messages))
+
+    def test_local_artifact_actions_reject_disabled_direct_messages(self) -> None:
+        fake_app = FakeApp()
+        client = MagicMock()
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir).resolve()
+            artifact = root / "report.md"
+            artifact.write_text("# Report\n", encoding="utf-8")
+            with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+                os.environ,
+                {"SLACK_BOT_TOKEN": "xoxb-test", "OPENTAG_SLACK_DM_ENABLED": "0"},
+                clear=True,
+            ), patch.object(
+                slack_socket_agent, "default_workdir", return_value=root
+            ), patch.object(
+                slack_socket_agent, "open_local_artifact"
+            ) as local_open, patch.object(
+                slack_socket_agent, "open_local_artifact_directory"
+            ) as directory_open:
+                slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+                metadata = {
+                    "user": "UOWNER",
+                    "channel": "D123",
+                    "thread_ts": "1.23",
+                    "path": "report.md",
+                }
+                body = {
+                    "user": {"id": "UOWNER"},
+                    "channel": {"id": "D123"},
+                    "actions": [{"value": json.dumps(metadata)}],
+                }
+
+                fake_app.actions[slack_socket_agent.OPEN_LOCAL_ARTIFACT_ACTION_ID](
+                    MagicMock(), body, client, MagicMock()
+                )
+                metadata["path"] = "."
+                body["actions"][0]["value"] = json.dumps(metadata)
+                fake_app.actions[
+                    slack_socket_agent.OPEN_LOCAL_ARTIFACT_DIRECTORY_ACTION_ID
+                ](MagicMock(), body, client, MagicMock())
+
+            local_open.assert_not_called()
+            directory_open.assert_not_called()
+            client.chat_postEphemeral.assert_not_called()
+
+    def test_builds_one_compact_local_open_row_for_all_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir).resolve()
+            first = root / "launch-checklist.md"
+            second = root / "owners.csv"
+            first.write_text("# Checklist\n", encoding="utf-8")
+            second.write_text("owner\nAda\n", encoding="utf-8")
+
+            blocks = slack_socket_agent.output_artifact_button_blocks(
+                [first, second],
+                root,
+                user_id="UOWNER",
+                channel="C123",
+                thread_ts="1.23",
+            )
+
+        self.assertEqual(1, len(blocks))
+        buttons = blocks[0]["elements"]
+        file_buttons = buttons[:-1]
+        directory_button = buttons[-1]
+        self.assertEqual(
+            ["↗ launch-checklist.md", "↗ owners.csv"],
+            [button["text"]["text"] for button in file_buttons],
+        )
+        action_ids = [button["action_id"] for button in buttons]
+        self.assertEqual(len(action_ids), len(set(action_ids)))
+        self.assertTrue(
+            all(
+                slack_socket_agent.OPEN_LOCAL_ARTIFACT_ACTION_PATTERN.fullmatch(action_id)
+                for action_id in action_ids[:-1]
+            )
+        )
+        self.assertEqual(
+            slack_socket_agent.OPEN_LOCAL_ARTIFACT_DIRECTORY_ACTION_ID,
+            directory_button["action_id"],
+        )
+        self.assertEqual("📁 Open folder", directory_button["text"]["text"])
+        self.assertEqual(".", json.loads(directory_button["value"])["path"])
+        self.assertEqual(
+            ["launch-checklist.md", "owners.csv"],
+            [json.loads(button["value"])["path"] for button in file_buttons],
+        )
+        self.assertEqual(
+            [
+                "Open launch-checklist.md on the Tag host",
+                "Open owners.csv on the Tag host",
+            ],
+            [button["accessibility_label"] for button in file_buttons],
+        )
+
+    def test_local_open_directory_action_validates_and_opens_common_parent(self) -> None:
+        fake_app = FakeApp()
+        client = MagicMock()
+        logger = MagicMock()
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir).resolve()
+            outputs = root / "exports"
+            outputs.mkdir()
+            with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+                os.environ,
+                {"SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_IDS": "C123"},
+                clear=True,
+            ), patch.object(
+                slack_socket_agent, "default_workdir", return_value=root
+            ), patch.object(
+                slack_socket_agent, "open_local_artifact_directory"
+            ) as local_open:
+                slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+                handler = fake_app.actions[
+                    slack_socket_agent.OPEN_LOCAL_ARTIFACT_DIRECTORY_ACTION_ID
+                ]
+                ack = MagicMock()
+                handler(
+                    ack,
+                    {
+                        "user": {"id": "UOWNER"},
+                        "channel": {"id": "C123"},
+                        "actions": [
+                            {
+                                "value": json.dumps(
+                                    {
+                                        "user": "UOWNER",
+                                        "channel": "C123",
+                                        "thread_ts": "1.23",
+                                        "path": "exports",
+                                    }
+                                )
+                            }
+                        ],
+                    },
+                    client,
+                    logger,
+                )
+
+            ack.assert_called_once_with()
+            local_open.assert_called_once_with(outputs)
+            self.assertIn(
+                "Opened the output folder",
+                client.chat_postEphemeral.call_args.kwargs["text"],
+            )
+
+    def test_local_open_action_validates_user_and_workspace_path(self) -> None:
+        fake_app = FakeApp()
+        client = MagicMock()
+        logger = MagicMock()
+        with tempfile.TemporaryDirectory() as raw_dir, tempfile.TemporaryDirectory() as outside_dir:
+            root = Path(raw_dir).resolve()
+            artifact = root / "report.md"
+            artifact.write_text("# Report\n", encoding="utf-8")
+            outside = Path(outside_dir) / "outside.md"
+            outside.write_text("outside\n", encoding="utf-8")
+            with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+                os.environ,
+                {"SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_IDS": "C123"},
+                clear=True,
+            ), patch.object(
+                slack_socket_agent, "default_workdir", return_value=root
+            ), patch.object(slack_socket_agent, "open_local_artifact") as local_open:
+                slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER", "UOTHER"}))
+                handler = fake_app.actions[slack_socket_agent.OPEN_LOCAL_ARTIFACT_ACTION_ID]
+                metadata = {
+                    "user": "UOWNER",
+                    "channel": "C123",
+                    "thread_ts": "1.23",
+                    "path": "report.md",
+                }
+                ack = MagicMock()
+                handler(
+                    ack,
+                    {
+                        "user": {"id": "UOWNER"},
+                        "channel": {"id": "C123"},
+                        "actions": [{"value": json.dumps(metadata)}],
+                    },
+                    client,
+                    logger,
+                )
+                local_open.assert_called_once_with(artifact)
+                ack.assert_called_once_with()
+                self.assertIn(
+                    "Opened `report.md`",
+                    client.chat_postEphemeral.call_args.kwargs["text"],
+                )
+
+                local_open.reset_mock()
+                client.chat_postEphemeral.reset_mock()
+                handler(
+                    MagicMock(),
+                    {
+                        "user": {"id": "UOTHER"},
+                        "channel": {"id": "C123"},
+                        "actions": [{"value": json.dumps(metadata)}],
+                    },
+                    client,
+                    logger,
+                )
+                local_open.assert_not_called()
+                client.chat_postEphemeral.assert_not_called()
+
+                metadata["path"] = str(outside)
+                handler(
+                    MagicMock(),
+                    {
+                        "user": {"id": "UOWNER"},
+                        "channel": {"id": "C123"},
+                        "actions": [{"value": json.dumps(metadata)}],
+                    },
+                    client,
+                    logger,
+                )
+                local_open.assert_not_called()
+                self.assertIn(
+                    "couldn’t open that local file",
+                    client.chat_postEphemeral.call_args.kwargs["text"],
+                )
+
+    def test_uploads_requested_binary_file_to_originating_thread_unchanged(self) -> None:
+        client = MagicMock()
+        logger = MagicMock()
+        observed = b""
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            artifact = root / "release.zip"
+            expected = b"PK\x03\x04\x00binary payload"
+            artifact.write_bytes(expected)
+            manifest = root / ".manifest.json"
+            manifest.write_text(json.dumps([str(artifact)]), encoding="utf-8")
+
+            def capture_upload(**kwargs: object) -> dict[str, object]:
+                nonlocal observed
+                observed = Path(str(kwargs["file"])).read_bytes()
+                return {
+                    "files": [
+                        {
+                            "id": "F123",
+                            "permalink": "https://workspace.slack.com/files/F123/release.zip",
+                        }
+                    ]
+                }
+
+            client.files_upload_v2.side_effect = capture_upload
+            messages = slack_socket_agent.deliver_output_artifacts(
+                client, "C123", "1.23", manifest, root, logger
+            )
+
+        self.assertEqual(expected, observed)
+        client.files_upload_v2.assert_called_once_with(
+            channel="C123",
+            thread_ts="1.23",
+            file=str(artifact.resolve()),
+            filename="release.zip",
+            title="release.zip",
+        )
+        self.assertEqual(
+            [
+                "Download [release.zip](https://workspace.slack.com/files/F123/release.zip)."
+            ],
+            messages,
+        )
+
+    def test_local_only_outputs_get_buttons_without_slack_attachments(self) -> None:
+        client = MagicMock()
+        logger = MagicMock()
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            first = root / "launch-checklist.md"
+            second = root / "owners.csv"
+            first.write_text("# Checklist\n", encoding="utf-8")
+            second.write_text("owner\nAda\n", encoding="utf-8")
+            manifest = root / ".manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    [
+                        {"path": str(first), "attach": False},
+                        {"path": str(second), "attach": False},
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            paths, errors = slack_socket_agent.load_output_artifacts(manifest, root)
+            messages = slack_socket_agent.deliver_output_artifacts(
+                client, "C123", "1.23", manifest, root, logger
+            )
+
+        self.assertEqual([first.resolve(), second.resolve()], paths)
+        self.assertEqual([], errors)
+        self.assertEqual([], messages)
+        client.files_upload_v2.assert_not_called()
+
+    def test_explicit_multi_file_delivery_uploads_every_output(self) -> None:
+        client = MagicMock()
+        client.files_upload_v2.side_effect = [
+            {"file": {"permalink": "https://example.test/checklist"}},
+            {"file": {"permalink": "https://example.test/owners"}},
+        ]
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            first = root / "launch-checklist.md"
+            second = root / "owners.csv"
+            first.write_text("# Checklist\n", encoding="utf-8")
+            second.write_text("owner\nAda\n", encoding="utf-8")
+            manifest = root / ".manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    [
+                        {"path": str(first), "attach": True},
+                        {"path": str(second), "attach": True},
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            messages = slack_socket_agent.deliver_output_artifacts(
+                client, "C123", "1.23", manifest, root, MagicMock()
+            )
+
+        self.assertEqual(2, client.files_upload_v2.call_count)
+        self.assertEqual(
+            ["launch-checklist.md", "owners.csv"],
+            [call.kwargs["filename"] for call in client.files_upload_v2.call_args_list],
+        )
+        self.assertEqual(2, len(messages))
+
+    def test_rejects_missing_and_out_of_workspace_files(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir, tempfile.TemporaryDirectory() as outside_dir:
+            root = Path(raw_dir)
+            outside = Path(outside_dir) / "secret.txt"
+            outside.write_text("secret", encoding="utf-8")
+            missing = root / "missing.csv"
+            manifest = root / ".manifest.json"
+            manifest.write_text(json.dumps([str(missing), str(outside)]), encoding="utf-8")
+
+            artifacts, messages = slack_socket_agent.load_output_artifacts(manifest, root)
+
+        self.assertEqual([], artifacts)
+        self.assertEqual(2, len(messages))
+        self.assertIn("missing.csv", messages[0])
+        self.assertIn("secret.txt", messages[1])
+
+    def test_fetches_permalink_when_upload_returns_only_file_id(self) -> None:
+        client = MagicMock()
+        client.files_upload_v2.return_value = {"files": [{"id": "F123"}]}
+        client.files_info.return_value = {
+            "file": {
+                "id": "F123",
+                "permalink": "https://workspace.slack.com/files/F123/report.md",
+            }
+        }
+        logger = MagicMock()
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            artifact = root / "report.md"
+            artifact.write_text("# Report\n", encoding="utf-8")
+            manifest = root / ".manifest.json"
+            manifest.write_text(json.dumps([str(artifact)]), encoding="utf-8")
+
+            messages = slack_socket_agent.deliver_output_artifacts(
+                client, "C123", "1.23", manifest, root, logger
+            )
+
+        client.files_info.assert_called_once_with(file="F123")
+        self.assertEqual(
+            ["Download [report.md](https://workspace.slack.com/files/F123/report.md)."],
+            messages,
+        )
+
+    def test_keeps_successful_attachment_when_permalink_lookup_fails(self) -> None:
+        client = MagicMock()
+        client.files_upload_v2.return_value = {"file": {"id": "F123"}}
+        client.files_info.side_effect = RuntimeError("lookup failed")
+        logger = MagicMock()
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            artifact = root / "report.md"
+            artifact.write_text("# Report\n", encoding="utf-8")
+            manifest = root / ".manifest.json"
+            manifest.write_text(json.dumps([str(artifact)]), encoding="utf-8")
+
+            messages = slack_socket_agent.deliver_output_artifacts(
+                client, "C123", "1.23", manifest, root, logger
+            )
+
+        self.assertEqual(["Attached `report.md` to this thread."], messages)
+        logger.warning.assert_called_once()
+
+    def test_rejects_output_above_tag_file_size_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir, patch.object(
+            slack_socket_agent, "MAX_OUTPUT_FILE_BYTES", 3
+        ):
+            root = Path(raw_dir)
+            artifact = root / "large.bin"
+            artifact.write_bytes(b"four")
+            manifest = root / ".manifest.json"
+            manifest.write_text(json.dumps([str(artifact)]), encoding="utf-8")
+
+            artifacts, messages = slack_socket_agent.load_output_artifacts(manifest, root)
+
+        self.assertEqual([], artifacts)
+        self.assertIn("exceeds Tag’s", messages[0])
+
+    def test_upload_failure_distinguishes_local_save_from_slack_delivery(self) -> None:
+        client = MagicMock()
+        client.files_upload_v2.side_effect = RuntimeError("missing_scope")
+        logger = MagicMock()
+        with tempfile.TemporaryDirectory() as raw_dir, patch.object(
+            slack_socket_agent.uuid, "uuid4", return_value=SimpleNamespace(hex="deadbeef0000")
+        ):
+            root = Path(raw_dir)
+            artifact = root / "report.pdf"
+            artifact.write_bytes(b"pdf")
+            manifest = root / ".manifest.json"
+            manifest.write_text(json.dumps([str(artifact)]), encoding="utf-8")
+
+            messages = slack_socket_agent.deliver_output_artifacts(
+                client, "C123", "1.23", manifest, root, logger
+            )
+
+        self.assertIn("saved locally, but Slack delivery failed", messages[0])
+        self.assertIn("DEADBEEF", messages[0])
+        self.assertIn("files:write", messages[0])
+        logger.exception.assert_called_once()
+
+    def test_mention_delivers_declared_output_and_cleans_request_manifest(self) -> None:
+        fake_app = FakeApp()
+        client = MagicMock()
+        indicator = MagicMock()
+        indicator.native = False
+        indicator.message_ts = None
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir).resolve()
+            artifact = root / "requested.csv"
+            artifact.write_text("owner,due\nAda,Monday\n", encoding="utf-8")
+            client.files_upload_v2.return_value = {
+                "files": [
+                    {
+                        "id": "FCSV",
+                        "permalink": "https://workspace.slack.com/files/FCSV/requested.csv",
+                    }
+                ]
+            }
+
+            def finish_backend(*_args: object, **kwargs: object) -> tuple[str, bool]:
+                manifest = kwargs["output_manifest"]
+                assert isinstance(manifest, Path)
+                manifest.write_text(json.dumps([str(artifact)]), encoding="utf-8")
+                return "Saved requested.csv.", True
+
+            with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+                os.environ,
+                {
+                    "SLACK_BOT_TOKEN": "xoxb-test",
+                    "SLACK_CHANNEL_IDS": "C123",
+                    "OPENTAG_SLACK_STREAMING": "0",
+                },
+                clear=True,
+            ), patch.object(
+                slack_socket_agent, "default_workdir", return_value=root
+            ), patch.object(
+                slack_socket_agent, "WorkingIndicator", return_value=indicator
+            ), patch.object(
+                slack_socket_agent, "build_thread_text", return_value="thread"
+            ), patch.object(
+                slack_socket_agent, "run_backend", side_effect=finish_backend
+            ):
+                slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+                fake_app.events["app_mention"](
+                    {
+                        "channel": "C123",
+                        "ts": "1.23",
+                        "user": "UOWNER",
+                        "text": "<@BOT> create requested.csv",
+                    },
+                    {"team_id": "T123"},
+                    client,
+                    MagicMock(),
+                )
+
+            self.assertEqual([], list(root.glob(f"{slack_socket_agent.OUTPUT_ARTIFACT_MANIFEST_PREFIX}*")))
+
+        client.files_upload_v2.assert_called_once()
+        upload = client.files_upload_v2.call_args.kwargs
+        self.assertEqual(("C123", "1.23"), (upload["channel"], upload["thread_ts"]))
+        posted = client.chat_postMessage.call_args.kwargs["text"]
+        self.assertIn("Saved requested.csv.", posted)
+        self.assertIn(
+            "<https://workspace.slack.com/files/FCSV/requested.csv|requested.csv>",
+            posted,
+        )
+        posted_blocks = client.chat_postMessage.call_args.kwargs["blocks"]
+        self.assertEqual(
+            "↗ requested.csv",
+            posted_blocks[1]["elements"][0]["text"]["text"],
+        )
 
 
 class SlackGeneratedImageTests(unittest.TestCase):
@@ -369,6 +955,205 @@ class SlackChannelAllowlistTests(unittest.TestCase):
         os.environ["SLACK_CHANNEL_ID"] = ""
         os.environ["SLACK_CHANNEL_IDS"] = ""
         self.assertFalse(slack_socket_agent.slack_channel_allowed("C999"))
+
+
+class SlackCrossChannelSearchTests(unittest.TestCase):
+    def configured_client(self) -> MagicMock:
+        client = MagicMock()
+        client.users_info.return_value = {
+            "user": {"id": "UOWNER", "team_id": "T123"}
+        }
+        client.conversations_info.side_effect = lambda *, channel: {
+            "channel": {
+                "id": channel,
+                "name": {"C123": "general", "C456": "support"}[channel],
+                "is_private": False,
+                "is_member": True,
+            }
+        }
+        return client
+
+    def test_working_indicator_starts_before_all_channel_scope_resolution(self) -> None:
+        fake_app = FakeApp()
+        client = self.configured_client()
+        indicator = MagicMock()
+        indicator.native = False
+        indicator.message_ts = None
+        events: list[str] = []
+        indicator.start.side_effect = lambda: events.append("indicator")
+        plan_search_scopes = slack_socket_agent.plan_search_scopes
+
+        def tracked_plan(**kwargs: object):
+            events.append(f"plan:{kwargs['intent'].mode}")
+            return plan_search_scopes(**kwargs)
+
+        with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+            os.environ,
+            {
+                "SLACK_BOT_TOKEN": "xoxb-test",
+                "SLACK_TEAM_ID": "T123",
+                "SLACK_CHANNEL_IDS": "C123,C456",
+                "MFS_ALLOWED_SCOPES": (
+                    "slack://tag-t123/channels/general__C123,"
+                    "slack://tag-t123/channels/support__C456"
+                ),
+                "OPENTAG_SLACK_STREAMING": "0",
+            },
+            clear=True,
+        ), patch(
+            "scripts.slack_search_scope.resolve_mfs_channel_scope",
+            side_effect=lambda channel: channel.scope,
+        ), patch.object(
+            slack_socket_agent, "WorkingIndicator", return_value=indicator
+        ), patch.object(
+            slack_socket_agent, "plan_search_scopes", side_effect=tracked_plan
+        ), patch.object(
+            slack_socket_agent, "build_thread_text", return_value="thread"
+        ), patch.object(
+            slack_socket_agent, "run_backend", return_value=("done", True)
+        ):
+            slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+            fake_app.events["app_mention"](
+                {
+                    "channel": "C123",
+                    "ts": "1.23",
+                    "user": "UOWNER",
+                    "text": "<@BOT> search all channels for launch notes",
+                },
+                {"team_id": "T123"},
+                client,
+                MagicMock(),
+            )
+
+        self.assertEqual(["plan:current", "indicator", "plan:all"], events[:3])
+
+    def test_explicit_named_scope_reaches_backend_for_claude(self) -> None:
+        fake_app = FakeApp()
+        client = self.configured_client()
+        with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+            os.environ,
+            {
+                "SLACK_BOT_TOKEN": "xoxb-test",
+                "SLACK_TEAM_ID": "T123",
+                "SLACK_CHANNEL_IDS": "C123,C456",
+                "MFS_ALLOWED_SCOPES": (
+                    "slack://tag-t123/channels/general__C123,"
+                    "slack://tag-t123/channels/old-support__C456"
+                ),
+                "OPENTAG_SLACK_STREAMING": "0",
+            },
+            clear=True,
+        ), patch(
+            "scripts.slack_search_scope.resolve_mfs_channel_scope",
+            side_effect=lambda channel: channel.scope,
+        ), patch.object(
+            slack_socket_agent, "build_thread_text", return_value="thread"
+        ), patch.object(
+            slack_socket_agent, "run_backend", return_value=("done", True)
+        ) as run_backend:
+            slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+            fake_app.events["app_mention"](
+                {
+                    "channel": "C123",
+                    "ts": "1.23",
+                    "user": "UOWNER",
+                    "text": "<@BOT> search #support for launch notes",
+                },
+                {"team_id": "T123"},
+                client,
+                MagicMock(),
+            )
+
+        plan = run_backend.call_args.kwargs["scope_plan"]
+        grant = run_backend.call_args.kwargs["slack_search_grant"]
+        self.assertEqual("current", plan.mode)
+        self.assertEqual(("slack://tag-t123/channels/general__C123",), plan.scopes)
+        self.assertEqual("all", grant.mode)
+        self.assertEqual({"C123": "general", "C456": "support"}, grant.channel_labels)
+
+    def test_natural_all_channel_wording_reaches_agent_with_authorized_grant(self) -> None:
+        fake_app = FakeApp()
+        client = self.configured_client()
+        with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+            os.environ,
+            {
+                "SLACK_BOT_TOKEN": "xoxb-test",
+                "SLACK_TEAM_ID": "T123",
+                "SLACK_CHANNEL_IDS": "C123,C456",
+                "MFS_ALLOWED_SCOPES": (
+                    "slack://tag-t123/channels/general__C123,"
+                    "slack://tag-t123/channels/support__C456"
+                ),
+                "OPENTAG_SLACK_STREAMING": "0",
+            },
+            clear=True,
+        ), patch(
+            "scripts.slack_search_scope.resolve_mfs_channel_scope",
+            side_effect=lambda channel: channel.scope,
+        ), patch.object(
+            slack_socket_agent, "build_thread_text", return_value="thread"
+        ), patch.object(
+            slack_socket_agent, "run_backend", return_value=("done", True)
+        ) as run_backend:
+            slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+            fake_app.events["app_mention"](
+                {
+                    "channel": "C123",
+                    "ts": "1.23",
+                    "user": "UOWNER",
+                    "text": "<@BOT> ANYTHING RELATED TO MARKETING ACROSS ALL CHANNELS",
+                },
+                {"team_id": "T123"},
+                client,
+                MagicMock(),
+            )
+
+        plan = run_backend.call_args.kwargs["scope_plan"]
+        grant = run_backend.call_args.kwargs["slack_search_grant"]
+        self.assertEqual("current", plan.mode)
+        self.assertEqual(("slack://tag-t123/channels/general__C123",), plan.scopes)
+        self.assertEqual("all", grant.mode)
+        self.assertEqual(
+            (
+                "slack://tag-t123/channels/general__C123",
+                "slack://tag-t123/channels/support__C456",
+            ),
+            grant.scopes,
+        )
+
+    def test_scope_meaning_is_left_to_runtime_agent(self) -> None:
+        fake_app = FakeApp()
+        client = self.configured_client()
+        with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+            os.environ,
+            {
+                "SLACK_BOT_TOKEN": "xoxb-test",
+                "SLACK_CHANNEL_IDS": "C123,C456",
+                "OPENTAG_SLACK_STREAMING": "0",
+            },
+            clear=True,
+        ), patch.object(
+            slack_socket_agent, "build_thread_text", return_value="thread"
+        ), patch.object(
+            slack_socket_agent, "run_backend", return_value=("please clarify", True)
+        ) as run_backend:
+            slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+            fake_app.events["app_mention"](
+                {
+                    "channel": "C123",
+                    "ts": "1.23",
+                    "user": "UOWNER",
+                    "text": "<@BOT> search general workspace all",
+                },
+                {"team_id": "T123"},
+                client,
+                MagicMock(),
+            )
+
+        run_backend.assert_called_once()
+        self.assertEqual(
+            "search general workspace all", run_backend.call_args.args[3]
+        )
 
 
 class SlackAppHomeTests(unittest.TestCase):
@@ -1330,6 +2115,115 @@ class SlackAgentSettingsTests(unittest.TestCase):
             slack_socket_agent.AgentSettings("gpt-configured", "high", fast_mode=True),
             slack_socket_agent.default_agent_settings(models),
         )
+
+    def test_tag_local_codex_defaults_override_global_defaults_in_slack_modal(self) -> None:
+        payload = {
+            "models": [
+                {
+                    "slug": "gpt-global",
+                    "display_name": "GPT Global",
+                    "visibility": "list",
+                    "supported_reasoning_levels": [
+                        {"effort": "medium"},
+                        {"effort": "high"},
+                    ],
+                },
+                {
+                    "slug": "gpt-tag",
+                    "display_name": "GPT Tag",
+                    "visibility": "list",
+                    "additional_speed_tiers": ["fast"],
+                    "supported_reasoning_levels": [
+                        {"effort": "medium"},
+                        {"effort": "high"},
+                    ],
+                },
+            ]
+        }
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            codex_home = root / "codex-home"
+            workdir = root / "tag-workspace"
+            codex_home.mkdir()
+            (workdir / ".codex").mkdir(parents=True)
+            (codex_home / "models_cache.json").write_text(json.dumps(payload), encoding="utf-8")
+            (codex_home / "config.toml").write_text(
+                'model = "gpt-global"\n'
+                'model_reasoning_effort = "medium"\n'
+                'service_tier = "priority"\n',
+                encoding="utf-8",
+            )
+            (workdir / ".codex/config.toml").write_text(
+                'model = "gpt-tag"\n'
+                'model_reasoning_effort = "high"\n'
+                'service_tier = "default"\n',
+                encoding="utf-8",
+            )
+            with patch.dict(
+                os.environ,
+                {"CODEX_HOME": str(codex_home), "OPENTAG_WORKDIR": str(workdir)},
+                clear=True,
+            ):
+                models = slack_socket_agent.discover_codex_models()
+                modal = slack_socket_agent.settings_modal(
+                    metadata={"team": "T1", "channel": "C1", "thread_ts": "1.23"},
+                    settings=slack_socket_agent.AgentSettings(),
+                    models=models,
+                )
+
+        self.assertEqual(
+            "gpt-tag", modal["blocks"][0]["element"]["initial_option"]["value"]
+        )
+        self.assertEqual(
+            "high", modal["blocks"][1]["element"]["initial_option"]["value"]
+        )
+        self.assertNotIn("initial_options", modal["blocks"][2]["accessory"])
+
+    def test_tag_local_codex_defaults_inherit_missing_global_values(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            codex_home = root / "codex-home"
+            workdir = root / "tag-workspace"
+            codex_home.mkdir()
+            (workdir / ".codex").mkdir(parents=True)
+            (codex_home / "config.toml").write_text(
+                'model = "gpt-global"\nmodel_reasoning_effort = "medium"\n',
+                encoding="utf-8",
+            )
+            (workdir / ".codex/config.toml").write_text(
+                'model_reasoning_effort = "high"\nservice_tier = "fast"\n',
+                encoding="utf-8",
+            )
+            with patch.dict(
+                os.environ,
+                {"CODEX_HOME": str(codex_home), "OPENTAG_WORKDIR": str(workdir)},
+                clear=True,
+            ):
+                defaults = slack_socket_agent.configured_codex_defaults()
+
+        self.assertEqual(("gpt-global", "high", True), defaults)
+
+    def test_tag_local_codex_defaults_inherit_global_service_tier_when_invalid(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            codex_home = root / "codex-home"
+            workdir = root / "tag-workspace"
+            codex_home.mkdir()
+            (workdir / ".codex").mkdir(parents=True)
+            (codex_home / "config.toml").write_text(
+                'service_tier = "fast"\n', encoding="utf-8"
+            )
+            (workdir / ".codex/config.toml").write_text(
+                'service_tier = "typo"\n', encoding="utf-8"
+            )
+            with patch.dict(
+                os.environ,
+                {"CODEX_HOME": str(codex_home), "OPENTAG_WORKDIR": str(workdir)},
+                clear=True,
+            ):
+                defaults = slack_socket_agent.configured_codex_defaults()
+
+        self.assertEqual((None, None, True), defaults)
 
     def test_user_settings_without_fast_mode_leave_it_unset(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:

@@ -6,14 +6,17 @@ Start with `./tag doctor`, then use the first failed check below.
 | --- | --- | --- |
 | `mfs-server` or `mfs` missing/wrong version | The pinned memory runtime is unavailable | Run `./install.sh` again and ensure uv's tool directory and `~/.local/bin` are on `PATH`. |
 | MFS health fails | Nothing is listening at `MFS_URL` | Run `./tag start`; inspect `./tag logs` and `~/.mfs/server.log`. |
+| Local MFS is healthy but untracked | Another process owns the loopback endpoint | `tag start` and `tag dev` replace an identifiable `mfs-server` with Tag's current runtime. If another kind of service owns the port, stop it or configure a different `MFS_URL`. Remote endpoints are never replaced. |
 | MFS status has no connectors | MFS has no indexed source | Add a source with MFS, then include its exact root in `MFS_ALLOWED_SCOPES`. |
 | MFS scope fails | The scope is absent, outside policy, or its connector credential is unavailable | Compare the exact URI with `mfs ls`; restart MFS after exporting credentials referenced by connector configuration. |
+| Cross-channel search rejects a channel | The requested name is absent or non-unique in the caller's live grant | Check the channel name, bot membership, caller membership for private/guest access, indexing, and Slack connectivity. The runtime helper never searches outside its bridge-generated grant. |
 | Slack app token fails | Socket Mode cannot connect | Create an `xapp-` app-level token with `connections:write`. |
 | Slack bot token fails | Web API calls cannot authenticate | Reinstall the Slack app and rerun `tag setup`; enter the `xoxb-` token only in its hidden prompt. |
 | Slack allowed users fails | No caller is authorized, so the bridge fails closed | Copy the owner's Slack member ID and set it in `SLACK_ALLOWED_USER_IDS`. |
 | Slack channel/history fails | The bot is absent or lacks scopes | Invite the bot, choose the channel again in setup, Settings, or App Home, and reinstall after changing manifest scopes. |
 | Slack app installation asks for approval | Workspace or Enterprise app approval is enabled | Submit the Slack app request to a workspace owner or app manager; Tag cannot bypass workspace policy. |
 | Generated image is described but not attached | The app lacks `files:write`, the result is unsupported or over 15 MB, or the backend did not save it in the prompted result directory | Reinstall the app from the current manifest, retry with PNG/JPEG/GIF/WebP, and inspect Tag logs for the per-file upload error. |
+| **Open filename** reports that a local file could not be opened | The file was moved or deleted, its path no longer resolves inside the workspace, or the Tag host has no active desktop application for that file type | Confirm the file still exists in the configured workspace and open it directly on the Tag host to verify its desktop file association. |
 | Codex missing | The supported backend is not available | Install/login to Codex CLI and confirm `codex --version` works in the same shell. |
 | Bridge immediately stops | Runtime dependency or configuration failed after preflight | Run `./tag logs`; rerun `./scripts/ci_check.sh` before reporting a bug. |
 | Mention is denied | The caller is not in the Slack user allowlist | Add their exact member ID to `SLACK_ALLOWED_USER_IDS` only if the owner intends to share access. |

@@ -35,8 +35,9 @@ structured form. `tag restart` stops Tag's managed processes and starts them
 through the normal readiness checks; a failed stop prevents starting again.
 Contributors using a prepared source checkout can run `./tag dev` for a
 foreground loop that watches `scripts/**/*.py`, reloads the Slack bridge, and
-streams bridge logs. Ctrl-C stops the development bridge but leaves MFS running.
-Managed releases do not expose development watching.
+streams bridge logs. It owns both Slack and loopback MFS for the session, so
+Ctrl-C stops both; configured remote MFS endpoints remain external. Managed
+releases do not expose development watching.
 
 Completed `tag setup` checks readiness and exits without repeating onboarding.
 Use `tag setup --review` to review choices explicitly. `tag setup --no-start`
@@ -203,6 +204,9 @@ Manual permission recovery still needs live acceptance testing.
 | Store a token | `tag config set SLACK_BOT_TOKEN --stdin --json` | Read its value from standard input; never echo it |
 | Diagnose | `tag doctor --json` | Check configuration, memory, backend executable, and Slack API access |
 | Check services | `tag status --json` | Require healthy MFS and a connected Slack bridge for exit 0 |
+| Check for updates | `tag upgrade --dry-run --json` | Verify the saved channel's target without changing the installation |
+| Upgrade | `tag upgrade` | Stage and atomically select the verified release, restarting managed services when needed |
+| Install an older release | `tag upgrade --version X.Y.Z --allow-downgrade` | Explicitly override the downgrade guard; prefer rollback for the previous release |
 | Start or stop | `tag start` / `tag stop` | Use the existing managed-process lifecycle |
 
 Pass secrets through a process stdin pipe or use settings' hidden token prompt;

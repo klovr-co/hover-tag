@@ -6,18 +6,51 @@ permissions:
   contents: write
 jobs:
   package:
+    if: startsWith(github.event.release.tag_name, 'v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
+          fetch-depth: 0
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.12'
-      - name: Build and upload verified archive
+      - name: Validate release tag belongs to main
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          git fetch origin main "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          git merge-base --is-ancestor "$RELEASE_TAG^{commit}" origin/main
+          git checkout --detach "$RELEASE_TAG^{commit}"
+      - name: Verify or create release archive
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          test "$RELEASE_TAG" = "v$(head -n 1 VERSION)"
           python scripts/release_check.py
-          python scripts/package_release.py
-          gh release upload "$RELEASE_TAG" out/*.zip out/SHA256SUMS
+          source_version=$(head -n 1 VERSION)
+          python scripts/release_automation.py validate-release-tag \
+            --source-version "$source_version" --tag "$RELEASE_TAG"
+          version=${RELEASE_TAG#v}
+          case "$version" in
+            *-alpha*|*-beta*) expected_prerelease=true ;;
+            *) expected_prerelease=false ;;
+          esac
+          test "$expected_prerelease" = "${{ github.event.release.prerelease }}" || {
+            echo 'Release prerelease setting does not match VERSION.' >&2
+            exit 1
+          }
+          asset_count=$(gh release view "$RELEASE_TAG" --json assets --jq '.assets | length')
+          if [ "$asset_count" -eq 0 ]; then
+            python scripts/package_release.py --commit-sha "$(git rev-parse HEAD)" \
+              --source-ref refs/heads/main --version "$version"
+            gh release upload "$RELEASE_TAG" \
+              out/*.zip out/SHA256SUMS out/BUILD-PROVENANCE.json
+          else
+            mkdir -p out
+            gh release download "$RELEASE_TAG" --dir out \
+              --pattern "tag-$version.zip" --pattern SHA256SUMS --pattern BUILD-PROVENANCE.json
+            python scripts/release_automation.py validate-release \
+              --directory out --version "$version" --sha "$(git rev-parse HEAD)"
+          fi
