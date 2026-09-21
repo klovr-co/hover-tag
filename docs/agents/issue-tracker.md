@@ -39,7 +39,7 @@ replacement project or automatically add every implementation task.
 For a feature tracked by an existing issue, add it with:
 
 ```bash
-gh project item-add 3 --owner klovr-co --url https://github.com/klovr-co/tag/issues/NUMBER
+gh project item-add 3 --owner klovr-co --url https://github.com/klovr-co/hover-tag/issues/NUMBER
 ```
 
 Replace `NUMBER` with the issue number, then set its catalog fields with
@@ -56,7 +56,7 @@ When the saved login is the intended user account and has project access, retry
 the authorized operation using that login for this command only:
 
 ```bash
-env -u GH_TOKEN -u GITHUB_TOKEN gh project item-add 3 --owner klovr-co --url https://github.com/klovr-co/tag/issues/NUMBER
+env -u GH_TOKEN -u GITHUB_TOKEN gh project item-add 3 --owner klovr-co --url https://github.com/klovr-co/hover-tag/issues/NUMBER
 ```
 
 Do not print token values or change global authentication settings. If no suitable

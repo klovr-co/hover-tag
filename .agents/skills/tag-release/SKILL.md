@@ -33,8 +33,8 @@ Useful read-only commands include:
 ```sh
 git status --short
 git fetch origin main --tags
-gh release list --repo klovr-co/tag --limit 30
-gh run list --repo klovr-co/tag --limit 30
+gh release list --repo klovr-co/hover-tag --limit 30
+gh run list --repo klovr-co/hover-tag --limit 30
 ```
 
 Do not expose tokens or dump unbounded logs.
@@ -77,7 +77,7 @@ Use the exact promoted `main` commit, not the earlier live candidate SHA when an
 
 ```sh
 gh workflow run prepare-release.yml \
-  --repo klovr-co/tag \
+  --repo klovr-co/hover-tag \
   -f phase=<beta-or-stable> \
   -f commit_sha=<full-promoted-main-sha>
 ```

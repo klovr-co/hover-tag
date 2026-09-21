@@ -81,5 +81,5 @@ All notable changes to Tag are documented here.
 - This alpha is explicitly limited to trusted sandbox use and is not a
   production security boundary.
 
-[0.1.1-alpha]: https://github.com/klovr-co/tag/releases/tag/v0.1.1-alpha
-[0.1.0-alpha]: https://github.com/klovr-co/tag/releases/tag/v0.1.0-alpha
+[0.1.1-alpha]: https://github.com/klovr-co/hover-tag/releases/tag/v0.1.1-alpha
+[0.1.0-alpha]: https://github.com/klovr-co/hover-tag/releases/tag/v0.1.0-alpha

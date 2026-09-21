@@ -18,7 +18,7 @@ Slack to a local CLI agent and uses
 
 > [!NOTE]
 > The `main` branch is intentionally Slack-only for the v0.1 alpha launch.
-> Unfinished Zulip work is preserved on [`feature/zulip`](https://github.com/klovr-co/tag/tree/feature/zulip),
+> Unfinished Zulip work is preserved on [`feature/zulip`](https://github.com/klovr-co/hover-tag/tree/feature/zulip),
 > outside the supported installer and runtime.
 
 ## Why I built this
@@ -123,7 +123,7 @@ You need Python 3.10+, `curl`, and a working Codex CLI login. The installer uses
 Python's standard `venv` and pip. Clone Tag first:
 
 ```bash
-git clone https://github.com/klovr-co/tag.git
+git clone https://github.com/klovr-co/hover-tag.git
 cd tag
 ```
 
@@ -132,7 +132,7 @@ cd tag
 Install Tag's setup skill for Codex:
 
 ```bash
-npx skills add klovr-co/tag --skill hover-tag-setup -a codex -g
+npx skills add klovr-co/hover-tag --skill hover-tag-setup -a codex -g
 ```
 
 Open a new Codex task in the cloned repository and ask: `Set up Tag for me.`
