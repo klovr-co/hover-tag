@@ -1,40 +1,75 @@
-# Run your first Tag task
+# Get started with Tag
 
-Start with one local workspace and one Slack channel. That is enough to check
-that Tag can receive a request, run Codex in the right place, and reply in the
-right thread. Add more sources after this works.
-
-## The goal
-
-You mention your Tag in Slack. Codex works in its configured workspace, and
-Tag replies in the same thread, where your teammates can follow the work.
+Connect Tag to Slack, then try a task in a thread. You can set up with help
+from Codex or run the installer yourself.
 
 ## Before you begin
 
 Use a Mac or Linux computer that can stay awake and connected to the internet
-while Tag handles requests. Before starting, have these ready on that computer:
+while Tag handles requests. You'll need:
 
-- [Codex CLI](https://learn.chatgpt.com/docs/codex/cli), installed, signed in, and able to run tasks.
-- [Python 3.10 or later](https://www.python.org/downloads/).
-- [`uv`](https://docs.astral.sh/uv/getting-started/installation/), which installs Tag's Python dependencies.
-- [`curl`](https://curl.se/download.html), to download Tag's installer.
-- [Slack CLI](https://docs.slack.dev/tools/slack-cli/), which connects setup to your Slack workspace.
+- Codex CLI installed, signed in, and able to run tasks on that computer.
+- Permission to create and install a Slack app in your workspace. Your workplace
+  may require an administrator to approve it.
 
-You'll also need permission to create and install a Slack app in your workspace.
-Your workplace may require an administrator to approve the app.
+Only you can ask your Tag to work. Other people in the channel can read your
+requests and its replies. See [Your own Tag](../concepts/access.md) for how
+Tag uses your agent's files, tools, and connected accounts.
 
-This guide uses Codex. Claude support is coming soon.
+Claude support is coming soon.
 
-## 1. Install Tag
+## Set up Tag
+
+Choose one setup method. Both use the same installer and Slack setup flow.
+
+### Set up with Codex
+
+Install the setup skill from your terminal. This command requires
+[Node.js and npm](https://nodejs.org/en/download):
+
+```bash
+npx skills add klovr-co/tag --skill hover-tag-setup -a codex -g
+```
+
+Open a new Codex session and ask:
+
+```text
+Use the hover-tag-setup skill to set up Tag for me.
+```
+
+Codex checks what's already installed, helps with missing prerequisites,
+and installs Tag if needed. It then asks you to run `tag setup` in your own
+terminal to authorize Slack and choose your app and channels.
+
+Use your own Slack account as the owner. Review the channel list, history
+window, and invitation policy before finishing. New setups include channels
+the app has already joined; later invitations also make channels eligible for
+replies and history indexing.
+
+Complete the prompts in your terminal. If credentials need manual entry, enter
+them there, not in your Codex conversation.
+
+Return to Codex when setup finishes or pauses. It can check the connection or
+help diagnose the failed step. Once Tag is connected, continue to
+[Try your Tag in Slack](#try-your-tag-in-slack) below.
+
+### Set up in your terminal
+
+Have [Python 3.10 or later](https://www.python.org/downloads/),
+[`curl`](https://curl.se/download.html), and
+[Slack CLI](https://docs.slack.dev/tools/slack-cli/) installed.
+Tag uses [`uv`](https://docs.astral.sh/uv/getting-started/installation/) if
+available, or Python's venv and pip otherwise.
+
+Run the installer:
 
 ```bash
 curl -fsSL https://hover.team/tag/install | sh
 ```
 
-The installer creates a persistent Tag home, including a workspace folder for
-your files, and installs the `tag` command. It prints the command's location.
-If your terminal cannot find `tag`, add the default command directory to this
-terminal's path:
+It creates a persistent Tag home, a workspace folder for your files, and the
+`tag` command. If your terminal cannot find `tag`, add its default command
+directory to this terminal's path:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
@@ -43,103 +78,66 @@ export PATH="$HOME/.local/bin:$PATH"
 Add the same line to your shell configuration (`~/.zshrc` for zsh or
 `~/.bashrc` for bash) to keep it available in new terminals.
 
-Run `tag setup` to configure Slack and save settings. See
-[setup and management](../tag-management.md) for the full setup flow.
-
-## 2. Connect Slack
-
-Run `tag setup` in a terminal. It guides you through connecting Slack,
-creating or linking an app, entering tokens, and selecting channels and the
-owner member ID. Approve the displayed channels and history window before
-Tag indexes Slack history. Use your installed bot's name when mentioning it.
-
-Use your own Slack member ID as the owner. Only you can request
-work from your Tag. This matters because the agent runs on the host computer
-with the file access, tools, and connected accounts available to its backend.
-Actual access depends on backend permissions, the local account, and
-credentials. Other channel members can still see your requests and Tag's replies.
-
-Each person brings their own Tag through a separate Slack app. Multi-user
-access is coming soon. See [Your own Tag](../concepts/access.md) for how
-personal agents fit into shared conversations.
-
-For every scope and token detail, use the
-[Slack adapter reference](../../references/slack-adapter.md).
-
-## 3. Choose the working workspace
-
-Tag manages a workspace under its persistent home. Use `tag inspect --json`
-to inspect the current configuration, and put the project files you want
-Tag to work on in that workspace.
-
-The workspace is different from MFS memory:
-
-- the workspace is where the agent can inspect, run, and change things;
-- MFS is how the agent retrieves context from approved indexed sources.
-
-Workspace files are available to the agent directly. Searchable context
-depends on which sources are indexed and permitted through MFS.
-
-The workspace folder is the agent's starting directory, not a security sandbox.
-
-## 4. Check and start Tag
+Start guided setup:
 
 ```bash
-tag doctor
-tag start
-tag status
+tag setup
 ```
 
-`doctor` checks the backend, Slack credentials, authorized users, MFS service,
-and configured retrieval scopes. Fix failed checks before testing a mention.
+Follow the prompts to:
 
-## 5. Delegate a useful task
+1. Authorize Slack CLI for your workspace.
+2. Create a new Slack app for your Tag, or link an existing app you manage.
+   Setup attempts to connect credentials automatically; hidden token entry is
+   a recovery option.
+3. Select your own Slack account as the owner and choose channels.
+   Private channels need an invitation before they appear.
+4. Review the channels, history window, and invitation policy. New setups
+   include channels the app has already joined; later invitations also make
+   channels eligible for replies and history indexing.
+5. Finish setup to start Tag and begin indexing the approved Slack history.
 
-In the Slack channel where Tag is present, try a request grounded in the
-workspace. These examples use Maya's Tag; select your own Tag's mention in Slack:
+Setup saves completed answers. If you pause or encounter an error, run
+`tag setup` again to resume.
 
-> @Maya's Tag read the project documentation, summarize what this project is trying to
-> accomplish, and list the three most important open questions. For each point,
-> tell me which file supports it.
-
-Check the cited files. If they match the answer, you know Slack accepted the
-request, Codex ran in the intended workspace, and Tag returned the result to the
-right thread.
-
-## 6. Continue in the thread
-
-Reply in the same thread with:
-
-> @Maya's Tag turn that into a one-week action plan with an owner placeholder for each item.
-
-Tag receives the earlier thread messages with the new request, so the follow-up
-can build on the shared discussion.
-
-## 7. Add broader context
-
-Once the first loop works, make your existing tools and connected accounts
-available to Tag. See [Adding integrations](../concepts/adding-integrations.md).
-Availability depends on the local account and environment running Codex.
-
-Setup handles approved Slack history indexing. For Slack requests, the bundled
-MFS helpers are currently filtered to the invoking channel's Slack scopes;
-adding another source to `MFS_ALLOWED_SCOPES` does not make it available through
-those helpers.
-
-## If something fails
-
-Run:
+When setup reports that Tag is connected, check its status:
 
 ```bash
 tag status
-tag logs
-tag doctor
 ```
 
-Then match the first failed check in [Troubleshooting](../troubleshooting.md).
+If setup is complete but Tag is stopped, run `tag start`.
+For detailed setup options, see [Set up and manage Tag](../tag-management.md).
 
-Stop Tag with:
+## Try your Tag in Slack
 
-```bash
-tag stop
-```
+In a channel connected during setup, post a short planning note. You can use
+this example or write one for your own work:
+
+> We need to prepare the launch. Maya will finish the FAQ by Tuesday.
+> Jules will test signup by Wednesday. Nobody has taken the support briefing yet.
+
+Reply in that message's thread and mention your Tag. These examples use
+Maya's Tag; select your own app's mention from Slack's suggestions:
+
+> @Maya's Tag turn this into a checklist with owners and deadlines. Flag anything missing.
+
+Check that the reply appears in the same thread, keeps the two assigned tasks
+and their deadlines, and flags the missing owner and deadline for the support
+briefing. That confirms Tag received your request, ran Codex, and returned a
+result to Slack.
+
+Continue in the same thread:
+
+> @Maya's Tag I'll handle the support briefing on Thursday. Update the checklist.
+
+The updated checklist should include your follow-up alongside the earlier
+tasks. Tag uses the thread messages as context.
+
+Once this works, explore [Working with files](../concepts/workspaces-and-tools.md)
+or [Adding integrations](../concepts/adding-integrations.md).
+
+## Need help?
+
+Run `tag doctor` to check for problems, then follow
+[Troubleshooting](../troubleshooting.md). Stop Tag at any time with `tag stop`.
