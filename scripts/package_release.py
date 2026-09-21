@@ -38,8 +38,10 @@ def _tracked_files(root: Path) -> list[tuple[str, int]]:
     return sorted(tracked)
 
 
-def build_archive(root: Path, archive: Path, epoch: int | None = None) -> str:
-    """Write tracked working-tree files with stable metadata and return SHA-256."""
+def build_archive(
+    root: Path, archive: Path, epoch: int | None = None, version: str | None = None,
+) -> str:
+    """Write tracked files with stable metadata, optionally stamping VERSION."""
     timestamp = time.gmtime(epoch if epoch is not None else _source_epoch(root))[:6]
     # ZIP cannot represent timestamps before 1980.
     timestamp = max(timestamp, (1980, 1, 1, 0, 0, 0))
@@ -57,7 +59,12 @@ def build_archive(root: Path, archive: Path, epoch: int | None = None) -> str:
             info.create_system = 3
             info.compress_type = zipfile.ZIP_DEFLATED
             info.external_attr = ((0o755 if git_mode & 0o111 else 0o644) & 0xFFFF) << 16
-            bundle.writestr(info, path.read_bytes())
+            content = (
+                (version + "\n").encode()
+                if name == "VERSION" and version
+                else path.read_bytes()
+            )
+            bundle.writestr(info, content)
     return hashlib.sha256(archive.read_bytes()).hexdigest()
 
 
@@ -72,12 +79,13 @@ def main() -> None:
     parser.add_argument("--commit-sha")
     parser.add_argument("--source-ref")
     parser.add_argument("--built-at")
+    parser.add_argument("--version", help="version to stamp into the packaged archive")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
-    version = (root / "VERSION").read_text().strip()
+    version = args.version or (root / "VERSION").read_text().strip()
     args.output.mkdir(parents=True, exist_ok=True)
     archive = args.output / ("tag-edge.zip" if args.channel == "edge" else f"tag-{version}.zip")
-    digest = build_archive(root, archive)
+    digest = build_archive(root, archive, version=version)
     (args.output / "SHA256SUMS").write_text(f"{digest}  {archive.name}\n", encoding="utf-8")
     if args.channel == "edge":
         if not args.commit_sha or not args.source_ref:

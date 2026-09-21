@@ -192,6 +192,9 @@ Manual permission recovery still needs live acceptance testing.
 | Store a token | `tag config set SLACK_BOT_TOKEN --stdin --json` | Read its value from standard input; never echo it |
 | Diagnose | `tag doctor --json` | Check configuration, memory, backend executable, and Slack API access |
 | Check services | `tag status --json` | Require healthy MFS and a connected Slack bridge for exit 0 |
+| Check for updates | `tag upgrade --dry-run --json` | Verify the saved channel's target without changing the installation |
+| Upgrade | `tag upgrade` | Stage and atomically select the verified release, restarting managed services when needed |
+| Install an older release | `tag upgrade --version X.Y.Z --allow-downgrade` | Explicitly override the downgrade guard; prefer rollback for the previous release |
 | Start or stop | `tag start` / `tag stop` | Use the existing managed-process lifecycle |
 
 Pass secrets through a process stdin pipe or use settings' hidden token prompt;

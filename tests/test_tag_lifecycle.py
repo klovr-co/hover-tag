@@ -259,7 +259,8 @@ class TagLifecycleTests(unittest.TestCase):
             sys, "argv", ["tag", "paths"]
         ), redirect_stdout(StringIO()) as output:
             self.assertEqual(tag_cli.main(), 0)
-        self.assertIn("tag  /  Paths", output.getvalue())
+        self.assertIn("@Tag by Hover  /  Paths", output.getvalue())
+        self.assertIn("https://hover.team/tag", output.getvalue())
         self.assertIn("tag paths --json", output.getvalue())
         self.assertNotIn('"workspace":', output.getvalue())
 

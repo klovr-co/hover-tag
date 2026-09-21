@@ -1,6 +1,6 @@
 # Release contract
 
-## v0.1.1-alpha
+## v0.2 alpha line
 
 The supported alpha path is **Slack + Codex CLI + a local MFS server** on macOS
 or Linux. It is intended for trusted, isolated sandbox use. Native Windows
@@ -8,17 +8,14 @@ installation and lifecycle support are included in the CI matrix; live Windows
 Slack/backend qualification must be recorded before claiming that path qualified.
 
 Claude Code is included for experimentation, but is not part of the
-v0.1.1-alpha launch qualification unless its live checks are recorded
+v0.2 alpha qualification unless its live checks are recorded
 separately. Hosted operation, enterprise policy, automated Slack OAuth,
 and production-grade sandboxing are out of scope.
 
-The canonical source repository is <https://github.com/klovr-co/tag>. Release
-tags use the `v<version>` form, so the version in `VERSION` corresponds to the
-Git tag `v0.1.1-alpha`. Alpha releases must be published as GitHub prereleases.
-
-Before publishing, the release owner must verify the repository's automated
-gate, clean-checkout installation smoke tests, and live Slack sandbox evidence.
-Publishing a GitHub prerelease remains an explicit owner action.
+The canonical source repository is <https://github.com/klovr-co/tag>. `VERSION`
+selects the active release line (`0.2.0-alpha`), while automatic releases append
+a monotonically increasing candidate number such as `v0.2.0-alpha.3`. Alpha
+releases are GitHub prereleases and remain explicitly experimental.
 
 Published releases trigger `.github/workflows/release-package.yml`, which
 verifies or creates `tag-<version>.zip`, `SHA256SUMS`, and
@@ -30,38 +27,45 @@ publishing them. The active installation is independent of the checkout; see
 ## Development and promotion workflow
 
 `main` is the only permanent development branch. After both CI and clean-install
-smoke tests pass for its current commit, `.github/workflows/edge-build.yml`
-publishes a moving `edge` prerelease. The `edge` tag and its stable-named assets
+smoke tests pass for a merged commit, `.github/workflows/edge-build.yml`
+publishes an immutable numbered alpha by default. It also updates the moving
+`edge` prerelease when that commit is still the head of `main`. The `edge` tag and its stable-named assets
 are intentionally replaceable and are not SemVer releases. `BUILD-PROVENANCE.json`
 records the full commit SHA, build time, source ref, base version, and archive
 digest. A commit-specific copy is retained as a GitHub Actions artifact for 90
 days, which is the repository's maximum configured retention period.
-Testers can always retrieve the current build from
+Testers can always retrieve the current edge build from
 `https://github.com/klovr-co/tag/releases/download/edge/tag-edge.zip` and should
 verify it with the adjacent checksum and provenance assets.
 
-Official release tags remain immutable. A maintainer prepares one by running the
-`Prepare release` workflow with the full tested `main` commit SHA and the phase
-encoded in that commit's `VERSION`. The workflow requires successful CI and
-install-smoke runs for that exact SHA, validates the allowed version transition,
-reruns the release-candidate preflight, and promotes the retained archive bytes
-into a draft GitHub release. Draft preparation does not require publication
-approval. The workflow never publishes the draft: a maintainer must inspect it
-and publish it explicitly; alpha and beta drafts must be marked as prereleases.
+Automatic alpha releases use the exact bytes retained for their commit-specific
+edge artifact. A merged PR needs no release label for the normal path. Apply
+`release:skip` to publish no alpha, `release:next-patch` to start the next patch
+line, or `release:next-minor` to start the next minor line. Conflicting release
+labels fail closed and publish nothing. Once a line exists, unlabeled merges
+advance its alpha candidate number.
 
-Live validation evidence names the candidate commit that was exercised. Because
+Beta and stable releases remain explicit owner actions. A maintainer prepares
+one by updating `VERSION`, completing live evidence, and running the `Prepare
+release` workflow with the full tested `main` commit SHA. The workflow requires
+successful CI and install-smoke runs for that exact SHA, validates the version
+transition, reruns the release-candidate preflight, and creates a draft from the
+retained archive. A maintainer must inspect and publish that draft explicitly.
+
+Live validation evidence for beta and stable names the candidate commit that was exercised. Because
 a commit cannot contain its own SHA, the release commit may follow that candidate
 only to record its evidence file; the preflight rejects changes to every other
 path between the named candidate and the promoted commit. CI, install smoke, and
 the retained edge artifact are still required for the exact promoted SHA.
 
-The version is selected in source before the candidate commit is tested. Normal
-work after `vX.Y.Z` starts `vX.(Y+1).0-alpha.1`; urgent maintenance may instead
-start `vX.Y.(Z+1)-alpha.1`. Candidates advance without skipping counters from
-alpha to beta to stable. The existing unnumbered `v0.1.x-alpha` line remains
-supported as a legacy transition, but new lines use numbered candidates.
+The alpha release line is selected in source and may be advanced explicitly by
+PR label. Candidate numbers are derived from immutable published tags. Beta and
+stable versions are still selected in source before their candidate commit is
+tested. The existing unnumbered `v0.1.x-alpha` releases remain supported as a
+legacy format, but new lines use numbered candidates.
 
-Publishing a prepared draft triggers `.github/workflows/release-package.yml`.
-For promoted builds it verifies the attached archive, checksum, provenance,
-internal version, and prerelease setting instead of rebuilding. Older releases
-without prepared assets retain the original build-on-publication fallback.
+The automatic workflow downloads and verifies the published alpha assets after
+upload. Manually published releases trigger `.github/workflows/release-package.yml`,
+which verifies attached archives, checksums, provenance, internal versions, and
+the prerelease setting instead of rebuilding. Older releases without prepared
+assets retain the original build-on-publication fallback.

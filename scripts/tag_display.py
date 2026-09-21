@@ -16,6 +16,8 @@ ACCENT = "38;2;56;207;241"
 MUTED = "90"
 WARNING = "33"
 SUCCESS = "38;2;149;197;112"
+BRAND_NAME = "@Tag by Hover"
+BRAND_URL = "https://hover.team/tag"
 ASCII_FALLBACK = str.maketrans({
     "✓": "+",
     "●": "*",
@@ -60,7 +62,8 @@ def mascot_banner():
     free of the illustration. This never changes the user's terminal palette.
     """
     width = content_width()
-    if not color_available():
+    brand_width = 3 + max(len(BRAND_NAME), len(BRAND_URL))
+    if not color_available() or width < brand_width:
         return False
     ice, navy = "#bfe6fd", "#083778"
     sprite_width, sprite_height = 13, 14
@@ -73,13 +76,8 @@ def mascot_banner():
             if 0 <= column + offset < width:
                 grid[row][column + offset] = (char, fg, bg)
 
-    if width >= 60:
-        for row, text in enumerate(("▀█▀  ▄▀█  █▀▀", " █   █▀█  █▄█"), title_row):
-            put(row, 3, text)
-        put(title_row + 3, 3, "Your Slack assistant")
-    else:
-        put(title_row, 3, "tag")
-        put(title_row + 3, 3, "Slack assistant")
+    put(title_row, 3, BRAND_NAME)
+    put(title_row + 2, 3, BRAND_URL)
 
     # Scale the measured source grid, keeping the full map as the source of truth.
     def pixel(x, y):
@@ -135,7 +133,8 @@ def header(section, detail=""):
         emit()
         paragraph(section.upper(), "1;" + ACCENT)
     else:
-        emit("  " + styled("tag", "1;" + ACCENT) + "  /  " + styled(section, MUTED))
+        paragraph(f"{BRAND_NAME}  /  {section}", "1;" + ACCENT)
+        paragraph(BRAND_URL, MUTED)
     rule()
     if detail:
         paragraph(detail, MUTED)
