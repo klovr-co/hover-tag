@@ -131,6 +131,7 @@ class FlowTests(unittest.TestCase):
         ):
             self.assertEqual(self.invoke(["setup", "--test"])[0], 0)
             self.assertIn("--no-start", call.call_args.args[0])
+            self.assertIn("--test-mode", call.call_args.args[0])
             env = call.call_args.kwargs["env"]
             self.assertEqual(env["TAG_HOME"], str(self.home / "testing/onboarding"))
             self.assertNotIn("OPENTAG_ENV_FILE", env)

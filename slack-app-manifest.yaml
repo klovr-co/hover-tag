@@ -1,5 +1,5 @@
 display_information:
-  name: OpenMax
+  name: Tag
   description: Run approved Codex or Claude tasks from Slack.
   background_color: "#1f2937"
 features:
@@ -10,7 +10,7 @@ features:
   agent_view:
     agent_description: Run approved Codex or Claude tasks from Slack.
   bot_user:
-    display_name: OpenMax
+    display_name: Tag
     always_online: true
 oauth_config:
   scopes:
