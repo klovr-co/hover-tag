@@ -51,6 +51,71 @@ class SlackManifestMigrationTests(unittest.TestCase):
                          ["app_mention", "message.im"])
         self.assertFalse(migrations.migrate_manifest(migrated)[1])
 
+    def test_agent_view_migration_preserves_manifest_and_is_idempotent(self):
+        original = self.manifest()
+        migrated, changed, replaces_legacy = migrations.migrate_agent_view(original)
+        self.assertTrue(changed)
+        self.assertFalse(replaces_legacy)
+        self.assertEqual(
+            migrated["features"]["agent_view"]["agent_description"],
+            migrations.AGENT_DESCRIPTION,
+        )
+        self.assertEqual(migrated["custom_operator_setting"], {"kept": True})
+        self.assertNotIn("agent_view", original["features"])
+        self.assertEqual(migrations.migrate_agent_view(migrated)[1:], (False, False))
+
+    def test_agent_view_migration_maps_legacy_presentation(self):
+        original = self.manifest()
+        original["features"]["assistant_view"] = {
+            "assistant_description": "A custom helper",
+            "actions": [{"id": "compose"}],
+            "suggested_prompts": [{"title": "Catch me up"}],
+        }
+        migrated, changed, replaces_legacy = migrations.migrate_agent_view(original)
+        self.assertTrue(changed)
+        self.assertTrue(replaces_legacy)
+        self.assertNotIn("assistant_view", migrated["features"])
+        self.assertEqual(migrated["features"]["agent_view"], {
+            "agent_description": "A custom helper",
+            "actions": [{"id": "compose"}],
+            "suggested_prompts": [{"title": "Catch me up"}],
+        })
+
+    def test_enable_agent_view_requires_approval_before_replacing_legacy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home, _ = self.linked_home(Path(directory))
+            project = home / "integrations/slack-cli"
+            remote = self.manifest()
+            remote["features"]["assistant_view"] = {}
+            approve = Mock(return_value=False)
+            with patch.object(migrations.shutil, "which", return_value="/bin/slack"), patch.object(
+                migrations, "remote_manifest", return_value=remote
+            ), patch.object(migrations, "_run") as run:
+                self.assertFalse(migrations.enable_agent_view(
+                    project, "ATEST", "TTEST", approve_legacy=approve
+                ))
+            approve.assert_called_once_with()
+            run.assert_not_called()
+
+    def test_enable_agent_view_syncs_and_verifies_remote_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home, _ = self.linked_home(Path(directory))
+            project = home / "integrations/slack-cli"
+            verified = migrations.migrate_agent_view(self.manifest())[0]
+            success = subprocess.CompletedProcess([], 0, "", "")
+            approve = Mock(return_value=True)
+            with patch.object(migrations.shutil, "which", return_value="/bin/slack"), patch.object(
+                migrations, "remote_manifest", side_effect=[self.manifest(), verified]
+            ) as remote, patch.object(
+                migrations, "_sync_command", return_value=["/bin/slack", "manifest", "sync"]
+            ), patch.object(migrations, "_run", return_value=success) as run:
+                self.assertTrue(migrations.enable_agent_view(
+                    project, "ATEST", "TTEST", approve_legacy=approve
+                ))
+            approve.assert_not_called()
+            self.assertEqual(remote.call_count, 2)
+            self.assertEqual(run.call_args.args[0], ["/bin/slack", "manifest", "sync"])
+
     def test_current_manifest_and_grant_only_write_checkpoint(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

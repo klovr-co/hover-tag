@@ -139,11 +139,15 @@ or Client ID. Tag asks before linking and checks the app's configuration afterwa
 No browser-session integration is needed. Saved or archived app identities are
 not presented as a list of your Slack apps.
 When the compatibility check finds missing settings, it shows the full
-checklist and offers **Open app settings**, **Check again**, or **Save and
-exit**. Open app settings takes you to the selected Slack app; make every
-listed change there, save it, then choose Check again. If bot scopes are
-listed, reinstall the app in Slack afterward so they take effect. Tag never
-requests a configuration token or changes an existing Slack app's manifest.
+checklist. If Agent messaging is missing, setup offers **Enable Agent messaging
+with Slack CLI**. Tag exports the remote manifest, adds only the Agent view while
+preserving unrelated settings, syncs it, and verifies Slack's saved state. A
+legacy Assistant view requires explicit confirmation because Slack does not
+allow that conversion to be reversed. Other missing settings still offer
+**Open app settings**, **Check again**, or **Save and exit**. Open app settings
+takes you to the selected Slack app; make every listed change there, save it,
+then choose Check again. If bot scopes are listed, reinstall the app in Slack
+afterward so they take effect. Tag never requests a configuration token.
 If setup pauses or fails, run
 `tag setup` to resume the new answers. Reset requires an interactive terminal.
 The printed backup contains `restore-paths.json`, mapping each saved item to its
