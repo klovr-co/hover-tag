@@ -259,6 +259,14 @@ for raw in sys.stdin:
         if "exit-after-start" in prompt:
             raise SystemExit(7)
         if "wait-for-interrupt" not in prompt:
+            if "large-image-event" in prompt:
+                send({"method": "item/completed", "params": {
+                    "threadId": "thread-1", "turnId": "turn-1", "completedAtMs": 2,
+                    "item": {
+                        "id": "image-large", "type": "imageGeneration", "status": "completed",
+                        "result": "data:image/png;base64," + "x" * (1024 * 1024),
+                    }
+                }})
             print("malformed diagnostic", flush=True)
             send({"method": "item/completed", "params": {
                 "threadId": "thread-1", "turnId": "turn-1", "completedAtMs": 2,
@@ -299,6 +307,23 @@ for raw in sys.stdin:
         self.assertEqual("Hello", next(
             event["text"] for event in events if event["type"] == "message_delta"
         ))
+        self.assertEqual("turn_complete", events[-1]["type"])
+
+    def test_accepts_valid_large_image_completion_event(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            events: list[dict[str, object]] = []
+            server = CodexAppServer(
+                [sys.executable, "-u", str(self.fake_server_path(root))],
+                cwd=root,
+                timeout=5,
+            )
+
+            status, detail = server.run(
+                "large-image-event", model=None, reasoning_effort=None, emit=events.append
+            )
+
+        self.assertEqual(("completed", ""), (status, detail))
         self.assertEqual("turn_complete", events[-1]["type"])
 
     def test_control_file_interrupt_waits_for_confirmation(self) -> None:
