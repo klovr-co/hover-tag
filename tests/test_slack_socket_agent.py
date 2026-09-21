@@ -2041,6 +2041,68 @@ class SlackSessionJournalTests(unittest.TestCase):
         client.assistant_threads_setStatus.assert_called_once()
 
 
+class SlackBridgeReadinessTests(unittest.TestCase):
+    def test_invitation_failure_withholds_socket_readiness(self) -> None:
+        app = MagicMock()
+        handler = MagicMock()
+        handler.client.is_connected.return_value = True
+        invitation_memory = MagicMock()
+        invitation_memory.ready_for_requests.return_value = False
+        shutdown_requested = MagicMock()
+        shutdown_requested.is_set.side_effect = [False, True]
+        journal = MagicMock()
+
+        with tempfile.TemporaryDirectory() as raw_dir:
+            ready_file = Path(raw_dir) / "slack.ready"
+
+            def assert_not_ready(_seconds: float) -> None:
+                self.assertFalse(ready_file.exists())
+
+            with patch.dict(
+                os.environ,
+                {
+                    "SLACK_ALLOWED_USER_IDS": "UOWNER",
+                    "SLACK_APP_TOKEN": "xapp-fixture",
+                    "SLACK_CHANNEL_POLICY": "invited",
+                },
+                clear=True,
+            ), patch(
+                "scripts.slack_socket_agent.sys.argv",
+                [
+                    "slack_socket_agent.py",
+                    "--backend",
+                    "codex",
+                    "--ready-file",
+                    str(ready_file),
+                    "--process-id",
+                    "fixture-process",
+                ],
+            ), patch.object(
+                slack_socket_agent, "create_app", return_value=app
+            ), patch.object(
+                slack_socket_agent, "print_live_summary"
+            ), patch.object(
+                slack_socket_agent, "SocketModeHandler", return_value=handler
+            ), patch.object(
+                slack_socket_agent, "SlackSessionJournal", return_value=journal
+            ), patch.object(
+                slack_socket_agent, "install_shutdown_handlers"
+            ), patch.object(
+                slack_socket_agent.threading, "Event", return_value=shutdown_requested
+            ), patch.object(
+                slack_socket_agent.time, "sleep", side_effect=assert_not_ready
+            ), patch(
+                "scripts.slack_invitation_memory.InvitationMemory",
+                return_value=invitation_memory,
+            ), patch(
+                "scripts.tag_paths.instance_home", return_value=Path(raw_dir)
+            ):
+                slack_socket_agent.main()
+
+        invitation_memory.start.assert_called_once_with()
+        invitation_memory.stop.assert_called_once_with()
+
+
 class SlackAnswerStreamTests(unittest.TestCase):
     def test_batches_deltas_and_finishes_stream(self) -> None:
         client = MagicMock()
