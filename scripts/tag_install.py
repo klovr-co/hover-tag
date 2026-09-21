@@ -417,6 +417,7 @@ def install(
     sys.path.insert(0, scripts_dir)
     try:
         from tag_paths import initialize
+        import tag_instances
         from release_check import validate_release
     finally:
         sys.path.remove(scripts_dir)
@@ -488,12 +489,15 @@ def install(
             # Explicit test/development mode; never advertised as a complete install.
             python = Path(sys.executable)
             row("Runtime", "Development mode · dependencies skipped")
-        for backend in (".agents", ".claude"):
-            bundled = home / "workspace" / backend / "skills/open-tag-admin"
-            skill = bundled / "SKILL.md"
-            if not bundled.exists() or (skill.is_file() and skill.read_text(encoding="utf-8") == LEGACY_ADMIN_SKILL):
-                bundled.mkdir(parents=True, exist_ok=True)
-                skill.write_text(ADMIN_SKILL, encoding="utf-8")
+        instance_homes = [Path(str(item["home"])) for item in tag_instances.discover(home)
+                          if item.get("valid")]
+        for instance in instance_homes:
+            for backend in (".agents", ".claude"):
+                bundled = instance / "workspace" / backend / "skills/open-tag-admin"
+                skill = bundled / "SKILL.md"
+                if not bundled.exists() or (skill.is_file() and skill.read_text(encoding="utf-8") == LEGACY_ADMIN_SKILL):
+                    bundled.mkdir(parents=True, exist_ok=True)
+                    skill.write_text(ADMIN_SKILL, encoding="utf-8")
         # Keep the launcher fixed while the pointer changes atomically on upgrade.
         launcher = home / "bin/tag-launch.py"
         launcher_text = '''# TAG managed launcher

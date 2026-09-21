@@ -105,8 +105,7 @@ def archive_setup(home: Path, lifecycle, *, expected_app: dict | None = None) ->
             check_app_link(home / "integrations/slack-cli", expected_app)
         # Use the same identity-checked lifecycle as `tag stop`. A failure leaves
         # saved answers intact and never starts a second onboarding flow.
-        for name in ("slack", "mfs"):
-            lifecycle.stop_process(home, name)
+        lifecycle.stop_process(home, "slack")
         backup_root = home / "config/backups"
         backup_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -197,4 +196,5 @@ def reset_and_setup(home: Path, lifecycle) -> int:
         ui.message("Existing Slack apps are kept. Choose Use an existing app and paste its App ID to reconnect.")
     ui.message("If setup pauses, run tag setup to continue.")
     print()
-    return subprocess.call([sys.executable, str(lifecycle.ROOT / "scripts/tag_cli.py"), "setup"])
+    target = [] if os.getenv("TAG_ID", "default") == "default" else ["--tag", os.environ["TAG_ID"]]
+    return subprocess.call([sys.executable, str(lifecycle.ROOT / "scripts/tag_cli.py"), "setup", *target])

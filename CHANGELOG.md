@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Manage independent named Tags for multiple Slack workspaces with `tag add`,
+  `tag list`, and target-aware lifecycle, setup, settings, logs, and diagnostics.
+- Share one explicitly owned MFS lifecycle across instances, with per-instance
+  credential files and an administrative `tag memory` command.
+
 All notable changes to Tag are documented here.
 
 ## [0.1.1-alpha] - 2026-09-18

@@ -1,5 +1,44 @@
 # Set up and manage Tag
 
+## Multiple Slack workspaces
+
+One installation can run independent Tags for separate Slack apps/workspaces.
+The existing configuration is always the reserved `default` Tag:
+
+```sh
+tag add personal
+tag list
+tag setup --tag personal
+tag start --tag personal
+tag status --tag personal
+tag logs --tag personal
+tag stop --tag personal
+```
+
+Omitting `--tag` continues to select `default`. A local Tag name is a stable,
+lowercase identifier; it is independent of both the Slack app's display name
+and Slack workspace name. Paused onboarding appears in `tag list` and resumes
+with the targeted setup command. Each Tag has its own settings, Slack app,
+agent working folder, conversations, logs, and lifecycle. Use Slack's settings
+for that specific app to change its remote name or profile image.
+
+MFS is shared by the installation. `tag stop --tag NAME`, restart, reset, and
+failed startup leave shared memory and other Tags running. Inspect it with
+`tag memory status`; after stopping every Tag bridge, an installation-owned
+service can be stopped explicitly with `tag memory stop`. Tag refuses to stop
+an externally managed MFS process.
+
+Shared storage does not authorize cross-workspace retrieval. Normal Slack
+retrieval remains limited to the selected Tag's approved workspace/channel
+scopes. These local instances share the trusted-sandbox limitations described
+in the security model; they are not hardened tenants from one another.
+
+For automation, `tag list --json` returns `schema_version`, the installation
+root, and one independently readable record per Tag. Existing inspect/status
+objects retain their fields and add `tag` plus nullable `slack_workspace`;
+their `next_command` includes `--tag NAME` for named instances. A malformed
+instance is returned with its own error and does not suppress other records.
+
 The CLI, guided settings, and admin skill share the same settings and lifecycle
 operations. Use `tag` for a status summary and next command, or ask an assistant with the
 `open-tag-admin` skill to set up, change, or diagnose Tag. Both begin by inspecting

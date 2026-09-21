@@ -1,4 +1,4 @@
-"""One platform-aware home for installed TAG data, independent of source trees."""
+"""Platform-aware installation and instance paths, independent of source trees."""
 from __future__ import annotations
 
 import csv
@@ -11,6 +11,11 @@ from pathlib import Path
 
 
 def tag_home() -> Path:
+    """Return Tag's installation root.
+
+    ``TAG_HOME`` remains the public installation-root override.  Named Tag
+    instances must not reinterpret it as their private mutable home.
+    """
     override = os.getenv("TAG_HOME")
     if override:
         path = Path(override).expanduser()
@@ -27,9 +32,24 @@ def tag_home() -> Path:
     return data / "tag"
 
 
+def instance_home() -> Path:
+    """Return the explicitly selected mutable instance home.
+
+    Child processes receive ``TAG_INSTANCE_HOME`` from the CLI.  Direct and
+    legacy script invocations retain the historical default-home behavior.
+    """
+    override = os.getenv("TAG_INSTANCE_HOME")
+    if not override:
+        return tag_home()
+    path = Path(override).expanduser()
+    if not path.is_absolute():
+        raise ValueError("TAG_INSTANCE_HOME must be an absolute path")
+    return path
+
+
 def tag_temp_dir() -> Path:
     """Return TAG's private temporary root, creating it for direct script runs."""
-    home = tag_home()
+    home = instance_home()
     home.mkdir(parents=True, exist_ok=True, mode=0o700)
     temporary = home / "tmp"
     temporary.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -41,12 +61,7 @@ def initialize(home: Path) -> None:
     for name in ("releases", "config", "workspace/.agents/skills", "workspace/.codex",
                  "workspace/.claude/skills", "integrations/bin", "state", "tmp", "bin"):
         (home / name).mkdir(parents=True, exist_ok=True, mode=0o700)
-    if os.name == "nt":
-        identity = subprocess.check_output(["whoami", "/user", "/fo", "csv", "/nh"], text=True)
-        sid = next(csv.reader([identity.strip()]))[1]
-        subprocess.run(["icacls", str(home), "/inheritance:r", "/grant:r",
-                        f"*{sid}:(OI)(CI)F", "*S-1-5-18:(OI)(CI)F"],
-                       check=True, stdout=subprocess.DEVNULL)
+    restrict_windows_acl(home)
     config = home / "workspace/.codex/config.toml"
     if not config.exists():
         config.write_text(
@@ -59,10 +74,47 @@ def initialize(home: Path) -> None:
         )
 
 
-def runtime_environment(home: Path) -> dict[str, str]:
+def initialize_instance(home: Path) -> None:
+    """Create only the mutable directories owned by one Tag instance."""
+    home.mkdir(parents=True, exist_ok=True, mode=0o700)
+    for name in ("config", "workspace/.agents/skills", "workspace/.codex",
+                 "workspace/.claude/skills", "integrations/bin", "state", "tmp"):
+        (home / name).mkdir(parents=True, exist_ok=True, mode=0o700)
+    restrict_windows_acl(home)
+    config = home / "workspace/.codex/config.toml"
+    if not config.exists():
+        config.write_text(
+            "# TAG-only Codex defaults and MCP servers go here.\n"
+            "# model = \"gpt-example\"\n"
+            "# model_reasoning_effort = \"high\"\n"
+            "# service_tier = \"default\"\n"
+            "# [mcp_servers.NAME]\n",
+            encoding="utf-8",
+        )
+
+
+def restrict_windows_acl(home: Path) -> None:
+    if os.name != "nt":
+        return
+    identity = subprocess.check_output(["whoami", "/user", "/fo", "csv", "/nh"], text=True)
+    sid = next(csv.reader([identity.strip()]))[1]
+    subprocess.run(["icacls", str(home), "/inheritance:r", "/grant:r",
+                    f"*{sid}:(OI)(CI)F", "*S-1-5-18:(OI)(CI)F"],
+                   check=True, stdout=subprocess.DEVNULL)
+
+
+def runtime_environment(
+    home: Path,
+    *,
+    installation_root: Path | None = None,
+    tag_id: str = "default",
+) -> dict[str, str]:
     """Keep backend authentication/global config intact; scope only TAG data."""
+    root = installation_root or home
     return {
-        "TAG_HOME": str(home),
+        "TAG_HOME": str(root),
+        "TAG_INSTANCE_HOME": str(home),
+        "TAG_ID": tag_id,
         "OPENTAG_WORKDIR": str(home / "workspace"),
         "OPENTAG_MEMORY_ROOT": str(home / "state/memory"),
         "OPENTAG_SLACK_SETTINGS_FILE": str(home / "state/slack-user-settings.json"),
@@ -75,7 +127,7 @@ def runtime_environment(home: Path) -> dict[str, str]:
 def codex_workspace_args(workdir: Path) -> list[str]:
     # CLI trust overrides do not activate project config in Codex 0.147.0.
     # Layer only TAG's MCP definitions explicitly, preserving global settings/auth.
-    if os.getenv("TAG_HOME") and workdir.resolve() == (tag_home() / "workspace").resolve():
+    if os.getenv("TAG_HOME") and workdir.resolve() == (instance_home() / "workspace").resolve():
         try:
             import tomllib
         except ImportError:

@@ -11,6 +11,12 @@ TAG installs independently of any Git checkout. Its default home is:
 Set `TAG_HOME` to an absolute path before installing to choose another home.
 Use an isolated `TAG_HOME` for development. WSL uses the Linux layout.
 
+`TAG_HOME` always names the installation root. The original `default` Tag keeps
+its mutable data there; named Tags live under `<TAG_HOME>/instances/NAME` and
+share releases, launchers, backend account authentication, and managed MFS.
+Do not point concurrent old and new CLI releases at the same home while
+upgrading the shared service ownership record.
+
 ```text
 Tag/
   releases/<version>-<installation-id>/
@@ -187,14 +193,19 @@ See [setup and management](tag-management.md) for the shared flow and commands.
 `tag paths` shows storage locations in a readable view; `tag paths --json`
 provides the same data for automation. `tag doctor` checks configuration and
 connectivity. `tag start` runs in the background until stopped or rebooted.
-Use `tag status`, `tag logs`, and `tag stop`. The dedicated `tag restart`
+Use `tag status`, `tag logs`, and `tag stop`. Add `--tag NAME` to operate a
+named Tag; `tag list` shows all independent configurations. The dedicated `tag restart`
 command presents one operation and should be preferred to manually chaining
 stop and start. Automatic login startup is not
 configured. A separately managed MFS server is reused and never stopped by TAG.
 
 Rerun the installer to upgrade. Failed dependency installation leaves the active
-release unchanged. Run `tag stop` then `tag start` to activate the new code for
-running services. `tag rollback` selects the previous release after stopping
+release unchanged. Stop and restart every running Tag to activate new code.
+`tag rollback` selects the previous release only after all Tag bridges and the
+installation-owned shared MFS service are stopped with `tag memory stop`.
+Rollback is blocked while named Tags exist because an older selected CLI may
+not understand their lifecycle; use a coordinated supported upgrade path
+instead of mixing old and new lifecycle commands.
 TAG. Older releases remain available; no automatic release deletion is performed.
 
 For a legacy checkout, explicitly copy settings and local skills:
