@@ -23,17 +23,22 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 try:
-    from tag_paths import initialize, runtime_environment, tag_home
+    from tag_paths import initialize_instance, runtime_environment, tag_home
+    import tag_instances
     from tag_config import read_config
+    import tag_credentials
     import tag_display as display
 except ImportError:
-    from scripts.tag_paths import initialize, runtime_environment, tag_home
+    from scripts.tag_paths import initialize_instance, runtime_environment, tag_home
+    from scripts import tag_instances
     from scripts.tag_config import read_config
+    from scripts import tag_credentials
     from scripts import tag_display as display
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_DEPENDENCIES = ("mfs_server", "psutil", "slack_bolt")
 UPGRADE_CHANNELS = ("stable", "beta", "alpha", "edge")
+COMMANDS = tuple(sorted(tag_instances.RESERVED_NAMES))
 TOKEN_PATTERN = re.compile(r"\b(?:xox[a-z]-|xapp-)[A-Za-z0-9-]+")
 MFS_HISTORY_CREDENTIAL_MESSAGE = (
     "MFS is already running without Tag's Slack-history credential. "
@@ -176,7 +181,12 @@ def process_for(path: Path):
     try:
         record = json.loads(path.read_text(encoding="utf-8"))
         process = psutil.Process(record["pid"])
-        if process.create_time() == record["created"] and process.status() != psutil.STATUS_ZOMBIE:
+        marker = record.get("command_marker")
+        command_matches = True
+        if isinstance(marker, str) and marker:
+            command_matches = any(marker in part for part in process.cmdline())
+        if (process.create_time() == record["created"]
+                and process.status() != psutil.STATUS_ZOMBIE and command_matches):
             return process
     except (OSError, ValueError, KeyError, psutil.Error):
         pass
@@ -190,22 +200,28 @@ def start_process(
     *,
     environment: dict[str, str] | None = None,
     metadata: dict[str, object] | None = None,
+    state_dir: Path | None = None,
+    cwd: Path | None = None,
 ) -> bool:
     import psutil
-    record = home / "state" / f"{name}.json"
+    state = state_dir or home / "state"
+    state.mkdir(parents=True, exist_ok=True, mode=0o700)
+    record = state / f"{name}.json"
     if process_for(record):
         return False
     options = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS} if os.name == "nt" else {"start_new_session": True}
-    with (home / "state" / f"{name}.log").open("ab") as log:
-        child = subprocess.Popen(command, cwd=home / "workspace", stdin=subprocess.DEVNULL,
+    with (state / f"{name}.log").open("ab") as log:
+        child = subprocess.Popen(command, cwd=cwd or home / "workspace", stdin=subprocess.DEVNULL,
                                  stdout=log, stderr=subprocess.STDOUT, env=environment, **options)
     process = psutil.Process(child.pid)
-    identity = {"pid": child.pid, "created": process.create_time(), **(metadata or {})}
+    marker_source = command[1] if len(command) > 1 and command[1].endswith(".py") else command[0]
+    identity = {"pid": child.pid, "created": process.create_time(),
+                "command_marker": Path(marker_source).name, **(metadata or {})}
     record.write_text(json.dumps(identity), encoding="utf-8")
     time.sleep(0.3)
     if child.poll() is not None:
         record.unlink(missing_ok=True)
-        detail = log_tail(home, name, 20)
+        detail = log_tail(home, name, 20, state_dir=state)
         raise RuntimeError(
             f"{name} exited during startup"
             + (f":\n{detail}" if detail else "; run tag logs")
@@ -217,9 +233,10 @@ def start_process(
     return True
 
 
-def stop_process(home: Path, name: str) -> None:
+def stop_process(home: Path, name: str, *, state_dir: Path | None = None) -> None:
     import psutil
-    record = home / "state" / f"{name}.json"
+    state = state_dir or home / "state"
+    record = state / f"{name}.json"
     process = process_for(record)
     if process:
         children = process.children(recursive=True)
@@ -321,9 +338,12 @@ def local_mfs_listener(url: str):
     return candidates[0] if len(candidates) == 1 else None
 
 
-def replace_unmanaged_local_mfs(home: Path, url: str) -> bool:
+def replace_unmanaged_local_mfs(
+    home: Path, url: str, *, state_dir: Path | None = None
+) -> bool:
     """Replace an untracked loopback MFS so Tag owns runtime and cleanup."""
-    record = home / "state/mfs.json"
+    state = state_dir or home / "state"
+    record = state / "mfs.json"
     if not local_mfs_endpoint(url) or process_for(record) is not None or not healthy(url):
         return False
     process = local_mfs_listener(url)
@@ -332,11 +352,15 @@ def replace_unmanaged_local_mfs(home: Path, url: str) -> bool:
             "The local MFS endpoint is healthy but its process is not an identifiable "
             "mfs-server. Stop that service or configure a separate MFS_URL before starting Tag."
         )
+    state.mkdir(parents=True, exist_ok=True, mode=0o700)
     record.write_text(
         json.dumps({"pid": process.pid, "created": process.create_time(), "adopted": True}),
         encoding="utf-8",
     )
-    stop_process(home, "mfs")
+    if state_dir is None:
+        stop_process(home, "mfs")
+    else:
+        stop_process(home, "mfs", state_dir=state)
     return True
 
 
@@ -362,9 +386,9 @@ def slack_ready(home: Path, maximum_age: float = 5.0) -> bool:
         return False
 
 
-def log_tail(home: Path, name: str, lines: int = 50) -> str:
+def log_tail(home: Path, name: str, lines: int = 50, *, state_dir: Path | None = None) -> str:
     try:
-        content = (home / "state" / f"{name}.log").read_text(
+        content = ((state_dir or home / "state") / f"{name}.log").read_text(
             encoding="utf-8", errors="replace"
         )
     except OSError:
@@ -498,9 +522,14 @@ def development_loop(home: Path) -> int:
             "Run ./install.sh --dependencies-only, then ./tag dev in the repository."
         )
 
-    display.header("Dev", "Watching Python source and reloading the Slack bridge.")
+    display.header(
+        "Dev",
+        selected_target(home, suffix="Watching Python source and reloading the Slack bridge"),
+    )
     display.section("Bootstrap")
-    command = [sys.executable, str(ROOT / "scripts/tag_cli.py"), "start"]
+    tag_id = os.getenv("TAG_ID", "default")
+    target = [] if tag_id == "default" else [tag_id]
+    command = [sys.executable, str(ROOT / "scripts/tag_cli.py"), *target, "start"]
     result = subprocess.call(command, env=os.environ.copy())
     if result:
         return result
@@ -567,6 +596,173 @@ def mfs_server_executable() -> str | None:
     name = "mfs-server.exe" if os.name == "nt" else "mfs-server"
     bundled = Path(sys.executable).parent / name
     return str(bundled) if bundled.is_file() else shutil.which(name)
+
+
+def instance_environment(
+    context: tag_instances.InstanceContext,
+    values: dict[str, str] | None = None,
+    *,
+    source: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Build a fresh child environment without cross-instance Tag settings."""
+    inherited = os.environ if source is None else source
+    blocked = ("SLACK_", "MFS_", "OPENTAG_")
+    environment = {
+        key: value for key, value in inherited.items()
+        if not key.startswith(blocked) and key not in {"TAG_INSTANCE_HOME", "TAG_ID"}
+    }
+    environment.update(runtime_environment(
+        context.home,
+        installation_root=context.installation_root,
+        tag_id=context.tag_id,
+    ))
+    if values:
+        environment.update(values)
+    environment["OPENTAG_ENV_FILE"] = str(context.home / "config/settings.json")
+    return environment
+
+
+def migrate_legacy_mfs_record(context: tag_instances.InstanceContext) -> None:
+    """Recoverably transfer the default home’s managed MFS identity."""
+    if not context.is_default:
+        return
+    legacy = context.installation_root / "state/mfs.json"
+    shared = context.shared_mfs_home
+    destination = shared / "mfs.json"
+    pending = shared / "mfs.migrating"
+    if destination.exists():
+        return
+    source = pending if pending.exists() else legacy
+    if not source.exists():
+        return
+    process = process_for(source)
+    if process is None:
+        source.unlink(missing_ok=True)
+        return
+    try:
+        command = " ".join(process.cmdline()).lower()
+    except Exception:
+        raise RuntimeError("Could not verify the legacy MFS process; stop it with the older Tag CLI before upgrading") from None
+    if "mfs-server" not in command and "mfs_server" not in command:
+        raise RuntimeError("Legacy MFS process identity does not match mfs-server; refusing ownership migration")
+    shared.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if source == legacy:
+        # Moving first makes the old record unavailable to an older CLI before
+        # the shared record becomes authoritative. A crash leaves a recoverable
+        # `.migrating` record rather than two shutdown authorities.
+        os.replace(legacy, pending)
+    os.replace(pending, destination)
+    old_log = context.installation_root / "state/mfs.log"
+    if old_log.exists() and not (shared / "mfs.log").exists():
+        os.replace(old_log, shared / "mfs.log")
+
+
+def bridge_processes(installation_root: Path) -> list[str]:
+    running = []
+    for item in tag_instances.discover(installation_root):
+        if not item.get("valid"):
+            continue
+        home = Path(str(item["home"]))
+        if process_for(home / "state/slack.json"):
+            running.append(str(item["id"]))
+    return running
+
+
+def assert_unique_slack_app(context: tag_instances.InstanceContext, values: dict[str, str]) -> None:
+    """Reject one Slack App ID being activated by two local Tag instances."""
+    app_id = values.get("SLACK_APP_ID", "")
+    if not app_id:
+        return
+    shared = context.installation_root / "shared"
+    shared.mkdir(parents=True, exist_ok=True, mode=0o700)
+    lock = shared / "app-identity.lock"
+    try:
+        lock.mkdir()
+    except FileExistsError:
+        raise RuntimeError("Another Tag is activating a Slack app; retry shortly") from None
+    try:
+        for item in tag_instances.discover(context.installation_root):
+            if not item.get("valid") or item["id"] == context.tag_id:
+                continue
+            try:
+                other = read_config(Path(str(item["home"])) / "config/settings.json")
+            except (OSError, ValueError):
+                continue
+            if other.get("SLACK_APP_ID") == app_id:
+                raise RuntimeError(
+                    f"Slack app {app_id} is already configured for Tag '{item['id']}'. "
+                    "Use a separate Slack app for each Tag."
+                )
+            uri = values.get("MFS_SLACK_CONNECTOR_URI", "")
+            if uri and other.get("MFS_SLACK_CONNECTOR_URI") == uri:
+                raise RuntimeError(
+                    f"Slack connector {uri} is already owned by Tag '{item['id']}'. "
+                    "Refusing to update a colliding connector root."
+                )
+    finally:
+        lock.rmdir()
+
+
+def ensure_connector_credential(home: Path, values: dict[str, str]) -> None:
+    """Migrate an owned local connector from process-env to a private file."""
+    raw = values.get("MFS_SLACK_CONNECTOR_CONFIG", "")
+    if not raw:
+        return
+    connector = Path(raw).expanduser()
+    url = values.get("MFS_URL", "http://127.0.0.1:13619")
+    local = local_mfs_endpoint(url)
+    try:
+        owned = connector.resolve().is_relative_to((home / "integrations").resolve())
+    except OSError:
+        owned = False
+    if not connector.is_file() or connector.is_symlink() or not owned:
+        raise RuntimeError("Slack connector configuration is missing or is not owned by the selected Tag")
+    content = connector.read_text(encoding="utf-8")
+    if not local:
+        if 'token = "file:' in content:
+            raise RuntimeError(
+                "Remote MFS cannot resolve this Tag's local Slack credential file; "
+                "configure a server-resolvable credential reference."
+            )
+        return
+    token = values.get("MFS_SLACK_TOKEN", "")
+    if not token:
+        raise RuntimeError("Slack history credential is missing")
+    credential = tag_credentials.write_slack_history(home, token)
+    replacement = "token = " + json.dumps("file:" + str(credential))
+    migrated, count = re.subn(r'(?m)^token = "(?:env:MFS_SLACK_TOKEN|file:[^"]+)"$', replacement, content)
+    if count != 1:
+        raise RuntimeError("Slack connector credential reference is malformed")
+    if migrated != content:
+        temporary = connector.with_suffix(connector.suffix + ".credential.tmp")
+        try:
+            descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                handle.write(migrated)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, connector)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
+def selected_target(home: Path, tag_id: str | None = None, *, suffix: str = "") -> str:
+    """Return a consistent visible identity for the selected Tag and Slack app."""
+    try:
+        values = read_config(home / "config/settings.json")
+    except FileNotFoundError:
+        values = {}
+    except (OSError, ValueError):
+        return display.target_detail(
+            tag_id or os.getenv("TAG_ID", "default"), suffix="Configuration unreadable"
+        )
+    return display.target_detail(
+        tag_id or os.getenv("TAG_ID", "default"),
+        values.get("SLACK_TEAM_ID", ""),
+        values.get("SLACK_APP_ID", ""),
+        values.get("OPENTAG_BOT_NAME", ""),
+        suffix=suffix,
+    )
 
 
 def sync_configured_slack_memory(environment: dict[str, str] | None = None) -> None:
@@ -672,11 +868,16 @@ def doctor_report(offline: bool) -> tuple[int, dict[str, object]]:
     return completed.returncode, report
 
 
-def doctor(home: Path, offline: bool, json_output: bool = False) -> int:
+def doctor(home: Path, offline: bool, json_output: bool = False, *, tag_id: str = "default") -> int:
     if json_output:
-        return subprocess.call(doctor_command(offline, json_output=True))
+        result, report = doctor_report(offline)
+        report.setdefault("schema_version", 1)
+        report["tag"] = tag_id
+        print(json.dumps(report, indent=2))
+        return result
     result, report = doctor_report(offline)
     display.doctor_summary(report)
+    display.info_row("Target", selected_target(home, tag_id))
     return result
 
 
@@ -940,9 +1141,10 @@ def upgrade_command(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Tag: set up, inspect, and manage your Slack teammate.",
-                                     epilog="Use tag for status and the next step. Start with tag setup; change configuration with tag settings.")
-    parser.add_argument("command", nargs="?", choices=("settings", "inspect", "config", "setup", "reset", "migrate", "upgrade", "rollback", "version", "paths", "doctor", "start", "stop", "restart", "status", "logs", "dev"))
-    parser.add_argument("arguments", nargs="*", help="config: init | show | keys | set KEY VALUE")
+                                     usage="tag [TAG] [COMMAND] [OPTIONS]",
+                                     epilog="Use tag for default status, or tag NAME status for a named Tag. Start with tag setup; change configuration with tag settings.")
+    parser.add_argument("command", nargs="?", choices=COMMANDS)
+    parser.add_argument("arguments", nargs="*", help="memory: status | stop; config: init | show | keys | set KEY VALUE")
     parser.add_argument("--offline", action="store_true")
     parser.add_argument("--json", action="store_true", dest="json_output", help="structured output for inspect, status, doctor, config, paths, and upgrade")
     parser.add_argument("--stdin", action="store_true", help="read a config value from stdin")
@@ -958,13 +1160,20 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="upgrade: verify and report the target without installing")
     parser.add_argument("--no-restart", action="store_true", help="upgrade: leave running services on the previous code")
     parser.add_argument("--allow-downgrade", action="store_true", help="upgrade: explicitly permit installing an older release")
-    args = parser.parse_args()
+    raw_arguments = sys.argv[1:]
+    explicit_tag = bool(
+        raw_arguments
+        and not raw_arguments[0].startswith("-")
+        and raw_arguments[0] not in COMMANDS
+    )
+    tag_id = raw_arguments.pop(0) if explicit_tag else "default"
+    args = parser.parse_args(raw_arguments)
     if (args.no_start or args.test or args.review) and args.command != "setup":
         parser.error("--no-start, --test and --review are only for setup")
-    if args.arguments and args.command != "config":
-        parser.error("Only config accepts additional positional arguments")
-    if args.json_output and args.command not in {"inspect", "status", "doctor", "config", "paths", "upgrade"}:
-        parser.error("--json supports inspect, status, doctor, config, paths, and upgrade")
+    if args.arguments and args.command not in {"add", "memory", "config"}:
+        parser.error("Only add, memory, and config accept additional positional arguments")
+    if args.json_output and args.command not in {"list", "memory", "inspect", "status", "doctor", "config", "paths", "upgrade"}:
+        parser.error("--json supports list, memory, inspect, status, doctor, config, paths, and upgrade")
     if args.stdin and args.command != "config":
         parser.error("--stdin is only for config set")
     if args.offline and args.command not in {"inspect", "doctor"}:
@@ -975,12 +1184,104 @@ def main() -> int:
         parser.error("--channel, --version, --dry-run, --no-restart, and --allow-downgrade are only for upgrade")
     if args.limit is not None and args.limit < 1:
         parser.error("--limit must be at least 1")
-    home = tag_home()
+    installation_root = tag_home()
+    tag_instances.validate_name(tag_id)
+    if args.command in {"version", "upgrade", "rollback", "migrate", "list", "add", "memory"} and explicit_tag:
+        parser.error(f"Tag selection is not supported for installation-wide command '{args.command}'")
     try:
         import tag_control as control
         import tag_config as settings
     except ImportError:
         from scripts import tag_control as control, tag_config as settings
+    if args.command == "add":
+        if args.arguments:
+            parser.error("add does not accept a name; the workspace alias is chosen during onboarding")
+        try:
+            import opentag_setup as setup
+        except ImportError:
+            from scripts import opentag_setup as setup
+        selected = setup.connect_slack_workspace()
+        if not selected:
+            return 1
+        team_id, workspace_name = selected
+        suggestion = tag_instances.suggest_name(installation_root, workspace_name)
+        display.header("Add", f"Slack workspace connected: {workspace_name}")
+        display.paragraph("Choose a workspace alias. It is used in commands and does not change your assistant's Slack name.")
+        while True:
+            alias = setup.ask("Workspace alias", suggestion).strip()
+            try:
+                context = tag_instances.create(installation_root, alias)
+                break
+            except ValueError as exc:
+                display.paragraph(str(exc), display.WARNING)
+        settings.update_config(settings.config_path(context.home), {"SLACK_TEAM_ID": team_id})
+        display.header("Add", f"Created workspace alias '{context.tag_id}'.")
+        display.info_row("Home", display.short_path(context.home), good=True)
+        display.info_row("Command", context.command("setup"), good=True)
+        command = [sys.executable, str(ROOT / "scripts/tag_cli.py"), *context.command_arguments("setup")]
+        return subprocess.call(command, env=instance_environment(context))
+    if args.command == "list":
+        if args.arguments:
+            parser.error("list does not accept positional arguments")
+        rows = []
+        for item in tag_instances.discover(installation_root):
+            record = dict(item)
+            if item["valid"]:
+                try:
+                    context = tag_instances.resolve(installation_root, str(item["id"]))
+                    report = control.inspect(context.home, sys.modules[__name__], tag_id=context.tag_id)
+                    record.update(state=report["state"], configuration=report["configuration"],
+                                  services=report["services"], slack_workspace=report.get("slack_workspace"))
+                except (OSError, ValueError, RuntimeError) as exc:
+                    record.update(valid=False, state="invalid_configuration", error=str(exc))
+            else:
+                record["state"] = "invalid_tag"
+            rows.append(record)
+        result = {"schema_version": 1, "installation_root": str(installation_root), "tags": rows}
+        if args.json_output:
+            print(json.dumps(result, indent=2))
+        else:
+            display.header("Tags", "Independent Slack workspaces managed by this installation.")
+            for row in rows:
+                workspace = row.get("slack_workspace") or "Slack not configured"
+                detail = f"{row['state']} · {workspace}" if row.get("valid") else str(row.get("error"))
+                display.info_row(str(row["id"]), detail, good=bool(row.get("valid")))
+            display.next_action("Connect another Slack workspace", "tag add")
+        return 0
+    context = tag_instances.resolve(installation_root, tag_id)
+    home = context.home
+    environment = instance_environment(context)
+    os.environ.clear()
+    os.environ.update(environment)
+    if args.command == "memory":
+        action = args.arguments[0] if len(args.arguments) == 1 else "status" if not args.arguments else ""
+        if action not in {"status", "stop"}:
+            parser.error("memory accepts status or stop")
+        migrate_legacy_mfs_record(tag_instances.resolve(installation_root))
+        context.shared_mfs_home.mkdir(parents=True, exist_ok=True, mode=0o700)
+        managed = process_for(context.shared_mfs_home / "mfs.json") is not None
+        bridges = bridge_processes(installation_root)
+        result = {"schema_version": 1, "managed": managed, "healthy": healthy("http://127.0.0.1:13619"),
+                  "running_tags": bridges, "state_path": str(context.shared_mfs_home / "mfs.json")}
+        if action == "stop":
+            if bridges:
+                raise RuntimeError("Stop every Tag bridge before stopping shared memory: " + ", ".join(bridges))
+            if not managed:
+                raise RuntimeError("The running memory service is not owned by this Tag installation")
+            stop_process(home, "mfs", state_dir=context.shared_mfs_home)
+            result.update(managed=False, healthy=False)
+        if args.json_output:
+            print(json.dumps(result, indent=2))
+        else:
+            display.header("Memory", "Shared by every Tag in this installation.")
+            display.info_row("Service", "Managed and running" if result["managed"] else "Not managed", good=result["managed"])
+            display.info_row("Active Tags", ", ".join(bridges) if bridges else "None")
+            detail = log_tail(home, "mfs", 20, state_dir=context.shared_mfs_home)
+            if detail:
+                display.section("Recent memory output")
+                for line in detail.splitlines():
+                    print("    " + line)
+        return 0
     if args.command in {"start", "dev"}:
         missing = missing_runtime_dependencies()
         if missing:
@@ -991,7 +1292,7 @@ def main() -> int:
                 f"Stop it using {legacy_stop_command(home)}, then retry this start."
             )
     if args.command is None or args.command == "status":
-        report = control.status_report(home, sys.modules[__name__])
+        report = control.status_report(home, sys.modules[__name__], tag_id=context.tag_id)
         if args.json_output:
             print(json.dumps(report, indent=2))
         else:
@@ -1007,24 +1308,24 @@ def main() -> int:
             from scripts.tag_reset import reset_and_setup
         return reset_and_setup(home, sys.modules[__name__])
     if args.command == "settings":
-        initialize(home)
-        os.environ.update(runtime_environment(home))
+        initialize_instance(home)
         control.settings_menu(home)
         return 0
     if args.command == "restart":
-        display.header("Restart", "Refreshing the services managed by this Tag installation.")
+        display.header("Restart", selected_target(home, context.tag_id))
         command = [sys.executable, str(ROOT / "scripts/tag_cli.py")]
         environment = os.environ.copy()
         environment["TAG_RESTART_FLOW"] = "1"
-        result = subprocess.call(command + ["stop"], env=environment)
-        return result if result else subprocess.call(command + ["start"], env=environment)
+        result = subprocess.call(command + context.command_arguments("stop"), env=environment)
+        return result if result else subprocess.call(command + context.command_arguments("start"), env=environment)
     if args.command == "config":
         # Initialize the private home before writing, including Windows ACLs.
         if args.arguments and args.arguments[0] in {"init", "set"}:
-            initialize(home)
-        return control.config_command(home, args.arguments, json_output=args.json_output, stdin=args.stdin)
+            initialize_instance(home)
+        return control.config_command(home, args.arguments, json_output=args.json_output,
+                                      stdin=args.stdin, tag_id=context.tag_id)
     if args.command == "inspect" or (args.command == "status" and args.json_output):
-        report = control.inspect(home, sys.modules[__name__], offline=args.offline)
+        report = control.inspect(home, sys.modules[__name__], offline=args.offline, tag_id=context.tag_id)
         if args.json_output:
             print(json.dumps(report, indent=2))
         else:
@@ -1034,16 +1335,19 @@ def main() -> int:
         print("Tag v" + (ROOT / "VERSION").read_text().strip())
         return 0
     if args.command == "paths":
-        paths = {key: str(home / key) for key in ("config", "workspace", "integrations", "state", "tmp", "releases")}
+        paths = {key: str(home / key) for key in ("config", "workspace", "integrations", "state", "tmp")}
+        paths.update(tag=context.tag_id, installation_root=str(installation_root),
+                     instance_home=str(home), releases=str(installation_root / "releases"),
+                     shared_mfs=str(context.shared_mfs_home))
         paths.update(management_guide=str(ROOT / "docs/tag-management.md"))
-        paths["runtime"] = runtime_identity(home)
+        paths["runtime"] = runtime_identity(installation_root)
         if args.json_output:
             print(json.dumps(paths, indent=2))
             return 0
         runtime = paths["runtime"]
-        display.header("Paths", "Where this Tag installation keeps its runtime and data.")
+        display.header("Paths", selected_target(home, context.tag_id))
         display.section("Installation")
-        display.info_row("Home", display.short_path(home))
+        display.info_row("Installation", display.short_path(installation_root))
         display.info_row(
             "Runtime",
             f"Tag v{runtime['version']} · {runtime['mode']}",
@@ -1059,7 +1363,7 @@ def main() -> int:
         return 0
     if args.command == "upgrade":
         return upgrade_command(
-            home,
+            installation_root,
             channel=args.channel,
             version=args.target_version,
             dry_run=args.dry_run,
@@ -1067,19 +1371,27 @@ def main() -> int:
             allow_downgrade=args.allow_downgrade,
             json_output=args.json_output,
         )
-    initialize(home)
-    os.environ.update(runtime_environment(home))
+    initialize_instance(home)
     if args.command == "rollback":
-        if any(process_for(home / "state" / f"{name}.json") for name in ("slack", "mfs")):
-            raise RuntimeError("Run tag stop before rolling back")
+        named = [str(item["id"]) for item in tag_instances.discover(installation_root)
+                 if item.get("valid") and item["id"] != "default"]
+        if named:
+            raise RuntimeError(
+                "Rollback is unavailable while named Tags exist because the previous CLI may not "
+                "understand their lifecycle: " + ", ".join(named)
+            )
+        running = bridge_processes(installation_root)
+        if (running or process_for(context.shared_mfs_home / "mfs.json")
+                or process_for(installation_root / "state/mfs.json")):
+            raise RuntimeError("Stop every Tag and run tag memory stop before rolling back")
         try:
             from tag_install import atomic_text
         except ImportError:
             from scripts.tag_install import atomic_text
-        previous = home / "previous.json"
+        previous = installation_root / "previous.json"
         if not previous.exists():
             raise RuntimeError("No previous release is available")
-        current = home / "current.json"
+        current = installation_root / "current.json"
         old, target = current.read_text(encoding="utf-8"), previous.read_text(encoding="utf-8")
         atomic_text(current, target)
         atomic_text(previous, old)
@@ -1090,7 +1402,7 @@ def main() -> int:
             "Rollback is ready",
             "Configuration and workspace data were left unchanged.",
             next_label="Start the selected release",
-            next_command="tag start",
+            next_command=context.command("start"),
         )
         return 0
     if args.command == "migrate":
@@ -1100,16 +1412,17 @@ def main() -> int:
             from tag_migrate import migrate
         except ImportError:
             from scripts.tag_migrate import migrate
-        migrate(args.source, home)
+        migrate(args.source, installation_root)
         return 0
     config_path = Path(os.getenv("OPENTAG_ENV_FILE", str(home / "config/settings.json")))
     if args.command == "setup":
         environment = dict(os.environ)
         if args.test:
             test_home = home / "testing/onboarding"
-            initialize(test_home)
+            initialize_instance(test_home)
             environment = {key: value for key, value in environment.items()
                            if not key.startswith(("SLACK_", "MFS_", "OPENTAG_"))}
+            # Test onboarding is an explicit disposable staging installation.
             environment.update(runtime_environment(test_home))
             config_path = test_home / "config/settings.json"
             print(f"TEST MODE: {test_home}", flush=True)
@@ -1124,33 +1437,37 @@ def main() -> int:
             command.append("--review")
         return subprocess.call(command, env=environment)
     if args.command == "doctor" and args.json_output:
-        report = control.inspect(home, sys.modules[__name__], offline=True)
+        report = control.inspect(home, sys.modules[__name__], offline=True, tag_id=context.tag_id)
         if not report["configuration"]["complete"]:
-            print(json.dumps({"schema_version": 1, "ok": False, "configuration": report["configuration"],
+            print(json.dumps({"schema_version": 1, "tag": context.tag_id,
+                              "slack_workspace": report.get("slack_workspace"),
+                              "ok": False, "configuration": report["configuration"],
                               "next_command": report["next_command"]}, indent=2))
             return 1
     if args.command in ("start", "dev", "doctor", "status") and config_path.is_file() and config_path.stat().st_size:
         values = read_config(config_path)
         if args.command in {"start", "dev"} and settings.config_errors(values):
             raise RuntimeError("Configuration is incomplete or invalid. Run tag inspect or tag setup.")
+        if args.command in {"start", "dev"}:
+            assert_unique_slack_app(context, values)
         os.environ.update(values)
     elif args.command in {"start", "dev"} or (args.command == "doctor" and not args.offline):
         raise RuntimeError(f"Missing configuration: {config_path}. Run tag setup.")
     # A TAG installation always has one stable integration workspace.
     os.environ["OPENTAG_WORKDIR"] = str(home / "workspace")
     if args.command == "doctor":
-        result = doctor(home, args.offline, args.json_output)
+        result = doctor(home, args.offline, args.json_output, tag_id=context.tag_id)
         if not args.offline and not args.json_output and sys.stdin.isatty():
             try:
                 import tag_diagnose
             except ImportError:
                 from scripts import tag_diagnose
-            report = control.inspect(home, sys.modules[__name__])
+            report = control.inspect(home, sys.modules[__name__], tag_id=context.tag_id)
             tag_diagnose.offer(tag_diagnose.report(result, report["services"]["slack"],
                 report["services"]["mfs"], (home / "state").glob("*.log")))
         return result
     if args.command == "logs":
-        display.header("Logs", "Recent output from services managed by this Tag installation.")
+        display.header("Logs", selected_target(home, context.tag_id))
         logs = sorted((home / "state").glob("*.log"))
         if not logs:
             display.section("Services")
@@ -1166,7 +1483,8 @@ def main() -> int:
         if args.follow:
             follow_logs(home, logs)
         else:
-            display.next_action("Follow new entries", "tag logs --follow", detail="For deeper checks, run tag doctor.")
+            display.next_action("Follow new entries", context.command("logs") + " --follow",
+                                detail=f"For deeper checks, run {context.command('doctor')}.")
         return 0
     if args.command == "dev":
         return development_loop(home)
@@ -1175,21 +1493,20 @@ def main() -> int:
         if restart_flow:
             display.section("Stopping")
         else:
-            display.header("Stop", "Disconnecting services managed by this Tag installation.")
-            display.section("Services")
-        for name in ("slack", "mfs"):
-            stop_process(home, name)
-            display.info_row(
-                "Slack" if name == "slack" else "Memory",
-                "Stopped or already offline",
-                good=True,
+            display.header(
+                "Stop",
+                selected_target(home, context.tag_id, suffix="Shared memory stays online"),
             )
+            display.section("Services")
+        stop_process(home, "slack")
+        display.info_row("Slack", "Stopped or already offline", good=True)
+        display.info_row("Memory", "Shared service left running", good=True)
         if not restart_flow:
             display.completion(
                 "Tag is stopped",
                 "Independently managed memory servers were left running.",
                 next_label="Start again",
-                next_command="tag start",
+                next_command=context.command("start"),
             )
         return 0
     if args.command == "start":
@@ -1197,7 +1514,7 @@ def main() -> int:
         if restart_flow:
             display.section("Starting")
         else:
-            display.header("Start", "Bringing memory and Slack online.")
+            display.header("Start", selected_target(home, context.tag_id))
             display.section("Readiness")
         display.info_row("Runtime", "Dependencies available", good=True)
         # Serialize starts so concurrent invocations cannot create orphan services.
@@ -1218,33 +1535,53 @@ def main() -> int:
                 "Permissions migrated" if manifest_changed else "Permissions current",
                 good=True,
             )
+            ensure_connector_credential(home, values)
             url = os.getenv("MFS_URL", "http://127.0.0.1:13619")
-            replace_unmanaged_local_mfs(home, url)
+            local_mfs = local_mfs_endpoint(url)
+            if local_mfs:
+                migrate_legacy_mfs_record(tag_instances.resolve(installation_root))
+                replace_unmanaged_local_mfs(
+                    home, url, state_dir=context.shared_mfs_home
+                )
             if not healthy(url):
-                if url.rstrip("/") not in ("http://localhost:13619", "http://127.0.0.1:13619"):
-                    raise RuntimeError("Configured MFS endpoint is unavailable; start that server first")
+                if not local_mfs:
+                    raise RuntimeError("Configured external MFS endpoint is unavailable; start that server first")
                 executable = mfs_server_executable()
                 if not executable:
                     raise RuntimeError("MFS server is unavailable; run ./install.sh --dependencies-only")
-                if start_process(home, "mfs", [executable, "run"]):
-                    started.append("mfs")
-                attempts = int(os.getenv("OPENTAG_MFS_STARTUP_ATTEMPTS", "90"))
-                for _ in range(attempts):
-                    if healthy(url):
-                        break
-                    if process_for(home / "state/mfs.json") is None:
-                        detail = log_tail(home, "mfs")
+                shared = context.shared_mfs_home
+                shared.mkdir(parents=True, exist_ok=True, mode=0o700)
+                mfs_lock = shared / "start.lock"
+                try:
+                    mfs_lock.mkdir()
+                except FileExistsError:
+                    raise RuntimeError("Another shared memory start is in progress; retry shortly") from None
+                try:
+                    # Recheck after acquiring the installation-wide lock. A
+                    # different Tag may have completed startup while we waited.
+                    if not healthy(url):
+                        start_process(home, "mfs", [executable, "run"],
+                                      environment=os.environ.copy(), state_dir=shared,
+                                      cwd=home / "workspace")
+                    attempts = int(os.getenv("OPENTAG_MFS_STARTUP_ATTEMPTS", "90"))
+                    for _ in range(attempts):
+                        if healthy(url):
+                            break
+                        if process_for(shared / "mfs.json") is None:
+                            detail = log_tail(home, "mfs", state_dir=shared)
+                            raise RuntimeError(
+                                "Shared MFS exited before becoming healthy"
+                                + (f":\n{detail}" if detail else "; run tag memory status")
+                            )
+                        time.sleep(1)
+                    else:
+                        detail = log_tail(home, "mfs", state_dir=shared)
                         raise RuntimeError(
-                            "MFS exited before becoming healthy"
-                            + (f":\n{detail}" if detail else "; run tag logs")
+                            f"Shared MFS did not become healthy within {attempts} seconds"
+                            + (f":\n{detail}" if detail else "; run tag memory status")
                         )
-                    time.sleep(1)
-                else:
-                    detail = log_tail(home, "mfs")
-                    raise RuntimeError(
-                        f"MFS did not become healthy within {attempts} seconds"
-                        + (f":\n{detail}" if detail else "; run tag logs")
-                    )
+                finally:
+                    mfs_lock.rmdir()
             display.info_row("Memory", "Healthy", good=True)
             if os.getenv("SLACK_CHANNEL_POLICY") == "invited":
                 reconcile_invitation_memory(home)

@@ -10,18 +10,18 @@ from contextlib import redirect_stdout
 from io import StringIO
 from unittest.mock import patch
 
-from scripts import tag_cli, tag_control, tag_config, tag_reconfigure, opentag_setup
-from scripts.tag_paths import initialize
+from scripts import tag_cli, tag_control, tag_config, tag_instances, tag_reconfigure, opentag_setup
+from scripts.tag_paths import initialize_instance
 
 
 class FlowTests(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
-        self.home = Path(temp.name) / "home"
-        initialize(self.home)
+        self.root = Path(temp.name) / "home"
+        self.home = tag_instances.ensure_default(self.root).home
         self.config = self.home / "config/settings.json"
-        self.env = patch.dict(os.environ, {"TAG_HOME": str(self.home), "OPENTAG_ENV_FILE": str(self.config)})
+        self.env = patch.dict(os.environ, {"TAG_HOME": str(self.root), "OPENTAG_ENV_FILE": str(self.config)})
         self.env.start()
         self.addCleanup(self.env.stop)
 
@@ -199,7 +199,7 @@ class FlowTests(unittest.TestCase):
     def make_draft(self):
         original = self.seed()
         draft = self.home / "integrations/setup-drafts/settings-fixture"
-        initialize(draft)
+        initialize_instance(draft)
         opentag_setup.slack_project(draft)
         connector = opentag_setup.write_slack_connector("TOLD", [opentag_setup.slack_channels.SlackChannel("CNEW", "new", False, True)], "7", home=draft)
         values = dict(original, SLACK_CHANNEL_IDS="CNEW", MFS_SLACK_CONNECTOR_CONFIG=str(connector), MFS_SLACK_HISTORY_DAYS="7")
@@ -215,6 +215,31 @@ class FlowTests(unittest.TestCase):
         self.assertTrue(Path(saved["MFS_SLACK_CONNECTOR_CONFIG"]).is_file())
         self.assertEqual(tag_config.read_config(draft / "previous-settings.json"), original)
         self.assertTrue((draft / "previous-slack-cli").is_dir())
+
+    def test_commit_removes_superseded_managed_credential(self):
+        original, draft = self.make_draft()
+        tag_config.update_config(
+            draft / "config/settings.json", {"MFS_URL": "http://Localhost:13619"}
+        )
+        old_credential = tag_reconfigure.tag_credentials.write_slack_history(
+            self.home, "xoxb-old-history"
+        )
+        connector = Path(original["MFS_SLACK_CONNECTOR_CONFIG"])
+        connector.write_text(
+            connector.read_text().replace(
+                'token = "env:MFS_SLACK_TOKEN"',
+                "token = " + json.dumps("file:" + str(old_credential)),
+            ),
+            encoding="utf-8",
+        )
+
+        with patch.object(tag_reconfigure.lifecycle, "process_for", return_value=None):
+            tag_reconfigure.commit(self.home, draft, original)
+
+        self.assertFalse(old_credential.exists())
+        saved = tag_config.read_config(self.config)
+        active_connector = Path(saved["MFS_SLACK_CONNECTOR_CONFIG"])
+        self.assertIn("file:", active_connector.read_text(encoding="utf-8"))
 
     def test_commit_conflict_and_write_failure_keep_active_setup(self):
         original, draft = self.make_draft()

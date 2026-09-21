@@ -12,7 +12,7 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts import opentag_doctor, opentag_setup, slack_manifest_migrations, tag_cli, tag_config, tag_control
+from scripts import opentag_doctor, opentag_setup, slack_manifest_migrations, tag_cli, tag_config, tag_control, tag_instances
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -51,11 +51,12 @@ class TagControlTests(unittest.TestCase):
 
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
-        self.home = Path(self.temporary.name) / "Tag home"
+        self.root = Path(self.temporary.name) / "Tag home"
+        self.home = tag_instances.ensure_default(self.root).home
         self.path = self.home / "config/settings.json"
         environment = {key: value for key, value in os.environ.items()
                        if not key.startswith(("TAG_", "OPENTAG_", "MFS_", "SLACK_"))}
-        environment["TAG_HOME"] = str(self.home)
+        environment["TAG_HOME"] = str(self.root)
         self.environment = patch.dict(os.environ, environment, clear=True)
         self.environment.start()
         self.addCleanup(self.environment.stop)
@@ -85,7 +86,7 @@ class TagControlTests(unittest.TestCase):
             report = tag_control.inspect(self.home, tag_cli, offline=True)
         self.assertEqual(report["state"], "not_configured")
         self.assertEqual(report["next_command"], "tag setup")
-        self.assertFalse(self.home.exists())
+        self.assertFalse(self.path.exists())
         healthy.assert_not_called()
         ready.assert_not_called()
 
@@ -167,9 +168,10 @@ class TagControlTests(unittest.TestCase):
         result = self.cli()
         self.assertEqual(result.returncode, 0)
         self.assertIn("tag setup", result.stdout)
-        self.assertFalse(self.home.exists())
-        for command in ("setup", "settings", "menu"):
+        self.assertFalse(self.path.exists())
+        for command in ("setup", "settings"):
             self.assertEqual(self.cli(command).returncode, 2)
+        self.assertEqual(self.cli("menu").returncode, 1)
         result = self.cli("inspect", "--offline", "--json")
         self.assertEqual(json.loads(result.stdout)["state"], "not_configured")
         result = self.cli("doctor", "--offline", "--json")
@@ -178,7 +180,7 @@ class TagControlTests(unittest.TestCase):
 
     def test_config_stdin_never_echoes_secret_and_bad_updates_are_json(self):
         # Initialize once here so native Windows CLI writes have account ACLs too.
-        tag_cli.initialize(self.home)
+        tag_cli.initialize_instance(self.home)
         result = self.cli("config", "set", "SLACK_BOT_TOKEN", "--stdin", "--json", input="xoxb-test-secret\n")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("xoxb-test-secret", result.stdout + result.stderr)
@@ -294,7 +296,7 @@ class TagControlTests(unittest.TestCase):
         start.assert_not_called()
 
     def test_backend_selection_reaches_runtime_for_both_choices(self):
-        tag_cli.initialize(self.home)
+        tag_cli.initialize_instance(self.home)
         for backend in ("codex", "claude"):
             with self.subTest(backend=backend):
                 self.complete(backend)
@@ -317,7 +319,7 @@ class TagControlTests(unittest.TestCase):
 
     def test_start_allows_mfs_cold_initialization_beyond_thirty_seconds(self):
         self.complete()
-        tag_cli.initialize(self.home)
+        tag_cli.initialize_instance(self.home)
         health_checks = [False, *([False] * 31), True]
         with patch.object(sys, "argv", ["tag", "start"]), patch.object(
             tag_cli, "missing_runtime_dependencies", return_value=()

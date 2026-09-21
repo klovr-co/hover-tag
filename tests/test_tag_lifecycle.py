@@ -14,14 +14,14 @@ from unittest.mock import MagicMock, patch
 
 import psutil
 
-from scripts import slack_invitation_memory, tag_cli
+from scripts import slack_invitation_memory, tag_cli, tag_instances
 
 
 class TagLifecycleTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
-        self.home = Path(self.temporary_directory.name)
-        tag_cli.initialize(self.home)
+        self.root = Path(self.temporary_directory.name)
+        self.home = tag_instances.ensure_default(self.root).home
 
     def tearDown(self) -> None:
         self.temporary_directory.cleanup()
@@ -57,7 +57,7 @@ class TagLifecycleTests(unittest.TestCase):
 
     def test_status_fails_when_required_services_are_unhealthy(self) -> None:
         output = StringIO()
-        with patch.dict(os.environ, {"TAG_HOME": str(self.home)}, clear=False), patch.object(
+        with patch.dict(os.environ, {"TAG_HOME": str(self.root)}, clear=False), patch.object(
             sys, "argv", ["tag", "status"]
         ), patch.object(tag_cli, "healthy", return_value=False), patch.object(
             tag_cli, "slack_ready", return_value=False
@@ -99,6 +99,7 @@ class TagLifecycleTests(unittest.TestCase):
     def test_local_mfs_endpoint_excludes_remote_and_non_http_urls(self) -> None:
         self.assertTrue(tag_cli.local_mfs_endpoint("http://127.0.0.1:13619"))
         self.assertTrue(tag_cli.local_mfs_endpoint("http://localhost:13619"))
+        self.assertTrue(tag_cli.local_mfs_endpoint("http://Localhost:13619"))
         self.assertTrue(tag_cli.local_mfs_endpoint("http://localhost:13619/"))
         self.assertFalse(tag_cli.local_mfs_endpoint("https://mfs.example.com"))
         self.assertFalse(tag_cli.local_mfs_endpoint("file://local/mfs"))
@@ -106,6 +107,21 @@ class TagLifecycleTests(unittest.TestCase):
         self.assertFalse(tag_cli.local_mfs_endpoint("http://[::1]:13619"))
         self.assertFalse(tag_cli.local_mfs_endpoint("http://localhost:13619/api"))
         self.assertFalse(tag_cli.local_mfs_endpoint("http://localhost:13619?mode=test"))
+
+    def test_memory_status_includes_redacted_shared_log_tail(self) -> None:
+        shared = self.root / "shared/mfs"
+        shared.mkdir(parents=True)
+        secret = "xoxb-shared-log-secret"
+        (shared / "mfs.log").write_text(f"startup failed: {secret}\n", encoding="utf-8")
+
+        with patch.dict(os.environ, {"TAG_HOME": str(self.root)}, clear=False), patch.object(
+            sys, "argv", ["tag", "memory", "status"]
+        ), patch.object(tag_cli, "healthy", return_value=False), redirect_stdout(StringIO()) as output:
+            self.assertEqual(tag_cli.main(), 0)
+
+        self.assertIn("RECENT MEMORY OUTPUT", output.getvalue())
+        self.assertIn("startup failed: <redacted>", output.getvalue())
+        self.assertNotIn(secret, output.getvalue())
 
     def test_local_mfs_listener_matches_the_resolved_configured_address(self) -> None:
         expected = MagicMock(pid=22)
@@ -244,7 +260,7 @@ class TagLifecycleTests(unittest.TestCase):
             self.assertTrue(tag_cli.legacy_slack_ready(self.home))
 
     def test_start_rejects_an_incomplete_runtime_before_service_checks(self) -> None:
-        with patch.dict(os.environ, {"TAG_HOME": str(self.home)}, clear=False), patch.object(
+        with patch.dict(os.environ, {"TAG_HOME": str(self.root)}, clear=False), patch.object(
             sys, "argv", ["tag", "start"]
         ), patch.object(
             tag_cli, "missing_runtime_dependencies", return_value=("slack_bolt",)
@@ -255,7 +271,7 @@ class TagLifecycleTests(unittest.TestCase):
         healthy.assert_not_called()
 
     def test_paths_defaults_to_a_readable_screen_and_keeps_json_for_automation(self) -> None:
-        with patch.dict(os.environ, {"TAG_HOME": str(self.home)}, clear=False), patch.object(
+        with patch.dict(os.environ, {"TAG_HOME": str(self.root)}, clear=False), patch.object(
             sys, "argv", ["tag", "paths"]
         ), redirect_stdout(StringIO()) as output:
             self.assertEqual(tag_cli.main(), 0)
@@ -264,7 +280,7 @@ class TagLifecycleTests(unittest.TestCase):
         self.assertIn("tag paths --json", output.getvalue())
         self.assertNotIn('"workspace":', output.getvalue())
 
-        with patch.dict(os.environ, {"TAG_HOME": str(self.home)}, clear=False), patch.object(
+        with patch.dict(os.environ, {"TAG_HOME": str(self.root)}, clear=False), patch.object(
             sys, "argv", ["tag", "paths", "--json"]
         ), redirect_stdout(StringIO()) as output:
             self.assertEqual(tag_cli.main(), 0)

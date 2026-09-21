@@ -9,12 +9,14 @@ from urllib.parse import urlsplit
 
 try:
     from . import slack_channels, tag_config, tag_cli
-    from .opentag_setup import connector_scope, write_slack_connector
+    from .opentag_setup import connector_scope, connector_uri, write_slack_connector
+    from . import tag_credentials
 except ImportError:
     import slack_channels
     import tag_config
     import tag_cli
-    from opentag_setup import connector_scope, write_slack_connector
+    from opentag_setup import connector_scope, connector_uri, write_slack_connector
+    import tag_credentials
 
 
 def validate_slack_identity(token: str, *, team_id: str, app_id: str = "", label: str) -> None:
@@ -58,7 +60,7 @@ class InvitationMemory:
             return
         self.environment["SLACK_CHANNEL_POLICY"] = "invited"
         team = values.get("SLACK_TEAM_ID", "")
-        uri = f"slack://tag-{team.lower()}"
+        uri = connector_uri(team, values.get("SLACK_APP_ID", ""))
         # Keep unrelated configured sources; Slack reply scopes remain narrowed
         # by backend_environment. Never restore old Slack scopes on a failed check.
         unrelated = [s.strip() for s in values.get("MFS_ALLOWED_SCOPES", "").split(",")
@@ -71,7 +73,7 @@ class InvitationMemory:
                                     app_id=values.get("SLACK_APP_ID", ""), label="Bot token")
             channels = [c for c in slack_channels.list_channels(values["SLACK_BOT_TOKEN"]) if c.is_member]
             ids = ",".join(c.channel_id for c in channels)
-            scopes = [connector_scope(team, c) for c in channels]
+            scopes = [connector_scope(team, c, values.get("SLACK_APP_ID", "")) for c in channels]
             # Remove lost membership from live access before any index operation.
             self.restrict(unrelated + scopes, ids)
             if not channels:
@@ -93,6 +95,7 @@ class InvitationMemory:
                 self.restrict(unrelated)
                 self.status("settings_changed")
                 return
+            tag_credentials.write_slack_history(self.home, history)
             connector = write_slack_connector(team, channels, signature[1], home=self.home)
             check = "index_submission"
             env = dict(self.environment)
@@ -105,8 +108,15 @@ class InvitationMemory:
                 return
             # Preserve unrelated scopes/config on disk. Only replace this
             # workspace's managed Slack scopes, not other source registrations.
-            preserved = [s.strip() for s in values.get("MFS_ALLOWED_SCOPES", "").split(",")
-                         if s.strip() and not (s.strip() == uri or s.strip().startswith(uri + "/"))]
+            legacy_uri = connector_uri(team)
+            managed_roots = {uri, legacy_uri}
+            preserved = [
+                s.strip() for s in values.get("MFS_ALLOWED_SCOPES", "").split(",")
+                if s.strip() and not any(
+                    s.strip() == root or s.strip().startswith(root + "/")
+                    for root in managed_roots
+                )
+            ]
             tag_config.update_config(path, {
                 "SLACK_CHANNEL_IDS": ids,
                 "MFS_ALLOWED_SCOPES": ",".join(dict.fromkeys(preserved + scopes)),

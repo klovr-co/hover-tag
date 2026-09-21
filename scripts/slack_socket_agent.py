@@ -2366,12 +2366,12 @@ def save_home_channels(channel_ids: list[str]) -> None:
     """Persist authorized App Home choices and apply them to this live bridge."""
     try:
         import tag_config as settings
-        from tag_paths import tag_home
+        from tag_paths import instance_home
     except ImportError:
         from scripts import tag_config as settings
-        from scripts.tag_paths import tag_home
+        from scripts.tag_paths import instance_home
     value = ",".join(channel_ids)
-    settings.update_config(settings.config_path(tag_home()), {"SLACK_CHANNEL_IDS": value})
+    settings.update_config(settings.config_path(instance_home()), {"SLACK_CHANNEL_IDS": value})
     os.environ["SLACK_CHANNEL_IDS"] = value
 
 
@@ -3242,11 +3242,11 @@ def main() -> None:
     if os.getenv("SLACK_CHANNEL_POLICY") == "invited":
         try:
             from .slack_invitation_memory import InvitationMemory
-            from .tag_paths import tag_home
+            from .tag_paths import instance_home
         except ImportError:
             from slack_invitation_memory import InvitationMemory
-            from tag_paths import tag_home
-        invitation_memory = InvitationMemory(tag_home())
+            from tag_paths import instance_home
+        invitation_memory = InvitationMemory(instance_home())
         invitation_memory.start()
     try:
         handler.connect()
