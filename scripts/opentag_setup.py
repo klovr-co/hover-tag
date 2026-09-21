@@ -1017,6 +1017,10 @@ def choose_slack_app(
                 if changed:
                     ui.message("✓ Agent messaging enabled through Slack CLI")
                     continue
+                issues.remove("Agent view enabled")
+                can_enable_agent = False
+                if not issues:
+                    break
         print()
         ui.message("Your app selection and link are saved.")
         while True:
@@ -1032,8 +1036,7 @@ def choose_slack_app(
                     continue
                 if changed:
                     ui.message("✓ Agent messaging enabled through Slack CLI")
-                    break
-                continue
+                break
             browser_choice = choice - int(can_enable_agent)
             if browser_choice == 0:
                 webbrowser.open(f"https://api.slack.com/apps/{app_id}")
