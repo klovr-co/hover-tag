@@ -30,7 +30,7 @@ boundary.
 ## Reporting a vulnerability
 
 Please do not disclose a suspected vulnerability in a public issue. Use
-[GitHub's private vulnerability reporting](https://github.com/klovr-co/tag/security/advisories/new)
+[GitHub's private vulnerability reporting](https://github.com/klovr-co/hover-tag/security/advisories/new)
 and include:
 
 - the affected commit or release;
