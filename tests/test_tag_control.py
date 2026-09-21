@@ -18,13 +18,6 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class TagControlTests(unittest.TestCase):
-    def memory_ready(self):
-        return patch.object(
-            opentag_setup.subprocess,
-            "run",
-            return_value=subprocess.CompletedProcess([], 0, "", ""),
-        )
-
     def test_config_show_targets_named_tag_settings(self):
         self.complete()
         with patch.object(tag_control.ui.display, "next_action") as next_action, redirect_stdout(StringIO()):
@@ -224,7 +217,7 @@ class TagControlTests(unittest.TestCase):
             "builtins.input", side_effect=["UOWNER", "1", "1"]
         ), patch.object(
             opentag_setup, "finish_setup", return_value=0
-        ), self.memory_ready(), patch.object(
+        ), patch.object(
             opentag_setup.getpass, "getpass"
         ) as secret, redirect_stdout(StringIO()):
             self.assertEqual(opentag_setup.guided_setup(self.path), 0)
@@ -262,7 +255,7 @@ class TagControlTests(unittest.TestCase):
             "builtins.input", side_effect=["1", "1"]
         ), patch.object(
             opentag_setup, "finish_setup", return_value=0
-        ), self.memory_ready(), redirect_stdout(StringIO()):
+        ), redirect_stdout(StringIO()):
             self.assertEqual(opentag_setup.guided_setup(self.path), 0)
 
         self.assertEqual(picker.call_args.args, ("xoxb-fixture", ""))
@@ -277,7 +270,7 @@ class TagControlTests(unittest.TestCase):
         ), patch.object(opentag_setup.ui, "choose", return_value=1
         ), patch.object(opentag_setup, "validate_socket_token"), patch.object(
             opentag_setup.getpass, "getpass", side_effect=["xapp-fixture", KeyboardInterrupt]
-        ), self.memory_ready(), patch.object(sys.stdin, "isatty", return_value=True), patch.object(
+        ), patch.object(sys.stdin, "isatty", return_value=True), patch.object(
             sys, "argv", ["setup", "--config", str(self.path)]
         ), redirect_stdout(StringIO()):
             self.assertEqual(opentag_setup.main(), 130)
@@ -295,7 +288,7 @@ class TagControlTests(unittest.TestCase):
             opentag_setup.ui, "choose", side_effect=[2, 0, 1, 0, 0]
         ), patch.object(opentag_setup, "write_slack_connector", return_value=Path(values["MFS_SLACK_CONNECTOR_CONFIG"])) as connector, patch.object(
             opentag_setup, "finish_setup", return_value=0
-        ), self.memory_ready(), redirect_stdout(StringIO()):
+        ), redirect_stdout(StringIO()):
             self.assertEqual(opentag_setup.guided_setup(self.path), 0)
         saved = tag_config.read_config(self.path)
         self.assertEqual(saved["SLACK_APP_ID"], "ATEST")
@@ -315,11 +308,16 @@ class TagControlTests(unittest.TestCase):
             opentag_setup, "write_slack_connector"
         ) as connector, patch.object(
             opentag_setup, "finish_setup"
-        ) as start, self.memory_ready(), redirect_stdout(StringIO()):
+        ) as start, patch.object(
+            opentag_setup.subprocess,
+            "run",
+            return_value=subprocess.CompletedProcess([], 0, "", ""),
+        ) as run, redirect_stdout(StringIO()):
             with self.assertRaises(opentag_setup.ui.Paused):
                 opentag_setup.guided_setup(self.path)
         connector.assert_not_called()
         start.assert_not_called()
+        run.assert_not_called()
 
     def test_backend_selection_reaches_runtime_for_both_choices(self):
         tag_cli.initialize_instance(self.home)
