@@ -526,9 +526,13 @@ def install(
             for backend in (".agents", ".claude"):
                 bundled = workspace / backend / "skills/open-tag-admin"
                 skill = bundled / "SKILL.md"
-                if skill.is_file() and skill.read_text(encoding="utf-8") in (
-                    LEGACY_ADMIN_SKILL, ADMIN_SKILL
-                ):
+                try:
+                    managed = skill.is_file() and skill.read_bytes() in {
+                        LEGACY_ADMIN_SKILL.encode(), ADMIN_SKILL.encode()
+                    }
+                except OSError:
+                    managed = False
+                if managed:
                     skill.unlink()
                     if not any(bundled.iterdir()):
                         bundled.rmdir()

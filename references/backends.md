@@ -1,6 +1,6 @@
 # CLI Backends
 
-Open Tag treats the backend as the Brain: a non-interactive CLI process that can
+Tag treats the backend as the Brain: a non-interactive CLI process that can
 read the prompt, use the workspace, call MFS helpers, and return a Slack-ready
 answer. Choose the backend explicitly for each deployment.
 
@@ -31,7 +31,7 @@ claude -p \
 Availability depends on the operator's account and local CLI setup.
 
 Unless `OPENTAG_SLACK_STREAMING=0`, the Slack bridge invokes Claude with
-`--output-format stream-json --include-partial-messages`. Open Tag forwards only
+`--output-format stream-json --include-partial-messages`. Tag forwards only
 top-level text deltas and the final result through its normalized event stream;
 thinking blocks, tool events, hook output, and subagent text are not forwarded.
 
@@ -70,9 +70,9 @@ Slack agent demo, not a locked-down production deployment.
 No `OPENAI_API_KEY` is required by this skill path. The backend uses the local
 Codex CLI session and inherits the environment needed for MFS.
 
-When Slack streaming is enabled, Open Tag invokes `codex exec --json` and reads
+When Slack streaming is enabled, Tag invokes `codex exec --json` and reads
 the completed `agent_message` event. The current CLI does not expose answer
-token deltas, so Open Tag shows Slack's native loading indicator and posts the
+token deltas, so Tag shows Slack's native loading indicator and posts the
 complete response without a fake typewriter animation.
 
 ## Backend Selection

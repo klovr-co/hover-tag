@@ -1,12 +1,15 @@
 <!-- Modified by klovr.co in 2026 for Tag. See NOTICE and repository history. -->
 
-# tag
+# Tag
 
-Bring Codex into Slack as a shared, self-hosted teammate.
+## @Tag, Slack is all you need.
 
-Mention the bot in a channel, let it read the conversation and your approved
-sources, and delegate real work without moving the discussion into one person's
-private AI chat.
+Tag brings Codex or Claude into the Slack conversation. Mention your Tag where the
+work is already being discussed. It picks up the thread, finds any context it is
+allowed to use, does the work, and replies there.
+
+Your team stays in Slack. No one has to copy a conversation into a private AI
+chat and carry the answer back.
 
 Tag is an open-source reference implementation inspired by
 [Claude Tag](https://www.anthropic.com/news/introducing-claude-tag). It connects
@@ -17,12 +20,6 @@ Slack to a local CLI agent and uses
 > The `main` branch is intentionally Slack-only for the v0.1 alpha launch.
 > Unfinished Zulip work is preserved on [`feature/zulip`](https://github.com/klovr-co/tag/tree/feature/zulip),
 > outside the supported installer and runtime.
-
-> [!WARNING]
-> Tag is an alpha and is not a production security boundary. Start in an
-> isolated channel, point it at a sandbox workspace, and invite only people you
-> trust. The agent can read and change files using the permissions of the local
-> account that runs it.
 
 ## Why I built this
 
@@ -43,9 +40,9 @@ already working.
 That is the part I care about: the discussion and the result stay visible in
 Slack. They do not disappear into my private Claude or ChatGPT history.
 
-## What Tag can do
+## What your team can delegate
 
-- Respond when someone mentions `@Tag` in Slack or sends it a direct message,
+- Respond when someone mentions their Tag in Slack or sends it a direct message,
   provided the sender is explicitly authorized.
 - Read the current thread, including text and image attachments.
 - Upload backend-generated PNG, JPEG, GIF, and WebP images to the requesting thread.
@@ -58,10 +55,9 @@ Slack. They do not disappear into my private Claude or ChatGPT history.
 
 ## See it in action
 
-The [connected user-flow guide](docs/user-flows.md) follows the complete journey
-from setup and caller authorization through thread context, MFS retrieval,
-workspace work, shared outputs, and recovery. For the designed light-mode view,
-serve the repository locally and open the rendered tour:
+The [connected user-flow guide](docs/user-flows.md) shows what happens during
+setup, a Slack request, MFS retrieval, workspace work, and error recovery. To
+open the designed light-mode version, serve the repository locally:
 
 ```bash
 python3 -m http.server 8765
@@ -90,7 +86,7 @@ returns the result where the rest of the team can read and continue the work.
 
 ```text
        ┌──────────────┐
-       │    Slack     │    @Tag <task>
+       │    Slack     │    @Maya's Tag <task>
        │              │ ◄──── answer ──────┐
        └──────┬───────┘                    │
               │ mention                    │
@@ -235,13 +231,19 @@ and Ctrl-C stops both development services. Explicit remote MFS endpoints remain
 externally managed. This command is intentionally unavailable from managed
 releases.
 
-Mention `@Tag` (or the name you chose during setup) in the sandbox channel you configured:
+Mention your Tag in the test channel you configured. This example uses Maya's
+Tag; select your own bot's mention:
 
-> @Tag summarize this channel and list the decisions and open questions.
+> @Maya's Tag read the project documentation in your workspace, summarize what this
+> project is trying to accomplish, and cite the supporting files.
+
+This first request uses the local workspace configured during setup. A request
+to summarize the entire Slack channel requires that channel's history to be
+indexed separately through an MFS Slack connector.
 
 Only the owner member ID entered during setup can invoke Tag initially. Add
 other IDs to the comma-separated `SLACK_ALLOWED_USER_IDS` setting to share access.
-Those authorized users can also invoke Tag without an `@mention` from the app's
+Authorized users can also invoke Tag without an `@mention` from the app's
 Messages tab. Each top-level DM starts a fresh task; replies in that DM thread
 provide bounded context only for that task. Set `OPENTAG_SLACK_DM_ENABLED=0` to
 disable direct-message invocation.
@@ -452,6 +454,11 @@ Use a non-production host or a real external sandbox for stronger isolation.
 
 ## Documentation
 
+- [Documentation home](docs/index.md)
+- [Why Tag](docs/philosophy/why-tag.md)
+- [How Tag works](docs/concepts/mental-model.md)
+- [Run your first task](docs/getting-started/first-task.md)
+- [Supported capabilities](docs/reference/supported-capabilities.md)
 - [Connected user flows and functional tour](docs/user-flows.md) ([light-mode HTML](docs/user-flows.html))
 - [Slack setup and troubleshooting](references/slack-adapter.md)
 - [Backend behavior](references/backends.md)
@@ -483,6 +490,6 @@ modifications and extensions.
 
 Tag is an early open-source project built from a workflow that has already been
 useful in day-to-day Slack discussions. It is ready for experimentation in a
-trusted sandbox—not as a production security boundary.
+trusted sandbox. It is not a production security boundary.
 
 Issues and contributions are welcome.

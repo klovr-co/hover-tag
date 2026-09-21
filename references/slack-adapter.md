@@ -2,7 +2,7 @@
 
 # Slack Adapter
 
-Use this reference when setting up the Slack-facing side of Open Tag from
+Use this reference when setting up the Slack-facing side of Tag from
 scratch. The bridge is intentionally thin. It only:
 
 1. Receives `app_mention` and `message.im` events through Socket Mode.
@@ -154,7 +154,7 @@ export MFS_ALLOWED_SCOPES="slack://team-memory,file://local/path/to/workspace"
 
 ### More sources
 
-Open Tag's reach is whatever MFS has indexed plus what you list in
+Tag's reach is whatever MFS has indexed plus what you list in
 `MFS_ALLOWED_SCOPES`. Add each once with **mfs-ingest** (it handles credentials),
 then append its root to the scope list:
 

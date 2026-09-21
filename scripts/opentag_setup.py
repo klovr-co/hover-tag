@@ -219,42 +219,44 @@ def inspect_slack_app(project: Path, app_id: str, *, issues: list[str] | None = 
         if not missing:
             ui.message("✓ Existing app has Tag's required Socket Mode, events, and bot scopes")
             return True
-        ui.message("App configuration needs attention: " + ", ".join(missing))
         if issues is not None:
             issues.extend(missing)
-        if "Agent view enabled" in missing:
-            ui.message("Tag can enable Agent messaging with Slack CLI from the next menu.")
-        if any(label != "Agent view enabled" for label in missing):
+        manual_missing = [label for label in missing if label != "Agent view enabled"]
+        if manual_missing:
+            ui.message("App configuration needs attention: " + ", ".join(manual_missing))
             ui.message("Open app settings, make the other listed changes, then choose Check again.")
-        print()
-        ui.message("In Slack app settings:")
-        if any(label in missing for label in (
+            print()
+            ui.message("In Slack app settings:")
+        if any(label in manual_missing for label in (
             "app mentions", "App Home event (app_home_opened)", "agent stop event", "direct-message event"
         )):
             ui.message("Event Subscriptions → Subscribe to bot events:", indent="    ")
-            if "app mentions" in missing:
+            if "app mentions" in manual_missing:
                 ui.message("Add app_mention to receive mentions.", indent="      ")
-            if "App Home event (app_home_opened)" in missing:
+            if "App Home event (app_home_opened)" in manual_missing:
                 ui.message("Add app_home_opened to show Tag's Home tab controls.", indent="      ")
-            if "agent stop event" in missing:
+            if "agent stop event" in manual_missing:
                 ui.message("Add agent_session_stopped to enable the native Stop button.", indent="      ")
-            if "direct-message event" in missing:
+            if "direct-message event" in manual_missing:
                 ui.message("Add message.im to receive direct messages.", indent="      ")
-        if "Home tab enabled" in missing:
+        if "Home tab enabled" in manual_missing:
             ui.message("App Home → Show Tabs → enable Home Tab.", indent="    ")
-        if "Messages tab enabled" in missing:
+        if "Messages tab enabled" in manual_missing:
             ui.message("App Home → Show Tabs → enable Messages Tab.", indent="    ")
-        if "Agent view enabled" in missing:
-            ui.message("Agents & AI Apps → enable the Agent messaging experience.", indent="    ")
-        if "Interactive controls enabled" in missing:
+        if "Interactive controls enabled" in manual_missing:
             ui.message("Interactivity & Shortcuts → enable Interactivity.", indent="    ")
-        if "Socket Mode" in missing:
+        if "Socket Mode" in manual_missing:
             ui.message("Socket Mode → enable Socket Mode.", indent="    ")
-        scopes = [required[label] for label in missing if ":" in required[label] and " " not in required[label]]
+        scopes = [
+            required[label]
+            for label in manual_missing
+            if ":" in required[label] and " " not in required[label]
+        ]
         if scopes:
             ui.message("OAuth & Permissions → add bot scopes: " + ", ".join(scopes), indent="    ")
             ui.message("Reinstall the app after adding scopes; Slack may require administrator approval.", indent="    ")
-        ui.message("Keep existing settings, then save your changes.")
+        if manual_missing:
+            ui.message("Keep existing settings, then save your changes.")
         return False
     detail = safe_cli_output((completed.stderr or completed.stdout).strip())
     if detail:
@@ -990,35 +992,51 @@ def choose_slack_app(
                 raise ui.Paused()
     settings.save_config(marker, {"app_id": app_id, "team_id": team_id})
     ui.message("✓ App linked")
+
+    def enable_agent_messaging() -> bool:
+        def approve_legacy() -> bool:
+            ui.notice(
+                "Slack currently uses the legacy Assistant messaging experience",
+                "Switching this app to Agent messaging cannot be reversed.",
+            )
+            return confirm("Switch permanently to Agent messaging?", default=False)
+
+        return slack_manifest_migrations.enable_agent_view(
+            project, app_id, team_id, approve_legacy=approve_legacy
+        )
+
     issues: list[str] = []
     while not inspect_slack_app(project, app_id, issues=issues):
+        can_enable_agent = "Agent view enabled" in issues
+        if can_enable_agent:
+            try:
+                changed = enable_agent_messaging()
+            except RuntimeError as exc:
+                ui.message(str(exc))
+            else:
+                if changed:
+                    ui.message("✓ Agent messaging enabled through Slack CLI")
+                    continue
+                issues.remove("Agent view enabled")
+                can_enable_agent = False
+                if not issues:
+                    break
         print()
         ui.message("Your app selection and link are saved.")
         while True:
-            can_enable_agent = "Agent view enabled" in issues
-            options = (["Enable Agent messaging with Slack CLI"] if can_enable_agent else []) + [
+            options = (["Retry Agent messaging with Slack CLI"] if can_enable_agent else []) + [
                 "Open app settings", "Check again", "Save and exit",
             ]
             choice = ui.choose("App settings need attention", options)
             if can_enable_agent and choice == 0:
-                def approve_legacy() -> bool:
-                    ui.notice(
-                        "Slack currently uses the legacy Assistant messaging experience",
-                        "Switching this app to Agent messaging cannot be reversed.",
-                    )
-                    return confirm("Switch permanently to Agent messaging?", default=False)
-
                 try:
-                    changed = slack_manifest_migrations.enable_agent_view(
-                        project, app_id, team_id, approve_legacy=approve_legacy
-                    )
+                    changed = enable_agent_messaging()
                 except RuntimeError as exc:
                     ui.message(str(exc))
                     continue
                 if changed:
                     ui.message("✓ Agent messaging enabled through Slack CLI")
-                    break
-                continue
+                break
             browser_choice = choice - int(can_enable_agent)
             if browser_choice == 0:
                 webbrowser.open(f"https://api.slack.com/apps/{app_id}")
