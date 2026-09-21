@@ -6,7 +6,7 @@ One installation can run independent Tags for separate Slack apps/workspaces.
 The reserved `default` Tag uses the same isolated layout as every named Tag:
 
 ```sh
-tag add personal
+tag add
 tag list
 tag personal setup
 tag personal start
@@ -15,9 +15,10 @@ tag personal logs
 tag personal stop
 ```
 
-Omitting the name selects `<TAG_HOME>/instances/default`. A local Tag name is a stable,
-lowercase identifier; it is independent of both the Slack app's display name
-and Slack workspace name. Paused onboarding appears in `tag list` and resumes
+Omitting the alias selects `<TAG_HOME>/instances/default`. During `tag add`, Tag connects
+Slack first and suggests a lowercase workspace alias derived from the selected workspace's
+name. The alias is only used in local commands; it is independent of the Slack app's display
+name. Paused onboarding appears in `tag list` and resumes
 with the targeted setup command. Each Tag has its own settings, Slack app,
 agent working folder, conversations, logs, and lifecycle. Use Slack's settings
 for that specific app to change its remote name or profile image.
@@ -39,16 +40,17 @@ objects retain their fields and add `tag` plus nullable `slack_workspace`;
 their `next_command` starts with `tag NAME` for named Tags. A malformed Tag is
 returned with its own error and does not suppress other records.
 
-The CLI, guided settings, and admin skill share the same settings and lifecycle
-operations. Use `tag` for a status summary and next command, or ask an assistant with the
-`open-tag-admin` skill to set up, change, or diagnose Tag. Both begin by inspecting
-what is already configured.
+The CLI and guided settings share the same settings and lifecycle operations.
+Use `tag` for a status summary and next command. An assistant managing Tag should
+begin with `tag inspect --json` to inspect what is already configured.
+Slack runtime agents load the runtime contract; Tag does not bundle an admin
+skill into their workspace.
 
 ## The journey
 
 ```mermaid
 flowchart TD
-    Request[Open Tag or ask the admin skill] --> Inspect[Inspect existing settings and services]
+    Request[Open Tag or ask the setup assistant] --> Inspect[Inspect existing settings and services]
     Inspect --> Missing[Not configured or incomplete]
     Inspect --> Stopped[Configured and stopped]
     Inspect --> Running[Running and connected]

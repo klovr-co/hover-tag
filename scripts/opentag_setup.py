@@ -32,6 +32,7 @@ try:
     import slack_app_create
     import slack_credentials
     import tag_credentials
+    import tag_cli as lifecycle
     from tag_mascot import PALETTE as MASCOT_PALETTE, PIXELS as MASCOT_PIXELS
 except ImportError:
     from scripts.tag_paths import instance_home, initialize_instance
@@ -41,6 +42,7 @@ except ImportError:
     from scripts import slack_app_create
     from scripts import slack_credentials
     from scripts import tag_credentials
+    from scripts import tag_cli as lifecycle
     from scripts.tag_mascot import PALETTE as MASCOT_PALETTE, PIXELS as MASCOT_PIXELS
 
 
@@ -314,7 +316,7 @@ def choose_allowed_users(team_id: str, current: str = "") -> str:
     )
 
 
-def connect_slack_cli(current: str = "") -> str | None:
+def connect_slack_workspace(current: str = "") -> tuple[str, str] | None:
     if not shutil.which("slack"):
         ui.message("Slack CLI is required for workspace authorization: https://docs.slack.dev/tools/slack-cli/")
         return None
@@ -332,12 +334,17 @@ def connect_slack_cli(current: str = "") -> str | None:
         if index < len(accounts):
             name, team_id = accounts[index]
             ui.message(f"✓ {name}")
-            return team_id
+            return team_id, name
         if index == len(accounts) + 1:
             return None
         if run_slack_cli(["auth", "login"], interactive=True):
             ui.message("Slack CLI authorization was not completed. Run tag setup to try again.")
             return None
+
+
+def connect_slack_cli(current: str = "") -> str | None:
+    selected = connect_slack_workspace(current)
+    return selected[0] if selected else None
 
 
 def ask_validated(prompt: str, key: str, default: str | None = None) -> str:
@@ -1396,9 +1403,9 @@ def guided_setup(
                     raise ui.Paused()
                 if action == 1:
                     history_token = ask_secret("Slack-history token (hidden)", "xox")
-        if values.get("MFS_URL", settings.DEFAULTS["MFS_URL"]).rstrip("/") not in {
-            "http://localhost:13619", "http://127.0.0.1:13619"
-        }:
+        if not lifecycle.local_mfs_endpoint(
+            values.get("MFS_URL", settings.DEFAULTS["MFS_URL"])
+        ):
             raise RuntimeError(
                 "Slack history for a remote MFS endpoint needs a server-resolvable credential reference; "
                 "a local Tag credential file cannot be used remotely."

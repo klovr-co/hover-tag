@@ -4,7 +4,7 @@
 
 ### Added
 
-- Manage independent named Tags for multiple Slack workspaces with `tag add`,
+- Manage independent workspace aliases for multiple Slack workspaces with `tag add`,
   `tag list`, and target-aware lifecycle, setup, settings, logs, and diagnostics.
 - Share one explicitly owned MFS lifecycle across Tags, with per-Tag
   credential files and an administrative `tag memory` command.

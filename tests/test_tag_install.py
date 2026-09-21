@@ -380,6 +380,22 @@ class TagHomeTests(unittest.TestCase):
                 unpack_release(archive, root / "output")
             self.assertFalse((root / "escape").exists())
 
+    def test_upgrade_removes_only_generated_admin_wrappers(self):
+        for wrapper in (LEGACY_ADMIN_SKILL, ADMIN_SKILL):
+            with self.subTest(wrapper=wrapper), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                home = root / "home"
+                for backend in (".agents", ".claude"):
+                    folder = home / "workspace" / backend / "skills/open-tag-admin"
+                    folder.mkdir(parents=True)
+                    (folder / "SKILL.md").write_text(wrapper)
+                    (folder / "personal-notes.md").write_text("keep this")
+                install(ROOT, home, root / "bin", dependencies=False)
+                for backend in (".agents", ".claude"):
+                    folder = home / "workspace" / backend / "skills/open-tag-admin"
+                    self.assertFalse((folder / "SKILL.md").exists())
+                    self.assertEqual((folder / "personal-notes.md").read_text(), "keep this")
+
     def test_install_upgrade_and_run_without_source(self):
         with tempfile.TemporaryDirectory(prefix="Tag install with spaces ") as temp:
             root = Path(temp)
@@ -387,17 +403,20 @@ class TagHomeTests(unittest.TestCase):
             first = install(ROOT, home, bin_dir, dependencies=False)
             default = home / "instances/default"
             admin = default / "workspace/.agents/skills/open-tag-admin/SKILL.md"
-            self.assertEqual(admin.read_text(), ADMIN_SKILL)
+            self.assertFalse(admin.exists())
+            self.assertFalse((first / "SKILL.md").exists())
+            admin.parent.mkdir(parents=True)
             admin.write_text(LEGACY_ADMIN_SKILL)
             custom_admin = default / "workspace/.claude/skills/open-tag-admin/SKILL.md"
+            custom_admin.parent.mkdir(parents=True)
             custom_admin.write_text("personal admin instructions")
             skill = default / "workspace/.agents/skills/personal/SKILL.md"
-            skill.parent.mkdir()
+            skill.parent.mkdir(parents=True)
             skill.write_text("personal skill")
             config = default / "config/settings.json"
             config.write_text('{"OPENTAG_BACKEND":"codex"}')
             second = install(ROOT, home, bin_dir, dependencies=False)
-            self.assertEqual(admin.read_text(), ADMIN_SKILL)
+            self.assertFalse(admin.exists())
             self.assertEqual(custom_admin.read_text(), "personal admin instructions")
             self.assertNotEqual(first, second)
             previous = json.loads((home / "previous.json").read_text())
@@ -415,6 +434,7 @@ class TagHomeTests(unittest.TestCase):
             paths = json.loads(result.stdout)
             self.assertEqual(Path(paths["workspace"]).resolve(), (default / "workspace").resolve())
             self.assertTrue(Path(paths["management_guide"]).is_file())
+            self.assertNotIn("admin_skill", paths)
             self.assertEqual(paths["runtime"]["mode"], "managed")
             self.assertTrue(paths["runtime"]["active_release"])
             result = subprocess.run([str(command), "inspect", "--offline", "--json"], cwd=root, capture_output=True, text=True, check=True)

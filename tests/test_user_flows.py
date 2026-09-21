@@ -216,6 +216,31 @@ class FlowTests(unittest.TestCase):
         self.assertEqual(tag_config.read_config(draft / "previous-settings.json"), original)
         self.assertTrue((draft / "previous-slack-cli").is_dir())
 
+    def test_commit_removes_superseded_managed_credential(self):
+        original, draft = self.make_draft()
+        tag_config.update_config(
+            draft / "config/settings.json", {"MFS_URL": "http://Localhost:13619"}
+        )
+        old_credential = tag_reconfigure.tag_credentials.write_slack_history(
+            self.home, "xoxb-old-history"
+        )
+        connector = Path(original["MFS_SLACK_CONNECTOR_CONFIG"])
+        connector.write_text(
+            connector.read_text().replace(
+                'token = "env:MFS_SLACK_TOKEN"',
+                "token = " + json.dumps("file:" + str(old_credential)),
+            ),
+            encoding="utf-8",
+        )
+
+        with patch.object(tag_reconfigure.lifecycle, "process_for", return_value=None):
+            tag_reconfigure.commit(self.home, draft, original)
+
+        self.assertFalse(old_credential.exists())
+        saved = tag_config.read_config(self.config)
+        active_connector = Path(saved["MFS_SLACK_CONNECTOR_CONFIG"])
+        self.assertIn("file:", active_connector.read_text(encoding="utf-8"))
+
     def test_commit_conflict_and_write_failure_keep_active_setup(self):
         original, draft = self.make_draft()
         with patch.object(tag_reconfigure.lifecycle, "process_for", return_value=None):

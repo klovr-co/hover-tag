@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import shutil
 import tempfile
+import unicodedata
 
 try:
     from .tag_paths import initialize_instance
@@ -51,13 +52,28 @@ class InstanceContext:
 def validate_name(name: str, *, allow_default: bool = True) -> str:
     if not isinstance(name, str) or not NAME_PATTERN.fullmatch(name):
         raise ValueError(
-            "Tag names must be 1-32 lowercase letters, digits, or hyphens"
+            "Workspace aliases must be 1-32 lowercase letters, digits, or hyphens"
         )
     if name == DEFAULT_TAG and not allow_default:
-        raise ValueError("The name 'default' is reserved for the built-in Tag")
+        raise ValueError("The alias 'default' is reserved for the built-in Tag")
     if name in RESERVED_NAMES:
-        raise ValueError(f"The name '{name}' is reserved for a Tag command")
+        raise ValueError(f"The alias '{name}' is reserved for a Tag command")
     return name
+
+
+def suggest_name(installation_root: Path, workspace_name: str) -> str:
+    """Return an available command-safe alias derived from a Slack workspace."""
+    ascii_name = unicodedata.normalize("NFKD", workspace_name).encode("ascii", "ignore").decode()
+    stem = re.sub(r"[^a-z0-9]+", "-", ascii_name.lower()).strip("-")[:32].rstrip("-")
+    if not stem or stem == DEFAULT_TAG or stem in RESERVED_NAMES:
+        stem = "workspace"
+    candidate = stem
+    number = 2
+    while instance_path(installation_root, candidate).exists():
+        suffix = f"-{number}"
+        candidate = stem[: 32 - len(suffix)].rstrip("-") + suffix
+        number += 1
+    return candidate
 
 
 def instance_path(installation_root: Path, tag_id: str) -> Path:
@@ -82,7 +98,7 @@ def resolve(installation_root: Path, tag_id: str = DEFAULT_TAG, *, require_exist
     if require_exists and (tag_id != DEFAULT_TAG or home.exists()):
         metadata = home / "instance.json"
         if not home.is_dir() or home.is_symlink() or not metadata.is_file():
-            raise ValueError(f"Unknown Tag '{tag_id}'. Run tag add {tag_id} first.")
+            raise ValueError(f"Unknown workspace alias '{tag_id}'. Run tag add first.")
         try:
             record = json.loads(metadata.read_text(encoding="utf-8"))
         except (OSError, ValueError, TypeError):

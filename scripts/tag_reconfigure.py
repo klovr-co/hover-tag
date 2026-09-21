@@ -21,6 +21,27 @@ except ImportError:
     from tag_paths import initialize_instance, runtime_environment
 
 
+def managed_connector_credential(home: Path, connector: Path) -> Path | None:
+    """Return a regular credential owned by this instance, if referenced."""
+    try:
+        content = connector.read_text(encoding="utf-8")
+        match = re.search(r"(?m)^token = (.+)$", content)
+        reference = json.loads(match.group(1)) if match else ""
+        credential = Path(reference.removeprefix("file:"))
+        credential_root = (home / "config/credentials").resolve()
+        resolved = credential.resolve(strict=True)
+        if (
+            reference.startswith("file:")
+            and credential.is_file()
+            and not credential.is_symlink()
+            and resolved.is_relative_to(credential_root)
+        ):
+            return credential
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        pass
+    return None
+
+
 def commit(home: Path, draft: Path, original: dict[str, str]) -> None:
     """Serialize with starts/settings writes; restore the old link on failure."""
     config = settings.config_path(home)
@@ -49,6 +70,9 @@ def commit(home: Path, draft: Path, original: dict[str, str]) -> None:
         values = settings.read_config(draft / "config/settings.json")
         if settings.config_errors(values):
             raise RuntimeError("Draft settings are incomplete. Active settings were kept.")
+        previous_credential = managed_connector_credential(
+            home, Path(original.get("MFS_SLACK_CONNECTOR_CONFIG", ""))
+        )
         source = Path(values["MFS_SLACK_CONNECTOR_CONFIG"])
         if not source.resolve().is_relative_to(draft.resolve()):
             raise RuntimeError("Draft connector must belong to the draft home.")
@@ -57,9 +81,10 @@ def commit(home: Path, draft: Path, original: dict[str, str]) -> None:
         shutil.copy2(source, destination)
         destination.chmod(0o600)
         connector_text = destination.read_text(encoding="utf-8")
-        local_mfs = values.get("MFS_URL", settings.DEFAULTS["MFS_URL"]).rstrip("/") in {
-            "http://localhost:13619", "http://127.0.0.1:13619"
-        }
+        local_mfs = lifecycle.local_mfs_endpoint(
+            values.get("MFS_URL", settings.DEFAULTS["MFS_URL"])
+        )
+        credential = None
         if local_mfs:
             # Use a new final-home credential generation. The live connector
             # keeps its previous file until the settings commit succeeds.
@@ -91,6 +116,18 @@ def commit(home: Path, draft: Path, original: dict[str, str]) -> None:
         installed = True
         shutil.copytree(draft / "integrations/slack-cli", project)
         settings.save_config(config, values)
+        credential_reused = (
+            previous_credential is not None
+            and credential is not None
+            and previous_credential.resolve() == credential.resolve()
+        )
+        if previous_credential is not None and not credential_reused:
+            try:
+                previous_credential.unlink()
+            except OSError:
+                # Settings already point at the new credential; stale-secret
+                # cleanup must not roll back a successfully committed change.
+                pass
     except BaseException:
         # Only our newly copied project is moved; nothing is recursively deleted.
         if project.exists() and (installed or moved):
