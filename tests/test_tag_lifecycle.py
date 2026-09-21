@@ -123,6 +123,40 @@ class TagLifecycleTests(unittest.TestCase):
         self.assertIn("startup failed: <redacted>", output.getvalue())
         self.assertNotIn(secret, output.getvalue())
 
+    def test_memory_start_uses_saved_mfs_settings_before_onboarding_completes(self) -> None:
+        config = self.home / "config/settings.json"
+        config.write_text('{"MFS_URL":"http://localhost:13619"}')
+
+        with patch.dict(os.environ, {"TAG_HOME": str(self.root)}, clear=False), patch.object(
+            sys, "argv", ["tag", "memory", "start"]
+        ), patch.object(tag_cli, "ensure_shared_memory") as ensure, patch.object(
+            tag_cli, "process_for", return_value=None
+        ), patch.object(tag_cli, "healthy", return_value=True), redirect_stdout(StringIO()):
+            self.assertEqual(tag_cli.main(), 0)
+
+        environment = ensure.call_args.args[1]
+        self.assertEqual(environment["MFS_URL"], "http://localhost:13619")
+        self.assertEqual(environment["TAG_INSTANCE_HOME"], str(self.home))
+
+    def test_shared_memory_start_reuses_the_installation_lock_and_workspace(self) -> None:
+        context = tag_instances.resolve(self.root)
+        environment = {
+            "MFS_URL": "http://127.0.0.1:13619",
+            "OPENTAG_MFS_STARTUP_ATTEMPTS": "1",
+        }
+        with patch.object(
+            tag_cli, "healthy", side_effect=[False, False, True]
+        ), patch.object(
+            tag_cli, "mfs_server_executable", return_value="/bin/mfs-server"
+        ), patch.object(tag_cli, "replace_unmanaged_local_mfs"), patch.object(
+            tag_cli, "start_process"
+        ) as start:
+            tag_cli.ensure_shared_memory(context, environment)
+
+        self.assertFalse((context.shared_mfs_home / "start.lock").exists())
+        self.assertEqual(start.call_args.kwargs["state_dir"], context.shared_mfs_home)
+        self.assertEqual(start.call_args.kwargs["cwd"], context.workspace)
+
     def test_local_mfs_listener_matches_the_resolved_configured_address(self) -> None:
         expected = MagicMock(pid=22)
         expected.cmdline.return_value = ["python", "-m", "mfs_server", "run"]

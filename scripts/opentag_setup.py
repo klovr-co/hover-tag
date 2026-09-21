@@ -1269,6 +1269,31 @@ def guided_setup(
     defaults = {key: value for key, value in settings.DEFAULTS.items() if key not in values}
     if defaults:
         values = settings.update_config(config_path, defaults, only_missing=True)
+    if start_services:
+        ui.message("◌ Memory · Initializing…")
+        ui.message(
+            "First start can take a couple of minutes. This happens now so "
+            "memory is ready before Tag connects to Slack.",
+            indent="    ",
+        )
+        tag_id = os.getenv("TAG_ID", "default")
+        target = [] if tag_id == "default" else [tag_id]
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts/tag_cli.py"),
+                *target,
+                "memory",
+                "start",
+            ],
+            env=dict(os.environ, OPENTAG_ENV_FILE=str(config_path)),
+            text=True,
+            capture_output=True,
+        )
+        if result.returncode:
+            ui.message(safe_cli_output(result.stdout + "\n" + result.stderr))
+            raise RuntimeError("Memory could not initialize; run tag memory status for details")
+        ui.message("✓ Memory ready")
     if settings.validation_error("OPENTAG_BACKEND", values["OPENTAG_BACKEND"]):
         values = settings.update_config(config_path, {"OPENTAG_BACKEND": choose_backend()})
     backend = values["OPENTAG_BACKEND"]
@@ -1527,7 +1552,7 @@ def finish_setup(config_path: Path, values: dict[str, str], channels: list[slack
         ui.message("✓ Claude executable available · sign-in will be checked by its first task")
     environment = dict(os.environ, OPENTAG_ENV_FILE=str(config_path))
     while True:
-        ui.message("◌ Starting memory and connecting Tag…")
+        ui.message("◌ Connecting Tag to Slack…")
         tag_id = os.getenv("TAG_ID", "default")
         target = [] if tag_id == "default" else [tag_id]
         result = subprocess.run([sys.executable, str(ROOT / "scripts/tag_cli.py"), *target, "start"], env=environment, text=True, capture_output=True)
@@ -1605,7 +1630,7 @@ def main() -> int:
         return result
     except ui.Paused:
         print()
-        ui.message("✓ Progress saved. Run tag setup to continue.")
+        ui.message("Setup is incomplete. Progress saved; run tag setup to continue.")
         return 0
     except (KeyboardInterrupt, EOFError):
         print()

@@ -510,6 +510,12 @@ def install(
                     "Installing Tag dependencies with pip",
                 )
             row("Runtime", f"Python {sys.version_info.major}.{sys.version_info.minor} · dependencies ready")
+            paragraph("Preparing the local memory model…", MUTED, indent="    ")
+            install_step(
+                [str(python), str(release / "scripts/preload_mfs_model.py")],
+                "Preparing the MFS embedding model",
+            )
+            row("Memory", "Local embedding model cached")
         else:
             # Explicit test/development mode; never advertised as a complete install.
             python = Path(sys.executable)

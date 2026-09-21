@@ -671,6 +671,70 @@ def migrate_legacy_mfs_record(context: tag_instances.InstanceContext) -> None:
         os.replace(old_log, shared / "mfs.log")
 
 
+def ensure_shared_memory(
+    context: tag_instances.InstanceContext, environment: dict[str, str]
+) -> None:
+    """Start the configured shared MFS if needed and wait until it is healthy."""
+    url = environment.get("MFS_URL", "http://127.0.0.1:13619")
+    local_mfs = local_mfs_endpoint(url)
+    if local_mfs:
+        migrate_legacy_mfs_record(context)
+        replace_unmanaged_local_mfs(
+            context.home, url, state_dir=context.shared_mfs_home
+        )
+    if healthy(url):
+        return
+    if not local_mfs:
+        raise RuntimeError(
+            "Configured external MFS endpoint is unavailable; start that server first"
+        )
+    executable = mfs_server_executable()
+    if not executable:
+        raise RuntimeError(
+            "MFS server is unavailable; run ./install.sh --dependencies-only"
+        )
+    shared = context.shared_mfs_home
+    shared.mkdir(parents=True, exist_ok=True, mode=0o700)
+    mfs_lock = shared / "start.lock"
+    try:
+        mfs_lock.mkdir()
+    except FileExistsError:
+        raise RuntimeError(
+            f"Another shared memory start is in progress. If interrupted, remove {mfs_lock} and retry."
+        ) from None
+    try:
+        # Recheck after acquiring the installation-wide lock. A different Tag
+        # may have completed startup while this process waited.
+        if not healthy(url):
+            start_process(
+                context.home,
+                "mfs",
+                [executable, "run"],
+                environment=environment,
+                state_dir=shared,
+                cwd=context.workspace,
+            )
+        attempts = int(environment.get("OPENTAG_MFS_STARTUP_ATTEMPTS", "90"))
+        for _ in range(attempts):
+            if healthy(url):
+                break
+            if process_for(shared / "mfs.json") is None:
+                detail = log_tail(context.home, "mfs", state_dir=shared)
+                raise RuntimeError(
+                    "Shared MFS exited before becoming healthy"
+                    + (f":\n{detail}" if detail else "; run tag memory status")
+                )
+            time.sleep(1)
+        else:
+            detail = log_tail(context.home, "mfs", state_dir=shared)
+            raise RuntimeError(
+                f"Shared MFS did not become healthy within {attempts} seconds"
+                + (f":\n{detail}" if detail else "; run tag memory status")
+            )
+    finally:
+        mfs_lock.rmdir()
+
+
 def bridge_processes(installation_root: Path) -> list[str]:
     running = []
     for item in tag_instances.discover(installation_root):
@@ -1271,7 +1335,7 @@ def main() -> int:
                                      usage="tag [TAG] [COMMAND] [OPTIONS]",
                                      epilog="Use tag for default status, or tag NAME status for a named Tag. Start with tag setup; change configuration with tag settings.")
     parser.add_argument("command", nargs="?", choices=COMMANDS)
-    parser.add_argument("arguments", nargs="*", help="memory: status | stop; config: init | show | keys | set KEY VALUE")
+    parser.add_argument("arguments", nargs="*", help="memory: start | status | stop; config: init | show | keys | set KEY VALUE")
     parser.add_argument("--offline", action="store_true")
     parser.add_argument("--json", action="store_true", dest="json_output", help="structured output for inspect, status, doctor, config, paths, and upgrade")
     parser.add_argument("--stdin", action="store_true", help="read a config value from stdin")
@@ -1391,8 +1455,13 @@ def main() -> int:
     os.environ.update(environment)
     if args.command == "memory":
         action = args.arguments[0] if len(args.arguments) == 1 else "status" if not args.arguments else ""
-        if action not in {"status", "stop"}:
-            parser.error("memory accepts status or stop")
+        if action not in {"start", "status", "stop"}:
+            parser.error("memory accepts start, status, or stop")
+        if action == "start":
+            config_path = context.home / "config/settings.json"
+            values = read_config(config_path) if config_path.is_file() else {}
+            environment = instance_environment(context, values)
+            ensure_shared_memory(context, environment)
         migrate_legacy_mfs_record(tag_instances.resolve(installation_root))
         context.shared_mfs_home.mkdir(parents=True, exist_ok=True, mode=0o700)
         managed = process_for(context.shared_mfs_home / "mfs.json") is not None
@@ -1680,54 +1749,7 @@ def main() -> int:
                 good=True,
             )
             ensure_connector_credential(home, values)
-            url = os.getenv("MFS_URL", "http://127.0.0.1:13619")
-            local_mfs = local_mfs_endpoint(url)
-            if local_mfs:
-                migrate_legacy_mfs_record(tag_instances.resolve(installation_root))
-                replace_unmanaged_local_mfs(
-                    home, url, state_dir=context.shared_mfs_home
-                )
-            if not healthy(url):
-                if not local_mfs:
-                    raise RuntimeError("Configured external MFS endpoint is unavailable; start that server first")
-                executable = mfs_server_executable()
-                if not executable:
-                    raise RuntimeError("MFS server is unavailable; run ./install.sh --dependencies-only")
-                shared = context.shared_mfs_home
-                shared.mkdir(parents=True, exist_ok=True, mode=0o700)
-                mfs_lock = shared / "start.lock"
-                try:
-                    mfs_lock.mkdir()
-                except FileExistsError:
-                    raise RuntimeError(
-                        f"Another shared memory start is in progress. If interrupted, remove {mfs_lock} and retry."
-                    ) from None
-                try:
-                    # Recheck after acquiring the installation-wide lock. A
-                    # different Tag may have completed startup while we waited.
-                    if not healthy(url):
-                        start_process(home, "mfs", [executable, "run"],
-                                      environment=os.environ.copy(), state_dir=shared,
-                                      cwd=context.workspace)
-                    attempts = int(os.getenv("OPENTAG_MFS_STARTUP_ATTEMPTS", "90"))
-                    for _ in range(attempts):
-                        if healthy(url):
-                            break
-                        if process_for(shared / "mfs.json") is None:
-                            detail = log_tail(home, "mfs", state_dir=shared)
-                            raise RuntimeError(
-                                "Shared MFS exited before becoming healthy"
-                                + (f":\n{detail}" if detail else "; run tag memory status")
-                            )
-                        time.sleep(1)
-                    else:
-                        detail = log_tail(home, "mfs", state_dir=shared)
-                        raise RuntimeError(
-                            f"Shared MFS did not become healthy within {attempts} seconds"
-                            + (f":\n{detail}" if detail else "; run tag memory status")
-                        )
-                finally:
-                    mfs_lock.rmdir()
+            ensure_shared_memory(context, os.environ.copy())
             display.info_row("Memory", "Healthy", good=True)
             if os.getenv("SLACK_CHANNEL_POLICY") == "invited":
                 reconcile_invitation_memory(home)
