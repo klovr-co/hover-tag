@@ -14,6 +14,7 @@ class MissingScope(RuntimeError):
         scopes = [s.strip() for s in str(needed).split(",")]
         self.needed = ", ".join(s for s in scopes if re.fullmatch(r"[a-z_]+(?::[a-z_]+)+", s))
         reasons = {
+            "users.info": "verify caller identity and access before searching Slack history",
             "bots.info": "confirm the bot belongs to the selected app",
             "apps.connections.open": "connect the app through Socket Mode",
             "conversations.list": "show available channels for selection",
