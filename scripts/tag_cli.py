@@ -1881,8 +1881,8 @@ def main() -> int:
         stop_process(home, "slack")
         display.info_row("Slack", "Stopped or already offline", good=True)
         memory_running = process_for(context.shared_mfs_home / "mfs.json") is not None
-        remaining_tags = bridge_processes(installation_root) if memory_running else []
-        if remaining_tags:
+        remaining_tags = bridge_processes(installation_root)
+        if memory_running and remaining_tags:
             memory_status = "Still running for: " + ", ".join(remaining_tags)
             memory_detail = "Stop those Tags before running tag memory stop."
         elif memory_running:
@@ -1890,6 +1890,8 @@ def main() -> int:
             memory_detail = "Memory runs separately and stays available for your next start."
         else:
             memory_status = "No Tag-managed process running"
+            if remaining_tags:
+                memory_status += " · active Tags: " + ", ".join(remaining_tags)
             memory_detail = "Externally managed memory, if configured, is unchanged."
         display.info_row("Memory", memory_status)
         if not restart_flow:
