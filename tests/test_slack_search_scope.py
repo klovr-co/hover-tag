@@ -130,6 +130,20 @@ class SearchIntentTests(unittest.TestCase):
 
 
 class IndexedScopeTests(unittest.TestCase):
+    def test_app_scoped_connectors_preserve_exact_workspace_boundary(self) -> None:
+        for authority in ("tag-t1-a123", "TAG-T1-A123", "tag-t1"):
+            with self.subTest(authority=authority):
+                scope = f"slack://{authority}/channels/general__C1"
+                self.assertEqual(scope, indexed_slack_channels(scope, "T1")["C1"].scope)
+        for authority in (
+            "tag-t2-a123", "tag-t10-a123", "tag-t1-other", "tag-t1-a",
+            "tag-t1-a123-extra", "tag-t1-a123:80", "user@tag-t1-a123",
+        ):
+            with self.subTest(authority=authority):
+                self.assertEqual({}, indexed_slack_channels(
+                    f"slack://{authority}/channels/general__C1", "T1"
+                ))
+
     def test_indexes_only_exact_workspace_channel_scopes(self) -> None:
         indexed = indexed_slack_channels(SCOPES, "T1")
         self.assertEqual({"C1", "C2", "G3"}, set(indexed))
@@ -184,6 +198,22 @@ class ScopePlanningTests(unittest.TestCase):
             scope_is_indexed=kwargs.pop("scope_is_indexed", lambda _scope: True),
             **kwargs,
         )
+
+    def test_setup_app_scopes_produce_search_grant_with_visibility_checks(self) -> None:
+        from scripts.opentag_setup import connector_scope
+        from scripts.slack_channels import SlackChannel
+
+        scope = connector_scope("T1", SlackChannel("C1", "general", False, True), "A123")
+        plan = self.plan("search all channels", allowed_scopes=scope)
+        self.assertEqual("all", plan.mode)
+        self.assertEqual((scope,), plan.scopes)
+        self.assertEqual({"C1": "general"}, plan.channel_labels)
+
+        client = FakeSlackClient(restricted=True)
+        client.members["C1"] = []
+        denied = self.plan("search all channels", client, allowed_scopes=scope)
+        self.assertEqual("denied", denied.mode)
+        self.assertEqual((), denied.scopes)
 
     def test_default_is_byte_for_byte_current_scope_without_slack_calls(self) -> None:
         client = FakeSlackClient()

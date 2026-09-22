@@ -66,7 +66,9 @@ decision and explicit operator authorization.
 ## Consequences
 
 - Unqualified commands select `instances/default`; installations using the old
-  root-level mutable layout require a one-time, stopped-service migration.
+  root-level mutable layout are migrated automatically on startup after stopping
+  the affected bridge. Settings, integrations, and instance state are copied
+  with originals preserved and managed paths updated for the new home.
 - Upgrade and rollback stay installation-wide; rollback is blocked while any
   managed bridge or shared MFS process is running.
 - Separate Slack apps may use different names and profile images, but remote

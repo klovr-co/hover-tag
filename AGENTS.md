@@ -62,6 +62,30 @@ unknown `release:*` labels intentionally prevent publication. Beta lines only
 accept `release:skip`; patch and minor labels begin alpha lines. Stable releases
 remain manually qualified and published; see `RELEASE.md`.
 
+### Automatic upgrade migrations
+
+Treat changes required by a new release like database migrations. Ship versioned,
+idempotent migrations for existing installations, including configuration,
+stored data, Slack app manifests, required permissions, and credential refreshes.
+Updating fresh-install defaults or repairing one developer's installation is
+not a complete upgrade fix.
+
+Run required migrations automatically during upgrade/startup, before dependent
+readiness checks and services. They must work in the background without a TTY,
+using existing authorization and preserving unrelated operator settings. Do not
+require users to repeat setup or manually edit settings for changes Tag can
+apply itself.
+
+Record completion only after verifying the resulting state, including actual
+token grants when permissions change. Reload refreshed credentials before
+continuing startup. Interrupted or failed migrations must remain safely
+retryable; never mark partial work complete. Add regression coverage for older
+installations, repeated runs, and failure recovery.
+
+When Slack or another provider requires fresh sign-in or administrator approval,
+report the exact remaining action and resume the migration on retry. Existing
+confirmation requirements for destructive operations still apply.
+
 ### Domain docs
 
 This is a single-context repository. Read the root `CONTEXT.md` and relevant

@@ -29,6 +29,13 @@ failed startup leave shared memory and other Tags running. Inspect it with
 service can be stopped explicitly with `tag memory stop`. Tag refuses to stop
 an externally managed MFS process.
 
+An upgrade restarts each previously running Tag, leaving stopped Tags stopped
+and shared MFS online. `--no-restart` defers activation until you restart those
+Tags. On startup, legacy root-level settings and old working folders are migrated
+automatically after stopping the affected bridge. Originals are retained;
+conflicting destination files stop migration with an actionable path. Interrupted
+copies resume on retry, and completed migrations do not overwrite later edits.
+
 Shared storage does not authorize cross-workspace retrieval. Normal Slack
 retrieval remains limited to the selected Tag's approved workspace/channel
 scopes. These local Tags share the trusted-sandbox limitations described
@@ -237,11 +244,28 @@ and removed on exit; these safeguards are not a hardened isolation boundary
 
 ## Commands for people and skills
 
+After an upgrade, `tag start` applies versioned Slack app migrations before
+preflight. Existing Slack CLI authorization is used to reconcile the release's
+required bot scopes, events, App Home, Socket Mode, and interactivity settings,
+refresh the installation,
+and save replacement credentials privately. This works without an interactive
+terminal and preserves unrelated app settings. The migration is marked complete
+only after remote settings and the replacement token's required grants are verified.
+An existing legacy Assistant view requires explicit approval through
+`tag setup --review` before the irreversible Agent conversion. If Slack requires
+workspace approval or renewed CLI sign-in, startup stops with recovery guidance;
+resolve that requirement and retry `tag start`.
+
+Lifecycle locks for startup, shared-memory startup, reset, and settings apply
+are released by the operating system if the CLI exits unexpectedly. A later
+attempt recovers the leftover marker without taking a live operation's lock.
+
 Permission failures pause setup and show the missing scope, the operation it blocks,
 and instructions to fix it yourself in Slack (or ask a workspace admin).
 Choose **Open app settings**, **Check again**, or **Exit · finish setup later**; channel joining
-also lets you return to channel selection. Tag does not repair permissions or
-reinstall apps as part of error recovery. Bot scopes, Socket Mode app-token scopes,
+also lets you return to channel selection. Outside the versioned upgrade migrations
+above, Tag does not repair permissions or reinstall apps as part of error recovery.
+Bot scopes, Socket Mode app-token scopes,
 and separate history credentials require different fixes. If Slack issues a new
 token, update it privately in Tag settings before retrying. Normal approved
 credential handoff remains unchanged; it uses remote app settings without `--force`.
