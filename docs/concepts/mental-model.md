@@ -31,8 +31,10 @@ MFS gives it searchable context without opening every indexed source to Tag.
 ```
 
 One Slack API page containing up to 30 messages from the current thread is
-passed to each run, and the triggering request is passed separately. A teammate
-can say "compare that with the current plan" without restating the discussion.
+passed to each run, and the triggering request is passed separately. You can
+ask your Tag to "compare that with the current plan" without restating the
+discussion. Only the owner can request work from their Tag. Teammates can add
+details in the thread for the owner's next request to draw on.
 Anything outside that slice of the thread must come from the workspace, an
 approved MFS source, or a tool available to the agent.
 
@@ -44,11 +46,11 @@ approved MFS source, or a tool available to the agent.
 | Files and task output | Configured workspace | Yes, while they remain in that workspace |
 | Indexed organizational context | MFS | Yes, while the source remains indexed and permitted |
 | Model reasoning process | Current CLI run | No |
-| Optional thread model settings | Tag's local runtime state | Yes, for that Slack thread |
+| Your Codex model, reasoning, and Fast Mode choices | Tag's local runtime state | Yes, for your requests across channels and threads in that Tag |
 
-Each mention starts a fresh CLI agent run. Tag does not reuse the previous
+Each mention starts a fresh agent run. Tag does not reuse the previous
 model's private reasoning state. A follow-up works because Tag can read the
-thread again and because the workspace, indexed sources, and thread settings
+thread again and because the workspace, indexed sources, and saved user settings
 are still there.
 
 ## When Tag uses MFS
