@@ -12,9 +12,9 @@ while Tag handles requests. You'll need:
 - Permission to create and install a Slack app in your workspace. Your workplace
   may require an administrator to approve it.
 
-Only you can ask your Tag to work. Other people in the channel can read your
-requests and its replies. See [Your own Tag](../concepts/access.md) for how
-Tag uses your agent's files, tools, and connected accounts.
+By default, only you can ask your Tag to work. Other people in the channel can
+read your requests and Tag's replies. See [Your own Tag](../concepts/access.md)
+for how Tag uses your agent's files, tools, and connected accounts.
 
 Claude support is coming soon.
 

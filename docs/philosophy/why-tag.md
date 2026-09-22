@@ -10,7 +10,10 @@ It runs on a computer you control, using your Codex setup. You choose its skills
 
 We don’t host your conversations or working files. Codex and connected services still process the information needed for your requests, under their own data policies.
 
-Only you give your @Tag instructions. Your teammates can bring their own, with their own setup. You share the conversation and the results; each assistant stays personal.
+By default, only you give your @Tag instructions. Your teammates can bring
+their own, with their own setup. You share the conversation and the results;
+each assistant stays personal. See [Sharing access to your Tag](../concepts/sharing-access.md)
+when you need to authorize another person to make requests.
 
 See [Your own @Tag](../concepts/access.md) and [Adding integrations](../concepts/adding-integrations.md) for how to make it yours.
 
