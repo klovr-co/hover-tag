@@ -22,6 +22,7 @@ ASCII_FALLBACK = str.maketrans({
     "✓": "+",
     "●": "*",
     "○": "o",
+    "◌": "o",
     "›": ">",
     "─": "-",
     "·": ".",
@@ -179,6 +180,11 @@ def info_row(name, value, *, good=None):
     marker = "✓" if good else "!"
     code = SUCCESS if good else WARNING
     paragraph(f"{marker}  {name:<14} {value}", code, indent="    ")
+
+
+def pending_row(name, value):
+    """Render a readiness step before its blocking check has completed."""
+    paragraph(f"◌  {name:<14} {value}", MUTED, indent="    ")
 
 
 def next_action(label, command, *, detail=""):
