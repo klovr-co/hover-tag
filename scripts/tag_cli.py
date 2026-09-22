@@ -1916,8 +1916,12 @@ def main() -> int:
                 good=True,
             )
             ensure_connector_credential(home, values)
+            display.pending_row("Memory", "Waiting for the service to become healthy…")
             ensure_shared_memory(context, os.environ.copy())
             display.info_row("Memory", "Healthy", good=True)
+            display.pending_row(
+                "Channel memory", "Waiting for selected channels to become readable…"
+            )
             if os.getenv("SLACK_CHANNEL_POLICY") == "invited":
                 reconcile_invitation_memory(home)
             else:
@@ -1929,6 +1933,7 @@ def main() -> int:
                     + unavailable_scopes[0]
                     + ". Run mfs status and tag doctor, then retry tag start."
                 )
+            display.info_row("Channel memory", "Ready", good=True)
             preflight_result, preflight = doctor_report(False)
             if preflight_result:
                 failed = [item for item in preflight.get("checks", []) if not item.get("ok")]
@@ -1942,6 +1947,7 @@ def main() -> int:
                     )
                 raise RuntimeError("Preflight failed; run tag doctor")
             display.info_row("Checks", "Configuration and access verified", good=True)
+            display.pending_row("Slack", "Waiting for the connection to become ready…")
             if not slack_ready(home):
                 # Replace a live but disconnected TAG-managed bridge rather than
                 # accepting a PID as proof that Socket Mode is operational.
