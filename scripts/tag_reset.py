@@ -88,7 +88,9 @@ def unregister_connector(home: Path, values: dict[str, str]) -> None:
     if not uri:
         return
     search_path = str(home / "integrations/bin") + os.pathsep + os.environ.get("PATH", "")
-    executable = shutil.which("mfs", path=search_path)
+    name = "mfs.exe" if os.name == "nt" else "mfs"
+    bundled = Path(sys.executable).parent / name
+    executable = str(bundled) if bundled.is_file() else shutil.which("mfs", path=search_path)
     if not executable:
         raise RuntimeError(
             "MFS client is unavailable; the Slack history connector was not removed and setup was not reset."

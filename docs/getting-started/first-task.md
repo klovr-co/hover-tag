@@ -95,7 +95,7 @@ Follow the prompts to:
 4. Review the channels, history window, and invitation policy. New setups
    include channels the app has already joined; later invitations also make
    channels eligible for replies and history indexing.
-5. Finish setup to start Tag and begin indexing the approved Slack history.
+5. Finish setup to save the approved configuration and verify the MFS client.
 
 Setup saves completed answers. If you pause or encounter an error, run
 `tag setup` again to resume.
@@ -114,8 +114,8 @@ Tag runs in the background, so you can close this terminal. Keep the computer
 awake and connected. After restarting your computer, run `tag start` again;
 you don't need to repeat setup.
 
-If guided setup already started Tag, you're ready to continue. You can check
-the connection anytime with `tag status`.
+Setup does not start services or index history. After `tag start` completes,
+you can check the connection anytime with `tag status`.
 
 Try the task below to check that your Tag answers in Slack.
 

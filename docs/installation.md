@@ -107,8 +107,8 @@ Each release has its own Python environment with the pinned runtime requirements
 Installation also downloads and validates MFS's default local embedding model
 into its reusable cache, so the first `tag start` does not wait for a cold model
 download. Later installs reuse the cached model.
-The MFS Python server is used directly; installation does not require the
-Unix-only MFS CLI binary. Google Workspace CLI and third-party MCP packages are
+The MFS Python server and matching MFS CLI are installed into Tag's managed
+runtime on macOS and Linux. Google Workspace CLI and third-party MCP packages are
 optional integrations, installed and authenticated separately.
 
 The installer keeps dependency-manager output behind a concise Install screen.

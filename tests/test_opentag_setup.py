@@ -25,7 +25,7 @@ from scripts.opentag_setup import (
 
 
 class OpenTagSetupTests(unittest.TestCase):
-    def test_finish_setup_initializes_memory_before_connecting_named_tag(self):
+    def test_finish_setup_leaves_start_as_a_separate_command(self):
         channel = opentag_setup.slack_channels.SlackChannel(
             "C123", "general", False, True
         )
@@ -35,17 +35,17 @@ class OpenTagSetupTests(unittest.TestCase):
         with patch.dict(os.environ, {"TAG_ID": "personal"}), patch.object(
             opentag_setup, "selected_backend_available", return_value=True
         ), patch.object(
+            opentag_setup.lifecycle, "mfs_client_executable", return_value="/runtime/bin/mfs"
+        ), patch.object(
             opentag_setup.subprocess, "run", return_value=started
         ) as run, redirect_stdout(StringIO()) as output:
             result = opentag_setup.finish_setup(Path("settings.json"), values, [channel])
 
         self.assertEqual(result, 0)
-        commands = [call.args[0] for call in run.call_args_list]
-        self.assertEqual(commands[0][-2:], ["memory", "start"])
-        self.assertNotIn("personal", commands[0])
-        self.assertEqual(commands[1][-2:], ["personal", "start"])
-        self.assertIn("Memory · Initializing", output.getvalue())
-        self.assertIn("Connecting Tag to Slack", output.getvalue())
+        run.assert_not_called()
+        self.assertIn("MFS client ready", output.getvalue())
+        self.assertIn("tag personal start", output.getvalue())
+        self.assertIn("No services were started", output.getvalue())
 
     def test_bot_name_rejects_unicode_controls_and_line_separators(self):
         error = "Use a name from 1 to 35 characters without line breaks"
