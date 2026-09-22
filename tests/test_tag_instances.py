@@ -196,6 +196,26 @@ class TagInstanceTests(unittest.TestCase):
             self.assertEqual(tag_cli.main(), 0)
         stop.assert_called_once_with(home, "slack")
 
+    def test_stop_explains_memory_ownership_and_remaining_tags(self) -> None:
+        tag_instances.ensure_default(self.root)
+        for managed, bridges, expected in (
+            (True, [], "Still running · no active Tags"),
+            (True, ["personal"], "Still running for: personal"),
+            (False, [], "No Tag-managed process running"),
+        ):
+            with self.subTest(managed=managed, bridges=bridges):
+                output = StringIO()
+                with patch.dict(os.environ, {"TAG_HOME": str(self.root)}, clear=False), patch.object(
+                    sys, "argv", ["tag", "stop"]
+                ), patch.object(tag_cli, "stop_process") as stop, patch.object(
+                    tag_cli, "process_for", return_value=object() if managed else None
+                ), patch.object(tag_cli, "bridge_processes", return_value=bridges), redirect_stdout(output):
+                    self.assertEqual(tag_cli.main(), 0)
+                stop.assert_called_once_with(self.root / "instances/default", "slack")
+                self.assertIn(expected, output.getvalue())
+                self.assertEqual("Stop memory too" in output.getvalue(), managed and not bridges)
+                self.assertNotIn("Shared service left running", output.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()
