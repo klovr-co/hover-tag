@@ -28,6 +28,30 @@ class DisplayTests(unittest.TestCase):
         self.assertIn("@Tag by Hover  /  Setup", text)
         self.assertIn("https://hover.team/tag", text)
 
+    def test_header_renders_trimmed_version(self):
+        with patch.object(tag_display.Path, "read_text", return_value="  1.2.3-beta.1 \n"), redirect_stdout(StringIO()) as output:
+            tag_display.header("Setup")
+        self.assertIn("  CLI v1.2.3-beta.1\n", output.getvalue())
+        self.assertNotIn("CLI version unavailable", output.getvalue())
+
+    def test_header_reports_unavailable_version_when_empty(self):
+        for content in ("", " \t\n"):
+            with self.subTest(content=content):
+                with patch.object(tag_display.Path, "read_text", return_value=content), redirect_stdout(StringIO()) as output:
+                    tag_display.header("Setup")
+                self.assertIn("CLI version unavailable", output.getvalue())
+
+    def test_header_reports_unavailable_version_when_read_fails(self):
+        for error in (
+            FileNotFoundError("missing VERSION"),
+            PermissionError("unreadable VERSION"),
+            UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte"),
+        ):
+            with self.subTest(error=type(error).__name__):
+                with patch.object(tag_display.Path, "read_text", side_effect=error), redirect_stdout(StringIO()) as output:
+                    tag_display.header("Setup")
+                self.assertIn("CLI version unavailable", output.getvalue())
+
     def test_wide_banner_has_one_brand_name_without_a_duplicate_wordmark(self):
         with patch.object(tag_display.shutil, "get_terminal_size", return_value=os.terminal_size((80, 24))), patch.object(
             tag_display, "color_available", return_value=True
