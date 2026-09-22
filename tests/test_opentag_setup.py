@@ -44,7 +44,9 @@ class OpenTagSetupTests(unittest.TestCase):
         self.assertEqual(result, 0)
         run.assert_not_called()
         self.assertIn("MFS client ready", output.getvalue())
+        self.assertIn("Next step · start Tag", output.getvalue())
         self.assertIn("tag personal start", output.getvalue())
+        self.assertIn("Tag is still stopped. Run this command", output.getvalue())
         self.assertIn("No services were started", output.getvalue())
 
     def test_bot_name_rejects_unicode_controls_and_line_separators(self):

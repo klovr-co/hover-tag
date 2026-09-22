@@ -1576,7 +1576,11 @@ def finish_setup(_config_path: Path, values: dict[str, str], _channels: list[sla
     ui.message("✓ Setup complete. No services were started and no history was indexed.")
     tag_id = os.getenv("TAG_ID", "default")
     command = "tag start" if tag_id == "default" else f"tag {shlex.quote(tag_id)} start"
-    ui.message(f"Start when ready: {command}")
+    ui.display.next_action(
+        "Next step · start Tag",
+        command,
+        detail="Tag is still stopped. Run this command to connect Slack and make Tag available.",
+    )
     return 0
 
 
