@@ -1038,6 +1038,57 @@ class TagHomeTests(unittest.TestCase):
         self.assertTrue(result["restarted"])
         self.assertFalse(result["restart_required"])
 
+    def test_upgrade_discovers_instances_and_restarts_only_running_tags(self):
+        for no_restart in (False, True):
+            with self.subTest(no_restart=no_restart), tempfile.TemporaryDirectory() as temp:
+                home = Path(temp)
+                default = tag_instances.ensure_default(home)
+                work = tag_instances.create(home, "work")
+                tag_instances.create(home, "stopped")
+                (home / "current.json").write_text(json.dumps({
+                    "installed_version": "0.2.0-beta.1", "installed_commit": "a" * 40,
+                    "channel": "beta", "selection": "channel",
+                }))
+                running_paths = {default.home / "state/slack.json", work.home / "state/slack.json"}
+                target = FetchedRelease(ROOT, ReleaseSelection("beta", "0.2.0-beta.2", "b" * 40))
+                output = io.StringIO()
+                with patch("scripts.tag_install.fetch_release", return_value=target), patch(
+                    "scripts.tag_install.install"
+                ), patch("scripts.tag_cli.process_for", side_effect=lambda path: object() if path in running_paths else None), patch(
+                    "scripts.tag_cli.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", "")
+                ) as run, contextlib.redirect_stdout(output):
+                    upgrade_command(home, json_output=True, dependencies=False, no_restart=no_restart)
+                result = json.loads(output.getvalue())
+                self.assertEqual(["default", "work"], result["running_tags"])
+                self.assertEqual(no_restart, result["restart_required"])
+                commands = [call.args[0] for call in run.call_args_list]
+                if no_restart:
+                    self.assertEqual([], commands)
+                else:
+                    self.assertEqual(2, len(commands))
+                    self.assertEqual("restart", commands[0][-1])
+                    self.assertEqual(["work", "restart"], commands[1][-2:])
+
+    def test_upgrade_continues_restarting_other_tags_after_one_failure(self):
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            tag_instances.ensure_default(home)
+            tag_instances.create(home, "work")
+            (home / "current.json").write_text(json.dumps({
+                "installed_version": "0.2.0-beta.1", "installed_commit": "a" * 40,
+                "channel": "beta", "selection": "channel",
+            }))
+            target = FetchedRelease(ROOT, ReleaseSelection("beta", "0.2.0-beta.2", "b" * 40))
+            with patch("scripts.tag_install.fetch_release", return_value=target), patch(
+                "scripts.tag_install.install"
+            ), patch("scripts.tag_cli.bridge_processes", return_value=["default", "work"]), patch(
+                "scripts.tag_cli.process_for", return_value=None
+            ), patch("scripts.tag_cli.subprocess.run", side_effect=[
+                subprocess.CompletedProcess([], 1, "", ""), subprocess.CompletedProcess([], 0, "", ""),
+            ]) as run, self.assertRaisesRegex(RuntimeError, "default"):
+                upgrade_command(home, json_output=True, dependencies=False)
+            self.assertEqual(2, run.call_count)
+
     def test_upgrade_blocks_older_exact_version_without_opt_in(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
