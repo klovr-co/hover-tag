@@ -237,11 +237,21 @@ and removed on exit; these safeguards are not a hardened isolation boundary
 
 ## Commands for people and skills
 
+After an upgrade, `tag start` applies versioned Slack app migrations before
+preflight. Existing Slack CLI authorization is used to add required DM and
+search permissions (`im:history` and `users:read`), refresh the installation,
+and save replacement credentials privately. This works without an interactive
+terminal and preserves unrelated app settings. The migration is marked complete
+only after the replacement bot token has both permissions. If Slack requires
+workspace approval or renewed CLI sign-in, startup stops with recovery guidance;
+resolve that requirement and retry `tag start`.
+
 Permission failures pause setup and show the missing scope, the operation it blocks,
 and instructions to fix it yourself in Slack (or ask a workspace admin).
 Choose **Open app settings**, **Check again**, or **Exit · finish setup later**; channel joining
-also lets you return to channel selection. Tag does not repair permissions or
-reinstall apps as part of error recovery. Bot scopes, Socket Mode app-token scopes,
+also lets you return to channel selection. Outside the versioned upgrade migrations
+above, Tag does not repair permissions or reinstall apps as part of error recovery.
+Bot scopes, Socket Mode app-token scopes,
 and separate history credentials require different fixes. If Slack issues a new
 token, update it privately in Tag settings before retrying. Normal approved
 credential handoff remains unchanged; it uses remote app settings without `--force`.

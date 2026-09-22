@@ -23,14 +23,15 @@ except ImportError:
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MIGRATION_VERSION = 1
+MIGRATION_VERSION = 2
 DM_SCOPE = "im:history"
+REQUIRED_BOT_SCOPES = (DM_SCOPE, "users:read")
 DM_EVENT = "message.im"
 AGENT_DESCRIPTION = "Run approved Codex or Claude tasks from Slack."
 
 
 def migrate_manifest(remote: dict) -> tuple[dict, bool]:
-    """Add Tag's DM contract while preserving settings owned by the operator."""
+    """Add Tag's DM and search requirements, preserving operator settings."""
     migrated = json.loads(json.dumps(remote))
     try:
         app_home = migrated.setdefault("features", {}).setdefault("app_home", {})
@@ -42,8 +43,9 @@ def migrate_manifest(remote: dict) -> tuple[dict, bool]:
         raise RuntimeError("Slack returned a malformed app manifest; no settings were changed")
     app_home["messages_tab_enabled"] = True
     app_home["messages_tab_read_only_enabled"] = False
-    if DM_SCOPE not in scopes:
-        scopes.append(DM_SCOPE)
+    for scope in REQUIRED_BOT_SCOPES:
+        if scope not in scopes:
+            scopes.append(scope)
     if DM_EVENT not in events:
         events.append(DM_EVENT)
     return migrated, migrated != remote
@@ -217,8 +219,8 @@ def enable_agent_view(
     return True
 
 
-def reconcile(home: Path, config_path: Path, values: dict[str, str], *, interactive: bool | None = None) -> bool:
-    """Apply pending manifest migrations. Return true when remote state changed."""
+def reconcile(home: Path, config_path: Path, values: dict[str, str]) -> bool:
+    """Apply release requirements using existing CLI authorization, without prompts."""
     team_id, app_id = values["SLACK_TEAM_ID"], values["SLACK_APP_ID"]
     marker = home / "state/slack-manifest-migrations.json"
     if _marker_matches(marker, team_id, app_id):
@@ -230,31 +232,24 @@ def reconcile(home: Path, config_path: Path, values: dict[str, str], *, interact
     remote = remote_manifest(slack, project, app_id)
     migrated, changed = migrate_manifest(remote)
     scopes = granted_bot_scopes(values["SLACK_BOT_TOKEN"])
-    if not changed and DM_SCOPE in scopes:
+    if not changed and set(REQUIRED_BOT_SCOPES).issubset(scopes):
         settings.save_config(marker, {"version": MIGRATION_VERSION, "team_id": team_id, "app_id": app_id})
         return False
-    if interactive is None:
-        interactive = sys.stdin.isatty() and sys.stdout.isatty()
-    if not interactive:
-        raise RuntimeError(
-            "Slack app permissions need migration. Run `tag start` in an interactive terminal "
-            "to review Slack's authorization prompt."
-        )
     with tempfile.TemporaryDirectory(prefix="tag-slack-migration-") as directory:
         migration_project = _migration_project(project, migrated, team_id, app_id, Path(directory))
         if changed:
             result = _run(_sync_command(slack, migration_project, app_id, team_id), cwd=migration_project)
             if result.returncode:
                 raise RuntimeError("Slack app settings migration failed; run `slack login`, then retry `tag start`")
-        install = _run([
-            slack, "app", "install", "--team", team_id, "--app", app_id,
-            "--skip-update", "--no-color",
-        ], cwd=project, capture=False)
-        if install.returncode:
-            raise RuntimeError("Slack did not approve the new permissions; retry `tag start` after approval")
+    # The credential handoff refreshes the installation itself. It captures
+    # output and closes stdin, so background upgrades never wait for input.
     credentials = slack_credentials.receive(project, team_id, app_id)
     settings.update_config(config_path, credentials)
-    if DM_SCOPE not in granted_bot_scopes(credentials["SLACK_BOT_TOKEN"]):
-        raise RuntimeError("Slack reinstalled the app without im:history; approve that permission and retry `tag start`")
+    missing = set(REQUIRED_BOT_SCOPES) - granted_bot_scopes(credentials["SLACK_BOT_TOKEN"])
+    if missing:
+        raise RuntimeError(
+            "Slack reinstalled the app without " + ", ".join(sorted(missing))
+            + "; approve those permissions in Slack and retry `tag start`"
+        )
     settings.save_config(marker, {"version": MIGRATION_VERSION, "team_id": team_id, "app_id": app_id})
-    return changed
+    return True
