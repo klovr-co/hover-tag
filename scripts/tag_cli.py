@@ -1875,19 +1875,32 @@ def main() -> int:
         else:
             display.header(
                 "Stop",
-                selected_target(home, context.tag_id, suffix="Shared memory stays online"),
+                selected_target(home, context.tag_id),
             )
             display.section("Services")
         stop_process(home, "slack")
         display.info_row("Slack", "Stopped or already offline", good=True)
-        display.info_row("Memory", "Shared service left running", good=True)
+        memory_running = process_for(context.shared_mfs_home / "mfs.json") is not None
+        remaining_tags = bridge_processes(installation_root) if memory_running else []
+        if remaining_tags:
+            memory_status = "Still running for: " + ", ".join(remaining_tags)
+            memory_detail = "Stop those Tags before running tag memory stop."
+        elif memory_running:
+            memory_status = "Still running · no active Tags"
+            memory_detail = "Memory runs separately and stays available for your next start."
+        else:
+            memory_status = "No Tag-managed process running"
+            memory_detail = "Externally managed memory, if configured, is unchanged."
+        display.info_row("Memory", memory_status)
         if not restart_flow:
             display.completion(
                 "Tag is stopped",
-                "Independently managed memory servers were left running.",
+                memory_detail,
                 next_label="Start again",
                 next_command=context.command("start"),
             )
+            if memory_running and not remaining_tags:
+                display.next_action("Stop memory too", "tag memory stop")
         return 0
     if args.command == "start":
         restart_flow = os.getenv("TAG_RESTART_FLOW") == "1"
