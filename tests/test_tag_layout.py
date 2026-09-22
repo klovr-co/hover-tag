@@ -57,6 +57,41 @@ class LayoutMigrationTests(unittest.TestCase):
                 self.assertTrue((old / 'project.txt').exists())
                 self.assertEqual('dependency lock', (context.workspace / 'Cargo.lock').read_text())
 
+    def test_historical_workspace_placeholder_does_not_block_relocation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'Tag'
+            context = tag_instances.ensure_default(root)
+            historical = '# TAG-only Codex MCP servers go here: [mcp_servers.NAME]\n'
+            current = (
+                '# TAG-only Codex defaults and MCP servers go here.\n'
+                '# model = "gpt-example"\n'
+                '# model_reasoning_effort = "high"\n'
+                '# service_tier = "default"\n'
+                '# [mcp_servers.NAME]\n'
+            )
+            (context.workspace / '.codex/config.toml').write_text(historical)
+            source = root / 'workspace/.codex/config.toml'
+            source.parent.mkdir(parents=True)
+            source.write_text(current)
+
+            self.assertTrue(tag_layout.migrate(context, Mock()))
+            self.assertEqual(current, (context.workspace / '.codex/config.toml').read_text())
+
+    def test_custom_workspace_codex_config_still_blocks_relocation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'Tag'
+            context = tag_instances.ensure_default(root)
+            custom = 'model = "custom"\n'
+            destination = context.workspace / '.codex/config.toml'
+            destination.write_text(custom)
+            source = root / 'workspace/.codex/config.toml'
+            source.parent.mkdir(parents=True)
+            source.write_text('# TAG-only Codex MCP servers go here: [mcp_servers.NAME]\n')
+
+            with self.assertRaisesRegex(RuntimeError, 'conflict'):
+                tag_layout.migrate(context, Mock())
+            self.assertEqual(custom, destination.read_text())
+
     def test_conflicting_files_are_preserved_and_retry_can_complete(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
