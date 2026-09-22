@@ -33,9 +33,11 @@ them back from a separate AI chat.
 
 ## Only you can give your Tag instructions
 
-Today, only the owner can ask their Tag to do work. Jules can reply to Maya
-in the thread, but he can't give Maya's Tag a task. Sharing one Tag with
-other people is coming soon.
+By default, only the owner can ask their Tag to do work. Jules can reply to
+Maya in the thread, but he can't give Maya's Tag a task.
+
+If you need to let someone else make requests, see
+[Sharing access to your Tag](sharing-access.md).
 
 This matters because your Tag may use your files and connected accounts.
 For example, if it uses your Gmail connection, it accesses the mail that
@@ -61,8 +63,7 @@ Codex starts in Tag's workspace folder. That folder alone doesn't restrict
 it to the files inside; its permissions may also allow it to read or change
 files elsewhere on the computer.
 
-Only you can request work from your Tag, but that rule doesn't limit what
-Codex can do on the host computer. To keep unrelated files and accounts out
-of reach, consider running Tag on a separate computer or under a separate
-local account with limited permissions. See the [security policy](../../SECURITY.md)
-for details.
+The owner-only default doesn't limit what Codex can do on the host computer. To
+keep unrelated files and accounts out of reach, consider running Tag on a
+separate computer or under a separate local account with limited permissions.
+See the [security policy](../../SECURITY.md) for details.
