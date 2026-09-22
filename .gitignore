@@ -1,4 +1,3 @@
-.env
 .codex/skills/
 .runtime/
 *.log
@@ -7,3 +6,5 @@ __pycache__/
 .DS_Store
 out/
 .playwright-cli/
+config.bat
+node_modules
