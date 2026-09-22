@@ -1,11 +1,19 @@
 # Tag
 
-## @Tag, Slack is all you need.
+## @Tag in Slack
 
-Tag brings your personal AI agent into a Slack thread. Discuss the work
-with your teammates, then mention your Tag to ask it to investigate a question,
-make a plan, or work on files. It uses the thread as context and replies where
-everyone can see the result and follow up.
+Your personal assistant, in your workspace.
+
+[Install Tag](getting-started/first-task.md)
+
+**Ask your agent to set up Tag**
+
+Copy this prompt into your coding agent:
+
+```text
+Install the hover-tag-setup skill from https://github.com/klovr-co/hover-tag, then use it to set up Tag for me.
+Help me connect Tag to Slack and guide me through any login or authorization steps I need to complete myself.
+```
 
 Jules and Maya discuss the launch, then Maya asks their Tag to pull it
 together:
@@ -31,7 +39,7 @@ where teammates can follow the work.
 You don’t need to code to use Tag. Follow the
 [setup guide](getting-started/first-task.md) to connect your agent to Slack.
 
-Only you can ask your Tag to work, because it uses your agent's
+By default, only you can ask your Tag to work, because it uses your agent's
 available files, tools, and connected accounts. Teammates can still see the
 conversation. Read more about [your own Tag](concepts/access.md).
 
@@ -60,14 +68,19 @@ its workspace, and the sources and tools made available to it. See
 
 ## Find the right documentation
 
-| If you want to… | Go to… |
+| I want to… | Read |
 | --- | --- |
-| Understand why work stays in Slack | [Why Tag](philosophy/why-tag.md) |
-| Understand threads, workspaces, and memory | [How Tag works](concepts/mental-model.md) |
-| Follow up, find earlier discussions, or save a note | [What Tag knows](concepts/what-tag-knows.md) |
-| Install Tag and delegate the first task | [Run your first task](getting-started/first-task.md) |
-| See what is implemented today | [Supported capabilities](reference/supported-capabilities.md) |
-| Explore every connected journey | [Connected user flows](user-flows.md) |
-| Configure Slack in detail | [Slack adapter reference](../references/slack-adapter.md) |
-| Diagnose a problem | [Troubleshooting](troubleshooting.md) |
-| Check release and operating constraints | [Security policy](../SECURITY.md) |
+| Set up Tag and try a first task | [Get started](getting-started/first-task.md) |
+| Understand why I’d bring my assistant into Slack | [Why Tag](philosophy/why-tag.md) |
+| Know who can use my Tag and see its replies | [Your own Tag](concepts/access.md) |
+| Let someone else make requests to my Tag | [Sharing access to your Tag](concepts/sharing-access.md) |
+| See what happens when I ask for help | [How Tag works](concepts/mental-model.md) |
+| Follow up or find an earlier discussion | [What Tag knows](concepts/what-tag-knows.md) |
+| Work with attachments and save files | [Working with files](concepts/workspaces-and-tools.md) |
+| Add my tools, skills, and connected accounts | [Adding integrations](concepts/adding-integrations.md) |
+| Find an email and draft a reply from Slack | [Use Gmail from Slack](tutorials/use-gmail-from-slack.md) |
+| Check what’s supported today | [Supported capabilities](reference/supported-capabilities.md) |
+| Fix a setup or connection problem | [Troubleshooting](troubleshooting.md) |
+
+For detailed configuration, see the [Slack adapter reference](../references/slack-adapter.md).
+Read the [security policy](../SECURITY.md) for permissions and operating limits.

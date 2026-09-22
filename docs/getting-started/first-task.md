@@ -12,9 +12,9 @@ while Tag handles requests. You'll need:
 - Permission to create and install a Slack app in your workspace. Your workplace
   may require an administrator to approve it.
 
-Only you can ask your Tag to work. Other people in the channel can read your
-requests and its replies. See [Your own Tag](../concepts/access.md) for how
-Tag uses your agent's files, tools, and connected accounts.
+By default, only you can ask your Tag to work. Other people in the channel can
+read your requests and Tag's replies. See [Your own Tag](../concepts/access.md)
+for how Tag uses your agent's files, tools, and connected accounts.
 
 Claude support is coming soon.
 
@@ -122,16 +122,17 @@ Try the task below to check that your Tag answers in Slack.
 ## Try your Tag in Slack
 
 In a channel connected during setup, post a short planning note. You can use
-this example or write one for your own work:
-
-> We need to prepare the launch. Maya will finish the FAQ by Tuesday.
-> Jules will test signup by Wednesday. Nobody has taken the support briefing yet.
+the example below or write one for your own work.
 
 Reply in that message's thread and mention your Tag. These examples use
 Maya's Tag; select your own app's mention from Slack's suggestions. The replies
-below are illustrative:
+below are illustrative. Continue in the same thread to assign the support
+briefing and update the checklist:
 
-> @Maya's Tag turn this into a checklist with owners and deadlines. Flag anything missing.
+> **Maya:** We need to prepare the launch. Maya will finish the FAQ by Tuesday.
+> Jules will test signup by Wednesday. Nobody has taken the support briefing yet.
+>
+> **Maya:** @Maya's Tag turn this into a checklist with owners and deadlines. Flag anything missing.
 >
 > **Maya's Tag:** Here's the launch checklist:
 >
@@ -140,15 +141,8 @@ below are illustrative:
 > ☐ Test signup — Jules, by Wednesday.
 >
 > ☐ Brief support — owner and deadline missing. Who will take this, and by when?
-
-Check that the reply appears in the same thread, keeps the two assigned tasks
-and their deadlines, and flags the missing owner and deadline for the support
-briefing. That confirms Tag received your request, ran Codex, and returned a
-result to Slack.
-
-Continue in the same thread:
-
-> @Maya's Tag I'll handle the support briefing on Thursday. Update the checklist.
+>
+> **Maya:** @Maya's Tag I'll handle the support briefing on Thursday. Update the checklist.
 >
 > **Maya's Tag:** Updated the checklist:
 >
@@ -159,6 +153,11 @@ Continue in the same thread:
 > ☐ Brief support — Maya, on Thursday.
 >
 > All three tasks now have an owner and a deadline.
+
+Check that the first reply appears in the same thread, keeps the two assigned
+tasks and their deadlines, and flags the missing owner and deadline for the
+support briefing. That confirms Tag received your request, ran Codex, and
+returned a result to Slack.
 
 The updated checklist should include your follow-up alongside the earlier
 tasks. Tag uses the thread messages as context.

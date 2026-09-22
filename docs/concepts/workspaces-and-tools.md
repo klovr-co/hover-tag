@@ -59,9 +59,9 @@ terminal and run:
 tag paths
 ```
 
-Find the `workspace` path in the output. On a default macOS installation it is
-`~/Library/Application Support/Tag/workspace`. Other platforms and custom
-installations use different locations, so use the path your command reports.
+Find the `workspace` path in the output. A normal installation uses
+`~/Tag/default` for the default Tag and `~/Tag/NAME` for a named Tag. Custom
+installations can use a different location, so use the path your command reports.
 
 Tag keeps this folder separate from its application releases. Files and local
 skills stay in place when you upgrade. You can organize it like any working
@@ -78,3 +78,10 @@ workspace/
 The workspace is the agent's starting directory. Its actual file and command
 access depends on the backend's permissions; the folder itself is not a
 sandbox. See the [security policy](../../SECURITY.md) for the execution model.
+
+## Keep working on the result
+
+Files Tag saves are ordinary files. Open the checklist in your editor, make
+changes yourself, or use it in another tool. On a later request, tell Tag which
+file to read so it can work from the current version. Your work stays in your
+working folder when Tag is upgraded.
