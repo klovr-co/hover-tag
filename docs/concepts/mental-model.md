@@ -33,8 +33,10 @@ MFS gives it searchable context without opening every indexed source to Tag.
 One Slack API page containing up to 30 messages from the current thread is
 passed to each run, and the triggering request is passed separately. You can
 ask your Tag to "compare that with the current plan" without restating the
-discussion. Only the owner can request work from their Tag. Teammates can add
-details in the thread for the owner's next request to draw on.
+discussion. By default, only the owner can request work from their Tag.
+Teammates can add details in the thread for the owner's next request to draw
+on. See [Sharing access to your Tag](sharing-access.md) if the owner needs to
+let others make requests.
 Anything outside that slice of the thread must come from the workspace, an
 approved MFS source, or a tool available to the agent.
 

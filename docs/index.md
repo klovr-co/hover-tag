@@ -39,7 +39,7 @@ where teammates can follow the work.
 You don’t need to code to use Tag. Follow the
 [setup guide](getting-started/first-task.md) to connect your agent to Slack.
 
-Only you can ask your Tag to work, because it uses your agent's
+By default, only you can ask your Tag to work, because it uses your agent's
 available files, tools, and connected accounts. Teammates can still see the
 conversation. Read more about [your own Tag](concepts/access.md).
 
@@ -73,6 +73,7 @@ its workspace, and the sources and tools made available to it. See
 | Set up Tag and try a first task | [Get started](getting-started/first-task.md) |
 | Understand why I’d bring my assistant into Slack | [Why Tag](philosophy/why-tag.md) |
 | Know who can use my Tag and see its replies | [Your own Tag](concepts/access.md) |
+| Let someone else make requests to my Tag | [Sharing access to your Tag](concepts/sharing-access.md) |
 | See what happens when I ask for help | [How Tag works](concepts/mental-model.md) |
 | Follow up or find an earlier discussion | [What Tag knows](concepts/what-tag-knows.md) |
 | Work with attachments and save files | [Working with files](concepts/workspaces-and-tools.md) |
