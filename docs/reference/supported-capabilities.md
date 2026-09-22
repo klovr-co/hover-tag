@@ -14,7 +14,7 @@ unavailable behavior.
 | Continue with thread context | Implemented | A later mention receives the current bounded thread context. |
 | Post a requested top-level message | Implemented | Restricted to the channel that invoked Tag. |
 | Create a requested Slack Canvas | Implemented | Requires the Slack Canvas scope and explicit user intent. |
-| Upload generated images as results | Not implemented | There is no dedicated result upload-and-attach path. |
+| Upload generated images as results | Implemented | Uploads supported backend-generated PNG, JPEG, GIF, and WebP results to the requesting thread; requires `files:write`. Image generation depends on the backend's available tools. |
 
 ## Agent work
 
