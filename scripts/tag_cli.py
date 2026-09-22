@@ -606,6 +606,13 @@ def mfs_server_executable() -> str | None:
     return str(bundled) if bundled.is_file() else shutil.which(name)
 
 
+def mfs_client_executable() -> str | None:
+    """Prefer Tag's bundled MFS client, but support an independent install."""
+    name = "mfs.exe" if os.name == "nt" else "mfs"
+    bundled = Path(sys.executable).parent / name
+    return str(bundled) if bundled.is_file() else shutil.which(name)
+
+
 def instance_environment(
     context: tag_instances.InstanceContext,
     values: dict[str, str] | None = None,
@@ -853,7 +860,7 @@ def sync_configured_slack_memory(environment: dict[str, str] | None = None) -> N
     config = Path(source.get("MFS_SLACK_CONNECTOR_CONFIG", "")).expanduser()
     if not uri or not config.is_file():
         return
-    executable = shutil.which("mfs")
+    executable = mfs_client_executable()
     if not executable:
         raise RuntimeError("MFS client is unavailable; install it before indexing Slack history")
     completed = subprocess.run(
@@ -1500,7 +1507,7 @@ def main() -> int:
     parser.add_argument("--json", action="store_true", dest="json_output", help="structured output for inspect, status, doctor, config, paths, and upgrade")
     parser.add_argument("--stdin", action="store_true", help="read a config value from stdin")
     parser.add_argument("--from", dest="source", type=Path)
-    parser.add_argument("--no-start", action="store_true", help="setup: save choices without starting services or indexing")
+    parser.add_argument("--no-start", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--test", action="store_true", help="setup: use a separate test home; implies --no-start")
     parser.add_argument("--review", action="store_true", help="setup: review choices even when already configured")
     parser.add_argument("--follow", action="store_true", help="logs: continue streaming new service output")

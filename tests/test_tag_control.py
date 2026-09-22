@@ -71,6 +71,13 @@ class TagControlTests(unittest.TestCase):
         self.environment = patch.dict(os.environ, environment, clear=True)
         self.environment.start()
         self.addCleanup(self.environment.stop)
+        self.mfs_client = patch.object(
+            opentag_setup.lifecycle,
+            "mfs_client_executable",
+            return_value="/runtime/bin/mfs",
+        )
+        self.mfs_client.start()
+        self.addCleanup(self.mfs_client.stop)
         self.addCleanup(self.temporary.cleanup)
 
     def complete(self, backend="codex"):

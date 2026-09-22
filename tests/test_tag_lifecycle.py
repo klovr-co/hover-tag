@@ -545,6 +545,16 @@ class TagLifecycleTests(unittest.TestCase):
         ):
             self.assertEqual(tag_cli.mfs_server_executable(), "/usr/local/bin/mfs-server")
 
+    def test_mfs_client_prefers_managed_runtime_over_path(self) -> None:
+        with patch.object(tag_cli.Path, "is_file", return_value=True), patch.object(
+            tag_cli.shutil, "which", return_value="/usr/local/bin/mfs"
+        ) as which:
+            self.assertEqual(
+                tag_cli.mfs_client_executable(),
+                str(tag_cli.Path(sys.executable).parent / ("mfs.exe" if os.name == "nt" else "mfs")),
+            )
+        which.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

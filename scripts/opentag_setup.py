@@ -1232,6 +1232,11 @@ def check_prerequisites(backend: str) -> bool:
             ok = False
     else:
         ui.message("✓ mfs-server: MFS memory server")
+    if lifecycle.mfs_client_executable() is None:
+        ui.message("✗ mfs: MFS client (reinstall or upgrade Tag)")
+        ok = False
+    else:
+        ui.message("✓ mfs: MFS client")
     return ok
 
 
@@ -1309,6 +1314,9 @@ def guided_setup(
         values = settings.update_config(config_path, {"OPENTAG_BACKEND": choose_backend()})
     backend = values["OPENTAG_BACKEND"]
     if not selected_backend_available(backend):
+        return 1
+    if lifecycle.mfs_client_executable() is None:
+        ui.message("The MFS client is missing. Reinstall or upgrade Tag, then resume setup.")
         return 1
 
     needs_slack_connection = any(
@@ -1447,8 +1455,7 @@ def guided_setup(
             agent = ui.choose("Agent", ["Codex · recommended", "Claude · experimental"], default=int(values["OPENTAG_BACKEND"] == "claude"))
             values = settings.update_config(config_path, {"MFS_SLACK_HISTORY_DAYS": days[day], "OPENTAG_BACKEND": ("codex", "claude")[agent]})
         else:
-            ui.message("Continue will index the selected history and start Tag. No test message is sent." if start_services
-                       else "Continue saves these choices only. No services or indexing will start.")
+            ui.message("Continue saves these choices only. No services or indexing will start.")
             if ui.choose("Approve setup", ["Continue", "Back"], default=1) == 0:
                 if channel_policy == "invited":
                     values = settings.update_config(config_path, {"SLACK_CHANNEL_POLICY": channel_policy})
@@ -1544,28 +1551,12 @@ def guided_setup(
     return finish_setup(config_path, values, selected_channels)
 
 
-def finish_setup(config_path: Path, values: dict[str, str], channels: list[slack_channels.SlackChannel]) -> int:
-    """Start approved services, then wait for the Slack bridge to be ready."""
+def finish_setup(_config_path: Path, values: dict[str, str], _channels: list[slack_channels.SlackChannel]) -> int:
+    """Finish configuration without starting services or indexing history."""
     ui.message("✓ Slack memory configured")
-    environment = dict(os.environ, OPENTAG_ENV_FILE=str(config_path))
-    ui.message("◌ Memory · Initializing…")
-    ui.message(
-        "First start can take a couple of minutes. This happens now so "
-        "memory is ready before Tag connects to Slack.",
-        indent="    ",
-    )
-    result = subprocess.run(
-        [sys.executable, str(ROOT / "scripts/tag_cli.py"), "memory", "start"],
-        env=environment,
-        text=True,
-        capture_output=True,
-    )
-    if result.returncode:
-        ui.message(safe_cli_output(result.stdout + "\n" + result.stderr))
-        raise RuntimeError(
-            "Memory could not initialize; run tag memory status for details"
-        )
-    ui.message("✓ Memory ready")
+    if lifecycle.mfs_client_executable() is None:
+        raise RuntimeError("The bundled MFS client is missing; reinstall or upgrade Tag before starting")
+    ui.message("✓ MFS client ready")
     backend = values["OPENTAG_BACKEND"]
     while not selected_backend_available(backend):
         if ui.choose("Agent needs installation", ["Check again", "Save and exit"]) == 1:
@@ -1581,25 +1572,12 @@ def finish_setup(config_path: Path, values: dict[str, str], channels: list[slack
         ui.message("✓ Codex signed in · first task still unverified")
     else:
         ui.message("✓ Claude executable available · sign-in will be checked by its first task")
-    while True:
-        ui.message("◌ Connecting Tag to Slack…")
-        tag_id = os.getenv("TAG_ID", "default")
-        target = [] if tag_id == "default" else [tag_id]
-        result = subprocess.run([sys.executable, str(ROOT / "scripts/tag_cli.py"), *target, "start"], env=environment, text=True, capture_output=True)
-        if result.returncode == 0:
-            print()
-            ui.message("✓ Tag is connected.")
-            ui.message("MFS healthy · Slack connected")
-            ui.message("In any selected channel (" + ", ".join(f"#{c.name}" for c in channels) + "), send:")
-            print()
-            ui.message(f"@{values.get('OPENTAG_BOT_NAME', 'Tag')} say hello", indent="    ")
-            print()
-            ui.message("First reply: not verified yet. Observe the reply in Slack.")
-            return 0
-        ui.message(safe_cli_output(result.stdout + "\n" + result.stderr))
-        ui.message("Startup needs attention. Your completed setup is saved.")
-        if ui.choose("After addressing the error", ["Check again", "Save and exit"]) == 1:
-            raise ui.Paused()
+    print()
+    ui.message("✓ Setup complete. No services were started and no history was indexed.")
+    tag_id = os.getenv("TAG_ID", "default")
+    command = "tag start" if tag_id == "default" else f"tag {shlex.quote(tag_id)} start"
+    ui.message(f"Start when ready: {command}")
+    return 0
 
 
 def completed_setup_status(config_path: Path) -> int | None:
@@ -1628,7 +1606,7 @@ def completed_setup_status(config_path: Path) -> int | None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Set up Tag or resume missing configuration.")
     parser.add_argument("--config", type=Path, default=instance_home() / "config/settings.json", help="configuration file to create")
-    parser.add_argument("--no-start", action="store_true", help="save setup choices without starting services or indexing history")
+    parser.add_argument("--no-start", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--review", action="store_true", help="review completed setup choices")
     parser.add_argument("--test-mode", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--review-channels", action="store_true", help=argparse.SUPPRESS)
@@ -1647,6 +1625,8 @@ def main() -> int:
         progress = config_path.with_name("setup-progress.json")
         settings.save_config(progress, {"completed": False})
         setup_options = {
+            # This selects the full readiness path; finish_setup deliberately
+            # leaves service startup to the separate `tag start` command.
             "start_services": not args.no_start,
             "review_channels": args.review_channels,
         }
@@ -1654,7 +1634,7 @@ def main() -> int:
             setup_options["test_mode"] = True
         result = guided_setup(config_path, **setup_options)
         if result == 0:
-            settings.save_config(progress, {"completed": True, "services_requested": not args.no_start})
+            settings.save_config(progress, {"completed": True, "services_requested": False})
         if result == 0 and args.completion_file:
             settings.save_config(args.completion_file, {"approved": True})
         return result
