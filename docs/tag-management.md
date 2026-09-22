@@ -29,6 +29,13 @@ failed startup leave shared memory and other Tags running. Inspect it with
 service can be stopped explicitly with `tag memory stop`. Tag refuses to stop
 an externally managed MFS process.
 
+An upgrade restarts each previously running Tag, leaving stopped Tags stopped
+and shared MFS online. `--no-restart` defers activation until you restart those
+Tags. On startup, legacy root-level settings and old working folders are migrated
+automatically after stopping the affected bridge. Originals are retained;
+conflicting destination files stop migration with an actionable path. Interrupted
+copies resume on retry, and completed migrations do not overwrite later edits.
+
 Shared storage does not authorize cross-workspace retrieval. Normal Slack
 retrieval remains limited to the selected Tag's approved workspace/channel
 scopes. These local Tags share the trusted-sandbox limitations described
@@ -81,10 +88,11 @@ Ctrl-C stops both; configured remote MFS endpoints remain external. Managed
 releases do not expose development watching.
 
 Completed `tag setup` checks readiness and exits without repeating onboarding.
-Use `tag setup --review` to review choices explicitly. `tag setup --no-start`
-saves approved choices without starting services or indexing. For a separate,
+Setup saves approved choices and verifies the MFS client, but it does
+not start services or index history; run `tag start` when ready. Use
+`tag setup --review` to review choices explicitly. For a separate,
 resumable test configuration, use `tag setup --test`; it keeps data under
-`<TAG_HOME>/testing/onboarding` and implies `--no-start`. This is not a Slack
+`<TAG_HOME>/testing/onboarding`. This is not a Slack
 sandbox: CLI sign-ins are shared and approved Slack app/channel operations are
 real. Test mode labels its banner, app-creation choice, review warning, and
 default app name (`TEST · <first name>'s Tag`) accordingly. A test home needs a
@@ -123,7 +131,8 @@ its Slack app data. If deletion fails or its outcome is uncertain, setup does
 not restart; check the app in Slack before running `tag setup`. The backup's
 `app-deletion.json` records the outcome. Missing or ambiguous identity never
 triggers deletion.
-Setup offers **Create a new Tag app**, **Use an existing app**, or **Save and exit**.
+Setup offers **Create a new Tag app**, **Use an existing app**, or
+**Exit · finish setup later**.
 Profile-picture selection and upload require Slack CLI 4.7 or newer.
 Before creating a new app, setup proposes **&lt;your first name&gt;'s Tag** and a
 curated version of Tag's waterdrop. Choose Metal (white), Wood (green), Water
@@ -134,7 +143,7 @@ element to keep that branded identity, or **Choose my own picture** and drag or 
 local PNG, JPEG, or GIF path into the terminal. Images must be 512–2000 pixels
 in each dimension. Before creating anything remotely, Tag reviews the chosen
 name and picture and offers to open the PNG in the system image viewer, change
-either choice, continue, or save and exit. Tag copies the result into its private
+either choice, continue, or finish setup later. Tag copies the result into its private
 Slack CLI project and the Slack CLI uploads it during the approved app creation.
 For an existing app, open https://api.slack.com/apps, sign in if asked, and select
 an app you manage for the chosen workspace. In **Basic Information → App Credentials**,
@@ -148,7 +157,7 @@ with Slack CLI**. Tag exports the remote manifest, adds only the Agent view whil
 preserving unrelated settings, syncs it, and verifies Slack's saved state. A
 legacy Assistant view requires explicit confirmation because Slack does not
 allow that conversion to be reversed. Other missing settings still offer
-**Open app settings**, **Check again**, or **Save and exit**. Open app settings
+**Open app settings**, **Check again**, or **Exit · finish setup later**. Open app settings
 takes you to the selected Slack app; make every listed change there, save it,
 then choose Check again. If bot scopes are listed, reinstall the app in Slack
 afterward so they take effect. Tag never requests a configuration token.
@@ -159,15 +168,17 @@ original location. To recover the previous setup, stop Tag and move those items
 back, first keeping a copy of any newer configuration you want to preserve.
 
 The terminal follows four steps: Connect Slack → App → Channels → Finish.
+After you approve Finish setup, Tag initializes shared memory before connecting
+to Slack. Starting memory for the first time can take a couple of minutes.
 Channels Tag has already joined are included automatically and cannot be
 removed from setup. Use arrow keys and Enter to continue; Space opens an
 optional checklist only after choosing **Add public channels**. Plain terminals
-fall back to numbered input. `q` saves completed choices and exits. The channel
+fall back to numbered input. `q` exits so setup can be finished later. The channel
 summary offers Change channels and Change defaults (history window and agent)
 before approval. Approving Finish setup authorizes indexing the displayed
 history and starting Tag; it never sends a test message.
 An app compatibility failure stays on the selected app with Open settings,
-Check again, and Save and exit. Linking is saved separately from compatibility,
+Check again, and Exit · finish setup later. Linking is saved separately from compatibility,
 so returning does not repeat a successful link. Browser pages open only through
 an explicit action. Codex sign-in and startup failures have their own retry step.
 Slack onboarding is contained in `tag setup`: it checks Slack CLI authorization,
@@ -221,7 +232,7 @@ installation checks for the exact saved app in a temporary project using remote
 settings; the hook only receives credentials, with no hosted deployment or bot
 startup. Approval delays or missing credentials cannot count as connected.
 Failures pause on a recovery menu: retry after resolving the issue, enter tokens
-privately, open app settings, or save and exit. Opening settings does not retry.
+privately, open app settings, or finish setup later. Opening settings does not retry.
 Recognized CLI error codes receive fixed, actionable explanations; raw CLI output
 is never displayed. A service-limit error requires review by the operator/admin
 or Slack support, not repeated installation attempts or automatic permission repair.
@@ -233,11 +244,28 @@ and removed on exit; these safeguards are not a hardened isolation boundary
 
 ## Commands for people and skills
 
+After an upgrade, `tag start` applies versioned Slack app migrations before
+preflight. Existing Slack CLI authorization is used to reconcile the release's
+required bot scopes, events, App Home, Socket Mode, and interactivity settings,
+refresh the installation,
+and save replacement credentials privately. This works without an interactive
+terminal and preserves unrelated app settings. The migration is marked complete
+only after remote settings and the replacement token's required grants are verified.
+An existing legacy Assistant view requires explicit approval through
+`tag setup --review` before the irreversible Agent conversion. If Slack requires
+workspace approval or renewed CLI sign-in, startup stops with recovery guidance;
+resolve that requirement and retry `tag start`.
+
+Lifecycle locks for startup, shared-memory startup, reset, and settings apply
+are released by the operating system if the CLI exits unexpectedly. A later
+attempt recovers the leftover marker without taking a live operation's lock.
+
 Permission failures pause setup and show the missing scope, the operation it blocks,
 and instructions to fix it yourself in Slack (or ask a workspace admin).
-Choose **Open app settings**, **Check again**, or **Save and exit**; channel joining
-also lets you return to channel selection. Tag does not repair permissions or
-reinstall apps as part of error recovery. Bot scopes, Socket Mode app-token scopes,
+Choose **Open app settings**, **Check again**, or **Exit · finish setup later**; channel joining
+also lets you return to channel selection. Outside the versioned upgrade migrations
+above, Tag does not repair permissions or reinstall apps as part of error recovery.
+Bot scopes, Socket Mode app-token scopes,
 and separate history credentials require different fixes. If Slack issues a new
 token, update it privately in Tag settings before retrying. Normal approved
 credential handoff remains unchanged; it uses remote app settings without `--force`.

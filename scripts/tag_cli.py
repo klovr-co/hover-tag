@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import ipaddress
 import importlib.util
 import io
 import json
@@ -25,12 +26,14 @@ from pathlib import Path
 try:
     from tag_paths import initialize_instance, initialize_workspace, runtime_environment, tag_home
     import tag_instances
+    from tag_locks import LifecycleLock
     from tag_config import read_config
     import tag_credentials
     import tag_display as display
 except ImportError:
     from scripts.tag_paths import initialize_instance, initialize_workspace, runtime_environment, tag_home
     from scripts import tag_instances
+    from scripts.tag_locks import LifecycleLock
     from scripts.tag_config import read_config
     from scripts import tag_credentials
     from scripts import tag_display as display
@@ -605,6 +608,13 @@ def mfs_server_executable() -> str | None:
     return str(bundled) if bundled.is_file() else shutil.which(name)
 
 
+def mfs_client_executable() -> str | None:
+    """Prefer Tag's bundled MFS client, but support an independent install."""
+    name = "mfs.exe" if os.name == "nt" else "mfs"
+    bundled = Path(sys.executable).parent / name
+    return str(bundled) if bundled.is_file() else shutil.which(name)
+
+
 def instance_environment(
     context: tag_instances.InstanceContext,
     values: dict[str, str] | None = None,
@@ -669,6 +679,64 @@ def migrate_legacy_mfs_record(context: tag_instances.InstanceContext) -> None:
     old_log = context.installation_root / "state/mfs.log"
     if old_log.exists() and not (shared / "mfs.log").exists():
         os.replace(old_log, shared / "mfs.log")
+
+
+def ensure_shared_memory(
+    context: tag_instances.InstanceContext, environment: dict[str, str]
+) -> None:
+    """Start the configured shared MFS if needed and wait until it is healthy."""
+    url = environment.get("MFS_URL", "http://127.0.0.1:13619")
+    local_mfs = local_mfs_endpoint(url)
+    if local_mfs:
+        migrate_legacy_mfs_record(context)
+        replace_unmanaged_local_mfs(
+            context.home, url, state_dir=context.shared_mfs_home
+        )
+    if healthy(url):
+        return
+    if not local_mfs:
+        raise RuntimeError(
+            "Configured external MFS endpoint is unavailable; start that server first"
+        )
+    executable = mfs_server_executable()
+    if not executable:
+        raise RuntimeError(
+            "MFS server is unavailable; run ./install.sh --dependencies-only"
+        )
+    shared = context.shared_mfs_home
+    shared.mkdir(parents=True, exist_ok=True, mode=0o700)
+    mfs_lock = LifecycleLock(shared / "start.lock").acquire()
+    try:
+        # Recheck after acquiring the installation-wide lock. A different Tag
+        # may have completed startup while this process waited.
+        if not healthy(url):
+            start_process(
+                context.home,
+                "mfs",
+                [executable, "run"],
+                environment=environment,
+                state_dir=shared,
+                cwd=context.workspace,
+            )
+        attempts = int(environment.get("OPENTAG_MFS_STARTUP_ATTEMPTS", "90"))
+        for _ in range(attempts):
+            if healthy(url):
+                break
+            if process_for(shared / "mfs.json") is None:
+                detail = log_tail(context.home, "mfs", state_dir=shared)
+                raise RuntimeError(
+                    "Shared MFS exited before becoming healthy"
+                    + (f":\n{detail}" if detail else "; run tag memory status")
+                )
+            time.sleep(1)
+        else:
+            detail = log_tail(context.home, "mfs", state_dir=shared)
+            raise RuntimeError(
+                f"Shared MFS did not become healthy within {attempts} seconds"
+                + (f":\n{detail}" if detail else "; run tag memory status")
+            )
+    finally:
+        mfs_lock.release()
 
 
 def bridge_processes(installation_root: Path) -> list[str]:
@@ -788,7 +856,7 @@ def sync_configured_slack_memory(environment: dict[str, str] | None = None) -> N
     config = Path(source.get("MFS_SLACK_CONNECTOR_CONFIG", "")).expanduser()
     if not uri or not config.is_file():
         return
-    executable = shutil.which("mfs")
+    executable = mfs_client_executable()
     if not executable:
         raise RuntimeError("MFS client is unavailable; install it before indexing Slack history")
     completed = subprocess.run(
@@ -847,7 +915,10 @@ def reconcile_invitation_memory(home: Path) -> None:
         raise MfsHistoryCredentialUnavailable(MFS_HISTORY_CREDENTIAL_MESSAGE)
     if status.get("check") == "mfs_slack_connector":
         raise MfsSlackConnectorUnavailable(MFS_SLACK_CONNECTOR_MESSAGE)
-    if status.get("state") != "sync_requested":
+    if (
+        status.get("state") != "sync_requested"
+        and status.get("check") != "index_submission"
+    ):
         raise RuntimeError(
             "Invitation memory could not be prepared. Check Slack membership and history access, then retry tag start."
         )
@@ -882,6 +953,162 @@ def doctor_report(offline: bool) -> tuple[int, dict[str, object]]:
     if not isinstance(report, dict):
         raise RuntimeError("Doctor did not return a valid report")
     return completed.returncode, report
+
+
+def authenticated_mfs_url() -> str:
+    """Return an MFS base URL that is safe to receive a bearer token."""
+    raw = os.getenv("MFS_URL", "http://127.0.0.1:13619").rstrip("/")
+    try:
+        parsed = urllib.parse.urlsplit(raw)
+        host = parsed.hostname
+        parsed.port  # Validate malformed port syntax before request construction.
+    except ValueError as error:
+        raise RuntimeError("MFS_URL must be a valid HTTP(S) URL") from error
+    if (
+        not host
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise RuntimeError(
+            "MFS_URL must be a valid HTTP(S) URL without credentials, query, or fragment"
+        )
+    if parsed.scheme.casefold() == "https":
+        return raw
+    loopback = host.casefold() == "localhost"
+    if not loopback:
+        try:
+            loopback = ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            loopback = False
+    if parsed.scheme.casefold() != "http" or not loopback:
+        raise RuntimeError(
+            "MFS_URL must use HTTPS unless it points to localhost or a loopback IP; "
+            "refusing to send the MFS bearer token"
+        )
+    return raw
+
+
+class RejectMfsRedirects(urllib.request.HTTPRedirectHandler):
+    """Prevent bearer-authenticated MFS requests from following redirects."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(
+            req.full_url,
+            code,
+            "MFS bearer-authenticated requests do not follow redirects",
+            headers,
+            fp,
+        )
+
+
+def mfs_request_json(path: str, parameters: dict[str, str]) -> dict[str, object] | None:
+    """Call an authenticated MFS endpoint after enforcing its transport boundary."""
+    base = authenticated_mfs_url()
+    token = os.getenv("MFS_TOKEN", "").strip()
+    if not token:
+        try:
+            token = (Path.home() / ".mfs/server.token").read_text(encoding="utf-8").strip()
+        except OSError:
+            return None
+    query = urllib.parse.urlencode(parameters)
+    request = urllib.request.Request(
+        f"{base}{path}?{query}", headers={"Authorization": f"Bearer {token}"}
+    )
+    opener = urllib.request.build_opener(RejectMfsRedirects())
+    try:
+        with opener.open(request, timeout=2) as response:  # noqa: S310
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, ValueError, urllib.error.URLError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def resolve_indexed_mfs_scope(scope: str) -> str | None:
+    """Resolve a Slack scope by stable channel ID and require indexed messages."""
+    parsed = urllib.parse.urlsplit(scope)
+    final_segment = parsed.path.rstrip("/").rsplit("/", 1)[-1]
+    _, marker, channel_id = final_segment.rpartition("__")
+    current_scope = scope.rstrip("/")
+    if marker and re.fullmatch(r"[CG][A-Z0-9]+", channel_id):
+        parent_path = parsed.path.rstrip("/").rsplit("/", 1)[0] or "/"
+        parent_scope = parsed._replace(path=parent_path, query="", fragment="").geturl()
+        parent = mfs_request_json("/v1/ls", {"path": parent_scope})
+        entries = parent.get("entries") if isinstance(parent, dict) else None
+        if not isinstance(entries, list):
+            return None
+        stable_suffix = f"__{channel_id}"
+        current_scope = ""
+        for entry in entries:
+            candidate = entry.get("path") if isinstance(entry, dict) else None
+            if not isinstance(candidate, str):
+                continue
+            candidate_parsed = urllib.parse.urlsplit(candidate)
+            if (
+                candidate_parsed.scheme.casefold() == parsed.scheme.casefold()
+                and candidate_parsed.netloc.casefold() == parsed.netloc.casefold()
+                and candidate_parsed.path.rstrip("/")
+                .rsplit("/", 1)[-1]
+                .endswith(stable_suffix)
+            ):
+                current_scope = candidate.rstrip("/")
+                break
+        if not current_scope:
+            return None
+    listing = mfs_request_json("/v1/ls", {"path": current_scope})
+    children = listing.get("entries") if isinstance(listing, dict) else None
+    if not isinstance(children, list):
+        return None
+    if any(
+        isinstance(child, dict)
+        and child.get("name") == "messages.jsonl"
+        and child.get("search_status") == "indexed"
+        for child in children
+    ):
+        return current_scope
+    return None
+
+
+def mfs_scope_indexed(scope: str) -> bool:
+    """Return whether MFS exposes indexed Slack messages below a scope."""
+    return resolve_indexed_mfs_scope(scope) is not None
+
+
+def wait_for_configured_mfs_scopes(*, attempts: int | None = None) -> list[str]:
+    """Wait for an asynchronous connector sync to make every scope readable."""
+    configured = [
+        scope.strip()
+        for scope in os.getenv("MFS_ALLOWED_SCOPES", "").split(",")
+        if scope.strip()
+    ]
+    scopes = list(
+        dict.fromkeys(
+            scope
+            for scope in configured
+            if urllib.parse.urlsplit(scope).scheme == "slack"
+        )
+    )
+    remaining = scopes
+    resolved: dict[str, str] = {}
+    limit = attempts if attempts is not None else int(
+        os.getenv("OPENTAG_MFS_STARTUP_ATTEMPTS", "90")
+    )
+    for attempt in range(max(1, limit)):
+        resolved = {
+            scope: current
+            for scope in scopes
+            if (current := resolve_indexed_mfs_scope(scope)) is not None
+        }
+        remaining = [scope for scope in scopes if scope not in resolved]
+        if not remaining:
+            os.environ["MFS_ALLOWED_SCOPES"] = ",".join(
+                resolved.get(scope, scope) for scope in configured
+            )
+            return []
+        if attempt + 1 < max(1, limit):
+            time.sleep(1)
+    return remaining
 
 
 def doctor(home: Path, offline: bool, json_output: bool = False, *, tag_id: str = "default") -> int:
@@ -1109,10 +1336,11 @@ def upgrade_command(
             raise RuntimeError(
                 f"Cannot compare installed release version: {current_version or 'missing'}"
             ) from error
-        running = any(
-            process_for(home / "state" / f"{name}.json")
-            for name in ("slack", "mfs")
-        )
+        running_tags = bridge_processes(home)
+        legacy_running = process_for(home / "state/slack.json") is not None
+        if legacy_running and "default" not in running_tags:
+            running_tags.insert(0, "default")
+        running = bool(running_tags)
         result = {
             "schema_version": 1,
             "ok": True,
@@ -1131,6 +1359,11 @@ def upgrade_command(
                 "selection": target.selector,
             },
             "services_running": running,
+            "running_tags": running_tags,
+            "restart_commands": [
+                "tag restart" if tag_id == "default" else f"tag {tag_id} restart"
+                for tag_id in running_tags
+            ],
             "restart_required": False,
             "downgrade": downgrade,
         }
@@ -1238,19 +1471,18 @@ def upgrade_command(
         result["restart_required"] = running and no_restart
         result["restarted"] = False
         if running and not no_restart:
-            command = [sys.executable, str(home / "bin/tag-launch.py"), "restart"]
-            completed = subprocess.run(
-                command,
-                capture_output=json_output,
-                text=True,
-                check=False,
-            )
-            if completed.returncode:
-                detail = (completed.stderr or completed.stdout or "").strip()
+            failures = []
+            for tag_id in running_tags:
+                arguments = [] if tag_id == "default" else [tag_id]
+                command = [sys.executable, str(home / "bin/tag-launch.py"), *arguments, "restart"]
+                completed = subprocess.run(command, capture_output=json_output, text=True, check=False)
+                if completed.returncode:
+                    detail = redact_log_text((completed.stderr or completed.stdout or "").strip())
+                    failures.append(tag_id + (f": {detail}" if detail else ""))
+            if failures:
                 raise RuntimeError(
-                    "Tag was upgraded, but its services did not restart. "
-                    "Run tag stop, then tag rollback."
-                    + (f"\n{detail}" if detail else "")
+                    "Tag was upgraded, but these Tags need attention: " + "\n".join(failures)
+                    + ". Run tag [alias] doctor, resolve the reported requirement, then retry start."
                 )
             result["restarted"] = True
 
@@ -1261,7 +1493,7 @@ def upgrade_command(
             "Tag upgraded",
             f"Now using Tag v{result['target']['version']}. Configuration and workspace data were preserved.",
             next_label="Activate the new release" if result["restart_required"] else "",
-            next_command="tag restart" if result["restart_required"] else "",
+            next_command=" && ".join(result["restart_commands"]) if result["restart_required"] else "",
         )
     return 0
 
@@ -1271,12 +1503,12 @@ def main() -> int:
                                      usage="tag [TAG] [COMMAND] [OPTIONS]",
                                      epilog="Use tag for default status, or tag NAME status for a named Tag. Start with tag setup; change configuration with tag settings.")
     parser.add_argument("command", nargs="?", choices=COMMANDS)
-    parser.add_argument("arguments", nargs="*", help="memory: status | stop; config: init | show | keys | set KEY VALUE")
+    parser.add_argument("arguments", nargs="*", help="memory: start | status | stop; config: init | show | keys | set KEY VALUE")
     parser.add_argument("--offline", action="store_true")
     parser.add_argument("--json", action="store_true", dest="json_output", help="structured output for inspect, status, doctor, config, paths, and upgrade")
     parser.add_argument("--stdin", action="store_true", help="read a config value from stdin")
     parser.add_argument("--from", dest="source", type=Path)
-    parser.add_argument("--no-start", action="store_true", help="setup: save choices without starting services or indexing")
+    parser.add_argument("--no-start", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--test", action="store_true", help="setup: use a separate test home; implies --no-start")
     parser.add_argument("--review", action="store_true", help="setup: review choices even when already configured")
     parser.add_argument("--follow", action="store_true", help="logs: continue streaming new service output")
@@ -1383,6 +1615,13 @@ def main() -> int:
         return 0
     context = tag_instances.resolve(installation_root, tag_id)
     home = context.home
+    if args.command in {"start", "dev", "setup"}:
+        tag_instances.ensure_default(installation_root)
+        try:
+            from tag_layout import migrate as migrate_layout
+        except ImportError:
+            from scripts.tag_layout import migrate as migrate_layout
+        migrate_layout(context, sys.modules[__name__])
     environment = instance_environment(context)
     startup_attempt_overrides = {
         key: environment[key] for key in STARTUP_ATTEMPT_ENV_KEYS if key in environment
@@ -1391,8 +1630,13 @@ def main() -> int:
     os.environ.update(environment)
     if args.command == "memory":
         action = args.arguments[0] if len(args.arguments) == 1 else "status" if not args.arguments else ""
-        if action not in {"status", "stop"}:
-            parser.error("memory accepts status or stop")
+        if action not in {"start", "status", "stop"}:
+            parser.error("memory accepts start, status, or stop")
+        if action == "start":
+            config_path = context.home / "config/settings.json"
+            values = read_config(config_path) if config_path.is_file() else {}
+            environment = instance_environment(context, values)
+            ensure_shared_memory(context, environment)
         migrate_legacy_mfs_record(tag_instances.resolve(installation_root))
         context.shared_mfs_home.mkdir(parents=True, exist_ok=True, mode=0o700)
         managed = process_for(context.shared_mfs_home / "mfs.json") is not None
@@ -1639,19 +1883,34 @@ def main() -> int:
         else:
             display.header(
                 "Stop",
-                selected_target(home, context.tag_id, suffix="Shared memory stays online"),
+                selected_target(home, context.tag_id),
             )
             display.section("Services")
         stop_process(home, "slack")
         display.info_row("Slack", "Stopped or already offline", good=True)
-        display.info_row("Memory", "Shared service left running", good=True)
+        memory_running = process_for(context.shared_mfs_home / "mfs.json") is not None
+        remaining_tags = bridge_processes(installation_root)
+        if memory_running and remaining_tags:
+            memory_status = "Still running for: " + ", ".join(remaining_tags)
+            memory_detail = "Stop those Tags before running tag memory stop."
+        elif memory_running:
+            memory_status = "Still running · no active Tags"
+            memory_detail = "Memory runs separately and stays available for your next start."
+        else:
+            memory_status = "No Tag-managed process running"
+            if remaining_tags:
+                memory_status += " · active Tags: " + ", ".join(remaining_tags)
+            memory_detail = "Externally managed memory, if configured, is unchanged."
+        display.info_row("Memory", memory_status)
         if not restart_flow:
             display.completion(
                 "Tag is stopped",
-                "Independently managed memory servers were left running.",
+                memory_detail,
                 next_label="Start again",
                 next_command=context.command("start"),
             )
+            if memory_running and not remaining_tags:
+                display.next_action("Stop memory too", "tag memory stop")
         return 0
     if args.command == "start":
         restart_flow = os.getenv("TAG_RESTART_FLOW") == "1"
@@ -1662,11 +1921,7 @@ def main() -> int:
             display.section("Readiness")
         display.info_row("Runtime", "Dependencies available", good=True)
         # Serialize starts so concurrent invocations cannot create orphan services.
-        lock = home / "state/start.lock"
-        try:
-            lock.mkdir()
-        except FileExistsError:
-            raise RuntimeError(f"Another start is in progress. If interrupted, remove {lock} and retry.")
+        lock = LifecycleLock(home / "state/start.lock").acquire()
         started = []
         try:
             try:
@@ -1674,65 +1929,35 @@ def main() -> int:
             except ImportError:
                 from scripts import slack_manifest_migrations
             manifest_changed = slack_manifest_migrations.reconcile(home, config_path, values)
+            if manifest_changed:
+                # A migration may rotate credentials; preflight and the bridge
+                # must use the saved replacement during this same start.
+                values = read_config(config_path)
+                os.environ.update(values)
             display.info_row(
                 "Slack app",
                 "Permissions migrated" if manifest_changed else "Permissions current",
                 good=True,
             )
             ensure_connector_credential(home, values)
-            url = os.getenv("MFS_URL", "http://127.0.0.1:13619")
-            local_mfs = local_mfs_endpoint(url)
-            if local_mfs:
-                migrate_legacy_mfs_record(tag_instances.resolve(installation_root))
-                replace_unmanaged_local_mfs(
-                    home, url, state_dir=context.shared_mfs_home
-                )
-            if not healthy(url):
-                if not local_mfs:
-                    raise RuntimeError("Configured external MFS endpoint is unavailable; start that server first")
-                executable = mfs_server_executable()
-                if not executable:
-                    raise RuntimeError("MFS server is unavailable; run ./install.sh --dependencies-only")
-                shared = context.shared_mfs_home
-                shared.mkdir(parents=True, exist_ok=True, mode=0o700)
-                mfs_lock = shared / "start.lock"
-                try:
-                    mfs_lock.mkdir()
-                except FileExistsError:
-                    raise RuntimeError(
-                        f"Another shared memory start is in progress. If interrupted, remove {mfs_lock} and retry."
-                    ) from None
-                try:
-                    # Recheck after acquiring the installation-wide lock. A
-                    # different Tag may have completed startup while we waited.
-                    if not healthy(url):
-                        start_process(home, "mfs", [executable, "run"],
-                                      environment=os.environ.copy(), state_dir=shared,
-                                      cwd=context.workspace)
-                    attempts = int(os.getenv("OPENTAG_MFS_STARTUP_ATTEMPTS", "90"))
-                    for _ in range(attempts):
-                        if healthy(url):
-                            break
-                        if process_for(shared / "mfs.json") is None:
-                            detail = log_tail(home, "mfs", state_dir=shared)
-                            raise RuntimeError(
-                                "Shared MFS exited before becoming healthy"
-                                + (f":\n{detail}" if detail else "; run tag memory status")
-                            )
-                        time.sleep(1)
-                    else:
-                        detail = log_tail(home, "mfs", state_dir=shared)
-                        raise RuntimeError(
-                            f"Shared MFS did not become healthy within {attempts} seconds"
-                            + (f":\n{detail}" if detail else "; run tag memory status")
-                        )
-                finally:
-                    mfs_lock.rmdir()
+            display.pending_row("Memory", "Waiting for the service to become healthy…")
+            ensure_shared_memory(context, os.environ.copy())
             display.info_row("Memory", "Healthy", good=True)
+            display.pending_row(
+                "Channel memory", "Waiting for selected channels to become readable…"
+            )
             if os.getenv("SLACK_CHANNEL_POLICY") == "invited":
                 reconcile_invitation_memory(home)
             else:
                 sync_configured_slack_memory()
+            unavailable_scopes = wait_for_configured_mfs_scopes()
+            if unavailable_scopes:
+                raise RuntimeError(
+                    "MFS scope did not become readable after indexing: "
+                    + unavailable_scopes[0]
+                    + ". Run mfs status and tag doctor, then retry tag start."
+                )
+            display.info_row("Channel memory", "Ready", good=True)
             preflight_result, preflight = doctor_report(False)
             if preflight_result:
                 failed = [item for item in preflight.get("checks", []) if not item.get("ok")]
@@ -1746,6 +1971,7 @@ def main() -> int:
                     )
                 raise RuntimeError("Preflight failed; run tag doctor")
             display.info_row("Checks", "Configuration and access verified", good=True)
+            display.pending_row("Slack", "Waiting for the connection to become ready…")
             if not slack_ready(home):
                 # Replace a live but disconnected TAG-managed bridge rather than
                 # accepting a PID as proof that Socket Mode is operational.
@@ -1802,7 +2028,7 @@ def main() -> int:
                 stop_process(home, name)
             raise
         finally:
-            lock.rmdir()
+            lock.release()
         show_upgrade_reminder(installation_root)
     return 0
 

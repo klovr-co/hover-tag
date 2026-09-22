@@ -9,6 +9,9 @@ MFS_SERVER_SPEC=$(awk '/^mfs-server(\[[^]]+\])?==/ { print; exit }' "$ROOT/requi
 MFS_VERSION=${MFS_SERVER_SPEC##*==}
 MFS_RELEASE=https://github.com/zilliztech/mfs/releases/download/v${MFS_VERSION}
 RUNTIME_PYTHON="$ROOT/.venv/bin/python"
+RUNTIME_BIN="$ROOT/.venv/bin"
+PATH="$RUNTIME_BIN:$PATH"
+export PATH
 
 say() {
     printf '%s\n' "$*"
@@ -62,7 +65,7 @@ install_mfs_cli() {
             ;;
         Linux/aarch64|Linux/arm64)
             artifact=mfs-cli-aarch64-unknown-linux-musl.tar.xz
-            expected=a6a4cc90dc73118ae6f6b2c0fd779a43057ae1fd88d27e6cc32a3352ac3cc978
+            expected=a6a4cc90dc73118ae6f6b2c0fd779a43057ae1fd88b27e6cc32a3352ac3cc978
             ;;
         Linux/x86_64|Linux/amd64)
             artifact=mfs-cli-x86_64-unknown-linux-musl.tar.xz
@@ -81,7 +84,7 @@ install_mfs_cli() {
     actual=$(sha256_file "$archive")
     [ "$actual" = "$expected" ] || fail "MFS CLI checksum verification failed."
     tar -xJf "$archive" -C "$download_dir"
-    install_dir="${XDG_BIN_HOME:-$HOME/.local/bin}"
+    install_dir="$RUNTIME_BIN"
     mkdir -p "$install_dir"
     mfs_binary=$(find "$download_dir" -type f -name mfs -perm -u+x | head -n 1)
     [ -n "$mfs_binary" ] || fail "The MFS CLI archive did not contain an executable."
@@ -158,6 +161,9 @@ if [ ! -x "$RUNTIME_PYTHON" ]; then
 fi
 say "Installing pinned Tag runtime dependencies..."
 uv pip install --python "$RUNTIME_PYTHON" -r "$ROOT/requirements-runtime.txt"
+
+say "Preparing the local MFS embedding model..."
+"$RUNTIME_PYTHON" "$ROOT/scripts/preload_mfs_model.py"
 
 # Reinstalling this managed tool ensures optional connector extras (Slack in
 # particular) are present even when the base version already matches.

@@ -27,6 +27,7 @@ REQUIRED_WORKFLOWS = ("ci.yml", "install-smoke.yml")
 AUTO_RELEASE_LABELS = {
     "release:next-patch", "release:next-minor", "release:skip",
 }
+SEMVER_CHANNELS = ("stable", "beta", "alpha")
 
 
 @dataclass(frozen=True)
@@ -212,6 +213,98 @@ def select_auto_prerelease(
         if item.core == core and item.phase == "alpha"
     ]
     return Version(*core, "alpha", max(existing_numbers, default=0) + 1)
+
+
+def _release_asset_names(release: dict[str, Any]) -> set[str]:
+    assets = release.get("assets")
+    if not isinstance(assets, list):
+        return set()
+    return {
+        asset["name"] for asset in assets
+        if isinstance(asset, dict) and isinstance(asset.get("name"), str)
+    }
+
+
+def _channel_entry(release: dict[str, Any], version: str) -> dict[str, str]:
+    tag = release.get("tag_name")
+    sha = release.get("target_commitish")
+    if not isinstance(tag, str) or not isinstance(sha, str) or not SHA_RE.fullmatch(sha):
+        raise ValueError(f"release {tag!r} does not target a full commit SHA")
+    archive_name = "tag-edge.zip" if tag == "edge" else f"tag-{version}.zip"
+    required_assets = {archive_name, "SHA256SUMS", "BUILD-PROVENANCE.json"}
+    missing = required_assets - _release_asset_names(release)
+    if missing:
+        raise ValueError(
+            f"release {tag} is missing required assets: {', '.join(sorted(missing))}"
+        )
+    return {"version": version, "tag": tag, "commit_sha": sha}
+
+
+def build_channel_index(
+    releases: Iterable[dict[str, Any]], *, repository: str, generated_at: str
+) -> dict[str, Any]:
+    """Build public channel pointers from published, immutable releases."""
+    published = [
+        release for release in releases
+        if isinstance(release, dict) and not release.get("draft")
+    ]
+    parsed: list[tuple[Version, dict[str, Any]]] = []
+    for release in published:
+        tag = release.get("tag_name")
+        if not isinstance(tag, str) or not tag.startswith("v"):
+            continue
+        try:
+            version = Version.parse(tag[1:])
+        except ValueError:
+            continue
+        if bool(release.get("prerelease")) != (version.phase != "stable"):
+            continue
+        parsed.append((version, release))
+
+    channels: dict[str, dict[str, str]] = {}
+    for channel in SEMVER_CHANNELS:
+        candidates = [item for item in parsed if item[0].phase == channel]
+        if candidates:
+            version, release = max(candidates, key=lambda item: item[0].precedence())
+            channels[channel] = _channel_entry(release, str(version))
+
+    edge = next((release for release in published if release.get("tag_name") == "edge"), None)
+    if edge is not None:
+        if not edge.get("prerelease"):
+            raise ValueError("edge release is not marked as a prerelease")
+        channels["edge"] = _channel_entry(edge, "edge")
+
+    return {
+        "schema_version": 1,
+        "repository": repository,
+        "generated_at": generated_at,
+        "channels": channels,
+    }
+
+
+def write_channel_index(repository: str, output: Path) -> None:
+    releases: list[dict[str, Any]] = []
+    for page in range(1, 101):
+        payload = _github_json(repository, "releases", {
+            "per_page": "100", "page": str(page),
+        })
+        if not isinstance(payload, list):
+            raise ValueError("GitHub releases response is not a list")
+        releases.extend(item for item in payload if isinstance(item, dict))
+        if len(payload) < 100:
+            break
+    else:
+        raise RuntimeError("GitHub release pagination exceeded 100 pages")
+    generated_at = (
+        datetime.now(timezone.utc)
+        .isoformat(timespec="seconds")
+        .replace("+00:00", "Z")
+    )
+    index = build_channel_index(
+        releases, repository=repository, generated_at=generated_at
+    )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(index, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def validate_selected_sha(sha: str, resolved: str, is_on_main: bool) -> list[str]:
@@ -513,6 +606,10 @@ def main() -> int:
     release.add_argument("--sha")
     release.add_argument("--allow-missing-provenance", action="store_true")
 
+    channel_index = subparsers.add_parser("write-channel-index")
+    channel_index.add_argument("--repository", required=True)
+    channel_index.add_argument("--output", type=Path, required=True)
+
     args = parser.parse_args()
     if args.command == "validate-candidate":
         tags = subprocess.check_output(["git", "tag", "--list", "v*"], text=True).splitlines()
@@ -563,6 +660,10 @@ def main() -> int:
         return _print_errors(validate_release_bundle(
             args.directory, args.version, args.sha, not args.allow_missing_provenance
         ))
+    if args.command == "write-channel-index":
+        write_channel_index(args.repository, args.output)
+        print(args.output)
+        return 0
     raise AssertionError(args.command)
 
 

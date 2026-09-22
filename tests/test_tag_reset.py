@@ -206,9 +206,9 @@ class ResetTests(unittest.TestCase):
 
     def test_start_lock_blocks_reset_without_stopping(self):
         self.seed()
-        (self.home / "state/start.lock").mkdir()
-        with self.assertRaisesRegex(RuntimeError, "start or reset"):
-            tag_reset.archive_setup(self.home, self.lifecycle)
+        with tag_reset.LifecycleLock(self.home / "state/start.lock"):
+            with self.assertRaisesRegex(RuntimeError, "lifecycle operation"):
+                tag_reset.archive_setup(self.home, self.lifecycle)
         self.assertTrue(self.config.exists())
         self.lifecycle.stop_process.assert_not_called()
 

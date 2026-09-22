@@ -22,6 +22,7 @@ ASCII_FALLBACK = str.maketrans({
     "✓": "+",
     "●": "*",
     "○": "o",
+    "◌": "o",
     "›": ">",
     "─": "-",
     "·": ".",
@@ -144,6 +145,7 @@ def rule():
 
 
 def header(section, detail=""):
+    """Render branding, a best-effort CLI version, and optional section detail."""
     emit()
     if mascot_banner():
         emit()
@@ -151,6 +153,13 @@ def header(section, detail=""):
     else:
         paragraph(f"{BRAND_NAME}  /  {section}", "1;" + ACCENT)
         paragraph(BRAND_URL, MUTED)
+    try:
+        version = (Path(__file__).resolve().parents[1] / "VERSION").read_text(
+            encoding="utf-8"
+        ).strip()
+    except (OSError, UnicodeError):
+        version = ""
+    paragraph(f"CLI v{version}" if version else "CLI version unavailable", MUTED)
     rule()
     if detail:
         paragraph(detail, MUTED)
@@ -179,6 +188,11 @@ def info_row(name, value, *, good=None):
     marker = "✓" if good else "!"
     code = SUCCESS if good else WARNING
     paragraph(f"{marker}  {name:<14} {value}", code, indent="    ")
+
+
+def pending_row(name, value):
+    """Render a readiness step before its blocking check has completed."""
+    paragraph(f"◌  {name:<14} {value}", MUTED, indent="    ")
 
 
 def next_action(label, command, *, detail=""):
