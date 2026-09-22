@@ -2,101 +2,100 @@
 
 # Tag
 
-## @Tag, Slack is all you need.
+## Your personal assistant, in the workspace you share
 
-Tag brings Codex or Claude into the Slack conversation. Mention your Tag where the
-work is already being discussed. It picks up the thread, finds any context it is
-allowed to use, does the work, and replies there.
+Tag brings your Codex agent into Slack. Discuss the work with your teammates,
+then mention your Tag to investigate a question, make a plan, or work on files.
+It uses the thread as context and replies where everyone can see the result and
+follow up.
 
-Your team stays in Slack. No one has to copy a conversation into a private AI
-chat and carry the answer back.
+Your agent still runs on a computer you control, with the workspace, tools,
+skills, and connected accounts you make available to it, subject to that local
+account's permissions. There is no separate Tag cloud service hosting your
+conversations or working files.
 
-Tag is an open-source reference implementation inspired by
-[Claude Tag](https://www.anthropic.com/news/introducing-claude-tag). It connects
-Slack to a local CLI agent and uses
-[MFS](https://github.com/zilliztech/mfs) as searchable memory.
+[Get started](docs/getting-started/first-task.md) ·
+[Read the documentation](docs/index.md) ·
+[See what is supported](docs/reference/supported-capabilities.md)
 
-> [!NOTE]
-> The `main` branch is intentionally Slack-only for the v0.1 alpha launch.
-> Unfinished Zulip work is preserved on [`feature/zulip`](https://github.com/klovr-co/hover-tag/tree/feature/zulip),
-> outside the supported installer and runtime.
+### Ask your agent to set up Tag
 
-## Why I built this
-
-I first saw Claude Tag being shared on X and wanted the same experience: mention
-Claude in Slack, give it the context of the team's conversation, and let everyone
-see the work happen.
-
-The hosted launch was aimed at Claude Team and Enterprise workspaces. I was not
-subscribed to one of those plans. I already had my own Claude access and wanted
-to use it with my own Slack workspace.
-
-I found the original Open Tag example in MFS, forked it, and spent about a month
-adapting it to the way I work. It became useful for more than answering a single
-question. Tag can read approved Slack history, follow a discussion across a
-thread, retrieve related context, and share the result back where the team is
-already working.
-
-That is the part I care about: the discussion and the result stay visible in
-Slack. They do not disappear into my private Claude or ChatGPT history.
-
-## What your team can delegate
-
-- Respond when someone mentions their Tag in Slack or sends it a direct message,
-  provided the sender is explicitly authorized.
-- Read the current thread, including text and image attachments.
-- Upload backend-generated PNG, JPEG, GIF, and WebP images to the requesting thread.
-- Summarize an indexed Slack channel instead of seeing only one thread.
-- Search approved Slack history, repositories, documents, issues, databases,
-  and object stores through MFS.
-- Run real tasks through Claude Code or Codex in a configured workspace.
-- Keep long answers readable by splitting them into threaded Slack replies.
-- Post a requested summary back into the current channel.
-
-## See it in action
-
-The [connected user-flow guide](docs/user-flows.md) shows what happens during
-setup, a Slack request, MFS retrieval, workspace work, and error recovery. To
-open the designed light-mode version, serve the repository locally:
+Install the setup skill:
 
 ```bash
-python3 -m http.server 8765
+npx skills add klovr-co/hover-tag --skill hover-tag-setup -a codex -g
 ```
 
-Then visit <http://127.0.0.1:8765/docs/user-flows.html>.
+Then open a new Codex session and ask:
 
-### Delegate work across channels
+```text
+Use the hover-tag-setup skill to set up Tag for me.
+```
 
-A teammate requests a PR review in one channel. From another channel, someone
-mentions the bot and asks it to handle the review. Tag finds the original
-request in indexed Slack history, retrieves the PR context, and reports back in
-the thread.
+Codex checks the prerequisites and installation, then guides you to `tag setup`
+for the Slack login and approval steps that only you or a workspace admin can
+complete.
 
-![Tag reviewing a PR using context from another Slack channel](https://github.com/user-attachments/assets/6cb1db05-dd12-4a13-a9fa-1a1bf69bcf28)
+## Work together in the thread
 
-### Continue the discussion with shared context
+Jules and Maya discuss a launch, then Maya asks their Tag to pull the plan
+together:
 
-A follow-up asks the bot to compare two projects and write up the differences.
-Tag keeps the thread context, gathers information from the approved sources, and
-returns the result where the rest of the team can read and continue the work.
+> **Maya:** I’ll finish the FAQ by Tuesday.
+>
+> **Jules:** I’ll test signup on Wednesday. Support still needs a briefing.
+>
+> **Maya:** @Maya's Tag pull this into a launch checklist with owners.
+>
+> **Maya's Tag:** Here’s the shared checklist:
+> - **Maya:** Finish the FAQ by Tuesday.
+> - **Jules:** Test signup on Wednesday.
+> - **Unassigned:** Brief support before launch. Who can take this?
+>
+> **Jules:** I'll brief support. We're also missing the go/no-go review. Maya,
+> can you own that?
 
-![Tag completing a follow-up task across multiple sources](https://github.com/user-attachments/assets/8f11e931-4248-46c5-b1fb-8128d56b8773)
+The request and result stay in Slack. Teammates can add context, question an
+answer, or take the next step without reconstructing a private AI conversation.
 
-## How it works
+By default, only the owner can ask their Tag to work. Everyone who can see the
+channel can read its requests and replies. An owner can deliberately
+[share access](docs/concepts/sharing-access.md), but doing so lets another person
+request work from the same local agent environment—not merely read the thread.
+
+## What you can delegate
+
+You can ask Tag to:
+
+- summarize a discussion into decisions, owners, and next steps;
+- investigate a question across approved Slack history and other indexed
+  sources;
+- compare information from conversations, documents, issues, and repositories;
+- use locally installed tools, skills, and connected accounts available to
+  Codex;
+- inspect or change files in its configured workspace when explicitly asked;
+- return an answer to the thread, post to the current channel, create a Slack
+  Canvas, or deliver supported generated images.
+
+What Tag can do depends on its setup. It can use the current thread, files in
+its workspace, and the sources and tools made available to it. See
+[What Tag knows](docs/concepts/what-tag-knows.md) for examples and limits.
+
+## How Tag works
 
 ```text
        ┌──────────────┐
        │    Slack     │    @Maya's Tag <task>
        │              │ ◄──── answer ──────┐
        └──────┬───────┘                    │
-              │ mention                    │
+              │ thread context             │
               ▼                            │
    ┌────────────────────────────────────┐  │
    │                Tag                 ├──┘
-   │   Brain: Claude Code or Codex CLI  │
-   └────────────────┬───────────────────┘
-                    │ scoped retrieval
-                    ▼
+   │          Local Codex agent         │
+   └───────────────┬────────────────────┘
+                   │ optional retrieval
+                   ▼
    ┌────────────────────────────────────┐
    │                MFS                 │
    │ Slack · repos · docs · issues · DB │
@@ -105,175 +104,104 @@ returns the result where the rest of the team can read and continue the work.
 
 Tag has three parts:
 
-- **Brain:** Claude Code or Codex runs the task locally.
-- **Memory:** MFS indexes the sources you approve and makes them searchable.
-- **Chat:** Slack supplies the conversation and receives the answer.
+- **Slack** holds the request, up to 30 messages of thread context, and the
+  visible result.
+- **The agent workspace** is where Codex uses files and locally available tools
+  to do the work.
+- **MFS** is a searchable context layer over sources the person running Tag has
+  indexed and permitted. The agent uses it only when a request needs context
+  beyond the current thread and workspace.
 
-Tag does not call a model API directly. Authentication, model access, and usage
-come from the CLI backend installed on your machine.
+Each mention starts a fresh agent run. Continuity comes from context Tag can
+reconstruct: the current Slack thread, files that remain in the workspace,
+approved indexed sources, and saved user settings. Tag does not quietly build a
+permanent memory of every request.
 
-## Quick start
+Read [How Tag works](docs/concepts/mental-model.md) for the complete mental
+model.
 
-TAG provides installers for macOS, Linux, and native Windows. The primary path
-is Slack + Codex + local MFS; Claude Code remains experimental. Native Windows
-live Slack/backend qualification is still required before release.
+## Get started
 
-You need Python 3.10+, `curl`, and a working Codex CLI login. The installer uses
-[`uv`](https://docs.astral.sh/uv/) when available and otherwise falls back to
-Python's standard `venv` and pip. Clone Tag first:
+Use a Mac or Linux computer that can stay awake and connected while Tag handles
+requests. You need:
 
-```bash
-git clone https://github.com/klovr-co/hover-tag.git
-cd hover-tag
-```
+- Python 3.10 or later;
+- `curl`;
+- Codex CLI installed, signed in, and able to run tasks;
+- permission to create and install a Slack app in your workspace.
 
-### Agent-guided setup (recommended)
+The agent-guided setup also needs
+[Node.js and npm](https://nodejs.org/en/download) so it can run `npx`. The
+direct terminal installer does not require Node.js.
 
-Install Tag's setup skill for Codex:
-
-```bash
-npx skills add klovr-co/hover-tag --skill hover-tag-setup -a codex -g
-```
-
-Open a new Codex task in the cloned repository and ask: `Set up Tag for me.`
-The agent can check prerequisites, run the installer, and diagnose failures. It
-will pause when Slack requires you to create or approve the app.
-Once installed, the skill starts with `tag inspect --json` and uses targeted
-configuration commands, asking only for missing information.
-
-### Manual setup
-
-Run the same guided installer yourself:
+The recommended agent-guided setup is described above. To install directly in
+your terminal instead:
 
 ```bash
-./install.sh
+curl -fsSL https://hover.team/tag/install | sh
+tag setup
 ```
 
-The installer creates a permanent application home and an isolated runtime,
-independent of this checkout. Add its printed command directory to PATH, then
-run `tag` for status and next steps, or `tag setup` for resumable setup. Use `tag reset`
-to back up the old setup and redo onboarding after confirmation. Windows users
-run `./install.ps1` from PowerShell instead. See [installation and TAG home](docs/installation.md)
-for platform paths, download installers, skills, MCP, and migration.
-Contributors running directly from a checkout must first run
-`./install.sh --dependencies-only`; `./tag` deliberately does not fall back to
-system Python or install dependencies during startup.
-`tag setup` owns the Slack journey. It reuses the installed Slack CLI, offers
-the CLI's real login flow when the sandbox workspace is not authorized, and
-then lets you create a manifest-based app or link an existing app by App ID.
-Profile-picture selection and upload require Slack CLI 4.7 or newer.
-For a new app, setup proposes **&lt;your first name&gt;'s Tag** and a uniquely
-curated Tag waterdrop. Choose Metal (white), Wood (green), Water (the default
-blue), Fire (red), or Soil (yellow); 16 subtle signatures keep Tags within the
-same element distinct. You can edit the name or choose your own picture by
-dragging a local PNG, JPEG, or GIF into the terminal. The picture is copied into
-Tag's private application home and passed to Slack CLI during app creation.
-It pauses for every Slack approval that only a person or workspace admin can
-grant. Tokens are entered only through hidden terminal prompts.
+Setup helps you create or link a Slack app, select yourself as its owner, choose
+channels, and start indexing the approved Slack history. It saves completed
+steps, so you can rerun `tag setup` to resume after a pause or approval.
 
-The menu shows the next useful action based on current settings and service
-health. Settings and Troubleshooting remain available when you return. For
-scripts and skills, use the same operations directly:
-
-```bash
-tag inspect --json
-tag config init --json
-tag config show --json
-tag config set OPENTAG_BACKEND codex --json
-tag doctor --json
-```
-
-Settings output redacts secrets. Existing settings survive initialization and
-setup retries. See [setup and management](docs/tag-management.md) for the command
-contract, secret input, experimental Claude selection, and recovery.
-
-After the bot token is validated, setup shows the Slack channels visible to the
-bot and lets you select one or more joined channels by name. It separately
-validates the Socket Mode, bot, and Slack-history credentials, then asks before
-writing a selected-channel-only MFS connector. For another channel, invite the
-bot there first and rerun setup. Once Tag is running, authorized owners can also
-change reply destinations with the searchable picker in Slack App Home; rerun
-setup before expecting a newly added destination to have indexed memory.
-
-Start Tag and inspect it with:
+Once setup is complete:
 
 ```bash
 tag start
 tag status
-tag logs
-tag logs --follow
+tag stop
 ```
 
-To connect another independent Slack workspace/app through the same installed
-runtime, create and target a named Tag:
+Keep the host computer awake and connected. Tag runs in the background, but it
+does not start automatically after the computer restarts.
 
-```sh
-tag add
-tag list
-tag personal start
-tag personal status
-```
+For the full walkthrough—including Slack approvals, the first test task, and
+recovery—follow [Get started with Tag](docs/getting-started/first-task.md).
 
-Unqualified commands operate on the default Tag at `instances/default`. Every
-Tag keeps separate settings, Slack identities, conversations, and bridge
-lifecycles there, with its user-editable workspace at `~/Tag/NAME`; they reuse
-one installation-owned MFS service without gaining cross-workspace retrieval. See
-[Tag management](docs/tag-management.md#multiple-slack-workspaces).
+## Files and integrations
 
-Prefer the dedicated `tag restart` command over chaining stop and start so the
-terminal presents one coherent operation. Use `tag doctor` for deeper
-diagnostics after the quick status and recent logs.
+Each Tag has a user-owned workspace. A normal installation uses
+`~/Tag/default` for the default Tag and `~/Tag/NAME` for a named Tag. Run
+`tag paths` instead of assuming a location; custom installations can use a
+different path.
 
-When developing from a prepared source checkout, use `./tag dev`. It watches
-`scripts/**/*.py`, reloads only the Slack bridge after changes, and streams its
-output in the foreground. For the default loopback endpoint, Tag owns MFS as
-well: an identifiable untracked server is replaced with the checkout's runtime,
-and Ctrl-C stops both development services. Explicit remote MFS endpoints remain
-externally managed. This command is intentionally unavailable from managed
-releases.
+Files in this workspace remain in place during normal upgrades. The workspace
+is the agent's starting directory, not a sandbox: actual file and command
+access depends on the backend process and the local account running Tag.
 
-Mention your Tag in the test channel you configured. This example uses Maya's
-Tag; select your own bot's mention:
+Codex can also use installed commands, skills, and MCP connections. Each tool
+or connected service has its own credentials and permissions. Installing a
+skill teaches the agent how to use a tool; it does not grant access to an
+account.
 
-> @Maya's Tag read the project documentation in your workspace, summarize what this
-> project is trying to accomplish, and cite the supporting files.
+- [Work with files](docs/concepts/workspaces-and-tools.md)
+- [Add integrations](docs/concepts/adding-integrations.md)
+- [Use Gmail from Slack](docs/tutorials/use-gmail-from-slack.md)
 
-This first request uses the local workspace configured during setup. A request
-to summarize the entire Slack channel requires that channel's history to be
-indexed separately through an MFS Slack connector.
+## Context, access, and security
 
-Only the owner member ID entered during setup can invoke Tag initially. Add
-other IDs to the comma-separated `SLACK_ALLOWED_USER_IDS` setting to share access.
-Authorized users can also invoke Tag without an `@mention` from the app's
-Messages tab. Each top-level DM starts a fresh task; replies in that DM thread
-provide bounded context only for that task. Set `OPENTAG_SLACK_DM_ENABLED=0` to
-disable direct-message invocation.
+Tag turns Slack messages and attachments into instructions for a local coding
+agent. Treat them as untrusted input.
 
-While a task runs, Tag uses Slack's native loading indicator instead of posting
-a temporary bot message. Slack response streaming is enabled by default.
-Claude streams answer deltas directly. Codex uses App Server by default to stream
-final-answer deltas, display activity backed by observed tool events, and honor
-Slack's native Stop button. Set `OPENTAG_CODEX_TRANSPORT=exec` for rollback, or set
-`OPENTAG_SLACK_STREAMING=0` to retain buffered replies for troubleshooting.
-Commentary, reasoning, tool output, and raw diagnostics are never streamed.
-Capacity and rate-limit failures are retried before observable work begins; the
-loading indicator shows the attempt count. A terminal failure clears the loading
-state, posts sanitized guidance with a local-log reference, and offers a **Retry**
-button that reloads the original Slack request.
-Tag also journals active Slack thread identities in its private state directory.
-Normal shutdown clears those sessions before exit; after a forced crash, the
-next start clears any stale Slack working indicators before accepting new work.
+Important boundaries:
 
-Codex replies also include a compact **Configure** button beneath the answer. It
-opens a modal that saves model, native Codex reasoning-level,
-and Fast Mode choices for that Slack user across channels and threads.
-The modal's **Reset to default** button restores every control before saving.
-Its defaults come from `~/Tag/NAME/.codex/config.toml`, layered over the user's
-global `~/.codex/config.toml`; restart Tag after editing the local file.
-Fast Mode is independent of
-reasoning level and uses increased usage for faster responses. Operators can
-restrict the selectable models with `OPENTAG_CODEX_MODELS` and the reasoning
-levels with `OPENTAG_CODEX_REASONING_EFFORTS`.
+- Only the owner and explicitly authorized Slack members can start work.
+- Channel visibility and permission to invoke Tag are separate: anyone who can
+  see a channel can read Tag's visible requests and replies.
+- Inviting the Slack app to a channel does not make all history searchable.
+  Durable retrieval requires an MFS connector and an allowed scope.
+- MFS and Slack helper restrictions are application guardrails, not a hardened
+  capability boundary. A shell-capable backend runs as the same local account
+  and may use credentials inherited by that process.
+- Tag is intended for a trusted, isolated environment. It does not create that
+  isolation itself; use a dedicated host or local account and least-privilege
+  credentials when stronger boundaries matter.
+
+Tag does not provide organization-wide identity policy, auditable approvals,
+spend controls, or enterprise administration. Read the
+[security policy](SECURITY.md) before connecting sensitive files or accounts.
 
 Stop one bridge with `tag stop` (or `tag NAME stop`). Shared memory stays
 online for other Tags; inspect or explicitly stop an installation-owned service
@@ -461,42 +389,52 @@ Use a non-production host or a real external sandbox for stronger isolation.
 
 ## Documentation
 
-- [Documentation home](docs/index.md)
-- [Why Tag](docs/philosophy/why-tag.md)
-- [How Tag works](docs/concepts/mental-model.md)
-- [Run your first task](docs/getting-started/first-task.md)
-- [Supported capabilities](docs/reference/supported-capabilities.md)
-- [Connected user flows and functional tour](docs/user-flows.md) ([light-mode HTML](docs/user-flows.html))
-- [Slack setup and troubleshooting](references/slack-adapter.md)
-- [Backend behavior](references/backends.md)
-- [Runtime agent contract](references/runtime-agent.md)
-- [Memory model](references/memory.md)
-- [Troubleshooting](docs/troubleshooting.md)
-- [Security policy](SECURITY.md)
-- [Release contract](RELEASE.md)
-- [Changelog](CHANGELOG.md)
+| I want to… | Read |
+| --- | --- |
+| Set up Tag and try a first task | [Get started](docs/getting-started/first-task.md) |
+| Understand why I’d bring my assistant into Slack | [Why Tag](docs/philosophy/why-tag.md) |
+| Know who can use my Tag and see its replies | [Your own Tag](docs/concepts/access.md) |
+| Let someone else make requests to my Tag | [Sharing access](docs/concepts/sharing-access.md) |
+| See what happens after a mention | [How Tag works](docs/concepts/mental-model.md) |
+| Follow up or find an earlier discussion | [What Tag knows](docs/concepts/what-tag-knows.md) |
+| Work with attachments and saved files | [Working with files](docs/concepts/workspaces-and-tools.md) |
+| Add tools, skills, and connected accounts | [Adding integrations](docs/concepts/adding-integrations.md) |
+| Check the exact current feature set | [Supported capabilities](docs/reference/supported-capabilities.md) |
+| Configure and operate Tag | [Tag management](docs/tag-management.md) |
+| Diagnose a problem | [Troubleshooting](docs/troubleshooting.md) |
 
-Maintainers can run the same validation used by GitHub Actions with:
+Implementation-level references cover the
+[Slack adapter](references/slack-adapter.md),
+[backend behavior](references/backends.md),
+[runtime agent contract](references/runtime-agent.md), and
+[memory model](references/memory.md).
+
+## Project status
+
+Tag is an early open-source project built from a workflow already used in
+day-to-day Slack discussions. Codex is the supported path; other backends remain
+experimental. Tag is ready for experimentation in a trusted environment, but
+it is not a production security boundary.
+
+Issues and contributions are welcome. Maintainers can run the same validation
+used by GitHub Actions from a source checkout:
 
 ```bash
+git clone https://github.com/klovr-co/hover-tag.git
+cd hover-tag
+./install.sh --dependencies-only
 ./scripts/ci_check.sh
 ```
 
-The separate install-smoke workflow runs `./install.sh --dependencies-only` and
-`./tag doctor --offline` from clean macOS and Linux runners without credentials.
+See the [release contract](RELEASE.md) and [changelog](CHANGELOG.md) for release
+details.
 
 ## Origins and attribution
 
-Tag began as a modified derivative of the
+Tag is an open-source reference implementation inspired by
+[Claude Tag](https://www.anthropic.com/news/introducing-claude-tag). It began as
+a modified derivative of the
 [Open Tag Example](https://github.com/zilliztech/mfs/tree/main/examples/open-tag-skill)
 from [Zilliz MFS](https://github.com/zilliztech/mfs). The upstream material is
 licensed under the Apache License 2.0. This repository contains subsequent
 modifications and extensions.
-
-## Status
-
-Tag is an early open-source project built from a workflow that has already been
-useful in day-to-day Slack discussions. It is ready for experimentation in a
-trusted sandbox. It is not a production security boundary.
-
-Issues and contributions are welcome.
