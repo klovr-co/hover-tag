@@ -65,12 +65,16 @@ def _copy(source: Path, destination: Path, mappings=()):
                 pass  # Preserve malformed destination files as conflicts too.
         existing = destination.read_bytes() if destination.name == "config.toml" else b""
         # Workspace initialization may have created only this empty template.
+        templates = {
+            b'# TAG-only Codex MCP servers go here: [mcp_servers.NAME]\n',
+            (
+                '# TAG-only Codex defaults and MCP servers go here.\n'
+                '# model = "gpt-example"\n# model_reasoning_effort = "high"\n'
+                '# service_tier = "default"\n# [mcp_servers.NAME]\n'
+            ).encode(),
+        }
         template = (destination.name == "config.toml" and destination.parent.name == ".codex"
-                    and existing == (
-                        '# TAG-only Codex defaults and MCP servers go here.\n'
-                        '# model = "gpt-example"\n# model_reasoning_effort = "high"\n'
-                        '# service_tier = "default"\n# [mcp_servers.NAME]\n'
-                    ).encode())
+                    and existing in templates)
         if not template:
             raise RuntimeError(f"Migration conflict at {destination}; both originals were preserved")
     destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
