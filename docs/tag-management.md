@@ -81,10 +81,11 @@ Ctrl-C stops both; configured remote MFS endpoints remain external. Managed
 releases do not expose development watching.
 
 Completed `tag setup` checks readiness and exits without repeating onboarding.
-Use `tag setup --review` to review choices explicitly. `tag setup --no-start`
-saves approved choices without starting services or indexing. For a separate,
+Setup saves approved choices and verifies the MFS client, but it does
+not start services or index history; run `tag start` when ready. Use
+`tag setup --review` to review choices explicitly. For a separate,
 resumable test configuration, use `tag setup --test`; it keeps data under
-`<TAG_HOME>/testing/onboarding` and implies `--no-start`. This is not a Slack
+`<TAG_HOME>/testing/onboarding`. This is not a Slack
 sandbox: CLI sign-ins are shared and approved Slack app/channel operations are
 real. Test mode labels its banner, app-creation choice, review warning, and
 default app name (`TEST · <first name>'s Tag`) accordingly. A test home needs a

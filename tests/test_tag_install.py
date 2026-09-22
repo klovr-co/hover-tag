@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 import urllib.error
@@ -21,12 +22,14 @@ from scripts.tag_install import (
     CHANNEL_INDEX_URL,
     FetchedRelease,
     LEGACY_ADMIN_SKILL,
+    MFS_CLI_RELEASES,
     ReleaseSelection,
     _default_channel,
     command_owner,
     download,
     fetch_release,
     install,
+    install_mfs_cli,
     resolve_channel,
     resolve_version,
     unpack_release,
@@ -66,6 +69,42 @@ def release_record(version: str, *, prerelease: bool, names: list[str] | None = 
             for name in names
         ],
     }
+
+
+class MfsClientBundleTests(unittest.TestCase):
+    def test_installs_pinned_client_beside_managed_python(self) -> None:
+        payload = b"mfs-client-fixture"
+        archive_file = io.BytesIO()
+        with tarfile.open(fileobj=archive_file, mode="w:xz") as bundle:
+            info = tarfile.TarInfo("mfs-cli/mfs")
+            info.size = len(payload)
+            info.mode = 0o755
+            bundle.addfile(info, io.BytesIO(payload))
+        archive = archive_file.getvalue()
+        digest = hashlib.sha256(archive).hexdigest()
+
+        with tempfile.TemporaryDirectory() as temporary:
+            release = Path(temporary) / "release"
+            python = release / ".venv/bin/python"
+            python.parent.mkdir(parents=True)
+            (release / "requirements-runtime.txt").write_text(
+                "mfs-server[slack]==0.4.6\n", encoding="utf-8"
+            )
+            with patch.dict(
+                MFS_CLI_RELEASES,
+                {("darwin", "arm64"): ("fixture.tar.xz", digest)},
+                clear=True,
+            ), patch("scripts.tag_install.sys.platform", "darwin"), patch(
+                "scripts.tag_install.platform.machine", return_value="arm64"
+            ), patch("scripts.tag_install.download", return_value=archive) as fetched:
+                installed = install_mfs_cli(release, python)
+
+            self.assertEqual(installed, release / ".venv/bin/mfs")
+            self.assertEqual(installed.read_bytes(), payload)
+            self.assertTrue(installed.stat().st_mode & 0o100)
+            fetched.assert_called_once_with(
+                "https://github.com/zilliztech/mfs/releases/download/v0.4.6/fixture.tar.xz"
+            )
 
 
 class ReleaseResolutionTests(unittest.TestCase):
@@ -1151,7 +1190,10 @@ class TagHomeTests(unittest.TestCase):
         ), patch(
             "scripts.tag_install.subprocess.run",
             return_value=subprocess.CompletedProcess([], 0, "", ""),
-        ) as run:
+        ) as run, patch(
+            "scripts.tag_install.install_mfs_cli",
+            return_value=Path(temp) / "home/releases/release/.venv/bin/mfs",
+        ):
             install(ROOT, Path(temp) / "home", Path(temp) / "bin")
 
         commands = [call.args[0] for call in run.call_args_list]
