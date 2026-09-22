@@ -202,6 +202,7 @@ class TagInstanceTests(unittest.TestCase):
             (True, [], "Still running · no active Tags"),
             (True, ["personal"], "Still running for: personal"),
             (False, [], "No Tag-managed process running"),
+            (False, ["personal"], "No Tag-managed process running · active Tags: personal"),
         ):
             with self.subTest(managed=managed, bridges=bridges):
                 output = StringIO()
@@ -209,11 +210,16 @@ class TagInstanceTests(unittest.TestCase):
                     sys, "argv", ["tag", "stop"]
                 ), patch.object(tag_cli, "stop_process") as stop, patch.object(
                     tag_cli, "process_for", return_value=object() if managed else None
-                ), patch.object(tag_cli, "bridge_processes", return_value=bridges), redirect_stdout(output):
+                ), patch.object(tag_cli, "bridge_processes", return_value=bridges) as running, redirect_stdout(output):
                     self.assertEqual(tag_cli.main(), 0)
                 stop.assert_called_once_with(self.root / "instances/default", "slack")
+                running.assert_called_once_with(self.root)
                 self.assertIn(expected, output.getvalue())
                 self.assertEqual("Stop memory too" in output.getvalue(), managed and not bridges)
+                self.assertEqual(
+                    "Stop those Tags before running tag memory stop." in output.getvalue(),
+                    managed and bool(bridges),
+                )
                 self.assertNotIn("Shared service left running", output.getvalue())
 
 
