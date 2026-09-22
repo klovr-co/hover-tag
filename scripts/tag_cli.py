@@ -1910,6 +1910,11 @@ def main() -> int:
             except ImportError:
                 from scripts import slack_manifest_migrations
             manifest_changed = slack_manifest_migrations.reconcile(home, config_path, values)
+            if manifest_changed:
+                # A migration may rotate credentials; preflight and the bridge
+                # must use the saved replacement during this same start.
+                values = read_config(config_path)
+                os.environ.update(values)
             display.info_row(
                 "Slack app",
                 "Permissions migrated" if manifest_changed else "Permissions current",
