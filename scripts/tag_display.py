@@ -152,6 +152,13 @@ def header(section, detail=""):
     else:
         paragraph(f"{BRAND_NAME}  /  {section}", "1;" + ACCENT)
         paragraph(BRAND_URL, MUTED)
+    try:
+        version = (Path(__file__).resolve().parents[1] / "VERSION").read_text(
+            encoding="utf-8"
+        ).strip()
+    except OSError:
+        version = ""
+    paragraph(f"CLI v{version}" if version else "CLI version unavailable", MUTED)
     rule()
     if detail:
         paragraph(detail, MUTED)
