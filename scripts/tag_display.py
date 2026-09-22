@@ -145,6 +145,7 @@ def rule():
 
 
 def header(section, detail=""):
+    """Render branding, a best-effort CLI version, and optional section detail."""
     emit()
     if mascot_banner():
         emit()
@@ -156,7 +157,7 @@ def header(section, detail=""):
         version = (Path(__file__).resolve().parents[1] / "VERSION").read_text(
             encoding="utf-8"
         ).strip()
-    except OSError:
+    except (OSError, UnicodeError):
         version = ""
     paragraph(f"CLI v{version}" if version else "CLI version unavailable", MUTED)
     rule()
