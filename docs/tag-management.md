@@ -29,6 +29,13 @@ failed startup leave shared memory and other Tags running. Inspect it with
 service can be stopped explicitly with `tag memory stop`. Tag refuses to stop
 an externally managed MFS process.
 
+An upgrade restarts each previously running Tag, leaving stopped Tags stopped
+and shared MFS online. `--no-restart` defers activation until you restart those
+Tags. On startup, legacy root-level settings and old working folders are migrated
+automatically after stopping the affected bridge. Originals are retained;
+conflicting destination files stop migration with an actionable path. Interrupted
+copies resume on retry, and completed migrations do not overwrite later edits.
+
 Shared storage does not authorize cross-workspace retrieval. Normal Slack
 retrieval remains limited to the selected Tag's approved workspace/channel
 scopes. These local Tags share the trusted-sandbox limitations described
@@ -238,13 +245,20 @@ and removed on exit; these safeguards are not a hardened isolation boundary
 ## Commands for people and skills
 
 After an upgrade, `tag start` applies versioned Slack app migrations before
-preflight. Existing Slack CLI authorization is used to add required DM and
-search permissions (`im:history` and `users:read`), refresh the installation,
+preflight. Existing Slack CLI authorization is used to reconcile the release's
+required bot scopes, events, App Home, Socket Mode, and interactivity settings,
+refresh the installation,
 and save replacement credentials privately. This works without an interactive
 terminal and preserves unrelated app settings. The migration is marked complete
-only after the replacement bot token has both permissions. If Slack requires
+only after remote settings and the replacement token's required grants are verified.
+An existing legacy Assistant view requires explicit approval through
+`tag setup --review` before the irreversible Agent conversion. If Slack requires
 workspace approval or renewed CLI sign-in, startup stops with recovery guidance;
 resolve that requirement and retry `tag start`.
+
+Lifecycle locks for startup, shared-memory startup, reset, and settings apply
+are released by the operating system if the CLI exits unexpectedly. A later
+attempt recovers the leftover marker without taking a live operation's lock.
 
 Permission failures pause setup and show the missing scope, the operation it blocks,
 and instructions to fix it yourself in Slack (or ask a workspace admin).

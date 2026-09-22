@@ -45,10 +45,9 @@ class SlackManifestMigrationTests(unittest.TestCase):
         self.assertTrue(changed)
         self.assertEqual(migrated["display_information"], {"name": "Custom name"})
         self.assertEqual(migrated["custom_operator_setting"], {"kept": True})
-        self.assertEqual(migrated["oauth_config"]["scopes"]["bot"],
-                         ["chat:write", "users:read", "im:history"])
-        self.assertEqual(migrated["settings"]["event_subscriptions"]["bot_events"],
-                         ["app_mention", "message.im"])
+        self.assertEqual(set(migrated["oauth_config"]["scopes"]["bot"]), set(migrations.REQUIRED_BOT_SCOPES))
+        self.assertEqual(set(migrated["settings"]["event_subscriptions"]["bot_events"]),
+                         set(migrations.REQUIRED_MANIFEST["settings"]["event_subscriptions"]["bot_events"]))
         self.assertFalse(migrations.migrate_manifest(migrated)[1])
 
     def test_search_migration_updates_an_existing_dm_manifest(self):
@@ -59,6 +58,44 @@ class SlackManifestMigrationTests(unittest.TestCase):
         self.assertIn("users:read", migrated["oauth_config"]["scopes"]["bot"])
         self.assertNotIn("users:read", original["oauth_config"]["scopes"]["bot"])
         self.assertEqual(original["features"], migrated["features"])
+
+    def test_migration_covers_current_manifest_and_preserves_custom_settings(self):
+        from scripts.check_manifest import validate_manifest
+        import yaml
+        original = self.manifest()
+        original["oauth_config"]["scopes"]["bot"].append("reactions:read")
+        original["settings"]["event_subscriptions"]["bot_events"].append("reaction_added")
+        original["settings"]["interactivity"] = {"request_url": "https://example.test/actions"}
+        current, _ = migrations.migrate_manifest(original)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "slack-app-manifest.yaml").write_text(yaml.safe_dump(current))
+            self.assertEqual([], validate_manifest(root))
+        self.assertIn("reactions:read", current["oauth_config"]["scopes"]["bot"])
+        self.assertIn("reaction_added", current["settings"]["event_subscriptions"]["bot_events"])
+        self.assertEqual("https://example.test/actions", current["settings"]["interactivity"]["request_url"])
+
+    def test_legacy_assistant_conversion_requires_explicit_approval(self):
+        original = self.manifest()
+        original["features"]["assistant_view"] = {"assistant_description": "Custom assistant"}
+        with self.assertRaisesRegex(RuntimeError, "irreversible"):
+            migrations.migrate_manifest(original)
+        self.assertNotIn("agent_view", original["features"])
+
+    def test_sync_success_without_remote_changes_does_not_checkpoint(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home, config = self.linked_home(Path(directory))
+            with patch.object(migrations.shutil, "which", return_value="slack"), patch.object(
+                migrations, "remote_manifest", return_value=self.manifest()
+            ), patch.object(migrations, "granted_bot_scopes", return_value=set()), patch.object(
+                migrations, "_sync_command", return_value=["slack", "manifest", "sync"]
+            ), patch.object(migrations, "_run", return_value=subprocess.CompletedProcess([], 0, "", "")), patch.object(
+                migrations.slack_credentials, "receive"
+            ) as receive:
+                with self.assertRaisesRegex(RuntimeError, "did not save"):
+                    migrations.reconcile(home, config, self.values())
+            receive.assert_not_called()
+            self.assertFalse((home / "state/slack-manifest-migrations.json").exists())
 
     def test_agent_view_migration_preserves_manifest_and_is_idempotent(self):
         original = self.manifest()
@@ -132,7 +169,7 @@ class SlackManifestMigrationTests(unittest.TestCase):
             current = migrations.migrate_manifest(self.manifest())[0]
             with patch.object(migrations.shutil, "which", return_value="/bin/slack"), patch.object(
                 migrations, "remote_manifest", return_value=current
-            ), patch.object(migrations, "granted_bot_scopes", return_value={"im:history", "users:read"}), patch.object(
+            ), patch.object(migrations, "granted_bot_scopes", return_value=set(migrations.REQUIRED_BOT_SCOPES)), patch.object(
                 migrations, "_run"
             ) as run:
                 self.assertFalse(migrations.reconcile(home, config, self.values()))
@@ -155,8 +192,8 @@ class SlackManifestMigrationTests(unittest.TestCase):
             success = subprocess.CompletedProcess([], 0, "", "")
             fresh = {"SLACK_APP_TOKEN": "xapp-fresh-token", "SLACK_BOT_TOKEN": "xoxb-fresh-token"}
             with patch.object(migrations.shutil, "which", return_value="/bin/slack"), patch.object(
-                migrations, "remote_manifest", return_value=remote
-            ), patch.object(migrations, "granted_bot_scopes", side_effect=[set(), {"im:history", "users:read"}]), patch.object(
+                migrations, "remote_manifest", side_effect=[remote, migrations.migrate_manifest(remote)[0]]
+            ), patch.object(migrations, "granted_bot_scopes", side_effect=[set(), set(migrations.REQUIRED_BOT_SCOPES)]), patch.object(
                 migrations, "_sync_command", return_value=["/bin/slack", "manifest", "sync"]
             ), patch.object(migrations, "_run", return_value=success) as run, patch.object(
                 migrations.slack_credentials, "receive", return_value=fresh
@@ -181,7 +218,7 @@ class SlackManifestMigrationTests(unittest.TestCase):
             with patch.object(migrations.shutil, "which", return_value="/bin/slack"), patch.object(
                 migrations, "remote_manifest", return_value=current
             ), patch.object(migrations, "granted_bot_scopes", side_effect=[
-                {"im:history"}, {"im:history", "users:read"},
+                {"im:history"}, set(migrations.REQUIRED_BOT_SCOPES),
             ]), patch.object(migrations, "_run") as run, patch.object(
                 migrations.slack_credentials, "receive", return_value=fresh
             ) as receive:
