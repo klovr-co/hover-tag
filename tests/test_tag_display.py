@@ -28,6 +28,30 @@ class DisplayTests(unittest.TestCase):
         self.assertIn("@Tag by Hover  /  Setup", text)
         self.assertIn("https://hover.team/tag", text)
 
+    def test_header_renders_trimmed_version(self):
+        with patch.object(tag_display.Path, "read_text", return_value="  1.2.3-beta.1 \n"), redirect_stdout(StringIO()) as output:
+            tag_display.header("Setup")
+        self.assertIn("  CLI v1.2.3-beta.1\n", output.getvalue())
+        self.assertNotIn("CLI version unavailable", output.getvalue())
+
+    def test_header_reports_unavailable_version_when_empty(self):
+        for content in ("", " \t\n"):
+            with self.subTest(content=content):
+                with patch.object(tag_display.Path, "read_text", return_value=content), redirect_stdout(StringIO()) as output:
+                    tag_display.header("Setup")
+                self.assertIn("CLI version unavailable", output.getvalue())
+
+    def test_header_reports_unavailable_version_when_read_fails(self):
+        for error in (
+            FileNotFoundError("missing VERSION"),
+            PermissionError("unreadable VERSION"),
+            UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte"),
+        ):
+            with self.subTest(error=type(error).__name__):
+                with patch.object(tag_display.Path, "read_text", side_effect=error), redirect_stdout(StringIO()) as output:
+                    tag_display.header("Setup")
+                self.assertIn("CLI version unavailable", output.getvalue())
+
     def test_wide_banner_has_one_brand_name_without_a_duplicate_wordmark(self):
         with patch.object(tag_display.shutil, "get_terminal_size", return_value=os.terminal_size((80, 24))), patch.object(
             tag_display, "color_available", return_value=True
@@ -87,7 +111,14 @@ class DisplayTests(unittest.TestCase):
     def test_terminal_text_falls_back_when_stdout_cannot_encode_ui_glyphs(self):
         legacy_stdout = type("LegacyStdout", (), {"encoding": "cp1252"})()
         with patch.object(tag_display.sys, "stdout", legacy_stdout):
-            self.assertEqual(tag_display.terminal_text("✓ › ─ ▀"), "+ > - #")
+            self.assertEqual(tag_display.terminal_text("✓ ◌ › ─ ▀"), "+ o > - #")
+
+    def test_pending_row_makes_a_blocking_readiness_check_explicit(self):
+        with redirect_stdout(StringIO()) as output:
+            tag_display.pending_row("Slack", "Waiting for the connection to become ready…")
+
+        self.assertIn("◌  Slack", output.getvalue())
+        self.assertIn("Waiting for the connection", output.getvalue())
 
     def test_doctor_summary_collapses_successful_low_level_checks(self):
         report = {

@@ -19,6 +19,12 @@ except ImportError:
     from scripts import setup_ui as ui, tag_config as settings, slack_app_create
 
 
+try:
+    from .tag_locks import LifecycleLock
+except ImportError:
+    from tag_locks import LifecycleLock
+
+
 def selected_app(home: Path) -> dict | None:
     """Use explicit saved identities, never a guessed app or CLI default."""
     try:
@@ -88,7 +94,9 @@ def unregister_connector(home: Path, values: dict[str, str]) -> None:
     if not uri:
         return
     search_path = str(home / "integrations/bin") + os.pathsep + os.environ.get("PATH", "")
-    executable = shutil.which("mfs", path=search_path)
+    name = "mfs.exe" if os.name == "nt" else "mfs"
+    bundled = Path(sys.executable).parent / name
+    executable = str(bundled) if bundled.is_file() else shutil.which("mfs", path=search_path)
     if not executable:
         raise RuntimeError(
             "MFS client is unavailable; the Slack history connector was not removed and setup was not reset."
@@ -129,10 +137,7 @@ def archive_setup(home: Path, lifecycle, *, expected_app: dict | None = None) ->
         if source.exists() and not (source.is_dir() if name == "slack-cli" else source.is_file()):
             raise RuntimeError(f"Unexpected setup path type; nothing was reset: {source}")
     start_lock = home / "state/start.lock"
-    try:
-        start_lock.mkdir()
-    except FileExistsError:
-        raise RuntimeError("Another start or reset is in progress; retry after it finishes") from None
+    lifecycle_lock = LifecycleLock(start_lock).acquire()
     config_lock = config.with_name(config.name + ".lock")
     locked = False
     try:
@@ -178,7 +183,7 @@ def archive_setup(home: Path, lifecycle, *, expected_app: dict | None = None) ->
     finally:
         if locked:
             config_lock.unlink(missing_ok=True)
-        start_lock.rmdir()
+        lifecycle_lock.release()
 
 
 def reset_and_setup(home: Path, lifecycle) -> int:

@@ -31,3 +31,6 @@ with tempfile.TemporaryDirectory(prefix="Tag smoke ") as temporary:
     subprocess.run([str(command), "doctor", "--offline"], cwd=directory, env=env, check=True)
     current = json.loads((directory / "home/current.json").read_text())
     subprocess.run([current["python"], "-c", "import slack_bolt, psutil, mfs_server"], check=True)
+    if os.name != "nt":
+        mfs = Path(current["python"]).parent / "mfs"
+        subprocess.run([str(mfs), "--version"], check=True)

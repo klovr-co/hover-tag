@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 import urllib.error
@@ -18,14 +19,17 @@ from scripts import tag_instances
 from scripts.tag_install import (
     ADMIN_SKILL,
     API_RELEASES,
+    CHANNEL_INDEX_URL,
     FetchedRelease,
     LEGACY_ADMIN_SKILL,
+    MFS_CLI_RELEASES,
     ReleaseSelection,
     _default_channel,
     command_owner,
     download,
     fetch_release,
     install,
+    install_mfs_cli,
     resolve_channel,
     resolve_version,
     unpack_release,
@@ -67,22 +71,163 @@ def release_record(version: str, *, prerelease: bool, names: list[str] | None = 
     }
 
 
+class MfsClientBundleTests(unittest.TestCase):
+    def test_installs_pinned_client_beside_managed_python(self) -> None:
+        payload = b"mfs-client-fixture"
+        archive_file = io.BytesIO()
+        with tarfile.open(fileobj=archive_file, mode="w:xz") as bundle:
+            info = tarfile.TarInfo("mfs-cli/mfs")
+            info.size = len(payload)
+            info.mode = 0o755
+            bundle.addfile(info, io.BytesIO(payload))
+        archive = archive_file.getvalue()
+        digest = hashlib.sha256(archive).hexdigest()
+
+        with tempfile.TemporaryDirectory() as temporary:
+            release = Path(temporary) / "release"
+            python = release / ".venv/bin/python"
+            python.parent.mkdir(parents=True)
+            (release / "requirements-runtime.txt").write_text(
+                "mfs-server[slack]==0.4.6\n", encoding="utf-8"
+            )
+            with patch.dict(
+                MFS_CLI_RELEASES,
+                {("darwin", "arm64"): ("fixture.tar.xz", digest)},
+                clear=True,
+            ), patch("scripts.tag_install.sys.platform", "darwin"), patch(
+                "scripts.tag_install.platform.machine", return_value="arm64"
+            ), patch("scripts.tag_install.download", return_value=archive) as fetched:
+                installed = install_mfs_cli(release, python)
+
+            self.assertEqual(installed, release / ".venv/bin/mfs")
+            self.assertEqual(installed.read_bytes(), payload)
+            self.assertTrue(installed.stat().st_mode & 0o100)
+            fetched.assert_called_once_with(
+                "https://github.com/zilliztech/mfs/releases/download/v0.4.6/fixture.tar.xz"
+            )
+
+
 class ReleaseResolutionTests(unittest.TestCase):
     def test_repository_policy_defaults_bare_installs_to_stable(self) -> None:
         """Bare installs follow the repository's stable-channel policy."""
         self.assertEqual(_default_channel(), "stable")
 
-    def test_channels_select_the_newest_compatible_release(self) -> None:
+    def test_channels_select_the_newest_release_in_each_phase(self) -> None:
         releases = [
             release_record("1.0.0", prerelease=False),
             release_record("1.1.0-alpha.2", prerelease=True),
             release_record("1.1.0-beta.1", prerelease=True),
             {**release_record("9.0.0", prerelease=False), "draft": True},
         ]
-        with patch("scripts.tag_install._json_download", return_value=releases):
+        with patch(
+            "scripts.tag_install._resolve_channel_from_index",
+            side_effect=RuntimeError("channel index unavailable"),
+        ), patch("scripts.tag_install._json_download", return_value=releases):
             self.assertEqual(resolve_channel("stable")["tag_name"], "v1.0.0")
             self.assertEqual(resolve_channel("beta")["tag_name"], "v1.1.0-beta.1")
-            self.assertEqual(resolve_channel("alpha")["tag_name"], "v1.1.0-beta.1")
+            self.assertEqual(resolve_channel("alpha")["tag_name"], "v1.1.0-alpha.2")
+
+    def test_channels_prefer_public_index_without_calling_github_api(self) -> None:
+        sha = "d" * 40
+        index = {
+            "schema_version": 1,
+            "repository": "klovr-co/hover-tag",
+            "channels": {
+                "alpha": {
+                    "version": "1.2.0-alpha.3",
+                    "tag": "v1.2.0-alpha.3",
+                    "commit_sha": sha,
+                },
+            },
+        }
+        with patch("scripts.tag_install._json_download", return_value=index) as request:
+            release = resolve_channel("alpha")
+
+        request.assert_called_once_with(CHANNEL_INDEX_URL, timeout=120)
+        self.assertEqual(release["tag_name"], "v1.2.0-alpha.3")
+        self.assertEqual(release["target_commitish"], sha)
+        self.assertEqual(
+            {asset["name"] for asset in release["assets"]},
+            {"tag-1.2.0-alpha.3.zip", "SHA256SUMS", "BUILD-PROVENANCE.json"},
+        )
+        self.assertTrue(all(
+            "/releases/download/v1.2.0-alpha.3/" in asset["browser_download_url"]
+            for asset in release["assets"]
+        ))
+
+    def test_channel_rejects_cross_phase_index_pointer(self) -> None:
+        index = {
+            "schema_version": 1,
+            "repository": "klovr-co/hover-tag",
+            "channels": {
+                "alpha": {
+                    "version": "1.2.0-beta.3",
+                    "tag": "v1.2.0-beta.3",
+                    "commit_sha": "b" * 40,
+                },
+            },
+        }
+        releases = [
+            release_record("1.2.0-alpha.4", prerelease=True),
+            release_record("1.2.0-beta.3", prerelease=True),
+        ]
+        with patch(
+            "scripts.tag_install._json_download", side_effect=[index, releases]
+        ):
+            release = resolve_channel("alpha")
+
+        self.assertEqual(release["tag_name"], "v1.2.0-alpha.4")
+
+    def test_channel_index_avoids_an_exhausted_api_quota(self) -> None:
+        index = {
+            "schema_version": 1,
+            "repository": "klovr-co/hover-tag",
+            "channels": {
+                "alpha": {
+                    "version": "1.2.0-alpha.4",
+                    "tag": "v1.2.0-alpha.4",
+                    "commit_sha": "a" * 40,
+                },
+            },
+        }
+
+        def response(url: str, *, timeout: float = 120):
+            if url == CHANNEL_INDEX_URL:
+                return index
+            raise RuntimeError("GitHub API rate limit exceeded; try again later")
+
+        with patch("scripts.tag_install._json_download", side_effect=response) as request:
+            self.assertEqual(resolve_channel("alpha")["tag_name"], "v1.2.0-alpha.4")
+
+        self.assertEqual(request.call_count, 1)
+
+    def test_valid_index_does_not_fall_back_when_channel_has_no_release(self) -> None:
+        index = {
+            "schema_version": 1,
+            "repository": "klovr-co/hover-tag",
+            "channels": {},
+        }
+        with patch("scripts.tag_install._json_download", return_value=index), patch(
+            "scripts.tag_install._resolve_channel_from_api"
+        ) as api:
+            with self.assertRaisesRegex(RuntimeError, "No published releases"):
+                resolve_channel("stable")
+
+        api.assert_not_called()
+
+    def test_channel_index_transport_failures_fall_back_to_api(self) -> None:
+        expected = release_record("1.0.0", prerelease=False)
+        for error in (urllib.error.URLError("offline"), TimeoutError("timed out")):
+            with self.subTest(error=type(error).__name__), patch(
+                "scripts.tag_install._resolve_channel_from_index", side_effect=error
+            ), patch(
+                "scripts.tag_install._resolve_channel_from_api", return_value=expected
+            ) as api, contextlib.redirect_stderr(io.StringIO()) as stderr:
+                self.assertEqual(resolve_channel("stable"), expected)
+
+            api.assert_called_once_with("stable", timeout=120, page_limit=100)
+            self.assertIn("Channel index unavailable:", stderr.getvalue())
+            self.assertIn("falling back to the GitHub Releases API", stderr.getvalue())
 
     def test_channel_resolution_paginates_and_handles_no_stable_release(self) -> None:
         first_page = [
@@ -90,10 +235,16 @@ class ReleaseResolutionTests(unittest.TestCase):
             for index in range(100)
         ]
         stable = release_record("1.0.0", prerelease=False)
-        with patch("scripts.tag_install._json_download", side_effect=[first_page, [stable]]) as request:
+        with patch(
+            "scripts.tag_install._resolve_channel_from_index",
+            side_effect=RuntimeError("channel index unavailable"),
+        ), patch("scripts.tag_install._json_download", side_effect=[first_page, [stable]]) as request:
             self.assertEqual(resolve_channel("stable")["tag_name"], "v1.0.0")
             self.assertEqual(request.call_count, 2)
         with patch(
+            "scripts.tag_install._resolve_channel_from_index",
+            side_effect=RuntimeError("channel index unavailable"),
+        ), patch(
             "scripts.tag_install._json_download",
             return_value=[release_record("1.1.0-alpha.1", prerelease=True)],
         ):
@@ -122,9 +273,15 @@ class ReleaseResolutionTests(unittest.TestCase):
 
     def test_edge_requires_the_published_moving_prerelease(self) -> None:
         edge = {"tag_name": "edge", "draft": False, "prerelease": True, "assets": []}
-        with patch("scripts.tag_install._json_download", return_value=edge):
+        with patch(
+            "scripts.tag_install._resolve_channel_from_index",
+            side_effect=RuntimeError("channel index unavailable"),
+        ), patch("scripts.tag_install._json_download", return_value=edge):
             self.assertEqual(resolve_channel("edge"), edge)
         with patch(
+            "scripts.tag_install._resolve_channel_from_index",
+            side_effect=RuntimeError("channel index unavailable"),
+        ), patch(
             "scripts.tag_install._json_download",
             return_value={**edge, "prerelease": False},
         ):
@@ -881,6 +1038,57 @@ class TagHomeTests(unittest.TestCase):
         self.assertTrue(result["restarted"])
         self.assertFalse(result["restart_required"])
 
+    def test_upgrade_discovers_instances_and_restarts_only_running_tags(self):
+        for no_restart in (False, True):
+            with self.subTest(no_restart=no_restart), tempfile.TemporaryDirectory() as temp:
+                home = Path(temp)
+                default = tag_instances.ensure_default(home)
+                work = tag_instances.create(home, "work")
+                tag_instances.create(home, "stopped")
+                (home / "current.json").write_text(json.dumps({
+                    "installed_version": "0.2.0-beta.1", "installed_commit": "a" * 40,
+                    "channel": "beta", "selection": "channel",
+                }))
+                running_paths = {default.home / "state/slack.json", work.home / "state/slack.json"}
+                target = FetchedRelease(ROOT, ReleaseSelection("beta", "0.2.0-beta.2", "b" * 40))
+                output = io.StringIO()
+                with patch("scripts.tag_install.fetch_release", return_value=target), patch(
+                    "scripts.tag_install.install"
+                ), patch("scripts.tag_cli.process_for", side_effect=lambda path: object() if path in running_paths else None), patch(
+                    "scripts.tag_cli.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", "")
+                ) as run, contextlib.redirect_stdout(output):
+                    upgrade_command(home, json_output=True, dependencies=False, no_restart=no_restart)
+                result = json.loads(output.getvalue())
+                self.assertEqual(["default", "work"], result["running_tags"])
+                self.assertEqual(no_restart, result["restart_required"])
+                commands = [call.args[0] for call in run.call_args_list]
+                if no_restart:
+                    self.assertEqual([], commands)
+                else:
+                    self.assertEqual(2, len(commands))
+                    self.assertEqual("restart", commands[0][-1])
+                    self.assertEqual(["work", "restart"], commands[1][-2:])
+
+    def test_upgrade_continues_restarting_other_tags_after_one_failure(self):
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            tag_instances.ensure_default(home)
+            tag_instances.create(home, "work")
+            (home / "current.json").write_text(json.dumps({
+                "installed_version": "0.2.0-beta.1", "installed_commit": "a" * 40,
+                "channel": "beta", "selection": "channel",
+            }))
+            target = FetchedRelease(ROOT, ReleaseSelection("beta", "0.2.0-beta.2", "b" * 40))
+            with patch("scripts.tag_install.fetch_release", return_value=target), patch(
+                "scripts.tag_install.install"
+            ), patch("scripts.tag_cli.bridge_processes", return_value=["default", "work"]), patch(
+                "scripts.tag_cli.process_for", return_value=None
+            ), patch("scripts.tag_cli.subprocess.run", side_effect=[
+                subprocess.CompletedProcess([], 1, "", ""), subprocess.CompletedProcess([], 0, "", ""),
+            ]) as run, self.assertRaisesRegex(RuntimeError, "default"):
+                upgrade_command(home, json_output=True, dependencies=False)
+            self.assertEqual(2, run.call_count)
+
     def test_upgrade_blocks_older_exact_version_without_opt_in(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -1033,12 +1241,19 @@ class TagHomeTests(unittest.TestCase):
         ), patch(
             "scripts.tag_install.subprocess.run",
             return_value=subprocess.CompletedProcess([], 0, "", ""),
-        ) as run:
+        ) as run, patch(
+            "scripts.tag_install.install_mfs_cli",
+            return_value=Path(temp) / "home/releases/release/.venv/bin/mfs",
+        ):
             install(ROOT, Path(temp) / "home", Path(temp) / "bin")
 
         commands = [call.args[0] for call in run.call_args_list]
         self.assertEqual(commands[0][1:3], ["-m", "venv"])
         self.assertEqual(commands[1][1:4], ["-m", "pip", "install"])
+        self.assertEqual(
+            Path(commands[2][1]).name,
+            "preload_mfs_model.py",
+        )
 
     def test_background_lifecycle_and_stale_pid_safety(self):
         with tempfile.TemporaryDirectory() as temp:

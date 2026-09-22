@@ -123,6 +123,40 @@ class TagLifecycleTests(unittest.TestCase):
         self.assertIn("startup failed: <redacted>", output.getvalue())
         self.assertNotIn(secret, output.getvalue())
 
+    def test_memory_start_uses_saved_mfs_settings_before_onboarding_completes(self) -> None:
+        config = self.home / "config/settings.json"
+        config.write_text('{"MFS_URL":"http://localhost:13619"}')
+
+        with patch.dict(os.environ, {"TAG_HOME": str(self.root)}, clear=False), patch.object(
+            sys, "argv", ["tag", "memory", "start"]
+        ), patch.object(tag_cli, "ensure_shared_memory") as ensure, patch.object(
+            tag_cli, "process_for", return_value=None
+        ), patch.object(tag_cli, "healthy", return_value=True), redirect_stdout(StringIO()):
+            self.assertEqual(tag_cli.main(), 0)
+
+        environment = ensure.call_args.args[1]
+        self.assertEqual(environment["MFS_URL"], "http://localhost:13619")
+        self.assertEqual(environment["TAG_INSTANCE_HOME"], str(self.home))
+
+    def test_shared_memory_start_reuses_the_installation_lock_and_workspace(self) -> None:
+        context = tag_instances.resolve(self.root)
+        environment = {
+            "MFS_URL": "http://127.0.0.1:13619",
+            "OPENTAG_MFS_STARTUP_ATTEMPTS": "1",
+        }
+        with patch.object(
+            tag_cli, "healthy", side_effect=[False, False, True]
+        ), patch.object(
+            tag_cli, "mfs_server_executable", return_value="/bin/mfs-server"
+        ), patch.object(tag_cli, "replace_unmanaged_local_mfs"), patch.object(
+            tag_cli, "start_process"
+        ) as start:
+            tag_cli.ensure_shared_memory(context, environment)
+
+        self.assertFalse((context.shared_mfs_home / "start.lock").exists())
+        self.assertEqual(start.call_args.kwargs["state_dir"], context.shared_mfs_home)
+        self.assertEqual(start.call_args.kwargs["cwd"], context.workspace)
+
     def test_local_mfs_listener_matches_the_resolved_configured_address(self) -> None:
         expected = MagicMock(pid=22)
         expected.cmdline.return_value = ["python", "-m", "mfs_server", "run"]
@@ -302,6 +336,12 @@ class TagLifecycleTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "Invitation memory could not be prepared"):
                 tag_cli.reconcile_invitation_memory(self.home)
 
+        status.write_text(json.dumps({"state": "needs_attention", "check": "index_submission"}), encoding="utf-8")
+        with patch.dict(sys.modules, {"slack_invitation_memory": slack_invitation_memory}), patch.object(
+            slack_invitation_memory.InvitationMemory, "tick"
+        ):
+            tag_cli.reconcile_invitation_memory(self.home)
+
         status.write_text(json.dumps({"state": "needs_attention", "check": "mfs_history_credential"}), encoding="utf-8")
         with patch.dict(sys.modules, {"slack_invitation_memory": slack_invitation_memory}), patch.object(
             slack_invitation_memory.InvitationMemory, "tick"
@@ -315,6 +355,132 @@ class TagLifecycleTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(tag_cli.MfsSlackConnectorUnavailable, "Slack connector support is not installed"):
                 tag_cli.reconcile_invitation_memory(self.home)
+
+    def test_wait_for_configured_mfs_scopes_allows_asynchronous_indexing(self) -> None:
+        with patch.dict(os.environ, {
+            "MFS_ALLOWED_SCOPES": "slack://tag-test/channels/one,slack://tag-test/channels/two",
+        }, clear=False), patch.object(
+            tag_cli,
+            "resolve_indexed_mfs_scope",
+            side_effect=[
+                None,
+                "slack://tag-test/channels/two",
+                "slack://tag-test/channels/one",
+                "slack://tag-test/channels/two",
+            ],
+        ) as indexed, patch.object(tag_cli.time, "sleep") as sleep:
+            self.assertEqual(tag_cli.wait_for_configured_mfs_scopes(attempts=2), [])
+
+        self.assertEqual(indexed.call_count, 4)
+        sleep.assert_called_once_with(1)
+
+    def test_mfs_scope_requires_an_indexed_entry(self) -> None:
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = json.dumps({
+            "entries": [{"name": "messages.jsonl", "search_status": "indexing"}],
+        }).encode()
+        with patch.dict(os.environ, {
+            "MFS_URL": "https://mfs.test", "MFS_TOKEN": "fixture-token",
+        }, clear=False), patch.object(tag_cli.urllib.request, "build_opener") as build_opener:
+            build_opener.return_value.open.return_value = response
+            self.assertFalse(tag_cli.mfs_scope_indexed("slack://tag-test/channels/one"))
+
+        response.__enter__.return_value.read.return_value = json.dumps({
+            "entries": [{"name": "messages.jsonl", "search_status": "indexed"}],
+        }).encode()
+        with patch.dict(os.environ, {
+            "MFS_URL": "https://mfs.test", "MFS_TOKEN": "fixture-token",
+        }, clear=False), patch.object(tag_cli.urllib.request, "build_opener") as build_opener:
+            build_opener.return_value.open.return_value = response
+            self.assertTrue(tag_cli.mfs_scope_indexed("slack://tag-test/channels/one"))
+
+    def test_mfs_scope_resolution_survives_a_channel_rename(self) -> None:
+        old_scope = "slack://tag-test/channels/old-name__C123"
+        current_scope = "slack://tag-test/channels/new-name__C123"
+        with patch.dict(os.environ, {
+            "MFS_ALLOWED_SCOPES": old_scope + ",file:///approved",
+        }, clear=False), patch.object(
+            tag_cli,
+            "mfs_request_json",
+            side_effect=[
+                {"entries": [{"path": current_scope}]},
+                {"entries": [{"name": "messages.jsonl", "search_status": "indexed"}]},
+            ],
+        ) as request:
+            self.assertEqual(tag_cli.wait_for_configured_mfs_scopes(attempts=1), [])
+            self.assertEqual(
+                os.environ["MFS_ALLOWED_SCOPES"], current_scope + ",file:///approved"
+            )
+
+        self.assertEqual(
+            request.call_args_list,
+            [
+                unittest.mock.call(
+                    "/v1/ls", {"path": "slack://tag-test/channels"}
+                ),
+                unittest.mock.call("/v1/ls", {"path": current_scope}),
+            ],
+        )
+
+    def test_authenticated_mfs_request_rejects_insecure_remote_urls(self) -> None:
+        for url in ("http://mfs.example.com", "file://mfs.example.com/data"):
+            with self.subTest(url=url), patch.dict(os.environ, {
+                "MFS_URL": url,
+                "MFS_TOKEN": "fixture-token",
+            }, clear=False), patch.object(tag_cli.urllib.request, "Request") as request:
+                with self.assertRaisesRegex(RuntimeError, "HTTPS"):
+                    tag_cli.mfs_scope_indexed("slack://tag-test/channels/one")
+                request.assert_not_called()
+
+    def test_authenticated_mfs_request_allows_loopback_http(self) -> None:
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = json.dumps({
+            "entries": [{"name": "messages.jsonl", "search_status": "indexed"}],
+        }).encode()
+        with patch.dict(os.environ, {
+            "MFS_URL": "http://[::1]:13619", "MFS_TOKEN": "fixture-token",
+        }, clear=False), patch.object(
+            tag_cli.urllib.request, "build_opener"
+        ) as build_opener:
+            build_opener.return_value.open.return_value = response
+            self.assertTrue(tag_cli.mfs_scope_indexed("slack://tag-test/channels/one"))
+        self.assertIsInstance(
+            build_opener.call_args.args[0], tag_cli.RejectMfsRedirects
+        )
+        build_opener.return_value.open.assert_called_once()
+
+    def test_authenticated_mfs_request_rejects_redirects(self) -> None:
+        request = tag_cli.urllib.request.Request(
+            "https://mfs.example.com/v1/ls",
+            headers={"Authorization": "Bearer fixture-token"},
+        )
+        handler = tag_cli.RejectMfsRedirects()
+        for target in (
+            "https://attacker.example/collect",
+            "http://mfs.example.com/collect",
+        ):
+            with self.subTest(target=target):
+                with self.assertRaises(tag_cli.urllib.error.HTTPError) as raised:
+                    handler.redirect_request(
+                        request,
+                        None,
+                        302,
+                        "Found",
+                        {"Location": target},
+                        target,
+                    )
+                raised.exception.close()
+
+    def test_wait_for_configured_mfs_scopes_returns_the_exact_failed_scope(self) -> None:
+        failed = "slack://tag-test/channels/two"
+        with patch.dict(os.environ, {
+            "MFS_ALLOWED_SCOPES": "slack://tag-test/channels/one," + failed,
+        }, clear=False), patch.object(
+            tag_cli,
+            "resolve_indexed_mfs_scope",
+            side_effect=lambda scope: scope if scope != failed else None,
+        ), patch.object(tag_cli.time, "sleep"):
+            self.assertEqual(tag_cli.wait_for_configured_mfs_scopes(attempts=2), [failed])
 
     def test_sync_explains_when_the_running_mfs_server_lacks_history_credential(self) -> None:
         config = self.home / "connector.toml"
@@ -378,6 +544,16 @@ class TagLifecycleTests(unittest.TestCase):
             tag_cli.shutil, "which", return_value="/usr/local/bin/mfs-server"
         ):
             self.assertEqual(tag_cli.mfs_server_executable(), "/usr/local/bin/mfs-server")
+
+    def test_mfs_client_prefers_managed_runtime_over_path(self) -> None:
+        with patch.object(tag_cli.Path, "is_file", return_value=True), patch.object(
+            tag_cli.shutil, "which", return_value="/usr/local/bin/mfs"
+        ) as which:
+            self.assertEqual(
+                tag_cli.mfs_client_executable(),
+                str(tag_cli.Path(sys.executable).parent / ("mfs.exe" if os.name == "nt" else "mfs")),
+            )
+        which.assert_not_called()
 
 
 if __name__ == "__main__":

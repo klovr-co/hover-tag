@@ -21,6 +21,12 @@ except ImportError:
     from tag_paths import initialize_instance, runtime_environment
 
 
+try:
+    from .tag_locks import LifecycleLock
+except ImportError:
+    from tag_locks import LifecycleLock
+
+
 def managed_connector_credential(home: Path, connector: Path) -> Path | None:
     """Return a regular credential owned by this instance, if referenced."""
     try:
@@ -47,10 +53,7 @@ def commit(home: Path, draft: Path, original: dict[str, str]) -> None:
     config = settings.config_path(home)
     start_lock = home / "state/start.lock"
     config_lock = config.with_name(config.name + ".lock")
-    try:
-        start_lock.mkdir()
-    except FileExistsError:
-        raise RuntimeError("Another start or reset is in progress. Draft kept; retry afterward.") from None
+    lifecycle_lock = LifecycleLock(start_lock).acquire()
     locked = False
     project = home / "integrations/slack-cli"
     previous = draft / "previous-slack-cli"
@@ -138,7 +141,7 @@ def commit(home: Path, draft: Path, original: dict[str, str]) -> None:
     finally:
         if locked:
             config_lock.unlink(missing_ok=True)
-        start_lock.rmdir()
+        lifecycle_lock.release()
 
 
 def edit(home: Path, kind: str) -> None:

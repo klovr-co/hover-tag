@@ -6,11 +6,13 @@ import argparse
 import hashlib
 import json
 import os
+import platform
 import re
 import shlex
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import textwrap
 import urllib.error
@@ -23,7 +25,27 @@ from pathlib import Path
 from typing import Any
 
 API_RELEASES = "https://api.github.com/repos/klovr-co/hover-tag/releases"
+RELEASE_DOWNLOADS = "https://github.com/klovr-co/hover-tag/releases/download"
+CHANNEL_INDEX_URL = RELEASE_DOWNLOADS + "/channels/tag-release-channels.json"
 CHANNELS = ("stable", "beta", "alpha", "edge")
+MFS_CLI_RELEASES = {
+    ("darwin", "arm64"): (
+        "mfs-cli-aarch64-apple-darwin.tar.xz",
+        "1fd7c9fe38d5f27e72cde3fca8e895c2185eb6113d17d352bc33c1e661e18cfe",
+    ),
+    ("darwin", "x86_64"): (
+        "mfs-cli-x86_64-apple-darwin.tar.xz",
+        "807eeba5c7d35b02123a25bfc244ad8dae3b478d79757d30373d282f234bbd25",
+    ),
+    ("linux", "arm64"): (
+        "mfs-cli-aarch64-unknown-linux-musl.tar.xz",
+        "a6a4cc90dc73118ae6f6b2c0fd779a43057ae1fd88b27e6cc32a3352ac3cc978",
+    ),
+    ("linux", "x86_64"): (
+        "mfs-cli-x86_64-unknown-linux-musl.tar.xz",
+        "2b4721bce6ebcea84d19a33d517d4963932d0696a106555753f145de6e767ae4",
+    ),
+}
 VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta)(?:\.(\d+))?)?$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 ACCENT = "38;2;56;207;241"
@@ -164,6 +186,45 @@ def download(url: str, *, timeout: float = 120) -> bytes:
         raise RuntimeError(f"Download failed with HTTP {error.code}: {url}") from error
 
 
+def install_mfs_cli(release: Path, python: Path) -> Path | None:
+    """Install the pinned MFS client beside Tag's managed Python executable."""
+    requirements = (release / "requirements-runtime.txt").read_text(encoding="utf-8")
+    match = re.search(r"(?m)^mfs-server(?:\[[^]]+\])?==([^\s;]+)", requirements)
+    if not match:
+        raise ValueError("requirements-runtime.txt does not pin mfs-server")
+    version = match.group(1)
+    machine = platform.machine().lower()
+    machine = {"aarch64": "arm64", "amd64": "x86_64"}.get(machine, machine)
+    target = MFS_CLI_RELEASES.get((sys.platform, machine))
+    if target is None:
+        # Upstream does not currently publish a native Windows client. Keep the
+        # existing PATH fallback there until an official artifact is available.
+        return None
+    artifact, expected = target
+    url = f"https://github.com/zilliztech/mfs/releases/download/v{version}/{artifact}"
+    archive_data = download(url)
+    actual = hashlib.sha256(archive_data).hexdigest()
+    if actual != expected:
+        raise ValueError(f"MFS CLI checksum mismatch for {artifact}")
+    with tempfile.TemporaryDirectory(prefix="tag-mfs-cli-") as temporary:
+        archive = Path(temporary) / artifact
+        archive.write_bytes(archive_data)
+        with tarfile.open(archive, "r:xz") as bundle:
+            members = [
+                member for member in bundle.getmembers()
+                if member.isfile() and Path(member.name).name == "mfs"
+            ]
+            if len(members) != 1:
+                raise ValueError("MFS CLI archive does not contain exactly one client executable")
+            source = bundle.extractfile(members[0])
+            if source is None:
+                raise ValueError("MFS CLI executable could not be read")
+            destination = python.parent / "mfs"
+            destination.write_bytes(source.read())
+    destination.chmod(0o755)
+    return destination
+
+
 def _json_download(url: str, *, timeout: float = 120) -> Any:
     try:
         return json.loads(download(url, timeout=timeout).decode("utf-8"))
@@ -198,24 +259,69 @@ def _release_matches_channel(release: dict[str, Any], channel: str) -> bool:
         return False
     if bool(release.get("prerelease")) != (phase != "stable"):
         return False
-    allowed = {
-        "stable": {"stable"},
-        "beta": {"stable", "beta"},
-        "alpha": {"stable", "beta", "alpha"},
+    return phase == channel
+
+
+class _ChannelHasNoRelease(RuntimeError):
+    """The public index is valid but intentionally has no release for a channel."""
+
+
+def _resolve_channel_from_index(channel: str, *, timeout: float) -> dict[str, Any]:
+    index = _json_download(CHANNEL_INDEX_URL, timeout=timeout)
+    if (
+        not isinstance(index, dict)
+        or index.get("schema_version") != 1
+        or index.get("repository") != "klovr-co/hover-tag"
+        or not isinstance(index.get("channels"), dict)
+    ):
+        raise ValueError("Tag release channel index is malformed")
+    entry = index["channels"].get(channel)
+    if entry is None:
+        raise _ChannelHasNoRelease(
+            f"No published releases are available for channel {channel}"
+        )
+    if not isinstance(entry, dict):
+        raise ValueError("Tag release channel index entry is malformed")
+    version = entry.get("version")
+    tag = entry.get("tag")
+    commit_sha = entry.get("commit_sha")
+    if not isinstance(version, str) or not isinstance(tag, str):
+        raise ValueError("Tag release channel index entry is malformed")
+    if not isinstance(commit_sha, str) or not SHA_RE.fullmatch(commit_sha):
+        raise ValueError("Tag release channel index commit is invalid")
+    if channel == "edge":
+        if version != "edge" or tag != "edge":
+            raise ValueError("Tag edge channel index entry is malformed")
+        prerelease = True
+        archive_name = "tag-edge.zip"
+    else:
+        try:
+            _, phase = _parsed_version(version)
+        except ValueError as error:
+            raise ValueError("Tag release channel index version is invalid") from error
+        if tag != "v" + version:
+            raise ValueError("Tag release channel index tag does not match its version")
+        prerelease = phase != "stable"
+        archive_name = f"tag-{version}.zip"
+    base_url = f"{RELEASE_DOWNLOADS}/{tag}"
+    release = {
+        "tag_name": tag,
+        "draft": False,
+        "prerelease": prerelease,
+        "target_commitish": commit_sha,
+        "assets": [
+            {"name": name, "browser_download_url": f"{base_url}/{name}"}
+            for name in (archive_name, "SHA256SUMS", "BUILD-PROVENANCE.json")
+        ],
     }
-    return phase in allowed[channel]
+    if channel != "edge" and not _release_matches_channel(release, channel):
+        raise ValueError("Tag release channel index points to an incompatible release")
+    return release
 
 
-def resolve_channel(
-    channel: str,
-    *,
-    timeout: float = 120,
-    page_limit: int = 100,
+def _resolve_channel_from_api(
+    channel: str, *, timeout: float, page_limit: int
 ) -> dict[str, Any]:
-    if channel not in CHANNELS:
-        raise ValueError(f"Unknown release channel: {channel}")
-    if page_limit < 1:
-        raise ValueError("Release page limit must be positive")
     if channel == "edge":
         release = _json_download(API_RELEASES + "/tags/edge", timeout=timeout)
         if (
@@ -244,6 +350,32 @@ def resolve_channel(
     if not matches:
         raise RuntimeError(f"No published releases are available for channel {channel}")
     return max(matches, key=lambda item: _parsed_version(item["tag_name"])[0])
+
+
+def resolve_channel(
+    channel: str,
+    *,
+    timeout: float = 120,
+    page_limit: int = 100,
+) -> dict[str, Any]:
+    if channel not in CHANNELS:
+        raise ValueError(f"Unknown release channel: {channel}")
+    if page_limit < 1:
+        raise ValueError("Release page limit must be positive")
+    try:
+        return _resolve_channel_from_index(channel, timeout=timeout)
+    except _ChannelHasNoRelease:
+        raise
+    except (RuntimeError, ValueError, urllib.error.URLError, TimeoutError) as error:
+        # Compatibility path while the public index is unavailable during
+        # rollout. Public installations normally avoid the rate-limited API.
+        print(
+            f"Channel index unavailable: {error}; falling back to the GitHub Releases API",
+            file=sys.stderr,
+        )
+        return _resolve_channel_from_api(
+            channel, timeout=timeout, page_limit=page_limit
+        )
 
 
 def resolve_version(version: str) -> tuple[dict[str, Any], str, str]:
@@ -509,7 +641,16 @@ def install(
                      "-r", str(release / "requirements-runtime.txt")],
                     "Installing Tag dependencies with pip",
                 )
+            mfs_client = install_mfs_cli(release, python)
             row("Runtime", f"Python {sys.version_info.major}.{sys.version_info.minor} · dependencies ready")
+            if mfs_client is not None:
+                row("MFS CLI", f"Bundled {mfs_client.name} in the managed runtime")
+            paragraph("Preparing the local memory model…", MUTED, indent="    ")
+            install_step(
+                [str(python), str(release / "scripts/preload_mfs_model.py")],
+                "Preparing the MFS embedding model",
+            )
+            row("Memory", "Local embedding model cached")
         else:
             # Explicit test/development mode; never advertised as a complete install.
             python = Path(sys.executable)

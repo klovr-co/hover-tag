@@ -20,6 +20,10 @@ RUNTIME_DEPENDENCIES = ("mfs_server", "psutil", "slack_bolt")
 
 
 def recovery_hint(label: str) -> str:
+    if label == "Slack search users:read permission":
+        return "Add users:read under OAuth & Permissions > Bot Token Scopes, reinstall the Slack app, and update Tag's bot token if Slack replaces it"
+    if label == "Slack search user lookup":
+        return "Check the Slack bot token and users.info access; Slack search must verify caller identity"
     if label == "Tag runtime dependencies":
         return "Re-run the Tag installer; for a source checkout, run ./install.sh --dependencies-only"
     if label.startswith("MFS"):
@@ -176,6 +180,22 @@ def check_slack(channel_id: str | None) -> bool:
     detail = data.get("team") or data.get("error") or "authenticated"
     print_check(ok, "Slack bot auth.test", detail)
     all_ok = all_ok and ok
+
+    if ok:
+        # auth.test needs no scopes; probe the lookup used by search grants
+        # against the authenticated bot user, without depending on a caller.
+        user_id = data.get("user_id")
+        user_ok, user_data = (
+            slack_api("users.info", bot_token, {"user": user_id})
+            if user_id else (False, {"error": "auth.test returned no user ID"})
+        )
+        label = (
+            "Slack search users:read permission"
+            if user_data.get("error") == "missing_scope"
+            else "Slack search user lookup"
+        )
+        print_check(user_ok, label, "available" if user_ok else recovery_hint(label))
+        all_ok = all_ok and user_ok
 
     if channel_id:
         ok, data = slack_api("conversations.info", bot_token, {"channel": channel_id})

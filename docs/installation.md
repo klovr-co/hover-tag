@@ -104,8 +104,11 @@ If `tag` is a symlink to a recognized legacy Tag checkout, the installer safely
 replaces that symlink with the managed launcher. The old checkout is left intact.
 
 Each release has its own Python environment with the pinned runtime requirements.
-The MFS Python server is used directly; installation does not require the
-Unix-only MFS CLI binary. Google Workspace CLI and third-party MCP packages are
+Installation also downloads and validates MFS's default local embedding model
+into its reusable cache, so the first `tag start` does not wait for a cold model
+download. Later installs reuse the cached model.
+The MFS Python server and matching MFS CLI are installed into Tag's managed
+runtime on macOS and Linux. Google Workspace CLI and third-party MCP packages are
 optional integrations, installed and authenticated separately.
 
 The installer keeps dependency-manager output behind a concise Install screen.
@@ -160,11 +163,12 @@ Invoke-WebRequest https://raw.githubusercontent.com/klovr-co/hover-tag/main/inst
 # Or: & $installer -Version 0.2.0-beta.1
 ```
 
-`stable` accepts stable releases, `beta` accepts beta or newer stable releases,
-`alpha` accepts alpha, beta, or stable releases, and `edge` follows the latest
-successful `main` build. The selected channel, installed version, source commit,
-and check time are stored atomically in `current.json`; rollback restores the
-previous record with the previous release.
+`stable`, `beta`, and `alpha` each follow only releases from their named phase;
+`edge` follows the latest successful `main` build. Switching to a phase whose
+latest release is older than the installed version requires `--allow-downgrade`.
+The selected channel, installed version, source commit, and check time are stored
+atomically in `current.json`; rollback restores the previous record with the
+previous release.
 
 Release downloads are checked against both the SHA-256 manifest and build
 provenance before extraction. This checks integrity and consistency; it is not an
@@ -247,6 +251,13 @@ intentional older install requires `--allow-downgrade`; prefer `tag rollback`
 when returning to the immediately previous known-good release. `tag rollback`
 selects the previous release only after all Tag bridges and the
 installation-owned shared MFS service are stopped with `tag memory stop`.
+
+Channel selection reads a public `tag-release-channels.json` index from the
+moving `channels` GitHub release, then downloads immutable numbered assets
+directly. Public installation therefore does not require GitHub authentication
+and does not normally consume the anonymous REST API quota. Tag falls back to
+the GitHub Releases API if the index cannot be fetched or validated during
+rollout, while checksum and provenance verification remain mandatory.
 
 Human-readable `tag`, `tag status`, `tag inspect`, and successful `tag setup`
 and `tag start` runs also check the saved channel at most once every 24 hours.

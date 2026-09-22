@@ -171,6 +171,17 @@ class FlowTests(unittest.TestCase):
         guided.assert_called_once_with(self.config.resolve(), start_services=False, review_channels=False)
         self.assertFalse(receipt.exists())
 
+    def test_paused_setup_says_onboarding_is_incomplete(self):
+        with patch.object(
+            opentag_setup, "guided_setup", side_effect=opentag_setup.ui.Paused()
+        ), patch.object(sys.stdin, "isatty", return_value=True), patch.object(
+            sys, "argv", ["setup", "--config", str(self.config)]
+        ), redirect_stdout(StringIO()) as output:
+            self.assertEqual(opentag_setup.main(), 0)
+
+        self.assertIn("Setup is incomplete", output.getvalue())
+        self.assertIn("run tag setup to continue", output.getvalue())
+
     def test_settings_channels_use_plural_guided_flow(self):
         self.seed()
         with patch.object(tag_control.ui, "keyboard_available", return_value=True), patch.object(

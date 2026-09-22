@@ -1131,6 +1131,86 @@ class SlackChannelAllowlistTests(unittest.TestCase):
         os.environ["SLACK_CHANNEL_IDS"] = ""
         self.assertFalse(slack_socket_agent.slack_channel_allowed("C999"))
 
+    def test_invited_channel_mention_is_allowed_before_membership_poll(self) -> None:
+        fake_app = FakeApp()
+        client = MagicMock()
+        client.conversations_info.return_value = {"channel": {"is_member": True}}
+        event = {
+            "channel": "CNEW",
+            "ts": "1.23",
+            "user": "UOTHER",
+            "text": "<@BOT> hi",
+        }
+        with patch.object(
+            slack_socket_agent, "App", return_value=fake_app
+        ), patch.dict(
+            os.environ,
+            {
+                "SLACK_BOT_TOKEN": "xoxb-test",
+                "SLACK_CHANNEL_IDS": "COLD",
+                "SLACK_CHANNEL_POLICY": "invited",
+            },
+            clear=True,
+        ):
+            slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+            fake_app.events["app_mention"](
+                event,
+                {"team_id": "T123"},
+                client,
+                MagicMock(),
+            )
+
+        client.conversations_info.assert_called_once_with(channel="CNEW")
+        client.chat_postMessage.assert_called_once_with(
+            channel="CNEW",
+            thread_ts="1.23",
+            text=slack_socket_agent.UNAUTHORIZED_USER_MESSAGE,
+        )
+
+    def test_invited_policy_still_rejects_channel_without_membership(self) -> None:
+        fake_app = FakeApp()
+        client = MagicMock()
+        client.conversations_info.return_value = {"channel": {"is_member": False}}
+        logger = MagicMock()
+        with patch.object(
+            slack_socket_agent, "App", return_value=fake_app
+        ), patch.dict(
+            os.environ,
+            {
+                "SLACK_BOT_TOKEN": "xoxb-test",
+                "SLACK_CHANNEL_IDS": "COLD",
+                "SLACK_CHANNEL_POLICY": "invited",
+            },
+            clear=True,
+        ):
+            slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+            fake_app.events["app_mention"](
+                {
+                    "channel": "COTHER",
+                    "ts": "1.23",
+                    "user": "UOWNER",
+                    "text": "<@BOT> hi",
+                },
+                {"team_id": "T123"},
+                client,
+                logger,
+            )
+
+        client.chat_postMessage.assert_not_called()
+        logger.warning.assert_called_once()
+
+    def test_invited_membership_lookup_failure_fails_closed(self) -> None:
+        client = MagicMock()
+        client.conversations_info.side_effect = RuntimeError("Slack unavailable")
+        with patch.dict(
+            os.environ,
+            {"SLACK_CHANNEL_POLICY": "invited"},
+            clear=True,
+        ):
+            self.assertFalse(
+                slack_socket_agent.newly_invited_channel_allowed("CNEW", client)
+            )
+
 
 class SlackCrossChannelSearchTests(unittest.TestCase):
     def configured_client(self) -> MagicMock:
@@ -2039,6 +2119,68 @@ class SlackSessionJournalTests(unittest.TestCase):
 
         client.api_call.assert_called_once()
         client.assistant_threads_setStatus.assert_called_once()
+
+
+class SlackBridgeReadinessTests(unittest.TestCase):
+    def test_invitation_failure_withholds_socket_readiness(self) -> None:
+        app = MagicMock()
+        handler = MagicMock()
+        handler.client.is_connected.return_value = True
+        invitation_memory = MagicMock()
+        invitation_memory.ready_for_requests.return_value = False
+        shutdown_requested = MagicMock()
+        shutdown_requested.is_set.side_effect = [False, True]
+        journal = MagicMock()
+
+        with tempfile.TemporaryDirectory() as raw_dir:
+            ready_file = Path(raw_dir) / "slack.ready"
+
+            def assert_not_ready(_seconds: float) -> None:
+                self.assertFalse(ready_file.exists())
+
+            with patch.dict(
+                os.environ,
+                {
+                    "SLACK_ALLOWED_USER_IDS": "UOWNER",
+                    "SLACK_APP_TOKEN": "xapp-fixture",
+                    "SLACK_CHANNEL_POLICY": "invited",
+                },
+                clear=True,
+            ), patch(
+                "scripts.slack_socket_agent.sys.argv",
+                [
+                    "slack_socket_agent.py",
+                    "--backend",
+                    "codex",
+                    "--ready-file",
+                    str(ready_file),
+                    "--process-id",
+                    "fixture-process",
+                ],
+            ), patch.object(
+                slack_socket_agent, "create_app", return_value=app
+            ), patch.object(
+                slack_socket_agent, "print_live_summary"
+            ), patch.object(
+                slack_socket_agent, "SocketModeHandler", return_value=handler
+            ), patch.object(
+                slack_socket_agent, "SlackSessionJournal", return_value=journal
+            ), patch.object(
+                slack_socket_agent, "install_shutdown_handlers"
+            ), patch.object(
+                slack_socket_agent.threading, "Event", return_value=shutdown_requested
+            ), patch.object(
+                slack_socket_agent.time, "sleep", side_effect=assert_not_ready
+            ), patch(
+                "scripts.slack_invitation_memory.InvitationMemory",
+                return_value=invitation_memory,
+            ), patch(
+                "scripts.tag_paths.instance_home", return_value=Path(raw_dir)
+            ):
+                slack_socket_agent.main()
+
+        invitation_memory.start.assert_called_once_with()
+        invitation_memory.stop.assert_called_once_with()
 
 
 class SlackAnswerStreamTests(unittest.TestCase):

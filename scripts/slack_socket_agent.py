@@ -2461,6 +2461,17 @@ def slack_channel_allowed(channel: str) -> bool:
     return bool(allowed_channels) and channel in allowed_channels
 
 
+def newly_invited_channel_allowed(channel: str, client: Any) -> bool:
+    """Confirm a joined channel while invitation-memory polling catches up."""
+    if os.getenv("SLACK_CHANNEL_POLICY") != "invited":
+        return False
+    try:
+        conversation = client.conversations_info(channel=channel).get("channel") or {}
+        return isinstance(conversation, dict) and conversation.get("is_member") is True
+    except Exception:  # noqa: BLE001 - a failed Slack check must fail closed
+        return False
+
+
 def direct_messages_enabled() -> bool:
     """Enable authorized DM invocation unless the operator explicitly disables it."""
     return env_enabled("OPENTAG_SLACK_DM_ENABLED", default=True)
@@ -3377,7 +3388,10 @@ def create_app(
         logger: Any,
     ) -> None:
         channel = event["channel"]
-        if not slack_conversation_allowed(channel):
+        if not (
+            slack_conversation_allowed(channel)
+            or newly_invited_channel_allowed(channel, client)
+        ):
             logger.warning("Ignoring Open Tag mention from unapproved Slack channel %s", channel)
             return
         handle_invocation(event, body, client, logger, direct_message=False)
@@ -3464,7 +3478,11 @@ def main() -> None:
         handler.connect()
         while not shutdown_requested.is_set():
             if args.ready_file:
-                if handler.client.is_connected():
+                invitation_ready = (
+                    invitation_memory is None
+                    or invitation_memory.ready_for_requests()
+                )
+                if handler.client.is_connected() and invitation_ready:
                     instance_id = args.process_id or require_env("OPENTAG_PROCESS_ID")
                     temporary = args.ready_file.with_name(
                         f"{args.ready_file.name}.tmp.{os.getpid()}"

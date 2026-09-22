@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import yaml
 import os
 from pathlib import Path
 import re
@@ -23,14 +24,16 @@ except ImportError:
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MIGRATION_VERSION = 1
+MIGRATION_VERSION = 3
 DM_SCOPE = "im:history"
+REQUIRED_MANIFEST = yaml.safe_load((ROOT / "slack-app-manifest.yaml").read_text())
+REQUIRED_BOT_SCOPES = tuple(REQUIRED_MANIFEST["oauth_config"]["scopes"]["bot"])
 DM_EVENT = "message.im"
 AGENT_DESCRIPTION = "Run approved Codex or Claude tasks from Slack."
 
 
 def migrate_manifest(remote: dict) -> tuple[dict, bool]:
-    """Add Tag's DM contract while preserving settings owned by the operator."""
+    """Reconcile the release manifest without replacing operator-owned values."""
     migrated = json.loads(json.dumps(remote))
     try:
         app_home = migrated.setdefault("features", {}).setdefault("app_home", {})
@@ -40,12 +43,27 @@ def migrate_manifest(remote: dict) -> tuple[dict, bool]:
         raise RuntimeError("Slack returned a malformed app manifest; no settings were changed") from exc
     if not isinstance(app_home, dict) or not isinstance(scopes, list) or not isinstance(events, list):
         raise RuntimeError("Slack returned a malformed app manifest; no settings were changed")
+    app_home.update(REQUIRED_MANIFEST["features"]["app_home"])
     app_home["messages_tab_enabled"] = True
     app_home["messages_tab_read_only_enabled"] = False
-    if DM_SCOPE not in scopes:
-        scopes.append(DM_SCOPE)
-    if DM_EVENT not in events:
-        events.append(DM_EVENT)
+    for scope in REQUIRED_BOT_SCOPES:
+        if scope not in scopes:
+            scopes.append(scope)
+    for event in REQUIRED_MANIFEST["settings"]["event_subscriptions"]["bot_events"]:
+        if event not in events:
+            events.append(event)
+    migrated["settings"]["socket_mode_enabled"] = True
+    interactivity = migrated["settings"].setdefault("interactivity", {})
+    if not isinstance(interactivity, dict):
+        raise RuntimeError("Slack returned malformed interactivity; no settings were changed")
+    interactivity["is_enabled"] = True
+    if "assistant_view" in migrated["features"]:
+        raise RuntimeError(
+            "This app needs an irreversible Assistant-to-Agent conversion. "
+            "Run `tag setup --review` and approve Agent messaging, then retry `tag start`."
+        )
+    migrated, _, _ = migrate_agent_view(migrated)
+    migrated["features"]["agent_view"].setdefault("agent_description", AGENT_DESCRIPTION)
     return migrated, migrated != remote
 
 
@@ -102,6 +120,7 @@ def _run(command: list[str], *, cwd: Path, capture: bool = True) -> subprocess.C
             check=False,
             text=True,
             capture_output=capture,
+            stdin=subprocess.DEVNULL,
             timeout=120,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -217,8 +236,8 @@ def enable_agent_view(
     return True
 
 
-def reconcile(home: Path, config_path: Path, values: dict[str, str], *, interactive: bool | None = None) -> bool:
-    """Apply pending manifest migrations. Return true when remote state changed."""
+def reconcile(home: Path, config_path: Path, values: dict[str, str]) -> bool:
+    """Apply release requirements using existing CLI authorization, without prompts."""
     team_id, app_id = values["SLACK_TEAM_ID"], values["SLACK_APP_ID"]
     marker = home / "state/slack-manifest-migrations.json"
     if _marker_matches(marker, team_id, app_id):
@@ -230,31 +249,27 @@ def reconcile(home: Path, config_path: Path, values: dict[str, str], *, interact
     remote = remote_manifest(slack, project, app_id)
     migrated, changed = migrate_manifest(remote)
     scopes = granted_bot_scopes(values["SLACK_BOT_TOKEN"])
-    if not changed and DM_SCOPE in scopes:
+    if not changed and set(REQUIRED_BOT_SCOPES).issubset(scopes):
         settings.save_config(marker, {"version": MIGRATION_VERSION, "team_id": team_id, "app_id": app_id})
         return False
-    if interactive is None:
-        interactive = sys.stdin.isatty() and sys.stdout.isatty()
-    if not interactive:
-        raise RuntimeError(
-            "Slack app permissions need migration. Run `tag start` in an interactive terminal "
-            "to review Slack's authorization prompt."
-        )
     with tempfile.TemporaryDirectory(prefix="tag-slack-migration-") as directory:
         migration_project = _migration_project(project, migrated, team_id, app_id, Path(directory))
         if changed:
             result = _run(_sync_command(slack, migration_project, app_id, team_id), cwd=migration_project)
             if result.returncode:
                 raise RuntimeError("Slack app settings migration failed; run `slack login`, then retry `tag start`")
-        install = _run([
-            slack, "app", "install", "--team", team_id, "--app", app_id,
-            "--skip-update", "--no-color",
-        ], cwd=project, capture=False)
-        if install.returncode:
-            raise RuntimeError("Slack did not approve the new permissions; retry `tag start` after approval")
+    verified = remote_manifest(slack, project, app_id)
+    if migrate_manifest(verified)[1]:
+        raise RuntimeError("Slack did not save the required app settings; retry `tag start`")
+    # The credential handoff refreshes the installation itself. It captures
+    # output and closes stdin, so background upgrades never wait for input.
     credentials = slack_credentials.receive(project, team_id, app_id)
     settings.update_config(config_path, credentials)
-    if DM_SCOPE not in granted_bot_scopes(credentials["SLACK_BOT_TOKEN"]):
-        raise RuntimeError("Slack reinstalled the app without im:history; approve that permission and retry `tag start`")
+    missing = set(REQUIRED_BOT_SCOPES) - granted_bot_scopes(credentials["SLACK_BOT_TOKEN"])
+    if missing:
+        raise RuntimeError(
+            "Slack reinstalled the app without " + ", ".join(sorted(missing))
+            + "; approve those permissions in Slack and retry `tag start`"
+        )
     settings.save_config(marker, {"version": MIGRATION_VERSION, "team_id": team_id, "app_id": app_id})
-    return changed
+    return True

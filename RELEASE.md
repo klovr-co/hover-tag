@@ -25,6 +25,14 @@ the bootstrap endpoints must not be advertised as available before merging and
 publishing them. The active installation is independent of the checkout; see
 [installation](docs/installation.md).
 
+Public installers resolve channels through `tag-release-channels.json` on the
+moving `channels` GitHub release. `.github/workflows/channel-index.yml`
+regenerates that index from published, fully attributed releases after edge or
+release packaging completes. The index is a mutable pointer only; numbered
+release archives, checksums, and provenance remain immutable. Installers derive
+fixed release-asset URLs from the selected tag and retain the GitHub Releases
+API only as a compatibility fallback while the index is unavailable.
+
 ## Development and promotion workflow
 
 `main` is the only permanent development branch. After both CI and clean-install

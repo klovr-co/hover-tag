@@ -37,6 +37,7 @@ class InvitationMemory:
         self.home = home
         self.environment = os.environ if environment is None else environment
         self.stop_event = threading.Event()
+        self.ready_event = threading.Event()
         self.thread = None
         self.last_sync = 0.0
         self.last_signature = None
@@ -57,6 +58,7 @@ class InvitationMemory:
         if values.get("SLACK_CHANNEL_POLICY") != "invited":
             self.environment["SLACK_CHANNEL_POLICY"] = values.get("SLACK_CHANNEL_POLICY", "selected")
             self.restrict(values.get("MFS_ALLOWED_SCOPES", "").split(","), values.get("SLACK_CHANNEL_IDS", ""))
+            self.ready_event.set()
             return
         self.environment["SLACK_CHANNEL_POLICY"] = "invited"
         team = values.get("SLACK_TEAM_ID", "")
@@ -77,12 +79,14 @@ class InvitationMemory:
             # Remove lost membership from live access before any index operation.
             self.restrict(unrelated + scopes, ids)
             if not channels:
+                self.ready_event.clear()
                 self.last_signature = None
                 self.status("no_joined_channels")
                 return  # Never send an empty connector allowlist to MFS.
             signature = (tuple(sorted(scopes)), values.get("MFS_SLACK_HISTORY_DAYS", "30"),
                          values.get("MFS_SLACK_TOKEN"), values.get("MFS_URL"), values.get("MFS_TOKEN"))
             if signature == self.last_signature and time.monotonic() - self.last_sync < 300:
+                self.ready_event.set()
                 return
             self.status("syncing", len(channels))
             check = "history_access"
@@ -93,6 +97,7 @@ class InvitationMemory:
             # Do not continue if settings changed while Slack checks were running.
             if self.stop_event.is_set() or tag_config.load_config(path) != values:
                 self.restrict(unrelated)
+                self.ready_event.clear()
                 self.status("settings_changed")
                 return
             tag_credentials.write_slack_history(self.home, history)
@@ -104,6 +109,7 @@ class InvitationMemory:
             tag_cli.sync_configured_slack_memory(env)
             if self.stop_event.is_set() or tag_config.load_config(path) != values:
                 self.restrict(unrelated)
+                self.ready_event.clear()
                 self.status("settings_changed")
                 return
             # Preserve unrelated scopes/config on disk. Only replace this
@@ -125,34 +131,44 @@ class InvitationMemory:
             self.last_signature = signature
             self.last_sync = time.monotonic()
             self.status("sync_requested", len(channels))
+            self.ready_event.set()
         except tag_cli.MfsHistoryCredentialUnavailable:
             # The server's environment is distinct from Tag's. Record a safe,
             # actionable status without retaining the credential or CLI output.
             self.restrict(unrelated)
+            self.ready_event.clear()
             self.last_signature = None
             self.status("needs_attention", check="mfs_history_credential")
         except tag_cli.MfsSlackConnectorUnavailable:
             self.restrict(unrelated)
+            self.ready_event.clear()
             self.last_signature = None
             self.status("needs_attention", check="mfs_slack_connector")
         except Exception:
             # No raw API/CLI exception output: it may include credentials/content.
             self.restrict(unrelated)
+            self.ready_event.clear()
             self.last_signature = None
             self.status("needs_attention", check=check)
 
     def start(self) -> None:
         # Fail closed until the first current membership check completes.
         self.restrict([])
+        self.ready_event.clear()
         def work():
             while not self.stop_event.is_set():
                 try:
                     self.tick()
                 except Exception:
+                    self.ready_event.clear()
                     self.restrict([])
                 self.stop_event.wait(60)
         self.thread = threading.Thread(target=work, name="tag-invitation-memory", daemon=True)
         self.thread.start()
+
+    def ready_for_requests(self) -> bool:
+        """Return whether current invitation policy permits serving Slack requests."""
+        return self.ready_event.is_set()
 
     def stop(self) -> None:
         self.stop_event.set()
