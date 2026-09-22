@@ -346,6 +346,9 @@ class TagControlTests(unittest.TestCase):
                     self.assertEqual(tag_cli.main(), 0)
                 command = start.call_args.args[2]
                 self.assertEqual(command[command.index("--backend") + 1], backend)
+                self.assertIn("Waiting for the service to become healthy", output.getvalue())
+                self.assertIn("Waiting for selected channels to become readable", output.getvalue())
+                self.assertIn("Waiting for the connection to become ready", output.getvalue())
                 self.assertIn("Tag is connected", output.getvalue())
                 self.assertNotIn("[ok]", output.getvalue())
 

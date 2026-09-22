@@ -87,7 +87,14 @@ class DisplayTests(unittest.TestCase):
     def test_terminal_text_falls_back_when_stdout_cannot_encode_ui_glyphs(self):
         legacy_stdout = type("LegacyStdout", (), {"encoding": "cp1252"})()
         with patch.object(tag_display.sys, "stdout", legacy_stdout):
-            self.assertEqual(tag_display.terminal_text("✓ › ─ ▀"), "+ > - #")
+            self.assertEqual(tag_display.terminal_text("✓ ◌ › ─ ▀"), "+ o > - #")
+
+    def test_pending_row_makes_a_blocking_readiness_check_explicit(self):
+        with redirect_stdout(StringIO()) as output:
+            tag_display.pending_row("Slack", "Waiting for the connection to become ready…")
+
+        self.assertIn("◌  Slack", output.getvalue())
+        self.assertIn("Waiting for the connection", output.getvalue())
 
     def test_doctor_summary_collapses_successful_low_level_checks(self):
         report = {
