@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import yaml
 import os
 from pathlib import Path
 import re
@@ -23,15 +24,16 @@ except ImportError:
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MIGRATION_VERSION = 2
+MIGRATION_VERSION = 3
 DM_SCOPE = "im:history"
-REQUIRED_BOT_SCOPES = (DM_SCOPE, "users:read")
+REQUIRED_MANIFEST = yaml.safe_load((ROOT / "slack-app-manifest.yaml").read_text())
+REQUIRED_BOT_SCOPES = tuple(REQUIRED_MANIFEST["oauth_config"]["scopes"]["bot"])
 DM_EVENT = "message.im"
 AGENT_DESCRIPTION = "Run approved Codex or Claude tasks from Slack."
 
 
 def migrate_manifest(remote: dict) -> tuple[dict, bool]:
-    """Add Tag's DM and search requirements, preserving operator settings."""
+    """Reconcile the release manifest without replacing operator-owned values."""
     migrated = json.loads(json.dumps(remote))
     try:
         app_home = migrated.setdefault("features", {}).setdefault("app_home", {})
@@ -41,13 +43,27 @@ def migrate_manifest(remote: dict) -> tuple[dict, bool]:
         raise RuntimeError("Slack returned a malformed app manifest; no settings were changed") from exc
     if not isinstance(app_home, dict) or not isinstance(scopes, list) or not isinstance(events, list):
         raise RuntimeError("Slack returned a malformed app manifest; no settings were changed")
+    app_home.update(REQUIRED_MANIFEST["features"]["app_home"])
     app_home["messages_tab_enabled"] = True
     app_home["messages_tab_read_only_enabled"] = False
     for scope in REQUIRED_BOT_SCOPES:
         if scope not in scopes:
             scopes.append(scope)
-    if DM_EVENT not in events:
-        events.append(DM_EVENT)
+    for event in REQUIRED_MANIFEST["settings"]["event_subscriptions"]["bot_events"]:
+        if event not in events:
+            events.append(event)
+    migrated["settings"]["socket_mode_enabled"] = True
+    interactivity = migrated["settings"].setdefault("interactivity", {})
+    if not isinstance(interactivity, dict):
+        raise RuntimeError("Slack returned malformed interactivity; no settings were changed")
+    interactivity["is_enabled"] = True
+    if "assistant_view" in migrated["features"]:
+        raise RuntimeError(
+            "This app needs an irreversible Assistant-to-Agent conversion. "
+            "Run `tag setup --review` and approve Agent messaging, then retry `tag start`."
+        )
+    migrated, _, _ = migrate_agent_view(migrated)
+    migrated["features"]["agent_view"].setdefault("agent_description", AGENT_DESCRIPTION)
     return migrated, migrated != remote
 
 
@@ -104,6 +120,7 @@ def _run(command: list[str], *, cwd: Path, capture: bool = True) -> subprocess.C
             check=False,
             text=True,
             capture_output=capture,
+            stdin=subprocess.DEVNULL,
             timeout=120,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -241,6 +258,9 @@ def reconcile(home: Path, config_path: Path, values: dict[str, str]) -> bool:
             result = _run(_sync_command(slack, migration_project, app_id, team_id), cwd=migration_project)
             if result.returncode:
                 raise RuntimeError("Slack app settings migration failed; run `slack login`, then retry `tag start`")
+    verified = remote_manifest(slack, project, app_id)
+    if migrate_manifest(verified)[1]:
+        raise RuntimeError("Slack did not save the required app settings; retry `tag start`")
     # The credential handoff refreshes the installation itself. It captures
     # output and closes stdin, so background upgrades never wait for input.
     credentials = slack_credentials.receive(project, team_id, app_id)

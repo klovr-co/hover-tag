@@ -26,12 +26,14 @@ from pathlib import Path
 try:
     from tag_paths import initialize_instance, initialize_workspace, runtime_environment, tag_home
     import tag_instances
+    from tag_locks import LifecycleLock
     from tag_config import read_config
     import tag_credentials
     import tag_display as display
 except ImportError:
     from scripts.tag_paths import initialize_instance, initialize_workspace, runtime_environment, tag_home
     from scripts import tag_instances
+    from scripts.tag_locks import LifecycleLock
     from scripts.tag_config import read_config
     from scripts import tag_credentials
     from scripts import tag_display as display
@@ -703,13 +705,7 @@ def ensure_shared_memory(
         )
     shared = context.shared_mfs_home
     shared.mkdir(parents=True, exist_ok=True, mode=0o700)
-    mfs_lock = shared / "start.lock"
-    try:
-        mfs_lock.mkdir()
-    except FileExistsError:
-        raise RuntimeError(
-            f"Another shared memory start is in progress. If interrupted, remove {mfs_lock} and retry."
-        ) from None
+    mfs_lock = LifecycleLock(shared / "start.lock").acquire()
     try:
         # Recheck after acquiring the installation-wide lock. A different Tag
         # may have completed startup while this process waited.
@@ -740,7 +736,7 @@ def ensure_shared_memory(
                 + (f":\n{detail}" if detail else "; run tag memory status")
             )
     finally:
-        mfs_lock.rmdir()
+        mfs_lock.release()
 
 
 def bridge_processes(installation_root: Path) -> list[str]:
@@ -1340,10 +1336,11 @@ def upgrade_command(
             raise RuntimeError(
                 f"Cannot compare installed release version: {current_version or 'missing'}"
             ) from error
-        running = any(
-            process_for(home / "state" / f"{name}.json")
-            for name in ("slack", "mfs")
-        )
+        running_tags = bridge_processes(home)
+        legacy_running = process_for(home / "state/slack.json") is not None
+        if legacy_running and "default" not in running_tags:
+            running_tags.insert(0, "default")
+        running = bool(running_tags)
         result = {
             "schema_version": 1,
             "ok": True,
@@ -1362,6 +1359,11 @@ def upgrade_command(
                 "selection": target.selector,
             },
             "services_running": running,
+            "running_tags": running_tags,
+            "restart_commands": [
+                "tag restart" if tag_id == "default" else f"tag {tag_id} restart"
+                for tag_id in running_tags
+            ],
             "restart_required": False,
             "downgrade": downgrade,
         }
@@ -1469,19 +1471,18 @@ def upgrade_command(
         result["restart_required"] = running and no_restart
         result["restarted"] = False
         if running and not no_restart:
-            command = [sys.executable, str(home / "bin/tag-launch.py"), "restart"]
-            completed = subprocess.run(
-                command,
-                capture_output=json_output,
-                text=True,
-                check=False,
-            )
-            if completed.returncode:
-                detail = (completed.stderr or completed.stdout or "").strip()
+            failures = []
+            for tag_id in running_tags:
+                arguments = [] if tag_id == "default" else [tag_id]
+                command = [sys.executable, str(home / "bin/tag-launch.py"), *arguments, "restart"]
+                completed = subprocess.run(command, capture_output=json_output, text=True, check=False)
+                if completed.returncode:
+                    detail = redact_log_text((completed.stderr or completed.stdout or "").strip())
+                    failures.append(tag_id + (f": {detail}" if detail else ""))
+            if failures:
                 raise RuntimeError(
-                    "Tag was upgraded, but its services did not restart. "
-                    "Run tag stop, then tag rollback."
-                    + (f"\n{detail}" if detail else "")
+                    "Tag was upgraded, but these Tags need attention: " + "\n".join(failures)
+                    + ". Run tag [alias] doctor, resolve the reported requirement, then retry start."
                 )
             result["restarted"] = True
 
@@ -1492,7 +1493,7 @@ def upgrade_command(
             "Tag upgraded",
             f"Now using Tag v{result['target']['version']}. Configuration and workspace data were preserved.",
             next_label="Activate the new release" if result["restart_required"] else "",
-            next_command="tag restart" if result["restart_required"] else "",
+            next_command=" && ".join(result["restart_commands"]) if result["restart_required"] else "",
         )
     return 0
 
@@ -1614,6 +1615,13 @@ def main() -> int:
         return 0
     context = tag_instances.resolve(installation_root, tag_id)
     home = context.home
+    if args.command in {"start", "dev", "setup"}:
+        tag_instances.ensure_default(installation_root)
+        try:
+            from tag_layout import migrate as migrate_layout
+        except ImportError:
+            from scripts.tag_layout import migrate as migrate_layout
+        migrate_layout(context, sys.modules[__name__])
     environment = instance_environment(context)
     startup_attempt_overrides = {
         key: environment[key] for key in STARTUP_ATTEMPT_ENV_KEYS if key in environment
@@ -1898,11 +1906,7 @@ def main() -> int:
             display.section("Readiness")
         display.info_row("Runtime", "Dependencies available", good=True)
         # Serialize starts so concurrent invocations cannot create orphan services.
-        lock = home / "state/start.lock"
-        try:
-            lock.mkdir()
-        except FileExistsError:
-            raise RuntimeError(f"Another start is in progress. If interrupted, remove {lock} and retry.")
+        lock = LifecycleLock(home / "state/start.lock").acquire()
         started = []
         try:
             try:
@@ -2009,7 +2013,7 @@ def main() -> int:
                 stop_process(home, name)
             raise
         finally:
-            lock.rmdir()
+            lock.release()
         show_upgrade_reminder(installation_root)
     return 0
 
