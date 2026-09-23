@@ -18,6 +18,20 @@ conversations or working files.
 [Read the documentation](docs/index.md) ·
 [See what is supported](docs/reference/supported-capabilities.md)
 
+### Anonymous usage telemetry
+
+Tag includes privacy-bounded CLI telemetry to help improve setup and
+reliability. It never collects prompts, Slack messages, agent output, workspace
+paths, files, source code, logs, credentials, configuration values, or command
+arguments. Collection remains off until an interactive first-run notice is
+shown and the operator continues with telemetry enabled.
+
+Use `tag telemetry status`, `tag telemetry on`, or `tag telemetry off` to manage
+the installation-wide preference. Set `TAG_TELEMETRY=off` before running Tag for
+an immediate process-level hard stop. See [Tag telemetry and privacy](docs/reference/telemetry.md)
+for the complete event list, destination, local data handling, and privacy
+contact.
+
 ### Ask your agent to set up Tag
 
 Install the setup skill:
