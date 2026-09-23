@@ -38,19 +38,26 @@ Use the hover-tag-setup skill to set up Tag for me.
 ```
 
 Codex checks what's already installed, helps with missing prerequisites,
-and installs Tag if needed. It then asks you to run `tag setup` in your own
-terminal to authorize Slack and choose your app and channels.
+and installs Tag if needed. It proposes your workspace, app, access, channels,
+history window, backend, and startup choices together. Reply **Use these
+defaults** or list all changes in one message.
 
 Use your own Slack account as the owner. Review the channel list, history
 window, and invitation policy before finishing. New setups include channels
 the app has already joined; later invitations also make channels eligible for
 replies and history indexing.
 
-Complete the prompts in your terminal. If credentials need manual entry, enter
-them there, not in your Codex conversation.
-
-Return to Codex when setup finishes or pauses. It can check the connection or
-help diagnose the failed step. Once Tag is connected, continue to
+Codex drives the local setup prompts. If Slack login is needed, Codex shows a
+one-time connection in the conversation. In the Slack workspace you want to
+connect, paste it into the message box of **any channel or DM** and send it; it
+does not need to be a Tag channel. Choose **Confirm**, then return the short code
+from the next Slack window in one reply. These values are single-use and
+short-lived. If you prefer to keep them out of chat, choose the private clipboard
+handoff in the initial setup proposal and follow the same Slack steps, then reply
+**copied**. Codex completes setup and reports service readiness separately from
+the first verified Slack reply. Slack's illustrated
+[authorization guide](https://docs.slack.dev/tools/slack-cli/guides/authorizing-the-slack-cli/)
+shows where the command and short code appear. Once Tag is connected, continue to
 [Try your Tag in Slack](#try-your-tag-in-slack) below.
 
 ### Set up in your terminal
