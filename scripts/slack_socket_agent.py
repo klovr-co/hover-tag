@@ -26,12 +26,40 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 try:
     from .opentag_process_env import backend_environment
+    from .tag_error_reporting import (
+        COMMUNITY_INVITE_URL,
+        ErrorReport,
+        ErrorReportStore,
+        ReportOrigin,
+        build_troubleshooting_prompt,
+        classify_failure,
+        collect_health_checks,
+        default_report_store,
+        make_error_report,
+        new_error_reference,
+        sanitize_user_context,
+        utc_timestamp,
+    )
     from .slack_mrkdwn import to_mrkdwn
     from .slack_search_scope import ScopePlan, SearchIntent, plan_search_scopes
     from .tag_paths import tag_temp_dir
     from . import slack_channels
 except ImportError:  # Direct script execution does not create a package context.
     from opentag_process_env import backend_environment
+    from tag_error_reporting import (
+        COMMUNITY_INVITE_URL,
+        ErrorReport,
+        ErrorReportStore,
+        ReportOrigin,
+        build_troubleshooting_prompt,
+        classify_failure,
+        collect_health_checks,
+        default_report_store,
+        make_error_report,
+        new_error_reference,
+        sanitize_user_context,
+        utc_timestamp,
+    )
     from slack_mrkdwn import to_mrkdwn
     from slack_search_scope import ScopePlan, SearchIntent, plan_search_scopes
     from tag_paths import tag_temp_dir
@@ -66,6 +94,11 @@ SETTINGS_EFFORT_ACTION_ID = "opentag_settings_effort"
 SETTINGS_FAST_ACTION_ID = "opentag_settings_fast_mode"
 SETTINGS_RESET_ACTION_ID = "opentag_settings_reset"
 RETRY_ACTION_ID = "opentag_retry_request"
+REPORT_ISSUE_ACTION_ID = "opentag_report_issue"
+FIX_WITH_AGENT_ACTION_ID = "opentag_fix_with_coding_agent"
+JOIN_COMMUNITY_ACTION_ID = "opentag_join_hover_community"
+REPORT_VIEW_ID = "opentag_report_issue_view"
+TROUBLESHOOT_VIEW_ID = "opentag_troubleshoot_view"
 OPEN_LOCAL_ARTIFACT_ACTION_ID = "opentag_open_local_artifact"
 OPEN_LOCAL_ARTIFACT_ACTION_PATTERN = re.compile(
     rf"^{re.escape(OPEN_LOCAL_ARTIFACT_ACTION_ID)}_[0-9]+$"
@@ -1922,6 +1955,7 @@ def run_backend(
     max_timeout: int | None = None,
     scope_plan: ScopePlan | None = None,
     slack_search_grant: ScopePlan | None = None,
+    on_error: Callable[[str | None, str], None] | None = None,
 ) -> tuple[str, bool]:
     if max_timeout is None:
         max_timeout = int(os.getenv("OPENTAG_MAX_TIMEOUT_SECONDS", "3600"))
@@ -1991,8 +2025,13 @@ def run_backend(
         output = result.stdout.strip()
         if result.returncode != 0:
             if result.returncode == 124:
-                return f"Tag backend exceeded its maximum runtime of {max_timeout}s", False
+                detail = f"Tag backend exceeded its maximum runtime of {max_timeout}s"
+                if on_error:
+                    on_error("maximum_runtime", detail)
+                return detail, False
             detail = output[-3000:] or f"Open Tag backend failed with exit code {result.returncode}."
+            if on_error:
+                on_error(None, detail)
             return detail, False
         return output or "Open Tag finished without output.", True
     finally:
@@ -2023,6 +2062,7 @@ def run_backend_events(
     max_timeout: int | None = None,
     scope_plan: ScopePlan | None = None,
     slack_search_grant: ScopePlan | None = None,
+    on_error: Callable[[str | None, str], None] | None = None,
 ) -> tuple[str, bool]:
     """Consume normalized lifecycle events and forward only final-answer text."""
     if max_timeout is None:
@@ -2115,6 +2155,7 @@ def run_backend_events(
     final_messages: list[str] = []
     delta_text: list[str] = []
     error_text = ""
+    error_code: str | None = None
     terminal_status = ""
     diagnostics: list[str] = []
     try:
@@ -2145,6 +2186,10 @@ def run_backend_events(
                 final_messages.append(text)
             elif event_type == "error" and isinstance(text, str):
                 error_text = text
+                candidate_code = event.get("code")
+                error_code = candidate_code if isinstance(candidate_code, str) else error_code
+                if on_error:
+                    on_error(error_code, text)
             elif event_type == "status" and isinstance(text, str) and on_status:
                 on_status(text)
             elif event_type in {"activity_start", "activity_complete"} and on_activity:
@@ -2158,6 +2203,14 @@ def run_backend_events(
                 status = event.get("status")
                 if isinstance(status, str):
                     terminal_status = status
+                terminal_text = event.get("text")
+                if isinstance(terminal_text, str) and terminal_text:
+                    error_text = terminal_text
+                candidate_code = event.get("code")
+                if isinstance(candidate_code, str):
+                    error_code = candidate_code
+                if on_error and terminal_status not in {"completed", "complete", "interrupted"}:
+                    on_error(error_code, error_text or terminal_status)
         return_code = process.wait()
     finally:
         timer.cancel()
@@ -2171,10 +2224,16 @@ def run_backend_events(
     if active_run.cancel_requested:
         return "Stop requested, but the backend did not confirm interruption before cleanup.", False
     if timed_out.is_set():
-        return f"Tag backend exceeded its maximum runtime of {max_timeout}s", False
+        detail = f"Tag backend exceeded its maximum runtime of {max_timeout}s"
+        if on_error:
+            on_error("maximum_runtime", detail)
+        return detail, False
     if return_code != 0:
         details = error_text or "\n".join(diagnostics)[-3000:].strip()
-        return details or f"Open Tag backend failed with exit code {return_code}.", False
+        detail = details or f"Open Tag backend failed with exit code {return_code}."
+        if on_error:
+            on_error(error_code, detail)
+        return detail, False
     answer = "".join(final_messages) or "".join(delta_text)
     return (answer or "Open Tag finished without output."), True
 
@@ -2392,6 +2451,7 @@ def retry_button_blocks(
     thread_ts: str,
     request_ts: str,
     direct_message: bool = False,
+    error_reference: str | None = None,
 ) -> list[dict[str, Any]]:
     metadata = {
         "team": team,
@@ -2401,6 +2461,8 @@ def retry_button_blocks(
     }
     if direct_message:
         metadata["direct_message"] = True
+    if error_reference:
+        metadata["error_reference"] = error_reference
     return [{
         "type": "actions",
         "elements": [{
@@ -2412,38 +2474,174 @@ def retry_button_blocks(
     }]
 
 
+def failure_action_blocks(
+    *,
+    team: str,
+    channel: str,
+    thread_ts: str,
+    request_ts: str,
+    error_reference: str,
+    direct_message: bool = False,
+) -> list[dict[str, Any]]:
+    """Render recovery actions without putting diagnostic content in Slack metadata."""
+    retry = retry_button_blocks(
+        team=team,
+        channel=channel,
+        thread_ts=thread_ts,
+        request_ts=request_ts,
+        direct_message=direct_message,
+        error_reference=error_reference,
+    )[0]["elements"][0]
+    reference = json.dumps({"reference": error_reference}, separators=(",", ":"))
+    return [{
+        "type": "actions",
+        "elements": [
+            retry,
+            {
+                "type": "button",
+                "action_id": FIX_WITH_AGENT_ACTION_ID,
+                "text": {"type": "plain_text", "text": "Fix with coding agent"},
+                "value": reference,
+            },
+            {
+                "type": "button",
+                "action_id": REPORT_ISSUE_ACTION_ID,
+                "text": {"type": "plain_text", "text": "Report issue"},
+                "value": reference,
+            },
+        ],
+    }]
+
+
 def user_facing_failure(
     detail: str,
     timeout: int,
     error_reference: str,
     max_timeout: int | None = None,
+    backend_code: str | None = None,
 ) -> str:
     """Turn private backend diagnostics into stable, actionable Slack copy."""
     if detail.startswith("Stopped.") or detail.startswith("Stop requested"):
         return detail
+    classification = classify_failure(detail, backend_code)
     lowered = detail.lower()
-    if "no backend activity" in lowered:
-        return f"Tag stopped after {timeout} seconds without backend activity. Please retry."
-    if "maximum runtime" in lowered and max_timeout is not None:
-        return f"Tag reached its maximum runtime of {max_timeout} seconds. Please retry."
-    if "timed out" in lowered:
-        return f"Tag timed out after {timeout} seconds. Please retry."
-    if any(
-        marker in lowered
-        for marker in (
-            "capacity",
-            "rate limit",
-            "rate_limit",
-            "too many requests",
-            "http 429",
-            "backend is busy",
-        )
-    ):
-        return "Tag couldn’t complete this request because the backend is busy. Please retry."
+    cause = classification.explanation
+    if classification.category == "idle_timeout" and "no backend activity" in lowered:
+        cause = f"The coding backend stopped after {timeout} seconds without backend activity."
+    elif classification.category == "maximum_runtime" and max_timeout is not None:
+        cause = f"The coding backend reached Tag’s maximum runtime of {max_timeout} seconds."
+    elif classification.category == "idle_timeout" and "timed out" in lowered:
+        cause = f"The coding backend timed out after {timeout} seconds."
     return (
-        "Tag couldn’t complete this request. Please retry. If it keeps happening, "
-        f"ask the Tag owner to check the local logs with error reference `{error_reference}`."
+        "Tag couldn’t complete this request.\n"
+        f"*Cause:* {cause}\n\n"
+        "Please retry, troubleshoot with your coding agent, or report this in "
+        f"<{COMMUNITY_INVITE_URL}|Hover Community> so the developers can help.\n\n"
+        f"Error reference: `{error_reference}`"
     )
+
+
+def troubleshooting_skill_available(workdir: Path | None = None) -> bool:
+    """Check only supported local skill locations; never invoke a backend to check."""
+    roots = [skill_dir()]
+    if workdir is not None:
+        roots.append(workdir)
+    for root in roots:
+        for relative in (
+            ".agents/skills/tag-troubleshoot/SKILL.md",
+            ".claude/skills/tag-troubleshoot/SKILL.md",
+        ):
+            if (root / relative).is_file():
+                return True
+    return False
+
+
+def _modal_text(value: str, limit: int = 2_900) -> str:
+    if len(value) <= limit:
+        return value
+    suffix = "\n[Text truncated; use the report reference to request it again]"
+    return value[: max(0, limit - len(suffix))].rstrip() + suffix
+
+
+def report_preview_modal(
+    report: ErrorReport,
+    *,
+    mode: str,
+    private_metadata: dict[str, str],
+    skill_available: bool = False,
+) -> dict[str, Any]:
+    """Build a Slack modal using selectable text; Slack has no clipboard button."""
+    troubleshooting = mode == "troubleshoot"
+    text = (
+        build_troubleshooting_prompt(report, skill_available=skill_available)
+        if troubleshooting
+        else report.report_text()
+    )
+    description = (
+        "Review the prompt before giving it to a coding agent. A local agent must have access to the machine running Tag."
+        if troubleshooting
+        else "Copy your report, join Hover Community, and share it with the developers. Review the report before sharing. Nothing has been sent yet."
+    )
+    text_label = "Troubleshooting prompt" if troubleshooting else "Sanitized report"
+    text_action = "troubleshooting_prompt" if troubleshooting else "report_text"
+    callback_id = TROUBLESHOOT_VIEW_ID if troubleshooting else REPORT_VIEW_ID
+    submit = "Review prompt" if troubleshooting else "Review report"
+    return {
+        "type": "modal",
+        "callback_id": callback_id,
+        "title": {"type": "plain_text", "text": "Troubleshoot Tag" if troubleshooting else "Report issue"},
+        "submit": {"type": "plain_text", "text": submit},
+        "close": {"type": "plain_text", "text": "Close"},
+        "private_metadata": json.dumps(private_metadata, separators=(",", ":")),
+        "blocks": [
+            {"type": "section", "text": {"type": "mrkdwn", "text": description}},
+            {
+                "type": "input",
+                "block_id": "tag_report_text",
+                "label": {"type": "plain_text", "text": text_label},
+                "hint": {
+                    "type": "plain_text",
+                    "text": "Slack does not provide a clipboard action here. Select the text to copy it.",
+                },
+                "element": {
+                    "type": "plain_text_input",
+                    "action_id": text_action,
+                    "multiline": True,
+                    "initial_value": _modal_text(text),
+                    "max_length": 3_000,
+                },
+            },
+            {
+                "type": "input",
+                "block_id": "tag_user_context",
+                "optional": True,
+                "label": {"type": "plain_text", "text": "What were you trying to do?"},
+                "element": {
+                    "type": "plain_text_input",
+                    "action_id": "user_context",
+                    "multiline": True,
+                    "max_length": 1_200,
+                },
+            },
+            {
+                "type": "actions",
+                "elements": [{
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "Join Hover Community"},
+                    "url": COMMUNITY_INVITE_URL,
+                    "action_id": JOIN_COMMUNITY_ACTION_ID,
+                }],
+            },
+        ],
+    }
+
+
+def _view_input_value(view: dict[str, Any], block_id: str, action_id: str) -> str:
+    values = view.get("state", {}).get("values", {})
+    block = values.get(block_id, {}) if isinstance(values, dict) else {}
+    action = block.get(action_id, {}) if isinstance(block, dict) else {}
+    value = action.get("value") if isinstance(action, dict) else ""
+    return value if isinstance(value, str) else ""
 
 
 def suggested_bot_name(backend: str) -> str:
@@ -2625,10 +2823,215 @@ def create_app(
     *,
     max_timeout: int | None = None,
     session_journal: SlackSessionJournal | None = None,
+    report_store: ErrorReportStore | None = None,
 ) -> App:
     if max_timeout is None:
         max_timeout = int(os.getenv("OPENTAG_MAX_TIMEOUT_SECONDS", "3600"))
     app = App(token=require_env("SLACK_BOT_TOKEN"))
+    report_store = report_store or default_report_store()
+    fallback_reports: dict[str, ErrorReport] = {}
+
+    def stored_report(reference: str) -> ErrorReport | None:
+        report = report_store.get(reference)
+        if report is not None:
+            return report
+        fallback = fallback_reports.get(reference)
+        if fallback is not None and report_store.is_available(fallback):
+            return fallback
+        fallback_reports.pop(reference, None)
+        return None
+
+    def remember_fallback(report: ErrorReport) -> None:
+        fallback_reports[report.reference] = report
+        while len(fallback_reports) > report_store.max_records:
+            fallback_reports.pop(next(iter(fallback_reports)))
+
+    def authorized_report(
+        body: dict[str, Any],
+        logger: Any,
+    ) -> tuple[ErrorReport | None, str]:
+        user_id = body.get("user", {}).get("id", "")
+        if not isinstance(user_id, str) or not slack_user_allowed(user_id, allowed_user_ids):
+            return None, user_id
+        try:
+            value = body["actions"][0]["value"]
+            metadata = json.loads(value)
+            reference = metadata["reference"]
+        except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError):
+            logger.warning("Ignoring malformed Tag report action")
+            return None, user_id
+        if not isinstance(reference, str):
+            return None, user_id
+        report = stored_report(reference)
+        if report is None:
+            return None, user_id
+        origin = report.origin
+        if origin.requester_id and origin.requester_id != user_id:
+            logger.warning("Ignoring Tag report action from a different Slack caller")
+            return None, user_id
+        action_channel = body.get("channel", {}).get("id")
+        if action_channel and action_channel != origin.channel_id:
+            logger.warning("Ignoring Tag report action from a different Slack channel")
+            return None, user_id
+        action_team = body.get("team", {}).get("id")
+        if action_team and origin.team_id and action_team != origin.team_id:
+            logger.warning("Ignoring Tag report action from a different Slack workspace")
+            return None, user_id
+        if origin.channel_id and not slack_conversation_allowed(
+            origin.channel_id,
+            direct_message=is_direct_message_channel(origin.channel_id),
+        ):
+            return None, user_id
+        return report, user_id
+
+    def report_action_failure(
+        client: Any,
+        report: ErrorReport | None,
+        user_id: str,
+        body: dict[str, Any],
+    ) -> None:
+        if report is None:
+            channel = body.get("channel", {}).get("id", "")
+            if isinstance(channel, str) and slack_conversation_allowed(
+                channel,
+                direct_message=is_direct_message_channel(channel),
+            ):
+                try:
+                    client.chat_postEphemeral(
+                        channel=channel,
+                        user=user_id,
+                        text="That Tag report is no longer available. Run the request again to create a fresh reference.",
+                    )
+                except Exception:
+                    pass
+
+    def open_report_modal(
+        body: dict[str, Any],
+        client: Any,
+        logger: Any,
+        *,
+        mode: str,
+    ) -> None:
+        report, user_id = authorized_report(body, logger)
+        if report is None:
+            report_action_failure(client, report, user_id, body)
+            return
+        trigger_id = body.get("trigger_id")
+        if not isinstance(trigger_id, str) or not trigger_id:
+            logger.warning("Tag report action did not include a Slack trigger id")
+            return
+        metadata = {
+            "reference": report.reference,
+            "channel": report.origin.channel_id,
+            "thread_ts": report.origin.thread_ts,
+            "user": user_id,
+            "mode": mode,
+        }
+        try:
+            client.views_open(
+                trigger_id=trigger_id,
+                view=report_preview_modal(
+                    report,
+                    mode=mode,
+                    private_metadata=metadata,
+                    skill_available=troubleshooting_skill_available(default_workdir()),
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001 - recovery UI must not stop the listener
+            logger.warning("Could not open Tag report preview: %s", exc)
+
+    def submit_report_preview(
+        ack: Any,
+        body: dict[str, Any],
+        client: Any,
+        logger: Any,
+        *,
+        mode: str,
+    ) -> None:
+        user_id = body.get("user", {}).get("id", "")
+        try:
+            metadata = json.loads(body["view"]["private_metadata"])
+            reference = metadata["reference"]
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            ack(response_action="errors", errors={"tag_report_text": "This report is unavailable."})
+            return
+        report = stored_report(reference) if isinstance(reference, str) else None
+        if (
+            not isinstance(user_id, str)
+            or not slack_user_allowed(user_id, allowed_user_ids)
+            or report is None
+            or not report.origin.requester_id
+            or report.origin.requester_id != user_id
+        ):
+            ack(response_action="errors", errors={"tag_report_text": "This report is unavailable."})
+            return
+        if report.origin.channel_id and not slack_conversation_allowed(
+            report.origin.channel_id,
+            direct_message=is_direct_message_channel(report.origin.channel_id),
+        ):
+            ack(response_action="errors", errors={"tag_report_text": "This channel is no longer allowed."})
+            return
+        block_id = "tag_report_text"
+        action_id = "troubleshooting_prompt" if mode == "troubleshoot" else "report_text"
+        supplied = _view_input_value(body["view"], block_id, action_id)
+        context = sanitize_user_context(_view_input_value(body["view"], "tag_user_context", "user_context"))
+        if not supplied:
+            supplied = (
+                build_troubleshooting_prompt(
+                    report,
+                    skill_available=troubleshooting_skill_available(default_workdir()),
+                    user_context=context,
+                )
+                if mode == "troubleshoot"
+                else report.report_text(context)
+            )
+        elif context:
+            context_block = f"User-provided context:\n{context}"
+            if context_block not in supplied:
+                supplied = f"{supplied.rstrip()}\n\n{context_block}"
+        ack()
+        if mode == "troubleshoot":
+            text = (
+                "Troubleshooting prompt ready. Nothing was sent and Tag cannot track whether an external agent "
+                "completes the repair. Select the text below and give it to an agent with access to the machine running Tag.\n\n"
+                + supplied
+            )
+        else:
+            text = (
+                "Report preview — nothing has been sent. Join Hover Community and share this reviewed text with the developers.\n\n"
+                + supplied
+            )
+        try:
+            client.chat_postEphemeral(
+                channel=report.origin.channel_id,
+                user=user_id,
+                thread_ts=report.origin.thread_ts,
+                text=text,
+            )
+        except Exception as exc:  # noqa: BLE001 - preserve the submitted preview locally
+            logger.warning("Could not post Tag report preview: %s", exc)
+
+    @app.action(REPORT_ISSUE_ACTION_ID)
+    def report_issue_action(ack: Any, body: dict[str, Any], client: Any, logger: Any) -> None:
+        ack()
+        open_report_modal(body, client, logger, mode="report")
+
+    @app.action(FIX_WITH_AGENT_ACTION_ID)
+    def fix_with_agent_action(ack: Any, body: dict[str, Any], client: Any, logger: Any) -> None:
+        ack()
+        open_report_modal(body, client, logger, mode="troubleshoot")
+
+    @app.action(JOIN_COMMUNITY_ACTION_ID)
+    def join_community_action(ack: Any) -> None:
+        ack()
+
+    @app.view(REPORT_VIEW_ID)
+    def submit_report_view(ack: Any, body: dict[str, Any], client: Any, logger: Any) -> None:
+        submit_report_preview(ack, body, client, logger, mode="report")
+
+    @app.view(TROUBLESHOOT_VIEW_ID)
+    def submit_troubleshoot_view(ack: Any, body: dict[str, Any], client: Any, logger: Any) -> None:
+        submit_report_preview(ack, body, client, logger, mode="troubleshoot")
 
     @app.event("agent_session_stopped")
     def handle_agent_session_stopped(
@@ -3054,6 +3457,7 @@ def create_app(
         logger: Any,
         *,
         direct_message: bool,
+        prior_error_reference: str | None = None,
     ) -> None:
         channel = event["channel"]
         thread_ts = event.get("thread_ts") or event["ts"]
@@ -3122,6 +3526,21 @@ def create_app(
             intent=SearchIntent("all"),
         )
         answer_stream: SlackAnswerStream | None = None
+        backend_error_code: str | None = None
+        backend_error_events: list[str] = []
+        failure_stage = "request preparation"
+
+        def capture_backend_error(code: str | None, _detail: str) -> None:
+            nonlocal backend_error_code
+            if code:
+                backend_error_code = code
+            classification = classify_failure("", code)
+            if classification.backend_code:
+                event = f"Observed backend error code: {classification.backend_code}."
+            else:
+                event = "Observed a backend failure event."
+            if event not in backend_error_events:
+                backend_error_events.append(event)
         output_manifest = (
             default_workdir() / f"{OUTPUT_ARTIFACT_MANIFEST_PREFIX}{uuid.uuid4().hex}.json"
         )
@@ -3136,6 +3555,7 @@ def create_app(
                 image_results_dir.mkdir(parents=True)
                 (attachment_dir / "results" / "artifacts").mkdir()
                 thread_text = build_thread_text(client, channel, thread_ts, attachment_dir)
+                failure_stage = "backend execution"
                 stream_available = (
                     env_enabled("OPENTAG_SLACK_STREAMING", default=True)
                     and indicator.native
@@ -3177,6 +3597,7 @@ def create_app(
                         max_timeout=max_timeout,
                         scope_plan=scope_plan,
                         slack_search_grant=slack_search_grant,
+                        on_error=capture_backend_error,
                     )
                 else:
                     answer, succeeded = run_backend(
@@ -3194,6 +3615,7 @@ def create_app(
                         max_timeout=max_timeout,
                         scope_plan=scope_plan,
                         slack_search_grant=slack_search_grant,
+                        on_error=capture_backend_error,
                     )
                 artifact_button_blocks: list[dict[str, Any]] = []
                 if succeeded:
@@ -3235,14 +3657,45 @@ def create_app(
                 elif answer.startswith("Stopped.") or answer.startswith("Stop requested"):
                     footer_blocks = None
                 else:
-                    error_reference = uuid.uuid4().hex[:8].upper()
+                    error_reference = new_error_reference()
                     logger.error("Tag backend failure [%s]: %s", error_reference, answer)
-                    answer = user_facing_failure(answer, timeout, error_reference, max_timeout)
-                    footer_blocks = retry_button_blocks(
+                    failure_at = utc_timestamp()
+                    report = make_error_report(
+                        error_reference,
+                        answer,
+                        backend=backend,
+                        backend_code=backend_error_code,
+                        failed_stage=failure_stage,
+                        related_reference=prior_error_reference,
+                        origin=ReportOrigin(
+                            team_id=team,
+                            channel_id=channel,
+                            thread_ts=thread_ts,
+                            request_ts=event["ts"],
+                            requester_id=user_id,
+                        ),
+                        error_events=tuple(backend_error_events),
+                        health_checks=collect_health_checks(),
+                        failure_at=failure_at,
+                    )
+                    try:
+                        report_store.save(report)
+                    except OSError as exc:
+                        remember_fallback(report)
+                        logger.warning("Could not persist Tag error report [%s]: %s", error_reference, exc)
+                    answer = user_facing_failure(
+                        answer,
+                        timeout,
+                        error_reference,
+                        max_timeout,
+                        backend_error_code,
+                    )
+                    footer_blocks = failure_action_blocks(
                         team=team,
                         channel=channel,
                         thread_ts=thread_ts,
                         request_ts=event["ts"],
+                        error_reference=error_reference,
                         direct_message=direct_message,
                     )
                 streamed = (
@@ -3294,13 +3747,41 @@ def create_app(
                 None,
             )
         except Exception as exc:
-            error_reference = uuid.uuid4().hex[:8].upper()
+            error_reference = new_error_reference()
             logger.exception("Open Tag failed [%s]", error_reference)
             indicator.clear()
             if answer_stream is not None:
                 answer_stream.abort()
+            failure_at = utc_timestamp()
+            report = make_error_report(
+                error_reference,
+                f"{type(exc).__name__}: {exc}",
+                backend=backend,
+                backend_code=backend_error_code,
+                failed_stage=failure_stage,
+                related_reference=prior_error_reference,
+                origin=ReportOrigin(
+                    team_id=team,
+                    channel_id=channel,
+                    thread_ts=thread_ts,
+                    request_ts=event["ts"],
+                    requester_id=user_id,
+                ),
+                error_events=tuple(backend_error_events),
+                health_checks=collect_health_checks(),
+                failure_at=failure_at,
+            )
+            try:
+                report_store.save(report)
+            except OSError as save_exc:
+                remember_fallback(report)
+                logger.warning("Could not persist Tag error report [%s]: %s", error_reference, save_exc)
             answer = user_facing_failure(
-                f"{type(exc).__name__}: {exc}", timeout, error_reference, max_timeout
+                f"{type(exc).__name__}: {exc}",
+                timeout,
+                error_reference,
+                max_timeout,
+                backend_error_code,
             )
             post_final_reply(
                 client,
@@ -3308,11 +3789,12 @@ def create_app(
                 thread_ts,
                 answer,
                 indicator.message_ts,
-                retry_button_blocks(
+                failure_action_blocks(
                     team=team,
                     channel=channel,
                     thread_ts=thread_ts,
                     request_ts=event["ts"],
+                    error_reference=error_reference,
                     direct_message=direct_message,
                 ),
             )
@@ -3366,6 +3848,11 @@ def create_app(
                 client,
                 logger,
                 direct_message=direct_message,
+                prior_error_reference=(
+                    metadata.get("error_reference")
+                    if isinstance(metadata.get("error_reference"), str)
+                    else None
+                ),
             )
         except Exception as exc:  # noqa: BLE001 - keep the Slack action listener alive
             logger.warning("Could not retry Tag request: %s", exc)

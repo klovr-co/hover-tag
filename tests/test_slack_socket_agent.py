@@ -15,6 +15,7 @@ except ModuleNotFoundError:
     raise unittest.SkipTest("slack_bolt is installed by the Slack bridge runtime")
 
 from scripts import slack_socket_agent
+from scripts.tag_error_reporting import ErrorReportStore, ReportOrigin, make_error_report
 
 
 class FakeApp:
@@ -1038,6 +1039,157 @@ class SlackFailureReplyTests(unittest.TestCase):
         self.assertNotIn("secret backend detail", reply)
         self.assertIn("ABC12345", reply)
         self.assertIn("Please retry", reply)
+
+    def test_failure_actions_keep_report_content_out_of_slack_metadata(self) -> None:
+        blocks = slack_socket_agent.failure_action_blocks(
+            team="T1",
+            channel="C1",
+            thread_ts="1.0",
+            request_ts="1.1",
+            error_reference="ABC12345",
+        )
+        actions = blocks[0]["elements"]
+
+        self.assertEqual(
+            [
+                slack_socket_agent.RETRY_ACTION_ID,
+                slack_socket_agent.FIX_WITH_AGENT_ACTION_ID,
+                slack_socket_agent.REPORT_ISSUE_ACTION_ID,
+            ],
+            [action["action_id"] for action in actions],
+        )
+        self.assertEqual({"reference": "ABC12345"}, json.loads(actions[1]["value"]))
+        self.assertEqual({"reference": "ABC12345"}, json.loads(actions[2]["value"]))
+
+    def test_report_modal_uses_selectable_text_and_manual_community_link(self) -> None:
+        report = make_error_report(
+            "ABC12345",
+            "authentication failed: token=xoxb-secret",
+            backend="codex",
+            origin=ReportOrigin(channel_id="C1", requester_id="UOWNER"),
+        )
+        modal = slack_socket_agent.report_preview_modal(
+            report,
+            mode="report",
+            private_metadata={"reference": "ABC12345"},
+        )
+
+        report_input = next(block for block in modal["blocks"] if block.get("block_id") == "tag_report_text")
+        join_block = next(block for block in modal["blocks"] if block["type"] == "actions")
+        self.assertEqual("plain_text_input", report_input["element"]["type"])
+        self.assertIn("Select the text to copy it", report_input["hint"]["text"])
+        self.assertEqual(
+            slack_socket_agent.COMMUNITY_INVITE_URL,
+            join_block["elements"][0]["url"],
+        )
+        self.assertNotIn("xoxb-secret", report_input["element"]["initial_value"])
+
+    def test_report_action_requires_the_original_caller(self) -> None:
+        fake_app = FakeApp()
+        client = MagicMock()
+        logger = MagicMock()
+        with tempfile.TemporaryDirectory() as raw_dir:
+            store = ErrorReportStore(Path(raw_dir))
+            store.save(
+                make_error_report(
+                    "ABC12345",
+                    "backend failed",
+                    backend="claude",
+                    origin=ReportOrigin(
+                        team_id="T1",
+                        channel_id="C1",
+                        thread_ts="1.0",
+                        request_ts="1.1",
+                        requester_id="UOWNER",
+                    ),
+                )
+            )
+            with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+                os.environ,
+                {"SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_IDS": "C1"},
+                clear=True,
+            ):
+                slack_socket_agent.create_app(
+                    "claude",
+                    30,
+                    frozenset({"UOWNER", "UOTHER"}),
+                    report_store=store,
+                )
+                handler = fake_app.actions[slack_socket_agent.REPORT_ISSUE_ACTION_ID]
+                body = {
+                    "user": {"id": "UOTHER"},
+                    "team": {"id": "T1"},
+                    "channel": {"id": "C1"},
+                    "trigger_id": "trigger",
+                    "actions": [{"value": json.dumps({"reference": "ABC12345"})}],
+                }
+                handler(MagicMock(), body, client, logger)
+                client.views_open.assert_not_called()
+
+                body["user"] = {"id": "UOWNER"}
+                handler(MagicMock(), body, client, logger)
+
+        client.views_open.assert_called_once()
+        self.assertEqual(
+            slack_socket_agent.REPORT_VIEW_ID,
+            client.views_open.call_args.kwargs["view"]["callback_id"],
+        )
+
+    def test_report_submission_keeps_sanitized_user_context_in_preview(self) -> None:
+        fake_app = FakeApp()
+        client = MagicMock()
+        logger = MagicMock()
+        with tempfile.TemporaryDirectory() as raw_dir:
+            store = ErrorReportStore(Path(raw_dir))
+            store.save(
+                make_error_report(
+                    "ABC12345",
+                    "backend failed",
+                    backend="claude",
+                    origin=ReportOrigin(channel_id="C1", requester_id="UOWNER"),
+                )
+            )
+            with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+                os.environ,
+                {"SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_IDS": "C1"},
+                clear=True,
+            ):
+                slack_socket_agent.create_app(
+                    "claude",
+                    30,
+                    frozenset({"UOWNER"}),
+                    report_store=store,
+                )
+                handler = fake_app.views[slack_socket_agent.REPORT_VIEW_ID]
+                ack = MagicMock()
+                handler(
+                    ack,
+                    {
+                        "user": {"id": "UOWNER"},
+                        "view": {
+                            "private_metadata": json.dumps({"reference": "ABC12345"}),
+                            "state": {
+                                "values": {
+                                    "tag_report_text": {
+                                        "report_text": {"value": "Reviewed report"}
+                                    },
+                                    "tag_user_context": {
+                                        "user_context": {"value": "Summarize token=xoxb-secret"}
+                                    },
+                                }
+                            },
+                        },
+                    },
+                    client,
+                    logger,
+                )
+
+        ack.assert_called_once_with()
+        preview = client.chat_postEphemeral.call_args.kwargs["text"]
+        self.assertIn("Reviewed report", preview)
+        self.assertIn("User-provided context:", preview)
+        self.assertIn("Summarize token=<redacted>", preview)
+        self.assertNotIn("xoxb-secret", preview)
 
     def test_retry_button_contains_only_request_identity(self) -> None:
         blocks = slack_socket_agent.retry_button_blocks(

@@ -594,6 +594,8 @@ class TagHomeTests(unittest.TestCase):
             root = Path(temp)
             home, bin_dir = root / "home", root / "bin"
             first = install(ROOT, home, bin_dir, dependencies=False)
+            bundled_skill = first / ".agents/skills/tag-troubleshoot/SKILL.md"
+            self.assertTrue(bundled_skill.is_file())
             default = home / "instances/default"
             admin = default / "workspace/.agents/skills/open-tag-admin/SKILL.md"
             self.assertFalse(admin.exists())
