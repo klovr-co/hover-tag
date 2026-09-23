@@ -27,6 +27,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
+          TAG_POSTHOG_PROJECT_TOKEN: ${{ secrets.TAG_POSTHOG_PROJECT_TOKEN }}
+          TAG_TELEMETRY_RELEASE_APPROVED: ${{ vars.TAG_TELEMETRY_RELEASE_APPROVED }}
         run: |
           python scripts/release_check.py
           source_version=$(head -n 1 VERSION)
@@ -43,8 +45,17 @@ jobs:
           }
           asset_count=$(gh release view "$RELEASE_TAG" --json assets --jq '.assets | length')
           if [ "$asset_count" -eq 0 ]; then
+            telemetry_arguments=()
+            if [ "$TAG_TELEMETRY_RELEASE_APPROVED" = true ]; then
+              telemetry_arguments+=(
+                --posthog-host https://eu.i.posthog.com
+                --posthog-project-token "$TAG_POSTHOG_PROJECT_TOKEN"
+                --privacy-notice-url https://github.com/klovr-co/hover-tag/blob/main/docs/reference/telemetry.md
+              )
+            fi
             python scripts/package_release.py --commit-sha "$(git rev-parse HEAD)" \
-              --source-ref refs/heads/main --version "$version"
+              --source-ref refs/heads/main --version "$version" \
+              "${telemetry_arguments[@]}"
             gh release upload "$RELEASE_TAG" \
               out/*.zip out/SHA256SUMS out/BUILD-PROVENANCE.json
           else
