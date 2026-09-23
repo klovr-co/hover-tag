@@ -64,6 +64,8 @@ stays personal. See [Your own Tag](concepts/access.md) for access details.
 
 We don’t host your conversations or working files. Codex and connected services
 still process the information needed for your requests, under their own data policies.
+Tag’s optional CLI telemetry has a separate, privacy-bounded collection policy;
+you can [review or disable it](reference/telemetry.md) at any time.
 
 ## The missing detail might be in your inbox
 

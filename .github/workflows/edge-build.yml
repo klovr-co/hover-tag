@@ -59,11 +59,22 @@ jobs:
             echo "RELEASE_VERSION=$version" >> "$GITHUB_ENV"
           fi
       - name: Build reproducible edge archive
+        env:
+          TAG_POSTHOG_PROJECT_TOKEN: ${{ secrets.TAG_POSTHOG_PROJECT_TOKEN }}
+          TAG_TELEMETRY_RELEASE_APPROVED: ${{ vars.TAG_TELEMETRY_RELEASE_APPROVED }}
         run: |
           built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          telemetry_arguments=()
+          if [ "$TAG_TELEMETRY_RELEASE_APPROVED" = true ]; then
+            telemetry_arguments+=(
+              --posthog-host https://eu.i.posthog.com
+              --posthog-project-token "$TAG_POSTHOG_PROJECT_TOKEN"
+              --privacy-notice-url https://github.com/klovr-co/hover-tag/blob/main/docs/reference/telemetry.md
+            )
+          fi
           python scripts/package_release.py --channel edge --commit-sha "$EDGE_SHA" \
             --source-ref refs/heads/main --built-at "$built_at" \
-            --version "$RELEASE_VERSION"
+            --version "$RELEASE_VERSION" "${telemetry_arguments[@]}"
           python scripts/release_automation.py validate-edge \
             --directory out --sha "$EDGE_SHA" --version "$RELEASE_VERSION"
       - name: Retain commit-specific promotion artifact

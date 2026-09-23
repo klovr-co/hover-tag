@@ -24,6 +24,7 @@ RESERVED_NAMES = frozenset({
     "add", "list", "memory", "settings", "inspect", "config", "setup",
     "reset", "migrate", "upgrade", "rollback", "version", "paths",
     "doctor", "start", "stop", "restart", "status", "logs", "dev",
+    "telemetry",
 })
 
 
