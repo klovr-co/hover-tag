@@ -80,6 +80,7 @@ its workspace, and the sources and tools made available to it. See
 | Add my tools, skills, and connected accounts | [Adding integrations](concepts/adding-integrations.md) |
 | Find an email and draft a reply from Slack | [Use Gmail from Slack](tutorials/use-gmail-from-slack.md) |
 | Check what’s supported today | [Supported capabilities](reference/supported-capabilities.md) |
+| Review or disable anonymous usage telemetry | [Tag telemetry and privacy](reference/telemetry.md) |
 | Fix a setup or connection problem | [Troubleshooting](troubleshooting.md) |
 
 For detailed configuration, see the [Slack adapter reference](../references/slack-adapter.md).
