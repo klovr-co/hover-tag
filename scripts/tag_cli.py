@@ -1928,6 +1928,16 @@ def main() -> int:
                 import slack_manifest_migrations
             except ImportError:
                 from scripts import slack_manifest_migrations
+            try:
+                from tag_error_migrations import migrate as migrate_error_reports
+            except ImportError:
+                from scripts.tag_error_migrations import migrate as migrate_error_reports
+            diagnostics_migrated = migrate_error_reports(home)
+            display.info_row(
+                "Diagnostics",
+                "Private report storage migrated" if diagnostics_migrated else "Private report storage ready",
+                good=True,
+            )
             manifest_changed = slack_manifest_migrations.reconcile(home, config_path, values)
             if manifest_changed:
                 # A migration may rotate credentials; preflight and the bridge
