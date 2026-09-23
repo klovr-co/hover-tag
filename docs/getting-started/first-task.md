@@ -37,10 +37,11 @@ Open a new Codex session and ask:
 Use the hover-tag-setup skill to set up Tag for me.
 ```
 
-Codex checks what's already installed, helps with missing prerequisites,
-and installs Tag if needed. It proposes your workspace, app, access, channels,
-history window, backend, and startup choices together. Reply **Use these
-defaults** or list all changes in one message.
+Codex checks what's already installed and proposes your workspace, app, access,
+channels, history window, backend, installation, and startup choices together.
+Reply **Use these defaults** or list all changes in one message. After you
+approve the plan, Codex helps with missing prerequisites and installs Tag if
+needed.
 
 Use your own Slack account as the owner. Review the channel list, history
 window, and invitation policy before finishing. New setups include channels

@@ -11,7 +11,6 @@ import json
 import os
 import re
 import shutil
-import stat
 import subprocess
 import sys
 import tempfile
@@ -91,12 +90,6 @@ def begin() -> int:
         write_clipboard(f"/slackauthticket {ticket}")
         handle, raw_path = tempfile.mkstemp(prefix="hover-tag-slack-auth-", suffix=".json")
         path = Path(raw_path)
-        try:
-            os.fchmod(handle, stat.S_IRUSR | stat.S_IWUSR)
-        except BaseException:
-            os.close(handle)
-            path.unlink(missing_ok=True)
-            raise
         try:
             with os.fdopen(handle, "w", encoding="utf-8") as state:
                 json.dump({"slack": slack, "ticket": ticket}, state)
