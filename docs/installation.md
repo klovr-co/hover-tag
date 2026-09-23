@@ -183,6 +183,13 @@ existing skill directories, including locally installed skills and edits.
 Global backend skills and authentication remain available, subject to the
 backend's own discovery rules and context limits.
 
+Tag releases also bundle the `tag-troubleshoot` skill in the immutable runtime
+so an upgrade makes the recovery handoff available to existing installations.
+It is copied from the release source allowlist; the installer does not overwrite
+user-owned workspace skills. Use it only when a coding agent has access to the
+machine running Tag, and follow its manual contribution and Slack-app deletion
+boundaries.
+
 Put Tag-specific Codex defaults and MCP definitions in
 `~/Tag/NAME/.codex/config.toml`:
 

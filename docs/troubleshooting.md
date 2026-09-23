@@ -23,5 +23,36 @@ Start with `./tag doctor`, then use the first failed check below.
 | Mention receives no reply | Slack did not emit an event or the bridge rejected the channel | Confirm Socket Mode is connected, mention your Tag from an authorized human account, and verify the channel is in `SLACK_CHANNEL_IDS`. |
 | Direct message receives no reply | DM invocation was disabled, its automatic Slack migration is pending, or the sender is not authorized | Ensure `OPENTAG_SLACK_DM_ENABLED` is not `0`, run `tag restart` in an interactive terminal and approve Slack's permission prompt if shown, then confirm the sender is in `SLACK_ALLOWED_USER_IDS`. |
 
+## Failed Slack requests
+
+When a backend request fails, Tag shows an evidence-based cause, an error
+reference, and recovery actions. An unrecognized failure is shown as **Cause
+not identified**; a timeout does not by itself mean that the network failed.
+Retrying creates a new reference and keeps the earlier attempt linked in the
+local report.
+
+**Report issue** opens a private preview for the authorized person who made the
+request. The preview contains an allowlisted report with the Tag version,
+backend identity when available, failed stage, recognized cause, bounded
+diagnostics, and later health-check timestamps. It does not include tokens,
+conversation text, file contents, or raw logs by default. Add context only after
+reviewing it. Slack does not provide a clipboard button for this surface, so
+select the report text manually. Nothing is posted automatically.
+
+To share a report, select the reviewed text, [join Hover Community](https://join.slack.com/t/hover-community/shared_invite/zt-4aghkshid-n7fRukS7_J5sR2jDLBXK9A),
+and paste it into the discussion. GitHub Issues remain the canonical record for
+confirmed bugs; community posting is a manual first-release handoff. Reports
+are stored in the selected Tag's private state for up to 30 days, bounded to 50
+records, and an expired or unavailable reference is not treated as authorization
+to read anything.
+
+**Fix with coding agent** creates a copyable troubleshooting prompt. Repair
+requires an agent with access to the machine running Tag; an agent elsewhere
+can analyze the sanitized report but must not claim it inspected local logs or
+settings. Tag cannot guarantee that an external agent completes a repair or
+reports back. Use the bundled `tag-troubleshoot` skill when it is available;
+otherwise the prompt falls back to `tag inspect --json`, `tag doctor --json`,
+`tag status --json`, and bounded `tag logs --limit 50` checks.
+
 When reporting a problem, include the Tag version, operating system, Python
 version, failing check, and redacted log excerpt. Never include tokens.
