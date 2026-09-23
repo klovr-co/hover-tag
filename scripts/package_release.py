@@ -39,7 +39,14 @@ def _tracked_files(root: Path) -> list[tuple[str, int]]:
 
 
 def build_archive(
-    root: Path, archive: Path, epoch: int | None = None, version: str | None = None,
+    root: Path,
+    archive: Path,
+    epoch: int | None = None,
+    version: str | None = None,
+    *,
+    posthog_host: str = "",
+    posthog_project_token: str = "",
+    privacy_notice_url: str = "",
 ) -> str:
     """Write tracked files with stable metadata, optionally stamping VERSION."""
     timestamp = time.gmtime(epoch if epoch is not None else _source_epoch(root))[:6]
@@ -59,11 +66,28 @@ def build_archive(
             info.create_system = 3
             info.compress_type = zipfile.ZIP_DEFLATED
             info.external_attr = ((0o755 if git_mode & 0o111 else 0o644) & 0xFFFF) << 16
-            content = (
-                (version + "\n").encode()
-                if name == "VERSION" and version
-                else path.read_bytes()
-            )
+            if name == "VERSION" and version:
+                content = (version + "\n").encode()
+            elif name == "scripts/tag_telemetry_config.py" and (
+                posthog_host or posthog_project_token
+            ):
+                if (
+                    not posthog_host.startswith("https://")
+                    or not posthog_project_token
+                    or not privacy_notice_url.startswith("https://")
+                ):
+                    raise ValueError(
+                        "telemetry builds require an HTTPS PostHog host, project token, "
+                        "and HTTPS privacy notice"
+                    )
+                content = (
+                    '"""Release-stamped public configuration for Tag CLI telemetry."""\n\n'
+                    f"POSTHOG_HOST = {posthog_host!r}\n"
+                    f"POSTHOG_PROJECT_TOKEN = {posthog_project_token!r}\n"
+                    f"PRIVACY_NOTICE_URL = {privacy_notice_url!r}\n"
+                ).encode("utf-8")
+            else:
+                content = path.read_bytes()
             bundle.writestr(info, content)
     return hashlib.sha256(archive.read_bytes()).hexdigest()
 
@@ -80,12 +104,26 @@ def main() -> None:
     parser.add_argument("--source-ref")
     parser.add_argument("--built-at")
     parser.add_argument("--version", help="version to stamp into the packaged archive")
+    parser.add_argument("--posthog-host", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--posthog-project-token", default="", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--privacy-notice-url",
+        default="",
+        help=argparse.SUPPRESS,
+    )
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     version = args.version or (root / "VERSION").read_text().strip()
     args.output.mkdir(parents=True, exist_ok=True)
     archive = args.output / ("tag-edge.zip" if args.channel == "edge" else f"tag-{version}.zip")
-    digest = build_archive(root, archive, version=version)
+    digest = build_archive(
+        root,
+        archive,
+        version=version,
+        posthog_host=args.posthog_host,
+        posthog_project_token=args.posthog_project_token,
+        privacy_notice_url=args.privacy_notice_url,
+    )
     (args.output / "SHA256SUMS").write_text(f"{digest}  {archive.name}\n", encoding="utf-8")
     if args.channel == "edge":
         if not args.commit_sha or not args.source_ref:

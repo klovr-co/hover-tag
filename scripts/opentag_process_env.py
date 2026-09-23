@@ -19,6 +19,22 @@ SLACK_BRIDGE_ONLY_ENV = {
     "OPENTAG_SLACK_SEARCH_GRANT",
 }
 
+TELEMETRY_ENV_NAMES = {
+    "TAG_TELEMETRY",
+    "TAG_POSTHOG_HOST",
+    "TAG_POSTHOG_PROJECT_TOKEN",
+}
+
+
+def without_telemetry_environment(source: Mapping[str, str]) -> dict[str, str]:
+    """Keep telemetry controls and transport settings out of child processes."""
+    return {
+        key: value for key, value in source.items()
+        if key not in TELEMETRY_ENV_NAMES
+        and "TELEMETRY" not in key.upper()
+        and "POSTHOG" not in key.upper()
+    }
+
 
 def current_channel_scopes(raw_scopes: str, conversation_id: str) -> str:
     """Narrow Slack connector scopes to this invocation's channel directory."""
@@ -50,7 +66,9 @@ def backend_environment(
     channel_labels: str | None = None,
     slack_search_grant: str | None = None,
 ) -> dict[str, str]:
-    clean = isolated_environment(source, transport=transport)
+    clean = without_telemetry_environment(
+        isolated_environment(source, transport=transport)
+    )
     # The backend may use SLACK_BOT_TOKEN through channel-restricted helpers,
     # but never needs Socket Mode or bridge access-control configuration.
     for name in SLACK_BRIDGE_ONLY_ENV:

@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from io import StringIO
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 from scripts import tag_cli, tag_control, tag_config, tag_instances, tag_reconfigure, opentag_setup
 from scripts.tag_paths import initialize_instance
@@ -168,7 +168,12 @@ class FlowTests(unittest.TestCase):
             sys.stdin, "isatty", return_value=True
         ), patch.object(sys, "argv", ["setup", "--config", str(self.config), "--review", "--no-start", "--completion-file", str(receipt)]), redirect_stdout(StringIO()):
             self.assertEqual(opentag_setup.main(), 0)
-        guided.assert_called_once_with(self.config.resolve(), start_services=False, review_channels=False)
+        guided.assert_called_once_with(
+            self.config.resolve(),
+            start_services=False,
+            review_channels=False,
+            telemetry_session=ANY,
+        )
         self.assertFalse(receipt.exists())
 
     def test_paused_setup_says_onboarding_is_incomplete(self):
