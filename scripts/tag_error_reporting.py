@@ -325,7 +325,7 @@ def classify_failure(detail: str, backend_code: str | None = None) -> FailureCla
         )
 
     lowered = safe_detail.lower()
-    if re.search(r"\bno backend activity\b|\bidle(?:[_ -]| )?timeout\b", lowered):
+    if re.search(r"\bno backend activity\b|\bidle(?:[_ -]|\u00a0)?timeout\b", lowered):
         return _classification_for_category(FailureCategory.IDLE_TIMEOUT, code=None, detail=safe_detail)
     if re.search(r"\bmaximum runtime\b|\bmax(?:imum)?[_ -]?runtime\b", lowered):
         return _classification_for_category(FailureCategory.MAXIMUM_RUNTIME, code=None, detail=safe_detail)
@@ -542,6 +542,8 @@ class ErrorReportStore:
         if path is None:
             raise ValueError("invalid error report reference")
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if self.directory.is_symlink() or not self.directory.is_dir():
+            raise OSError(f"Tag error report storage is not a private directory: {self.directory}")
         try:
             self.directory.chmod(0o700)
         except OSError:

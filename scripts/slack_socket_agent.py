@@ -2529,11 +2529,11 @@ def user_facing_failure(
     if classification.category == "idle_timeout" and "no backend activity" in lowered:
         cause = f"The coding backend stopped after {timeout} seconds without backend activity."
     elif classification.category == "maximum_runtime" and max_timeout is not None:
-        cause = f"The coding backend reached Tag’s maximum runtime of {max_timeout} seconds."
+        cause = f"The coding backend reached Tag's maximum runtime of {max_timeout} seconds."
     elif classification.category == "idle_timeout" and "timed out" in lowered:
         cause = f"The coding backend timed out after {timeout} seconds."
     return (
-        "Tag couldn’t complete this request.\n"
+        "Tag couldn't complete this request.\n"
         f"*Cause:* {cause}\n\n"
         "Please retry, troubleshoot with your coding agent, or report this in "
         f"<{COMMUNITY_INVITE_URL}|Hover Community> so the developers can help.\n\n"
@@ -2889,6 +2889,7 @@ def create_app(
         report: ErrorReport | None,
         user_id: str,
         body: dict[str, Any],
+        logger: Any,
     ) -> None:
         if report is None:
             channel = body.get("channel", {}).get("id", "")
@@ -2902,8 +2903,8 @@ def create_app(
                         user=user_id,
                         text="That Tag report is no longer available. Run the request again to create a fresh reference.",
                     )
-                except Exception:
-                    pass
+                except Exception:  # noqa: BLE001 - a stale-report notice must not stop the action handler
+                    logger.debug("Could not post stale Tag report notice")
 
     def open_report_modal(
         body: dict[str, Any],
@@ -2914,7 +2915,7 @@ def create_app(
     ) -> None:
         report, user_id = authorized_report(body, logger)
         if report is None:
-            report_action_failure(client, report, user_id, body)
+            report_action_failure(client, report, user_id, body, logger)
             return
         trigger_id = body.get("trigger_id")
         if not isinstance(trigger_id, str) or not trigger_id:
@@ -2975,11 +2976,17 @@ def create_app(
         action_id = "troubleshooting_prompt" if mode == "troubleshoot" else "report_text"
         supplied = _view_input_value(body["view"], block_id, action_id)
         context = sanitize_user_context(_view_input_value(body["view"], "tag_user_context", "user_context"))
-        if not supplied:
+        skill_available = troubleshooting_skill_available(default_workdir())
+        original = (
+            build_troubleshooting_prompt(report, skill_available=skill_available)
+            if mode == "troubleshoot"
+            else report.report_text()
+        )
+        if not supplied or supplied == _modal_text(original):
             supplied = (
                 build_troubleshooting_prompt(
                     report,
-                    skill_available=troubleshooting_skill_available(default_workdir()),
+                    skill_available=skill_available,
                     user_context=context,
                 )
                 if mode == "troubleshoot"
