@@ -77,6 +77,7 @@ ADMIN_SKILL = (
     "Use `tag upgrade --dry-run --json` to check for updates and `tag upgrade` to apply one. "
     "The operator authorizes Slack and backend logins. Verify a real Slack reply separately.\n"
 )
+BUNDLED_SKILLS = ("tag-troubleshoot",)
 
 
 @dataclass(frozen=True)
@@ -612,6 +613,14 @@ def install(
         for name in ("scripts", "references", "docs"):
             shutil.copytree(source / name, release / name,
                             ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        for name in BUNDLED_SKILLS:
+            bundled = source / ".agents/skills" / name
+            if bundled.is_dir():
+                shutil.copytree(
+                    bundled,
+                    release / ".agents/skills" / name,
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+                )
         for name in ("VERSION", "LICENSE", "NOTICE", "README.md", "RELEASE.md", "SECURITY.md",
                      ".env.example", "requirements-runtime.txt", "slack-app-manifest.yaml",
                      "tag", "tag.cmd", "install.sh", "install.ps1", "release-channels.json"):
