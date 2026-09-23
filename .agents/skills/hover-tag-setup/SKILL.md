@@ -77,14 +77,97 @@ not a checkout `.env`.
 For Windows requests, use the checkout's `install.ps1` and platform instructions
 in `docs/installation.md`; do not adapt POSIX shell commands blindly.
 
-## Connect Slack through guided setup
+## Agree on the setup once
 
-Run the installed `tag setup` in an interactive terminal when the current
-environment can present and respond to its prompts. Otherwise, ask the user to
-run it in their terminal, explain what remains, and resume inspection after they
-complete or pause it. Ask the user before answering authorization or policy
-prompts when their choice is not already explicit. Do not pipe numbered answers,
-invent a noninteractive setup API, or infer the user's authorization choices.
+Inspect the installation and existing Slack CLI authorizations before asking
+questions. Then present one compact proposed setup using discovered values and
+recommended defaults. Include every choice or approval setup is likely to need:
+
+- install or reuse the detected Tag installation;
+- Slack workspace, and whether to create a new app or link an App ID;
+- suggested app name and picture choice;
+- authorized caller, channel or invitation-following policy, and history window;
+- Codex or the requested backend; and
+- permission to perform the described app creation or linking, installation,
+  indexing, and service startup. If Slack authorization is needed, include the
+  handoff choice: show the one-time connection in chat (default), or use the
+  local clipboard to keep the one-time values out of chat.
+
+Ask the user to reply **Use these defaults** or list all changes in one message.
+Do not ask separately for values that inspection can discover. Treat that reply
+as the answer to matching later setup prompts, but do not broaden it to new
+actions or unexpected permission changes. Ask again only for an unavoidable
+just-in-time Slack approval, a genuinely missing choice, or a new condition
+that changes the agreed plan.
+
+Drive `tag setup` yourself in an interactive tool session and answer its prompts
+from the agreed plan. Do not tell the user to open Terminal, copy terminal
+output, or answer setup's numbered prompts. Do not pipe guessed answers; keep the
+session interactive and pause if a prompt is not covered by the plan.
+
+## Connect Slack without exposing the CLI flow
+
+If the requested workspace is already present in `slack auth list`, select it
+and skip authorization. Otherwise, keep the Slack CLI mechanics behind the
+agent. Never describe “Terminal inside Slack” or teach the user what an
+authorization ticket is.
+
+### Visible handoff in chat
+
+Use this by default unless the user selected the private clipboard option:
+
+1. Run `slack auth login --no-prompt`, retaining its one-time ticket for the
+   completion command. Show only the complete `/slackauthticket …` line to the
+   user; do not dump the surrounding CLI output.
+2. In the same message, say: “In the Slack workspace you want to connect, paste
+   the line above into the message box of **any channel or DM** and send it. It
+   does not need to be a Tag channel. Choose **Confirm**, then copy the short
+   code from the next Slack window and send that code back here.” Do not split
+   those actions into separate turns.
+3. When the user replies with the code, complete the exchange with `slack auth
+   login --ticket <ticket> --challenge <code>`. Do not echo either value again.
+4. Verify the resulting workspace with `slack auth list`, then continue the
+   agreed setup without asking the user to repeat prior choices.
+
+Tell the user that the displayed command and returned code are one-time,
+short-lived connection values. Keep them confined to the active setup exchange;
+do not copy them into summaries, diagnostics, screenshots, issue trackers, or
+persistent application logs.
+
+Always include Slack's illustrated
+[Authorizing the Slack CLI](https://docs.slack.dev/tools/slack-cli/guides/authorizing-the-slack-cli/)
+guide in the first handoff message, whether using chat or the private clipboard.
+Present it as an optional visual reference, not a required setup step.
+
+### Private clipboard handoff
+
+Use this only when the user selects it and a supported local clipboard is
+available. Explain in the initial proposal that it temporarily replaces the
+clipboard with a one-time Slack connection command and later reads the short
+code the user copies from Slack. After approval:
+
+1. Run `scripts/slack_auth_clipboard.py begin`. Do not print or repeat the
+   command it places on the clipboard.
+2. Tell the user: “In the Slack workspace you want to connect, paste into the
+   message box of **any channel or DM** and send. It does not need to be a Tag
+   channel. Choose **Confirm**, copy the short code from the next Slack window,
+   then reply **copied** here.” This is one user turn; do not split it into
+   separate checks.
+3. After the user replies, run `scripts/slack_auth_clipboard.py complete --state
+   <state_file>` using the state path returned by `begin`.
+4. Verify the resulting workspace with `slack auth list`, then continue the
+   already-running setup plan without asking the user to repeat prior choices.
+
+The helper keeps the one-time command and short code out of agent chat and tool
+output. Never inspect, print, summarize, or ask the user to send either value.
+If clipboard access becomes unavailable, offer the visible chat handoff instead
+of reverting to a terminal tutorial. On a failed or expired exchange, discard
+the saved state and begin once with a fresh command rather than retrying the old
+values.
+
+Run the installed `tag setup` in an interactive tool session. Ask the user before
+answering authorization or policy prompts when their choice is not already
+explicit. Do not invent a noninteractive setup API.
 
 Setup owns these steps:
 
