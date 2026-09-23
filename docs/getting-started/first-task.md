@@ -1,4 +1,4 @@
-# Get started with Tag
+# Set up Tag
 
 Connect Tag to Slack, then try a task in a thread. You can set up with help
 from Codex or run the installer yourself.
