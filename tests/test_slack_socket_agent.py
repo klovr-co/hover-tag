@@ -1191,6 +1191,64 @@ class SlackFailureReplyTests(unittest.TestCase):
         self.assertIn("Summarize token=<redacted>", preview)
         self.assertNotIn("xoxb-secret", preview)
 
+    def test_troubleshooting_submission_regenerates_a_truncated_initial_value(self) -> None:
+        fake_app = FakeApp()
+        client = MagicMock()
+        logger = MagicMock()
+        report = make_error_report(
+            "ABC12345",
+            "backend failed",
+            backend="codex",
+            error_events=tuple(f"event {index}: " + "x" * 220 for index in range(5)),
+            origin=ReportOrigin(channel_id="C1", requester_id="UOWNER"),
+        )
+        with tempfile.TemporaryDirectory() as raw_dir:
+            store = ErrorReportStore(Path(raw_dir))
+            store.save(report)
+            with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+                os.environ,
+                {"SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_IDS": "C1"},
+                clear=True,
+            ), patch.object(slack_socket_agent, "troubleshooting_skill_available", return_value=False):
+                slack_socket_agent.create_app(
+                    "codex",
+                    30,
+                    frozenset({"UOWNER"}),
+                    report_store=store,
+                )
+                handler = fake_app.views[slack_socket_agent.TROUBLESHOOT_VIEW_ID]
+                original = slack_socket_agent.build_troubleshooting_prompt(
+                    report,
+                    skill_available=False,
+                )
+                self.assertGreater(len(original), 2_900)
+                ack = MagicMock()
+                handler(
+                    ack,
+                    {
+                        "user": {"id": "UOWNER"},
+                        "view": {
+                            "private_metadata": json.dumps({"reference": "ABC12345"}),
+                            "state": {
+                                "values": {
+                                    "tag_report_text": {
+                                        "troubleshooting_prompt": {
+                                            "value": slack_socket_agent._modal_text(original),
+                                        }
+                                    }
+                                }
+                            },
+                        },
+                    },
+                    client,
+                    logger,
+                )
+
+        ack.assert_called_once_with()
+        preview = client.chat_postEphemeral.call_args.kwargs["text"]
+        self.assertIn(original, preview)
+        self.assertNotIn("[Text truncated; use the report reference to request it again]", preview)
+
     def test_retry_button_contains_only_request_identity(self) -> None:
         blocks = slack_socket_agent.retry_button_blocks(
             team="T1", channel="C1", thread_ts="1.0", request_ts="1.1"

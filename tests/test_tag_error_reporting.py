@@ -161,6 +161,22 @@ class ErrorReportStoreTests(unittest.TestCase):
             with patch.object(Path, "read_text", side_effect=PermissionError):
                 self.assertIsNone(store.get("ABC12345"))
 
+    def test_save_rejects_a_symlinked_report_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            target = root / "target"
+            target.mkdir()
+            directory = root / "reports"
+            try:
+                directory.symlink_to(target, target_is_directory=True)
+            except OSError:
+                self.skipTest("symlinks are unavailable in this test environment")
+
+            store = ErrorReportStore(directory)
+            with self.assertRaises(OSError):
+                store.save(make_error_report("ABC12345", "backend failed", backend="codex"))
+            self.assertEqual([], list(target.iterdir()))
+
     def test_in_memory_availability_uses_the_same_retention_policy(self) -> None:
         report = make_error_report(
             "ABC12345",
