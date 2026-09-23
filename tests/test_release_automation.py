@@ -10,6 +10,7 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
+from scripts import package_release
 from scripts.package_release import build_archive
 from scripts.release_check import validate_release
 from scripts.release_automation import (
@@ -331,6 +332,33 @@ class ReleaseArtifactTests(unittest.TestCase):
         self.assertEqual(packaged_version, "9.8.7-alpha.6\n")
         self.assertEqual((root / "VERSION").read_text(encoding="utf-8"), source_version)
 
+    def test_package_can_stamp_approved_telemetry_destination(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        source = (root / "scripts/tag_telemetry_config.py").read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            archive = Path(temporary_directory) / "release.zip"
+            tracked = package_release._tracked_files(root)
+            if not any(name == "scripts/tag_telemetry_config.py" for name, _ in tracked):
+                tracked.append(("scripts/tag_telemetry_config.py", 0o100644))
+            with patch("scripts.package_release._tracked_files", return_value=tracked):
+                build_archive(
+                    root,
+                    archive,
+                    posthog_host="https://eu.posthog.example",
+                    posthog_project_token="phc_public_project",
+                    privacy_notice_url="https://example.com/privacy",
+                )
+            with zipfile.ZipFile(archive) as bundle:
+                packaged = bundle.read("scripts/tag_telemetry_config.py").decode()
+
+        self.assertIn("https://eu.posthog.example", packaged)
+        self.assertIn("phc_public_project", packaged)
+        self.assertIn("https://example.com/privacy", packaged)
+        self.assertEqual(
+            (root / "scripts/tag_telemetry_config.py").read_text(encoding="utf-8"),
+            source,
+        )
+
     def test_numbered_alpha_archive_satisfies_release_contract(self) -> None:
         root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -467,6 +495,19 @@ class ReleasePreflightTests(unittest.TestCase):
         self.assertIn('startswith("release:")', workflow)
         self.assertIn("edge-release-${{ github.event.workflow_run.head_sha }}", workflow)
         self.assertIn("wait-for-predecessor", workflow)
+
+    def test_release_workflows_gate_telemetry_stamping_on_explicit_approval(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        for relative_path in (
+            ".github/workflows/edge-build.yml",
+            ".github/workflows/release-package.yml",
+        ):
+            workflow = (root / relative_path).read_text(encoding="utf-8")
+            self.assertIn("vars.TAG_TELEMETRY_RELEASE_APPROVED", workflow)
+            self.assertIn("secrets.TAG_POSTHOG_PROJECT_TOKEN", workflow)
+            self.assertIn("https://eu.i.posthog.com", workflow)
+            self.assertIn("docs/reference/telemetry.md", workflow)
+            self.assertIn('--posthog-project-token "$TAG_POSTHOG_PROJECT_TOKEN"', workflow)
 
     def test_prepare_workflow_uses_candidate_preflight(self) -> None:
         workflow = (
