@@ -39,7 +39,9 @@ try:
     import slack_manifest_migrations
     import slack_credentials
     import tag_credentials
+    import tag_telemetry
     import tag_cli as lifecycle
+    from opentag_process_env import without_telemetry_environment
     from tag_mascot import PALETTE as MASCOT_PALETTE, PIXELS as MASCOT_PIXELS
 except ImportError:
     from scripts.tag_paths import (
@@ -56,7 +58,9 @@ except ImportError:
     from scripts import slack_manifest_migrations
     from scripts import slack_credentials
     from scripts import tag_credentials
+    from scripts import tag_telemetry
     from scripts import tag_cli as lifecycle
+    from scripts.opentag_process_env import without_telemetry_environment
     from scripts.tag_mascot import PALETTE as MASCOT_PALETTE, PIXELS as MASCOT_PIXELS
 
 
@@ -1280,6 +1284,7 @@ def write_config(path: Path, values: dict[str, str]) -> None:
 def guided_setup(
     config_path: Path, *, start_services: bool = True,
     review_channels: bool = False, test_mode: bool = False,
+    telemetry_session: tag_telemetry.SetupSession | None = None,
 ) -> int:
     values = settings.load_config(config_path)
     channel_policy = values.get("SLACK_CHANNEL_POLICY", "selected" if values.get("MFS_SLACK_CONNECTOR_CONFIG") else "invited")
@@ -1294,6 +1299,8 @@ def guided_setup(
     if not workspace.is_absolute():
         raise ValueError("OPENTAG_WORKDIR must be an absolute path")
     initialize_workspace(workspace)
+    if telemetry_session:
+        telemetry_session.enter("slack")
     ui.screen(
         1,
         "Let’s connect Tag to Slack.",
@@ -1330,6 +1337,8 @@ def guided_setup(
             ui.message("Slack authorization is required; run tag setup again when ready.")
             return 1
         values = settings.update_config(config_path, {"SLACK_TEAM_ID": team_id})
+        if telemetry_session:
+            telemetry_session.enter("app")
         app_id = choose_slack_app(home, team_id, config_path, test_mode=test_mode)
         values = settings.update_config(config_path, {"SLACK_APP_ID": app_id})
         values = connect_app_credentials(home, config_path, team_id, app_id)
@@ -1364,6 +1373,8 @@ def guided_setup(
             values = settings.update_config(config_path, {"SLACK_BOT_TOKEN": bot_token})
             break
 
+    if telemetry_session:
+        telemetry_session.enter("app")
     bot_identity = validate_slack_identity(
         values["SLACK_BOT_TOKEN"],
         team_id=values.get("SLACK_TEAM_ID", ""),
@@ -1379,6 +1390,8 @@ def guided_setup(
     if inferred:
         values = settings.update_config(config_path, inferred)
 
+    if telemetry_session:
+        telemetry_session.enter("channels")
     ui.screen(
         3,
         "Where should Tag respond?",
@@ -1460,6 +1473,8 @@ def guided_setup(
                 if channel_policy == "invited":
                     values = settings.update_config(config_path, {"SLACK_CHANNEL_POLICY": channel_policy})
                 break
+    if telemetry_session:
+        telemetry_session.enter("finish")
     ui.screen(
         4,
         "Finishing setup",
@@ -1562,13 +1577,22 @@ def finish_setup(_config_path: Path, values: dict[str, str], _channels: list[sla
         if ui.choose("Agent needs installation", ["Check again", "Save and exit"]) == 1:
             raise ui.Paused()
     if backend == "codex":
-        while subprocess.run([shutil.which("codex") or "codex", "login", "status"], capture_output=True).returncode:
+        backend_environment = without_telemetry_environment(os.environ)
+        while subprocess.run(
+            [shutil.which("codex") or "codex", "login", "status"],
+            capture_output=True,
+            env=backend_environment,
+        ).returncode:
             ui.message("Codex needs sign-in. Your Slack and memory choices are saved.")
             action = ui.choose("Sign in to continue", ["Open Codex sign-in", "Check again", "Save and exit"])
             if action == 2:
                 raise ui.Paused()
             if action == 0:
-                subprocess.run([shutil.which("codex") or "codex", "login"], check=False)
+                subprocess.run(
+                    [shutil.which("codex") or "codex", "login"],
+                    check=False,
+                    env=backend_environment,
+                )
         ui.message("✓ Codex signed in · first task still unverified")
     else:
         ui.message("✓ Claude executable available · sign-in will be checked by its first task")
@@ -1620,6 +1644,7 @@ def main() -> int:
     if not sys.stdin.isatty():
         print("Use a terminal for setup, or tag inspect --json and tag config set for automation.", file=sys.stderr)
         return 2
+    telemetry_session: tag_telemetry.SetupSession | None = None
     try:
         os.environ["OPENTAG_ENV_FILE"] = str(config_path)
         if not args.review:
@@ -1636,21 +1661,37 @@ def main() -> int:
         }
         if args.test_mode:
             setup_options["test_mode"] = True
+        telemetry_session = tag_telemetry.SetupSession(
+            tag_home(), "test" if args.test_mode else "setup"
+        )
+        telemetry_session.start()
+        setup_options["telemetry_session"] = telemetry_session
         result = guided_setup(config_path, **setup_options)
+        if result == 0:
+            backend = settings.load_config(config_path).get("OPENTAG_BACKEND", "")
+            telemetry_session.complete(backend)
+        else:
+            telemetry_session.abandon()
         if result == 0:
             settings.save_config(progress, {"completed": True, "services_requested": False})
         if result == 0 and args.completion_file:
             settings.save_config(args.completion_file, {"approved": True})
         return result
     except ui.Paused:
+        if telemetry_session:
+            telemetry_session.abandon()
         print()
         ui.message("Setup is incomplete. Progress saved; run tag setup to continue.")
         return 0
     except (KeyboardInterrupt, EOFError):
+        if telemetry_session:
+            telemetry_session.abandon()
         print()
         ui.message("Setup paused. Saved answers are kept; run tag setup to continue.")
         return 130
     except (OSError, ValueError, RuntimeError) as exc:
+        if telemetry_session:
+            telemetry_session.abandon()
         print(f"Setup could not continue: {exc}", file=sys.stderr)
         return 1
 
