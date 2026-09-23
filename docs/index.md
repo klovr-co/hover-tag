@@ -29,58 +29,72 @@ together:
 > - **Jules:** Test signup on Wednesday.
 > - **Unassigned:** Brief support before launch. Who can take this?
 
-## Who it's for
+## Work already happens in Slack
 
-Bring your own Tag to work. Tag is for people who want to use their Codex
-agent in Slack, with context from Slack threads and integrations already
-connected to their agent. Requests, updates, and results stay in the thread,
-where teammates can follow the work.
+Most work doesn’t begin as a tidy brief. It starts in a Slack thread: a question,
+a few links, some back-and-forth, and eventually a decision someone needs to act on.
 
-You don’t need to code to use Tag. Follow the
-[setup guide](getting-started/first-task.md) to connect your agent to Slack.
+Take that discussion into a private AI chat and you’ve given yourself a relay job.
+Copy over the context, work through the answer, then bring it back to Slack. If
+someone questions it, you’re explaining a conversation they never saw.
 
-By default, only you can ask your Tag to work, because it uses your agent's
-available files, tools, and connected accounts. Teammates can still see the
-conversation. Read more about [your own Tag](concepts/access.md).
+Tag brings your personal Codex assistant into that thread. You ask for help where
+the discussion is already happening, and your teammates can follow the work,
+add a missing detail, or take on the next step.
 
-## What you can delegate
+## A little help working together
 
-You can ask Tag to:
+A thread has gone back and forth all morning. Are we agreed? Who’s doing what?
+Did anyone answer the question about support?
 
-- summarize a discussion and turn it into decisions, owners, and next steps;
-- investigate a question across approved Slack history and other sources;
-- compare information from conversations, documents, issues, and repositories;
-- use locally installed tools available to Codex;
-- inspect or change files in its configured workspace when explicitly asked;
-- return an answer to the thread, post to the channel, or create a Slack Canvas.
+Ask your Tag to pull it together.
 
-What Tag can do depends on its setup. It can use the current thread, files in
-its workspace, and the sources and tools made available to it. See
-[What Tag knows](concepts/what-tag-knows.md) for examples and limits.
+Your teammates don’t need to set up an assistant to follow the conversation.
+They can question the answer, volunteer for a task, or point out what’s missing.
 
-## Start here
+## Your assistant, your own environment
 
-1. Read [Why Tag](philosophy/why-tag.md) for the product philosophy.
-2. Read [How Tag works](concepts/mental-model.md) to see what happens after a
-   mention.
-3. Follow [Run your first task](getting-started/first-task.md) to install Tag and
-   complete one useful Slack workflow.
+Tag runs on a computer you control, using your Codex setup. You choose its skills,
+connect your accounts, and give it a place to work. Add your weekly report template
+or the checklist you use before a launch. Make it yours.
 
-## Find the right documentation
+By default, only you can ask your Tag to work. Your teammates can bring their own,
+with their own setup. You share the conversation and the results; each assistant
+stays personal. See [Your own Tag](concepts/access.md) for access details.
 
-| I want to… | Read |
-| --- | --- |
-| Set up Tag and try a first task | [Get started](getting-started/first-task.md) |
-| Understand why I’d bring my assistant into Slack | [Why Tag](philosophy/why-tag.md) |
-| Know who can use my Tag and see its replies | [Your own Tag](concepts/access.md) |
-| Let someone else make requests to my Tag | [Sharing access to your Tag](concepts/sharing-access.md) |
-| See what happens when I ask for help | [How Tag works](concepts/mental-model.md) |
-| Follow up or find an earlier discussion | [What Tag knows](concepts/what-tag-knows.md) |
-| Work with attachments and save files | [Working with files](concepts/workspaces-and-tools.md) |
-| Add my tools, skills, and connected accounts | [Adding integrations](concepts/adding-integrations.md) |
-| Find an email and draft a reply from Slack | [Use Gmail from Slack](tutorials/use-gmail-from-slack.md) |
-| Check what’s supported today | [Supported capabilities](reference/supported-capabilities.md) |
-| Fix a setup or connection problem | [Troubleshooting](troubleshooting.md) |
+We don’t host your conversations or working files. Codex and connected services
+still process the information needed for your requests, under their own data policies.
 
-For detailed configuration, see the [Slack adapter reference](../references/slack-adapter.md).
-Read the [security policy](../SECURITY.md) for permissions and operating limits.
+## The missing detail might be in your inbox
+
+You remember an email about the launch moving to Monday. Everyone in Slack is
+still talking about Friday.
+
+With your email connected, you can ask Tag to find that update and share the
+relevant details. The team gets the context it needs without needing access to
+your inbox. You choose what to bring into the channel, where the people there
+can read it.
+
+That’s one less “hang on, let me find it” between a question and a decision.
+Try it with [Gmail](tutorials/use-gmail-from-slack.md), or explore
+[what Tag knows](concepts/what-tag-knows.md).
+
+## Leave with something you can use
+
+Once you’ve worked it out, ask Tag to save the plan. It could be a checklist in
+your working folder or, with Canvas access enabled, a reference the team can
+open in Slack.
+
+The files are ordinary files. Open them yourself, edit them in another tool,
+or ask your assistant to pick them up again when things change. They stay in
+place when you upgrade. See [Working with files](concepts/workspaces-and-tools.md).
+
+## Bring your Tag to work
+
+You don’t need to code to use Tag. Follow the setup guide to connect your agent
+to Slack and complete your first useful task.
+
+[Install Tag](getting-started/first-task.md)
+
+Want to understand what happens after a mention? Read
+[How Tag works](concepts/mental-model.md).
