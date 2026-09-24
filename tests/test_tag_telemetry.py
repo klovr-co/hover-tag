@@ -301,6 +301,5 @@ class TagTelemetryTests(unittest.TestCase):
         self.assertEqual(failed.call_args.args[2], "validation")
         self.assertEqual(completed.call_args.args[2], "failed")
 
-
 if __name__ == "__main__":
     unittest.main()
