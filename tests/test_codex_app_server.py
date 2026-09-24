@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from scripts.codex_app_server import (
+    APPROVAL_TIMEOUT_SECONDS,
     CodexAppServer,
     CodexAppServerError,
     CodexEventMapper,
@@ -281,6 +282,36 @@ class ServerRequestTests(unittest.TestCase):
                 False,
             ),
         )
+
+    def test_slack_approval_wait_uses_earliest_dedicated_or_outer_deadline(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            server = CodexAppServer(
+                ["codex"], cwd=Path(raw_dir), timeout=1, approval_dir=Path(raw_dir)
+            )
+            server._send = MagicMock()  # type: ignore[method-assign]
+            server._wait_for_approval = MagicMock(return_value=False)  # type: ignore[method-assign]
+
+            for outer_deadline, expected_deadline in [
+                (10_000.0, 100.0 + APPROVAL_TIMEOUT_SECONDS),
+                (500.0, 500.0),
+            ]:
+                with self.subTest(outer_deadline=outer_deadline), patch(
+                    "scripts.codex_app_server.time.monotonic", return_value=100.0
+                ):
+                    server._resolve_server_request(
+                        {
+                            "id": 9,
+                            "method": "item/commandExecution/requestApproval",
+                            "params": {},
+                        },
+                        emit=lambda _event: None,
+                        deadline=outer_deadline,
+                    )
+
+                self.assertEqual(
+                    expected_deadline,
+                    server._wait_for_approval.call_args.args[1],
+                )
 
     def test_unknown_server_request_gets_json_rpc_error(self) -> None:
         server = CodexAppServer(["codex"], cwd=Path("/tmp"), timeout=1)

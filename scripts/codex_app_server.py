@@ -29,6 +29,7 @@ MAX_STDERR_BYTES = 64 * 1024
 REQUEST_TIMEOUT_SECONDS = 60.0
 INTERRUPT_GRACE_SECONDS = 5.0
 APPROVAL_POLL_SECONDS = 0.1
+APPROVAL_TIMEOUT_SECONDS = 600.0
 
 APPROVAL_REQUEST_LABELS = {
     "item/commandExecution/requestApproval": "run a command outside the workspace sandbox",
@@ -596,7 +597,10 @@ class CodexAppServer:
                 "approval_id": approval_id,
                 "label": APPROVAL_REQUEST_LABELS[method],
             })
-            approved = self._wait_for_approval(approval_id, deadline)
+            approved = self._wait_for_approval(
+                approval_id,
+                min(deadline, time.monotonic() + APPROVAL_TIMEOUT_SECONDS),
+            )
             self._send({
                 "id": request_id,
                 "result": self._approval_result(
