@@ -22,6 +22,18 @@
 
 [![Tag brings personal assistants into your team's Slack conversations](assets/branding/tag-social-preview.png)](https://www.hover.team/tag/)
 
+<table align="center">
+  <tr>
+    <td align="center"><img src="assets/characters/tag-jules-pixel.png" width="84" alt="Jules" /> + <img src="assets/characters/tag-avatar-soil-pixel.png" width="56" alt="Jules's Soil Tag" /><br /><strong>Jules + Tag</strong></td>
+    <td align="center"><img src="assets/characters/tag-iris-pixel.png" width="84" alt="Iris" /> + <img src="assets/characters/tag-avatar-metal-pixel.png" width="56" alt="Iris's Metal Tag" /><br /><strong>Iris + Tag</strong></td>
+    <td align="center"><img src="assets/characters/tag-maya-pixel.png" width="84" alt="Maya" /> + <img src="assets/characters/tag-avatar-water-pixel.png" width="56" alt="Maya's Water Tag" /><br /><strong>Maya + Tag</strong></td>
+    <td align="center"><img src="assets/characters/tag-rowan-pixel.png" width="84" alt="Rowan" /> + <img src="assets/characters/tag-avatar-wood-pixel.png" width="56" alt="Rowan's Wood Tag" /><br /><strong>Rowan + Tag</strong></td>
+    <td align="center"><img src="assets/characters/tag-zara-pixel.png" width="84" alt="Zara" /> + <img src="assets/characters/tag-avatar-fire-pixel.png" width="56" alt="Zara's Fire Tag" /><br /><strong>Zara + Tag</strong></td>
+  </tr>
+</table>
+
+<p align="center"><strong>Everyone brings their own Tag. Everyone works in the same conversation.</strong></p>
+
 ## Work through it together
 
 The context is already there: a question, a few links, a decision buried in a
