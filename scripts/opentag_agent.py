@@ -613,6 +613,7 @@ def run_codex_app_server_events(
     fast_mode: bool = False,
     control_file: Path | None = None,
     run_id: str | None = None,
+    approval_dir: Path | None = None,
 ) -> int:
     """Run one request-scoped App Server and emit the richer event contract."""
     attempts = max(1, int(os.getenv("OPENTAG_BACKEND_ATTEMPTS", "3")))
@@ -624,6 +625,7 @@ def run_codex_app_server_events(
             max_timeout=max_timeout,
             control_file=control_file,
             run_id=run_id,
+            approval_dir=approval_dir,
         )
         made_progress = False
 
@@ -832,6 +834,7 @@ def main() -> int:
     )
     parser.add_argument("--control-file", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--run-id", help=argparse.SUPPRESS)
+    parser.add_argument("--approval-dir", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--skill-dir", type=Path, default=default_skill_dir())
     parser.add_argument(
         "--workdir",
@@ -878,6 +881,7 @@ def main() -> int:
                         fast_mode=args.fast_mode == "on",
                         control_file=args.control_file,
                         run_id=args.run_id,
+                        approval_dir=args.approval_dir,
                     )
                 return run_codex_events(
                     prompt,

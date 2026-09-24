@@ -66,6 +66,8 @@ SETTINGS_EFFORT_ACTION_ID = "opentag_settings_effort"
 SETTINGS_FAST_ACTION_ID = "opentag_settings_fast_mode"
 SETTINGS_RESET_ACTION_ID = "opentag_settings_reset"
 RETRY_ACTION_ID = "opentag_retry_request"
+APPROVAL_APPROVE_ACTION_ID = "opentag_approval_approve"
+APPROVAL_DENY_ACTION_ID = "opentag_approval_deny"
 OPEN_LOCAL_ARTIFACT_ACTION_ID = "opentag_open_local_artifact"
 OPEN_LOCAL_ARTIFACT_ACTION_PATTERN = re.compile(
     rf"^{re.escape(OPEN_LOCAL_ARTIFACT_ACTION_ID)}_[0-9]+$"
@@ -1823,8 +1825,10 @@ class ActiveBackendRun:
     process: subprocess.Popen[str]
     control_file: Path
     run_id: str
+    approval_dir: Path | None = None
     started_at_epoch: float = field(default_factory=time.time)
     cancel_requested: bool = False
+    pending_approvals: set[str] = field(default_factory=set)
     kill_timer: threading.Timer | None = None
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
@@ -1855,6 +1859,37 @@ class ActiveBackendRun:
             except (OSError, ProcessLookupError):
                 pass
         self.process.kill()
+
+    def register_approval(self, approval_id: str) -> bool:
+        if not re.fullmatch(r"[0-9a-f]{32}", approval_id):
+            return False
+        with self.lock:
+            if self.process.poll() is not None or self.approval_dir is None:
+                return False
+            self.pending_approvals.add(approval_id)
+            return True
+
+    def resolve_approval(self, approval_id: str, *, approved: bool) -> bool:
+        with self.lock:
+            if (
+                self.process.poll() is not None
+                or self.approval_dir is None
+                or approval_id not in self.pending_approvals
+            ):
+                return False
+            self.pending_approvals.remove(approval_id)
+            target = self.approval_dir / f"{approval_id}.json"
+            temporary = self.approval_dir / f".{approval_id}.{uuid.uuid4().hex}.tmp"
+            try:
+                temporary.write_text(
+                    json.dumps({"decision": "approve" if approved else "deny"}),
+                    encoding="utf-8",
+                )
+                os.replace(temporary, target)
+            except OSError:
+                temporary.unlink(missing_ok=True)
+                return False
+            return True
 
     def finish(self) -> None:
         with self.lock:
@@ -1898,6 +1933,12 @@ def cancel_active_run(key: RunKey, event_ts: str | None = None) -> bool:
         return False
     run.cancel()
     return True
+
+
+def resolve_active_approval(key: RunKey, approval_id: str, *, approved: bool) -> bool:
+    with ACTIVE_RUNS_LOCK:
+        run = ACTIVE_RUNS.get(key)
+    return run.resolve_approval(approval_id, approved=approved) if run is not None else False
 
 
 def slack_search_grant_json(plan: ScopePlan, request_text: str) -> str:
@@ -2018,6 +2059,7 @@ def run_backend_events(
     reasoning_effort: str | None = None,
     on_answer_start: Callable[[], None] | None = None,
     on_status: Callable[[str], None] | None = None,
+    on_approval: Callable[[dict[str, str]], None] | None = None,
     fast_mode: bool = False,
     output_manifest: Path | None = None,
     max_timeout: int | None = None,
@@ -2069,7 +2111,15 @@ def run_backend_events(
         "w", suffix=".control", delete=False, dir=tag_temp_dir()
     ) as control:
         control_file = Path(control.name)
-    cmd.extend(["--control-file", str(control_file), "--run-id", run_id])
+    approval_dir_context = tempfile.TemporaryDirectory(
+        prefix="tag-approvals-", dir=tag_temp_dir()
+    )
+    approval_dir = Path(approval_dir_context.name)
+    cmd.extend([
+        "--control-file", str(control_file),
+        "--run-id", run_id,
+        "--approval-dir", str(approval_dir),
+    ])
     child_env = backend_environment(
         os.environ,
         transport="slack",
@@ -2100,9 +2150,10 @@ def run_backend_events(
     except BaseException:
         thread_file.unlink(missing_ok=True)
         control_file.unlink(missing_ok=True)
+        approval_dir_context.cleanup()
         raise
     run_key = RunKey(team, channel, thread_ts)
-    active_run = ActiveBackendRun(process, control_file, run_id)
+    active_run = ActiveBackendRun(process, control_file, run_id, approval_dir)
     register_active_run(run_key, active_run)
     timed_out = threading.Event()
 
@@ -2147,6 +2198,22 @@ def run_backend_events(
                 error_text = text
             elif event_type == "status" and isinstance(text, str) and on_status:
                 on_status(text)
+            elif event_type == "approval_request":
+                approval_id = event.get("approval_id")
+                label = event.get("label")
+                if (
+                    isinstance(approval_id, str)
+                    and isinstance(label, str)
+                    and active_run.register_approval(approval_id)
+                ):
+                    if on_approval is None:
+                        active_run.resolve_approval(approval_id, approved=False)
+                    else:
+                        try:
+                            on_approval({"approval_id": approval_id, "label": label})
+                        except Exception as exc:  # noqa: BLE001 - fail closed if Slack cannot ask
+                            diagnostics.append(f"Could not present approval: {exc}")
+                            active_run.resolve_approval(approval_id, approved=False)
             elif event_type in {"activity_start", "activity_complete"} and on_activity:
                 activity_id = event.get("activity_id")
                 label = event.get("label")
@@ -2165,6 +2232,7 @@ def run_backend_events(
         unregister_active_run(run_key, active_run)
         thread_file.unlink(missing_ok=True)
         control_file.unlink(missing_ok=True)
+        approval_dir_context.cleanup()
 
     if active_run.cancel_requested and terminal_status == "interrupted":
         return "Stopped. Actions completed before the stop were not rolled back.", False
@@ -2412,6 +2480,66 @@ def retry_button_blocks(
     }]
 
 
+def approval_button_blocks(
+    *,
+    team: str,
+    channel: str,
+    thread_ts: str,
+    user_id: str,
+    approval_id: str,
+    label: str,
+) -> list[dict[str, Any]]:
+    safe_labels = {
+        "run a command outside the workspace sandbox",
+        "change files outside the workspace sandbox",
+        "use additional filesystem or network access",
+        "apply a file change that requires approval",
+        "run a command that requires approval",
+    }
+    action = label if label in safe_labels else "perform an action outside its current permissions"
+    metadata = json.dumps(
+        {
+            "team": team,
+            "channel": channel,
+            "thread_ts": thread_ts,
+            "user": user_id,
+            "approval_id": approval_id,
+        },
+        separators=(",", ":"),
+    )
+    return [
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": (
+                    f"*Codex needs approval* to {action}. "
+                    "Approve only if you expect this request."
+                ),
+            },
+        },
+        {
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "action_id": APPROVAL_APPROVE_ACTION_ID,
+                    "style": "primary",
+                    "text": {"type": "plain_text", "text": "Approve once"},
+                    "value": metadata,
+                },
+                {
+                    "type": "button",
+                    "action_id": APPROVAL_DENY_ACTION_ID,
+                    "style": "danger",
+                    "text": {"type": "plain_text", "text": "Deny"},
+                    "value": metadata,
+                },
+            ],
+        },
+    ]
+
+
 def user_facing_failure(
     detail: str,
     timeout: int,
@@ -2485,6 +2613,34 @@ def slack_conversation_allowed(channel: str, *, direct_message: bool = False) ->
 def is_direct_message_channel(channel: str) -> bool:
     """Recognize Slack's stable DM conversation ID prefix for events without channel_type."""
     return channel.startswith("D")
+
+
+def post_codex_approval(
+    client: Any,
+    *,
+    team: str,
+    channel: str,
+    thread_ts: str,
+    user_id: str,
+    approval: dict[str, str],
+) -> Any:
+    """Show an approval only to its requester, except in an already-private DM."""
+    message = {
+        "channel": channel,
+        "thread_ts": thread_ts,
+        "text": "Codex needs your approval to continue.",
+        "blocks": approval_button_blocks(
+            team=team,
+            channel=channel,
+            thread_ts=thread_ts,
+            user_id=user_id,
+            approval_id=approval["approval_id"],
+            label=approval["label"],
+        ),
+    }
+    if is_direct_message_channel(channel):
+        return client.chat_postMessage(**message)
+    return client.chat_postEphemeral(user=user_id, **message)
 
 
 def parse_slack_user_ids(value: str) -> frozenset[str]:
@@ -2696,6 +2852,81 @@ def create_app(
             )
         except Exception as exc:  # noqa: BLE001 - keep the Socket Mode listener alive
             logger.warning("Could not publish Tag App Home: %s", exc)
+
+    @app.action(APPROVAL_APPROVE_ACTION_ID)
+    @app.action(APPROVAL_DENY_ACTION_ID)
+    def resolve_codex_approval(
+        ack: Any,
+        body: dict[str, Any],
+        client: Any,
+        logger: Any,
+        respond: Any,
+    ) -> None:
+        ack()
+        user_id = body.get("user", {}).get("id", "")
+        channel = body.get("channel", {}).get("id", "")
+        body_team = body.get("team", {}).get("id", "") or body.get("team_id", "")
+        try:
+            action = body["actions"][0]
+            metadata = json.loads(action["value"])
+            team = metadata["team"]
+            expected_channel = metadata["channel"]
+            thread_ts = metadata["thread_ts"]
+            expected_user = metadata["user"]
+            approval_id = metadata["approval_id"]
+            approved = action.get("action_id") == APPROVAL_APPROVE_ACTION_ID
+            if not all(
+                isinstance(value, str) and value
+                for value in (
+                    team,
+                    expected_channel,
+                    thread_ts,
+                    expected_user,
+                    approval_id,
+                )
+            ):
+                raise ValueError("invalid approval metadata")
+            if (
+                body_team != team
+                or channel != expected_channel
+                or user_id != expected_user
+                or not slack_user_allowed(user_id, allowed_user_ids)
+                or not slack_conversation_allowed(
+                    channel,
+                    direct_message=is_direct_message_channel(channel),
+                )
+            ):
+                client.chat_postEphemeral(
+                    channel=channel or expected_channel,
+                    user=user_id,
+                    thread_ts=thread_ts,
+                    text="Only the authorized user who started this request can decide it.",
+                )
+                return
+            if not resolve_active_approval(
+                RunKey(team, channel, thread_ts),
+                approval_id,
+                approved=approved,
+            ):
+                respond(
+                    text="This approval request has expired or was already decided.",
+                    response_type="ephemeral",
+                    replace_original=True,
+                )
+                return
+            result = "Approved once" if approved else "Denied"
+            text = f"{result}. Codex is continuing."
+            respond(
+                text=text,
+                blocks=[{
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": text},
+                }],
+                response_type="ephemeral",
+                replace_original=True,
+            )
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            logger.warning("Could not resolve Codex approval from Slack: %s", exc)
 
     @app.action(HOME_CHANNEL_ACTION_ID)
     def select_home_channel(ack: Any, body: dict[str, Any], client: Any, logger: Any) -> None:
@@ -3172,6 +3403,14 @@ def create_app(
                         reasoning_effort=agent_settings.reasoning_effort,
                         on_answer_start=indicator.answer_started,
                         on_status=indicator.status,
+                        on_approval=lambda approval: post_codex_approval(
+                            client,
+                            team=team,
+                            channel=channel,
+                            thread_ts=thread_ts,
+                            user_id=user_id,
+                            approval=approval,
+                        ),
                         fast_mode=agent_settings.fast_mode,
                         output_manifest=output_manifest,
                         max_timeout=max_timeout,

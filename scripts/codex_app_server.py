@@ -14,6 +14,7 @@ import shlex
 import subprocess
 import threading
 import time
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,15 @@ MAX_RESPONSE_LINE_BYTES = 32 * 1024 * 1024
 MAX_STDERR_BYTES = 64 * 1024
 REQUEST_TIMEOUT_SECONDS = 60.0
 INTERRUPT_GRACE_SECONDS = 5.0
+APPROVAL_POLL_SECONDS = 0.1
+
+APPROVAL_REQUEST_LABELS = {
+    "item/commandExecution/requestApproval": "run a command outside the workspace sandbox",
+    "item/fileChange/requestApproval": "change files outside the workspace sandbox",
+    "item/permissions/requestApproval": "use additional filesystem or network access",
+    "applyPatchApproval": "apply a file change that requires approval",
+    "execCommandApproval": "run a command that requires approval",
+}
 
 # Public display vocabulary, never populated from tool arguments or results.
 MCP_SERVICE_NAMES = {
@@ -327,6 +337,7 @@ class CodexAppServer:
         max_timeout: int | None = None,
         control_file: Path | None = None,
         run_id: str | None = None,
+        approval_dir: Path | None = None,
     ) -> None:
         self.command = command
         self.cwd = cwd
@@ -334,6 +345,7 @@ class CodexAppServer:
         self.max_timeout = max_timeout if max_timeout is not None else timeout
         self.control_file = control_file
         self.run_id = run_id
+        self.approval_dir = approval_dir
         self.process: subprocess.Popen[bytes] | None = None
         self.messages: queue.Queue[dict[str, Any] | BaseException] = queue.Queue()
         self.stderr = bytearray()
@@ -475,7 +487,7 @@ class CodexAppServer:
                 if "error" in message:
                     raise CodexAppServerError(self._response_error(method, message["error"]))
                 return message.get("result")
-            self._dispatch(message, mapper, emit)
+            self._dispatch(message, mapper, emit, deadline)
 
     def _next_message(self, deadline: float) -> dict[str, Any]:
         while True:
@@ -500,12 +512,13 @@ class CodexAppServer:
         message: dict[str, Any],
         mapper: CodexEventMapper,
         emit: Callable[[dict[str, Any]], None],
-    ) -> None:
+        deadline: float,
+    ) -> bool:
         if "method" in message and "id" in message:
-            self._resolve_server_request(message)
-            return
+            return self._resolve_server_request(message, emit=emit, deadline=deadline)
         for event in mapper.map(message):
             emit(event)
+        return False
 
     def _consume_turn(
         self,
@@ -548,7 +561,8 @@ class CodexAppServer:
                             return "timeout", timeout_detail
                         return str(event.get("status", "failed")), str(event.get("text", ""))
                 continue
-            self._dispatch(message, mapper, emit)
+            if self._dispatch(message, mapper, emit, max_deadline) and not timed_out:
+                idle_deadline = time.monotonic() + self.timeout
 
     @staticmethod
     def _is_progress_notification(message: dict[str, Any]) -> bool:
@@ -559,9 +573,39 @@ class CodexAppServer:
             or method in {"turn/started", "turn/diff/updated", "turn/plan/updated"}
         )
 
-    def _resolve_server_request(self, message: dict[str, Any]) -> None:
+    def _resolve_server_request(
+        self,
+        message: dict[str, Any],
+        *,
+        emit: Callable[[dict[str, Any]], None] | None = None,
+        deadline: float | None = None,
+    ) -> bool:
         request_id = message.get("id")
         method = message.get("method")
+        params = message.get("params")
+        if (
+            isinstance(method, str)
+            and method in APPROVAL_REQUEST_LABELS
+            and self.approval_dir is not None
+            and emit is not None
+            and deadline is not None
+        ):
+            approval_id = uuid.uuid4().hex
+            emit({
+                "type": "approval_request",
+                "approval_id": approval_id,
+                "label": APPROVAL_REQUEST_LABELS[method],
+            })
+            approved = self._wait_for_approval(approval_id, deadline)
+            self._send({
+                "id": request_id,
+                "result": self._approval_result(
+                    method,
+                    params if isinstance(params, dict) else {},
+                    approved,
+                ),
+            })
+            return True
         responses: dict[str, dict[str, Any]] = {
             "item/commandExecution/requestApproval": {"decision": "decline"},
             "item/fileChange/requestApproval": {"decision": "decline"},
@@ -578,6 +622,46 @@ class CodexAppServer:
                 "id": request_id,
                 "error": {"code": -32601, "message": "Tag does not support this interactive request"},
             })
+        return False
+
+    def _wait_for_approval(self, approval_id: str, deadline: float) -> bool:
+        assert self.approval_dir is not None
+        decision_file = self.approval_dir / f"{approval_id}.json"
+        while time.monotonic() < deadline:
+            self._check_control()
+            if self.interrupt_sent:
+                return False
+            try:
+                payload = json.loads(decision_file.read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                time.sleep(APPROVAL_POLL_SECONDS)
+                continue
+            except (OSError, json.JSONDecodeError):
+                decision_file.unlink(missing_ok=True)
+                return False
+            decision_file.unlink(missing_ok=True)
+            return isinstance(payload, dict) and payload.get("decision") == "approve"
+        return False
+
+    @staticmethod
+    def _approval_result(method: str, params: dict[str, Any], approved: bool) -> dict[str, Any]:
+        if method in {
+            "item/commandExecution/requestApproval",
+            "item/fileChange/requestApproval",
+        }:
+            return {"decision": "accept" if approved else "decline"}
+        if method == "item/permissions/requestApproval":
+            permissions = params.get("permissions")
+            return {
+                "permissions": permissions if approved and isinstance(permissions, dict) else {},
+                "scope": "turn",
+            }
+        if method in {"applyPatchApproval", "execCommandApproval"}:
+            decision: Any = "approved" if approved else {
+                "denied": {"rejection": "Denied in Slack"}
+            }
+            return {"decision": decision}
+        return {}
 
     def _check_control(self) -> None:
         if self.interrupt_sent or not self.control_file or not self.run_id:

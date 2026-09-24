@@ -1,0 +1,7 @@
+#:schema https://developers.openai.com/codex/config-schema.json
+
+# Let contributors work autonomously inside this repository while routing
+# requests to cross the workspace sandbox through Codex's reviewer agent.
+approval_policy = "on-request"
+approvals_reviewer = "auto_review"
+sandbox_mode = "workspace-write"

@@ -1100,6 +1100,179 @@ class SlackFailureReplyTests(unittest.TestCase):
         self.assertEqual("UOWNER", run_backend.call_args.args[4])
 
 
+class SlackApprovalTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        with slack_socket_agent.ACTIVE_RUNS_LOCK:
+            slack_socket_agent.ACTIVE_RUNS.clear()
+
+    def test_approval_buttons_contain_only_request_identity(self) -> None:
+        blocks = slack_socket_agent.approval_button_blocks(
+            team="T1",
+            channel="C1",
+            thread_ts="1.0",
+            user_id="U1",
+            approval_id="a" * 32,
+            label="run a command outside the workspace sandbox",
+        )
+
+        buttons = blocks[1]["elements"]
+        self.assertEqual(["Approve once", "Deny"], [button["text"]["text"] for button in buttons])
+        self.assertEqual(
+            {
+                "team": "T1",
+                "channel": "C1",
+                "thread_ts": "1.0",
+                "user": "U1",
+                "approval_id": "a" * 32,
+            },
+            json.loads(buttons[0]["value"]),
+        )
+        self.assertNotIn("command", buttons[0]["value"])
+
+    def test_approval_prompt_is_visible_only_to_requesting_user(self) -> None:
+        client = MagicMock()
+
+        slack_socket_agent.post_codex_approval(
+            client,
+            team="T1",
+            channel="C1",
+            thread_ts="1.0",
+            user_id="UOWNER",
+            approval={
+                "approval_id": "a" * 32,
+                "label": "run a command outside the workspace sandbox",
+            },
+        )
+
+        client.chat_postEphemeral.assert_called_once()
+        self.assertEqual("UOWNER", client.chat_postEphemeral.call_args.kwargs["user"])
+        client.chat_postMessage.assert_not_called()
+
+    def test_initiating_user_can_approve_active_request_once(self) -> None:
+        fake_app = FakeApp()
+        client = MagicMock()
+        logger = MagicMock()
+        approval_id = "b" * 32
+        metadata = {
+            "team": "T1",
+            "channel": "C1",
+            "thread_ts": "1.0",
+            "user": "UOWNER",
+            "approval_id": approval_id,
+        }
+        with tempfile.TemporaryDirectory() as raw_dir, patch.object(
+            slack_socket_agent, "App", return_value=fake_app
+        ), patch.dict(
+            os.environ,
+            {"SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_IDS": "C1"},
+            clear=True,
+        ), patch.object(slack_socket_agent, "discover_codex_models", return_value=[]):
+            slack_socket_agent.create_app("codex", 30, frozenset({"UOWNER"}))
+            process = MagicMock()
+            process.poll.return_value = None
+            run = slack_socket_agent.ActiveBackendRun(
+                process,
+                Path(raw_dir) / "control",
+                "run-1",
+                Path(raw_dir),
+            )
+            self.assertTrue(run.register_approval(approval_id))
+            slack_socket_agent.register_active_run(
+                slack_socket_agent.RunKey("T1", "C1", "1.0"), run
+            )
+            ack = MagicMock()
+            respond = MagicMock()
+
+            fake_app.actions[slack_socket_agent.APPROVAL_APPROVE_ACTION_ID](
+                ack,
+                {
+                    "team": {"id": "T1"},
+                    "user": {"id": "UOWNER"},
+                    "channel": {"id": "C1"},
+                    "container": {"message_ts": "1.2"},
+                    "actions": [{
+                        "action_id": slack_socket_agent.APPROVAL_APPROVE_ACTION_ID,
+                        "value": json.dumps(metadata),
+                    }],
+                },
+                client,
+                logger,
+                respond,
+            )
+
+            decision = json.loads(
+                (Path(raw_dir) / f"{approval_id}.json").read_text(encoding="utf-8")
+            )
+
+        ack.assert_called_once_with()
+        self.assertEqual({"decision": "approve"}, decision)
+        respond.assert_called_once()
+        self.assertTrue(respond.call_args.kwargs["replace_original"])
+        self.assertEqual("ephemeral", respond.call_args.kwargs["response_type"])
+        self.assertIn("Approved once", respond.call_args.kwargs["text"])
+        client.chat_update.assert_not_called()
+        self.assertFalse(run.resolve_approval(approval_id, approved=True))
+
+    def test_other_user_cannot_decide_approval(self) -> None:
+        fake_app = FakeApp()
+        client = MagicMock()
+        approval_id = "c" * 32
+        with tempfile.TemporaryDirectory() as raw_dir, patch.object(
+            slack_socket_agent, "App", return_value=fake_app
+        ), patch.dict(
+            os.environ,
+            {
+                "SLACK_BOT_TOKEN": "xoxb-test",
+                "SLACK_CHANNEL_IDS": "C1",
+            },
+            clear=True,
+        ), patch.object(slack_socket_agent, "discover_codex_models", return_value=[]):
+            slack_socket_agent.create_app("codex", 30, frozenset({"UOWNER", "UOTHER"}))
+            process = MagicMock()
+            process.poll.return_value = None
+            run = slack_socket_agent.ActiveBackendRun(
+                process,
+                Path(raw_dir) / "control",
+                "run-1",
+                Path(raw_dir),
+            )
+            self.assertTrue(run.register_approval(approval_id))
+            slack_socket_agent.register_active_run(
+                slack_socket_agent.RunKey("T1", "C1", "1.0"), run
+            )
+
+            fake_app.actions[slack_socket_agent.APPROVAL_DENY_ACTION_ID](
+                MagicMock(),
+                {
+                    "team": {"id": "T1"},
+                    "user": {"id": "UOTHER"},
+                    "channel": {"id": "C1"},
+                    "actions": [{
+                        "action_id": slack_socket_agent.APPROVAL_DENY_ACTION_ID,
+                        "value": json.dumps({
+                            "team": "T1",
+                            "channel": "C1",
+                            "thread_ts": "1.0",
+                            "user": "UOWNER",
+                            "approval_id": approval_id,
+                        }),
+                    }],
+                },
+                client,
+                MagicMock(),
+                MagicMock(),
+            )
+
+            self.assertFalse((Path(raw_dir) / f"{approval_id}.json").exists())
+
+        client.chat_postEphemeral.assert_called_once()
+        self.assertIn(
+            "Only the authorized user",
+            client.chat_postEphemeral.call_args.kwargs["text"],
+        )
+        self.assertIn(approval_id, run.pending_approvals)
+
+
 class SlackChannelAllowlistTests(unittest.TestCase):
     def setUp(self) -> None:
         self.previous = os.environ.get("SLACK_CHANNEL_ID")
