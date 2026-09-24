@@ -2,7 +2,7 @@
 
 <p align="center">
   <a href="https://www.hover.team/tag/">
-    <img src="assets/branding/tag-icon.png" width="96" height="96" alt="Tag waterdrop icon" />
+    <img src="assets/branding/tag-team.png" alt="Jules, Iris, Maya, Rowan, and Zara, each with their own Tag" />
   </a>
 </p>
 
@@ -11,9 +11,6 @@
 <p align="center"><strong>Your personal assistant, in Slack.</strong></p>
 <p align="center">
   Bring your own Tag to the conversation. Work through it together.
-</p>
-<p align="center">
-  <img src="assets/branding/tag-team.png" alt="Jules, Iris, Maya, Rowan, and Zara, each with their own Tag" />
 </p>
 <p align="center"><strong>Everyone brings their own Tag. Everyone works in the same conversation.</strong></p>
 <p align="center">
