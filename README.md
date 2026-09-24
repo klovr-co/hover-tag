@@ -13,11 +13,7 @@
   Bring your own Tag to the conversation. Work through it together.
 </p>
 <p align="center">
-  <img src="assets/characters/tag-jules-pixel.png" width="72" alt="Jules" /> <strong>+</strong> <img src="assets/characters/tag-avatar-soil-pixel.png" width="48" alt="Jules's Soil Tag" />&nbsp;&nbsp;
-  <img src="assets/characters/tag-iris-pixel.png" width="72" alt="Iris" /> <strong>+</strong> <img src="assets/characters/tag-avatar-metal-pixel.png" width="48" alt="Iris's Metal Tag" />&nbsp;&nbsp;
-  <img src="assets/characters/tag-maya-pixel.png" width="72" alt="Maya" /> <strong>+</strong> <img src="assets/characters/tag-avatar-water-pixel.png" width="48" alt="Maya's Water Tag" />&nbsp;&nbsp;
-  <img src="assets/characters/tag-rowan-pixel.png" width="72" alt="Rowan" /> <strong>+</strong> <img src="assets/characters/tag-avatar-wood-pixel.png" width="48" alt="Rowan's Wood Tag" />&nbsp;&nbsp;
-  <img src="assets/characters/tag-zara-pixel.png" width="72" alt="Zara" /> <strong>+</strong> <img src="assets/characters/tag-avatar-fire-pixel.png" width="48" alt="Zara's Fire Tag" />
+  <img src="assets/branding/tag-team.png" alt="Jules, Iris, Maya, Rowan, and Zara, each with their own Tag" />
 </p>
 <p align="center"><strong>Everyone brings their own Tag. Everyone works in the same conversation.</strong></p>
 <p align="center">
