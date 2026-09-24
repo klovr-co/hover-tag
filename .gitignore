@@ -1,9 +1,11 @@
+.env
 .codex/skills/
 .runtime/
 *.log
 __pycache__/
 *.py[cod]
 .DS_Store
+.vscode/
 out/
 .playwright-cli/
 .gstack/
