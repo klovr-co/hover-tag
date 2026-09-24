@@ -9,6 +9,7 @@
 <h1 align="center">Tag</h1>
 <p align="center">by <a href="https://www.hover.team/">Hover</a></p>
 <p align="center"><strong>A +1 for everyone.</strong></p>
+<p align="center"><strong>Your personal assistant, in Slack.</strong></p>
 <p align="center">
   Everyone brings their own Tag. The work stays together in Slack.
 </p>
