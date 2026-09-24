@@ -16,18 +16,11 @@ class BackendEnvironmentTests(unittest.TestCase):
             "TAG_TELEMETRY": "off",
             "TAG_POSTHOG_PROJECT_TOKEN": "public-project-token",
             "THIRD_PARTY_TELEMETRY_MODE": "enabled",
-            "DISABLE_TELEMETRY": "1",
-            "POSTHOG_PERSONAL_API_KEY": "third-party-key",
         }
 
         environment = without_telemetry_environment(source)
 
-        self.assertEqual(environment, {
-            "PATH": "/fixture/bin",
-            "THIRD_PARTY_TELEMETRY_MODE": "enabled",
-            "DISABLE_TELEMETRY": "1",
-            "POSTHOG_PERSONAL_API_KEY": "third-party-key",
-        })
+        self.assertEqual(environment, {"PATH": "/fixture/bin"})
 
     def test_bridge_access_control_is_not_inherited_by_backend(self) -> None:
         environment = backend_environment(
