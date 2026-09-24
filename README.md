@@ -15,6 +15,7 @@
 <p align="center">
   <a href="https://www.hover.team/tag/">Meet Tag</a> ·
   <a href="https://www.hover.team/tag/getting-started/">Get started</a> ·
+  <a href="https://join.slack.com/t/hover-community/shared_invite/zt-4aghkshid-n7fRukS7_J5sR2jDLBXK9A">Join the Slack community</a> ·
   <a href="https://www.hover.team/tag/capabilities/">Capabilities</a> ·
   <a href="https://github.com/klovr-co/hover-tag/issues">Issues</a>
 </p>
@@ -101,6 +102,7 @@ or set `TAG_TELEMETRY=off` for an immediate process-level stop. Read the full
 [telemetry and privacy reference](docs/reference/telemetry.md).
 
 [Documentation](https://www.hover.team/tag/) ·
+[Join the Slack community](https://join.slack.com/t/hover-community/shared_invite/zt-4aghkshid-n7fRukS7_J5sR2jDLBXK9A) ·
 [Troubleshooting](https://www.hover.team/tag/troubleshooting/) ·
 [Source](https://github.com/klovr-co/hover-tag.git) ·
 [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) ·
