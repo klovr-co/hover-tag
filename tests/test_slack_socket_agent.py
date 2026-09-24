@@ -139,6 +139,56 @@ class SlackBinaryAttachmentTests(unittest.TestCase):
                 thread_text,
             )
 
+    def test_downloads_files_nested_in_a_forwarded_message(self) -> None:
+        messages = [{
+            "user": "UOWNER",
+            "text": "<@BOT> use the attachments in this context",
+            "attachments": [{
+                "is_msg_unfurl": True,
+                "author_name": "Xian Jun",
+                "text": "Here are the documents you need for the project.",
+                "files": [
+                    {
+                        "id": "FPDF",
+                        "name": "partnership-agreement.pdf",
+                        "mimetype": "application/pdf",
+                        "url_private_download": "https://files.slack.com/FPDF",
+                    },
+                    {
+                        "id": "FXLSX",
+                        "name": "developer-qa-report.xlsx",
+                        "mimetype": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        "url_private_download": "https://files.slack.com/FXLSX",
+                    },
+                ],
+            }],
+        }]
+        client = MagicMock()
+        client.conversations_replies.return_value = {"messages": messages}
+        with tempfile.TemporaryDirectory() as raw_dir, patch(
+            "scripts.slack_socket_agent.download_file_bytes",
+            side_effect=[b"%PDF-agreement", b"PK\x03\x04spreadsheet"],
+        ) as download, patch.dict(
+            os.environ, {"SLACK_BOT_TOKEN": "xoxb-test"}, clear=False
+        ):
+            thread_text = slack_socket_agent.build_thread_text(
+                client, "C123", "1.23", Path(raw_dir)
+            )
+            attachment_dir = Path(raw_dir)
+
+            self.assertEqual(
+                b"%PDF-agreement",
+                (attachment_dir / "partnership-agreement.pdf").read_bytes(),
+            )
+            self.assertEqual(
+                b"PK\x03\x04spreadsheet",
+                (attachment_dir / "developer-qa-report.xlsx").read_bytes(),
+            )
+            self.assertIn("Body: Here are the documents you need for the project.", thread_text)
+            self.assertIn("[Slack file attachment: partnership-agreement.pdf", thread_text)
+            self.assertIn("[Slack file attachment: developer-qa-report.xlsx", thread_text)
+            self.assertEqual(2, download.call_count)
+
     def test_streamed_bytes_over_limit_are_rejected_instead_of_becoming_prompt_text(self) -> None:
         messages = [{"files": [{
             "id": "FZIP",
