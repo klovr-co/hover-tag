@@ -6,7 +6,8 @@
   </a>
 </p>
 
-<h1 align="center">Tag</h1>
+<h1 align="center">tag</h1>
+<p align="center">by <a href="https://www.hover.team/">Hover</a></p>
 <p align="center"><strong>Your personal assistant, in Slack.</strong></p>
 <p align="center">
   Turn a team conversation into a checklist, a reviewed PR, or a finished file.<br />
@@ -15,7 +16,7 @@
 <p align="center">
   <a href="https://www.hover.team/tag/">Meet Tag</a> ·
   <a href="https://www.hover.team/tag/getting-started/">Get started</a> ·
-  <a href="https://join.slack.com/t/hover-community/shared_invite/zt-4aghkshid-n7fRukS7_J5sR2jDLBXK9A">Join the Slack community</a> ·
+  <a href="https://join.slack.com/t/hover-community/shared_invite/zt-4aghkshid-n7fRukS7_J5sR2jDLBXK9A"><img src="assets/branding/slack-icon.svg" width="16" height="16" alt="Slack" /> Join the Slack community</a> ·
   <a href="https://www.hover.team/tag/capabilities/">Capabilities</a> ·
   <a href="https://github.com/klovr-co/hover-tag/issues">Issues</a>
 </p>
@@ -102,7 +103,7 @@ or set `TAG_TELEMETRY=off` for an immediate process-level stop. Read the full
 [telemetry and privacy reference](docs/reference/telemetry.md).
 
 [Documentation](https://www.hover.team/tag/) ·
-[Join the Slack community](https://join.slack.com/t/hover-community/shared_invite/zt-4aghkshid-n7fRukS7_J5sR2jDLBXK9A) ·
+<a href="https://join.slack.com/t/hover-community/shared_invite/zt-4aghkshid-n7fRukS7_J5sR2jDLBXK9A"><img src="assets/branding/slack-icon.svg" width="16" height="16" alt="Slack" /> Join the Slack community</a> ·
 [Troubleshooting](https://www.hover.team/tag/troubleshooting/) ·
 [Source](https://github.com/klovr-co/hover-tag.git) ·
 [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) ·
