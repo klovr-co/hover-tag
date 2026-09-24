@@ -53,17 +53,22 @@ Open a new Codex session and ask:
 
 > Use the hover-tag-setup skill to set up Tag for me.
 
-Codex helps check prerequisites and install Tag. Complete Slack authorization
-in your own terminal, then bring your Tag online:
+Codex checks prerequisites, proposes the setup with recommended defaults, and
+drives installation locally. If Slack login is needed, it gives you a one-time
+connection to approve in Slack and return in one reply, with a private clipboard
+handoff available instead. Then bring your Tag online:
 
 ```bash
 tag start
+tag status
+tag stop
 ```
 
 **[Follow the setup guide and try your first Slack task →](https://www.hover.team/tag/getting-started/)**
 
-Prefer a manual install? The same guide covers it. For Windows installation
-details and qualification status, see [installation](docs/installation.md).
+Prefer installing from a source checkout? Run `./install.sh`; the same guide
+covers the full manual path. For Windows installation details and qualification
+status, see [installation](docs/installation.md).
 
 ## More than a reply
 
@@ -81,15 +86,23 @@ conversation. [See how it works →](https://www.hover.team/tag/how-it-works/)
 
 ## Early, open source, yours to run
 
-Tag is an alpha project for experimentation in a trusted environment. Codex is
+Tag is an early project for experimentation in a trusted environment. Codex is
 the supported path; Claude Code is experimental. Your agent runs with local
 account permissions and inherited bot/MFS credentials; Tag is not a hardened
 sandbox. Connected services process requests under their own data policies.
 Read the [security model](docs/adr/0001-credential-boundary.md) before connecting
 sensitive accounts or files.
 
+Tag includes privacy-bounded CLI telemetry for setup and reliability. It never
+collects prompts, Slack messages, agent output, workspace paths, files, source
+code, logs, credentials, configuration values, or command arguments. Use
+`tag telemetry status`, `tag telemetry on`, or `tag telemetry off` to manage it,
+or set `TAG_TELEMETRY=off` for an immediate process-level stop. Read the full
+[telemetry and privacy reference](docs/reference/telemetry.md).
+
 [Documentation](https://www.hover.team/tag/) ·
 [Troubleshooting](https://www.hover.team/tag/troubleshooting/) ·
+[Source](https://github.com/klovr-co/hover-tag.git) ·
 [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) ·
 [Releases](https://github.com/klovr-co/hover-tag/releases) ·
 [Security policy](SECURITY.md)
@@ -97,4 +110,5 @@ sensitive accounts or files.
 Tag began with the [Open Tag example](https://github.com/zilliztech/mfs/tree/main/examples/open-tag-skill)
 from [Zilliz MFS](https://github.com/zilliztech/mfs), inspired by
 [Claude Tag](https://www.anthropic.com/news/introducing-claude-tag).
-Licensed under [Apache 2.0](LICENSE); see [NOTICE](NOTICE) for attribution.
+Licensed under the [Apache License 2.0](LICENSE); see [NOTICE](NOTICE) for
+attribution.

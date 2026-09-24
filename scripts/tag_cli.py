@@ -26,12 +26,15 @@ from pathlib import Path
 try:
     from tag_paths import initialize_instance, initialize_workspace, runtime_environment, tag_home
     import tag_instances
+    import tag_telemetry
+    from tag_locks import LifecycleLock
     from tag_config import read_config
     import tag_credentials
     import tag_display as display
 except ImportError:
     from scripts.tag_paths import initialize_instance, initialize_workspace, runtime_environment, tag_home
-    from scripts import tag_instances
+    from scripts import tag_instances, tag_telemetry
+    from scripts.tag_locks import LifecycleLock
     from scripts.tag_config import read_config
     from scripts import tag_credentials
     from scripts import tag_display as display
@@ -209,6 +212,10 @@ def start_process(
     cwd: Path | None = None,
 ) -> bool:
     import psutil
+    try:
+        from opentag_process_env import without_telemetry_environment
+    except ImportError:
+        from scripts.opentag_process_env import without_telemetry_environment
     state = state_dir or home / "state"
     state.mkdir(parents=True, exist_ok=True, mode=0o700)
     record = state / f"{name}.json"
@@ -219,8 +226,10 @@ def start_process(
         process_cwd = cwd or Path((environment or os.environ).get("OPENTAG_WORKDIR", str(home / "workspace")))
         if cwd is None:
             process_cwd.mkdir(parents=True, exist_ok=True, mode=0o700)
+        child_environment = without_telemetry_environment(environment or os.environ)
         child = subprocess.Popen(command, cwd=process_cwd, stdin=subprocess.DEVNULL,
-                                 stdout=log, stderr=subprocess.STDOUT, env=environment, **options)
+                                 stdout=log, stderr=subprocess.STDOUT,
+                                 env=child_environment, **options)
     process = psutil.Process(child.pid)
     marker_source = command[1] if len(command) > 1 and command[1].endswith(".py") else command[0]
     identity = {"pid": child.pid, "created": process.create_time(),
@@ -606,6 +615,13 @@ def mfs_server_executable() -> str | None:
     return str(bundled) if bundled.is_file() else shutil.which(name)
 
 
+def mfs_client_executable() -> str | None:
+    """Prefer Tag's bundled MFS client, but support an independent install."""
+    name = "mfs.exe" if os.name == "nt" else "mfs"
+    bundled = Path(sys.executable).parent / name
+    return str(bundled) if bundled.is_file() else shutil.which(name)
+
+
 def instance_environment(
     context: tag_instances.InstanceContext,
     values: dict[str, str] | None = None,
@@ -696,13 +712,7 @@ def ensure_shared_memory(
         )
     shared = context.shared_mfs_home
     shared.mkdir(parents=True, exist_ok=True, mode=0o700)
-    mfs_lock = shared / "start.lock"
-    try:
-        mfs_lock.mkdir()
-    except FileExistsError:
-        raise RuntimeError(
-            f"Another shared memory start is in progress. If interrupted, remove {mfs_lock} and retry."
-        ) from None
+    mfs_lock = LifecycleLock(shared / "start.lock").acquire()
     try:
         # Recheck after acquiring the installation-wide lock. A different Tag
         # may have completed startup while this process waited.
@@ -733,7 +743,7 @@ def ensure_shared_memory(
                 + (f":\n{detail}" if detail else "; run tag memory status")
             )
     finally:
-        mfs_lock.rmdir()
+        mfs_lock.release()
 
 
 def bridge_processes(installation_root: Path) -> list[str]:
@@ -853,7 +863,7 @@ def sync_configured_slack_memory(environment: dict[str, str] | None = None) -> N
     config = Path(source.get("MFS_SLACK_CONNECTOR_CONFIG", "")).expanduser()
     if not uri or not config.is_file():
         return
-    executable = shutil.which("mfs")
+    executable = mfs_client_executable()
     if not executable:
         raise RuntimeError("MFS client is unavailable; install it before indexing Slack history")
     completed = subprocess.run(
@@ -1333,10 +1343,11 @@ def upgrade_command(
             raise RuntimeError(
                 f"Cannot compare installed release version: {current_version or 'missing'}"
             ) from error
-        running = any(
-            process_for(home / "state" / f"{name}.json")
-            for name in ("slack", "mfs")
-        )
+        running_tags = bridge_processes(home)
+        legacy_running = process_for(home / "state/slack.json") is not None
+        if legacy_running and "default" not in running_tags:
+            running_tags.insert(0, "default")
+        running = bool(running_tags)
         result = {
             "schema_version": 1,
             "ok": True,
@@ -1355,6 +1366,11 @@ def upgrade_command(
                 "selection": target.selector,
             },
             "services_running": running,
+            "running_tags": running_tags,
+            "restart_commands": [
+                "tag restart" if tag_id == "default" else f"tag {tag_id} restart"
+                for tag_id in running_tags
+            ],
             "restart_required": False,
             "downgrade": downgrade,
         }
@@ -1462,19 +1478,18 @@ def upgrade_command(
         result["restart_required"] = running and no_restart
         result["restarted"] = False
         if running and not no_restart:
-            command = [sys.executable, str(home / "bin/tag-launch.py"), "restart"]
-            completed = subprocess.run(
-                command,
-                capture_output=json_output,
-                text=True,
-                check=False,
-            )
-            if completed.returncode:
-                detail = (completed.stderr or completed.stdout or "").strip()
+            failures = []
+            for tag_id in running_tags:
+                arguments = [] if tag_id == "default" else [tag_id]
+                command = [sys.executable, str(home / "bin/tag-launch.py"), *arguments, "restart"]
+                completed = subprocess.run(command, capture_output=json_output, text=True, check=False)
+                if completed.returncode:
+                    detail = redact_log_text((completed.stderr or completed.stdout or "").strip())
+                    failures.append(tag_id + (f": {detail}" if detail else ""))
+            if failures:
                 raise RuntimeError(
-                    "Tag was upgraded, but its services did not restart. "
-                    "Run tag stop, then tag rollback."
-                    + (f"\n{detail}" if detail else "")
+                    "Tag was upgraded, but these Tags need attention: " + "\n".join(failures)
+                    + ". Run tag [alias] doctor, resolve the reported requirement, then retry start."
                 )
             result["restarted"] = True
 
@@ -1485,22 +1500,31 @@ def upgrade_command(
             "Tag upgraded",
             f"Now using Tag v{result['target']['version']}. Configuration and workspace data were preserved.",
             next_label="Activate the new release" if result["restart_required"] else "",
-            next_command="tag restart" if result["restart_required"] else "",
+            next_command=" && ".join(result["restart_commands"]) if result["restart_required"] else "",
         )
     return 0
 
 
-def main() -> int:
+def _run_cli() -> int:
     parser = argparse.ArgumentParser(description="Tag: set up, inspect, and manage your Slack teammate.",
                                      usage="tag [TAG] [COMMAND] [OPTIONS]",
-                                     epilog="Use tag for default status, or tag NAME status for a named Tag. Start with tag setup; change configuration with tag settings.")
+                                     epilog=(
+                                         "Use tag for default status, or tag NAME status for a named Tag. "
+                                         "Start with tag setup; change configuration with tag settings.\n\n"
+                                         "Telemetry: Tag can collect minimal anonymous CLI usage without prompts, "
+                                         "Slack messages, agent output, paths, logs, credentials, or configuration "
+                                         "values. Use 'tag telemetry status|on|off', or set TAG_TELEMETRY=off. "
+                                         "Privacy notice: "
+                                         f"{tag_telemetry.build_config.PRIVACY_NOTICE_URL or 'not configured in this build'}"
+                                     ),
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("command", nargs="?", choices=COMMANDS)
     parser.add_argument("arguments", nargs="*", help="memory: start | status | stop; config: init | show | keys | set KEY VALUE")
     parser.add_argument("--offline", action="store_true")
     parser.add_argument("--json", action="store_true", dest="json_output", help="structured output for inspect, status, doctor, config, paths, and upgrade")
     parser.add_argument("--stdin", action="store_true", help="read a config value from stdin")
     parser.add_argument("--from", dest="source", type=Path)
-    parser.add_argument("--no-start", action="store_true", help="setup: save choices without starting services or indexing")
+    parser.add_argument("--no-start", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--test", action="store_true", help="setup: use a separate test home; implies --no-start")
     parser.add_argument("--review", action="store_true", help="setup: review choices even when already configured")
     parser.add_argument("--follow", action="store_true", help="logs: continue streaming new service output")
@@ -1521,10 +1545,10 @@ def main() -> int:
     args = parser.parse_args(raw_arguments)
     if (args.no_start or args.test or args.review) and args.command != "setup":
         parser.error("--no-start, --test and --review are only for setup")
-    if args.arguments and args.command not in {"add", "memory", "config"}:
-        parser.error("Only add, memory, and config accept additional positional arguments")
-    if args.json_output and args.command not in {"list", "memory", "inspect", "status", "doctor", "config", "paths", "upgrade"}:
-        parser.error("--json supports list, memory, inspect, status, doctor, config, paths, and upgrade")
+    if args.arguments and args.command not in {"add", "memory", "config", "telemetry"}:
+        parser.error("Only add, memory, config, and telemetry accept additional positional arguments")
+    if args.json_output and args.command not in {"list", "memory", "inspect", "status", "doctor", "config", "paths", "upgrade", "telemetry"}:
+        parser.error("--json supports list, memory, inspect, status, doctor, config, paths, upgrade, and telemetry")
     if args.stdin and args.command != "config":
         parser.error("--stdin is only for config set")
     if args.offline and args.command not in {"inspect", "doctor"}:
@@ -1537,13 +1561,52 @@ def main() -> int:
         parser.error("--limit must be at least 1")
     installation_root = tag_home()
     tag_instances.validate_name(tag_id)
-    if args.command in {"version", "upgrade", "rollback", "migrate", "list", "add", "memory"} and explicit_tag:
+    if args.command in {"version", "upgrade", "rollback", "migrate", "list", "add", "memory", "telemetry"} and explicit_tag:
         parser.error(f"Tag selection is not supported for installation-wide command '{args.command}'")
     try:
         import tag_control as control
         import tag_config as settings
     except ImportError:
         from scripts import tag_control as control, tag_config as settings
+    if args.command == "telemetry":
+        if len(args.arguments) != 1 or args.arguments[0] not in {"status", "on", "off"}:
+            parser.error("telemetry requires status, on, or off")
+        action = args.arguments[0]
+        if action == "on":
+            if tag_telemetry.hard_disabled():
+                raise RuntimeError(
+                    "TAG_TELEMETRY=off is active for this process; unset it to save telemetry on"
+                )
+            if not tag_telemetry.collection_available():
+                raise RuntimeError(
+                    "This Tag build has no approved telemetry destination; no preference was changed"
+                )
+            _show_telemetry_scope(installation_root)
+            tag_telemetry.enable(installation_root)
+        elif action == "off":
+            if not tag_telemetry.disable(installation_root):
+                raise RuntimeError(
+                    "TAG_TELEMETRY=off is active for this process; telemetry is already stopped "
+                    "for this command, but the saved preference was not changed"
+                )
+        result = tag_telemetry.status(installation_root)
+        if args.json_output:
+            print(json.dumps(result, indent=2))
+        else:
+            display.header("Telemetry", "Installation-wide privacy control")
+            display.info_row(
+                "Collection",
+                "On" if result["enabled"] else "Off",
+                good=bool(result["enabled"]),
+            )
+            display.info_row("Saved", str(result["saved_preference"]).replace("_", " "))
+            if result["process_override"]:
+                display.info_row("Override", "TAG_TELEMETRY=off")
+            display.info_row(
+                "Privacy",
+                str(result["privacy_notice"] or "Not configured in this build"),
+            )
+        return 0
     if args.command == "add":
         if args.arguments:
             parser.error("add does not accept a name; the workspace alias is chosen during onboarding")
@@ -1607,6 +1670,13 @@ def main() -> int:
         return 0
     context = tag_instances.resolve(installation_root, tag_id)
     home = context.home
+    if args.command in {"start", "dev", "setup"}:
+        tag_instances.ensure_default(installation_root)
+        try:
+            from tag_layout import migrate as migrate_layout
+        except ImportError:
+            from scripts.tag_layout import migrate as migrate_layout
+        migrate_layout(context, sys.modules[__name__])
     environment = instance_environment(context)
     startup_attempt_overrides = {
         key: environment[key] for key in STARTUP_ATTEMPT_ENV_KEYS if key in environment
@@ -1792,7 +1862,9 @@ def main() -> int:
             environment = {key: value for key, value in environment.items()
                            if not key.startswith(("SLACK_", "MFS_", "OPENTAG_"))}
             # Test onboarding is an explicit disposable staging installation.
-            environment.update(runtime_environment(test_home))
+            environment.update(runtime_environment(
+                test_home, installation_root=installation_root
+            ))
             config_path = test_home / "config/settings.json"
             print(f"TEST MODE: {test_home}", flush=True)
             print("Local settings are isolated. No services or indexing.", flush=True)
@@ -1868,19 +1940,34 @@ def main() -> int:
         else:
             display.header(
                 "Stop",
-                selected_target(home, context.tag_id, suffix="Shared memory stays online"),
+                selected_target(home, context.tag_id),
             )
             display.section("Services")
         stop_process(home, "slack")
         display.info_row("Slack", "Stopped or already offline", good=True)
-        display.info_row("Memory", "Shared service left running", good=True)
+        memory_running = process_for(context.shared_mfs_home / "mfs.json") is not None
+        remaining_tags = bridge_processes(installation_root)
+        if memory_running and remaining_tags:
+            memory_status = "Still running for: " + ", ".join(remaining_tags)
+            memory_detail = "Stop those Tags before running tag memory stop."
+        elif memory_running:
+            memory_status = "Still running · no active Tags"
+            memory_detail = "Memory runs separately and stays available for your next start."
+        else:
+            memory_status = "No Tag-managed process running"
+            if remaining_tags:
+                memory_status += " · active Tags: " + ", ".join(remaining_tags)
+            memory_detail = "Externally managed memory, if configured, is unchanged."
+        display.info_row("Memory", memory_status)
         if not restart_flow:
             display.completion(
                 "Tag is stopped",
-                "Independently managed memory servers were left running.",
+                memory_detail,
                 next_label="Start again",
                 next_command=context.command("start"),
             )
+            if memory_running and not remaining_tags:
+                display.next_action("Stop memory too", "tag memory stop")
         return 0
     if args.command == "start":
         restart_flow = os.getenv("TAG_RESTART_FLOW") == "1"
@@ -1891,26 +1978,41 @@ def main() -> int:
             display.section("Readiness")
         display.info_row("Runtime", "Dependencies available", good=True)
         # Serialize starts so concurrent invocations cannot create orphan services.
-        lock = home / "state/start.lock"
-        try:
-            lock.mkdir()
-        except FileExistsError:
-            raise RuntimeError(f"Another start is in progress. If interrupted, remove {lock} and retry.")
+        lock = LifecycleLock(home / "state/start.lock").acquire()
         started = []
         try:
             try:
                 import slack_manifest_migrations
             except ImportError:
                 from scripts import slack_manifest_migrations
+            try:
+                from tag_error_migrations import migrate as migrate_error_reports
+            except ImportError:
+                from scripts.tag_error_migrations import migrate as migrate_error_reports
+            diagnostics_migrated = migrate_error_reports(home)
+            display.info_row(
+                "Diagnostics",
+                "Private report storage migrated" if diagnostics_migrated else "Private report storage ready",
+                good=True,
+            )
             manifest_changed = slack_manifest_migrations.reconcile(home, config_path, values)
+            if manifest_changed:
+                # A migration may rotate credentials; preflight and the bridge
+                # must use the saved replacement during this same start.
+                values = read_config(config_path)
+                os.environ.update(values)
             display.info_row(
                 "Slack app",
                 "Permissions migrated" if manifest_changed else "Permissions current",
                 good=True,
             )
             ensure_connector_credential(home, values)
+            display.pending_row("Memory", "Waiting for the service to become healthy…")
             ensure_shared_memory(context, os.environ.copy())
             display.info_row("Memory", "Healthy", good=True)
+            display.pending_row(
+                "Channel memory", "Waiting for selected channels to become readable…"
+            )
             if os.getenv("SLACK_CHANNEL_POLICY") == "invited":
                 reconcile_invitation_memory(home)
             else:
@@ -1922,6 +2024,7 @@ def main() -> int:
                     + unavailable_scopes[0]
                     + ". Run mfs status and tag doctor, then retry tag start."
                 )
+            display.info_row("Channel memory", "Ready", good=True)
             preflight_result, preflight = doctor_report(False)
             if preflight_result:
                 failed = [item for item in preflight.get("checks", []) if not item.get("ok")]
@@ -1935,6 +2038,7 @@ def main() -> int:
                     )
                 raise RuntimeError("Preflight failed; run tag doctor")
             display.info_row("Checks", "Configuration and access verified", good=True)
+            display.pending_row("Slack", "Waiting for the connection to become ready…")
             if not slack_ready(home):
                 # Replace a live but disconnected TAG-managed bridge rather than
                 # accepting a PID as proof that Socket Mode is operational.
@@ -1991,9 +2095,152 @@ def main() -> int:
                 stop_process(home, name)
             raise
         finally:
-            lock.rmdir()
+            lock.release()
         show_upgrade_reminder(installation_root)
     return 0
+
+
+def _show_telemetry_scope(installation_root: Path) -> None:
+    """Show the complete collection boundary before an operator enables it."""
+    display.header("Telemetry", "Installation-wide privacy control")
+    display.paragraph(
+        "Tag collects minimal anonymous usage telemetry to improve setup and reliability. "
+        "We never send prompts, Slack messages, agent output, workspace paths, logs, "
+        "credentials, or configuration values."
+    )
+    display.paragraph(
+        "Telemetry is on by default after this notice. You can turn it off at any time "
+        "with 'tag telemetry off', or for one process with TAG_TELEMETRY=off."
+    )
+    display.paragraph(f"Privacy notice: {tag_telemetry.build_config.PRIVACY_NOTICE_URL}")
+
+
+def _offer_first_run_telemetry(installation_root: Path) -> None:
+    """Persist a choice only after the notice is visible in an interactive TUI."""
+    if (
+        tag_telemetry.hard_disabled()
+        or not tag_telemetry.collection_available()
+        or tag_telemetry.saved_preference(installation_root) is not None
+        or not sys.stdin.isatty()
+        or not sys.stdout.isatty()
+    ):
+        return
+    _show_telemetry_scope(installation_root)
+    try:
+        import setup_ui as ui
+    except ImportError:
+        from scripts import setup_ui as ui
+    try:
+        choice = ui.choose(
+            "Help support Tag’s development",
+            ["Continue", "Turn telemetry off"],
+            default=0,
+        )
+    except ui.Paused:
+        # An interrupted notice is not consent. Continue this command without
+        # collection and offer the same notice on a later interactive run.
+        return
+    if choice == 0:
+        tag_telemetry.enable(installation_root)
+    else:
+        tag_telemetry.disable(installation_root)
+
+
+def _command_name(arguments: list[str]) -> str:
+    return next((item for item in arguments if item in COMMANDS), "status")
+
+
+def _command_group(command: str) -> str:
+    if command in {"start", "stop", "restart", "dev", "logs"}:
+        return "lifecycle"
+    if command in {"setup", "add", "reset", "settings"}:
+        return "setup"
+    if command in {"config", "paths"}:
+        return "configuration"
+    if command in {"inspect", "status", "doctor", "version"}:
+        return "diagnostics"
+    if command == "memory":
+        return "memory"
+    if command in {"upgrade", "rollback", "migrate"}:
+        return "update"
+    return "tag_management"
+
+
+def _error_category(error: BaseException) -> str:
+    if isinstance(error, KeyboardInterrupt):
+        return "interrupted"
+    if isinstance(error, PermissionError):
+        return "permission"
+    if isinstance(error, (ImportError, FileNotFoundError)):
+        return "dependency"
+    if isinstance(error, ValueError):
+        return "validation"
+    if isinstance(error, OSError):
+        return "runtime"
+    return "unknown"
+
+
+def main() -> int:
+    """Apply telemetry policy around the existing CLI without changing outcomes."""
+    arguments = sys.argv[1:]
+    command = _command_name(arguments)
+    installation_root = tag_home()
+    telemetry_command = command == "telemetry"
+    help_command = any(item in {"-h", "--help"} for item in arguments)
+    if not telemetry_command and not help_command:
+        _offer_first_run_telemetry(installation_root)
+    enabled = (
+        not telemetry_command
+        and tag_telemetry.saved_preference(installation_root) is True
+        and not tag_telemetry.hard_disabled()
+    )
+    started = time.monotonic()
+    group = _command_group(command)
+    if enabled:
+        invocation = (
+            "interactive"
+            if sys.stdin.isatty() and sys.stdout.isatty()
+            else "non_interactive"
+        )
+        tag_telemetry.tui_started(installation_root, invocation)
+    try:
+        result = _run_cli()
+    except SystemExit as exc:
+        if enabled:
+            succeeded = exc.code in (None, 0)
+            if not succeeded:
+                tag_telemetry.command_failed(
+                    installation_root,
+                    group,
+                    "validation" if exc.code == 2 else "unknown",
+                )
+            tag_telemetry.command_completed(
+                installation_root,
+                group,
+                "succeeded" if succeeded else "failed",
+                time.monotonic() - started,
+            )
+        raise
+    except BaseException as exc:
+        if enabled:
+            tag_telemetry.command_failed(
+                installation_root, group, _error_category(exc)
+            )
+            tag_telemetry.command_completed(
+                installation_root,
+                group,
+                "interrupted" if isinstance(exc, KeyboardInterrupt) else "failed",
+                time.monotonic() - started,
+            )
+        raise
+    if enabled:
+        tag_telemetry.command_completed(
+            installation_root,
+            group,
+            "succeeded" if result == 0 else "failed",
+            time.monotonic() - started,
+        )
+    return result
 
 
 if __name__ == "__main__":

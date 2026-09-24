@@ -71,6 +71,13 @@ class TagControlTests(unittest.TestCase):
         self.environment = patch.dict(os.environ, environment, clear=True)
         self.environment.start()
         self.addCleanup(self.environment.stop)
+        self.mfs_client = patch.object(
+            opentag_setup.lifecycle,
+            "mfs_client_executable",
+            return_value="/runtime/bin/mfs",
+        )
+        self.mfs_client.start()
+        self.addCleanup(self.mfs_client.stop)
         self.addCleanup(self.temporary.cleanup)
 
     def complete(self, backend="codex"):
@@ -321,17 +328,28 @@ class TagControlTests(unittest.TestCase):
 
     def test_backend_selection_reaches_runtime_for_both_choices(self):
         tag_cli.initialize_instance(self.home)
+        def refresh_credentials(home, config_path, values):
+            tag_config.update_config(config_path, {
+                "SLACK_BOT_TOKEN": "xoxb-refreshed", "SLACK_APP_TOKEN": "xapp-refreshed",
+            })
+            return True
+
+        def check_refreshed_credentials(offline):
+            self.assertEqual("xoxb-refreshed", os.environ["SLACK_BOT_TOKEN"])
+            self.assertEqual("xapp-refreshed", os.environ["SLACK_APP_TOKEN"])
+            return 0, {"checks": []}
+
         for backend in ("codex", "claude"):
             with self.subTest(backend=backend):
                 self.complete(backend)
                 with patch.object(sys, "argv", ["tag", "start"]), patch.object(
                     tag_cli, "missing_runtime_dependencies", return_value=()
-                ), patch.object(slack_manifest_migrations, "reconcile", return_value=False
+                ), patch.object(slack_manifest_migrations, "reconcile", side_effect=refresh_credentials
                 ), patch.object(tag_cli, "healthy", return_value=True
                 ), patch.object(tag_cli, "replace_unmanaged_local_mfs", return_value=False
                 ), patch.object(tag_cli, "sync_configured_slack_memory"
                 ), patch.object(tag_cli, "wait_for_configured_mfs_scopes", return_value=[]
-                ), patch.object(tag_cli, "doctor_report", return_value=(0, {"checks": []})), patch.object(
+                ), patch.object(tag_cli, "doctor_report", side_effect=check_refreshed_credentials), patch.object(
                     tag_cli, "slack_ready", side_effect=[False, True]
                 ), patch.object(tag_cli, "stop_process"), patch.object(
                     tag_cli, "start_process", return_value=True
@@ -339,6 +357,9 @@ class TagControlTests(unittest.TestCase):
                     self.assertEqual(tag_cli.main(), 0)
                 command = start.call_args.args[2]
                 self.assertEqual(command[command.index("--backend") + 1], backend)
+                self.assertIn("Waiting for the service to become healthy", output.getvalue())
+                self.assertIn("Waiting for selected channels to become readable", output.getvalue())
+                self.assertIn("Waiting for the connection to become ready", output.getvalue())
                 self.assertIn("Tag is connected", output.getvalue())
                 self.assertNotIn("[ok]", output.getvalue())
 

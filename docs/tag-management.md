@@ -29,6 +29,13 @@ failed startup leave shared memory and other Tags running. Inspect it with
 service can be stopped explicitly with `tag memory stop`. Tag refuses to stop
 an externally managed MFS process.
 
+An upgrade restarts each previously running Tag, leaving stopped Tags stopped
+and shared MFS online. `--no-restart` defers activation until you restart those
+Tags. On startup, legacy root-level settings and old working folders are migrated
+automatically after stopping the affected bridge. Originals are retained;
+conflicting destination files stop migration with an actionable path. Interrupted
+copies resume on retry, and completed migrations do not overwrite later edits.
+
 Shared storage does not authorize cross-workspace retrieval. Normal Slack
 retrieval remains limited to the selected Tag's approved workspace/channel
 scopes. These local Tags share the trusted-sandbox limitations described
@@ -74,6 +81,18 @@ by Tag's persistent home. Changing memory scopes does not index new sources.
 memory and first-reply caveats. `tag status --json` reports the same checks in
 structured form. `tag restart` stops Tag's managed processes and starts them
 through the normal readiness checks; a failed stop prevents starting again.
+
+Failed Slack requests use a separate, local error-report store. Startup creates
+or verifies its owner-only directory before dependent services and records the
+versioned migration only after verification succeeds; interrupted migrations
+remain retryable. The store keeps at most 50 bounded records for 30 days.
+Reports are private previews for the authorized request caller and contain no
+raw conversation, file contents, tokens, or raw logs by default. Sharing with
+[Hover Community](https://join.slack.com/t/hover-community/shared_invite/zt-4aghkshid-n7fRukS7_J5sR2jDLBXK9A)
+is manual. A troubleshooting handoff needs local coding-agent access to repair
+Tag; an upstream code bug is handled through a regression-tested GitHub PR and
+canonical issue, while a local repair is explained in the community report.
+
 Contributors using a prepared source checkout can run `./tag dev` for a
 foreground loop that watches `scripts/**/*.py`, reloads the Slack bridge, and
 streams bridge logs. It owns both Slack and loopback MFS for the session, so
@@ -81,10 +100,11 @@ Ctrl-C stops both; configured remote MFS endpoints remain external. Managed
 releases do not expose development watching.
 
 Completed `tag setup` checks readiness and exits without repeating onboarding.
-Use `tag setup --review` to review choices explicitly. `tag setup --no-start`
-saves approved choices without starting services or indexing. For a separate,
+Setup saves approved choices and verifies the MFS client, but it does
+not start services or index history; run `tag start` when ready. Use
+`tag setup --review` to review choices explicitly. For a separate,
 resumable test configuration, use `tag setup --test`; it keeps data under
-`<TAG_HOME>/testing/onboarding` and implies `--no-start`. This is not a Slack
+`<TAG_HOME>/testing/onboarding`. This is not a Slack
 sandbox: CLI sign-ins are shared and approved Slack app/channel operations are
 real. Test mode labels its banner, app-creation choice, review warning, and
 default app name (`TEST · <first name>'s Tag`) accordingly. A test home needs a
@@ -236,11 +256,28 @@ and removed on exit; these safeguards are not a hardened isolation boundary
 
 ## Commands for people and skills
 
+After an upgrade, `tag start` applies versioned Slack app migrations before
+preflight. Existing Slack CLI authorization is used to reconcile the release's
+required bot scopes, events, App Home, Socket Mode, and interactivity settings,
+refresh the installation,
+and save replacement credentials privately. This works without an interactive
+terminal and preserves unrelated app settings. The migration is marked complete
+only after remote settings and the replacement token's required grants are verified.
+An existing legacy Assistant view requires explicit approval through
+`tag setup --review` before the irreversible Agent conversion. If Slack requires
+workspace approval or renewed CLI sign-in, startup stops with recovery guidance;
+resolve that requirement and retry `tag start`.
+
+Lifecycle locks for startup, shared-memory startup, reset, and settings apply
+are released by the operating system if the CLI exits unexpectedly. A later
+attempt recovers the leftover marker without taking a live operation's lock.
+
 Permission failures pause setup and show the missing scope, the operation it blocks,
 and instructions to fix it yourself in Slack (or ask a workspace admin).
 Choose **Open app settings**, **Check again**, or **Exit · finish setup later**; channel joining
-also lets you return to channel selection. Tag does not repair permissions or
-reinstall apps as part of error recovery. Bot scopes, Socket Mode app-token scopes,
+also lets you return to channel selection. Outside the versioned upgrade migrations
+above, Tag does not repair permissions or reinstall apps as part of error recovery.
+Bot scopes, Socket Mode app-token scopes,
 and separate history credentials require different fixes. If Slack issues a new
 token, update it privately in Tag settings before retrying. Normal approved
 credential handoff remains unchanged; it uses remote app settings without `--force`.

@@ -28,9 +28,12 @@ instance home. An explicit non-standard `TAG_HOME` keeps its workspace below
 `instances/NAME/workspace`, preserving the existing self-contained behavior for
 development, tests, and portable installations.
 
-Because the old layout was used only by the alpha operator, its default
-workspace is moved once by the operator before installing this change. Tag does
-not retain a permanent compatibility subsystem for that one-time migration.
+Startup migrates old working folders automatically, including the root-level
+default workspace and per-instance app-data workspaces. The affected bridge is
+stopped first. Original files are retained, existing destination files are never
+silently replaced, and a versioned checkpoint is written only after a complete
+copy. Interrupted copies can be retried. Conflicts preserve both versions and
+identify the destination requiring operator resolution.
 
 This decision supersedes ADR 0005 only where that ADR says the agent working
 folder lives below `instances/NAME`. The instance remains the owner of the

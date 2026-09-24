@@ -2,10 +2,33 @@ from __future__ import annotations
 
 import unittest
 
-from scripts.opentag_process_env import backend_environment, current_channel_scopes
+from scripts.opentag_process_env import (
+    backend_environment,
+    current_channel_scopes,
+    without_telemetry_environment,
+)
 
 
 class BackendEnvironmentTests(unittest.TestCase):
+    def test_telemetry_settings_do_not_reach_any_child_environment(self) -> None:
+        source = {
+            "PATH": "/fixture/bin",
+            "TAG_TELEMETRY": "off",
+            "TAG_POSTHOG_PROJECT_TOKEN": "public-project-token",
+            "THIRD_PARTY_TELEMETRY_MODE": "enabled",
+            "DISABLE_TELEMETRY": "1",
+            "POSTHOG_PERSONAL_API_KEY": "third-party-key",
+        }
+
+        environment = without_telemetry_environment(source)
+
+        self.assertEqual(environment, {
+            "PATH": "/fixture/bin",
+            "THIRD_PARTY_TELEMETRY_MODE": "enabled",
+            "DISABLE_TELEMETRY": "1",
+            "POSTHOG_PERSONAL_API_KEY": "third-party-key",
+        })
+
     def test_bridge_access_control_is_not_inherited_by_backend(self) -> None:
         environment = backend_environment(
             {

@@ -1,4 +1,4 @@
-# Get started with Tag
+# Set up Tag
 
 Connect Tag to Slack, then try a task in a thread. You can set up with help
 from Codex or run the installer yourself.
@@ -12,9 +12,9 @@ while Tag handles requests. You'll need:
 - Permission to create and install a Slack app in your workspace. Your workplace
   may require an administrator to approve it.
 
-Only you can ask your Tag to work. Other people in the channel can read your
-requests and its replies. See [Your own Tag](../concepts/access.md) for how
-Tag uses your agent's files, tools, and connected accounts.
+By default, only you can ask your Tag to work. Other people in the channel can
+read your requests and Tag's replies. See [Your own Tag](../concepts/access.md)
+for how Tag uses your agent's files, tools, and connected accounts.
 
 Claude support is coming soon.
 
@@ -37,20 +37,28 @@ Open a new Codex session and ask:
 Use the hover-tag-setup skill to set up Tag for me.
 ```
 
-Codex checks what's already installed, helps with missing prerequisites,
-and installs Tag if needed. It then asks you to run `tag setup` in your own
-terminal to authorize Slack and choose your app and channels.
+Codex checks what's already installed and proposes your workspace, app, access,
+channels, history window, backend, installation, and startup choices together.
+Reply **Use these defaults** or list all changes in one message. After you
+approve the plan, Codex helps with missing prerequisites and installs Tag if
+needed.
 
 Use your own Slack account as the owner. Review the channel list, history
 window, and invitation policy before finishing. New setups include channels
 the app has already joined; later invitations also make channels eligible for
 replies and history indexing.
 
-Complete the prompts in your terminal. If credentials need manual entry, enter
-them there, not in your Codex conversation.
-
-Return to Codex when setup finishes or pauses. It can check the connection or
-help diagnose the failed step. Once Tag is connected, continue to
+Codex drives the local setup prompts. If Slack login is needed, Codex shows a
+one-time connection in the conversation. In the Slack workspace you want to
+connect, paste it into the message box of **any channel or DM** and send it; it
+does not need to be a Tag channel. Choose **Confirm**, then return the short code
+from the next Slack window in one reply. These values are single-use and
+short-lived. If you prefer to keep them out of chat, choose the private clipboard
+handoff in the initial setup proposal and follow the same Slack steps, then reply
+**copied**. Codex completes setup and reports service readiness separately from
+the first verified Slack reply. Slack's illustrated
+[authorization guide](https://docs.slack.dev/tools/slack-cli/guides/authorizing-the-slack-cli/)
+shows where the command and short code appear. Once Tag is connected, continue to
 [Try your Tag in Slack](#try-your-tag-in-slack) below.
 
 ### Set up in your terminal
@@ -95,7 +103,7 @@ Follow the prompts to:
 4. Review the channels, history window, and invitation policy. New setups
    include channels the app has already joined; later invitations also make
    channels eligible for replies and history indexing.
-5. Finish setup to start Tag and begin indexing the approved Slack history.
+5. Finish setup to save the approved configuration and verify the MFS client.
 
 Setup saves completed answers. If you pause or encounter an error, run
 `tag setup` again to resume.
@@ -114,24 +122,25 @@ Tag runs in the background, so you can close this terminal. Keep the computer
 awake and connected. After restarting your computer, run `tag start` again;
 you don't need to repeat setup.
 
-If guided setup already started Tag, you're ready to continue. You can check
-the connection anytime with `tag status`.
+Setup does not start services or index history. After `tag start` completes,
+you can check the connection anytime with `tag status`.
 
 Try the task below to check that your Tag answers in Slack.
 
 ## Try your Tag in Slack
 
 In a channel connected during setup, post a short planning note. You can use
-this example or write one for your own work:
-
-> We need to prepare the launch. Maya will finish the FAQ by Tuesday.
-> Jules will test signup by Wednesday. Nobody has taken the support briefing yet.
+the example below or write one for your own work.
 
 Reply in that message's thread and mention your Tag. These examples use
 Maya's Tag; select your own app's mention from Slack's suggestions. The replies
-below are illustrative:
+below are illustrative. Continue in the same thread to assign the support
+briefing and update the checklist:
 
-> @Maya's Tag turn this into a checklist with owners and deadlines. Flag anything missing.
+> **Maya:** We need to prepare the launch. Maya will finish the FAQ by Tuesday.
+> Jules will test signup by Wednesday. Nobody has taken the support briefing yet.
+>
+> **Maya:** @Maya's Tag turn this into a checklist with owners and deadlines. Flag anything missing.
 >
 > **Maya's Tag:** Here's the launch checklist:
 >
@@ -140,15 +149,8 @@ below are illustrative:
 > ☐ Test signup — Jules, by Wednesday.
 >
 > ☐ Brief support — owner and deadline missing. Who will take this, and by when?
-
-Check that the reply appears in the same thread, keeps the two assigned tasks
-and their deadlines, and flags the missing owner and deadline for the support
-briefing. That confirms Tag received your request, ran Codex, and returned a
-result to Slack.
-
-Continue in the same thread:
-
-> @Maya's Tag I'll handle the support briefing on Thursday. Update the checklist.
+>
+> **Maya:** @Maya's Tag I'll handle the support briefing on Thursday. Update the checklist.
 >
 > **Maya's Tag:** Updated the checklist:
 >
@@ -159,6 +161,11 @@ Continue in the same thread:
 > ☐ Brief support — Maya, on Thursday.
 >
 > All three tasks now have an owner and a deadline.
+
+Check that the first reply appears in the same thread, keeps the two assigned
+tasks and their deadlines, and flags the missing owner and deadline for the
+support briefing. That confirms Tag received your request, ran Codex, and
+returned a result to Slack.
 
 The updated checklist should include your follow-up alongside the earlier
 tasks. Tag uses the thread messages as context.

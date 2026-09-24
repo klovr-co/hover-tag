@@ -5,5 +5,9 @@
 __pycache__/
 *.py[cod]
 .DS_Store
+.vscode/
 out/
 .playwright-cli/
+.gstack/
+config.bat
+node_modules

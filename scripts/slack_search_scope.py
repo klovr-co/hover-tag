@@ -34,7 +34,7 @@ except ImportError:  # Direct execution: python3 scripts/slack_search_scope.py
 CHANNEL_ID_RE = re.compile(r"^[CG][A-Z0-9]+$")
 CHANNEL_REF_RE = re.compile(r"(?<![\w])#([\w][\w-]{0,79})", re.IGNORECASE)
 SLACK_CHANNEL_REF_RE = re.compile(
-    r"<#[CG][A-Z0-9]+\|([^>]+)>", re.IGNORECASE
+    r"<#(?P<id>[CG][A-Z0-9]+)(?:\|(?P<name>[^>]+))?>", re.IGNORECASE
 )
 CHANNEL_NAME = r"[\w][\w-]{0,79}"
 NAMED_CHANNELS_RE = (
@@ -157,7 +157,11 @@ def normalize_channel_name(value: str) -> str:
 
 def explicit_channel_names(text: str) -> tuple[str, ...]:
     """Return explicit channel names without mistaking Slack IDs for names."""
-    names = [normalize_channel_name(name) for name in SLACK_CHANNEL_REF_RE.findall(text)]
+    names = [
+        normalize_channel_name(match.group("name"))
+        for match in SLACK_CHANNEL_REF_RE.finditer(text)
+        if match.group("name")
+    ]
     plain_text = SLACK_CHANNEL_REF_RE.sub(" ", text)
     names.extend(normalize_channel_name(name) for name in CHANNEL_REF_RE.findall(plain_text))
     return tuple(dict.fromkeys(name for name in names if name))
@@ -203,11 +207,15 @@ def parse_search_intent(text: str) -> SearchIntent:
 
 def indexed_slack_channels(raw_scopes: str, team_id: str) -> dict[str, IndexedChannel]:
     """Return indexed channel scopes belonging to exactly this Slack workspace."""
-    expected_authority = f"tag-{team_id.casefold()}"
+    # Setup uses Team + App IDs for independent connectors; older installs
+    # retain their Team-only roots. Only consider operator-approved scopes.
+    authority_pattern = re.compile(
+        rf"tag-{re.escape(team_id.casefold())}(?:-a[a-z0-9]+)?"
+    )
     indexed: dict[str, IndexedChannel] = {}
     for scope in parse_scopes(raw_scopes):
         parsed = urlsplit(scope)
-        if parsed.scheme.casefold() != "slack" or parsed.netloc.casefold() != expected_authority:
+        if parsed.scheme.casefold() != "slack" or not authority_pattern.fullmatch(parsed.netloc.casefold()):
             continue
         final_segment = parsed.path.rstrip("/").rsplit("/", 1)[-1]
         _, marker, channel_id = final_segment.rpartition("__")

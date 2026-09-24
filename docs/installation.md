@@ -107,8 +107,8 @@ Each release has its own Python environment with the pinned runtime requirements
 Installation also downloads and validates MFS's default local embedding model
 into its reusable cache, so the first `tag start` does not wait for a cold model
 download. Later installs reuse the cached model.
-The MFS Python server is used directly; installation does not require the
-Unix-only MFS CLI binary. Google Workspace CLI and third-party MCP packages are
+The MFS Python server and matching MFS CLI are installed into Tag's managed
+runtime on macOS and Linux. Google Workspace CLI and third-party MCP packages are
 optional integrations, installed and authenticated separately.
 
 The installer keeps dependency-manager output behind a concise Install screen.
@@ -182,6 +182,13 @@ The installer creates TAG's administration skill there; upgrades preserve
 existing skill directories, including locally installed skills and edits.
 Global backend skills and authentication remain available, subject to the
 backend's own discovery rules and context limits.
+
+Tag releases also bundle the `tag-troubleshoot` skill in the immutable runtime
+so an upgrade makes the recovery handoff available to existing installations.
+It is copied from the release source allowlist; the installer does not overwrite
+user-owned workspace skills. Use it only when a coding agent has access to the
+machine running Tag, and follow its manual contribution and Slack-app deletion
+boundaries.
 
 Put Tag-specific Codex defaults and MCP definitions in
 `~/Tag/NAME/.codex/config.toml`:

@@ -6,11 +6,13 @@ import argparse
 import hashlib
 import json
 import os
+import platform
 import re
 import shlex
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import textwrap
 import urllib.error
@@ -26,6 +28,24 @@ API_RELEASES = "https://api.github.com/repos/klovr-co/hover-tag/releases"
 RELEASE_DOWNLOADS = "https://github.com/klovr-co/hover-tag/releases/download"
 CHANNEL_INDEX_URL = RELEASE_DOWNLOADS + "/channels/tag-release-channels.json"
 CHANNELS = ("stable", "beta", "alpha", "edge")
+MFS_CLI_RELEASES = {
+    ("darwin", "arm64"): (
+        "mfs-cli-aarch64-apple-darwin.tar.xz",
+        "1fd7c9fe38d5f27e72cde3fca8e895c2185eb6113d17d352bc33c1e661e18cfe",
+    ),
+    ("darwin", "x86_64"): (
+        "mfs-cli-x86_64-apple-darwin.tar.xz",
+        "807eeba5c7d35b02123a25bfc244ad8dae3b478d79757d30373d282f234bbd25",
+    ),
+    ("linux", "arm64"): (
+        "mfs-cli-aarch64-unknown-linux-musl.tar.xz",
+        "a6a4cc90dc73118ae6f6b2c0fd779a43057ae1fd88b27e6cc32a3352ac3cc978",
+    ),
+    ("linux", "x86_64"): (
+        "mfs-cli-x86_64-unknown-linux-musl.tar.xz",
+        "2b4721bce6ebcea84d19a33d517d4963932d0696a106555753f145de6e767ae4",
+    ),
+}
 VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta)(?:\.(\d+))?)?$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 ACCENT = "38;2;56;207;241"
@@ -57,6 +77,7 @@ ADMIN_SKILL = (
     "Use `tag upgrade --dry-run --json` to check for updates and `tag upgrade` to apply one. "
     "The operator authorizes Slack and backend logins. Verify a real Slack reply separately.\n"
 )
+BUNDLED_SKILLS = ("tag-troubleshoot",)
 
 
 @dataclass(frozen=True)
@@ -164,6 +185,45 @@ def download(url: str, *, timeout: float = 120) -> bytes:
         ):
             raise RuntimeError("GitHub API rate limit exceeded; try again later") from error
         raise RuntimeError(f"Download failed with HTTP {error.code}: {url}") from error
+
+
+def install_mfs_cli(release: Path, python: Path) -> Path | None:
+    """Install the pinned MFS client beside Tag's managed Python executable."""
+    requirements = (release / "requirements-runtime.txt").read_text(encoding="utf-8")
+    match = re.search(r"(?m)^mfs-server(?:\[[^]]+\])?==([^\s;]+)", requirements)
+    if not match:
+        raise ValueError("requirements-runtime.txt does not pin mfs-server")
+    version = match.group(1)
+    machine = platform.machine().lower()
+    machine = {"aarch64": "arm64", "amd64": "x86_64"}.get(machine, machine)
+    target = MFS_CLI_RELEASES.get((sys.platform, machine))
+    if target is None:
+        # Upstream does not currently publish a native Windows client. Keep the
+        # existing PATH fallback there until an official artifact is available.
+        return None
+    artifact, expected = target
+    url = f"https://github.com/zilliztech/mfs/releases/download/v{version}/{artifact}"
+    archive_data = download(url)
+    actual = hashlib.sha256(archive_data).hexdigest()
+    if actual != expected:
+        raise ValueError(f"MFS CLI checksum mismatch for {artifact}")
+    with tempfile.TemporaryDirectory(prefix="tag-mfs-cli-") as temporary:
+        archive = Path(temporary) / artifact
+        archive.write_bytes(archive_data)
+        with tarfile.open(archive, "r:xz") as bundle:
+            members = [
+                member for member in bundle.getmembers()
+                if member.isfile() and Path(member.name).name == "mfs"
+            ]
+            if len(members) != 1:
+                raise ValueError("MFS CLI archive does not contain exactly one client executable")
+            source = bundle.extractfile(members[0])
+            if source is None:
+                raise ValueError("MFS CLI executable could not be read")
+            destination = python.parent / "mfs"
+            destination.write_bytes(source.read())
+    destination.chmod(0o755)
+    return destination
 
 
 def _json_download(url: str, *, timeout: float = 120) -> Any:
@@ -553,6 +613,14 @@ def install(
         for name in ("scripts", "references", "docs"):
             shutil.copytree(source / name, release / name,
                             ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        for name in BUNDLED_SKILLS:
+            bundled = source / ".agents/skills" / name
+            if bundled.is_dir():
+                shutil.copytree(
+                    bundled,
+                    release / ".agents/skills" / name,
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+                )
         for name in ("VERSION", "LICENSE", "NOTICE", "README.md", "RELEASE.md", "SECURITY.md",
                      ".env.example", "requirements-runtime.txt", "slack-app-manifest.yaml",
                      "tag", "tag.cmd", "install.sh", "install.ps1", "release-channels.json"):
@@ -582,7 +650,10 @@ def install(
                      "-r", str(release / "requirements-runtime.txt")],
                     "Installing Tag dependencies with pip",
                 )
+            mfs_client = install_mfs_cli(release, python)
             row("Runtime", f"Python {sys.version_info.major}.{sys.version_info.minor} · dependencies ready")
+            if mfs_client is not None:
+                row("MFS CLI", f"Bundled {mfs_client.name} in the managed runtime")
             paragraph("Preparing the local memory model…", MUTED, indent="    ")
             install_step(
                 [str(python), str(release / "scripts/preload_mfs_model.py")],

@@ -39,7 +39,9 @@ try:
     import slack_manifest_migrations
     import slack_credentials
     import tag_credentials
+    import tag_telemetry
     import tag_cli as lifecycle
+    from opentag_process_env import without_telemetry_environment
     from tag_mascot import PALETTE as MASCOT_PALETTE, PIXELS as MASCOT_PIXELS
 except ImportError:
     from scripts.tag_paths import (
@@ -56,7 +58,9 @@ except ImportError:
     from scripts import slack_manifest_migrations
     from scripts import slack_credentials
     from scripts import tag_credentials
+    from scripts import tag_telemetry
     from scripts import tag_cli as lifecycle
+    from scripts.opentag_process_env import without_telemetry_environment
     from scripts.tag_mascot import PALETTE as MASCOT_PALETTE, PIXELS as MASCOT_PIXELS
 
 
@@ -1232,6 +1236,11 @@ def check_prerequisites(backend: str) -> bool:
             ok = False
     else:
         ui.message("✓ mfs-server: MFS memory server")
+    if lifecycle.mfs_client_executable() is None:
+        ui.message("✗ mfs: MFS client (reinstall or upgrade Tag)")
+        ok = False
+    else:
+        ui.message("✓ mfs: MFS client")
     return ok
 
 
@@ -1275,6 +1284,7 @@ def write_config(path: Path, values: dict[str, str]) -> None:
 def guided_setup(
     config_path: Path, *, start_services: bool = True,
     review_channels: bool = False, test_mode: bool = False,
+    telemetry_session: tag_telemetry.SetupSession | None = None,
 ) -> int:
     values = settings.load_config(config_path)
     channel_policy = values.get("SLACK_CHANNEL_POLICY", "selected" if values.get("MFS_SLACK_CONNECTOR_CONFIG") else "invited")
@@ -1289,6 +1299,8 @@ def guided_setup(
     if not workspace.is_absolute():
         raise ValueError("OPENTAG_WORKDIR must be an absolute path")
     initialize_workspace(workspace)
+    if telemetry_session:
+        telemetry_session.enter("slack")
     ui.screen(
         1,
         "Let’s connect Tag to Slack.",
@@ -1310,6 +1322,9 @@ def guided_setup(
     backend = values["OPENTAG_BACKEND"]
     if not selected_backend_available(backend):
         return 1
+    if lifecycle.mfs_client_executable() is None:
+        ui.message("The MFS client is missing. Reinstall or upgrade Tag, then resume setup.")
+        return 1
 
     needs_slack_connection = any(
         settings.validation_error(key, values.get(key, ""))
@@ -1322,6 +1337,8 @@ def guided_setup(
             ui.message("Slack authorization is required; run tag setup again when ready.")
             return 1
         values = settings.update_config(config_path, {"SLACK_TEAM_ID": team_id})
+        if telemetry_session:
+            telemetry_session.enter("app")
         app_id = choose_slack_app(home, team_id, config_path, test_mode=test_mode)
         values = settings.update_config(config_path, {"SLACK_APP_ID": app_id})
         values = connect_app_credentials(home, config_path, team_id, app_id)
@@ -1356,6 +1373,8 @@ def guided_setup(
             values = settings.update_config(config_path, {"SLACK_BOT_TOKEN": bot_token})
             break
 
+    if telemetry_session:
+        telemetry_session.enter("app")
     bot_identity = validate_slack_identity(
         values["SLACK_BOT_TOKEN"],
         team_id=values.get("SLACK_TEAM_ID", ""),
@@ -1371,6 +1390,8 @@ def guided_setup(
     if inferred:
         values = settings.update_config(config_path, inferred)
 
+    if telemetry_session:
+        telemetry_session.enter("channels")
     ui.screen(
         3,
         "Where should Tag respond?",
@@ -1447,12 +1468,13 @@ def guided_setup(
             agent = ui.choose("Agent", ["Codex · recommended", "Claude · experimental"], default=int(values["OPENTAG_BACKEND"] == "claude"))
             values = settings.update_config(config_path, {"MFS_SLACK_HISTORY_DAYS": days[day], "OPENTAG_BACKEND": ("codex", "claude")[agent]})
         else:
-            ui.message("Continue will index the selected history and start Tag. No test message is sent." if start_services
-                       else "Continue saves these choices only. No services or indexing will start.")
+            ui.message("Continue saves these choices only. No services or indexing will start.")
             if ui.choose("Approve setup", ["Continue", "Back"], default=1) == 0:
                 if channel_policy == "invited":
                     values = settings.update_config(config_path, {"SLACK_CHANNEL_POLICY": channel_policy})
                 break
+    if telemetry_session:
+        telemetry_session.enter("finish")
     ui.screen(
         4,
         "Finishing setup",
@@ -1544,62 +1566,46 @@ def guided_setup(
     return finish_setup(config_path, values, selected_channels)
 
 
-def finish_setup(config_path: Path, values: dict[str, str], channels: list[slack_channels.SlackChannel]) -> int:
-    """Start approved services, then wait for the Slack bridge to be ready."""
+def finish_setup(_config_path: Path, values: dict[str, str], _channels: list[slack_channels.SlackChannel]) -> int:
+    """Finish configuration without starting services or indexing history."""
     ui.message("✓ Slack memory configured")
-    environment = dict(os.environ, OPENTAG_ENV_FILE=str(config_path))
-    ui.message("◌ Memory · Initializing…")
-    ui.message(
-        "First start can take a couple of minutes. This happens now so "
-        "memory is ready before Tag connects to Slack.",
-        indent="    ",
-    )
-    result = subprocess.run(
-        [sys.executable, str(ROOT / "scripts/tag_cli.py"), "memory", "start"],
-        env=environment,
-        text=True,
-        capture_output=True,
-    )
-    if result.returncode:
-        ui.message(safe_cli_output(result.stdout + "\n" + result.stderr))
-        raise RuntimeError(
-            "Memory could not initialize; run tag memory status for details"
-        )
-    ui.message("✓ Memory ready")
+    if lifecycle.mfs_client_executable() is None:
+        raise RuntimeError("The bundled MFS client is missing; reinstall or upgrade Tag before starting")
+    ui.message("✓ MFS client ready")
     backend = values["OPENTAG_BACKEND"]
     while not selected_backend_available(backend):
         if ui.choose("Agent needs installation", ["Check again", "Save and exit"]) == 1:
             raise ui.Paused()
     if backend == "codex":
-        while subprocess.run([shutil.which("codex") or "codex", "login", "status"], capture_output=True).returncode:
+        backend_environment = without_telemetry_environment(os.environ)
+        while subprocess.run(
+            [shutil.which("codex") or "codex", "login", "status"],
+            capture_output=True,
+            env=backend_environment,
+        ).returncode:
             ui.message("Codex needs sign-in. Your Slack and memory choices are saved.")
             action = ui.choose("Sign in to continue", ["Open Codex sign-in", "Check again", "Save and exit"])
             if action == 2:
                 raise ui.Paused()
             if action == 0:
-                subprocess.run([shutil.which("codex") or "codex", "login"], check=False)
+                subprocess.run(
+                    [shutil.which("codex") or "codex", "login"],
+                    check=False,
+                    env=backend_environment,
+                )
         ui.message("✓ Codex signed in · first task still unverified")
     else:
         ui.message("✓ Claude executable available · sign-in will be checked by its first task")
-    while True:
-        ui.message("◌ Connecting Tag to Slack…")
-        tag_id = os.getenv("TAG_ID", "default")
-        target = [] if tag_id == "default" else [tag_id]
-        result = subprocess.run([sys.executable, str(ROOT / "scripts/tag_cli.py"), *target, "start"], env=environment, text=True, capture_output=True)
-        if result.returncode == 0:
-            print()
-            ui.message("✓ Tag is connected.")
-            ui.message("MFS healthy · Slack connected")
-            ui.message("In any selected channel (" + ", ".join(f"#{c.name}" for c in channels) + "), send:")
-            print()
-            ui.message(f"@{values.get('OPENTAG_BOT_NAME', 'Tag')} say hello", indent="    ")
-            print()
-            ui.message("First reply: not verified yet. Observe the reply in Slack.")
-            return 0
-        ui.message(safe_cli_output(result.stdout + "\n" + result.stderr))
-        ui.message("Startup needs attention. Your completed setup is saved.")
-        if ui.choose("After addressing the error", ["Check again", "Save and exit"]) == 1:
-            raise ui.Paused()
+    print()
+    ui.message("✓ Setup complete. No services were started and no history was indexed.")
+    tag_id = os.getenv("TAG_ID", "default")
+    command = "tag start" if tag_id == "default" else f"tag {shlex.quote(tag_id)} start"
+    ui.display.next_action(
+        "Next step · start Tag",
+        command,
+        detail="Tag is still stopped. Run this command to connect Slack and make Tag available.",
+    )
+    return 0
 
 
 def completed_setup_status(config_path: Path) -> int | None:
@@ -1628,7 +1634,7 @@ def completed_setup_status(config_path: Path) -> int | None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Set up Tag or resume missing configuration.")
     parser.add_argument("--config", type=Path, default=instance_home() / "config/settings.json", help="configuration file to create")
-    parser.add_argument("--no-start", action="store_true", help="save setup choices without starting services or indexing history")
+    parser.add_argument("--no-start", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--review", action="store_true", help="review completed setup choices")
     parser.add_argument("--test-mode", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--review-channels", action="store_true", help=argparse.SUPPRESS)
@@ -1638,6 +1644,7 @@ def main() -> int:
     if not sys.stdin.isatty():
         print("Use a terminal for setup, or tag inspect --json and tag config set for automation.", file=sys.stderr)
         return 2
+    telemetry_session: tag_telemetry.SetupSession | None = None
     try:
         os.environ["OPENTAG_ENV_FILE"] = str(config_path)
         if not args.review:
@@ -1647,26 +1654,44 @@ def main() -> int:
         progress = config_path.with_name("setup-progress.json")
         settings.save_config(progress, {"completed": False})
         setup_options = {
+            # This selects the full readiness path; finish_setup deliberately
+            # leaves service startup to the separate `tag start` command.
             "start_services": not args.no_start,
             "review_channels": args.review_channels,
         }
         if args.test_mode:
             setup_options["test_mode"] = True
+        telemetry_session = tag_telemetry.SetupSession(
+            tag_home(), "test" if args.test_mode else "setup"
+        )
+        telemetry_session.start()
+        setup_options["telemetry_session"] = telemetry_session
         result = guided_setup(config_path, **setup_options)
         if result == 0:
-            settings.save_config(progress, {"completed": True, "services_requested": not args.no_start})
+            backend = settings.load_config(config_path).get("OPENTAG_BACKEND", "")
+            telemetry_session.complete(backend)
+        else:
+            telemetry_session.abandon()
+        if result == 0:
+            settings.save_config(progress, {"completed": True, "services_requested": False})
         if result == 0 and args.completion_file:
             settings.save_config(args.completion_file, {"approved": True})
         return result
     except ui.Paused:
+        if telemetry_session:
+            telemetry_session.abandon()
         print()
         ui.message("Setup is incomplete. Progress saved; run tag setup to continue.")
         return 0
     except (KeyboardInterrupt, EOFError):
+        if telemetry_session:
+            telemetry_session.abandon()
         print()
         ui.message("Setup paused. Saved answers are kept; run tag setup to continue.")
         return 130
     except (OSError, ValueError, RuntimeError) as exc:
+        if telemetry_session:
+            telemetry_session.abandon()
         print(f"Setup could not continue: {exc}", file=sys.stderr)
         return 1
 

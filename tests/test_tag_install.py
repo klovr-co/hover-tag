@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 import urllib.error
@@ -21,12 +22,14 @@ from scripts.tag_install import (
     CHANNEL_INDEX_URL,
     FetchedRelease,
     LEGACY_ADMIN_SKILL,
+    MFS_CLI_RELEASES,
     ReleaseSelection,
     _default_channel,
     command_owner,
     download,
     fetch_release,
     install,
+    install_mfs_cli,
     resolve_channel,
     resolve_version,
     unpack_release,
@@ -66,6 +69,42 @@ def release_record(version: str, *, prerelease: bool, names: list[str] | None = 
             for name in names
         ],
     }
+
+
+class MfsClientBundleTests(unittest.TestCase):
+    def test_installs_pinned_client_beside_managed_python(self) -> None:
+        payload = b"mfs-client-fixture"
+        archive_file = io.BytesIO()
+        with tarfile.open(fileobj=archive_file, mode="w:xz") as bundle:
+            info = tarfile.TarInfo("mfs-cli/mfs")
+            info.size = len(payload)
+            info.mode = 0o755
+            bundle.addfile(info, io.BytesIO(payload))
+        archive = archive_file.getvalue()
+        digest = hashlib.sha256(archive).hexdigest()
+
+        with tempfile.TemporaryDirectory() as temporary:
+            release = Path(temporary) / "release"
+            python = release / ".venv/bin/python"
+            python.parent.mkdir(parents=True)
+            (release / "requirements-runtime.txt").write_text(
+                "mfs-server[slack]==0.4.6\n", encoding="utf-8"
+            )
+            with patch.dict(
+                MFS_CLI_RELEASES,
+                {("darwin", "arm64"): ("fixture.tar.xz", digest)},
+                clear=True,
+            ), patch("scripts.tag_install.sys.platform", "darwin"), patch(
+                "scripts.tag_install.platform.machine", return_value="arm64"
+            ), patch("scripts.tag_install.download", return_value=archive) as fetched:
+                installed = install_mfs_cli(release, python)
+
+            self.assertEqual(installed, release / ".venv/bin/mfs")
+            self.assertEqual(installed.read_bytes(), payload)
+            self.assertTrue(installed.stat().st_mode & 0o100)
+            fetched.assert_called_once_with(
+                "https://github.com/zilliztech/mfs/releases/download/v0.4.6/fixture.tar.xz"
+            )
 
 
 class ReleaseResolutionTests(unittest.TestCase):
@@ -555,6 +594,8 @@ class TagHomeTests(unittest.TestCase):
             root = Path(temp)
             home, bin_dir = root / "home", root / "bin"
             first = install(ROOT, home, bin_dir, dependencies=False)
+            bundled_skill = first / ".agents/skills/tag-troubleshoot/SKILL.md"
+            self.assertTrue(bundled_skill.is_file())
             default = home / "instances/default"
             admin = default / "workspace/.agents/skills/open-tag-admin/SKILL.md"
             self.assertFalse(admin.exists())
@@ -999,6 +1040,57 @@ class TagHomeTests(unittest.TestCase):
         self.assertTrue(result["restarted"])
         self.assertFalse(result["restart_required"])
 
+    def test_upgrade_discovers_instances_and_restarts_only_running_tags(self):
+        for no_restart in (False, True):
+            with self.subTest(no_restart=no_restart), tempfile.TemporaryDirectory() as temp:
+                home = Path(temp)
+                default = tag_instances.ensure_default(home)
+                work = tag_instances.create(home, "work")
+                tag_instances.create(home, "stopped")
+                (home / "current.json").write_text(json.dumps({
+                    "installed_version": "0.2.0-beta.1", "installed_commit": "a" * 40,
+                    "channel": "beta", "selection": "channel",
+                }))
+                running_paths = {default.home / "state/slack.json", work.home / "state/slack.json"}
+                target = FetchedRelease(ROOT, ReleaseSelection("beta", "0.2.0-beta.2", "b" * 40))
+                output = io.StringIO()
+                with patch("scripts.tag_install.fetch_release", return_value=target), patch(
+                    "scripts.tag_install.install"
+                ), patch("scripts.tag_cli.process_for", side_effect=lambda path: object() if path in running_paths else None), patch(
+                    "scripts.tag_cli.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", "")
+                ) as run, contextlib.redirect_stdout(output):
+                    upgrade_command(home, json_output=True, dependencies=False, no_restart=no_restart)
+                result = json.loads(output.getvalue())
+                self.assertEqual(["default", "work"], result["running_tags"])
+                self.assertEqual(no_restart, result["restart_required"])
+                commands = [call.args[0] for call in run.call_args_list]
+                if no_restart:
+                    self.assertEqual([], commands)
+                else:
+                    self.assertEqual(2, len(commands))
+                    self.assertEqual("restart", commands[0][-1])
+                    self.assertEqual(["work", "restart"], commands[1][-2:])
+
+    def test_upgrade_continues_restarting_other_tags_after_one_failure(self):
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            tag_instances.ensure_default(home)
+            tag_instances.create(home, "work")
+            (home / "current.json").write_text(json.dumps({
+                "installed_version": "0.2.0-beta.1", "installed_commit": "a" * 40,
+                "channel": "beta", "selection": "channel",
+            }))
+            target = FetchedRelease(ROOT, ReleaseSelection("beta", "0.2.0-beta.2", "b" * 40))
+            with patch("scripts.tag_install.fetch_release", return_value=target), patch(
+                "scripts.tag_install.install"
+            ), patch("scripts.tag_cli.bridge_processes", return_value=["default", "work"]), patch(
+                "scripts.tag_cli.process_for", return_value=None
+            ), patch("scripts.tag_cli.subprocess.run", side_effect=[
+                subprocess.CompletedProcess([], 1, "", ""), subprocess.CompletedProcess([], 0, "", ""),
+            ]) as run, self.assertRaisesRegex(RuntimeError, "default"):
+                upgrade_command(home, json_output=True, dependencies=False)
+            self.assertEqual(2, run.call_count)
+
     def test_upgrade_blocks_older_exact_version_without_opt_in(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -1151,7 +1243,10 @@ class TagHomeTests(unittest.TestCase):
         ), patch(
             "scripts.tag_install.subprocess.run",
             return_value=subprocess.CompletedProcess([], 0, "", ""),
-        ) as run:
+        ) as run, patch(
+            "scripts.tag_install.install_mfs_cli",
+            return_value=Path(temp) / "home/releases/release/.venv/bin/mfs",
+        ):
             install(ROOT, Path(temp) / "home", Path(temp) / "bin")
 
         commands = [call.args[0] for call in run.call_args_list]
