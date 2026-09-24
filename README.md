@@ -8,10 +8,9 @@
 
 <h1 align="center">Tag</h1>
 <p align="center">by <a href="https://www.hover.team/">Hover</a></p>
-<p align="center"><strong>Your personal assistant, in Slack.</strong></p>
+<p align="center"><strong>A +1 for everyone.</strong></p>
 <p align="center">
-  Turn a team conversation into a checklist, a reviewed PR, or a finished file.<br />
-  Bring your own agent. Keep the work in the thread.
+  Everyone brings their own Tag. The work stays together in Slack.
 </p>
 <p align="center">
   <a href="https://www.hover.team/tag/">Meet Tag</a> ·
@@ -23,11 +22,16 @@
 
 [![Tag brings personal assistants into your team's Slack conversations](assets/branding/tag-social-preview.png)](https://www.hover.team/tag/)
 
+<p align="center">
+  <img src="assets/branding/tag-plus-one.png" alt="A person paired with their own Tag element" />
+</p>
+
 ## Work already happens in Slack
 
 The context is already there: a question, a few links, a decision buried in a
-thread. Tag brings your personal Codex assistant into that conversation to do
-the work and reply where everyone can follow along.
+thread. Everyone can bring their own Tag into the same conversation. Each Tag
+works from its owner’s agent, files, skills, and connected accounts; the team
+shares the thread, the decisions, and the results.
 
 - **Turn discussion into action.** Pull together decisions, owners, and deadlines;
   save a checklist or draft a document in your working folder.
