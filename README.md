@@ -10,7 +10,7 @@
 <p align="center">by <a href="https://www.hover.team/">Hover</a></p>
 <p align="center"><strong>Your personal assistant, in Slack.</strong></p>
 <p align="center">
-  Bring your own Tag to the conversation. Work through it together.
+  Powered by your Codex setup · Runs on a computer you control
 </p>
 <p align="center"><strong>Everyone brings their own Tag. Everyone works in the same conversation.</strong></p>
 <p align="center">
@@ -32,12 +32,17 @@ follow how you got there.
   save a checklist or draft a document in your working folder.
 - **Bring the missing context.** Find earlier discussions in approved, indexed
   Slack history, or use connected tools to find an email or inspect a repository.
-- **Make it yours.** Tag runs on your computer with your agent, files, skills,
-  and connected accounts. Your teammates can see the results in Slack.
+- **Make it yours.** Tag runs on a computer you control using your Codex setup,
+  files, skills, and connected accounts. Your teammates can see the results in
+  Slack.
 
 Your Tag runs from your own agent environment, and only you can invoke it by
 default. Teammates can bring their own Tag with their own setup. You share the
 conversation and results; each assistant stays personal.
+
+Hover does not host your conversations or working files. Codex and connected
+services still process the information needed for your requests under their own
+data policies.
 [Learn how personal access works →](https://www.hover.team/tag/access/)
 
 ## Bring your Tag to work
