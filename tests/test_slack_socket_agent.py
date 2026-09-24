@@ -131,13 +131,119 @@ class SlackBinaryAttachmentTests(unittest.TestCase):
             thread_text = slack_socket_agent.build_thread_text(
                 client, "C123", "1.23", Path(raw_dir)
             )
-            downloaded = Path(raw_dir) / "tag-feature-catalog.zip"
+            downloaded = Path(raw_dir) / "tag-feature-catalog-FZIP.zip"
 
             self.assertEqual(b"PK\x03\x04archive", downloaded.read_bytes())
             self.assertIn(
-                f"[Slack file attachment: tag-feature-catalog.zip (application/zip) at {downloaded}]",
+                f"[Slack file attachment: tag-feature-catalog-FZIP.zip (application/zip) at {downloaded}]",
                 thread_text,
             )
+
+    def test_downloads_files_nested_in_a_forwarded_message(self) -> None:
+        messages = [{
+            "user": "UOWNER",
+            "text": "<@BOT> use the attachments in this context",
+            "attachments": [{
+                "is_msg_unfurl": True,
+                "author_name": "Xian Jun",
+                "text": "Here are the documents you need for the project.",
+                "files": [
+                    {
+                        "id": "FPDF",
+                        "name": "partnership-agreement.pdf",
+                        "mimetype": "application/pdf",
+                        "url_private_download": "https://files.slack.com/FPDF",
+                    },
+                    {
+                        "id": "FXLSX",
+                        "name": "developer-qa-report.xlsx",
+                        "mimetype": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        "url_private_download": "https://files.slack.com/FXLSX",
+                    },
+                ],
+            }],
+        }]
+        client = MagicMock()
+        client.conversations_replies.return_value = {"messages": messages}
+        with tempfile.TemporaryDirectory() as raw_dir, patch(
+            "scripts.slack_socket_agent.download_file_bytes",
+            side_effect=[b"%PDF-agreement", b"PK\x03\x04spreadsheet"],
+        ) as download, patch.dict(
+            os.environ, {"SLACK_BOT_TOKEN": "xoxb-test"}, clear=False
+        ):
+            thread_text = slack_socket_agent.build_thread_text(
+                client, "C123", "1.23", Path(raw_dir)
+            )
+            attachment_dir = Path(raw_dir)
+
+            self.assertEqual(
+                b"%PDF-agreement",
+                (attachment_dir / "partnership-agreement-FPDF.pdf").read_bytes(),
+            )
+            self.assertEqual(
+                b"PK\x03\x04spreadsheet",
+                (attachment_dir / "developer-qa-report-FXLSX.xlsx").read_bytes(),
+            )
+            self.assertIn("Body: Here are the documents you need for the project.", thread_text)
+            self.assertIn("[Slack file attachment: partnership-agreement-FPDF.pdf", thread_text)
+            self.assertIn("[Slack file attachment: developer-qa-report-FXLSX.xlsx", thread_text)
+            self.assertEqual(2, download.call_count)
+
+    def test_same_named_binary_files_use_distinct_stored_names(self) -> None:
+        messages = [{"files": [
+            {
+                "id": "FONE",
+                "name": "report.pdf",
+                "mimetype": "application/pdf",
+                "url_private": "https://files.slack.com/FONE",
+            },
+            {
+                "id": "FTWO",
+                "name": "report.pdf",
+                "mimetype": "application/pdf",
+                "url_private": "https://files.slack.com/FTWO",
+            },
+        ]}]
+        with tempfile.TemporaryDirectory() as raw_dir, patch(
+            "scripts.slack_socket_agent.download_file_bytes",
+            side_effect=[b"first", b"second"],
+        ), patch.dict(os.environ, {"SLACK_BOT_TOKEN": "xoxb-test"}, clear=False):
+            directory = Path(raw_dir)
+            lines = slack_socket_agent.download_thread_binary_files(
+                messages, directory
+            )
+
+            self.assertEqual((directory / "report-FONE.pdf").read_bytes(), b"first")
+            self.assertEqual((directory / "report-FTWO.pdf").read_bytes(), b"second")
+            self.assertIn("report-FONE.pdf", lines[0])
+            self.assertIn("report-FTWO.pdf", lines[1])
+
+    def test_same_named_images_use_distinct_stored_names(self) -> None:
+        messages = [{"files": [
+            {
+                "id": "FONE",
+                "name": "diagram.png",
+                "mimetype": "image/png",
+                "url_private": "https://files.slack.com/FONE",
+            },
+            {
+                "id": "FTWO",
+                "name": "diagram.png",
+                "mimetype": "image/png",
+                "url_private": "https://files.slack.com/FTWO",
+            },
+        ]}]
+        with tempfile.TemporaryDirectory() as raw_dir, patch(
+            "scripts.slack_socket_agent.download_file_bytes",
+            side_effect=[b"first", b"second"],
+        ), patch.dict(os.environ, {"SLACK_BOT_TOKEN": "xoxb-test"}, clear=False):
+            directory = Path(raw_dir)
+            lines = slack_socket_agent.download_thread_images(messages, directory)
+
+            self.assertEqual((directory / "diagram-FONE.png").read_bytes(), b"first")
+            self.assertEqual((directory / "diagram-FTWO.png").read_bytes(), b"second")
+            self.assertIn("diagram-FONE.png", lines[0])
+            self.assertIn("diagram-FTWO.png", lines[1])
 
     def test_streamed_bytes_over_limit_are_rejected_instead_of_becoming_prompt_text(self) -> None:
         messages = [{"files": [{
@@ -156,7 +262,7 @@ class SlackBinaryAttachmentTests(unittest.TestCase):
         ), patch.dict(os.environ, {"SLACK_BOT_TOKEN": "xoxb-test"}, clear=False):
             with self.assertRaisesRegex(
                 slack_socket_agent.AttachmentLimitError,
-                "example.zip.*15 MB attachment limit",
+                "example-FZIP.zip.*15 MB attachment limit",
             ):
                 slack_socket_agent.build_thread_text(
                     client, "C123", "1.23", Path(raw_dir)
