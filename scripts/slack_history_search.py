@@ -62,18 +62,21 @@ def requested_channel_names(raw_grant: str) -> tuple[str, ...]:
     request_text = payload.get("request_text") if isinstance(payload, dict) else None
     if not isinstance(request_text, str):
         return ()
+    channels = authorized_channels(raw_grant)
     authorized_by_id = {
-        channel["id"].casefold(): normalize_channel_name(channel["name"])
-        for channel in authorized_channels(raw_grant)
+        channel["id"]: normalize_channel_name(channel["name"])
+        for channel in channels
     }
     authorized_names = set(authorized_by_id.values())
-    names = [
-        authorized_by_id.get(
-            match.group("id").casefold(),
-            normalize_channel_name(match.group("id")),
-        )
-        for match in SLACK_CHANNEL_REF_RE.finditer(request_text)
-    ]
+    names: list[str] = []
+    for match in SLACK_CHANNEL_REF_RE.finditer(request_text):
+        channel_id = match.group("id")
+        if channel_id not in authorized_by_id:
+            raise ValueError(
+                "A Slack channel reference is not authorized and indexed. "
+                "Ask the user to confirm the channel names before searching."
+            )
+        names.append(authorized_by_id[channel_id])
     plain_text = SLACK_CHANNEL_REF_RE.sub(" ", request_text)
     names.extend(
         name
