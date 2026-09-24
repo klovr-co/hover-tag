@@ -15,6 +15,7 @@ except ModuleNotFoundError:
     raise unittest.SkipTest("slack_bolt is installed by the Slack bridge runtime")
 
 from scripts import slack_socket_agent
+from scripts.tag_error_reporting import ErrorReportStore, ReportOrigin, make_error_report
 
 
 class FakeApp:
@@ -130,13 +131,119 @@ class SlackBinaryAttachmentTests(unittest.TestCase):
             thread_text = slack_socket_agent.build_thread_text(
                 client, "C123", "1.23", Path(raw_dir)
             )
-            downloaded = Path(raw_dir) / "tag-feature-catalog.zip"
+            downloaded = Path(raw_dir) / "tag-feature-catalog-FZIP.zip"
 
             self.assertEqual(b"PK\x03\x04archive", downloaded.read_bytes())
             self.assertIn(
-                f"[Slack file attachment: tag-feature-catalog.zip (application/zip) at {downloaded}]",
+                f"[Slack file attachment: tag-feature-catalog-FZIP.zip (application/zip) at {downloaded}]",
                 thread_text,
             )
+
+    def test_downloads_files_nested_in_a_forwarded_message(self) -> None:
+        messages = [{
+            "user": "UOWNER",
+            "text": "<@BOT> use the attachments in this context",
+            "attachments": [{
+                "is_msg_unfurl": True,
+                "author_name": "Xian Jun",
+                "text": "Here are the documents you need for the project.",
+                "files": [
+                    {
+                        "id": "FPDF",
+                        "name": "partnership-agreement.pdf",
+                        "mimetype": "application/pdf",
+                        "url_private_download": "https://files.slack.com/FPDF",
+                    },
+                    {
+                        "id": "FXLSX",
+                        "name": "developer-qa-report.xlsx",
+                        "mimetype": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        "url_private_download": "https://files.slack.com/FXLSX",
+                    },
+                ],
+            }],
+        }]
+        client = MagicMock()
+        client.conversations_replies.return_value = {"messages": messages}
+        with tempfile.TemporaryDirectory() as raw_dir, patch(
+            "scripts.slack_socket_agent.download_file_bytes",
+            side_effect=[b"%PDF-agreement", b"PK\x03\x04spreadsheet"],
+        ) as download, patch.dict(
+            os.environ, {"SLACK_BOT_TOKEN": "xoxb-test"}, clear=False
+        ):
+            thread_text = slack_socket_agent.build_thread_text(
+                client, "C123", "1.23", Path(raw_dir)
+            )
+            attachment_dir = Path(raw_dir)
+
+            self.assertEqual(
+                b"%PDF-agreement",
+                (attachment_dir / "partnership-agreement-FPDF.pdf").read_bytes(),
+            )
+            self.assertEqual(
+                b"PK\x03\x04spreadsheet",
+                (attachment_dir / "developer-qa-report-FXLSX.xlsx").read_bytes(),
+            )
+            self.assertIn("Body: Here are the documents you need for the project.", thread_text)
+            self.assertIn("[Slack file attachment: partnership-agreement-FPDF.pdf", thread_text)
+            self.assertIn("[Slack file attachment: developer-qa-report-FXLSX.xlsx", thread_text)
+            self.assertEqual(2, download.call_count)
+
+    def test_same_named_binary_files_use_distinct_stored_names(self) -> None:
+        messages = [{"files": [
+            {
+                "id": "FONE",
+                "name": "report.pdf",
+                "mimetype": "application/pdf",
+                "url_private": "https://files.slack.com/FONE",
+            },
+            {
+                "id": "FTWO",
+                "name": "report.pdf",
+                "mimetype": "application/pdf",
+                "url_private": "https://files.slack.com/FTWO",
+            },
+        ]}]
+        with tempfile.TemporaryDirectory() as raw_dir, patch(
+            "scripts.slack_socket_agent.download_file_bytes",
+            side_effect=[b"first", b"second"],
+        ), patch.dict(os.environ, {"SLACK_BOT_TOKEN": "xoxb-test"}, clear=False):
+            directory = Path(raw_dir)
+            lines = slack_socket_agent.download_thread_binary_files(
+                messages, directory
+            )
+
+            self.assertEqual((directory / "report-FONE.pdf").read_bytes(), b"first")
+            self.assertEqual((directory / "report-FTWO.pdf").read_bytes(), b"second")
+            self.assertIn("report-FONE.pdf", lines[0])
+            self.assertIn("report-FTWO.pdf", lines[1])
+
+    def test_same_named_images_use_distinct_stored_names(self) -> None:
+        messages = [{"files": [
+            {
+                "id": "FONE",
+                "name": "diagram.png",
+                "mimetype": "image/png",
+                "url_private": "https://files.slack.com/FONE",
+            },
+            {
+                "id": "FTWO",
+                "name": "diagram.png",
+                "mimetype": "image/png",
+                "url_private": "https://files.slack.com/FTWO",
+            },
+        ]}]
+        with tempfile.TemporaryDirectory() as raw_dir, patch(
+            "scripts.slack_socket_agent.download_file_bytes",
+            side_effect=[b"first", b"second"],
+        ), patch.dict(os.environ, {"SLACK_BOT_TOKEN": "xoxb-test"}, clear=False):
+            directory = Path(raw_dir)
+            lines = slack_socket_agent.download_thread_images(messages, directory)
+
+            self.assertEqual((directory / "diagram-FONE.png").read_bytes(), b"first")
+            self.assertEqual((directory / "diagram-FTWO.png").read_bytes(), b"second")
+            self.assertIn("diagram-FONE.png", lines[0])
+            self.assertIn("diagram-FTWO.png", lines[1])
 
     def test_streamed_bytes_over_limit_are_rejected_instead_of_becoming_prompt_text(self) -> None:
         messages = [{"files": [{
@@ -155,7 +262,7 @@ class SlackBinaryAttachmentTests(unittest.TestCase):
         ), patch.dict(os.environ, {"SLACK_BOT_TOKEN": "xoxb-test"}, clear=False):
             with self.assertRaisesRegex(
                 slack_socket_agent.AttachmentLimitError,
-                "example.zip.*15 MB attachment limit",
+                "example-FZIP.zip.*15 MB attachment limit",
             ):
                 slack_socket_agent.build_thread_text(
                     client, "C123", "1.23", Path(raw_dir)
@@ -1038,6 +1145,215 @@ class SlackFailureReplyTests(unittest.TestCase):
         self.assertNotIn("secret backend detail", reply)
         self.assertIn("ABC12345", reply)
         self.assertIn("Please retry", reply)
+
+    def test_failure_actions_keep_report_content_out_of_slack_metadata(self) -> None:
+        blocks = slack_socket_agent.failure_action_blocks(
+            team="T1",
+            channel="C1",
+            thread_ts="1.0",
+            request_ts="1.1",
+            error_reference="ABC12345",
+        )
+        actions = blocks[0]["elements"]
+
+        self.assertEqual(
+            [
+                slack_socket_agent.RETRY_ACTION_ID,
+                slack_socket_agent.FIX_WITH_AGENT_ACTION_ID,
+                slack_socket_agent.REPORT_ISSUE_ACTION_ID,
+            ],
+            [action["action_id"] for action in actions],
+        )
+        self.assertEqual({"reference": "ABC12345"}, json.loads(actions[1]["value"]))
+        self.assertEqual({"reference": "ABC12345"}, json.loads(actions[2]["value"]))
+
+    def test_report_modal_uses_selectable_text_and_manual_community_link(self) -> None:
+        report = make_error_report(
+            "ABC12345",
+            "authentication failed: token=xoxb-secret",
+            backend="codex",
+            origin=ReportOrigin(channel_id="C1", requester_id="UOWNER"),
+        )
+        modal = slack_socket_agent.report_preview_modal(
+            report,
+            mode="report",
+            private_metadata={"reference": "ABC12345"},
+        )
+
+        report_input = next(block for block in modal["blocks"] if block.get("block_id") == "tag_report_text")
+        join_block = next(block for block in modal["blocks"] if block["type"] == "actions")
+        self.assertEqual("plain_text_input", report_input["element"]["type"])
+        self.assertIn("Select the text to copy it", report_input["hint"]["text"])
+        self.assertEqual(
+            slack_socket_agent.COMMUNITY_INVITE_URL,
+            join_block["elements"][0]["url"],
+        )
+        self.assertNotIn("xoxb-secret", report_input["element"]["initial_value"])
+
+    def test_report_action_requires_the_original_caller(self) -> None:
+        fake_app = FakeApp()
+        client = MagicMock()
+        logger = MagicMock()
+        with tempfile.TemporaryDirectory() as raw_dir:
+            store = ErrorReportStore(Path(raw_dir))
+            store.save(
+                make_error_report(
+                    "ABC12345",
+                    "backend failed",
+                    backend="claude",
+                    origin=ReportOrigin(
+                        team_id="T1",
+                        channel_id="C1",
+                        thread_ts="1.0",
+                        request_ts="1.1",
+                        requester_id="UOWNER",
+                    ),
+                )
+            )
+            with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+                os.environ,
+                {"SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_IDS": "C1"},
+                clear=True,
+            ):
+                slack_socket_agent.create_app(
+                    "claude",
+                    30,
+                    frozenset({"UOWNER", "UOTHER"}),
+                    report_store=store,
+                )
+                handler = fake_app.actions[slack_socket_agent.REPORT_ISSUE_ACTION_ID]
+                body = {
+                    "user": {"id": "UOTHER"},
+                    "team": {"id": "T1"},
+                    "channel": {"id": "C1"},
+                    "trigger_id": "trigger",
+                    "actions": [{"value": json.dumps({"reference": "ABC12345"})}],
+                }
+                handler(MagicMock(), body, client, logger)
+                client.views_open.assert_not_called()
+
+                body["user"] = {"id": "UOWNER"}
+                handler(MagicMock(), body, client, logger)
+
+        client.views_open.assert_called_once()
+        self.assertEqual(
+            slack_socket_agent.REPORT_VIEW_ID,
+            client.views_open.call_args.kwargs["view"]["callback_id"],
+        )
+
+    def test_report_submission_keeps_sanitized_user_context_in_preview(self) -> None:
+        fake_app = FakeApp()
+        client = MagicMock()
+        logger = MagicMock()
+        with tempfile.TemporaryDirectory() as raw_dir:
+            store = ErrorReportStore(Path(raw_dir))
+            store.save(
+                make_error_report(
+                    "ABC12345",
+                    "backend failed",
+                    backend="claude",
+                    origin=ReportOrigin(channel_id="C1", requester_id="UOWNER"),
+                )
+            )
+            with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+                os.environ,
+                {"SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_IDS": "C1"},
+                clear=True,
+            ):
+                slack_socket_agent.create_app(
+                    "claude",
+                    30,
+                    frozenset({"UOWNER"}),
+                    report_store=store,
+                )
+                handler = fake_app.views[slack_socket_agent.REPORT_VIEW_ID]
+                ack = MagicMock()
+                handler(
+                    ack,
+                    {
+                        "user": {"id": "UOWNER"},
+                        "view": {
+                            "private_metadata": json.dumps({"reference": "ABC12345"}),
+                            "state": {
+                                "values": {
+                                    "tag_report_text": {
+                                        "report_text": {"value": "Reviewed report"}
+                                    },
+                                    "tag_user_context": {
+                                        "user_context": {"value": "Summarize token=xoxb-secret"}
+                                    },
+                                }
+                            },
+                        },
+                    },
+                    client,
+                    logger,
+                )
+
+        ack.assert_called_once_with()
+        preview = client.chat_postEphemeral.call_args.kwargs["text"]
+        self.assertIn("Reviewed report", preview)
+        self.assertIn("User-provided context:", preview)
+        self.assertIn("Summarize token=<redacted>", preview)
+        self.assertNotIn("xoxb-secret", preview)
+
+    def test_troubleshooting_submission_regenerates_a_truncated_initial_value(self) -> None:
+        fake_app = FakeApp()
+        client = MagicMock()
+        logger = MagicMock()
+        report = make_error_report(
+            "ABC12345",
+            "backend failed",
+            backend="codex",
+            error_events=tuple(f"event {index}: " + "x" * 220 for index in range(5)),
+            origin=ReportOrigin(channel_id="C1", requester_id="UOWNER"),
+        )
+        with tempfile.TemporaryDirectory() as raw_dir:
+            store = ErrorReportStore(Path(raw_dir))
+            store.save(report)
+            with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+                os.environ,
+                {"SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_IDS": "C1"},
+                clear=True,
+            ), patch.object(slack_socket_agent, "troubleshooting_skill_available", return_value=False):
+                slack_socket_agent.create_app(
+                    "codex",
+                    30,
+                    frozenset({"UOWNER"}),
+                    report_store=store,
+                )
+                handler = fake_app.views[slack_socket_agent.TROUBLESHOOT_VIEW_ID]
+                original = slack_socket_agent.build_troubleshooting_prompt(
+                    report,
+                    skill_available=False,
+                )
+                self.assertGreater(len(original), 2_900)
+                ack = MagicMock()
+                handler(
+                    ack,
+                    {
+                        "user": {"id": "UOWNER"},
+                        "view": {
+                            "private_metadata": json.dumps({"reference": "ABC12345"}),
+                            "state": {
+                                "values": {
+                                    "tag_report_text": {
+                                        "troubleshooting_prompt": {
+                                            "value": slack_socket_agent._modal_text(original),
+                                        }
+                                    }
+                                }
+                            },
+                        },
+                    },
+                    client,
+                    logger,
+                )
+
+        ack.assert_called_once_with()
+        preview = client.chat_postEphemeral.call_args.kwargs["text"]
+        self.assertIn(original, preview)
+        self.assertNotIn("[Text truncated; use the report reference to request it again]", preview)
 
     def test_retry_button_contains_only_request_identity(self) -> None:
         blocks = slack_socket_agent.retry_button_blocks(

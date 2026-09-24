@@ -26,13 +26,14 @@ from pathlib import Path
 try:
     from tag_paths import initialize_instance, initialize_workspace, runtime_environment, tag_home
     import tag_instances
+    import tag_telemetry
     from tag_locks import LifecycleLock
     from tag_config import read_config
     import tag_credentials
     import tag_display as display
 except ImportError:
     from scripts.tag_paths import initialize_instance, initialize_workspace, runtime_environment, tag_home
-    from scripts import tag_instances
+    from scripts import tag_instances, tag_telemetry
     from scripts.tag_locks import LifecycleLock
     from scripts.tag_config import read_config
     from scripts import tag_credentials
@@ -211,6 +212,10 @@ def start_process(
     cwd: Path | None = None,
 ) -> bool:
     import psutil
+    try:
+        from opentag_process_env import without_telemetry_environment
+    except ImportError:
+        from scripts.opentag_process_env import without_telemetry_environment
     state = state_dir or home / "state"
     state.mkdir(parents=True, exist_ok=True, mode=0o700)
     record = state / f"{name}.json"
@@ -221,8 +226,10 @@ def start_process(
         process_cwd = cwd or Path((environment or os.environ).get("OPENTAG_WORKDIR", str(home / "workspace")))
         if cwd is None:
             process_cwd.mkdir(parents=True, exist_ok=True, mode=0o700)
+        child_environment = without_telemetry_environment(environment or os.environ)
         child = subprocess.Popen(command, cwd=process_cwd, stdin=subprocess.DEVNULL,
-                                 stdout=log, stderr=subprocess.STDOUT, env=environment, **options)
+                                 stdout=log, stderr=subprocess.STDOUT,
+                                 env=child_environment, **options)
     process = psutil.Process(child.pid)
     marker_source = command[1] if len(command) > 1 and command[1].endswith(".py") else command[0]
     identity = {"pid": child.pid, "created": process.create_time(),
@@ -1498,10 +1505,19 @@ def upgrade_command(
     return 0
 
 
-def main() -> int:
+def _run_cli() -> int:
     parser = argparse.ArgumentParser(description="Tag: set up, inspect, and manage your Slack teammate.",
                                      usage="tag [TAG] [COMMAND] [OPTIONS]",
-                                     epilog="Use tag for default status, or tag NAME status for a named Tag. Start with tag setup; change configuration with tag settings.")
+                                     epilog=(
+                                         "Use tag for default status, or tag NAME status for a named Tag. "
+                                         "Start with tag setup; change configuration with tag settings.\n\n"
+                                         "Telemetry: Tag can collect minimal anonymous CLI usage without prompts, "
+                                         "Slack messages, agent output, paths, logs, credentials, or configuration "
+                                         "values. Use 'tag telemetry status|on|off', or set TAG_TELEMETRY=off. "
+                                         "Privacy notice: "
+                                         f"{tag_telemetry.build_config.PRIVACY_NOTICE_URL or 'not configured in this build'}"
+                                     ),
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("command", nargs="?", choices=COMMANDS)
     parser.add_argument("arguments", nargs="*", help="memory: start | status | stop; config: init | show | keys | set KEY VALUE")
     parser.add_argument("--offline", action="store_true")
@@ -1529,10 +1545,10 @@ def main() -> int:
     args = parser.parse_args(raw_arguments)
     if (args.no_start or args.test or args.review) and args.command != "setup":
         parser.error("--no-start, --test and --review are only for setup")
-    if args.arguments and args.command not in {"add", "memory", "config"}:
-        parser.error("Only add, memory, and config accept additional positional arguments")
-    if args.json_output and args.command not in {"list", "memory", "inspect", "status", "doctor", "config", "paths", "upgrade"}:
-        parser.error("--json supports list, memory, inspect, status, doctor, config, paths, and upgrade")
+    if args.arguments and args.command not in {"add", "memory", "config", "telemetry"}:
+        parser.error("Only add, memory, config, and telemetry accept additional positional arguments")
+    if args.json_output and args.command not in {"list", "memory", "inspect", "status", "doctor", "config", "paths", "upgrade", "telemetry"}:
+        parser.error("--json supports list, memory, inspect, status, doctor, config, paths, upgrade, and telemetry")
     if args.stdin and args.command != "config":
         parser.error("--stdin is only for config set")
     if args.offline and args.command not in {"inspect", "doctor"}:
@@ -1545,13 +1561,52 @@ def main() -> int:
         parser.error("--limit must be at least 1")
     installation_root = tag_home()
     tag_instances.validate_name(tag_id)
-    if args.command in {"version", "upgrade", "rollback", "migrate", "list", "add", "memory"} and explicit_tag:
+    if args.command in {"version", "upgrade", "rollback", "migrate", "list", "add", "memory", "telemetry"} and explicit_tag:
         parser.error(f"Tag selection is not supported for installation-wide command '{args.command}'")
     try:
         import tag_control as control
         import tag_config as settings
     except ImportError:
         from scripts import tag_control as control, tag_config as settings
+    if args.command == "telemetry":
+        if len(args.arguments) != 1 or args.arguments[0] not in {"status", "on", "off"}:
+            parser.error("telemetry requires status, on, or off")
+        action = args.arguments[0]
+        if action == "on":
+            if tag_telemetry.hard_disabled():
+                raise RuntimeError(
+                    "TAG_TELEMETRY=off is active for this process; unset it to save telemetry on"
+                )
+            if not tag_telemetry.collection_available():
+                raise RuntimeError(
+                    "This Tag build has no approved telemetry destination; no preference was changed"
+                )
+            _show_telemetry_scope(installation_root)
+            tag_telemetry.enable(installation_root)
+        elif action == "off":
+            if not tag_telemetry.disable(installation_root):
+                raise RuntimeError(
+                    "TAG_TELEMETRY=off is active for this process; telemetry is already stopped "
+                    "for this command, but the saved preference was not changed"
+                )
+        result = tag_telemetry.status(installation_root)
+        if args.json_output:
+            print(json.dumps(result, indent=2))
+        else:
+            display.header("Telemetry", "Installation-wide privacy control")
+            display.info_row(
+                "Collection",
+                "On" if result["enabled"] else "Off",
+                good=bool(result["enabled"]),
+            )
+            display.info_row("Saved", str(result["saved_preference"]).replace("_", " "))
+            if result["process_override"]:
+                display.info_row("Override", "TAG_TELEMETRY=off")
+            display.info_row(
+                "Privacy",
+                str(result["privacy_notice"] or "Not configured in this build"),
+            )
+        return 0
     if args.command == "add":
         if args.arguments:
             parser.error("add does not accept a name; the workspace alias is chosen during onboarding")
@@ -1807,7 +1862,9 @@ def main() -> int:
             environment = {key: value for key, value in environment.items()
                            if not key.startswith(("SLACK_", "MFS_", "OPENTAG_"))}
             # Test onboarding is an explicit disposable staging installation.
-            environment.update(runtime_environment(test_home))
+            environment.update(runtime_environment(
+                test_home, installation_root=installation_root
+            ))
             config_path = test_home / "config/settings.json"
             print(f"TEST MODE: {test_home}", flush=True)
             print("Local settings are isolated. No services or indexing.", flush=True)
@@ -1928,6 +1985,16 @@ def main() -> int:
                 import slack_manifest_migrations
             except ImportError:
                 from scripts import slack_manifest_migrations
+            try:
+                from tag_error_migrations import migrate as migrate_error_reports
+            except ImportError:
+                from scripts.tag_error_migrations import migrate as migrate_error_reports
+            diagnostics_migrated = migrate_error_reports(home)
+            display.info_row(
+                "Diagnostics",
+                "Private report storage migrated" if diagnostics_migrated else "Private report storage ready",
+                good=True,
+            )
             manifest_changed = slack_manifest_migrations.reconcile(home, config_path, values)
             if manifest_changed:
                 # A migration may rotate credentials; preflight and the bridge
@@ -2031,6 +2098,149 @@ def main() -> int:
             lock.release()
         show_upgrade_reminder(installation_root)
     return 0
+
+
+def _show_telemetry_scope(installation_root: Path) -> None:
+    """Show the complete collection boundary before an operator enables it."""
+    display.header("Telemetry", "Installation-wide privacy control")
+    display.paragraph(
+        "Tag collects minimal anonymous usage telemetry to improve setup and reliability. "
+        "We never send prompts, Slack messages, agent output, workspace paths, logs, "
+        "credentials, or configuration values."
+    )
+    display.paragraph(
+        "Telemetry is on by default after this notice. You can turn it off at any time "
+        "with 'tag telemetry off', or for one process with TAG_TELEMETRY=off."
+    )
+    display.paragraph(f"Privacy notice: {tag_telemetry.build_config.PRIVACY_NOTICE_URL}")
+
+
+def _offer_first_run_telemetry(installation_root: Path) -> None:
+    """Persist a choice only after the notice is visible in an interactive TUI."""
+    if (
+        tag_telemetry.hard_disabled()
+        or not tag_telemetry.collection_available()
+        or tag_telemetry.saved_preference(installation_root) is not None
+        or not sys.stdin.isatty()
+        or not sys.stdout.isatty()
+    ):
+        return
+    _show_telemetry_scope(installation_root)
+    try:
+        import setup_ui as ui
+    except ImportError:
+        from scripts import setup_ui as ui
+    try:
+        choice = ui.choose(
+            "Help support Tag’s development",
+            ["Continue", "Turn telemetry off"],
+            default=0,
+        )
+    except ui.Paused:
+        # An interrupted notice is not consent. Continue this command without
+        # collection and offer the same notice on a later interactive run.
+        return
+    if choice == 0:
+        tag_telemetry.enable(installation_root)
+    else:
+        tag_telemetry.disable(installation_root)
+
+
+def _command_name(arguments: list[str]) -> str:
+    return next((item for item in arguments if item in COMMANDS), "status")
+
+
+def _command_group(command: str) -> str:
+    if command in {"start", "stop", "restart", "dev", "logs"}:
+        return "lifecycle"
+    if command in {"setup", "add", "reset", "settings"}:
+        return "setup"
+    if command in {"config", "paths"}:
+        return "configuration"
+    if command in {"inspect", "status", "doctor", "version"}:
+        return "diagnostics"
+    if command == "memory":
+        return "memory"
+    if command in {"upgrade", "rollback", "migrate"}:
+        return "update"
+    return "tag_management"
+
+
+def _error_category(error: BaseException) -> str:
+    if isinstance(error, KeyboardInterrupt):
+        return "interrupted"
+    if isinstance(error, PermissionError):
+        return "permission"
+    if isinstance(error, (ImportError, FileNotFoundError)):
+        return "dependency"
+    if isinstance(error, ValueError):
+        return "validation"
+    if isinstance(error, OSError):
+        return "runtime"
+    return "unknown"
+
+
+def main() -> int:
+    """Apply telemetry policy around the existing CLI without changing outcomes."""
+    arguments = sys.argv[1:]
+    command = _command_name(arguments)
+    installation_root = tag_home()
+    telemetry_command = command == "telemetry"
+    help_command = any(item in {"-h", "--help"} for item in arguments)
+    if not telemetry_command and not help_command:
+        _offer_first_run_telemetry(installation_root)
+    enabled = (
+        not telemetry_command
+        and tag_telemetry.saved_preference(installation_root) is True
+        and not tag_telemetry.hard_disabled()
+    )
+    started = time.monotonic()
+    group = _command_group(command)
+    if enabled:
+        invocation = (
+            "interactive"
+            if sys.stdin.isatty() and sys.stdout.isatty()
+            else "non_interactive"
+        )
+        tag_telemetry.tui_started(installation_root, invocation)
+    try:
+        result = _run_cli()
+    except SystemExit as exc:
+        if enabled:
+            succeeded = exc.code in (None, 0)
+            if not succeeded:
+                tag_telemetry.command_failed(
+                    installation_root,
+                    group,
+                    "validation" if exc.code == 2 else "unknown",
+                )
+            tag_telemetry.command_completed(
+                installation_root,
+                group,
+                "succeeded" if succeeded else "failed",
+                time.monotonic() - started,
+            )
+        raise
+    except BaseException as exc:
+        if enabled:
+            tag_telemetry.command_failed(
+                installation_root, group, _error_category(exc)
+            )
+            tag_telemetry.command_completed(
+                installation_root,
+                group,
+                "interrupted" if isinstance(exc, KeyboardInterrupt) else "failed",
+                time.monotonic() - started,
+            )
+        raise
+    if enabled:
+        tag_telemetry.command_completed(
+            installation_root,
+            group,
+            "succeeded" if result == 0 else "failed",
+            time.monotonic() - started,
+        )
+    return result
 
 
 if __name__ == "__main__":

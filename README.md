@@ -18,6 +18,20 @@ conversations or working files.
 [Read the documentation](docs/index.md) ·
 [See what is supported](docs/reference/supported-capabilities.md)
 
+### Anonymous usage telemetry
+
+Tag includes privacy-bounded CLI telemetry to help improve setup and
+reliability. It never collects prompts, Slack messages, agent output, workspace
+paths, files, source code, logs, credentials, configuration values, or command
+arguments. Collection remains off until an interactive first-run notice is
+shown and the operator continues with telemetry enabled.
+
+Use `tag telemetry status`, `tag telemetry on`, or `tag telemetry off` to manage
+the installation-wide preference. Set `TAG_TELEMETRY=off` before running Tag for
+an immediate process-level hard stop. See [Tag telemetry and privacy](docs/reference/telemetry.md)
+for the complete event list, destination, local data handling, and privacy
+contact.
+
 ### Ask your agent to set up Tag
 
 Install the setup skill:
@@ -32,9 +46,15 @@ Then open a new Codex session and ask:
 Use the hover-tag-setup skill to set up Tag for me.
 ```
 
-Codex checks the prerequisites and installation, then guides you to `tag setup`
-for the Slack login and approval steps that only you or a workspace admin can
-complete.
+Codex checks the prerequisites, proposes the complete setup with recommended
+defaults, and asks for your changes once. It drives setup locally; if Slack login
+is needed, it shows a one-time connection to paste into any channel or DM in the
+Slack workspace you want to connect—it does not need to be a Tag channel.
+Approve it and return the short code in one reply. You can choose a private
+clipboard handoff instead if you do not want those one-time values in chat. The
+agent also includes Slack's illustrated
+[authorization guide](https://docs.slack.dev/tools/slack-cli/guides/authorizing-the-slack-cli/)
+with the handoff.
 
 ## Work together in the thread
 
