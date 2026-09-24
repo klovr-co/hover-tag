@@ -1862,9 +1862,7 @@ def _run_cli() -> int:
             environment = {key: value for key, value in environment.items()
                            if not key.startswith(("SLACK_", "MFS_", "OPENTAG_"))}
             # Test onboarding is an explicit disposable staging installation.
-            environment.update(runtime_environment(
-                test_home, installation_root=installation_root
-            ))
+            environment.update(runtime_environment(test_home))
             config_path = test_home / "config/settings.json"
             print(f"TEST MODE: {test_home}", flush=True)
             print("Local settings are isolated. No services or indexing.", flush=True)
@@ -2205,22 +2203,6 @@ def main() -> int:
         tag_telemetry.tui_started(installation_root, invocation)
     try:
         result = _run_cli()
-    except SystemExit as exc:
-        if enabled:
-            succeeded = exc.code in (None, 0)
-            if not succeeded:
-                tag_telemetry.command_failed(
-                    installation_root,
-                    group,
-                    "validation" if exc.code == 2 else "unknown",
-                )
-            tag_telemetry.command_completed(
-                installation_root,
-                group,
-                "succeeded" if succeeded else "failed",
-                time.monotonic() - started,
-            )
-        raise
     except BaseException as exc:
         if enabled:
             tag_telemetry.command_failed(
