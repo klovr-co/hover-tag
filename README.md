@@ -2,16 +2,17 @@
 
 <p align="center">
   <a href="https://www.hover.team/tag/">
-    <img src="assets/branding/tag-icon.png" width="96" height="96" alt="Tag waterdrop icon" />
+    <img src="assets/branding/tag-team-transparent.png" alt="Jules, Iris, Maya, Rowan, and Zara, each with their own Tag" />
   </a>
 </p>
 
 <h1 align="center">Tag</h1>
 <p align="center">by <a href="https://www.hover.team/">Hover</a></p>
-<p align="center"><strong>A +1 for everyone.</strong></p>
+<p align="center"><strong>Your personal assistant, in Slack.</strong></p>
 <p align="center">
-  Everyone brings their own Tag. The work stays together in Slack.
+  Powered by your Codex setup · Runs on a computer you control
 </p>
+<p align="center"><strong>Everyone brings their own Tag. Everyone works in the same conversation.</strong></p>
 <p align="center">
   <a href="https://www.hover.team/tag/">Meet Tag</a> ·
   <a href="https://www.hover.team/tag/getting-started/">Get started</a> ·
@@ -20,28 +21,41 @@
   <a href="https://github.com/klovr-co/hover-tag/issues">Issues</a>
 </p>
 
-[![Tag brings personal assistants into your team's Slack conversations](assets/branding/tag-social-preview.png)](https://www.hover.team/tag/)
-
-<p align="center">
-  <img src="assets/branding/tag-plus-one.png" alt="A person paired with their own Tag element" />
-</p>
-
-## Work already happens in Slack
+## Work through it together
 
 The context is already there: a question, a few links, a decision buried in a
-thread. Everyone can bring their own Tag into the same conversation. Each Tag
-works from its owner’s agent, files, skills, and connected accounts; the team
-shares the thread, the decisions, and the results.
+thread. Mention your Tag where the discussion is happening. Teammates can add a
+missing detail, question the answer, or take on the next step. Everyone can
+follow how you got there.
 
 - **Turn discussion into action.** Pull together decisions, owners, and deadlines;
   save a checklist or draft a document in your working folder.
 - **Bring the missing context.** Find earlier discussions in approved, indexed
   Slack history, or use connected tools to find an email or inspect a repository.
-- **Make it yours.** Tag runs on your computer with your agent, files, skills,
-  and connected accounts. Your teammates can see the results in Slack.
+- **Make it yours.** Tag runs on a computer you control using your Codex setup,
+  files, skills, and connected accounts. Your teammates can see the results in
+  Slack.
 
-Only you can invoke your Tag by default. Each teammate can bring their own.
+Your Tag runs from your own agent environment, and only you can invoke it by
+default. Teammates can bring their own Tag with their own setup. You share the
+conversation and results; each assistant stays personal.
 [Learn how personal access works →](https://www.hover.team/tag/access/)
+
+## Runs locally, with clear boundaries
+
+Tag's Slack bridge and Codex agent run on a computer you control, using the
+files, tools, skills, and accounts you choose to make available.
+
+- **Hover does not host your conversations or working files.** Your agent
+  workspace and the files Tag creates remain on your computer.
+- **Your files stay useful outside Tag.** They are ordinary files in your working
+  folder, so you can open, edit, move, or reuse them with other tools.
+- **External services are still external.** Slack carries the team conversation;
+  Codex processes agent requests; and optional connected services process the
+  information required to use them, each under its own data policies.
+
+Tag is local by design, not offline.
+[See how Tag works →](https://www.hover.team/tag/how-it-works/)
 
 ## Bring your Tag to work
 
