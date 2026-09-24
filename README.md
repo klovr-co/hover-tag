@@ -2,7 +2,7 @@
 
 <p align="center">
   <a href="https://www.hover.team/tag/">
-    <img src="assets/branding/tag-team.png" alt="Jules, Iris, Maya, Rowan, and Zara, each with their own Tag" />
+    <img src="assets/branding/tag-team-transparent.png" alt="Jules, Iris, Maya, Rowan, and Zara, each with their own Tag" />
   </a>
 </p>
 
