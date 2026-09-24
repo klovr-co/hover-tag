@@ -54,6 +54,41 @@ class SlackHistorySearchTests(unittest.TestCase):
         )
         self.assertEqual(("general", "marketing"), requested_channel_names(grant))
 
+    def test_id_only_slack_mentions_resolve_through_the_authorized_grant(self) -> None:
+        grant = json.dumps(
+            {
+                **json.loads(GRANT),
+                "request_text": "Search <#C1> and <#C2> for launch notes",
+            }
+        )
+        channels = authorized_channels(grant)
+        original_names = requested_channel_names(grant)
+
+        self.assertEqual(("general", "marketing"), original_names)
+        self.assertEqual(
+            ("C1", "C2"),
+            tuple(
+                channel["id"]
+                for channel in select_channels_for_request(
+                    channels, ["general", "marketing"], original_names
+                )
+            ),
+        )
+
+    def test_unknown_id_only_slack_mention_still_fails_closed(self) -> None:
+        grant = json.dumps(
+            {
+                **json.loads(GRANT),
+                "request_text": "Search <#C9> for launch notes",
+            }
+        )
+        channels = authorized_channels(grant)
+        original_names = requested_channel_names(grant)
+
+        self.assertEqual(("c9",), original_names)
+        with self.assertRaisesRegex(ValueError, "confirm the channel names"):
+            select_channels_for_request(channels, ["general"], original_names)
+
     def test_issue_references_are_not_treated_as_channel_names(self) -> None:
         grant = json.dumps(
             {
