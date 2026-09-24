@@ -13,9 +13,17 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from .slack_search_scope import explicit_channel_names, normalize_channel_name
+    from .slack_search_scope import (
+        SLACK_CHANNEL_REF_RE,
+        explicit_channel_names,
+        normalize_channel_name,
+    )
 except ImportError:  # Direct execution: python3 scripts/slack_history_search.py
-    from slack_search_scope import explicit_channel_names, normalize_channel_name
+    from slack_search_scope import (
+        SLACK_CHANNEL_REF_RE,
+        explicit_channel_names,
+        normalize_channel_name,
+    )
 
 
 def authorized_channels(raw_grant: str) -> tuple[dict[str, str], ...]:
@@ -54,15 +62,25 @@ def requested_channel_names(raw_grant: str) -> tuple[str, ...]:
     request_text = payload.get("request_text") if isinstance(payload, dict) else None
     if not isinstance(request_text, str):
         return ()
-    authorized_names = {
-        normalize_channel_name(channel["name"])
+    authorized_by_id = {
+        channel["id"].casefold(): normalize_channel_name(channel["name"])
         for channel in authorized_channels(raw_grant)
     }
-    return tuple(
+    authorized_names = set(authorized_by_id.values())
+    names = [
+        authorized_by_id.get(
+            match.group("id").casefold(),
+            normalize_channel_name(match.group("id")),
+        )
+        for match in SLACK_CHANNEL_REF_RE.finditer(request_text)
+    ]
+    plain_text = SLACK_CHANNEL_REF_RE.sub(" ", request_text)
+    names.extend(
         name
-        for name in explicit_channel_names(request_text)
-        if not name.isdigit() or normalize_channel_name(name) in authorized_names
+        for name in explicit_channel_names(plain_text)
+        if not name.isdigit() or name in authorized_names
     )
+    return tuple(dict.fromkeys(name for name in names if name))
 
 
 def _selection_error(
