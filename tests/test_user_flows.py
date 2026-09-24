@@ -133,7 +133,10 @@ class FlowTests(unittest.TestCase):
             self.assertIn("--no-start", call.call_args.args[0])
             self.assertIn("--test-mode", call.call_args.args[0])
             env = call.call_args.kwargs["env"]
-            self.assertEqual(env["TAG_HOME"], str(self.home / "testing/onboarding"))
+            self.assertEqual(env["TAG_HOME"], str(self.root))
+            self.assertEqual(
+                env["TAG_INSTANCE_HOME"], str(self.home / "testing/onboarding")
+            )
             self.assertNotIn("OPENTAG_ENV_FILE", env)
             self.assertNotIn("SLACK_BOT_TOKEN", env)
         self.assertEqual(self.config.read_bytes(), before)
@@ -202,14 +205,15 @@ class FlowTests(unittest.TestCase):
             tag_reconfigure.ui, "choose", return_value=0
         ), patch.object(tag_reconfigure.subprocess, "call", return_value=0) as call, redirect_stdout(StringIO()):
             tag_reconfigure.edit(self.home, "app")
-            first = call.call_args.kwargs["env"]["TAG_HOME"]
+            first = call.call_args.kwargs["env"]["TAG_INSTANCE_HOME"]
             draft = tag_config.read_config(Path(first) / "config/settings.json")
             self.assertNotIn("SLACK_APP_TOKEN", draft)
             self.assertNotIn("SLACK_CHANNEL_IDS", draft)
             self.assertEqual(draft["OPENTAG_CUSTOM"], "keep")
             self.assertEqual(draft["MFS_ALLOWED_SCOPES"], "file://local/keep")
             tag_reconfigure.edit(self.home, "app")
-            self.assertEqual(call.call_args.kwargs["env"]["TAG_HOME"], first)
+            self.assertEqual(call.call_args.kwargs["env"]["TAG_HOME"], str(self.root))
+            self.assertEqual(call.call_args.kwargs["env"]["TAG_INSTANCE_HOME"], first)
         self.assertEqual(self.config.read_bytes(), original)
 
     def make_draft(self):
@@ -288,7 +292,7 @@ class FlowTests(unittest.TestCase):
     def test_successful_guided_channel_change_requires_apply_and_replaces_scopes(self):
         original = self.seed()
         def child(command, *, env):
-            draft = Path(env["TAG_HOME"])
+            draft = Path(env["TAG_INSTANCE_HOME"])
             path = draft / "config/settings.json"
             values = tag_config.read_config(path)
             self.assertNotIn("old__COLD", values["MFS_ALLOWED_SCOPES"])
