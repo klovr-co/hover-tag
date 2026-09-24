@@ -553,6 +553,19 @@ def attachment_name(file: dict[str, Any], index: int) -> str:
     return safe_name or f"slack-image-{index}"
 
 
+def stored_attachment_name(file: dict[str, Any], index: int) -> str:
+    """Return a collision-resistant local name while preserving the extension."""
+    name = attachment_name(file, index)
+    file_id = (
+        re.sub(r"[^A-Za-z0-9_-]+", "-", str(file.get("id") or index)).strip("-")
+        or str(index)
+    )
+    stem, separator, suffix = name.rpartition(".")
+    if separator and stem:
+        return f"{stem}-{file_id}.{suffix}"
+    return f"{name}-{file_id}"
+
+
 def validate_attachment_metadata(files: list[dict[str, Any]]) -> None:
     """Reject declared attachment limits before creating backend work."""
     if len(files) > MAX_ATTACHMENTS_PER_REQUEST:
@@ -621,7 +634,7 @@ def download_thread_images(
             if not mime_type.startswith("image/"):
                 continue
             url = file.get("url_private_download") or file.get("url_private")
-            name = attachment_name(file, len(seen_file_ids))
+            name = stored_attachment_name(file, len(seen_file_ids))
             if not url:
                 lines.append(f"[Slack image attachment could not be downloaded: {name}]")
                 continue
@@ -705,7 +718,7 @@ def download_thread_binary_files(
             mime_type = (file.get("mimetype") or "application/octet-stream").lower()
             if mime_type.startswith("image/") or is_text_file(file):
                 continue
-            name = attachment_name(file, len(seen_file_ids))
+            name = stored_attachment_name(file, len(seen_file_ids))
             url = file.get("url_private_download") or file.get("url_private")
             if not url:
                 lines.append(f"[Slack file attachment could not be downloaded: {name}]")

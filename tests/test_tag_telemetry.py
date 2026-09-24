@@ -269,6 +269,38 @@ class TagTelemetryTests(unittest.TestCase):
         self.assertFalse(telemetry.identifier_path(self.home).exists())
         preference_event.assert_not_called()
 
+    def test_help_system_exit_is_recorded_as_success(self) -> None:
+        with patch.object(os.sys, "argv", ["tag", "--help"]), patch.object(
+            telemetry, "saved_preference", return_value=True
+        ), patch.object(telemetry, "hard_disabled", return_value=False), patch.object(
+            tag_cli, "_run_cli", side_effect=SystemExit(0)
+        ), patch.object(telemetry, "command_failed") as failed, patch.object(
+            telemetry, "command_completed"
+        ) as completed, patch.object(telemetry, "tui_started"):
+            with self.assertRaises(SystemExit) as exit_status:
+                tag_cli.main()
+
+        self.assertEqual(exit_status.exception.code, 0)
+        failed.assert_not_called()
+        self.assertEqual(completed.call_args.args[2], "succeeded")
+
+    def test_argparse_system_exit_is_recorded_as_validation_failure(self) -> None:
+        with patch.object(os.sys, "argv", ["tag", "unknown"]), patch.object(
+            tag_cli, "_offer_first_run_telemetry"
+        ), patch.object(telemetry, "saved_preference", return_value=True), patch.object(
+            telemetry, "hard_disabled", return_value=False
+        ), patch.object(tag_cli, "_run_cli", side_effect=SystemExit(2)), patch.object(
+            telemetry, "command_failed"
+        ) as failed, patch.object(telemetry, "command_completed") as completed, patch.object(
+            telemetry, "tui_started"
+        ):
+            with self.assertRaises(SystemExit) as exit_status:
+                tag_cli.main()
+
+        self.assertEqual(exit_status.exception.code, 2)
+        self.assertEqual(failed.call_args.args[2], "validation")
+        self.assertEqual(completed.call_args.args[2], "failed")
+
 
 if __name__ == "__main__":
     unittest.main()
