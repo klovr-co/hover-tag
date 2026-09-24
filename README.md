@@ -13,26 +13,20 @@
   Bring your own Tag to the conversation. Work through it together.
 </p>
 <p align="center">
+  <img src="assets/characters/tag-jules-pixel.png" width="72" alt="Jules" /> <strong>+</strong> <img src="assets/characters/tag-avatar-soil-pixel.png" width="48" alt="Jules's Soil Tag" />&nbsp;&nbsp;
+  <img src="assets/characters/tag-iris-pixel.png" width="72" alt="Iris" /> <strong>+</strong> <img src="assets/characters/tag-avatar-metal-pixel.png" width="48" alt="Iris's Metal Tag" />&nbsp;&nbsp;
+  <img src="assets/characters/tag-maya-pixel.png" width="72" alt="Maya" /> <strong>+</strong> <img src="assets/characters/tag-avatar-water-pixel.png" width="48" alt="Maya's Water Tag" />&nbsp;&nbsp;
+  <img src="assets/characters/tag-rowan-pixel.png" width="72" alt="Rowan" /> <strong>+</strong> <img src="assets/characters/tag-avatar-wood-pixel.png" width="48" alt="Rowan's Wood Tag" />&nbsp;&nbsp;
+  <img src="assets/characters/tag-zara-pixel.png" width="72" alt="Zara" /> <strong>+</strong> <img src="assets/characters/tag-avatar-fire-pixel.png" width="48" alt="Zara's Fire Tag" />
+</p>
+<p align="center"><strong>Everyone brings their own Tag. Everyone works in the same conversation.</strong></p>
+<p align="center">
   <a href="https://www.hover.team/tag/">Meet Tag</a> ·
   <a href="https://www.hover.team/tag/getting-started/">Get started</a> ·
   <a href="https://join.slack.com/t/hover-community/shared_invite/zt-4aghkshid-n7fRukS7_J5sR2jDLBXK9A"><img src="assets/branding/slack-icon.svg" width="16" height="16" alt="Slack" /> Join the Slack community</a> ·
   <a href="https://www.hover.team/tag/capabilities/">Capabilities</a> ·
   <a href="https://github.com/klovr-co/hover-tag/issues">Issues</a>
 </p>
-
-[![Tag brings personal assistants into your team's Slack conversations](assets/branding/tag-social-preview.png)](https://www.hover.team/tag/)
-
-<table align="center">
-  <tr>
-    <td align="center"><img src="assets/characters/tag-jules-pixel.png" width="84" alt="Jules" /> + <img src="assets/characters/tag-avatar-soil-pixel.png" width="56" alt="Jules's Soil Tag" /><br /><strong>Jules + Tag</strong></td>
-    <td align="center"><img src="assets/characters/tag-iris-pixel.png" width="84" alt="Iris" /> + <img src="assets/characters/tag-avatar-metal-pixel.png" width="56" alt="Iris's Metal Tag" /><br /><strong>Iris + Tag</strong></td>
-    <td align="center"><img src="assets/characters/tag-maya-pixel.png" width="84" alt="Maya" /> + <img src="assets/characters/tag-avatar-water-pixel.png" width="56" alt="Maya's Water Tag" /><br /><strong>Maya + Tag</strong></td>
-    <td align="center"><img src="assets/characters/tag-rowan-pixel.png" width="84" alt="Rowan" /> + <img src="assets/characters/tag-avatar-wood-pixel.png" width="56" alt="Rowan's Wood Tag" /><br /><strong>Rowan + Tag</strong></td>
-    <td align="center"><img src="assets/characters/tag-zara-pixel.png" width="84" alt="Zara" /> + <img src="assets/characters/tag-avatar-fire-pixel.png" width="56" alt="Zara's Fire Tag" /><br /><strong>Zara + Tag</strong></td>
-  </tr>
-</table>
-
-<p align="center"><strong>Everyone brings their own Tag. Everyone works in the same conversation.</strong></p>
 
 ## Work through it together
 
