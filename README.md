@@ -39,11 +39,23 @@ follow how you got there.
 Your Tag runs from your own agent environment, and only you can invoke it by
 default. Teammates can bring their own Tag with their own setup. You share the
 conversation and results; each assistant stays personal.
-
-Hover does not host your conversations or working files. Codex and connected
-services still process the information needed for your requests under their own
-data policies.
 [Learn how personal access works →](https://www.hover.team/tag/access/)
+
+## Runs locally, with clear boundaries
+
+Tag's Slack bridge and Codex agent run on a computer you control, using the
+files, tools, skills, and accounts you choose to make available.
+
+- **Hover does not host your conversations or working files.** Your agent
+  workspace and the files Tag creates remain on your computer.
+- **Your files stay useful outside Tag.** They are ordinary files in your working
+  folder, so you can open, edit, move, or reuse them with other tools.
+- **External services are still external.** Slack carries the team conversation;
+  Codex processes agent requests; and optional connected services process the
+  information required to use them, each under its own data policies.
+
+Tag is local by design, not offline.
+[See how Tag works →](https://www.hover.team/tag/how-it-works/)
 
 ## Bring your Tag to work
 
