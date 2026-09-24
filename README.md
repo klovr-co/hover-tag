@@ -14,7 +14,9 @@
 </p>
 <p align="center"><strong>Everyone brings their own Tag. Everyone works in the same conversation.</strong></p>
 <p align="center">
-  <a href="https://www.hover.team/tag/">Meet Tag</a> ·
+  <strong><a href="https://www.hover.team/tag/"><img src="assets/branding/tag-cutout.png" width="28" height="28" alt="" /> Read the Tag guide at hover.team/tag →</a></strong>
+</p>
+<p align="center">
   <a href="https://www.hover.team/tag/getting-started/">Get started</a> ·
   <a href="https://join.slack.com/t/hover-community/shared_invite/zt-4aghkshid-n7fRukS7_J5sR2jDLBXK9A"><img src="assets/branding/slack-icon.svg" width="16" height="16" alt="Slack" /> Join the Slack community</a> ·
   <a href="https://www.hover.team/tag/capabilities/">Capabilities</a> ·
