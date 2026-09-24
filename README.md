@@ -14,7 +14,7 @@
 </p>
 <p align="center"><strong>Everyone brings their own Tag. Everyone works in the same conversation.</strong></p>
 <p align="center">
-  <strong><a href="https://www.hover.team/tag/">Read the Tag guide at hover.team/tag →</a></strong>
+  <strong><a href="https://www.hover.team/tag/"><img src="assets/branding/tag-cutout.png" width="28" height="28" alt="" /> Read the Tag guide at hover.team/tag →</a></strong>
 </p>
 <p align="center">
   <a href="https://www.hover.team/tag/getting-started/">Get started</a> ·
