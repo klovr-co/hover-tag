@@ -6,8 +6,8 @@
   </a>
 </p>
 
-<h1 align="center">tag</h1>
-<p align="center">by <a href="https://www.hover.team/">Hover</a></p>
+<h1 align="center">Tag</h1>
+<p align="center"><a href="https://www.hover.team/"><img src="assets/branding/hover-icon.png" width="20" height="20" alt="Hover" /> Hover</a></p>
 <p align="center"><strong>Your personal assistant, in Slack.</strong></p>
 <p align="center">
   Turn a team conversation into a checklist, a reviewed PR, or a finished file.<br />
