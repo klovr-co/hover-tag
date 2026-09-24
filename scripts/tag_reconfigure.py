@@ -12,13 +12,13 @@ import tempfile
 
 try:
     from . import tag_config as settings, tag_cli as lifecycle, setup_ui as ui, tag_credentials
-    from .tag_paths import initialize_instance, runtime_environment, tag_home
+    from .tag_paths import initialize_instance, runtime_environment
 except ImportError:
     import tag_config as settings
     import tag_cli as lifecycle
     import setup_ui as ui
     import tag_credentials
-    from tag_paths import initialize_instance, runtime_environment, tag_home
+    from tag_paths import initialize_instance, runtime_environment
 
 
 try:
@@ -247,12 +247,9 @@ def run_draft(home: Path, draft: Path, kind: str, original: dict[str, str]) -> N
     draft_config = draft / "config/settings.json"
     environment = {key: value for key, value in os.environ.items()
                    if not key.startswith(("SLACK_", "MFS_", "OPENTAG_"))}
-    # A setup draft keeps instance data private while installation-wide state,
-    # such as telemetry preference, remains rooted at the installed Tag home.
-    environment.update(
-        runtime_environment(draft, installation_root=tag_home()),
-        OPENTAG_ENV_FILE=str(draft_config),
-    )
+    # A setup draft is an explicit, private staging installation. Keeping both
+    # roots on the draft prevents setup helpers from resolving back to live data.
+    environment.update(runtime_environment(draft), OPENTAG_ENV_FILE=str(draft_config))
     receipt = draft / "state/setup-approved.json"
     receipt.unlink(missing_ok=True)
     command = [sys.executable, str(lifecycle.ROOT / "scripts/opentag_setup.py"), "--config", str(draft_config),
