@@ -8,9 +8,9 @@
 
 <h1 align="center">Tag</h1>
 <p align="center">by <a href="https://www.hover.team/">Hover</a></p>
-<p align="center"><strong>A +1 for everyone.</strong></p>
+<p align="center"><strong>Your personal assistant, in Slack.</strong></p>
 <p align="center">
-  Everyone brings their own Tag. The work stays together in Slack.
+  Bring your own Tag to the conversation. Work through it together.
 </p>
 <p align="center">
   <a href="https://www.hover.team/tag/">Meet Tag</a> ·
@@ -22,16 +22,12 @@
 
 [![Tag brings personal assistants into your team's Slack conversations](assets/branding/tag-social-preview.png)](https://www.hover.team/tag/)
 
-<p align="center">
-  <img src="assets/branding/tag-plus-one.png" alt="A person paired with their own Tag element" />
-</p>
-
-## Work already happens in Slack
+## Work through it together
 
 The context is already there: a question, a few links, a decision buried in a
-thread. Everyone can bring their own Tag into the same conversation. Each Tag
-works from its owner’s agent, files, skills, and connected accounts; the team
-shares the thread, the decisions, and the results.
+thread. Mention your Tag where the discussion is happening. Teammates can add a
+missing detail, question the answer, or take on the next step. Everyone can
+follow how you got there.
 
 - **Turn discussion into action.** Pull together decisions, owners, and deadlines;
   save a checklist or draft a document in your working folder.
@@ -40,7 +36,9 @@ shares the thread, the decisions, and the results.
 - **Make it yours.** Tag runs on your computer with your agent, files, skills,
   and connected accounts. Your teammates can see the results in Slack.
 
-Only you can invoke your Tag by default. Each teammate can bring their own.
+Your Tag runs from your own agent environment, and only you can invoke it by
+default. Teammates can bring their own Tag with their own setup. You share the
+conversation and results; each assistant stays personal.
 [Learn how personal access works →](https://www.hover.team/tag/access/)
 
 ## Bring your Tag to work
