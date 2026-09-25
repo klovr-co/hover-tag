@@ -109,6 +109,8 @@ REQUIRED_APP_SETTINGS = {
     "file access": "files:read",
     "file delivery": "files:write",
     "direct-message event": "message.im",
+    "public channel messages": "message.channels",
+    "private channel messages": "message.groups",
     "direct-message history": "im:history",
 }
 

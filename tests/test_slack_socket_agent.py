@@ -1939,6 +1939,136 @@ class SlackDirectMessageTests(unittest.TestCase):
         run_backend.assert_not_called()
 
 
+class SlackJevAutoInvokeTests(unittest.TestCase):
+    def test_untagged_channel_messages_are_opt_in_and_fail_closed(self) -> None:
+        fake_app = FakeApp()
+        with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+            os.environ,
+            {"SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_IDS": "C123"},
+            clear=True,
+        ), patch.object(slack_socket_agent.jev_auto_invoke, "evaluate") as evaluate:
+            slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+            fake_app.events["message"](
+                {
+                    "channel": "C123",
+                    "channel_type": "channel",
+                    "ts": "1.00",
+                    "user": "UOWNER",
+                    "text": "summarize this",
+                },
+                {"team_id": "T123"},
+                MagicMock(),
+                MagicMock(),
+            )
+
+        evaluate.assert_not_called()
+
+    def test_unauthorized_ambient_message_is_silent_before_jev(self) -> None:
+        fake_app = FakeApp()
+        client = MagicMock()
+        with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+            os.environ,
+            {
+                "SLACK_BOT_TOKEN": "xoxb-test",
+                "SLACK_CHANNEL_IDS": "C123",
+                "OPENTAG_JEV_AUTO_INVOKE": "1",
+                "OPENTAG_TYPESAFE_API_KEY": "secret-key",
+            },
+            clear=True,
+        ), patch.object(slack_socket_agent.jev_auto_invoke, "evaluate") as evaluate:
+            slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+            fake_app.events["message"](
+                {
+                    "channel": "C123",
+                    "channel_type": "channel",
+                    "ts": "1.00",
+                    "user": "UOTHER",
+                    "text": "summarize this",
+                },
+                {"team_id": "T123"},
+                client,
+                MagicMock(),
+            )
+
+        evaluate.assert_not_called()
+        client.chat_postMessage.assert_not_called()
+
+    def test_explicit_mentions_do_not_enter_the_ambient_gate(self) -> None:
+        fake_app = FakeApp()
+        with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+            os.environ,
+            {
+                "SLACK_BOT_TOKEN": "xoxb-test",
+                "SLACK_CHANNEL_IDS": "C123",
+                "OPENTAG_JEV_AUTO_INVOKE": "1",
+                "OPENTAG_TYPESAFE_API_KEY": "secret-key",
+            },
+            clear=True,
+        ), patch.object(slack_socket_agent.jev_auto_invoke, "evaluate") as evaluate:
+            slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+            fake_app.events["message"](
+                {
+                    "channel": "C123",
+                    "channel_type": "channel",
+                    "ts": "1.00",
+                    "user": "UOWNER",
+                    "text": "<@UTAG> summarize this",
+                },
+                {"team_id": "T123"},
+                MagicMock(),
+                MagicMock(),
+            )
+
+        evaluate.assert_not_called()
+
+    def test_positive_jev_decision_enters_existing_invocation_path(self) -> None:
+        fake_app = FakeApp()
+        client = MagicMock()
+        indicator = MagicMock()
+        indicator.native = False
+        indicator.message_ts = None
+        decision = slack_socket_agent.jev_auto_invoke.AutoInvokeDecision(
+            should_invoke=True,
+            tag_is_addressed=0.96,
+            model="jev-1.13.0",
+        )
+        with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+            os.environ,
+            {
+                "SLACK_BOT_TOKEN": "xoxb-test",
+                "SLACK_CHANNEL_IDS": "C123",
+                "OPENTAG_SLACK_STREAMING": "0",
+                "OPENTAG_JEV_AUTO_INVOKE": "1",
+                "OPENTAG_TYPESAFE_API_KEY": "secret-key",
+            },
+            clear=True,
+        ), patch.object(
+            slack_socket_agent.jev_auto_invoke, "evaluate", return_value=decision
+        ) as evaluate, patch.object(
+            slack_socket_agent, "WorkingIndicator", return_value=indicator
+        ), patch.object(
+            slack_socket_agent, "build_thread_text", return_value="thread context"
+        ), patch.object(
+            slack_socket_agent, "run_backend", return_value=("done", True)
+        ) as run_backend:
+            slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+            fake_app.events["message"](
+                {
+                    "channel": "C123",
+                    "channel_type": "channel",
+                    "ts": "1.00",
+                    "user": "UOWNER",
+                    "text": "summarize this thread",
+                },
+                {"team_id": "T123"},
+                client,
+                MagicMock(),
+            )
+
+        evaluate.assert_called_once()
+        run_backend.assert_called_once()
+
+
 class SlackWorkingIndicatorTests(unittest.TestCase):
     def test_journals_native_session_until_clear_succeeds(self) -> None:
         client = MagicMock()

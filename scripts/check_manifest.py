@@ -42,6 +42,10 @@ def validate_manifest(root: Path) -> list[str]:
         errors.append("app_mention must be subscribed")
     if "message.im" not in events:
         errors.append("message.im must be subscribed")
+    if "message.channels" not in events:
+        errors.append("message.channels must be subscribed")
+    if "message.groups" not in events:
+        errors.append("message.groups must be subscribed")
     if "app_home_opened" not in events:
         errors.append("app_home_opened must be subscribed")
     if "agent_session_stopped" not in events:
