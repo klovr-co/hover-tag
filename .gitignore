@@ -7,5 +7,5 @@ __pycache__/
 out/
 .playwright-cli/
 .gstack/
-config.bat
 node_modules
+
