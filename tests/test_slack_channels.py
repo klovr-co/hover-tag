@@ -23,7 +23,7 @@ class SlackChannelPickerTests(unittest.TestCase):
         self.assertIn("channels:join", output.getvalue())
         self.assertIn("reinstall the app", output.getvalue())
 
-    def test_joined_private_channel_requires_explicit_picker_approval(self):
+    def test_joined_private_channel_is_included_automatically(self):
         private = slack_channels.SlackChannel("G1", "private-team", True, True)
         with patch.object(slack_channels, "list_channels", return_value=[private]), patch.object(
             setup_ui, "checklist", return_value={0}
@@ -32,9 +32,9 @@ class SlackChannelPickerTests(unittest.TestCase):
         ) as join, redirect_stdout(StringIO()) as output:
             approve.return_value = 0
             self.assertEqual(slack_channels.choose_channels("fixture"), [private])
-        self.assertEqual(approve.call_args.args[1], ["Continue with 1 selected channel(s)", "Check again", "Save and exit"])
+        self.assertEqual(approve.call_args.args[1], ["Continue", "Check again", "Save and exit"])
         join.assert_not_called()
-        self.assertIn("Choose which joined channels", output.getvalue())
+        self.assertIn("Already joined", output.getvalue())
 
     def test_no_public_channels_refreshes_after_private_invitation(self):
         private = slack_channels.SlackChannel("G1", "private-team", True, True)
@@ -45,7 +45,7 @@ class SlackChannelPickerTests(unittest.TestCase):
         ) as join, redirect_stdout(StringIO()) as output:
             self.assertEqual(slack_channels.choose_channels("fixture"), [private])
         join.assert_not_called()
-        picker.assert_called_once()
+        picker.assert_not_called()
         self.assertIn("/invite", output.getvalue())
 
     def test_empty_membership_refreshes_then_selects_without_exiting(self):
@@ -56,7 +56,7 @@ class SlackChannelPickerTests(unittest.TestCase):
         ), patch.object(setup_ui, "checklist", return_value={0}) as picker, redirect_stdout(StringIO()) as output:
             self.assertEqual(slack_channels.choose_channels("fixture"), [joined])
         self.assertEqual(listing.call_count, 2)
-        picker.assert_called_once()
+        picker.assert_not_called()
         self.assertIn("/invite", output.getvalue())
 
     def test_empty_membership_can_pause_without_selecting_any_channel(self):
@@ -84,18 +84,18 @@ class SlackChannelPickerTests(unittest.TestCase):
         self.assertEqual(len(picker.call_args.args[0]), 2)
         join.assert_called_once_with("fixture", "conversations.join", {"channel": "C1"})
 
-    def test_joined_channels_require_selection_and_public_channels_remain_optional(self):
+    def test_joined_channels_are_automatic_and_public_channels_remain_optional(self):
         joined = slack_channels.SlackChannel("G1", "private-team", True, True)
         public = slack_channels.SlackChannel("C1", "announcements", False, False)
         with patch.object(slack_channels, "list_channels", return_value=[joined, public]), patch.object(
             setup_ui, "choose", return_value=0
         ) as choose, patch.object(setup_ui, "checklist", return_value={0}) as picker, redirect_stdout(StringIO()) as output:
             self.assertEqual(slack_channels.choose_channels("fixture"), [joined])
-        self.assertEqual(choose.call_args.args[1], ["Continue with 1 selected channel(s)", "Add public channels", "Check again", "Save and exit"])
-        picker.assert_called_once_with([joined.label], set())
-        self.assertIn("Choose which joined channels", output.getvalue())
+        self.assertEqual(choose.call_args.args[1], ["Continue", "Add public channels", "Check again", "Save and exit"])
+        picker.assert_not_called()
+        self.assertIn("Already joined", output.getvalue())
 
-    def test_joined_channel_picker_preselects_only_saved_channels(self):
+    def test_all_joined_channels_are_included_regardless_of_saved_selection(self):
         joined = [
             slack_channels.SlackChannel("C1", "approved", False, True),
             slack_channels.SlackChannel("G2", "not-approved", True, True),
@@ -104,8 +104,25 @@ class SlackChannelPickerTests(unittest.TestCase):
             setup_ui, "checklist", return_value={0}
         ) as picker, patch.object(setup_ui, "choose", return_value=0), redirect_stdout(StringIO()):
             selected = slack_channels.choose_channels("fixture", "C1")
-        self.assertEqual([channel.channel_id for channel in selected], ["C1"])
-        self.assertEqual(picker.call_args.args, ([channel.label for channel in joined], {0}))
+        self.assertEqual(selected, joined)
+        picker.assert_not_called()
+
+    def test_adding_public_channel_preserves_joined_channels(self):
+        joined = slack_channels.SlackChannel("G1", "private-team", True, True)
+        public = slack_channels.SlackChannel("C1", "announcements", False, False)
+        other = slack_channels.SlackChannel("C2", "other", False, False)
+        with patch.object(slack_channels, "list_channels", return_value=[joined, public, other]), patch.object(
+            setup_ui, "choose", side_effect=[1, 0]
+        ), patch.object(setup_ui, "checklist", return_value={0}) as picker, patch.object(
+            slack_channels, "slack_api_post", return_value={"ok": True, "channel": {"id": "C1", "is_member": True}}
+        ) as join, redirect_stdout(StringIO()):
+            selected = slack_channels.choose_channels("fixture")
+        self.assertEqual([channel.channel_id for channel in selected], ["G1", "C1"])
+        self.assertTrue(all(channel.is_member for channel in selected))
+        picker.assert_called_once_with(
+            ["#announcements (public; Tag will join)", "#other (public; Tag will join)"], set()
+        )
+        join.assert_called_once_with("fixture", "conversations.join", {"channel": "C1"})
 
     def test_join_requires_approval_and_skips_existing_members(self):
         channel = slack_channels.SlackChannel("C1", "selected", False, False)
@@ -192,13 +209,13 @@ class SlackChannelPickerTests(unittest.TestCase):
         with patch.object(slack_channels, "list_channels", return_value=channels), redirect_stdout(StringIO()):
             self.assertEqual("", slack_channels.choose_channel("xoxb-secret", input_fn=lambda _: "0"))
 
-    def test_multi_picker_requires_at_least_one_joined_channel(self) -> None:
+    def test_plain_picker_includes_joined_channels_on_enter(self) -> None:
         channels = [
             slack_channels.SlackChannel("C1", "team", False, True),
             slack_channels.SlackChannel("G2", "private", True, True),
             slack_channels.SlackChannel("C3", "unjoined", False, False),
         ]
-        answers = iter(["", "1,2"])
+        answers = iter([""])
         with patch.object(slack_channels, "list_channels", return_value=channels), redirect_stdout(StringIO()):
             selected = slack_channels.choose_channels(
                 "xoxb-secret", input_fn=lambda _: next(answers)
