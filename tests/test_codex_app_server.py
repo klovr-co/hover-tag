@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from scripts.codex_app_server import (
+    APPROVAL_TIMEOUT_SECONDS,
     CodexAppServer,
     CodexAppServerError,
     CodexEventMapper,
@@ -224,6 +226,93 @@ class ServerRequestTests(unittest.TestCase):
         })
         server._send.assert_called_once_with({"id": 7, "result": {"decision": "decline"}})
 
+    def test_slack_approval_accepts_one_command_and_resumes_same_request(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            approval_dir = Path(raw_dir)
+            approval_id = "a" * 32
+            (approval_dir / f"{approval_id}.json").write_text(
+                json.dumps({"decision": "approve"}), encoding="utf-8"
+            )
+            server = CodexAppServer(
+                ["codex"], cwd=Path(raw_dir), timeout=1, approval_dir=approval_dir
+            )
+            server._send = MagicMock()  # type: ignore[method-assign]
+            emitted: list[dict[str, object]] = []
+
+            with patch("scripts.codex_app_server.uuid.uuid4") as make_id:
+                make_id.return_value.hex = approval_id
+                handled = server._resolve_server_request(
+                    {
+                        "id": 8,
+                        "method": "item/commandExecution/requestApproval",
+                        "params": {"command": "private command is never emitted"},
+                    },
+                    emit=emitted.append,
+                    deadline=time.monotonic() + 1,
+                )
+
+        self.assertTrue(handled)
+        self.assertEqual(
+            [{
+                "type": "approval_request",
+                "approval_id": approval_id,
+                "label": "run a command outside the workspace sandbox",
+            }],
+            emitted,
+        )
+        self.assertNotIn("private command", json.dumps(emitted))
+        server._send.assert_called_once_with({"id": 8, "result": {"decision": "accept"}})
+
+    def test_permission_approval_grants_only_requested_permissions_for_turn(self) -> None:
+        requested = {"network": {"enabled": True}}
+
+        self.assertEqual(
+            {"permissions": requested, "scope": "turn"},
+            CodexAppServer._approval_result(
+                "item/permissions/requestApproval",
+                {"permissions": requested},
+                True,
+            ),
+        )
+        self.assertEqual(
+            {"permissions": {}, "scope": "turn"},
+            CodexAppServer._approval_result(
+                "item/permissions/requestApproval",
+                {"permissions": requested},
+                False,
+            ),
+        )
+
+    def test_slack_approval_wait_uses_earliest_dedicated_or_outer_deadline(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            server = CodexAppServer(
+                ["codex"], cwd=Path(raw_dir), timeout=1, approval_dir=Path(raw_dir)
+            )
+            server._send = MagicMock()  # type: ignore[method-assign]
+            server._wait_for_approval = MagicMock(return_value=False)  # type: ignore[method-assign]
+
+            for outer_deadline, expected_deadline in [
+                (10_000.0, 100.0 + APPROVAL_TIMEOUT_SECONDS),
+                (500.0, 500.0),
+            ]:
+                with self.subTest(outer_deadline=outer_deadline), patch(
+                    "scripts.codex_app_server.time.monotonic", return_value=100.0
+                ):
+                    server._resolve_server_request(
+                        {
+                            "id": 9,
+                            "method": "item/commandExecution/requestApproval",
+                            "params": {},
+                        },
+                        emit=lambda _event: None,
+                        deadline=outer_deadline,
+                    )
+
+                self.assertEqual(
+                    expected_deadline,
+                    server._wait_for_approval.call_args.args[1],
+                )
+
     def test_unknown_server_request_gets_json_rpc_error(self) -> None:
         server = CodexAppServer(["codex"], cwd=Path("/tmp"), timeout=1)
         server._send = MagicMock()  # type: ignore[method-assign]
@@ -254,6 +343,8 @@ for raw in sys.stdin:
     elif method == "initialized":
         pass
     elif method == "thread/start":
+        assert message["params"]["sandbox"] == "workspace-write"
+        assert message["params"]["approvalsReviewer"] == "auto_review"
         pending_thread_start = message
         send({"id": 900, "method": "item/commandExecution/requestApproval", "params": {}})
     elif method == "turn/start":

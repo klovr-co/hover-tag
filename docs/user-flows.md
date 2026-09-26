@@ -707,7 +707,8 @@ isolated chat location. Skip an optional step when its dependency is not set up.
 | Slack direct messages | Implemented, enabled by default | Requires an allowlisted sender. `tag start` migrates existing linked apps to `message.im` + `im:history` and opens Slack approval when needed. Set `OPENTAG_SLACK_DM_ENABLED=0` to disable it. Top-level DMs are separate tasks; thread replies provide bounded context. |
 | Duplicate-event idempotency | Not implemented | Avoid concurrent mentions in the same thread. |
 | Codex cancellation | Implemented with App Server | Slack's native Stop button interrupts the active Codex turn; the legacy exec transport remains a rollback path. |
-| Side-effect confirmation layer | Not provided by Tag | Workspace and connected-tool actions follow the selected backend/tool's permissions and confirmation behavior. |
+| Codex action approval | Automatic review with App Server fallback | Codex normally reviews sandbox-boundary actions automatically. Supported approval requests delivered to Tag appear as private, one-time Approve and Deny buttons for the initiating user; unsupported or stale requests fail closed. |
+| Connected-tool confirmation layer | Not provided by Tag | Connected-tool actions follow the selected backend/tool's permissions and confirmation behavior. |
 | Enterprise governance/audit/approvals | Not provided | Add external sandboxing and policy systems for production use. |
 
 ## Related documentation

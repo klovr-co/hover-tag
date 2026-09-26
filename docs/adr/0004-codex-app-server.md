@@ -21,10 +21,14 @@ ephemeral thread per Slack request. `OPENTAG_CODEX_TRANSPORT=exec` selects the
 legacy one-shot transport as an explicit rollback.
 
 The adapter performs the initialize handshake, matches request IDs, keeps
-stderr separate and bounded, routes item and turn lifecycle events, resolves
-unattended approval or question requests conservatively, and cleans up the
-process within bounded time. It reproduces the prior `--approve-for-me` posture
-with workspace-write sandboxing and automatic approval review. Global Codex
+stderr separate and bounded, routes item and turn lifecycle events, and cleans
+up the process within bounded time. It uses workspace-write sandboxing with
+automatic approval review. If the App Server still delivers a command, file,
+or permission approval request to Tag, one-time Approve and Deny controls are
+shown privately to the initiating user in the originating Slack thread. Only
+that authorized user may decide the request;
+stale, unavailable, or malformed requests fail closed. Other interactive
+questions remain unsupported and are resolved conservatively. Global Codex
 authentication, skills, settings, and workspace MCP overrides remain inherited.
 Recognized item and turn lifecycle notifications refresh a bounded idle
 deadline; they never extend the separate absolute task deadline. Slack status
@@ -49,5 +53,7 @@ starts, the stream owns the processing state until finalization.
   `agent_session_stopped` before the native Stop control is available.
 - Streaming delivery failures use the buffered answer from the same run; Tag
   never reruns a task merely to repair Slack delivery.
+- Approval controls carry only request identity and a fixed action category;
+  raw commands, paths, and permission payloads are not copied into Slack.
 - Persistent Codex threads and cross-request App Server reuse are deferred until
   their isolation and history semantics are designed explicitly.
