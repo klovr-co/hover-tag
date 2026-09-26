@@ -20,6 +20,11 @@ import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
+try:
+    from . import tag_dependencies
+except ImportError:
+    import tag_dependencies
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -340,9 +345,11 @@ def choose_allowed_users(team_id: str, current: str = "") -> str:
 
 
 def connect_slack_workspace(current: str = "") -> tuple[str, str] | None:
-    if not shutil.which("slack"):
-        ui.message("Slack CLI is required for workspace authorization: https://docs.slack.dev/tools/slack-cli/")
-        return None
+    try:
+        from tag_paths import tag_home
+    except ImportError:
+        from scripts.tag_paths import tag_home
+    tag_dependencies.activate_slack(tag_dependencies.ensure_slack(tag_home()))
     while True:
         result = subprocess.run(
             [shutil.which("slack") or "slack", "auth", "list", "--skip-update", "--no-color"],
@@ -1578,6 +1585,17 @@ def finish_setup(_config_path: Path, values: dict[str, str], _channels: list[sla
             raise ui.Paused()
     if backend == "codex":
         backend_environment = without_telemetry_environment(os.environ)
+        transport = "exec" if values.get("OPENTAG_CODEX_TRANSPORT") == "exec" else "app-server"
+        try:
+            compatible = subprocess.run(
+                [shutil.which("codex") or "codex", transport, "--help"],
+                capture_output=True, env=backend_environment, timeout=20, check=False,
+            ).returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            compatible = False
+        if not compatible:
+            ui.message(f"This Codex CLI does not support the required {transport} command. Update your existing Codex installation, then run tag setup again.")
+            return 1
         while subprocess.run(
             [shutil.which("codex") or "codex", "login", "status"],
             capture_output=True,

@@ -1677,6 +1677,11 @@ def _run_cli() -> int:
     home = context.home
     if args.command in {"start", "dev", "setup"}:
         try:
+            from tag_dependencies import migrate as migrate_dependencies
+        except ImportError:
+            from scripts.tag_dependencies import migrate as migrate_dependencies
+        migrate_dependencies(installation_root, ROOT)
+        try:
             from tag_layout import migrate as migrate_layout
         except ImportError:
             from scripts.tag_layout import migrate as migrate_layout
@@ -1843,6 +1848,11 @@ def _run_cli() -> int:
                 "The previous release cannot read this Tag's .tag folder. "
                 "Rollback was refused to preserve the current settings and history."
             )
+        target_record = json.loads(target)
+        verification = subprocess.run([target_record["python"], "-c",
+            "import sys; assert sys.version_info >= (3, 10)"], capture_output=True, check=False)
+        if verification.returncode:
+            raise RuntimeError("The previous release runtime is unavailable; current release retained")
         atomic_text(current, target)
         atomic_text(previous, old)
         display.header("Rollback", "Selecting the previously installed Tag release.")

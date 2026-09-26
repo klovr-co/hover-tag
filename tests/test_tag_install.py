@@ -32,6 +32,7 @@ from scripts.tag_install import (
     install_mfs_cli,
     resolve_channel,
     resolve_version,
+    runtime_files,
     unpack_release,
 )
 from scripts.tag_paths import (
@@ -1237,10 +1238,84 @@ class TagHomeTests(unittest.TestCase):
             self.assertEqual(result["status"], "upgraded")
             self.assertTrue(result["downgrade"])
 
-    def test_dependency_install_falls_back_to_venv_and_pip_without_uv(self):
+    def test_checkout_install_has_only_the_runtime_payload(self):
+        with tempfile.TemporaryDirectory() as temp:
+            release = install(ROOT, Path(temp) / "home", Path(temp) / "bin", dependencies=False)
+            installed = {p.relative_to(release).as_posix() for p in release.rglob("*") if p.is_file()}
+            self.assertEqual(installed, set(runtime_files(ROOT)))
+            self.assertFalse((release / "scripts/package_release.py").exists())
+            self.assertFalse((release / "docs/testing").exists())
+
+    def test_old_release_without_manifest_remains_installable(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "old-source"
+            for name in runtime_files(ROOT):
+                if name == "scripts/runtime-files.json":
+                    continue
+                target = source / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((ROOT / name).read_bytes())
+            release = install(source, root / "home", root / "bin", dependencies=False)
+            self.assertTrue((release / "scripts/tag_cli.py").is_file())
+            self.assertFalse((release / "scripts/runtime-files.json").exists())
+            self.assertEqual(json.loads((root / "home/current.json").read_text())["release"], release.name)
+
+    def test_malformed_manifest_never_falls_back_to_legacy_copy(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp)
+            (source / "scripts").mkdir()
+            manifest = source / "scripts/runtime-files.json"
+            manifest.write_text('{"schema_version": 100, "files": []}')
+            with self.assertRaisesRegex(ValueError, "Unsupported runtime file manifest"):
+                runtime_files(source, allow_legacy=True)
+
+    def test_hosted_installer_imports_before_release_modules_exist(self):
+        with tempfile.TemporaryDirectory() as temp:
+            standalone = Path(temp) / "tag_install.py"
+            standalone.write_bytes((ROOT / "scripts/tag_install.py").read_bytes())
+            result = subprocess.run([sys.executable, str(standalone), "--help"],
+                                    cwd=temp, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_dependency_migration_preserves_rollback_and_update_policy(self):
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp) / "home"
+            bin_dir = Path(temp) / "bin"
+            install(ROOT, home, bin_dir, dependencies=False)
+            first = (home / "current.json").read_bytes()
+            install(ROOT, home, bin_dir, dependencies=False)
+            record = json.loads((home / "current.json").read_text())
+            record.update(channel="alpha", selection="version", installed_commit="a" * 40)
+            (home / "current.json").write_text(json.dumps(record))
+            install(ROOT, home, bin_dir, dependencies=False, migrate_dependencies=True)
+            migrated = json.loads((home / "current.json").read_text())
+            self.assertEqual((home / "previous.json").read_bytes(), first)
+            for key in ("channel", "selection", "installed_commit"):
+                self.assertEqual(migrated[key], record[key])
+
+    @unittest.skipIf(os.name == "nt", "POSIX managed runtime bootstrap")
+    def test_failed_preparation_preserves_launcher_and_active_release(self):
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp) / "home"
+            bin_dir = Path(temp) / "bin"
+            install(ROOT, home, bin_dir, dependencies=False)
+            original = (home / "current.json").read_bytes()
+            launcher = (bin_dir / "tag").read_bytes()
+            with patch("scripts.tag_install.tag_dependencies.prepare_python", side_effect=RuntimeError("offline")):
+                with self.assertRaises(RuntimeError):
+                    install(ROOT, home, bin_dir)
+            self.assertEqual((home / "current.json").read_bytes(), original)
+            self.assertEqual((bin_dir / "tag").read_bytes(), launcher)
+            self.assertFalse((home / "state/install.lock").exists())
+            # Retry can acquire the same OS-managed lock.
+            install(ROOT, home, bin_dir, dependencies=False)
+
+    @unittest.skipIf(os.name == "nt", "POSIX managed runtime bootstrap")
+    def test_dependency_install_bootstraps_python_and_uv(self):
         with tempfile.TemporaryDirectory() as temp, patch(
-            "scripts.tag_install.shutil.which", return_value=None
-        ), patch(
+            "scripts.tag_install.tag_dependencies.prepare_python", return_value=(Path("/managed/python"), Path("/managed/uv"))
+        ), patch("scripts.tag_install.tag_dependencies.ensure_slack", return_value=Path("/managed/slack")), patch(
             "scripts.tag_install.subprocess.run",
             return_value=subprocess.CompletedProcess([], 0, "", ""),
         ) as run, patch(
@@ -1250,8 +1325,8 @@ class TagHomeTests(unittest.TestCase):
             install(ROOT, Path(temp) / "home", Path(temp) / "bin")
 
         commands = [call.args[0] for call in run.call_args_list]
-        self.assertEqual(commands[0][1:3], ["-m", "venv"])
-        self.assertEqual(commands[1][1:4], ["-m", "pip", "install"])
+        self.assertEqual(commands[0][:4], ["/managed/uv", "venv", "--python", "/managed/python"])
+        self.assertEqual(commands[1][1:3], ["pip", "install"])
         self.assertEqual(
             Path(commands[2][1]).name,
             "preload_mfs_model.py",

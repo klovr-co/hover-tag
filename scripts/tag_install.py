@@ -22,6 +22,14 @@ import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+
+try:
+    from . import tag_dependencies
+except ImportError:
+    try:
+        import tag_dependencies
+    except ImportError:
+        tag_dependencies = None  # Hosted bootstrap fetches release modules later.
 from typing import Any
 
 API_RELEASES = "https://api.github.com/repos/klovr-co/hover-tag/releases"
@@ -161,11 +169,10 @@ def row(name: str, value: str, *, good: bool = True) -> None:
 
 
 def install_step(command: list[str], label: str) -> None:
-    completed = subprocess.run(command, capture_output=True, text=True, check=False)
+    # Keep dependency download progress visible, including non-interactive upgrades.
+    completed = subprocess.run(command, stdout=sys.stderr, stderr=sys.stderr, check=False)
     if completed.returncode:
-        output = (completed.stderr or completed.stdout).strip().splitlines()
-        detail = "\n".join(output[-20:])
-        raise RuntimeError(f"{label} failed" + (f":\n{detail}" if detail else ""))
+        raise RuntimeError(f"{label} failed; see the download or preparation error above")
 
 
 def download(url: str, *, timeout: float = 120) -> bytes:
@@ -566,18 +573,73 @@ def command_owner(command: Path) -> str | None:
     return None
 
 
+RUNTIME_MANIFEST = "scripts/runtime-files.json"
+LEGACY_ROOT_FILES = (
+    "VERSION", "LICENSE", "NOTICE", "README.md", "RELEASE.md", "SECURITY.md",
+    ".env.example", "requirements-runtime.txt", "slack-app-manifest.yaml",
+    "tag", "tag.cmd", "install.sh", "install.ps1", "release-channels.json",
+)
+
+
+def runtime_files(source: Path, *, allow_legacy: bool = False) -> list[str]:
+    """One explicit file contract for release downloads and installed releases.
+
+    Only verified older releases may fall back to their historical layout. New
+    packages must supply a manifest; malformed manifests never trigger fallback.
+    """
+    manifest = source / RUNTIME_MANIFEST
+    if manifest.is_symlink() or (source / "scripts").is_symlink():
+        raise ValueError("Runtime manifest cannot be a symlink")
+    if not manifest.exists() and allow_legacy:
+        names = list(LEGACY_ROOT_FILES)
+        for directory in ("scripts", "references", "docs", *(
+            f".agents/skills/{name}" for name in BUNDLED_SKILLS
+        )):
+            names.extend(
+                path.relative_to(source).as_posix()
+                for path in (source / directory).rglob("*")
+                if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"
+            )
+    else:
+        policy = json.loads(manifest.read_text(encoding="utf-8"))
+        if not isinstance(policy, dict) or policy.get("schema_version") != 1:
+            raise ValueError("Unsupported runtime file manifest")
+        names = policy.get("files")
+        if not isinstance(names, list) or not names or any(not isinstance(name, str) for name in names):
+            raise ValueError("Runtime manifest must list file paths")
+        if len(set(names)) != len(names) or RUNTIME_MANIFEST not in names:
+            raise ValueError("Runtime manifest must include itself and contain no duplicate files")
+    for name in names:
+        path = Path(name)
+        if (not name or "\\" in name or ":" in name or path.is_absolute()
+                or ".." in path.parts or path.as_posix() != name):
+            raise ValueError(f"Unsafe runtime file path: {name}")
+        candidate = source / path
+        if any((source / Path(*path.parts[:i])).is_symlink() for i in range(1, len(path.parts) + 1)):
+            raise ValueError(f"Runtime files cannot be symlinks: {name}")
+        if not candidate.is_file():
+            raise FileNotFoundError(f"Required runtime file missing: {name}")
+    return sorted(names)
+
+
 def install(
     source: Path, home: Path, bin_dir: Path, *, dependencies: bool = True,
     selection: ReleaseSelection | None = None,
+    migrate_dependencies: bool = False,
 ) -> Path:
+    global tag_dependencies
     scripts_dir = str(source / "scripts")
     sys.path.insert(0, scripts_dir)
     try:
+        if tag_dependencies is None:
+            import tag_dependencies
         from tag_paths import initialize
         import tag_instances
         from release_check import validate_release
+        from tag_locks import LifecycleLock
     finally:
         sys.path.remove(scripts_dir)
+    files = runtime_files(source, allow_legacy=True)
     errors = validate_release(source)
     if errors:
         raise ValueError("Invalid release: " + "; ".join(errors))
@@ -594,10 +656,7 @@ def install(
             json.dumps({"command": legacy_command}, indent=2) + "\n",
         )
     lock = home / "state/install.lock"
-    try:
-        lock.mkdir()
-    except FileExistsError:
-        raise RuntimeError(f"An install is already in progress; interrupted installs leave {lock}")
+    install_lock = LifecycleLock(lock).acquire()
     try:
         version = (source / "VERSION").read_text().strip()
         if selection is not None and selection.version != version:
@@ -608,32 +667,26 @@ def install(
         if existing_owner == "legacy Tag source checkout":
             row("Migration", "Legacy command recognized; original checkout preserved")
         release = home / "releases" / f"{version}-{uuid.uuid4().hex[:12]}"
-        # An allowlist prevents copying credentials, worktree metadata, or personal skills.
+        # Use the same contract as the archive, even when installing a checkout.
         release.mkdir()
-        for name in ("scripts", "references", "docs"):
-            shutil.copytree(source / name, release / name,
-                            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-        for name in BUNDLED_SKILLS:
-            bundled = source / ".agents/skills" / name
-            if bundled.is_dir():
-                shutil.copytree(
-                    bundled,
-                    release / ".agents/skills" / name,
-                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
-                )
-        for name in ("VERSION", "LICENSE", "NOTICE", "README.md", "RELEASE.md", "SECURITY.md",
-                     ".env.example", "requirements-runtime.txt", "slack-app-manifest.yaml",
-                     "tag", "tag.cmd", "install.sh", "install.ps1", "release-channels.json"):
-            shutil.copy2(source / name, release / name)
+        for name in files:
+            destination = release / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source / name, destination)
         (release / "tag").chmod(0o755)
         (release / "install.sh").chmod(0o755)
         python = release / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
         if dependencies:
-            uv = shutil.which("uv")
+            runtime_python = Path(sys.executable)
+            if os.name != "nt":
+                runtime_python, uv_path = tag_dependencies.prepare_python(source, home)
+                uv = str(uv_path)
+            else:
+                uv = shutil.which("uv")
             paragraph("Installing runtime dependencies…", MUTED, indent="    ")
             if uv:
                 install_step(
-                    [uv, "venv", "--python", sys.executable, str(release / ".venv")],
+                    [uv, "venv", "--python", str(runtime_python), str(release / ".venv")],
                     "Creating the Tag runtime",
                 )
                 install_step(
@@ -660,6 +713,9 @@ def install(
                 "Preparing the MFS embedding model",
             )
             row("Memory", "Local embedding model cached")
+            if os.name != "nt":
+                tag_dependencies.ensure_slack(home)
+                install_step([str(python), "-c", "import mfs_server, psutil, slack_bolt"], "Checking the prepared runtime")
         else:
             # Explicit test/development mode; never advertised as a complete install.
             python = Path(sys.executable)
@@ -697,6 +753,7 @@ os.environ["TAG_HOME"] = str(home)
 raise SystemExit(subprocess.call([record["python"], str(release / "scripts/tag_cli.py"), *sys.argv[1:]]))
 '''
         atomic_text(launcher, launcher_text)
+        launcher_python = runtime_python if dependencies else Path(sys.executable)
         bin_dir.mkdir(parents=True, exist_ok=True)
         command = bin_dir / ("tag.cmd" if os.name == "nt" else "tag")
         if (command.exists() or command.is_symlink()) and command_owner(command) is None:
@@ -706,10 +763,11 @@ raise SystemExit(subprocess.call([record["python"], str(release / "scripts/tag_c
                 raise ValueError("Windows launcher paths cannot contain percent signs, quotes or newlines")
             script = f'@rem TAG managed launcher\n@"{sys.executable}" "{launcher}" %*\n'
         else:
-            script = f'#!/bin/sh\n# TAG managed launcher\nexec {shlex.quote(sys.executable)} {shlex.quote(str(launcher))} "$@"\n'
+            script = f'#!/bin/sh\n# TAG managed launcher\nexec {shlex.quote(str(launcher_python))} {shlex.quote(str(launcher))} "$@"\n'
         atomic_text(command, script, 0o755)
         current = home / "current.json"
-        if current.exists():
+        original_record = json.loads(current.read_text()) if current.exists() else {}
+        if current.exists() and not migrate_dependencies:
             atomic_text(home / "previous.json", current.read_text(encoding="utf-8"))
         current_record: dict[str, Any] = {
             "instance_layout": 2,
@@ -718,6 +776,8 @@ raise SystemExit(subprocess.call([record["python"], str(release / "scripts/tag_c
             "bin_dir": str(bin_dir.resolve()),
             "installed_version": version,
         }
+        if dependencies and os.name != "nt":
+            current_record["dependency_schema"] = 1
         if selection is not None:
             current_record.update({
                 "channel": selection.channel,
@@ -725,6 +785,10 @@ raise SystemExit(subprocess.call([record["python"], str(release / "scripts/tag_c
                 "installed_commit": selection.commit_sha,
                 "checked_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             })
+        if migrate_dependencies:
+            for key in ("channel", "selection", "installed_commit", "checked_at"):
+                if key in original_record:
+                    current_record[key] = original_record[key]
         atomic_text(current, json.dumps(current_record, indent=2, sort_keys=True) + "\n")
         row("Command", short_path(command))
         row("Home", short_path(home))
@@ -740,7 +804,7 @@ raise SystemExit(subprocess.call([record["python"], str(release / "scripts/tag_c
         emit()
         return release
     finally:
-        lock.rmdir()
+        install_lock.release()
 
 
 def main() -> int:
@@ -751,6 +815,7 @@ def main() -> int:
     selector.add_argument("--version", help="exact immutable release version")
     parser.add_argument("--bin-dir", type=Path)
     parser.add_argument("--skip-dependencies", action="store_true", help="development/test installs only")
+    parser.add_argument("--migrate-dependencies", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.source and (args.channel or args.version):
         parser.error("--source cannot be combined with --channel or --version")
@@ -769,7 +834,7 @@ def main() -> int:
         bin_dir = args.bin_dir or (home / "bin" if os.name == "nt" else Path.home() / ".local/bin")
         install(
             source, home, bin_dir.resolve(), dependencies=not args.skip_dependencies,
-            selection=selection,
+            selection=selection, migrate_dependencies=args.migrate_dependencies,
         )
     return 0
 

@@ -67,12 +67,15 @@ tools such as `gws`. The installer does not relocate their credentials.
 
 ## Install from a checkout
 
-Install Python 3.10+ and your chosen agent CLI. Tag prefers
-[uv](https://docs.astral.sh/uv/) when it is already available and otherwise uses
-Python's standard `venv` and pip. Authenticate the agent CLI separately. No local
-administrator privileges are needed. Slack installation is separate: a workspace
-owner or Enterprise policy may require an app manager to approve the custom Slack
-app.
+On supported macOS/Linux systems, install and sign in to Codex separately, then
+run the installer below. Tag automatically prepares Python and Slack CLI; neither
+Python nor uv needs to be on PATH. Setup checks the selected Codex transport and
+`codex login status`, and explains how to update or sign in when needed. Tag does
+not install Codex or change its global configuration or credentials.
+
+Native Windows retains its Python 3.10+ and Slack CLI prerequisites; WSL uses the
+Linux bootstrap. No local administrator privileges are needed. Slack sign-in
+and any workspace administrator approval remain explicit user actions.
 
 macOS/Linux:
 
@@ -123,8 +126,11 @@ Contributors can prepare the checkout's local runtime explicitly:
 ```
 
 On Windows, use `./install.ps1 -DependenciesOnly` followed by `./tag.cmd status`.
+Source preparation builds and checks an environment under `.runtime` before
+atomically selecting it through `.venv`; incomplete environments are not selected.
 The source launcher only uses that checkout's `.venv`; it never falls back to a
-system Python and `tag start` never installs packages. For normal use, prefer the
+system Python. Managed installations automatically finish required runtime
+migrations before startup readiness checks. For normal use, prefer the
 managed installer above so upgrades and runtime dependencies remain pinned.
 `./tag dev` starts the normal dependencies, watches Python source, reloads only
 the Slack bridge when files change, and shows bridge logs in the foreground.
@@ -304,3 +310,111 @@ process ownership, and traversal rejection. The installation smoke test installs
 real dependencies and runs the installed command outside the checkout.
 Live Slack and native backend qualification still require an authenticated test
 on each target platform; an offline smoke test does not establish those results.
+
+## Automatic dependency preparation
+
+The POSIX bootstrap uses curl, tar, and SHA-256 verification before any Python
+code runs. It reuses uv 0.12.19 or downloads that pinned version into
+`TAG_HOME/runtime/uv`; it prefers an existing Tag-managed Python 3.12.14, then
+an exact uv-managed Python already on the machine, otherwise downloads one into
+`TAG_HOME/runtime/python`. uv verifies its pinned Python distribution checksums.
+System Python and shell profiles are left alone. Paths containing spaces work;
+activation of a virtual environment is not required.
+
+Each release has a separate environment. The launcher records an explicit
+interpreter path, so changing the default `python3` does not change Tag's runtime.
+Old runtimes remain available for rollback. Preparation and runtime import checks
+finish before `current.json` switches releases. Interrupted preparation can be
+retried: incomplete downloads are never selected, and installation locks are
+released by the operating system when the process exits.
+
+Slack CLI 4.7 or newer in the 4.x line is reused when available. Otherwise Tag
+downloads the pinned Slack CLI 4.8.0 for macOS/Linux ARM64 or x86-64, verifies its
+SHA-256, extracts only the executable, checks that it runs, and atomically
+publishes it under `TAG_HOME/runtime/slack/4.8.0`. Existing user-managed binaries,
+Slack authorization directories, and app configuration are preserved. Preparation
+does not sign in, create or delete an app, or expand permissions. Guided setup
+continues directly to the existing authorization handoff.
+
+Upgrades run the new release's bootstrap before activation. A versioned startup
+migration also covers upgrades performed by older installers: it prepares a new
+release environment, preserves the saved update policy and previous release,
+and reloads the CLI before dependent checks. The migration checkpoint is written
+only after validation; failures retain the active release and retry on startup.
+Managed dependencies are shared installation resources, separate from each
+Tag's working folder and `.tag` data. Native Linux builds require a compatible
+glibc distribution and wheels for the runtime packages; musl-only distributions
+are not qualified by this bootstrap.
+
+## Measured installation size
+
+Measured on macOS ARM64 on 2026-09-27, using Python 3.12.14, uv 0.12.19,
+Slack CLI 4.8.0 and the current runtime requirements. These are measurements,
+not size limits or promises for other platforms. Transitive package updates,
+platform wheels, filesystem allocation, and existing caches change the totals.
+
+| Component | Download payload | Installed logical bytes |
+| --- | ---: | ---: |
+| Initial shell installer | 5,581 B | 5,581 B |
+| uv | 16,988,553 B | 37,194,640 B |
+| Python | approximately 23.9 MiB reported by uv | 69,627,389 B |
+| Slack CLI | 7,607,363 B | 20,527,232 B |
+| Runtime packages (118 wheels) | 196,784,133 B | included in release environment below |
+| MFS CLI | 2,038,676 B | included in release environment below |
+| Release environment, including packages and MFS CLI | see above | 583,249,864 B |
+| MFS embedding model and tokenizer | 587,042,498 B | 587,042,939 B including cache metadata |
+
+The dependency payload is approximately 797 MiB before the Tag runtime archive,
+index metadata, HTTP overhead, or retries. The first installed Tag home measured
+711,887,280 logical bytes; the model adds about 560 MiB outside that home, under
+`${MFS_HOME:-~/.mfs}/onnx-cache`. The initial script is small because it downloads
+these dependencies; it does not eliminate their transfer time or storage cost.
+Allocated disk usage (`du -sk`) measured 73,076 KiB for Python, 36,324 KiB
+for uv, 20,048 KiB for Slack CLI, 612,068 KiB for a prepared release environment,
+and 588,776 KiB for the embedding cache.
+The uv package cache separately measured 603,748,268 logical bytes. Do not add
+that figure to physical disk usage: uv may share files with environments using
+hardlinks or filesystem clones. Retaining releases for rollback also uses space.
+
+For reproduction, install into an empty `TAG_HOME` with an empty `UV_CACHE_DIR`
+and `UV_PYTHON_INSTALL_DIR`, and prepare the model with an empty `MFS_HOME`.
+Hide uv from PATH to exercise its download; the bootstrap also works without
+Python on PATH. Count regular files without following symlinks for logical
+sizes, and use `du -sk` for allocated disk usage. Record the selected wheel names
+from the uv cache and their PyPI release artifact sizes; the table uses those
+payload sizes and upstream release asset sizes, not a network traffic estimate.
+The model was separately downloaded into an empty cache and validated by MFS's
+embedding probe. Repeat installation reused the managed tools and caches;
+launch and rollback were verified with only system tools on PATH.
+
+Upstream references: [uv Python management](https://docs.astral.sh/uv/concepts/python-versions/),
+[uv pinned release](https://github.com/astral-sh/uv/releases/tag/0.12.19), and
+[Slack CLI pinned release](https://github.com/slackapi/slack-cli/releases/tag/v4.8.0).
+
+## Keeping release contents minimal
+
+`scripts/runtime-files.json` is the explicit file list shared by the release
+packager and installer. A new file is shipped only when it is added to that list.
+This applies to both archive downloads and installations from a checkout.
+Required missing files, unsafe paths, and symlinks fail packaging instead of
+silently producing an incomplete release. CI installs the generated archive
+outside the checkout and exercises the installed CLI and offline doctor.
+
+The runtime includes setup, upgrades, migrations, the troubleshooting skill,
+runtime contracts, operating guides, licensing, security, and privacy information.
+Tests, CI workflows, release publishing tools, contributor skills, development
+docs, repository agent settings, and branding assets stay in the source repository.
+The README uses online branding and links to contributor material there.
+
+Existing verified releases without the manifest remain installable through the
+legacy layout. Upgrades prepare the new minimal release before activation and
+retain the previous release for rollback; this change does not delete files from
+old releases or alter operator data.
+
+For the measured checkout, the archive fell from 6,603,360 bytes (196 files) to
+approximately 280 KB (74 files), about a 96% reduction. This is a reduction in the
+Tag archive, not in the Python packages or embedding model described above.
+MFS 0.4.6 declares `markitdown[all]` as a required dependency, including document,
+audio, and other converters. The installer keeps that supported dependency set;
+trimming it requires a narrower upstream package and capability testing, rather
+than omitting declared dependencies or installing with `--no-deps`.
