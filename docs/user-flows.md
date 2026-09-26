@@ -690,6 +690,7 @@ isolated chat location. Skip an optional step when its dependency is not set up.
 | Capability | Current path | Important condition or boundary |
 |---|---|---|
 | Slack mentions and threaded replies | Implemented | Mention must target the installed app used by the running tokens. |
+| Untagged Jev invocation | Implemented, disabled by default | Authorized messages in allowed channels are evaluated by TypeSafe; Tag responds when it is directly or inclusively addressed and the audience judgment clears the configured threshold. Provider failures stay silent. |
 | Caller authorization | Implemented | `SLACK_ALLOWED_USER_IDS` is required and fails closed. |
 | Explicit channel restriction | Implemented | Setup requires one or more joined channel IDs and the bridge fails closed when none are configured. |
 | Thread text and text attachments | Implemented | Content is bounded and treated as untrusted. |

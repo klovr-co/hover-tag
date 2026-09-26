@@ -29,6 +29,8 @@ class BackendEnvironmentTests(unittest.TestCase):
                 "SLACK_ALLOWED_USER_IDS": "UOWNER",
                 "SLACK_CHANNEL_ID": "C123",
                 "OPENTAG_SLACK_DM_ENABLED": "1",
+                "OPENTAG_JEV_AUTO_INVOKE": "1",
+                "OPENTAG_TYPESAFE_API_KEY": "typesafe-secret",
                 "SLACK_BOT_TOKEN": "xoxb-needed-by-tools",
             },
             transport="slack",
@@ -40,6 +42,8 @@ class BackendEnvironmentTests(unittest.TestCase):
         self.assertNotIn("SLACK_ALLOWED_USER_IDS", environment)
         self.assertNotIn("SLACK_CHANNEL_ID", environment)
         self.assertNotIn("OPENTAG_SLACK_DM_ENABLED", environment)
+        self.assertNotIn("OPENTAG_JEV_AUTO_INVOKE", environment)
+        self.assertNotIn("OPENTAG_TYPESAFE_API_KEY", environment)
         self.assertEqual("xoxb-needed-by-tools", environment["SLACK_BOT_TOKEN"])
         self.assertEqual("D123", environment["OPENTAG_CURRENT_CHANNEL_ID"])
 

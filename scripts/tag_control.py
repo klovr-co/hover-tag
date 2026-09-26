@@ -258,6 +258,9 @@ def _settings_menu(home: Path) -> None:
         ("Agent", ("OPENTAG_BACKEND",)),
         ("Advanced", ("OPENTAG_TIMEOUT_SECONDS", "OPENTAG_MAX_TIMEOUT_SECONDS", "OPENTAG_BACKEND_ATTEMPTS", "OPENTAG_SLACK_STREAMING",
                       "OPENTAG_SLACK_DM_ENABLED",
+                      "OPENTAG_JEV_AUTO_INVOKE", "OPENTAG_TYPESAFE_API_KEY",
+                      "OPENTAG_JEV_MODEL", "OPENTAG_JEV_THRESHOLD",
+                      "OPENTAG_JEV_TIMEOUT_SECONDS",
                       "OPENTAG_CODEX_TRANSPORT")),
     )
     while True:

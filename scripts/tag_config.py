@@ -21,6 +21,8 @@ DEFAULTS = {
     "OPENTAG_MAX_TIMEOUT_SECONDS": "3600",
     "OPENTAG_BACKEND_ATTEMPTS": "3", "OPENTAG_SLACK_STREAMING": "1",
     "OPENTAG_SLACK_DM_ENABLED": "1",
+    "OPENTAG_JEV_AUTO_INVOKE": "0", "OPENTAG_JEV_MODEL": "jev-latest",
+    "OPENTAG_JEV_THRESHOLD": "0.9", "OPENTAG_JEV_TIMEOUT_SECONDS": "5",
     "MFS_URL": "http://127.0.0.1:13619", "MFS_SLACK_HISTORY_DAYS": "30",
 }
 REQUIRED = ("OPENTAG_BACKEND", "MFS_URL", "MFS_ALLOWED_SCOPES",
@@ -35,7 +37,8 @@ PUBLIC = frozenset((*DEFAULTS, "MFS_ALLOWED_SCOPES", "OPENTAG_WORKDIR",
                     "MFS_SLACK_CONNECTOR_URI", "MFS_SLACK_CONNECTOR_CONFIG",
                     "OPENTAG_CODEX_MODELS", "OPENTAG_CODEX_REASONING_EFFORTS"))
 EDITABLE = PUBLIC - {"OPENTAG_WORKDIR"} | {
-    "SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "MFS_TOKEN", "MFS_SLACK_TOKEN", "MFS_HOME"
+    "SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "MFS_TOKEN", "MFS_SLACK_TOKEN", "MFS_HOME",
+    "OPENTAG_TYPESAFE_API_KEY",
 }
 LABELS = {
     "OPENTAG_BACKEND": "Agent", "OPENTAG_BOT_NAME": "Bot name",
@@ -53,6 +56,10 @@ LABELS = {
     "MFS_SLACK_CONNECTOR_CONFIG": "Slack history connector config",
     "OPENTAG_BACKEND_ATTEMPTS": "Retry attempts", "OPENTAG_SLACK_STREAMING": "Stream replies (1 on, 0 off)",
     "OPENTAG_SLACK_DM_ENABLED": "Direct messages (1 on, 0 off)",
+    "OPENTAG_JEV_AUTO_INVOKE": "Untagged Jev invocation (1 on, 0 off)",
+    "OPENTAG_JEV_MODEL": "Jev model", "OPENTAG_JEV_THRESHOLD": "Jev invocation threshold",
+    "OPENTAG_JEV_TIMEOUT_SECONDS": "Jev timeout (seconds)",
+    "OPENTAG_TYPESAFE_API_KEY": "TypeSafe API key",
     "OPENTAG_TRANSPORT": "Chat service",
 }
 
@@ -102,8 +109,26 @@ def validation_error(key: str, value: str) -> str | None:
         return "Use a slack:// connector URI"
     if key == "MFS_SLACK_CONNECTOR_CONFIG" and value and not Path(value).is_absolute():
         return "Use an absolute connector configuration path"
-    if key in {"OPENTAG_SLACK_STREAMING", "OPENTAG_SLACK_DM_ENABLED"} and value not in {"0", "1"}:
+    if key in {"OPENTAG_SLACK_STREAMING", "OPENTAG_SLACK_DM_ENABLED", "OPENTAG_JEV_AUTO_INVOKE"} and value not in {"0", "1"}:
         return "Use 0 or 1"
+    if key == "OPENTAG_JEV_MODEL" and not re.fullmatch(r"jev-[A-Za-z0-9.-]+", value):
+        return "Use a Jev model name such as jev-latest"
+    if key == "OPENTAG_JEV_THRESHOLD":
+        try:
+            valid = 0.5 <= float(value) <= 1
+        except ValueError:
+            valid = False
+        if not valid:
+            return "Use a number from 0.5 to 1"
+    if key == "OPENTAG_JEV_TIMEOUT_SECONDS":
+        try:
+            valid = 0 < float(value) <= 30
+        except ValueError:
+            valid = False
+        if not valid:
+            return "Use a number greater than 0 and at most 30"
+    if key == "OPENTAG_TYPESAFE_API_KEY" and value and any(c.isspace() for c in value):
+        return "Enter a TypeSafe API key without whitespace"
     if key == "SLACK_CHANNEL_POLICY" and value not in {"selected", "invited"}:
         return "Choose selected or invited"
     if key in {"SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "MFS_SLACK_TOKEN"}:
@@ -149,6 +174,10 @@ def config_errors(values: dict[str, str]) -> dict[str, str]:
     for key, value in values.items():
         if key in EDITABLE and (error := validation_error(key, value)):
             errors[key] = error
+    if values.get("OPENTAG_JEV_AUTO_INVOKE") == "1" and not values.get(
+        "OPENTAG_TYPESAFE_API_KEY", ""
+    ).strip():
+        errors["OPENTAG_TYPESAFE_API_KEY"] = "Required when untagged Jev invocation is enabled"
     return errors
 
 

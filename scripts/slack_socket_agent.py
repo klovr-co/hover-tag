@@ -43,7 +43,7 @@ try:
     from .slack_mrkdwn import to_mrkdwn
     from .slack_search_scope import ScopePlan, SearchIntent, plan_search_scopes
     from .tag_paths import tag_temp_dir
-    from . import slack_channels
+    from . import jev_auto_invoke, slack_channels
 except ImportError:  # Direct script execution does not create a package context.
     from opentag_process_env import backend_environment
     from tag_error_reporting import (
@@ -63,6 +63,7 @@ except ImportError:  # Direct script execution does not create a package context
     from slack_mrkdwn import to_mrkdwn
     from slack_search_scope import ScopePlan, SearchIntent, plan_search_scopes
     from tag_paths import tag_temp_dir
+    import jev_auto_invoke
     import slack_channels
 
 
@@ -2675,6 +2676,19 @@ def direct_messages_enabled() -> bool:
     return env_enabled("OPENTAG_SLACK_DM_ENABLED", default=True)
 
 
+def jev_auto_invoke_enabled() -> bool:
+    """Enable Jev routing only when the operator explicitly opts in."""
+    return env_enabled("OPENTAG_JEV_AUTO_INVOKE", default=False)
+
+
+def jev_auto_invoke_threshold() -> float:
+    return float(os.getenv("OPENTAG_JEV_THRESHOLD", "0.9"))
+
+
+def jev_auto_invoke_timeout() -> float:
+    return float(os.getenv("OPENTAG_JEV_TIMEOUT_SECONDS", "5"))
+
+
 def slack_conversation_allowed(channel: str, *, direct_message: bool = False) -> bool:
     """Apply the channel allowlist to channels and the DM switch to direct messages."""
     return direct_messages_enabled() if direct_message else slack_channel_allowed(channel)
@@ -2804,8 +2818,10 @@ def print_live_summary(backend: str, allowed_user_ids: frozenset[str]) -> None:
     for scope in scopes or ["(none — set MFS_ALLOWED_SCOPES)"]:
         print(f"            - {scope}")
     dm_status = "enabled" if direct_messages_enabled() else "disabled"
+    jev_status = "enabled" if jev_auto_invoke_enabled() else "disabled"
     print(f"  Slack   : listening for @mentions in channel {channel}")
     print(f"  DMs     : {dm_status}")
+    print(f"  Jev     : untagged channel invocation {jev_status}")
     print(f"  Access  : {len(allowed_user_ids)} authorized Slack user(s)")
     print("")
     print("  Only explicitly authorized Slack users can drive the backend,")
@@ -2830,6 +2846,19 @@ def create_app(
     app = App(token=require_env("SLACK_BOT_TOKEN"))
     report_store = report_store or default_report_store()
     fallback_reports: dict[str, ErrorReport] = {}
+    assistant_user_id = ""
+    assistant_identity_loaded = False
+
+    def current_assistant_user_id(client: Any) -> str:
+        nonlocal assistant_identity_loaded, assistant_user_id
+        if not assistant_identity_loaded:
+            assistant_identity_loaded = True
+            try:
+                value = client.auth_test().get("user_id", "")
+                assistant_user_id = value if isinstance(value, str) else ""
+            except Exception:  # noqa: BLE001 - missing identity only reduces thread context
+                assistant_user_id = ""
+        return assistant_user_id
 
     def stored_report(reference: str) -> ErrorReport | None:
         report = report_store.get(reference)
@@ -3891,18 +3920,82 @@ def create_app(
         handle_invocation(event, body, client, logger, direct_message=False)
 
     @app.event("message")
-    def handle_direct_message(
+    def handle_message(
         event: dict[str, Any],
         body: dict[str, Any],
         client: Any,
         logger: Any,
     ) -> None:
-        if event.get("channel_type") != "im" or not direct_messages_enabled():
-            return
         # Ignore bot output and Slack's message lifecycle events to prevent reply loops.
         if event.get("bot_id") or event.get("subtype") not in {None, "file_share"}:
             return
-        handle_invocation(event, body, client, logger, direct_message=True)
+        channel_type = event.get("channel_type")
+        if channel_type == "im":
+            if direct_messages_enabled():
+                handle_invocation(event, body, client, logger, direct_message=True)
+            return
+        if channel_type not in {"channel", "group"} or not jev_auto_invoke_enabled():
+            return
+
+        channel = event.get("channel", "")
+        if not isinstance(channel, str) or not (
+            slack_conversation_allowed(channel)
+            or newly_invited_channel_allowed(channel, client)
+        ):
+            return
+        user_id = event.get("user", "")
+        if not isinstance(user_id, str) or not slack_user_allowed(user_id, allowed_user_ids):
+            # Ambient messages from other people are normal conversation, not denied requests.
+            return
+        message_text = str(event.get("text") or "")
+        if not message_text.strip() or MENTION_RE.search(message_text):
+            # Explicit bot mentions use app_mention; other user mentions are human-directed.
+            return
+
+        thread_messages: list[dict[str, Any]] = []
+        thread_ts = event.get("thread_ts")
+        if isinstance(thread_ts, str) and thread_ts:
+            try:
+                response = client.conversations_replies(
+                    channel=channel,
+                    ts=thread_ts,
+                    limit=jev_auto_invoke.MAX_CONTEXT_MESSAGES + 1,
+                )
+                thread_messages = [
+                    message
+                    for message in response.get("messages", [])
+                    if isinstance(message, dict)
+                ]
+            except Exception as exc:  # noqa: BLE001 - current-message routing can still proceed
+                logger.warning("Could not load thread context for Jev routing: %s", type(exc).__name__)
+
+        state = jev_auto_invoke.message_state(
+            event,
+            thread_messages,
+            assistant_name=suggested_bot_name(backend),
+            assistant_user_id=(
+                current_assistant_user_id(client) if thread_messages else ""
+            ),
+        )
+        try:
+            decision = jev_auto_invoke.evaluate(
+                state,
+                api_key=require_env("OPENTAG_TYPESAFE_API_KEY"),
+                threshold=jev_auto_invoke_threshold(),
+                model=os.getenv("OPENTAG_JEV_MODEL", jev_auto_invoke.DEFAULT_MODEL),
+                timeout=jev_auto_invoke_timeout(),
+            )
+        except Exception as exc:  # noqa: BLE001 - routing failures must fail closed
+            logger.warning("Jev auto-invocation check failed closed: %s", type(exc).__name__)
+            return
+        logger.info(
+            "Jev auto-invocation decision: invoke=%s addressed=%.3f model=%s",
+            decision.should_invoke,
+            decision.tag_is_addressed,
+            decision.model,
+        )
+        if decision.should_invoke:
+            handle_invocation(event, body, client, logger, direct_message=False)
 
     return app
 

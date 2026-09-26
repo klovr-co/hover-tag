@@ -104,6 +104,8 @@ class ReleaseHelperTests(unittest.TestCase):
         self.assertIn("Socket Mode must be enabled", errors)
         self.assertIn("app_mention must be subscribed", errors)
         self.assertIn("message.im must be subscribed", errors)
+        self.assertIn("message.channels must be subscribed", errors)
+        self.assertIn("message.groups must be subscribed", errors)
         self.assertIn("app_home_opened must be subscribed", errors)
         self.assertIn("agent_session_stopped must be subscribed", errors)
         self.assertIn("App Home must be enabled", errors)
