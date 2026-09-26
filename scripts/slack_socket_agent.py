@@ -526,10 +526,50 @@ def format_message_attachments(message: dict[str, Any]) -> list[str]:
     return lines
 
 
+def message_files(message: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return direct and forwarded Slack files from one message."""
+    files: list[dict[str, Any]] = []
+    seen_file_ids: set[str] = set()
+    containers: list[dict[str, Any]] = [message]
+    containers.extend(
+        attachment
+        for attachment in message.get("attachments") or []
+        if isinstance(attachment, dict)
+    )
+    for container in containers:
+        for file in container.get("files") or []:
+            if not isinstance(file, dict):
+                continue
+            file_id = file.get("id")
+            if isinstance(file_id, str) and file_id:
+                if file_id in seen_file_ids:
+                    continue
+                seen_file_ids.add(file_id)
+            files.append(file)
+    return files
+
+
 def attachment_name(file: dict[str, Any], index: int) -> str:
     raw_name = file.get("name") or f"slack-image-{index}"
     safe_name = re.sub(r"[^A-Za-z0-9._-]+", "-", raw_name).strip(".-")
     return safe_name or f"slack-image-{index}"
+
+
+def stored_attachment_name(file: dict[str, Any], index: int) -> str:
+    """Return a collision-resistant local name while preserving the extension."""
+    name = attachment_name(file, index)
+    file_id = (
+        re.sub(r"[^A-Za-z0-9_-]+", "-", str(file.get("id") or index)).strip("-")
+        or str(index)
+    )
+    stem, separator, suffix = name.rpartition(".")
+    extension = f".{suffix}" if separator and stem else ""
+    if not extension:
+        stem = name
+    # Sanitized names are ASCII, so characters equal bytes for the 255-byte
+    # filesystem component limit. Reserve the ID and extension before trimming.
+    stem_limit = max(0, 255 - len(file_id) - 1 - len(extension))
+    return f"{stem[:stem_limit]}-{file_id}{extension}"
 
 
 def validate_attachment_metadata(files: list[dict[str, Any]]) -> None:
@@ -591,7 +631,7 @@ def download_thread_images(
     token = require_env("SLACK_BOT_TOKEN")
 
     for message in messages:
-        for file in message.get("files") or []:
+        for file in message_files(message):
             file_id = file.get("id")
             if not file_id or file_id in seen_file_ids:
                 continue
@@ -600,7 +640,7 @@ def download_thread_images(
             if not mime_type.startswith("image/"):
                 continue
             url = file.get("url_private_download") or file.get("url_private")
-            name = attachment_name(file, len(seen_file_ids))
+            name = stored_attachment_name(file, len(seen_file_ids))
             if not url:
                 lines.append(f"[Slack image attachment could not be downloaded: {name}]")
                 continue
@@ -637,7 +677,7 @@ def download_thread_text_files(
     token = require_env("SLACK_BOT_TOKEN")
 
     for message in messages:
-        for file in message.get("files") or []:
+        for file in message_files(message):
             file_id = file.get("id")
             if not file_id or file_id in seen_file_ids or not is_text_file(file):
                 continue
@@ -676,7 +716,7 @@ def download_thread_binary_files(
     token = require_env("SLACK_BOT_TOKEN")
 
     for message in messages:
-        for file in message.get("files") or []:
+        for file in message_files(message):
             file_id = file.get("id")
             if not file_id or file_id in seen_file_ids:
                 continue
@@ -684,7 +724,7 @@ def download_thread_binary_files(
             mime_type = (file.get("mimetype") or "application/octet-stream").lower()
             if mime_type.startswith("image/") or is_text_file(file):
                 continue
-            name = attachment_name(file, len(seen_file_ids))
+            name = stored_attachment_name(file, len(seen_file_ids))
             url = file.get("url_private_download") or file.get("url_private")
             if not url:
                 lines.append(f"[Slack file attachment could not be downloaded: {name}]")
@@ -769,7 +809,7 @@ def build_thread_text(client: Any, channel: str, thread_ts: str, attachment_dir:
     messages = response.get("messages", [])
     unique_files: dict[str, dict[str, Any]] = {}
     for message in messages:
-        for file in message.get("files") or []:
+        for file in message_files(message):
             file_id = file.get("id")
             if isinstance(file_id, str) and file_id:
                 unique_files.setdefault(file_id, file)
@@ -3714,7 +3754,7 @@ def create_app(
             return
         try:
             validate_attachment_metadata(
-                [file for file in event.get("files") or [] if isinstance(file, dict)]
+                message_files(event)
             )
         except AttachmentLimitError as exc:
             client.chat_postMessage(
