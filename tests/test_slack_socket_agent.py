@@ -72,6 +72,25 @@ class FakeResponse:
         return body
 
 
+class StoredAttachmentNameTests(unittest.TestCase):
+    def test_long_names_fit_on_disk_and_preserve_identity_and_extension(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            for extension in (".png", ".pdf", ""):
+                for length in (242, 243, 244, 255):
+                    with self.subTest(extension=extension, length=length):
+                        file_id = "F1234567890"
+                        original_stem = "a" * (length - len(extension))
+                        name = slack_socket_agent.stored_attachment_name(
+                            {"name": original_stem + extension, "id": file_id}, 1
+                        )
+                        self.assertLessEqual(len(name.encode()), 255)
+                        self.assertTrue(name.endswith(f"-{file_id}{extension}"))
+                        self.assertEqual(len(name), min(length + 12, 255))
+                        path = Path(tmp) / name
+                        path.write_bytes(b"attachment")
+                        self.assertEqual(path.read_bytes(), b"attachment")
+
+
 class SlackTextAttachmentTests(unittest.TestCase):
     @patch(
         "scripts.slack_socket_agent.urllib.request.urlopen",

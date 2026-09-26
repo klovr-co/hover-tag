@@ -561,9 +561,13 @@ def stored_attachment_name(file: dict[str, Any], index: int) -> str:
         or str(index)
     )
     stem, separator, suffix = name.rpartition(".")
-    if separator and stem:
-        return f"{stem}-{file_id}.{suffix}"
-    return f"{name}-{file_id}"
+    extension = f".{suffix}" if separator and stem else ""
+    if not extension:
+        stem = name
+    # Sanitized names are ASCII, so characters equal bytes for the 255-byte
+    # filesystem component limit. Reserve the ID and extension before trimming.
+    stem_limit = max(0, 255 - len(file_id) - 1 - len(extension))
+    return f"{stem[:stem_limit]}-{file_id}{extension}"
 
 
 def validate_attachment_metadata(files: list[dict[str, Any]]) -> None:
