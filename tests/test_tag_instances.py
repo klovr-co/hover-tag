@@ -225,3 +225,60 @@ class TagInstanceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NativeTagFolderTests(unittest.TestCase):
+    def test_fresh_and_restored_folders_are_discoverable_and_private(self):
+        import shutil
+        import subprocess
+        with tempfile.TemporaryDirectory() as directory:
+            user = Path(directory)
+            root = user / 'Library/Application Support/Tag'
+            with patch('pathlib.Path.home', return_value=user), patch('sys.platform', 'darwin'):
+                default = tag_instances.ensure_default(root)
+                work = tag_instances.create(root, 'work')
+                self.assertEqual(default.home, user / 'Tag/default/.tag')
+                self.assertEqual(work.home, user / 'Tag/work/.tag')
+                self.assertTrue((default.home / 'instance.json').exists())
+                self.assertTrue((default.workspace / '.codex/config.toml').exists())
+                self.assertFalse((root / 'instances/default').exists())
+                (work.home / 'config/settings.json').write_text('{"SLACK_TEAM_ID":"TWORK"}')
+                # A replacement installation discovers the folders without an
+                # installation-local registry or setup.
+                if root.exists():
+                    shutil.rmtree(root)
+                records = {row['id']: row for row in tag_instances.discover(root)}
+                self.assertEqual(set(records), {'default', 'work'})
+                self.assertTrue(all(row['valid'] for row in records.values()))
+                self.assertEqual(tag_instances.resolve(root, 'work').home, work.home)
+                subprocess.run(['git', 'init', '-q', str(work.workspace)], check=True)
+                result = subprocess.run(['git', '-C', str(work.workspace), 'check-ignore', '.tag/config/settings.json'],
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0)
+                if os.name != 'nt':
+                    self.assertEqual(work.home.stat().st_mode & 0o777, 0o700)
+
+    def test_default_config_init_creates_metadata_for_subsequent_start(self):
+        with tempfile.TemporaryDirectory() as directory:
+            user = Path(directory)
+            root = user / 'Library/Application Support/Tag'
+            with patch('pathlib.Path.home', return_value=user), patch('sys.platform', 'darwin'), patch.dict(
+                os.environ, {'TAG_HOME': str(root)}, clear=True
+            ), patch.object(sys, 'argv', ['tag', 'config', 'init']), redirect_stdout(StringIO()):
+                self.assertEqual(tag_cli.main(), 0)
+                context = tag_instances.resolve(root)
+                self.assertEqual(context.home, user / 'Tag/default/.tag')
+                self.assertTrue((context.home / 'instance.json').is_file())
+
+    def test_symlinked_native_tag_folder_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            user = Path(directory)
+            root = user / 'Library/Application Support/Tag'
+            (user / 'Tag').mkdir()
+            outside = user / 'outside'
+            outside.mkdir()
+            (user / 'Tag/work').symlink_to(outside, target_is_directory=True)
+            with patch('pathlib.Path.home', return_value=user), patch('sys.platform', 'darwin'):
+                with self.assertRaisesRegex(ValueError, 'symlink'):
+                    tag_instances.create(root, 'work')
+            self.assertFalse((outside / '.tag').exists())

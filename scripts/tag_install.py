@@ -712,6 +712,7 @@ raise SystemExit(subprocess.call([record["python"], str(release / "scripts/tag_c
         if current.exists():
             atomic_text(home / "previous.json", current.read_text(encoding="utf-8"))
         current_record: dict[str, Any] = {
+            "instance_layout": 2,
             "release": release.name,
             "python": str(python),
             "bin_dir": str(bin_dir.resolve()),

@@ -19,9 +19,11 @@ from typing import Any
 try:
     from tag_paths import codex_workspace_args, tag_temp_dir
     from codex_app_server import CodexAppServer, CodexAppServerError
+    from record_output_artifact import channel_artifact_directory
 except ImportError:
     from scripts.tag_paths import codex_workspace_args, tag_temp_dir
     from scripts.codex_app_server import CodexAppServer, CodexAppServerError
+    from scripts.record_output_artifact import channel_artifact_directory
 
 
 def default_skill_dir() -> Path:
@@ -83,13 +85,25 @@ def build_prompt(
     artifact_results_dir = attachments_dir / "results" / "artifacts" if attachments_dir else None
     artifact_instructions = ""
     if output_manifest is not None:
+        output_directory = channel_artifact_directory(workdir, channel_id)
         artifact_instructions = f"""
 Generated file delivery:
-- When, and only when, the user explicitly asks you to create a file, save it
-  inside the workspace and then run
+- When, and only when, the user explicitly asks you to create a lasting file,
+  save new deliverables in `{output_directory}` by default. This folder belongs
+  to the current Slack channel and is stable across channel renames. Use
+  descriptive filenames; check for existing files and avoid overwriting an
+  unrelated result from another request in this channel.
+- Honor an explicitly requested path inside the workspace and edit existing
+  files in place. For an unqualified existing filename, check this channel's
+  artifact folder first, then the workspace root for older files; ask if the
+  reference is ambiguous. Do not move older files or search other channels'
+  artifact folders merely to resolve a filename.
+- After saving the requested file, run
   `{helper_command(skill_dir / "scripts" / "record_output_artifact.py")}`
   with `--manifest {shlex.quote(str(output_manifest))}`,
-  `--workdir {shlex.quote(str(workdir))}`, and `--file` set to that output path.
+  `--workdir {shlex.quote(str(workdir))}`, `--channel-id {channel_id}`,
+  and `--file` set to its absolute path (or a filename relative to the channel
+  artifact folder).
 - Call the helper separately for every requested final deliverable, including
   every file in a multi-file request. Never record supporting files or files
   merely mentioned in the conversation. Any regular file type is supported.
@@ -851,6 +865,11 @@ def main() -> int:
         parser.error("--backend or OPENTAG_BACKEND is required")
 
     workdir = args.workdir.resolve()
+    if args.output_manifest:
+        try:
+            channel_artifact_directory(workdir, args.channel_id, create=True)
+        except (OSError, ValueError) as exc:
+            parser.error(str(exc))
     allowed_scopes = os.getenv("MFS_ALLOWED_SCOPES") or f"file://local{workdir}"
     os.environ["MFS_ALLOWED_SCOPES"] = allowed_scopes
     prompt = build_prompt(

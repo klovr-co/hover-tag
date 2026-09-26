@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import tempfile
 import time
 from pathlib import Path
@@ -13,6 +14,22 @@ from pathlib import Path
 
 LOCK_ATTEMPTS = 100
 LOCK_RETRY_SECONDS = 0.05
+
+
+def channel_artifact_directory(workdir: Path, channel_id: str, *, create: bool = False) -> Path:
+    """Stable per-channel output location without changing the agent workspace."""
+    if not re.fullmatch(r"[CDG][A-Z0-9]+", channel_id):
+        raise ValueError("artifact channel must be a Slack channel or conversation ID")
+    root = workdir.expanduser().resolve()
+    directory = root / "artifacts" / channel_id
+    for path in (directory.parent, directory):
+        if path.is_symlink():
+            raise ValueError(f"artifact directory must not be a symlink: {path}")
+        if path.exists() and not path.is_dir():
+            raise ValueError(f"artifact directory conflicts with an existing file: {path}")
+        if create:
+            path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    return directory
 
 
 def validated_output_path(raw_path: Path, workdir: Path) -> Path:
@@ -103,6 +120,7 @@ def main() -> int:
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--workdir", type=Path, required=True)
     parser.add_argument("--file", type=Path, required=True)
+    parser.add_argument("--channel-id", help="resolve relative output filenames in this channel's artifact folder")
     parser.add_argument(
         "--attach",
         action="store_true",
@@ -110,7 +128,12 @@ def main() -> int:
     )
     args = parser.parse_args()
     try:
-        path = validated_output_path(args.file, args.workdir)
+        output = args.file
+        if args.channel_id:
+            directory = channel_artifact_directory(args.workdir, args.channel_id)
+            if not output.is_absolute():
+                output = validated_output_path(output, directory)
+        path = validated_output_path(output, args.workdir)
         record_artifact(args.manifest, path, attach=args.attach)
     except (OSError, ValueError) as exc:
         parser.error(str(exc))

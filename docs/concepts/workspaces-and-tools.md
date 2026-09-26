@@ -41,7 +41,11 @@ they open on that person's computer.
 
 Uploading the brief lets Tag read it for the request. It does not automatically
 save a copy of the brief in the workspace. In this example, you asked Tag to save
-`open-questions.md`.
+`open-questions.md`. New saved artifacts go in `artifacts/CHANNEL_ID/` inside
+your Tag folder, so files from different Slack channels stay separate. Channel
+IDs keep these folders stable when channels are renamed. An explicit output
+path is respected, and edits to existing files stay in place. Older files remain
+where they were saved; Tag does not guess which channel owns them.
 
 > [!NOTE]
 > Files saved in the workspace are not automatically indexed. However, Tag can
@@ -64,12 +68,16 @@ Find the `workspace` path in the output. A normal installation uses
 installations can use a different location, so use the path your command reports.
 
 Tag keeps this folder separate from its application releases. Files and local
-skills stay in place when you upgrade. You can organize it like any working
+skills stay in place when you upgrade. Its hidden `.tag` directory holds this
+Tag’s settings, credentials, integrations, and conversation state. Keep that
+directory with the working files when moving the folder. You can organize it like any working
 folder:
 
 ```text
 workspace/
-  open-questions.md
+  artifacts/
+    C0123456789/
+      open-questions.md
   meeting-notes/
   templates/
     weekly-report.md

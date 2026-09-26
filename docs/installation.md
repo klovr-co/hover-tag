@@ -11,59 +11,54 @@ TAG installs independently of any Git checkout. Its default home is:
 Set `TAG_HOME` to an absolute path before installing to choose another home.
 Use an isolated `TAG_HOME` for development. WSL uses the Linux layout.
 
-`TAG_HOME` always names the installation root. Every Tag, including `default`,
-lives under `<TAG_HOME>/instances/NAME`, while its user-editable workspace lives
-at `~/Tag/NAME`. All Tags share releases, launchers, backend account
-authentication, and managed MFS.
-Do not point concurrent old and new CLI releases at the same home while
-upgrading the shared service ownership record.
+`TAG_HOME` always names the installation root. In a normal installation, each
+Tag keeps its working files and private data together in `~/Tag/NAME`.
+The built-in Tag uses `~/Tag/default`. All Tags share installed releases,
+launchers, backend account authentication, and managed MFS.
 
 ```text
-~/Library/Application Support/Tag/     # platform application-data home
+~/Tag/default/                       # everything owned by the default Tag
+  your-files.md
+  artifacts/CHANNEL_ID/             # new saved deliverables by Slack channel
+  .agents/skills/                    # Codex skills
+  .codex/config.toml                 # Tag-only Codex configuration
+  .claude/skills/                    # Claude skills
+  .mcp.json                          # optional Claude project MCP definitions
+  .tag/                             # private, excluded from Git
+    instance.json
+    config/                         # settings and credentials
+    integrations/                   # connector definitions and optional tools
+    state/                          # conversation state, logs, process records
+    tmp/                            # temporary files
+
+~/Library/Application Support/Tag/   # macOS installation-wide software/services
   releases/<version>-<installation-id>/
   current.json
   previous.json
   bin/
-  instances/
-    default/
-      instance.json
-      config/settings.json
-      integrations/bin/     # optional TAG-only tools; prepended to PATH
-      state/                # bridge logs, identity, and conversation settings
-      tmp/                  # disposable task files and generated artifacts
-    NAME/                   # the same layout for each additional Tag
-  shared/mfs/               # installation-owned MFS process state and logs
-
-~/Tag/
-  default/                  # user-owned agent workspace
-    .agents/skills/         # Codex skills
-    .codex/config.toml      # Tag-only Codex MCP definitions
-    .claude/skills/         # Claude skills
-    .mcp.json               # Claude project MCP definitions, when configured
-  NAME/                     # workspace for each additional Tag
+  shared/mfs/
+  state/
 ```
 
-An explicit non-standard `TAG_HOME` remains self-contained and keeps workspaces
-below `instances/NAME/workspace`; this preserves isolation for development,
-testing, and portable installations.
+Named Tags use the same layout at `~/Tag/NAME`. `tag paths --json` reports
+the exact locations. An explicit non-standard `TAG_HOME` retains its portable
+layout: private data under `instances/NAME` and files under
+`instances/NAME/workspace`.
 
-Installations created before the uniform Tag layout may still have
-`config/`, `workspace/`, `integrations/`, `state/`, and `tmp/` directly under
-`TAG_HOME`. The new CLI does not read those paths as the default Tag.
-Stop the old Slack bridge and MFS process, back up `TAG_HOME`, then migrate that
-data once into `instances/default` before starting the new CLI. Do not merge
-live process records or start old and new releases concurrently.
+On startup, Tag automatically migrates older root-level and per-instance data
+into the working folder's `.tag` directory before loading settings or checking
+readiness. It stops the affected bridge, preserves the original files, updates
+managed paths and connector credential references, and verifies the copy before
+switching to the new home. Conflicts preserve both versions and report the
+exact file to resolve; interrupted migrations retry on the next start. Existing
+working files and unrelated settings are preserved. No setup or sign-in is
+required solely for this move.
 
-For the alpha layout change, stop Tag and move an existing default workspace
-once before installing the updated release:
-
-```sh
-mkdir -p "$HOME/Tag"
-mv "$HOME/Library/Application Support/Tag/instances/default/workspace" \
-  "$HOME/Tag/default"
-```
-
-The installer does not merge or remove old workspace directories.
+The hidden `.tag` folder contains secrets. Keep it when moving a Tag's working
+folder, and treat copies as private. Cloud syncing the folder also syncs those
+secrets. Owner-only permissions and Git exclusion do not prevent access by an
+agent running under the same account; see [the security policy](../SECURITY.md).
+Global Codex/Claude sign-ins and the shared MFS index remain outside this folder.
 
 Configuration is JSON on every platform and is never executed as shell code.
 POSIX installations create private directories; Windows uses the account's ACL.

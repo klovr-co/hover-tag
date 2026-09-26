@@ -14,8 +14,10 @@ try:
     import tag_config as settings
     import slack_channels
     import setup_ui as ui
+    from tag_paths import default_workspace
 except ImportError:
     from scripts import slack_channels, tag_config as settings, setup_ui as ui
+    from scripts.tag_paths import default_workspace
 
 
 def target_detail(values: dict[str, str], tag_id: str = "default", *, suffix: str = "") -> str:
@@ -89,7 +91,7 @@ def inspect(home: Path, lifecycle, *, offline: bool = False, tag_id: str = "defa
         "next_command": tag_command(tag_id, action),
         "configuration": {"path": str(path), "exists": path.exists(), "error": error,
                           "complete": not error and not errors, "fields": errors},
-        "workspace": os.getenv("OPENTAG_WORKDIR", str(home / "workspace")),
+        "workspace": str(default_workspace(home)),
         "backend": {"selected": backend if backend in {"codex", "claude"} else None,
                     "experimental": backend == "claude", "executable_found": installed,
                     "authentication": "not_checked", "task_execution": "not_checked"},

@@ -1668,15 +1668,21 @@ def _run_cli() -> int:
                 display.info_row(str(row["id"]), detail, good=bool(row.get("valid")))
             display.next_action("Connect another Slack workspace", "tag add")
         return 0
-    context = tag_instances.resolve(installation_root, tag_id)
+    initializes_default = tag_id == "default" and (
+        args.command in {"start", "dev", "setup"}
+        or (args.command == "config" and args.arguments and args.arguments[0] in {"init", "set"})
+    )
+    context = (tag_instances.ensure_default(installation_root) if initializes_default
+               else tag_instances.resolve(installation_root, tag_id))
     home = context.home
     if args.command in {"start", "dev", "setup"}:
-        tag_instances.ensure_default(installation_root)
         try:
             from tag_layout import migrate as migrate_layout
         except ImportError:
             from scripts.tag_layout import migrate as migrate_layout
         migrate_layout(context, sys.modules[__name__])
+        context = tag_instances.resolve(installation_root, tag_id)
+        home = context.home
     environment = instance_environment(context)
     startup_attempt_overrides = {
         key: environment[key] for key in STARTUP_ATTEMPT_ENV_KEYS if key in environment
@@ -1832,6 +1838,11 @@ def _run_cli() -> int:
             raise RuntimeError("No previous release is available")
         current = installation_root / "current.json"
         old, target = current.read_text(encoding="utf-8"), previous.read_text(encoding="utf-8")
+        if home.name == ".tag" and json.loads(target).get("instance_layout", 1) < 2:
+            raise RuntimeError(
+                "The previous release cannot read this Tag's .tag folder. "
+                "Rollback was refused to preserve the current settings and history."
+            )
         atomic_text(current, target)
         atomic_text(previous, old)
         display.header("Rollback", "Selecting the previously installed Tag release.")
