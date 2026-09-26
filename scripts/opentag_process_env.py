@@ -31,8 +31,8 @@ def without_telemetry_environment(source: Mapping[str, str]) -> dict[str, str]:
     return {
         key: value for key, value in source.items()
         if key not in TELEMETRY_ENV_NAMES
-        and not key.upper().startswith("TAG_TELEMETRY_")
-        and not key.upper().startswith("TAG_POSTHOG_")
+        and "TELEMETRY" not in key.upper()
+        and "POSTHOG" not in key.upper()
     }
 
 
