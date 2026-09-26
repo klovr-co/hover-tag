@@ -18,6 +18,21 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class TagControlTests(unittest.TestCase):
+    def test_status_explains_indexing_cooldown(self):
+        self.complete()
+        with patch.object(tag_cli, "healthy", return_value=True), patch.object(
+            tag_cli, "slack_ready", return_value=False
+        ), patch.object(tag_control.tag_slack_backoff, "cooldown", return_value=130), patch.object(
+            tag_control.time, "time", return_value=100
+        ):
+            report = tag_control.inspect(self.home, tag_cli)
+        self.assertEqual(report["memory_sync"]["state"], "rate_limited")
+        self.assertEqual(report["memory_sync"]["retry_in_seconds"], 30)
+        with redirect_stdout(StringIO()) as output:
+            tag_control.show_status(report)
+        self.assertIn("Indexing paused by Slack; retrying in 30 seconds", output.getvalue())
+
+
     def test_config_show_targets_named_tag_settings(self):
         self.complete()
         with patch.object(tag_control.ui.display, "next_action") as next_action, redirect_stdout(StringIO()):
@@ -391,7 +406,9 @@ class TagControlTests(unittest.TestCase):
             tag_cli, "doctor_report", return_value=(0, {"checks": []})
         ), patch.object(
             tag_cli, "slack_ready", return_value=True
-        ), patch.object(tag_cli, "stop_process"), redirect_stdout(StringIO()):
+        ), patch.object(tag_cli, "stop_process"), patch.object(
+            tag_cli.tag_mfs_runtime, "active", return_value=True
+        ), redirect_stdout(StringIO()):
             self.assertEqual(tag_cli.main(), 0)
 
     def test_doctor_json_suppresses_raw_response_details(self):

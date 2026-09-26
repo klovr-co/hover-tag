@@ -150,7 +150,7 @@ class TagLifecycleTests(unittest.TestCase):
             tag_cli, "mfs_server_executable", return_value="/bin/mfs-server"
         ), patch.object(tag_cli, "replace_unmanaged_local_mfs"), patch.object(
             tag_cli, "start_process"
-        ) as start:
+        ) as start, patch.object(tag_cli.tag_mfs_runtime, "active", return_value=True):
             tag_cli.ensure_shared_memory(context, environment)
 
         self.assertFalse((context.shared_mfs_home / "start.lock").exists())
@@ -521,7 +521,7 @@ class TagLifecycleTests(unittest.TestCase):
         config.touch()
         existing = type("Completed", (), {"returncode": 1, "stdout": "", "stderr": "connector_already_registered"})()
         updated = type("Completed", (), {"returncode": 0, "stdout": "", "stderr": ""})()
-        with patch.object(tag_cli.shutil, "which", return_value="mfs"), patch.object(
+        with patch.object(tag_cli, "mfs_client_executable", return_value="mfs"), patch.object(
             tag_cli.subprocess, "run", side_effect=[existing, updated]
         ) as run:
             tag_cli.sync_configured_slack_memory({
