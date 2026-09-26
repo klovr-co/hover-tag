@@ -1616,6 +1616,8 @@ def finish_setup(_config_path: Path, values: dict[str, str], _channels: list[sla
         ui.message("✓ Claude executable available · sign-in will be checked by its first task")
     print()
     ui.message("✓ Setup complete. No services were started and no history was indexed.")
+    if len(set(values.get("SLACK_ALLOWED_USER_IDS", "").split(","))) == 1 and values.get("SLACK_ALLOWED_USER_IDS"):
+        ui.message("Once Tag starts successfully, it will send your configured Slack account a welcome DM with the community help link.")
     tag_id = os.getenv("TAG_ID", "default")
     command = "tag start" if tag_id == "default" else f"tag {shlex.quote(tag_id)} start"
     ui.display.next_action(
