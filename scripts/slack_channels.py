@@ -226,7 +226,7 @@ def choose_channels(
     input_fn: Callable[[str], str] | None = None,
     app_id: str = "",
 ) -> list[SlackChannel]:
-    """Require explicit approval for joined channels and optional public joins."""
+    """Include joined channels automatically and offer approved public joins."""
     reader = input_fn or input
     try:
         import setup_ui as ui
@@ -239,26 +239,23 @@ def choose_channels(
             public_options = [channel for channel in channels if not channel.is_private and not channel.is_member]
             if joined:
                 print()
-                ui.message("Choose which joined channels Tag may reply to and index.")
-                approved = ui.checklist(
-                    [channel.label for channel in joined],
-                    {index for index, channel in enumerate(joined) if channel.channel_id in parse_channel_ids(current)},
-                )
-                selected_joined = [channel for index, channel in enumerate(joined) if index in approved]
-                options = [f"Continue with {len(selected_joined)} selected channel(s)"]
+                ui.message("Already joined — included automatically:")
+                for channel in joined:
+                    ui.message(channel.label)
+                options = ["Continue"]
                 if public_options:
                     options.append("Add public channels")
                 options.extend(["Check again", "Save and exit"])
                 action = ui.choose("Channel access", options)
                 if action == 0:
-                    return selected_joined
+                    return joined
                 if public_options and action == 1:
                     ui.message("Optional: select public channels for Tag to join.")
                     indices = ui.checklist([f"#{channel.name} (public; Tag will join)" for channel in public_options], set())
                     requested = [channel for index, channel in enumerate(public_options) if index in indices]
                     added = join_selected_channels(token, requested, app_id=app_id)
                     if added is not None:
-                        return selected_joined + added
+                        return joined + added
                     channels = list_channels(token)
                     continue
                 if (public_options and action == 2) or (not public_options and action == 1):
@@ -296,15 +293,17 @@ def choose_channels(
         raise SlackChannelError(
             "No joined Slack channels are visible to the bot; invite it to a channel and try again"
         )
-    selected = set(parse_channel_ids(current))
+    joined = [channel for channel in available if channel.is_member]
     while True:
         print()
-        ui.message("Choose one or more channels for replies and Slack memory:")
+        ui.message("Joined channels are included automatically. Select additional public channels to join:")
         for index, channel in enumerate(available, 1):
-            marker = "x" if channel.channel_id in selected else " "
+            marker = "x" if channel.is_member else " "
             ui.message(f"{index}. [{marker}] {channel.label}")
-        answer = reader("Channels (comma-separated numbers): ").strip()
+        answer = reader("Add channels (comma-separated numbers; Enter to continue): ").strip()
         if not answer:
+            if joined:
+                return joined
             ui.message("Select at least one channel.")
             continue
         pieces = [piece.strip() for piece in answer.split(",") if piece.strip()]
@@ -315,7 +314,7 @@ def choose_channels(
         if any(index < 1 or index > len(available) for index in indices):
             ui.message("Choose only displayed channel numbers.")
             continue
-        chosen: list[SlackChannel] = []
+        chosen: list[SlackChannel] = list(joined)
         for index in indices:
             channel = available[index - 1]
             if channel not in chosen:
