@@ -25,6 +25,41 @@ def archive(path, content=b'#!/bin/sh\nprintf "slack v4.8.0\\n"\n'):
 
 
 class DependenciesTests(unittest.TestCase):
+    def test_source_start_restores_private_slack_in_fresh_process_environment(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            command = home / "runtime/slack" / dependencies.SLACK_VERSION / "slack"
+            command.parent.mkdir(parents=True)
+            for _ in range(2):
+                with patch.dict(os.environ, {"PATH": "/usr/bin", "SLACK_CONFIG_DIR": "/existing/auth"}), patch.object(
+                    dependencies, "ensure_slack", return_value=command
+                ) as ensure:
+                    dependencies.migrate(home, ROOT)
+                    ensure.assert_called_once_with(home)
+                    self.assertEqual(os.environ["PATH"].split(os.pathsep)[0], str(command.parent))
+                    self.assertEqual(os.environ["SLACK_CONFIG_DIR"], "/existing/auth")
+            self.assertFalse((home / "current.json").exists())
+
+    def test_source_start_retries_interrupted_private_slack_installation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            (home / "runtime/slack/old-version").mkdir(parents=True)
+            command = home / "runtime/slack" / dependencies.SLACK_VERSION / "slack"
+            with patch.dict(os.environ, {"PATH": "/usr/bin"}), patch.object(
+                dependencies, "ensure_slack", side_effect=[RuntimeError("offline"), command]
+            ) as ensure:
+                with self.assertRaisesRegex(RuntimeError, "offline"):
+                    dependencies.migrate(home, ROOT)
+                self.assertEqual(os.environ["PATH"], "/usr/bin")
+                dependencies.migrate(home, ROOT)
+                self.assertEqual(ensure.call_count, 2)
+                self.assertEqual(os.environ["PATH"].split(os.pathsep)[0], str(command.parent))
+
+    def test_fresh_source_checkout_defers_slack_installation_to_setup(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(dependencies, "ensure_slack") as ensure:
+            dependencies.migrate(Path(tmp), ROOT)
+            ensure.assert_not_called()
+
     def test_compatibility_checks_version_and_exit_status(self):
         for value, code, expected in [('slack v4.7.0', 0, True), ('slack v4.8.0', 0, True),
                                       ('slack v4.6.0', 0, False), ('slack v5.0.0', 0, False),
