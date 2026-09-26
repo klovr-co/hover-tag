@@ -30,6 +30,8 @@ try:
     from tag_locks import LifecycleLock
     from tag_config import read_config
     import tag_credentials
+    import tag_mfs_runtime
+    import tag_slack_backoff
     import tag_display as display
 except ImportError:
     from scripts.tag_paths import initialize_instance, initialize_workspace, runtime_environment, tag_home
@@ -37,6 +39,7 @@ except ImportError:
     from scripts.tag_locks import LifecycleLock
     from scripts.tag_config import read_config
     from scripts import tag_credentials
+    from scripts import tag_mfs_runtime, tag_slack_backoff
     from scripts import tag_display as display
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -699,37 +702,39 @@ def ensure_shared_memory(
         replace_unmanaged_local_mfs(
             context.home, url, state_dir=context.shared_mfs_home
         )
-    if healthy(url):
+    shared = context.shared_mfs_home
+    process = process_for(shared / "mfs.json") if local_mfs else None
+    if healthy(url) and (not local_mfs or process is None or tag_mfs_runtime.active(shared, process)):
         return
     if not local_mfs:
         raise RuntimeError(
             "Configured external MFS endpoint is unavailable; start that server first"
         )
-    executable = mfs_server_executable()
-    if not executable:
-        raise RuntimeError(
-            "MFS server is unavailable; run ./install.sh --dependencies-only"
-        )
-    shared = context.shared_mfs_home
+    if not mfs_server_executable():
+        raise RuntimeError("MFS server is unavailable; run ./install.sh --dependencies-only")
     shared.mkdir(parents=True, exist_ok=True, mode=0o700)
     mfs_lock = LifecycleLock(shared / "start.lock").acquire()
     try:
-        # Recheck after acquiring the installation-wide lock. A different Tag
-        # may have completed startup while this process waited.
+        process = process_for(shared / "mfs.json")
+        if process is not None and not tag_mfs_runtime.active(shared, process):
+            # Migration v1: only restart an identity-verified Tag-owned process.
+            # Stored indexes, connector settings, and credentials stay in place.
+            stop_process(context.home, "mfs", state_dir=shared)
         if not healthy(url):
+            instance_id = uuid.uuid4().hex
+            child_environment = dict(environment, TAG_MFS_STATE_DIR=str(shared), TAG_MFS_PROCESS_ID=instance_id)
             start_process(
-                context.home,
-                "mfs",
-                [executable, "run"],
-                environment=environment,
-                state_dir=shared,
-                cwd=context.workspace,
+                context.home, "mfs",
+                [sys.executable, str(ROOT / "scripts/tag_mfs_server.py"), "run"],
+                environment=child_environment, state_dir=shared, cwd=context.workspace,
+                metadata={"slack_runtime_version": tag_mfs_runtime.VERSION, "instance_id": instance_id},
             )
         attempts = int(environment.get("OPENTAG_MFS_STARTUP_ATTEMPTS", "90"))
         for _ in range(attempts):
-            if healthy(url):
+            process = process_for(shared / "mfs.json")
+            if healthy(url) and tag_mfs_runtime.active(shared, process):
                 break
-            if process_for(shared / "mfs.json") is None:
+            if process is None:
                 detail = log_tail(context.home, "mfs", state_dir=shared)
                 raise RuntimeError(
                     "Shared MFS exited before becoming healthy"
@@ -737,11 +742,15 @@ def ensure_shared_memory(
                 )
             time.sleep(1)
         else:
-            detail = log_tail(context.home, "mfs", state_dir=shared)
             raise RuntimeError(
-                f"Shared MFS did not become healthy within {attempts} seconds"
-                + (f":\n{detail}" if detail else "; run tag memory status")
+                "Shared MFS did not verify its Slack rate-limit runtime; run tag memory status, then retry tag start"
             )
+        # Commit only after the running adapter and HTTP health are verified.
+        try:
+            from tag_config import save_config
+        except ImportError:
+            from scripts.tag_config import save_config
+        save_config(shared / "slack-runtime-migration-v1.json", {"version": tag_mfs_runtime.VERSION})
     finally:
         mfs_lock.release()
 
@@ -1101,7 +1110,21 @@ def wait_for_configured_mfs_scopes(*, attempts: int | None = None) -> list[str]:
     limit = attempts if attempts is not None else int(
         os.getenv("OPENTAG_MFS_STARTUP_ATTEMPTS", "90")
     )
+    last_cooldown = 0.0
+    cooldown_state = tag_home() / "shared/mfs/slack-cooldowns-v1"
+    deadline = time.monotonic() + max(1, limit)
     for attempt in range(max(1, limit)):
+        if attempt and time.monotonic() >= deadline:
+            break
+        retry_at = tag_slack_backoff.cooldown(cooldown_state, os.getenv("SLACK_TEAM_ID", ""))
+        if retry_at > time.time():
+            if retry_at != last_cooldown:
+                display.pending_row("Channel memory", f"Indexing paused by Slack; retrying in {max(1, int(retry_at - time.time()))} seconds…")
+                sys.stdout.flush()
+                last_cooldown = retry_at
+            if attempt + 1 < max(1, limit):
+                time.sleep(1)
+            continue
         resolved = {
             scope: current
             for scope in scopes
@@ -1115,6 +1138,11 @@ def wait_for_configured_mfs_scopes(*, attempts: int | None = None) -> list[str]:
             return []
         if attempt + 1 < max(1, limit):
             time.sleep(1)
+    if last_cooldown:
+        raise RuntimeError(
+            "Slack history indexing is waiting on a rate limit. Memory will retry automatically in the background; "
+            "run tag start again after indexing finishes. Do not repeat setup."
+        )
     return remaining
 
 
