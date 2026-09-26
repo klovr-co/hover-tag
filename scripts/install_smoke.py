@@ -11,8 +11,9 @@ ROOT = Path(__file__).resolve().parents[1]
 with tempfile.TemporaryDirectory(prefix="Tag smoke ") as temporary:
     directory = Path(temporary)
     env = dict(os.environ, TAG_HOME=str(directory / "home"))
-    subprocess.run([sys.executable, str(ROOT / "scripts/tag_install.py"), "--source", str(ROOT),
-                    "--bin-dir", str(directory / "bin")], env=env, check=True)
+    installer = ([sys.executable, str(ROOT / "scripts/tag_install.py"), "--source", str(ROOT)]
+                 if os.name == "nt" else ["sh", str(ROOT / "install.sh")])
+    subprocess.run([*installer, "--bin-dir", str(directory / "bin")], env=env, check=True)
     command = directory / "bin" / ("tag.cmd" if os.name == "nt" else "tag")
     subprocess.run([str(command), "version"], cwd=directory, env=env, check=True)
     subprocess.run([str(command), "config", "init", "--json"], cwd=directory, env=env, check=True)

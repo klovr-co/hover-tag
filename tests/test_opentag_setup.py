@@ -49,6 +49,17 @@ class OpenTagSetupTests(unittest.TestCase):
         self.assertIn("Tag is still stopped. Run this command", output.getvalue())
         self.assertIn("No services were started", output.getvalue())
 
+    def test_codex_compatibility_failure_does_not_attempt_login_or_install(self):
+        with patch.object(opentag_setup, "selected_backend_available", return_value=True), patch.object(
+                opentag_setup.lifecycle, "mfs_client_executable", return_value="/runtime/bin/mfs"), patch.object(
+                opentag_setup.shutil, "which", return_value="/user/codex"), patch.object(
+                opentag_setup.subprocess, "run", return_value=subprocess.CompletedProcess([], 1)) as run, redirect_stdout(StringIO()) as output:
+            result = opentag_setup.finish_setup(Path("settings.json"), {"OPENTAG_BACKEND": "codex"}, [])
+        self.assertEqual(result, 1)
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(run.call_args.args[0], ["/user/codex", "app-server", "--help"])
+        self.assertIn("Update your existing Codex installation", " ".join(output.getvalue().split()))
+
     def test_bot_name_rejects_unicode_controls_and_line_separators(self):
         error = "Use a name from 1 to 35 characters without line breaks"
         for character in ("\x7f", "\x85", "\u2028", "\u2029"):
@@ -693,7 +704,8 @@ class OpenTagSetupTests(unittest.TestCase):
             ("Example Team", "T123"), ("Second Team", "T456"),
         ])
 
-    def test_workspace_picker_returns_selected_id_without_login(self) -> None:
+    @patch.object(opentag_setup.tag_dependencies, "ensure_slack", return_value=Path("/bin/slack"))
+    def test_workspace_picker_returns_selected_id_without_login(self, _ensure_slack) -> None:
         result = subprocess.CompletedProcess([], 0, "Example Team (Team ID: T123)\nSecond Team (Team ID: T456)\n", "")
         with patch.object(opentag_setup.shutil, "which", return_value="/bin/slack"), patch.object(
             opentag_setup.subprocess, "run", return_value=result
@@ -705,7 +717,8 @@ class OpenTagSetupTests(unittest.TestCase):
         self.assertIn("2. Second Team", output.getvalue())
         self.assertNotIn("sandbox", output.getvalue().lower())
 
-    def test_workspace_picker_refreshes_accounts_after_login(self) -> None:
+    @patch.object(opentag_setup.tag_dependencies, "ensure_slack", return_value=Path("/bin/slack"))
+    def test_workspace_picker_refreshes_accounts_after_login(self, _ensure_slack) -> None:
         results = [subprocess.CompletedProcess([], 0, "", ""),
                    subprocess.CompletedProcess([], 0, "Example Team (Team ID: T123)\n", "")]
         with patch.object(opentag_setup.shutil, "which", return_value="/bin/slack"), patch.object(
@@ -716,7 +729,8 @@ class OpenTagSetupTests(unittest.TestCase):
             self.assertEqual(opentag_setup.connect_slack_cli(), "T123")
         login.assert_called_once_with(["auth", "login"], interactive=True)
 
-    def test_workspace_picker_can_exit_when_listing_fails(self) -> None:
+    @patch.object(opentag_setup.tag_dependencies, "ensure_slack", return_value=Path("/bin/slack"))
+    def test_workspace_picker_can_exit_when_listing_fails(self, _ensure_slack) -> None:
         result = subprocess.CompletedProcess([], 1, "Example Team (Team ID: T123)\n", "error")
         with patch.object(opentag_setup.shutil, "which", return_value="/bin/slack"), patch.object(
             opentag_setup.subprocess, "run", return_value=result

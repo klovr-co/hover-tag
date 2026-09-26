@@ -1,6 +1,7 @@
 .env
 .codex/skills/
 .runtime/
+.venv
 *.log
 __pycache__/
 *.py[cod]
