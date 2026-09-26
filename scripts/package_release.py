@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a reproducible source archive consumed by Tag installers."""
+"""Build a reproducible runtime archive consumed by Tag installers."""
 from __future__ import annotations
 
 import argparse
@@ -13,8 +13,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-SYMLINK_MODE = 0o120000
-GITLINK_MODE = 0o160000
+try:
+    from .tag_install import runtime_files
+except ImportError:
+    from tag_install import runtime_files
 
 
 def _source_epoch(root: Path) -> int:
@@ -26,16 +28,18 @@ def _source_epoch(root: Path) -> int:
     ).strip())
 
 
-def _tracked_files(root: Path) -> list[tuple[str, int]]:
-    output = subprocess.check_output(["git", "ls-files", "-s", "-z"], cwd=root)
-    tracked: list[tuple[str, int]] = []
-    for entry in output.decode().split("\0"):
-        if not entry:
-            continue
-        metadata, name = entry.split("\t", 1)
-        mode = int(metadata.split()[0], 8)
-        tracked.append((name, mode))
-    return sorted(tracked)
+def _tracked_modes(root: Path) -> dict[str, int]:
+    """Keep Git's executable bits stable across Windows and POSIX checkouts."""
+    result = subprocess.run(["git", "-C", str(root), "ls-files", "-s", "-z"],
+                            capture_output=True, text=True, check=False)
+    if result.returncode:
+        return {}
+    modes = {}
+    for entry in result.stdout.split("\0"):
+        if entry:
+            metadata, name = entry.split("\t", 1)
+            modes[name] = int(metadata.split()[0], 8)
+    return modes
 
 
 def build_archive(
@@ -48,20 +52,16 @@ def build_archive(
     posthog_project_token: str = "",
     privacy_notice_url: str = "",
 ) -> str:
-    """Write tracked files with stable metadata, optionally stamping VERSION."""
+    """Write only runtime files with stable metadata, optionally stamping VERSION."""
+    files = runtime_files(root)
+    modes = _tracked_modes(root)
     timestamp = time.gmtime(epoch if epoch is not None else _source_epoch(root))[:6]
     # ZIP cannot represent timestamps before 1980.
     timestamp = max(timestamp, (1980, 1, 1, 0, 0, 0))
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
-        for name, git_mode in _tracked_files(root):
-            # Installers reject symlink entries, and gitlinks contain no file data.
-            if git_mode in {SYMLINK_MODE, GITLINK_MODE}:
-                continue
+        for name in files:
             path = root / name
-            if not path.is_file():
-                raise FileNotFoundError(
-                    f"tracked file missing from the working tree: {name}"
-                )
+            git_mode = modes.get(name, path.stat().st_mode)
             info = zipfile.ZipInfo(name, timestamp)
             info.create_system = 3
             info.compress_type = zipfile.ZIP_DEFLATED

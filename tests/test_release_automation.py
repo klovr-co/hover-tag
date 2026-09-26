@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ast
 import hashlib
+import os
 import json
 import shutil
 import subprocess
@@ -337,17 +339,13 @@ class ReleaseArtifactTests(unittest.TestCase):
         source = (root / "scripts/tag_telemetry_config.py").read_text(encoding="utf-8")
         with tempfile.TemporaryDirectory() as temporary_directory:
             archive = Path(temporary_directory) / "release.zip"
-            tracked = package_release._tracked_files(root)
-            if not any(name == "scripts/tag_telemetry_config.py" for name, _ in tracked):
-                tracked.append(("scripts/tag_telemetry_config.py", 0o100644))
-            with patch("scripts.package_release._tracked_files", return_value=tracked):
-                build_archive(
-                    root,
-                    archive,
-                    posthog_host="https://eu.posthog.example",
-                    posthog_project_token="phc_public_project",
-                    privacy_notice_url="https://example.com/privacy",
-                )
+            build_archive(
+                root,
+                archive,
+                posthog_host="https://eu.posthog.example",
+                posthog_project_token="phc_public_project",
+                privacy_notice_url="https://example.com/privacy",
+            )
             with zipfile.ZipFile(archive) as bundle:
                 packaged = bundle.read("scripts/tag_telemetry_config.py").decode()
 
@@ -387,28 +385,74 @@ class ReleaseArtifactTests(unittest.TestCase):
 
         self.assertEqual(errors, [])
 
-    def test_package_rejects_missing_files_but_skips_symlinks_and_gitlinks(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            included = root / "included.txt"
-            included.write_text("included\n", encoding="utf-8")
+    def test_package_contains_only_explicit_runtime_files(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as temp:
+            archive = Path(temp) / "runtime.zip"
+            build_archive(root, archive)
+            with zipfile.ZipFile(archive) as bundle:
+                names = set(bundle.namelist())
+        self.assertIn("scripts/tag_cli.py", names)
+        self.assertIn("scripts/release_check.py", names)  # Used by installer and doctor.
+        self.assertIn("references/runtime-agent.md", names)
+        self.assertIn("docs/tag-management.md", names)
+        self.assertIn(".agents/skills/tag-troubleshoot/SKILL.md", names)
+        for prefix in ("tests/", ".github/", "assets/", "docs/testing/", "docs/release-evidence/"):
+            self.assertFalse(any(name.startswith(prefix) for name in names), prefix)
+        for name in ("AGENTS.md", ".codex/config.toml", "scripts/package_release.py", "scripts/check_secrets.py"):
+            self.assertNotIn(name, names)
 
-            with patch(
-                "scripts.package_release._tracked_files",
-                return_value=[
-                    ("skill-link", 0o120000),
-                    ("dependency", 0o160000),
-                    (included.name, 0o100644),
-                ],
-            ):
-                build_archive(root, root / "valid.zip", epoch=315532800)
+    def test_runtime_manifest_covers_local_python_imports(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        names = set(package_release.runtime_files(root))
+        local_modules = {p.stem for p in (root / "scripts").glob("*.py")}
+        for name in sorted(names):
+            if not name.endswith(".py"):
+                continue
+            tree = ast.parse((root / name).read_text())
+            for node in ast.walk(tree):
+                imports = []
+                if isinstance(node, ast.Import):
+                    imports = [alias.name.split(".")[-1] for alias in node.names]
+                elif isinstance(node, ast.ImportFrom):
+                    if node.module in {None, "scripts"}:
+                        imports = [alias.name for alias in node.names]
+                    else:
+                        imports = [node.module.split(".")[-1]]
+                for imported in set(imports) & local_modules:
+                    self.assertIn(f"scripts/{imported}.py", names, f"{name} imports omitted module {imported}")
 
-            with patch(
-                "scripts.package_release._tracked_files",
-                return_value=[("missing.txt", 0o100644)],
-            ), self.assertRaisesRegex(
-                FileNotFoundError, "tracked file missing.*missing.txt"
-            ):
+    def test_package_rejects_missing_or_unsafe_required_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "scripts").mkdir()
+            manifest = root / "scripts/runtime-files.json"
+            def policy(name):
+                manifest.write_text(json.dumps({"schema_version": 1, "files": ["scripts/runtime-files.json", name]}))
+            policy("missing.txt")
+            with self.assertRaisesRegex(FileNotFoundError, "Required runtime file missing"):
+                build_archive(root, root / "invalid.zip", epoch=315532800)
+            for name in ("../private.env", "/absolute", "C:/absolute", "directory\\secret"):
+                policy(name)
+                with self.subTest(name=name), self.assertRaises(ValueError):
+                    build_archive(root, root / "invalid.zip", epoch=315532800)
+            policy("included.txt")
+            (root / "included.txt").write_text("included")
+            (root / "secret.env").write_text("must not ship")
+            build_archive(root, root / "valid.zip", epoch=315532800)
+            with zipfile.ZipFile(root / "valid.zip") as bundle:
+                self.assertEqual(set(bundle.namelist()), {"scripts/runtime-files.json", "included.txt"})
+
+    @unittest.skipIf(os.name == "nt", "Creating symlinks requires Windows privileges")
+    def test_package_rejects_manifest_symlinks(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "scripts").mkdir()
+            (root / "scripts/runtime-files.json").write_text(json.dumps({
+                "schema_version": 1, "files": ["scripts/runtime-files.json", "linked.txt"]}))
+            (root / "target.txt").write_text("private")
+            (root / "linked.txt").symlink_to(root / "target.txt")
+            with self.assertRaisesRegex(ValueError, "symlinks"):
                 build_archive(root, root / "invalid.zip", epoch=315532800)
 
     def test_validates_and_promotes_exact_edge_bytes(self) -> None:

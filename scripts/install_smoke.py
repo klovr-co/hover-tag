@@ -4,6 +4,9 @@ import os
 import subprocess
 import sys
 import tempfile
+import zipfile
+
+from package_release import build_archive
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -11,8 +14,18 @@ ROOT = Path(__file__).resolve().parents[1]
 with tempfile.TemporaryDirectory(prefix="Tag smoke ") as temporary:
     directory = Path(temporary)
     env = dict(os.environ, TAG_HOME=str(directory / "home"))
-    subprocess.run([sys.executable, str(ROOT / "scripts/tag_install.py"), "--source", str(ROOT),
-                    "--bin-dir", str(directory / "bin")], env=env, check=True)
+    # Exercise the shipped payload, not a checkout that can mask omitted files.
+    archive = directory / "release.zip"
+    source = directory / "release"
+    build_archive(ROOT, archive)
+    with zipfile.ZipFile(archive) as bundle:
+        bundle.extractall(source)
+        for entry in bundle.infolist():
+            if entry.external_attr >> 16 & 0o111:
+                (source / entry.filename).chmod(0o755)
+    installer = ([sys.executable, str(source / "scripts/tag_install.py"), "--source", str(source)]
+                 if os.name == "nt" else ["sh", str(source / "install.sh")])
+    subprocess.run([*installer, "--bin-dir", str(directory / "bin")], env=env, check=True)
     command = directory / "bin" / ("tag.cmd" if os.name == "nt" else "tag")
     subprocess.run([str(command), "version"], cwd=directory, env=env, check=True)
     subprocess.run([str(command), "config", "init", "--json"], cwd=directory, env=env, check=True)

@@ -37,8 +37,7 @@ command_has_version() {
 }
 
 mfs_server_has_version() {
-    command -v uv >/dev/null 2>&1 || return 1
-    uv tool list 2>/dev/null | grep -F "mfs-server v$MFS_VERSION" >/dev/null 2>&1
+    "$RUNTIME_PYTHON" -c 'import importlib.metadata, sys; sys.exit(importlib.metadata.version("mfs-server") != sys.argv[1])' "$MFS_VERSION" 2>/dev/null
 }
 
 sha256_file() {
@@ -98,7 +97,7 @@ install_mfs_cli() {
 check_install() {
     check_mode=${1:-full}
     failed=0
-    for command in python3 uv mfs-server mfs; do
+    for command in mfs-server mfs; do
         if command -v "$command" >/dev/null 2>&1; then
             say "✓ $command"
         else
@@ -143,35 +142,55 @@ if [ "${1:-}" = "--check-dependencies" ]; then
     exit 0
 fi
 
-require_command python3 "Install Python 3.10 or newer."
-python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' \
-    || fail "Python 3.10 or newer is required."
+if [ -z "${TAG_BOOTSTRAP_PYTHON:-}" ] || [ -z "${TAG_BOOTSTRAP_UV:-}" ]; then
+    # Direct invocation follows the same Python-free bootstrap as install.sh.
+    runtime_info=$(sh "$ROOT/install.sh" --runtime-info)
+    TAG_BOOTSTRAP_PYTHON=$(printf '%s\n' "$runtime_info" | sed -n '1p')
+    TAG_BOOTSTRAP_UV=$(printf '%s\n' "$runtime_info" | sed -n '2p')
+fi
 require_command curl "Install curl and run this command again."
-require_command uv "Install uv from https://docs.astral.sh/uv/getting-started/installation/"
-
-uv_bin_dir=$(uv tool dir --bin 2>/dev/null || true)
-if [ -n "$uv_bin_dir" ]; then
-    PATH="$uv_bin_dir:$PATH"
-    export PATH
-fi
-
-if [ ! -x "$RUNTIME_PYTHON" ]; then
-    say "Creating Tag runtime..."
-    uv venv --python python3 "$ROOT/.venv"
-fi
+# Prepare in an immutable directory. The source launcher only sees it after
+# packages, model, and imports pass, just like a managed release activation.
+mkdir -p "$ROOT/.runtime"
+prepared_runtime=$(mktemp -d "$ROOT/.runtime/python.XXXXXX")
+RUNTIME_PYTHON="$prepared_runtime/bin/python"
+RUNTIME_BIN="$prepared_runtime/bin"
+PATH="$RUNTIME_BIN:$PATH"
+export PATH
+say "Creating Tag runtime..."
+"$TAG_BOOTSTRAP_UV" venv --python "$TAG_BOOTSTRAP_PYTHON" "$prepared_runtime"
 say "Installing pinned Tag runtime dependencies..."
-uv pip install --python "$RUNTIME_PYTHON" -r "$ROOT/requirements-runtime.txt"
+"$TAG_BOOTSTRAP_UV" pip install --python "$RUNTIME_PYTHON" -r "$ROOT/requirements-runtime.txt"
 
 say "Preparing the local MFS embedding model..."
 "$RUNTIME_PYTHON" "$ROOT/scripts/preload_mfs_model.py"
 
-# Reinstalling this managed tool ensures optional connector extras (Slack in
-# particular) are present even when the base version already matches.
-say "Ensuring MFS server v$MFS_VERSION with Slack connector support..."
-uv tool install --force "$MFS_SERVER_SPEC"
-if ! command -v mfs >/dev/null 2>&1 || ! command_has_version mfs "$MFS_VERSION"; then
+if [ -x "$ROOT/.venv/bin/mfs" ] && command_has_version "$ROOT/.venv/bin/mfs" "$MFS_VERSION"; then
+    cp "$ROOT/.venv/bin/mfs" "$RUNTIME_BIN/mfs"
+else
     install_mfs_cli
 fi
+check_install dependencies
+"$RUNTIME_PYTHON" - "$ROOT" "$prepared_runtime" <<'PYTHON'
+import os, sys, uuid
+from pathlib import Path
+root, prepared = map(Path, sys.argv[1:])
+active = root / ".venv"
+pending = root / ".runtime" / ("activate-" + uuid.uuid4().hex)
+pending.symlink_to(prepared)
+legacy = None
+try:
+    if active.is_dir() and not active.is_symlink():
+        legacy = root / ".runtime" / ("legacy-" + uuid.uuid4().hex)
+        os.replace(active, legacy)
+    os.replace(pending, active)
+except BaseException:
+    if legacy is not None and not active.exists():
+        os.replace(legacy, active)
+    raise
+finally:
+    pending.unlink(missing_ok=True)
+PYTHON
 
 if [ "${1:-}" = "--dependencies-only" ]; then
     check_install dependencies
@@ -182,7 +201,7 @@ fi
 if [ -f "$ROOT/.env" ]; then
     say "Keeping existing private configuration at $ROOT/.env"
 else
-    python3 "$ROOT/scripts/opentag_setup.py"
+    "$RUNTIME_PYTHON" "$ROOT/scripts/opentag_setup.py"
 fi
 
 say ""
