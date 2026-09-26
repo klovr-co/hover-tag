@@ -82,7 +82,9 @@ class SearchIntentTests(unittest.TestCase):
     def test_explicit_names_support_slack_markup_without_treating_ids_as_names(self) -> None:
         self.assertEqual(
             ("general", "support"),
-            explicit_channel_names("search <#C123|general> and #support"),
+            explicit_channel_names(
+                "search <#C123|general> and #support, but not the ID-only <#C999>"
+            ),
         )
 
     def test_ordinary_request_keeps_current_channel(self) -> None:

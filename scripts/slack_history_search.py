@@ -13,9 +13,17 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from .slack_search_scope import explicit_channel_names, normalize_channel_name
+    from .slack_search_scope import (
+        SLACK_CHANNEL_REF_RE,
+        explicit_channel_names,
+        normalize_channel_name,
+    )
 except ImportError:  # Direct execution: python3 scripts/slack_history_search.py
-    from slack_search_scope import explicit_channel_names, normalize_channel_name
+    from slack_search_scope import (
+        SLACK_CHANNEL_REF_RE,
+        explicit_channel_names,
+        normalize_channel_name,
+    )
 
 
 def authorized_channels(raw_grant: str) -> tuple[dict[str, str], ...]:
@@ -46,7 +54,7 @@ def authorized_channels(raw_grant: str) -> tuple[dict[str, str], ...]:
 
 
 def requested_channel_names(raw_grant: str) -> tuple[str, ...]:
-    """Read explicit names from the bridge-bound original Slack request."""
+    """Read explicit names and preserve ID references from the original request."""
     try:
         payload: Any = json.loads(raw_grant)
     except (json.JSONDecodeError, TypeError):
@@ -54,15 +62,28 @@ def requested_channel_names(raw_grant: str) -> tuple[str, ...]:
     request_text = payload.get("request_text") if isinstance(payload, dict) else None
     if not isinstance(request_text, str):
         return ()
-    authorized_names = {
-        normalize_channel_name(channel["name"])
-        for channel in authorized_channels(raw_grant)
+    channels = authorized_channels(raw_grant)
+    authorized_by_id = {
+        channel["id"]: normalize_channel_name(channel["name"])
+        for channel in channels
     }
-    return tuple(
+    authorized_names = set(authorized_by_id.values())
+    names: list[str] = []
+    for match in SLACK_CHANNEL_REF_RE.finditer(request_text):
+        channel_id = match.group("id")
+        if channel_id not in authorized_by_id:
+            raise ValueError(
+                "A Slack channel reference is not authorized and indexed. "
+                "Ask the user to confirm the channel names before searching."
+            )
+        names.append(f"<#{channel_id}>")
+    plain_text = SLACK_CHANNEL_REF_RE.sub(" ", request_text)
+    names.extend(
         name
-        for name in explicit_channel_names(request_text)
-        if not name.isdigit() or normalize_channel_name(name) in authorized_names
+        for name in explicit_channel_names(plain_text)
+        if not name.isdigit() or name in authorized_names
     )
+    return tuple(dict.fromkeys(name for name in names if name))
 
 
 def _selection_error(
@@ -92,12 +113,18 @@ def select_channels(
 ) -> tuple[dict[str, str], ...]:
     if not requested_names:
         return channels
+    by_id = {channel["id"]: channel for channel in channels}
     by_name: dict[str, list[dict[str, str]]] = {}
     for channel in channels:
         by_name.setdefault(normalize_channel_name(channel["name"]), []).append(channel)
     selected: list[dict[str, str]] = []
     for requested_name in requested_names:
-        matches = by_name.get(normalize_channel_name(requested_name), [])
+        reference = SLACK_CHANNEL_REF_RE.fullmatch(requested_name)
+        if reference:
+            channel = by_id.get(reference.group("id"))
+            matches = [channel] if channel else []
+        else:
+            matches = by_name.get(normalize_channel_name(requested_name), [])
         if len(matches) != 1:
             raise ValueError(f"Channel is not uniquely authorized and indexed: #{requested_name.lstrip('#')}")
         if matches[0] not in selected:
@@ -110,15 +137,29 @@ def select_channels_for_request(
     requested_names: list[str],
     original_names: tuple[str, ...],
 ) -> tuple[dict[str, str], ...]:
-    """Bind explicitly named requests to the user's exact channel spellings."""
+    """Bind CLI names to the original request, retaining exact reference IDs."""
     if original_names:
         supplied = tuple(
             dict.fromkeys(normalize_channel_name(name) for name in requested_names)
         )
-        if set(supplied) != set(original_names):
+        by_id = {channel["id"]: channel for channel in channels}
+        original_labels: list[str] = []
+        for name in original_names:
+            reference = SLACK_CHANNEL_REF_RE.fullmatch(name)
+            if reference:
+                channel = by_id.get(reference.group("id"))
+                if channel is None:
+                    raise _selection_error(original_names, channels)
+                original_labels.append(normalize_channel_name(channel["name"]))
+            else:
+                original_labels.append(name)
+        if set(supplied) != set(original_labels):
             raise _selection_error(original_names, channels)
     try:
-        return select_channels(channels, requested_names)
+        # CLI names confirm the request; original references determine exact scopes.
+        return select_channels(
+            channels, list(original_names) if original_names else requested_names
+        )
     except ValueError:
         raise _selection_error(original_names or tuple(requested_names), channels) from None
 
