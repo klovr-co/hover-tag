@@ -52,7 +52,7 @@ class SlackHistorySearchTests(unittest.TestCase):
                 "request_text": "Search <#C1|general> and #marketing for launch notes",
             }
         )
-        self.assertEqual(("general", "marketing"), requested_channel_names(grant))
+        self.assertEqual(("<#C1>", "marketing"), requested_channel_names(grant))
 
     def test_id_only_slack_mentions_resolve_through_the_authorized_grant(self) -> None:
         grant = json.dumps(
@@ -64,7 +64,7 @@ class SlackHistorySearchTests(unittest.TestCase):
         channels = authorized_channels(grant)
         original_names = requested_channel_names(grant)
 
-        self.assertEqual(("general", "marketing"), original_names)
+        self.assertEqual(("<#C1>", "<#C2>"), original_names)
         self.assertEqual(
             ("C1", "C2"),
             tuple(
@@ -111,7 +111,7 @@ class SlackHistorySearchTests(unittest.TestCase):
             }
         )
         self.assertEqual(
-            ("general", "lowercase-id"), requested_channel_names(grant)
+            ("<#C1>", "<#c1>"), requested_channel_names(grant)
         )
 
     def test_unknown_reference_id_cannot_match_an_authorized_channel_name(self) -> None:
@@ -181,3 +181,46 @@ class SlackHistorySearchTests(unittest.TestCase):
             select_channels_for_request(
                 authorized_channels(GRANT), [], ("general", "marketing")
             )
+
+    def test_id_references_select_exact_channels_with_duplicate_names(self) -> None:
+        channels = [
+            {"id": "C1", "name": "general", "scope": "slack://one/general"},
+            {"id": "C2", "name": "General", "scope": "slack://two/general"},
+        ]
+        for request, expected in (
+            ("Search <#C2> for notes", ("C2",)),
+            ("Search <#C2|stale-name> for notes", ("C2",)),
+            ("Search <#C1> and <#C2> for notes", ("C1", "C2")),
+            ("Search <#C2> and <#C2> for notes", ("C2",)),
+        ):
+            with self.subTest(request=request):
+                grant = json.dumps(
+                    {"mode": "all", "channels": channels, "request_text": request}
+                )
+                selected = select_channels_for_request(
+                    authorized_channels(grant), ["general"], requested_channel_names(grant)
+                )
+                self.assertEqual(expected, tuple(channel["id"] for channel in selected))
+
+    def test_plain_duplicate_name_remains_ambiguous_even_with_id_reference(self) -> None:
+        for request in ("Search #general", "Search <#C1> and #general"):
+            with self.subTest(request=request):
+                grant = json.dumps({
+                    "mode": "all",
+                    "channels": [
+                        {"id": "C1", "name": "general", "scope": "slack://one/general"},
+                        {"id": "C2", "name": "general", "scope": "slack://two/general"},
+                    ],
+                    "request_text": request,
+                })
+                with self.assertRaisesRegex(ValueError, "confirm the channel names"):
+                    select_channels_for_request(
+                        authorized_channels(grant), ["general"], requested_channel_names(grant)
+                    )
+
+    def test_id_selection_never_falls_back_to_names(self) -> None:
+        channels = ({"id": "C1", "name": "c9", "scope": "slack://one/c9"},)
+        for reference in ("<#C9>", "<#c1>"):
+            with self.subTest(reference=reference):
+                with self.assertRaisesRegex(ValueError, "not uniquely authorized"):
+                    select_channels(channels, [reference])
