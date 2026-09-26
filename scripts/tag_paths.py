@@ -50,7 +50,11 @@ def instance_home() -> Path:
     """
     override = os.getenv("TAG_INSTANCE_HOME")
     if not override:
-        return tag_home() / "instances/default"
+        try:
+            from .tag_instances import instance_path
+        except ImportError:
+            from tag_instances import instance_path
+        return instance_path(tag_home(), "default")
     path = Path(override).expanduser()
     if not path.is_absolute():
         raise ValueError("TAG_INSTANCE_HOME must be an absolute path")
@@ -68,6 +72,38 @@ def tag_temp_dir() -> Path:
     return temporary
 
 
+def native_installation(installation_root: Path) -> bool:
+    return installation_root.resolve(strict=False) == platform_tag_home().resolve(strict=False)
+
+
+def data_home(installation_root: Path, tag_id: str) -> Path:
+    """Preferred instance data location; legacy selection is handled by discovery."""
+    if native_installation(installation_root):
+        return Path.home() / "Tag" / tag_id / ".tag"
+    return installation_root / "instances" / tag_id
+
+
+def home_migration_complete(home: Path) -> bool:
+    marker = home / "state/home-migration.json"
+    if not marker.exists():
+        return False
+    try:
+        record = json.loads(marker.read_text(encoding="utf-8"))
+        if not isinstance(record, dict) or record.get("version") != 1:
+            raise ValueError("unsupported checkpoint")
+    except (ValueError, UnicodeError) as exc:
+        raise ValueError(f"Cannot read Tag home migration checkpoint: {marker}") from exc
+    return True
+
+
+def default_workspace(home: Path) -> Path:
+    if home.name == ".tag":
+        return home.parent
+    if home.parent.name == "instances" and native_installation(home.parent.parent):
+        return Path.home() / "Tag" / home.name
+    return home / "workspace"
+
+
 def workspace_home(instance: Path, installation_root: Path, tag_id: str) -> Path:
     """Return the user-owned agent workspace for an instance.
 
@@ -76,7 +112,7 @@ def workspace_home(instance: Path, installation_root: Path, tag_id: str) -> Path
     portable installations.
     """
     root = installation_root.expanduser().absolute()
-    if root.resolve(strict=False) == platform_tag_home().resolve(strict=False):
+    if native_installation(root):
         return Path.home() / "Tag" / tag_id
     return instance / "workspace"
 
@@ -109,6 +145,13 @@ def initialize(home: Path) -> None:
 def initialize_instance(home: Path) -> None:
     """Create only app-managed directories owned by one Tag instance."""
     home.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if home.name == ".tag":
+        if home.is_symlink():
+            raise ValueError(f"Tag instance path must not be a symlink: {home}")
+        home.chmod(0o700)
+        ignore = home / ".gitignore"
+        if not ignore.exists():
+            ignore.write_text("*\n", encoding="utf-8")
     for name in ("config", "integrations/bin", "state", "tmp"):
         (home / name).mkdir(parents=True, exist_ok=True, mode=0o700)
     restrict_windows_acl(home)
@@ -133,7 +176,7 @@ def runtime_environment(
 ) -> dict[str, str]:
     """Keep backend authentication/global config intact; scope only TAG data."""
     root = installation_root or home
-    workdir = workspace or home / "workspace"
+    workdir = workspace or default_workspace(home)
     return {
         "TAG_HOME": str(root),
         "TAG_INSTANCE_HOME": str(home),
@@ -150,7 +193,7 @@ def runtime_environment(
 def codex_workspace_args(workdir: Path) -> list[str]:
     # CLI trust overrides do not activate project config in Codex 0.147.0.
     # Layer only TAG's MCP definitions explicitly, preserving global settings/auth.
-    selected = Path(os.getenv("OPENTAG_WORKDIR", str(instance_home() / "workspace"))).expanduser()
+    selected = Path(os.getenv("OPENTAG_WORKDIR", str(default_workspace(instance_home())))).expanduser()
     if os.getenv("TAG_HOME") and workdir.resolve() == selected.resolve():
         try:
             import tomllib

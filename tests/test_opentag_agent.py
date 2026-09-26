@@ -383,3 +383,28 @@ class BackendStreamEventTests(unittest.TestCase):
 
         self.assertIn("features.fast_mode=true", command)
         self.assertIn('service_tier="default"', command)
+
+
+class ChannelArtifactRoutingTests(unittest.TestCase):
+    def test_backend_receives_channel_output_location_with_original_workspace(self):
+        import sys
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            legacy = root / 'existing.md'
+            legacy.write_text('existing')
+            def backend(prompt, **kwargs):
+                self.assertEqual(kwargs['workdir'], root)
+                self.assertTrue((root / 'artifacts/C123').is_dir())
+                self.assertIn(str(root / 'artifacts/C123'), prompt)
+                self.assertIn('--channel-id C123', prompt)
+                self.assertIn('edit existing', prompt)
+                self.assertIn('workspace root for older files', prompt)
+                self.assertEqual(legacy.read_text(), 'existing')
+                return 0
+            with patch.dict(os.environ, {}, clear=True), patch.object(sys, 'argv', [
+                'opentag_agent', '--backend', 'claude', '--channel-id', 'C123',
+                '--question', 'Create a report.md', '--workdir', str(root),
+                '--thread-file', str(legacy),
+                '--output-manifest', str(root / 'manifest.json'),
+            ]), patch.object(opentag_agent, 'run_claude', side_effect=backend):
+                self.assertEqual(opentag_agent.main(), 0)

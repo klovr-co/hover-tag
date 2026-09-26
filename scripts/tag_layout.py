@@ -5,15 +5,18 @@ import json
 import filecmp
 import os
 from pathlib import Path
+import re
 import shutil
 import tempfile
 
 try:
     from . import tag_config
     from .tag_locks import LifecycleLock
+    from .tag_paths import data_home, home_migration_complete, initialize_instance
 except ImportError:
     import tag_config
     from tag_locks import LifecycleLock
+    from tag_paths import data_home, home_migration_complete, initialize_instance
 
 VERSION = 1
 INSTALLATION_STATE = {"mfs.json", "mfs.log", "mfs.migrating", "install.lock", "update-check.json", "legacy-command.json"}
@@ -25,6 +28,8 @@ def _rewrite(value, mappings):
     if isinstance(value, list):
         return [_rewrite(v, mappings) for v in value]
     if isinstance(value, str):
+        if value.startswith("file:"):
+            return "file:" + _rewrite(value[5:], mappings)
         for old, new in mappings:
             if value == str(old) or value.startswith(str(old) + os.sep):
                 return str(new) + value[len(str(old)):]
@@ -46,23 +51,37 @@ def _copy(source: Path, destination: Path, mappings=()):
     if source.is_dir():
         destination.mkdir(parents=True, exist_ok=True, mode=0o700)
         for child in source.iterdir():
-            if mappings and child.name.endswith((".lock", ".guard")):
+            if mappings and source.name in {"state", "config"} and child.name.endswith((".lock", ".guard")):
                 continue
             _copy(child, destination / child.name, mappings)
         return
+    if not source.is_file():
+        raise RuntimeError(f"Cannot migrate non-regular file: {source}")
     data = None
     if mappings and source.suffix == ".json":
         value = json.loads(source.read_bytes())
         data = (json.dumps(_rewrite(value, mappings), indent=2, sort_keys=True) + "\n").encode()
+    if mappings and source.suffix == ".toml":
+        # Managed connector credentials are TOML file: references, not JSON.
+        content = source.read_text(encoding="utf-8")
+        content = re.sub(
+            r'(?m)^(token\s*=\s*)("(?:[^"\\]|\\.)*")',
+            lambda match: match[1] + json.dumps(_rewrite(json.loads(match[2]), mappings)),
+            content,
+        )
+        data = content.encode()
     if destination.exists():
         if data is None and filecmp.cmp(source, destination, shallow=False):
             return
         if data is not None:
-            try:
-                if json.loads(destination.read_bytes()) == json.loads(data):
-                    return
-            except (ValueError, UnicodeError):
-                pass  # Preserve malformed destination files as conflicts too.
+            if destination.read_bytes() == data:
+                return
+            if source.suffix == ".json":
+                try:
+                    if json.loads(destination.read_bytes()) == json.loads(data):
+                        return
+                except (ValueError, UnicodeError):
+                    pass  # Preserve malformed destination files as conflicts too.
         existing = destination.read_bytes() if destination.name == "config.toml" else b""
         # Workspace initialization may have created only this empty template.
         templates = {
@@ -94,7 +113,7 @@ def _copy(source: Path, destination: Path, mappings=()):
         Path(temporary).unlink(missing_ok=True)
 
 
-def migrate(context, lifecycle) -> bool:
+def _migrate_workspace(context, lifecycle) -> bool:
     """Preserve originals; only copy while the affected managed bridge is stopped."""
     root, home, workspace = context.installation_root, context.home, context.workspace
     marker = home / "state/layout-migrations.json"
@@ -126,6 +145,52 @@ def migrate(context, lifecycle) -> bool:
                         continue
                     _copy(entry, home / "state" / entry.name, mappings)
             for old, new in sources:
+                if data_home(root, context.tag_id).name == ".tag" and (old / ".tag").exists():
+                    raise RuntimeError(f"Migration conflict at {old / '.tag'}; .tag is reserved for Tag data")
                 _copy(old, new)
             tag_config.save_config(marker, {"version": VERSION})
+    return True
+
+
+def migrate(context, lifecycle) -> bool:
+    """Move native instance data beside its files, retaining retryable originals.
+
+    The old home remains the discovery authority until the final checkpoint.
+    Callers must resolve the context again before loading settings or services.
+    Explicit portable TAG_HOME installations retain their existing layout.
+    """
+    destination = data_home(context.installation_root, context.tag_id)
+    if context.home == destination:
+        return _migrate_workspace(context, lifecycle)
+    _migrate_workspace(context, lifecycle)
+    source = context.home
+    marker = destination / "state/home-migration.json"
+    with LifecycleLock(context.installation_root / "state/layout.lock"):
+        with LifecycleLock(source / "state/start.lock"):
+            if home_migration_complete(destination):
+                return False
+            lifecycle.stop_process(source, "slack")
+            initialize_instance(destination)
+            with LifecycleLock(destination / "state/start.lock"):
+                # Coordinate with config set, which does not take start.lock.
+                config_lock = source / "config/settings.json.lock"
+                config_lock.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                descriptor = os.open(config_lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                os.close(descriptor)
+                try:
+                    mappings = [(source / "workspace", context.workspace), (source, destination)]
+                    entries = [entry for entry in source.iterdir()
+                               if entry.name != "workspace" and not entry.name.endswith((".lock", ".guard"))]
+                    for entry in entries:
+                        _copy(entry, destination / entry.name, mappings)
+                    # Re-read both sides before committing; interrupted or
+                    # conflicting copies remain on the old discovery path.
+                    for entry in entries:
+                        _copy(entry, destination / entry.name, mappings)
+                    for path in [destination, *destination.rglob("*")]:
+                        if not path.is_symlink():
+                            path.chmod(0o700 if path.is_dir() else path.stat().st_mode & 0o700)
+                    tag_config.save_config(marker, {"version": 1})
+                finally:
+                    config_lock.unlink(missing_ok=True)
     return True

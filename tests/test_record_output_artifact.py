@@ -111,3 +111,57 @@ class RecordOutputArtifactTests(unittest.TestCase):
                 record_output_artifact.validated_output_path(
                     Path("missing.txt"), Path(raw_dir)
                 )
+
+
+class ChannelArtifactTests(unittest.TestCase):
+    def test_same_filename_in_two_channels_registers_and_opens_correct_file(self):
+        import sys
+        from contextlib import redirect_stdout
+        from io import StringIO
+        from scripts import slack_socket_agent
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            for channel in ('C123', 'C456'):
+                output_dir = record_output_artifact.channel_artifact_directory(root, channel, create=True)
+                output = output_dir / 'report.md'
+                output.write_text(channel)
+                manifest = root / f'{channel}.json'
+                with patch.object(sys, 'argv', ['record_output_artifact', '--manifest', str(manifest),
+                    '--workdir', str(root), '--channel-id', channel, '--file', 'report.md']), redirect_stdout(StringIO()):
+                    self.assertEqual(record_output_artifact.main(), 0)
+                entries, errors = slack_socket_agent.load_output_artifact_entries(manifest, root)
+                self.assertEqual(errors, [])
+                self.assertEqual(entries, [(output, False)])
+                self.assertEqual(slack_socket_agent.resolve_local_artifact(f'artifacts/{channel}/report.md', root), output)
+                self.assertEqual(output.read_text(), channel)
+
+    def test_directory_initialization_is_retryable_and_preserves_older_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            old = root / 'report.md'
+            old.write_text('legacy')
+            output = record_output_artifact.channel_artifact_directory(root, 'C123', create=True)
+            current = output / 'report.md'
+            current.write_text('current')
+            self.assertEqual(record_output_artifact.channel_artifact_directory(root, 'C123', create=True), output)
+            self.assertEqual(old.read_text(), 'legacy')
+            self.assertEqual(current.read_text(), 'current')
+            self.assertEqual(record_output_artifact.validated_output_path(old, root), old.resolve())
+
+    def test_invalid_ids_and_symlinked_or_conflicting_directories_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for channel in ('../outside', 'C123/../../outside', '/C123', 'general', ''):
+                with self.subTest(channel=channel), self.assertRaises(ValueError):
+                    record_output_artifact.channel_artifact_directory(root, channel, create=True)
+            artifacts = root / 'artifacts'
+            artifacts.write_text('existing file')
+            with self.assertRaisesRegex(ValueError, 'conflicts'):
+                record_output_artifact.channel_artifact_directory(root, 'C123', create=True)
+            artifacts.unlink()
+            outside = root / 'outside'
+            outside.mkdir()
+            artifacts.symlink_to(outside, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, 'symlink'):
+                record_output_artifact.channel_artifact_directory(root, 'C123', create=True)
+            self.assertFalse((outside / 'C123').exists())

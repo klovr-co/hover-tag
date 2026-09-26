@@ -12,9 +12,9 @@ import tempfile
 import unicodedata
 
 try:
-    from .tag_paths import initialize_instance, initialize_workspace, workspace_home
+    from .tag_paths import data_home, home_migration_complete, native_installation, initialize_instance, initialize_workspace, workspace_home
 except ImportError:
-    from tag_paths import initialize_instance, initialize_workspace, workspace_home
+    from tag_paths import data_home, home_migration_complete, native_installation, initialize_instance, initialize_workspace, workspace_home
 
 
 DEFAULT_TAG = "default"
@@ -84,8 +84,20 @@ def suggest_name(installation_root: Path, workspace_name: str) -> str:
 def instance_path(installation_root: Path, tag_id: str) -> Path:
     validate_name(tag_id)
     root = installation_root.expanduser().absolute()
-    instances = root / "instances"
-    candidate = instances / tag_id
+    legacy = root / "instances" / tag_id
+    candidate = data_home(root, tag_id)
+    # Read-only commands and interrupted migrations keep using the old home
+    # until the verified relocation checkpoint is committed.
+    if candidate != legacy:
+        for path in (candidate.parent, candidate):
+            if path.is_symlink():
+                raise ValueError(f"Tag instance path must not be a symlink: {path}")
+        relocated = home_migration_complete(candidate)
+        if not relocated and (legacy.exists() or legacy.is_symlink() or (
+            tag_id == DEFAULT_TAG and (root / "config/settings.json").exists()
+        )):
+            candidate = legacy
+    instances = candidate.parent
     # Refuse a pre-existing symlink and ensure resolution cannot escape even if
     # an attacker races a parent replacement on a shared local account.
     if candidate.is_symlink():
@@ -108,7 +120,7 @@ def resolve(installation_root: Path, tag_id: str = DEFAULT_TAG, *, require_exist
             record = json.loads(metadata.read_text(encoding="utf-8"))
         except (OSError, ValueError, TypeError):
             raise ValueError(f"Tag '{tag_id}' has malformed metadata") from None
-        if record.get("schema_version") != SCHEMA_VERSION or record.get("id") != tag_id:
+        if not isinstance(record, dict) or record.get("schema_version") != SCHEMA_VERSION or record.get("id") != tag_id:
             raise ValueError(f"Tag '{tag_id}' has malformed metadata")
     return InstanceContext(installation_root.expanduser().absolute(), tag_id, home)
 
@@ -151,9 +163,9 @@ def create(installation_root: Path, tag_id: str) -> InstanceContext:
 def _create(installation_root: Path, tag_id: str) -> InstanceContext:
     validate_name(tag_id)
     root = installation_root.expanduser().absolute()
-    instances = root / "instances"
-    instances.mkdir(parents=True, exist_ok=True, mode=0o700)
     destination = instance_path(root, tag_id)
+    instances = destination.parent
+    instances.mkdir(parents=True, exist_ok=True, mode=0o700)
     if destination.exists() or destination.is_symlink():
         raise ValueError(f"Tag '{tag_id}' already exists; its configuration was preserved")
     staging = Path(tempfile.mkdtemp(prefix=f".{tag_id}-", dir=instances))
@@ -170,6 +182,7 @@ def _create(installation_root: Path, tag_id: str) -> InstanceContext:
             shutil.rmtree(staging)
     context = resolve(root, tag_id)
     try:
+        initialize_instance(context.home)
         initialize_workspace(context.workspace)
     except Exception:
         # The destination did not exist before this creation attempt, so
@@ -191,6 +204,17 @@ def discover(installation_root: Path) -> list[dict[str, object]]:
         )
     except OSError:
         entries = []
+    if native_installation(root):
+        # Discover copied/restored Tags directly from their working folders.
+        # Deduplicate retained legacy originals by alias.
+        by_name = {entry.name: entry for entry in entries}
+        try:
+            for entry in (Path.home() / "Tag").iterdir():
+                if (entry / ".tag").exists() or (entry / ".tag").is_symlink():
+                    by_name[entry.name] = entry
+        except OSError:
+            pass
+        entries = sorted(by_name.values(), key=lambda item: (item.name != DEFAULT_TAG, item.name))
     if not any(entry.name == DEFAULT_TAG for entry in entries):
         result.append({
             "id": DEFAULT_TAG,

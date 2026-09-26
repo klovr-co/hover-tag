@@ -71,7 +71,7 @@ command directory is `~/.local/bin`; if PATH omits it, use the absolute launcher
 or add that directory to the current shell's PATH. Persist shell-profile changes
 only when needed for the requested setup. Use installed `tag`, not the checkout's
 `./tag`, after installation. `tag paths --json` provides the actual locations;
-default configuration lives in the Tag home's `instances/default/config/settings.json`,
+normal installations keep default configuration in `~/Tag/default/.tag/config/settings.json`,
 not a checkout `.env`.
 
 For Windows requests, use the checkout's `install.ps1` and platform instructions

@@ -15,7 +15,7 @@ tag personal logs
 tag personal stop
 ```
 
-Omitting the alias selects `<TAG_HOME>/instances/default`. During `tag add`, Tag connects
+Omitting the alias selects `~/Tag/default`, with private data in its `.tag` folder. During `tag add`, Tag connects
 Slack first and suggests a lowercase workspace alias derived from the selected workspace's
 name. The alias is only used in local commands; it is independent of the Slack app's display
 name. Paused onboarding appears in `tag list` and resumes
@@ -32,7 +32,7 @@ an externally managed MFS process.
 An upgrade restarts each previously running Tag, leaving stopped Tags stopped
 and shared MFS online. `--no-restart` defers activation until you restart those
 Tags. On startup, legacy root-level settings and old working folders are migrated
-automatically after stopping the affected bridge. Originals are retained;
+automatically after stopping the affected bridge. Private data is consolidated under `~/Tag/NAME/.tag`. Originals are retained;
 conflicting destination files stop migration with an actionable path. Interrupted
 copies resume on retry, and completed migrations do not overwrite later edits.
 

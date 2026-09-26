@@ -103,3 +103,14 @@ sandbox, explicit tool allowlists, and auditable data-source policies.
 - Tool boundary: locally installed commands and skills run with the permissions of
   the backend process. Their own credentials and authorization grants apply. Run the
   bot in a trusted channel and use a real sandbox for stronger isolation.
+
+## Saved artifact locations
+
+Save new requested durable deliverables in the current channel's artifact folder
+provided by the runtime prompt, unless the user specifies a different workspace
+path. Edit existing files in place. Resolve unqualified filenames against the
+current channel's artifact folder and the workspace root for legacy files; ask
+if ambiguous. Do not relocate old files or search other channels' folders just
+to match a filename. These folders organize files; they are not a filesystem
+authorization boundary. Temporary image delivery and disposable invocation
+artifacts continue to use the runtime's temporary result directories.

@@ -27,6 +27,15 @@ bridge-generated grant; failures deny expansion. This is still an application
 guardrail under ADR 0001, not a credential broker or hardened isolation
 boundary.
 
+## Local storage
+
+Normal installations store each Tag's settings, credentials, and history in
+`~/Tag/NAME/.tag`. Tag makes this directory private to the local account and
+places a `.gitignore` inside it to exclude its contents. Forced Git additions
+can bypass that exclusion. Cloud syncing the working folder also syncs its
+credentials. The directory is not an access boundary against the coding agent
+or other processes running as the same user.
+
 ## Reporting a vulnerability
 
 Please do not disclose a suspected vulnerability in a public issue. Use
