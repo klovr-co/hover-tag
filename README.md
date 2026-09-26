@@ -2,7 +2,7 @@
 
 <p align="center">
   <a href="https://www.hover.team/tag/">
-    <img src="assets/branding/tag-team-transparent.png" alt="Jules, Iris, Maya, Rowan, and Zara, each with their own Tag" />
+    <img src="https://raw.githubusercontent.com/klovr-co/hover-tag/main/assets/branding/tag-team-transparent.png" alt="Jules, Iris, Maya, Rowan, and Zara, each with their own Tag" />
   </a>
 </p>
 
@@ -14,11 +14,11 @@
 </p>
 <p align="center"><strong>Everyone brings their own Tag. Everyone works in the same conversation.</strong></p>
 <p align="center">
-  <strong><a href="https://www.hover.team/tag/"><img src="assets/branding/tag-cutout.png" width="28" height="28" alt="" /> Read the Tag guide at hover.team/tag →</a></strong>
+  <strong><a href="https://www.hover.team/tag/"><img src="https://raw.githubusercontent.com/klovr-co/hover-tag/main/assets/branding/tag-cutout.png" width="28" height="28" alt="" /> Read the Tag guide at hover.team/tag →</a></strong>
 </p>
 <p align="center">
   <a href="https://www.hover.team/tag/getting-started/">Get started</a> ·
-  <a href="https://join.slack.com/t/hover-community/shared_invite/zt-4aghkshid-n7fRukS7_J5sR2jDLBXK9A"><img src="assets/branding/slack-icon.svg" width="16" height="16" alt="Slack" /> Join the Slack community</a> ·
+  <a href="https://join.slack.com/t/hover-community/shared_invite/zt-4aghkshid-n7fRukS7_J5sR2jDLBXK9A"><img src="https://raw.githubusercontent.com/klovr-co/hover-tag/main/assets/branding/slack-icon.svg" width="16" height="16" alt="Slack" /> Join the Slack community</a> ·
   <a href="https://www.hover.team/tag/capabilities/">Capabilities</a> ·
   <a href="https://github.com/klovr-co/hover-tag/issues">Issues</a>
 </p>
@@ -123,10 +123,10 @@ or set `TAG_TELEMETRY=off` for an immediate process-level stop. Read the full
 [telemetry and privacy reference](docs/reference/telemetry.md).
 
 [Documentation](https://www.hover.team/tag/) ·
-<a href="https://join.slack.com/t/hover-community/shared_invite/zt-4aghkshid-n7fRukS7_J5sR2jDLBXK9A"><img src="assets/branding/slack-icon.svg" width="16" height="16" alt="Slack" /> Join the Slack community</a> ·
+<a href="https://join.slack.com/t/hover-community/shared_invite/zt-4aghkshid-n7fRukS7_J5sR2jDLBXK9A"><img src="https://raw.githubusercontent.com/klovr-co/hover-tag/main/assets/branding/slack-icon.svg" width="16" height="16" alt="Slack" /> Join the Slack community</a> ·
 [Troubleshooting](https://www.hover.team/tag/troubleshooting/) ·
 [Source](https://github.com/klovr-co/hover-tag.git) ·
-[Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) ·
+[Contributing](https://github.com/klovr-co/hover-tag/blob/main/CONTRIBUTING.md) · [Changelog](https://github.com/klovr-co/hover-tag/blob/main/CHANGELOG.md) ·
 [Releases](https://github.com/klovr-co/hover-tag/releases) ·
 [Security policy](SECURITY.md)
 

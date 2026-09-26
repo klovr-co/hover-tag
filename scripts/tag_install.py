@@ -573,6 +573,55 @@ def command_owner(command: Path) -> str | None:
     return None
 
 
+RUNTIME_MANIFEST = "scripts/runtime-files.json"
+LEGACY_ROOT_FILES = (
+    "VERSION", "LICENSE", "NOTICE", "README.md", "RELEASE.md", "SECURITY.md",
+    ".env.example", "requirements-runtime.txt", "slack-app-manifest.yaml",
+    "tag", "tag.cmd", "install.sh", "install.ps1", "release-channels.json",
+)
+
+
+def runtime_files(source: Path, *, allow_legacy: bool = False) -> list[str]:
+    """One explicit file contract for release downloads and installed releases.
+
+    Only verified older releases may fall back to their historical layout. New
+    packages must supply a manifest; malformed manifests never trigger fallback.
+    """
+    manifest = source / RUNTIME_MANIFEST
+    if manifest.is_symlink() or (source / "scripts").is_symlink():
+        raise ValueError("Runtime manifest cannot be a symlink")
+    if not manifest.exists() and allow_legacy:
+        names = list(LEGACY_ROOT_FILES)
+        for directory in ("scripts", "references", "docs", *(
+            f".agents/skills/{name}" for name in BUNDLED_SKILLS
+        )):
+            names.extend(
+                path.relative_to(source).as_posix()
+                for path in (source / directory).rglob("*")
+                if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"
+            )
+    else:
+        policy = json.loads(manifest.read_text(encoding="utf-8"))
+        if not isinstance(policy, dict) or policy.get("schema_version") != 1:
+            raise ValueError("Unsupported runtime file manifest")
+        names = policy.get("files")
+        if not isinstance(names, list) or not names or any(not isinstance(name, str) for name in names):
+            raise ValueError("Runtime manifest must list file paths")
+        if len(set(names)) != len(names) or RUNTIME_MANIFEST not in names:
+            raise ValueError("Runtime manifest must include itself and contain no duplicate files")
+    for name in names:
+        path = Path(name)
+        if (not name or "\\" in name or ":" in name or path.is_absolute()
+                or ".." in path.parts or path.as_posix() != name):
+            raise ValueError(f"Unsafe runtime file path: {name}")
+        candidate = source / path
+        if any((source / Path(*path.parts[:i])).is_symlink() for i in range(1, len(path.parts) + 1)):
+            raise ValueError(f"Runtime files cannot be symlinks: {name}")
+        if not candidate.is_file():
+            raise FileNotFoundError(f"Required runtime file missing: {name}")
+    return sorted(names)
+
+
 def install(
     source: Path, home: Path, bin_dir: Path, *, dependencies: bool = True,
     selection: ReleaseSelection | None = None,
@@ -590,6 +639,7 @@ def install(
         from tag_locks import LifecycleLock
     finally:
         sys.path.remove(scripts_dir)
+    files = runtime_files(source, allow_legacy=True)
     errors = validate_release(source)
     if errors:
         raise ValueError("Invalid release: " + "; ".join(errors))
@@ -617,23 +667,12 @@ def install(
         if existing_owner == "legacy Tag source checkout":
             row("Migration", "Legacy command recognized; original checkout preserved")
         release = home / "releases" / f"{version}-{uuid.uuid4().hex[:12]}"
-        # An allowlist prevents copying credentials, worktree metadata, or personal skills.
+        # Use the same contract as the archive, even when installing a checkout.
         release.mkdir()
-        for name in ("scripts", "references", "docs"):
-            shutil.copytree(source / name, release / name,
-                            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-        for name in BUNDLED_SKILLS:
-            bundled = source / ".agents/skills" / name
-            if bundled.is_dir():
-                shutil.copytree(
-                    bundled,
-                    release / ".agents/skills" / name,
-                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
-                )
-        for name in ("VERSION", "LICENSE", "NOTICE", "README.md", "RELEASE.md", "SECURITY.md",
-                     ".env.example", "requirements-runtime.txt", "slack-app-manifest.yaml",
-                     "tag", "tag.cmd", "install.sh", "install.ps1", "release-channels.json"):
-            shutil.copy2(source / name, release / name)
+        for name in files:
+            destination = release / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source / name, destination)
         (release / "tag").chmod(0o755)
         (release / "install.sh").chmod(0o755)
         python = release / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")

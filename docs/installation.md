@@ -364,7 +364,7 @@ platform wheels, filesystem allocation, and existing caches change the totals.
 | Release environment, including packages and MFS CLI | see above | 583,249,864 B |
 | MFS embedding model and tokenizer | 587,042,498 B | 587,042,939 B including cache metadata |
 
-The dependency payload is approximately 797 MiB before the Tag source archive,
+The dependency payload is approximately 797 MiB before the Tag runtime archive,
 index metadata, HTTP overhead, or retries. The first installed Tag home measured
 711,887,280 logical bytes; the model adds about 560 MiB outside that home, under
 `${MFS_HOME:-~/.mfs}/onnx-cache`. The initial script is small because it downloads
@@ -390,3 +390,31 @@ launch and rollback were verified with only system tools on PATH.
 Upstream references: [uv Python management](https://docs.astral.sh/uv/concepts/python-versions/),
 [uv pinned release](https://github.com/astral-sh/uv/releases/tag/0.12.19), and
 [Slack CLI pinned release](https://github.com/slackapi/slack-cli/releases/tag/v4.8.0).
+
+## Keeping release contents minimal
+
+`scripts/runtime-files.json` is the explicit file list shared by the release
+packager and installer. A new file is shipped only when it is added to that list.
+This applies to both archive downloads and installations from a checkout.
+Required missing files, unsafe paths, and symlinks fail packaging instead of
+silently producing an incomplete release. CI installs the generated archive
+outside the checkout and exercises the installed CLI and offline doctor.
+
+The runtime includes setup, upgrades, migrations, the troubleshooting skill,
+runtime contracts, operating guides, licensing, security, and privacy information.
+Tests, CI workflows, release publishing tools, contributor skills, development
+docs, repository agent settings, and branding assets stay in the source repository.
+The README uses online branding and links to contributor material there.
+
+Existing verified releases without the manifest remain installable through the
+legacy layout. Upgrades prepare the new minimal release before activation and
+retain the previous release for rollback; this change does not delete files from
+old releases or alter operator data.
+
+For the measured checkout, the archive fell from 6,603,360 bytes (196 files) to
+approximately 280 KB (74 files), about a 96% reduction. This is a reduction in the
+Tag archive, not in the Python packages or embedding model described above.
+MFS 0.4.6 declares `markitdown[all]` as a required dependency, including document,
+audio, and other converters. The installer keeps that supported dependency set;
+trimming it requires a narrower upstream package and capability testing, rather
+than omitting declared dependencies or installing with `--no-deps`.

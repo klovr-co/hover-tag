@@ -32,6 +32,7 @@ from scripts.tag_install import (
     install_mfs_cli,
     resolve_channel,
     resolve_version,
+    runtime_files,
     unpack_release,
 )
 from scripts.tag_paths import (
@@ -1236,6 +1237,38 @@ class TagHomeTests(unittest.TestCase):
             result = json.loads(allowed_output.getvalue())
             self.assertEqual(result["status"], "upgraded")
             self.assertTrue(result["downgrade"])
+
+    def test_checkout_install_has_only_the_runtime_payload(self):
+        with tempfile.TemporaryDirectory() as temp:
+            release = install(ROOT, Path(temp) / "home", Path(temp) / "bin", dependencies=False)
+            installed = {p.relative_to(release).as_posix() for p in release.rglob("*") if p.is_file()}
+            self.assertEqual(installed, set(runtime_files(ROOT)))
+            self.assertFalse((release / "scripts/package_release.py").exists())
+            self.assertFalse((release / "docs/testing").exists())
+
+    def test_old_release_without_manifest_remains_installable(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "old-source"
+            for name in runtime_files(ROOT):
+                if name == "scripts/runtime-files.json":
+                    continue
+                target = source / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((ROOT / name).read_bytes())
+            release = install(source, root / "home", root / "bin", dependencies=False)
+            self.assertTrue((release / "scripts/tag_cli.py").is_file())
+            self.assertFalse((release / "scripts/runtime-files.json").exists())
+            self.assertEqual(json.loads((root / "home/current.json").read_text())["release"], release.name)
+
+    def test_malformed_manifest_never_falls_back_to_legacy_copy(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp)
+            (source / "scripts").mkdir()
+            manifest = source / "scripts/runtime-files.json"
+            manifest.write_text('{"schema_version": 100, "files": []}')
+            with self.assertRaisesRegex(ValueError, "Unsupported runtime file manifest"):
+                runtime_files(source, allow_legacy=True)
 
     def test_hosted_installer_imports_before_release_modules_exist(self):
         with tempfile.TemporaryDirectory() as temp:
