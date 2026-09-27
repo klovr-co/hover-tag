@@ -34,9 +34,8 @@ release commit. If its guide needs a docs-only correction, create a commit from
 that release changing only `docs/**`, then tag it `docs-v0.2.0-r1` (and advance
 the revision number for later corrections). The site can pin that docs tag to
 update the v0.2.0 guide without moving the software release tag or changing its
-downloadable assets. Creating a docs tag triggers a site documentation PR when
-the docs-sync GitHub App is configured; the site's **Sync Tag docs** workflow
-can also be run with the docs tag for a manual retry.
+downloadable assets. Run the site's **Sync Tag docs** workflow with that docs
+tag to propose a reviewable correction PR.
 After an immutable numbered alpha, beta, or stable release and its assets are
 verified, the release workflows notify the site with the exact tag and commit.
 The site validates the release and opens a separate version PR for review.
