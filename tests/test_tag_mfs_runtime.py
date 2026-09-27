@@ -99,6 +99,17 @@ class RuntimeTests(unittest.TestCase):
             self.assertEqual(tag_cli.wait_for_configured_mfs_scopes(attempts=2), [])
         probe.assert_called_once()
 
+    def test_expired_cooldown_reports_unavailable_scope(self):
+        scope = "slack://tag-test/channels/missing"
+        with patch.dict(os.environ, {"TAG_HOME": str(self.root), "SLACK_TEAM_ID": "TTEST",
+                                   "MFS_ALLOWED_SCOPES": scope}), patch.object(
+            tag_cli.tag_slack_backoff, "cooldown", side_effect=[130, 0, 0]
+        ), patch.object(tag_cli.time, "time", return_value=100), patch.object(
+            tag_cli.time, "sleep"
+        ), patch.object(tag_cli, "resolve_indexed_mfs_scope", return_value=None) as probe, redirect_stdout(StringIO()):
+            self.assertEqual(tag_cli.wait_for_configured_mfs_scopes(attempts=2), [scope])
+        probe.assert_called_once_with(scope)
+
 
 if __name__ == "__main__":
     unittest.main()

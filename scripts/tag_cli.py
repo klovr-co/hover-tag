@@ -1140,7 +1140,9 @@ def wait_for_configured_mfs_scopes(*, attempts: int | None = None) -> list[str]:
             return []
         if attempt + 1 < max(1, limit):
             time.sleep(1)
-    if last_cooldown:
+    if last_cooldown and tag_slack_backoff.cooldown(
+        cooldown_state, os.getenv("SLACK_TEAM_ID", "")
+    ) > time.time():
         raise RuntimeError(
             "Slack history indexing is waiting on a rate limit. Memory will retry automatically in the background; "
             "run tag start again after indexing finishes. Do not repeat setup."
