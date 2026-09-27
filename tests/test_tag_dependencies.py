@@ -173,7 +173,7 @@ class ShellBootstrapTests(unittest.TestCase):
             root = Path(tmp)
             fake = root / 'bin'
             fake.mkdir()
-            for command in ('awk', 'mkdir', 'mktemp', 'rm', 'tar', 'shasum', 'sha256sum', 'dirname', 'uname', 'mv', 'cp'):
+            for command in ('awk', 'mkdir', 'mktemp', 'rm', 'tar', 'gzip', 'shasum', 'sha256sum', 'dirname', 'uname', 'mv', 'cp'):
                 executable = shutil.which(command)
                 if executable:
                     (fake / command).symlink_to(executable)
