@@ -112,7 +112,12 @@ def migrate(home: Path, source: Path) -> None:
     """
     current = home / "current.json"
     if not current.is_file():
-        return  # Source checkout: setup provisions Slack on demand.
+        # Source setup provisions Slack privately too. Its PATH update only
+        # lives in that process, so restore it on later starts. Use ensure_slack
+        # to verify/repair older or interrupted runtime installs on retry.
+        if (home / "runtime/slack").is_dir():
+            activate_slack(ensure_slack(home))
+        return  # A fresh source checkout still provisions Slack during setup.
     record = json.loads(current.read_text())
     if record.get("dependency_schema", 0) < 1:
         if os.name == "nt":

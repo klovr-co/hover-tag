@@ -56,3 +56,25 @@ otherwise the prompt falls back to `tag inspect --json`, `tag doctor --json`,
 
 When reporting a problem, include the Tag version, operating system, Python
 version, failing check, and redacted log excerpt. Never include tokens.
+
+## Slack indexing is rate-limited
+
+Tag-managed memory honors Slack's HTTP 429 `Retry-After` delay, shares the
+cooldown across channels in the same workspace, and retries the current API
+request without restarting the channel's in-progress history read. Channel
+listings are cached for up to a minute so readiness checks do not repeatedly
+consume Slack's discovery quota.
+
+During a cooldown, startup and `tag status` show **Indexing paused by Slack**
+with the retry delay. Indexing continues in the background if the startup
+readiness wait expires. Let it finish, then run `tag start`; repeating setup
+or restarting memory does not clear Slack's limit. A memory restart preserves
+the cooldown, but may require replaying an interrupted indexing task.
+
+Existing Tag-managed memory processes automatically migrate to the rate-aware
+runtime on the next start. Tag verifies process identity before restarting
+memory and verifies the new runtime and HTTP health before recording the
+migration. This briefly interrupts shared memory for other running Tags;
+stored indexes, connector configuration, and credentials are preserved.
+Independently managed or remote MFS servers require an equivalent connector
+update by their operator; Tag does not replace their runtime.

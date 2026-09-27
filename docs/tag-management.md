@@ -180,15 +180,26 @@ original location. To recover the previous setup, stop Tag and move those items
 back, first keeping a copy of any newer configuration you want to preserve.
 
 The terminal follows four steps: Connect Slack → App → Channels → Finish.
-After you approve Finish setup, Tag initializes shared memory before connecting
-to Slack. Starting memory for the first time can take a couple of minutes.
+Finish setup saves configuration. Run `tag start` to initialize shared memory
+and connect Slack. Starting memory for the first time can take a couple of minutes.
 Channels Tag has already joined are included automatically and cannot be
 removed from setup. Use arrow keys and Enter to continue; Space opens an
 optional checklist only after choosing **Add public channels**. Plain terminals
 fall back to numbered input. `q` exits so setup can be finished later. The channel
 summary offers Change channels and Change defaults (history window and agent)
-before approval. Approving Finish setup authorizes indexing the displayed
-history and starting Tag; it never sends a test message.
+before approval. Approving Finish setup saves these choices without starting
+services or indexing history.
+
+After the first successful `tag start`, Tag sends a welcome DM to the single
+account configured under **Who can use Tag?**, including a first-task suggestion
+and the [Hover Community help link](https://join.slack.com/t/hover-community/shared_invite/zt-4aghkshid-n7fRukS7_J5sR2jDLBXK9A).
+Multiple allowed accounts do not receive a broadcast; the welcome is skipped
+when there is no single recipient. Delivery is recorded per Slack workspace,
+app, and user in private versioned state, so normal restarts and setup reviews
+do not repeat it. Existing installations receive it on their next successful
+start after upgrading. A delivery failure leaves Tag running and retries on
+the next `tag start`. The welcome confirms connectivity, not a tested agent reply.
+
 An app compatibility failure stays on the selected app with Open settings,
 Check again, and Exit · finish setup later. Linking is saved separately from compatibility,
 so returning does not repeat a successful link. Browser pages open only through

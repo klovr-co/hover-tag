@@ -14,10 +14,12 @@ try:
     import tag_config as settings
     import slack_channels
     import setup_ui as ui
-    from tag_paths import default_workspace
+    import tag_slack_backoff
+    from tag_paths import default_workspace, tag_home
 except ImportError:
     from scripts import slack_channels, tag_config as settings, setup_ui as ui
-    from scripts.tag_paths import default_workspace
+    from scripts import tag_slack_backoff
+    from scripts.tag_paths import default_workspace, tag_home
 
 
 def target_detail(values: dict[str, str], tag_id: str = "default", *, suffix: str = "") -> str:
@@ -86,6 +88,13 @@ def inspect(home: Path, lifecycle, *, offline: bool = False, tag_id: str = "defa
             pass
         if memory_sync["state"] in {"needs_attention", "settings_changed", "stale"} and state == "running":
             state, action = "needs_attention", "status"
+    if services["mfs"] and lifecycle.local_mfs_endpoint(values.get("MFS_URL", settings.DEFAULTS["MFS_URL"])):
+        retry_at = tag_slack_backoff.cooldown(
+            tag_home() / "shared/mfs/slack-cooldowns-v1", values.get("SLACK_TEAM_ID", "")
+        )
+        if retry_at > time.time():
+            memory_sync.update(state="rate_limited", retry_at=retry_at,
+                               retry_in_seconds=max(1, int(retry_at - time.time())))
     return {
         "schema_version": 1, "tag": tag_id, "state": state,
         "next_command": tag_command(tag_id, action),
@@ -130,7 +139,9 @@ def show_status(report: dict) -> None:
         report.get("slack_app") or "",
         report.get("slack_app_name") or "",
     ))
-    if report.get("memory_sync", {}).get("policy") == "invited":
+    if report.get("memory_sync", {}).get("state") == "rate_limited":
+        ui.message(f"Indexing paused by Slack; retrying in {report['memory_sync']['retry_in_seconds']} seconds.")
+    elif report.get("memory_sync", {}).get("policy") == "invited":
         print("  Invitation memory: " + report["memory_sync"]["state"].replace("_", " "))
     print("  First reply: not verified by this status check.")
 
@@ -168,7 +179,9 @@ def show_inspection(report: dict) -> None:
         f"{'executable found' if backend['executable_found'] else 'not found'} · sign-in not checked",
         good=backend["executable_found"],
     )
-    if report.get("memory_sync", {}).get("policy") == "invited":
+    if report.get("memory_sync", {}).get("state") == "rate_limited":
+        ui.message(f"Indexing paused by Slack; retrying in {report['memory_sync']['retry_in_seconds']} seconds.")
+    elif report.get("memory_sync", {}).get("policy") == "invited":
         ui.display.info_row("Invitations", report["memory_sync"]["state"].replace("_", " "))
     ui.display.next_action("Recommended next step", report["next_command"])
 

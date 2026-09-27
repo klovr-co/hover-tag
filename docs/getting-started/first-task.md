@@ -125,6 +125,12 @@ you don't need to repeat setup.
 Setup does not start services or index history. After `tag start` completes,
 you can check the connection anytime with `tag status`.
 
+On the first successful start, if **Who can use Tag?** has exactly one configured
+account, Tag sends that account a welcome DM with a first-task suggestion and a
+[Hover Community help link](https://join.slack.com/t/hover-community/shared_invite/zt-4aghkshid-n7fRukS7_J5sR2jDLBXK9A).
+When sent, the welcome confirms the connection; try a task to verify your
+agent's first reply.
+
 Try the task below to check that your Tag answers in Slack.
 
 ## Try your Tag in Slack

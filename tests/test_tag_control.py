@@ -18,6 +18,21 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class TagControlTests(unittest.TestCase):
+    def test_status_explains_indexing_cooldown(self):
+        self.complete()
+        with patch.object(tag_cli, "healthy", return_value=True), patch.object(
+            tag_cli, "slack_ready", return_value=False
+        ), patch.object(tag_control.tag_slack_backoff, "cooldown", return_value=130), patch.object(
+            tag_control.time, "time", return_value=100
+        ):
+            report = tag_control.inspect(self.home, tag_cli)
+        self.assertEqual(report["memory_sync"]["state"], "rate_limited")
+        self.assertEqual(report["memory_sync"]["retry_in_seconds"], 30)
+        with redirect_stdout(StringIO()) as output:
+            tag_control.show_status(report)
+        self.assertIn("Indexing paused by Slack; retrying in 30 seconds", output.getvalue())
+
+
     def test_config_show_targets_named_tag_settings(self):
         self.complete()
         with patch.object(tag_control.ui.display, "next_action") as next_action, redirect_stdout(StringIO()):
@@ -78,6 +93,9 @@ class TagControlTests(unittest.TestCase):
         )
         self.mfs_client.start()
         self.addCleanup(self.mfs_client.stop)
+        welcome = patch.object(tag_cli.tag_welcome, "send_once", return_value=None)
+        self.welcome = welcome.start()
+        self.addCleanup(welcome.stop)
         self.addCleanup(self.temporary.cleanup)
 
     def complete(self, backend="codex"):
@@ -362,6 +380,37 @@ class TagControlTests(unittest.TestCase):
                 self.assertIn("Waiting for the connection to become ready", output.getvalue())
                 self.assertIn("Tag is connected", output.getvalue())
                 self.assertNotIn("[ok]", output.getvalue())
+                self.assertEqual(self.welcome.call_args.args[0], self.home)
+                self.assertEqual(self.welcome.call_args.args[1]["SLACK_BOT_TOKEN"], "xoxb-refreshed")
+
+    def test_welcome_waits_for_readiness_and_failure_keeps_tag_running(self):
+        for failure in ("memory", "preflight", "slack", "welcome", None):
+            with self.subTest(failure=failure):
+                self.complete()
+                self.welcome.reset_mock()
+                self.welcome.side_effect = RuntimeError("xoxb-do-not-print") if failure == "welcome" else None
+                with patch.object(sys, "argv", ["tag", "start"]), patch.object(
+                    tag_cli, "missing_runtime_dependencies", return_value=()
+                ), patch.object(slack_manifest_migrations, "reconcile", return_value=False), patch.object(
+                    tag_cli, "ensure_shared_memory"
+                ), patch.object(tag_cli, "sync_configured_slack_memory"), patch.object(
+                    tag_cli, "wait_for_configured_mfs_scopes", return_value=["slack://unavailable"] if failure == "memory" else []
+                ), patch.object(tag_cli, "doctor_report", return_value=(int(failure == "preflight"), {"checks": []})), patch.object(
+                    tag_cli, "slack_ready", side_effect=RuntimeError("disconnected") if failure == "slack" else None,
+                    return_value=True
+                ), patch.object(tag_cli, "stop_process") as stop, redirect_stdout(StringIO()) as output:
+                    if failure in {"memory", "preflight", "slack"}:
+                        with self.assertRaises(RuntimeError):
+                            tag_cli.main()
+                        self.welcome.assert_not_called()
+                    else:
+                        self.assertEqual(tag_cli.main(), 0)
+                        self.welcome.assert_called_once()
+                        stop.assert_not_called()
+                        self.assertIn("Tag is connected", output.getvalue())
+                        self.assertNotIn("xoxb-do-not-print", output.getvalue())
+                        if failure == "welcome":
+                            self.assertIn("Could not confirm delivery", output.getvalue())
 
     def test_start_allows_mfs_cold_initialization_beyond_thirty_seconds(self):
         self.complete()
@@ -391,7 +440,9 @@ class TagControlTests(unittest.TestCase):
             tag_cli, "doctor_report", return_value=(0, {"checks": []})
         ), patch.object(
             tag_cli, "slack_ready", return_value=True
-        ), patch.object(tag_cli, "stop_process"), redirect_stdout(StringIO()):
+        ), patch.object(tag_cli, "stop_process"), patch.object(
+            tag_cli.tag_mfs_runtime, "active", return_value=True
+        ), redirect_stdout(StringIO()):
             self.assertEqual(tag_cli.main(), 0)
 
     def test_doctor_json_suppresses_raw_response_details(self):

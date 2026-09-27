@@ -29,7 +29,7 @@ class OpenTagSetupTests(unittest.TestCase):
         channel = opentag_setup.slack_channels.SlackChannel(
             "C123", "general", False, True
         )
-        values = {"OPENTAG_BACKEND": "claude", "OPENTAG_BOT_NAME": "Tag"}
+        values = {"OPENTAG_BACKEND": "claude", "OPENTAG_BOT_NAME": "Tag", "SLACK_ALLOWED_USER_IDS": "UOWNER"}
         started = subprocess.CompletedProcess([], 0, "", "")
 
         with patch.dict(os.environ, {"TAG_ID": "personal"}), patch.object(
@@ -48,6 +48,7 @@ class OpenTagSetupTests(unittest.TestCase):
         self.assertIn("tag personal start", output.getvalue())
         self.assertIn("Tag is still stopped. Run this command", output.getvalue())
         self.assertIn("No services were started", output.getvalue())
+        self.assertIn("welcome DM with the community help link", output.getvalue())
 
     def test_codex_compatibility_failure_does_not_attempt_login_or_install(self):
         with patch.object(opentag_setup, "selected_backend_available", return_value=True), patch.object(
