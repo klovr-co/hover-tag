@@ -1,5 +1,10 @@
 name: Notify site docs
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - '.github/workflows/notify-site-docs.yml'
   workflow_call:
     inputs:
       tag:
@@ -20,7 +25,27 @@ concurrency:
   group: notify-site-docs-${{ inputs.tag }}
   cancel-in-progress: false
 jobs:
+  notify-main:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DOCS_SYNC_APP_ID != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        id: app
+        with:
+          app-id: ${{ vars.DOCS_SYNC_APP_ID }}
+          private-key: ${{ secrets.DOCS_SYNC_APP_PRIVATE_KEY }}
+          owner: mmtmr
+          repositories: hover-site
+          permission-contents: write
+      - name: Request current-docs site PR
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          gh api --method POST repos/mmtmr/hover-site/dispatches \
+            -f event_type=tag-docs-updated
   notify:
+    if: github.event_name != 'push'
     # A docs outage must not prevent the installer channel index from advancing.
     # A manual retry still fails visibly so operators can resolve the cause.
     continue-on-error: ${{ github.event_name != 'workflow_dispatch' }}

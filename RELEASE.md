@@ -25,16 +25,17 @@ the bootstrap endpoints must not be advertised as available before merging and
 publishing them. The active installation is independent of the checkout; see
 [installation](docs/installation.md).
 
-Public documentation is release-pinned. The Hover site serves the latest
-published stable Tag guide at `/tag/` and a separately labeled published beta
-preview at `/tag/beta/`. Markdown on `main` remains development documentation.
-After an immutable numbered beta or stable release and its assets are verified,
-the release workflows notify the site with the exact tag and commit. The site
-validates the release and opens a channel-specific pin PR for review; merging
-that site PR publishes the docs. Alpha and `edge` releases, ordinary `main`
-merges, and `release:skip` do not advance either public guide. To retry a
-notification, run **Notify site docs** with the published tag. To roll back,
-revert the site pin commit. See [issue #132](https://github.com/klovr-co/hover-tag/issues/132).
+The Hover site serves a `Latest` guide at `/tag/latest/` from a pinned `main`
+commit and versioned guides from published release tags. For example, the
+existing v0.2.0 release appears at `/tag/v0.2/`. Changes under `docs/**` on
+`main` notify the site to propose an update to Latest. After an immutable
+numbered beta or stable release and its assets are verified, the release
+workflows notify the site with the exact tag and commit. The site validates
+the release and opens a separate version PR for review; merging that PR adds
+the version without moving Latest. Alpha and `edge` releases do not create
+versioned guides. To retry a release notification, run **Notify site docs**
+with the published tag. To roll back, revert the site pin commit. See
+[issue #132](https://github.com/klovr-co/hover-tag/issues/132).
 
 Public installers resolve channels through `tag-release-channels.json` on the
 moving `channels` GitHub release. `.github/workflows/channel-index.yml`
