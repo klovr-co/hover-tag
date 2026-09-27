@@ -8,6 +8,9 @@ jobs:
   package:
     if: startsWith(github.event.release.tag_name, 'v')
     runs-on: ubuntu-latest
+    outputs:
+      docs_tag: ${{ steps.archive.outputs.docs_tag }}
+      docs_sha: ${{ steps.archive.outputs.docs_sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -24,6 +27,7 @@ jobs:
           git merge-base --is-ancestor "$RELEASE_TAG^{commit}" origin/main
           git checkout --detach "$RELEASE_TAG^{commit}"
       - name: Verify or create release archive
+        id: archive
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
@@ -65,3 +69,15 @@ jobs:
             python scripts/release_automation.py validate-release \
               --directory out --version "$version" --sha "$(git rev-parse HEAD)"
           fi
+          if [ "$expected_prerelease" = false ]; then
+            echo "docs_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+            echo "docs_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          fi
+  notify-site-docs:
+    needs: package
+    if: needs.package.outputs.docs_tag != ''
+    uses: ./.github/workflows/notify-site-docs.yml
+    with:
+      tag: ${{ needs.package.outputs.docs_tag }}
+      commit: ${{ needs.package.outputs.docs_sha }}
+    secrets: inherit
