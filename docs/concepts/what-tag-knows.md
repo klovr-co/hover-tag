@@ -8,7 +8,16 @@ the files in its workspace, and the sources and tools configured for it.
 
 Mention Tag in the same thread when you want to build on an answer:
 
-> @Maya's Tag turn that into a one-week action plan.
+> **Maya:** @Maya's Tag Our launch is next Monday. Jules owns the FAQ by
+> Tuesday, and I'll brief support on Thursday. What's still open?
+>
+> **Maya's Tag:** Signup testing still needs an owner and a deadline.
+>
+> **Maya:** @Maya's Tag turn that into a one-week action plan.
+>
+> **Maya's Tag:** Tuesday: Jules finishes the FAQ. Wednesday: assign signup
+> testing and set its deadline. Thursday: Maya briefs support. Friday: review
+> testing and open risks before Monday's launch.
 
 Each mention starts a fresh agent run. Tag reads one page of up to 30 messages
 from the current thread and receives your new request separately. That lets
@@ -20,8 +29,13 @@ answer seems to have lost it.
 
 ## Find a discussion in another channel
 
-> @Iris's Tag find the launch decision in #product and compare it with the plan in
-> your workspace. Show me which messages support the decision.
+> **Iris:** @Iris's Tag find the launch decision in #product and compare it with
+> the plan in your workspace. Show me which messages support the decision.
+>
+> **Iris's Tag:** In the indexed #product thread, Maya wrote, "Let's move launch
+> to Monday so support has time to prepare." Jules replied, "I'll update the
+> checklist for Monday." The workspace plan still says Friday, so it conflicts
+> with those messages.
 
 Tag can search another channel's history when it has been indexed and made
 available by the person running Tag. Inviting the bot to a channel does not
@@ -58,8 +72,12 @@ configuration, and the tool's credentials and permissions.
 For example, with the Google Workspace CLI (`gws`) installed and authenticated,
 and the Gmail skill available to the agent, you could ask:
 
-> @Zara's Tag find the latest email about the launch schedule and summarize what
-> changed.
+> **Zara:** @Zara's Tag find the latest email about the launch schedule and
+> summarize what changed.
+>
+> **Zara's Tag:** The latest matching email is from Maya, subject "Updated launch
+> schedule." It moves launch from Friday to Monday so support has more time.
+> The FAQ and signup-testing deadlines are unchanged.
 
 The skill explains how to use `gws`; the Google login determines which email
 it can access. Installing a skill alone does not grant access to an account.
