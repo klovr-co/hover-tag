@@ -29,7 +29,12 @@ The Hover site defaults to the newest published stable guide at `/tag/`. The
 existing v0.2.0 release is served at `/tag/v0.2/`. Markdown from `main` is
 published separately as the `Development` guide at `/tag/development/`; changes
 under `docs/**` on `main` propose an update to Development without moving the
-stable guide.
+stable guide. The separate `docs-v0.2.0` tag initially points to the v0.2.0
+release commit. If its guide needs a docs-only correction, create a commit from
+that release changing only `docs/**`, then tag it `docs-v0.2.0-r1` (and advance
+the revision number for later corrections). The site can pin that docs tag to
+update the v0.2.0 guide without moving the software release tag or changing its
+downloadable assets.
 After an immutable numbered alpha, beta, or stable release and its assets are
 verified, the release workflows notify the site with the exact tag and commit.
 The site validates the release and opens a separate version PR for review.
