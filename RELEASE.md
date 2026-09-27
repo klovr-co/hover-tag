@@ -27,8 +27,9 @@ publishing them. The active installation is independent of the checkout; see
 
 The Hover site defaults to the newest published stable guide at `/tag/`. The
 existing v0.2.0 release is served at `/tag/v0.2/`. Markdown from `main` is
-published separately as the `Next` guide at `/tag/next/`; changes under
-`docs/**` on `main` propose an update to Next without moving the stable guide.
+published separately as the `Development` guide at `/tag/development/`; changes
+under `docs/**` on `main` propose an update to Development without moving the
+stable guide.
 After an immutable numbered alpha, beta, or stable release and its assets are
 verified, the release workflows notify the site with the exact tag and commit.
 The site validates the release and opens a separate version PR for review.
