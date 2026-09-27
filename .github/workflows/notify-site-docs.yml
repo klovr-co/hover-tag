@@ -5,19 +5,31 @@ on:
     paths:
       - 'docs/**'
       - '.github/workflows/notify-site-docs.yml'
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+      commit:
+        required: true
+        type: string
   workflow_dispatch:
-permissions: {}
+    inputs:
+      tag:
+        description: Published stable or numbered alpha/beta release tag
+        required: true
+        type: string
+permissions:
+  contents: read
 concurrency:
-  group: notify-site-docs
+  group: notify-site-docs-${{ inputs.tag }}
   cancel-in-progress: false
 jobs:
-  notify:
-    if: github.ref == 'refs/heads/main' && vars.DOCS_SYNC_APP_ID != ''
+  notify-main:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DOCS_SYNC_APP_ID != ''
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      # The app is installed on the destination repo, not necessarily on this repo.
-      # Configure this app ID/private key in both repositories. No checkout needed.
       - uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
         id: app
         with:
@@ -26,9 +38,87 @@ jobs:
           owner: mmtmr
           repositories: hover-site
           permission-contents: write
-      - name: Trigger site documentation sync
+      - name: Request current-docs site PR
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
           gh api --method POST repos/mmtmr/hover-site/dispatches \
             -f event_type=tag-docs-updated
+  notify:
+    if: github.event_name != 'push'
+    # A docs outage must not prevent the installer channel index from advancing.
+    # A manual retry still fails visibly so operators can resolve the cause.
+    continue-on-error: ${{ github.event_name != 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag }}
+      EXPECTED_SHA: ${{ inputs.commit }}
+    steps:
+      - name: Require docs sync credentials
+        env:
+          DOCS_SYNC_APP_ID: ${{ vars.DOCS_SYNC_APP_ID }}
+          DOCS_SYNC_APP_PRIVATE_KEY: ${{ secrets.DOCS_SYNC_APP_PRIVATE_KEY }}
+        run: |
+          if [ -z "$DOCS_SYNC_APP_ID" ] || [ -z "$DOCS_SYNC_APP_PRIVATE_KEY" ]; then
+            echo 'Configure DOCS_SYNC_APP_ID and DOCS_SYNC_APP_PRIVATE_KEY to notify the site.' >&2
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Verify published release and immutable assets
+        id: release
+        run: |
+          if [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-alpha\.[1-9][0-9]*$ ]]; then
+            channel=alpha
+          elif [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-beta\.[1-9][0-9]*$ ]]; then
+            channel=beta
+          elif [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            channel=stable
+          else
+            echo 'Only stable and numbered alpha/beta releases have public docs.' >&2
+            exit 1
+          fi
+          release=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG")
+          test "$(jq -r .draft <<<"$release")" = false
+          test "$(jq -r .prerelease <<<"$release")" = "$([ "$channel" = stable ] && echo false || echo true)"
+          test "$(jq -r .published_at <<<"$release")" != null
+          sha=$(jq -r .target_commitish <<<"$release")
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+          if [ -n "$EXPECTED_SHA" ]; then test "$sha" = "$EXPECTED_SHA"; fi
+          git fetch origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          test "$(git rev-parse "$RELEASE_TAG^{commit}")" = "$sha"
+          git merge-base --is-ancestor "$sha" origin/main
+          version=${RELEASE_TAG#v}
+          mkdir -p verified
+          gh release download "$RELEASE_TAG" --dir verified \
+            --pattern "tag-$version.zip" --pattern SHA256SUMS --pattern BUILD-PROVENANCE.json
+          python scripts/release_automation.py validate-release \
+            --directory verified --version "$version" --sha "$sha"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        id: app
+        with:
+          app-id: ${{ vars.DOCS_SYNC_APP_ID }}
+          private-key: ${{ secrets.DOCS_SYNC_APP_PRIVATE_KEY }}
+          owner: mmtmr
+          repositories: hover-site
+          permission-contents: write
+      - name: Request release-specific site PR
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          CHANNEL: ${{ steps.release.outputs.channel }}
+          SHA: ${{ steps.release.outputs.sha }}
+        run: |
+          gh api --method POST repos/mmtmr/hover-site/dispatches \
+            -f event_type=tag-docs-release \
+            -f "client_payload[tag]=$RELEASE_TAG" \
+            -f "client_payload[channel]=$CHANNEL" \
+            -f "client_payload[commit]=$SHA"

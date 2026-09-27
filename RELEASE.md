@@ -25,6 +25,26 @@ the bootstrap endpoints must not be advertised as available before merging and
 publishing them. The active installation is independent of the checkout; see
 [installation](docs/installation.md).
 
+The Hover site defaults to the newest published stable guide at `/tag/`. The
+existing v0.2.0 release is served at `/tag/v0.2/`. Markdown from `main` is
+published separately as the `Development` guide at `/tag/development/`; changes
+under `docs/**` on `main` propose an update to Development without moving the
+stable guide. The separate `docs-v0.2.0` tag initially points to the v0.2.0
+release commit. If its guide needs a docs-only correction, create a commit from
+that release changing only `docs/**`, then tag it `docs-v0.2.0-r1` (and advance
+the revision number for later corrections). The site can pin that docs tag to
+update the v0.2.0 guide without moving the software release tag or changing its
+downloadable assets. Run the site's **Sync Tag docs** workflow with that docs
+tag to propose a reviewable correction PR.
+After an immutable numbered alpha, beta, or stable release and its assets are
+verified, the release workflows notify the site with the exact tag and commit.
+The site validates the release and opens a separate version PR for review.
+Merging an alpha or beta PR adds a labeled prerelease guide; only a newer
+stable release advances the default. The moving `edge` release does not create
+a versioned guide. To retry a notification, run **Notify site docs** with the
+published tag. To roll back, revert the site pin commit. See
+[issue #132](https://github.com/klovr-co/hover-tag/issues/132).
+
 Public installers resolve channels through `tag-release-channels.json` on the
 moving `channels` GitHub release. `.github/workflows/channel-index.yml`
 regenerates that index from published, fully attributed releases after edge or
