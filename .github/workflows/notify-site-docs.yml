@@ -1,0 +1,34 @@
+name: Notify site docs
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - '.github/workflows/notify-site-docs.yml'
+  workflow_dispatch:
+permissions: {}
+concurrency:
+  group: notify-site-docs
+  cancel-in-progress: false
+jobs:
+  notify:
+    if: github.ref == 'refs/heads/main' && vars.DOCS_SYNC_APP_ID != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # The app is installed on the destination repo, not necessarily on this repo.
+      # Configure this app ID/private key in both repositories. No checkout needed.
+      - uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        id: app
+        with:
+          app-id: ${{ vars.DOCS_SYNC_APP_ID }}
+          private-key: ${{ secrets.DOCS_SYNC_APP_PRIVATE_KEY }}
+          owner: mmtmr
+          repositories: hover-site
+          permission-contents: write
+      - name: Trigger site documentation sync
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          gh api --method POST repos/mmtmr/hover-site/dispatches \
+            -f event_type=tag-docs-updated
