@@ -25,16 +25,17 @@ the bootstrap endpoints must not be advertised as available before merging and
 publishing them. The active installation is independent of the checkout; see
 [installation](docs/installation.md).
 
-The Hover site serves a `Latest` guide at `/tag/latest/` from a pinned `main`
-commit and versioned guides from published release tags. For example, the
-existing v0.2.0 release appears at `/tag/v0.2/`. Changes under `docs/**` on
-`main` notify the site to propose an update to Latest. After an immutable
-numbered beta or stable release and its assets are verified, the release
-workflows notify the site with the exact tag and commit. The site validates
-the release and opens a separate version PR for review; merging that PR adds
-the version without moving Latest. Alpha and `edge` releases do not create
-versioned guides. To retry a release notification, run **Notify site docs**
-with the published tag. To roll back, revert the site pin commit. See
+The Hover site defaults to the newest published stable guide at `/tag/`. The
+existing v0.2.0 release is served at `/tag/v0.2/`. Markdown from `main` is
+published separately as the `Next` guide at `/tag/next/`; changes under
+`docs/**` on `main` propose an update to Next without moving the stable guide.
+After an immutable numbered alpha, beta, or stable release and its assets are
+verified, the release workflows notify the site with the exact tag and commit.
+The site validates the release and opens a separate version PR for review.
+Merging an alpha or beta PR adds a labeled prerelease guide; only a newer
+stable release advances the default. The moving `edge` release does not create
+a versioned guide. To retry a notification, run **Notify site docs** with the
+published tag. To roll back, revert the site pin commit. See
 [issue #132](https://github.com/klovr-co/hover-tag/issues/132).
 
 Public installers resolve channels through `tag-release-channels.json` on the

@@ -16,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Published stable or numbered beta release tag
+        description: Published stable or numbered alpha/beta release tag
         required: true
         type: string
 permissions:
@@ -75,17 +75,19 @@ jobs:
       - name: Verify published release and immutable assets
         id: release
         run: |
-          if [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$ ]]; then
+          if [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-alpha\.[1-9][0-9]*$ ]]; then
+            channel=alpha
+          elif [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-beta\.[1-9][0-9]*$ ]]; then
             channel=beta
           elif [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             channel=stable
           else
-            echo 'Only stable and numbered beta releases have public docs.' >&2
+            echo 'Only stable and numbered alpha/beta releases have public docs.' >&2
             exit 1
           fi
           release=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG")
           test "$(jq -r .draft <<<"$release")" = false
-          test "$(jq -r .prerelease <<<"$release")" = "$([ "$channel" = beta ] && echo true || echo false)"
+          test "$(jq -r .prerelease <<<"$release")" = "$([ "$channel" = stable ] && echo false || echo true)"
           test "$(jq -r .published_at <<<"$release")" != null
           sha=$(jq -r .target_commitish <<<"$release")
           [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
