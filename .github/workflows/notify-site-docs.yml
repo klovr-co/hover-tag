@@ -21,6 +21,9 @@ concurrency:
   cancel-in-progress: false
 jobs:
   notify:
+    # A docs outage must not prevent the installer channel index from advancing.
+    # A manual retry still fails visibly so operators can resolve the cause.
+    continue-on-error: ${{ github.event_name != 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
