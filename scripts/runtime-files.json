@@ -11,6 +11,7 @@
     "VERSION",
     "docs/adr/0001-credential-boundary.md",
     "docs/installation.md",
+    "docs/reference/error-reporting.md",
     "docs/reference/telemetry.md",
     "docs/tag-management.md",
     "docs/troubleshooting.md",

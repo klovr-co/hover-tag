@@ -25,9 +25,10 @@ Start with `./tag doctor`, then use the first failed check below.
 
 ## Failed Slack requests
 
-When a backend request fails, Tag shows an evidence-based cause, an error
-reference, and recovery actions. An unrecognized failure is shown as **Cause
-not identified**; a timeout does not by itself mean that the network failed.
+When a backend request fails, Tag shows the requester an evidence-based cause,
+an error reference, and recovery actions in a private Slack message. An
+unrecognized failure is shown as **Cause not identified**; a timeout does not
+by itself mean that the network failed.
 Retrying creates a new reference and keeps the earlier attempt linked in the
 local report.
 
@@ -46,13 +47,13 @@ are stored in the selected Tag's private state for up to 30 days, bounded to 50
 records, and an expired or unavailable reference is not treated as authorization
 to read anything.
 
-**Fix with coding agent** creates a copyable troubleshooting prompt. Repair
-requires an agent with access to the machine running Tag; an agent elsewhere
-can analyze the sanitized report but must not claim it inspected local logs or
-settings. Tag cannot guarantee that an external agent completes a repair or
-reports back. Use the bundled `tag-troubleshoot` skill when it is available;
-otherwise the prompt falls back to `tag inspect --json`, `tag doctor --json`,
-`tag status --json`, and bounded `tag logs --limit 50` checks.
+**Fix with coding agent** posts a short, copyable prompt with the sanitized
+diagnostic report in a message only the requester can see. In a direct message,
+the prompt stays in that private conversation. Give it to an agent with access
+to the machine running Tag for a local repair. The separate **Report issue**
+action provides a private report preview for manual sharing. See
+[Error reporting for failed Slack requests](reference/error-reporting.md) for
+the full action, report, and retention details.
 
 When reporting a problem, include the Tag version, operating system, Python
 version, failing check, and redacted log excerpt. Never include tokens.

@@ -98,14 +98,14 @@ class ErrorReportTests(unittest.TestCase):
         self.assertEqual("unavailable", checks[0].status)
         self.assertEqual("2026-09-23T00:00:01Z", checks[0].checked_at)
 
-    def test_troubleshooting_prompt_is_self_contained_without_claiming_local_access(self) -> None:
-        prompt = build_troubleshooting_prompt(self.report(), skill_available=False)
+    def test_troubleshooting_prompt_is_short_and_uses_sanitized_report(self) -> None:
+        report = self.report()
+        prompt = build_troubleshooting_prompt(report)
 
-        self.assertIn("tag-troubleshoot skill was not found", prompt)
-        self.assertIn("tag inspect --json", prompt)
-        self.assertIn("must not claim it inspected the local installation", prompt)
+        self.assertIn("Help me fix this failed Tag request", prompt)
         self.assertIn("ABC12345", prompt)
-        self.assertIn("BEGIN TAG REPORT", prompt)
+        self.assertNotIn("TSECRET", prompt)
+        self.assertNotIn("Required workflow", prompt)
 
     def test_retry_linkage_accepts_only_opaque_references(self) -> None:
         report = make_error_report(

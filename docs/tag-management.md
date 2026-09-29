@@ -82,16 +82,18 @@ memory and first-reply caveats. `tag status --json` reports the same checks in
 structured form. `tag restart` stops Tag's managed processes and starts them
 through the normal readiness checks; a failed stop prevents starting again.
 
-Failed Slack requests use a separate, local error-report store. Startup creates
-or verifies its owner-only directory before dependent services and records the
-versioned migration only after verification succeeds; interrupted migrations
-remain retryable. The store keeps at most 50 bounded records for 30 days.
-Reports are private previews for the authorized request caller and contain no
-raw conversation, file contents, tokens, or raw logs by default. Sharing with
+Failed Slack requests use a separate, local error-report store. A versioned
+startup migration creates and verifies its owner-only directory before
+dependent services, then records completion. Interrupted migrations remain
+retryable. The store keeps at most 50 bounded records for 30 days.
+Failure messages and report previews are private to the original authorized
+requester. Sharing with
 [Hover Community](https://join.slack.com/t/hover-community/shared_invite/zt-4aghkshid-n7fRukS7_J5sR2jDLBXK9A)
-is manual. A troubleshooting handoff needs local coding-agent access to repair
-Tag; an upstream code bug is handled through a regression-tested GitHub PR and
-canonical issue, while a local repair is explained in the community report.
+is manual. See [Error reporting for failed Slack requests](reference/error-reporting.md)
+for report contents, recovery actions, and storage details. A troubleshooting
+handoff needs local coding-agent access to repair Tag; an upstream code bug is
+handled through a regression-tested GitHub PR and canonical issue, while a
+local repair is explained in the community report.
 
 Contributors using a prepared source checkout can run `./tag dev` for a
 foreground loop that watches `scripts/**/*.py`, reloads the Slack bridge, and
