@@ -212,7 +212,10 @@ def migrate_file_delivery(home: Path, path: Path) -> bool:
     saved = read_config(path)
     mode = saved.get("OPENTAG_FILE_DELIVERY", "")
     if mode not in {"local", "local+slack"}:
-        raise RuntimeError("File delivery migration could not verify the saved setting")
+        raise RuntimeError(
+            f"Invalid OPENTAG_FILE_DELIVERY value {mode!r}; "
+            "run tag config set OPENTAG_FILE_DELIVERY local+slack"
+        )
     # Atomic checkpoint comes last. Interrupted writes can be retried safely.
     save_config(marker, {"version": "1"})
     return True

@@ -30,6 +30,18 @@ class FileDeliveryMigrationTests(unittest.TestCase):
             self.assertTrue(tag_config.migrate_file_delivery(home, config))
             self.assertEqual(tag_config.read_config(config)["OPENTAG_FILE_DELIVERY"], "local")
 
+    def test_invalid_saved_choice_identifies_value_and_remains_retryable(self):
+        with tempfile.TemporaryDirectory() as raw:
+            home = Path(raw)
+            config = home / "config/settings.json"
+            marker = home / "state/migrations/file-delivery-v1.json"
+            tag_config.save_config(config, {"OPENTAG_FILE_DELIVERY": "remote"})
+            with self.assertRaisesRegex(RuntimeError, "Invalid OPENTAG_FILE_DELIVERY value 'remote'"):
+                tag_config.migrate_file_delivery(home, config)
+            self.assertFalse(marker.exists())
+            tag_config.update_config(config, {"OPENTAG_FILE_DELIVERY": "local"})
+            self.assertTrue(tag_config.migrate_file_delivery(home, config))
+
     def test_interrupted_checkpoint_is_retryable(self):
         with tempfile.TemporaryDirectory() as raw:
             home = Path(raw)
