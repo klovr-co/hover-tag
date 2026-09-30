@@ -3595,6 +3595,32 @@ class SlackAgentSettingsTests(unittest.TestCase):
         self.assertEqual("A concise answer.", rendered[0]["text"]["text"])
         self.assertEqual("Configure", rendered[1]["elements"][0]["text"]["text"])
 
+    def test_configure_shares_action_row_with_open_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            artifact = root / "test-note.md"
+            artifact.write_text("Hello", encoding="utf-8")
+            artifact_blocks = slack_socket_agent.output_artifact_button_blocks(
+                [artifact], root, uploaded_paths={artifact.resolve()},
+                user_id="UOWNER", channel="C1", thread_ts="1.23",
+            )
+        settings_blocks = slack_socket_agent.settings_button_blocks(
+            team="T1", channel="C1", thread_ts="1.23",
+        )
+        footer = slack_socket_agent.combine_reply_actions(artifact_blocks, settings_blocks)
+        client = MagicMock()
+        slack_socket_agent.post_final_reply(
+            client, "C1", "1.23", "Saved test-note.md", footer_blocks=footer,
+        )
+
+        rendered = client.chat_postMessage.call_args.kwargs["blocks"]
+        self.assertEqual(2, len(rendered))
+        self.assertEqual("actions", rendered[1]["type"])
+        self.assertEqual(
+            ["📁 Open folder", "Configure"],
+            [button["text"]["text"] for button in rendered[1]["elements"]],
+        )
+
     def test_settings_action_value_supports_new_and_existing_messages(self) -> None:
         self.assertEqual(
             "new",

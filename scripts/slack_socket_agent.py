@@ -961,6 +961,20 @@ def settings_button_blocks(
     ]
 
 
+def combine_reply_actions(
+    artifact_blocks: list[dict[str, Any]],
+    settings_blocks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Place Configure beside file actions when one Slack actions block has room."""
+    if (
+        artifact_blocks
+        and len(artifact_blocks[-1]["elements"]) + len(settings_blocks[0]["elements"]) <= 25
+    ):
+        artifact_blocks[-1]["elements"].extend(settings_blocks[0]["elements"])
+        return artifact_blocks
+    return artifact_blocks + settings_blocks
+
+
 def activity_button_blocks(
     *, team: str, channel: str, thread_ts: str, run_id: str,
     direct_message: bool = False,
@@ -4267,11 +4281,14 @@ def create_app(
                 if succeeded:
                     footer_blocks = artifact_button_blocks
                     if backend == "codex":
-                        footer_blocks += settings_button_blocks(
-                            team=team,
-                            channel=channel,
-                            thread_ts=thread_ts,
-                            direct_message=direct_message,
+                        footer_blocks = combine_reply_actions(
+                            artifact_button_blocks,
+                            settings_button_blocks(
+                                team=team,
+                                channel=channel,
+                                thread_ts=thread_ts,
+                                direct_message=direct_message,
+                            ),
                         )
                     footer_blocks = footer_blocks or None
                 elif answer.startswith("Stopped.") or answer.startswith("Stop requested"):
