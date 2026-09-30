@@ -18,6 +18,17 @@ This is thread context, not the whole channel. In a long thread, some messages
 may be missing from what Tag receives. Restate an important detail if the
 answer seems to have lost it.
 
+An operator can optionally enable Jev auto-invocation so an authorized user can
+talk to Tag without mentioning it. This includes inclusive questions to the channel,
+such as “What do you all think?” Before starting
+the local agent, Tag sends the current message and up to ten recent text messages
+from that thread to TypeSafe. Member IDs, files, attachments, and messages from
+the rest of the channel are not included in this routing request. TypeSafe returns
+the probability that the user is addressing Tag directly or as part of the audience
+and that a reply is welcome now. Tag acts only when it meets the configured threshold
+and otherwise stays silent. A request for help or a concrete task is not required.
+Explicit mentions continue to work independently.
+
 ## Find a discussion in another channel
 
 > @Iris's Tag find the launch decision in #product and compare it with the plan in

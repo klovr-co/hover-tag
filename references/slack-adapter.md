@@ -5,7 +5,7 @@
 Use this reference when setting up the Slack-facing side of Tag from
 scratch. The bridge is intentionally thin. It only:
 
-1. Receives `app_mention` and `message.im` events through Socket Mode.
+1. Receives `app_mention`, channel-message, and `message.im` events through Socket Mode.
 2. Reads the current thread through Slack Web API.
 3. Starts Slack's native working indicator, falling back to a temporary reply
    when that API is unavailable.
@@ -13,10 +13,13 @@ scratch. The bridge is intentionally thin. It only:
 5. Optionally streams normalized answer deltas, or posts the final answer when
    the selected backend provides only a completed response.
 
-The adapter does not answer task questions or classify their meaning. It passes
-the thread, current-channel MFS scope, and a separate cross-channel search grant
-to a fresh CLI agent. The runtime agent understands the request and chooses
-whether to call the dedicated Slack-history helper.
+The adapter does not answer task questions. Explicit mentions and direct messages
+pass directly to a fresh CLI agent. When optional Jev auto-invocation is enabled,
+the adapter asks TypeSafe one bounded question about each authorized user's
+untagged message: whether the user is talking to Tag directly or as part of the
+addressed audience and a reply is welcome now. The probability must meet the
+configured threshold. A provider error or uncertain decision stays silent.
+Accepted messages then enter the same authorization and execution path as a mention.
 
 By default, `scripts/mfs_search.py` remains narrowed to the invoking channel
 exactly as before. Independently, `scripts/slack_search_scope.py` computes the
@@ -40,6 +43,8 @@ Relevant Slack docs:
 
 - Socket Mode: <https://docs.slack.dev/apis/events-api/using-socket-mode/>
 - App mentions: <https://docs.slack.dev/reference/events/app_mention/>
+- Public channel messages: <https://docs.slack.dev/reference/events/message.channels/>
+- Private channel messages: <https://docs.slack.dev/reference/events/message.groups/>
 - Direct messages: <https://docs.slack.dev/reference/events/message.im/>
 - OAuth scopes: <https://docs.slack.dev/reference/scopes/>
 
@@ -71,6 +76,33 @@ connector configuration; `tag start` registers it after starting MFS:
    service readiness alone is not an end-to-end pass.
 9. Send Tag (or the customized app name) a direct message and confirm an
    authorized caller receives a threaded reply without an `@mention`.
+
+## Optional Jev auto-invocation
+
+Jev auto-invocation lets an authorized user talk to Tag in an allowed channel
+without mentioning it. This includes addressing everyone with a question such as
+“What do you all think?” It is disabled by default. Store the TypeSafe API
+key through standard input, enable the gate, and restart Tag:
+
+```sh
+printf '%s' "$TYPESAFE_API_KEY" | tag config set OPENTAG_TYPESAFE_API_KEY --stdin --json
+tag config set OPENTAG_JEV_AUTO_INVOKE 1 --json
+tag restart
+```
+
+The default `OPENTAG_JEV_THRESHOLD` is `0.9`; Jev's probability that Tag is part
+of the addressed audience must reach it.
+`OPENTAG_JEV_MODEL` defaults to `jev-latest`, and
+`OPENTAG_JEV_TIMEOUT_SECONDS` defaults to `5`. Tune the threshold against real
+workspace examples before lowering it. Explicit mentions and direct messages do
+not depend on TypeSafe and continue working when its API is unavailable.
+
+For every eligible untagged message, Tag sends the message text, the configured
+assistant name and role, and up to ten recent text messages from the same Slack
+thread to TypeSafe. Slack member IDs, attachments, files, and channel history
+outside that thread window are excluded from the decision state. Only messages
+from an authorized user in an allowed channel are evaluated. Disable the feature
+with `tag config set OPENTAG_JEV_AUTO_INVOKE 0 --json`.
 
 If the workspace blocks app creation or install approval, the user must ask a
 Slack workspace admin to approve the app. The skill can guide the setup and
@@ -105,6 +137,8 @@ Profile-picture selection and upload require Slack CLI 4.7 or newer.
    - `users:read` — verify app identity and caller visibility for cross-channel search.
 5. Open **Event Subscriptions** and subscribe to Bot Events:
    - `app_mention`
+   - `message.channels`
+   - `message.groups`
    - `message.im`
    - `app_home_opened`
    - `agent_session_stopped`

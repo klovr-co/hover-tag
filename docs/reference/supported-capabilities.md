@@ -48,6 +48,7 @@ unavailable behavior.
 | Owner access | Supported | Configure the owner's Slack member ID during setup. |
 | Multi-user access | Coming soon | Additional callers are not part of the supported product flow yet, although the underlying allowlist accepts multiple IDs. |
 | Explicit channel restriction | Implemented | Configure `SLACK_CHANNEL_IDS`; the bridge fails closed without selected channels. |
+| Untagged Jev invocation | Optional | Disabled by default. Authorized messages in allowed channels invoke Tag when TypeSafe judges that Tag is part of the addressed audience and its probability meets the configured threshold. |
 | MFS retrieval roots | Implemented | Configure `MFS_ALLOWED_SCOPES`. |
 | Backend timeout and retry settings | Implemented | Configure the corresponding `OPENTAG_` settings. |
 | Codex action approvals | Implemented fallback | Codex normally reviews sandbox-boundary actions automatically. Supported requests delivered to Tag show private **Approve once** and **Deny** buttons for the initiating user. See [Control your Tag](../concepts/control-your-tag.md#respond-to-a-codex-approval-request). |
