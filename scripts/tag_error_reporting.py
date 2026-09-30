@@ -46,6 +46,7 @@ class FailureCategory:
     IDLE_TIMEOUT = "idle_timeout"
     MAXIMUM_RUNTIME = "maximum_runtime"
     UNEXPECTED_EXIT = "unexpected_backend_exit"
+    MODEL_UNAVAILABLE = "model_unavailable"
     UNKNOWN = "unknown"
 
 
@@ -288,6 +289,12 @@ _CODE_CATEGORIES = {
     "process_exit": FailureCategory.UNEXPECTED_EXIT,
 }
 
+_UNSUPPORTED_CHATGPT_MODEL_RE = re.compile(
+    r"The '([A-Za-z0-9][A-Za-z0-9._-]{0,79})' model is not supported "
+    r"when using Codex with a ChatGPT account\.",
+    re.IGNORECASE,
+)
+
 
 def _classification_for_category(category: str, *, code: str | None, detail: str) -> FailureClassification:
     explanations = {
@@ -297,6 +304,7 @@ def _classification_for_category(category: str, *, code: str | None, detail: str
         FailureCategory.IDLE_TIMEOUT: "The coding backend timed out before completing the request.",
         FailureCategory.MAXIMUM_RUNTIME: "The coding backend reached Tag's maximum runtime.",
         FailureCategory.UNEXPECTED_EXIT: "The coding backend exited unexpectedly.",
+        FailureCategory.MODEL_UNAVAILABLE: "The selected model is unavailable for this ChatGPT account. Choose another model in Configure.",
         FailureCategory.UNKNOWN: "Cause not identified.",
     }
     evidence = {
@@ -306,12 +314,20 @@ def _classification_for_category(category: str, *, code: str | None, detail: str
         FailureCategory.IDLE_TIMEOUT: "The backend did not complete before its timeout.",
         FailureCategory.MAXIMUM_RUNTIME: "The configured maximum runtime was reached.",
         FailureCategory.UNEXPECTED_EXIT: "The backend process reported a non-success exit.",
+        FailureCategory.MODEL_UNAVAILABLE: "The backend rejected the selected model for a ChatGPT account.",
         FailureCategory.UNKNOWN: "The failure did not match a recognized evidence pattern.",
     }
     if category == FailureCategory.IDLE_TIMEOUT and "no backend activity" in detail.lower():
         evidence = "No backend activity was observed before the timeout."
     else:
         evidence = evidence[category]
+    if category == FailureCategory.MODEL_UNAVAILABLE:
+        match = _UNSUPPORTED_CHATGPT_MODEL_RE.search(detail)
+        if match:
+            explanations[category] = (
+                f"The '{match.group(1)}' model is not supported when using Codex "
+                "with a ChatGPT account. Choose another model in Configure."
+            )
     return FailureClassification(category, explanations[category], evidence, code)
 
 
@@ -325,6 +341,8 @@ def classify_failure(detail: str, backend_code: str | None = None) -> FailureCla
         )
 
     lowered = safe_detail.lower()
+    if re.search(r"model.{0,160}not supported when using codex with a chatgpt account", lowered):
+        return _classification_for_category(FailureCategory.MODEL_UNAVAILABLE, code=normalized_code, detail=safe_detail)
     if re.search(r"\bno backend activity\b|\bidle(?:[_ -]|\u00a0)?timeout\b", lowered):
         return _classification_for_category(FailureCategory.IDLE_TIMEOUT, code=None, detail=safe_detail)
     if re.search(r"\bmaximum runtime\b|\bmax(?:imum)?[_ -]?runtime\b", lowered):

@@ -1183,6 +1183,15 @@ class SlackFailureReplyTests(unittest.TestCase):
         self.assertIn("ABC12345", reply)
         self.assertIn("Please retry", reply)
 
+    def test_unsupported_chatgpt_model_copy_identifies_safe_cause(self) -> None:
+        reply = slack_socket_agent.user_facing_failure(
+            "The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.",
+            420, "ABC12345", backend_code="invalid_request_error",
+        )
+
+        self.assertIn("Choose another model in Configure", reply)
+        self.assertIn("The 'gpt-6.1-sol' model is not supported", reply)
+
     def test_failure_actions_keep_report_content_out_of_slack_metadata(self) -> None:
         blocks = slack_socket_agent.failure_action_blocks(
             team="T1",
@@ -1203,6 +1212,17 @@ class SlackFailureReplyTests(unittest.TestCase):
         )
         self.assertEqual({"reference": "ABC12345"}, json.loads(actions[1]["value"]))
         self.assertEqual({"reference": "ABC12345"}, json.loads(actions[2]["value"]))
+
+    def test_failure_recovery_keeps_configure_without_activity(self) -> None:
+        blocks = slack_socket_agent.failure_action_blocks(
+            team="T1", channel="C1", thread_ts="1.0", request_ts="1.1",
+            error_reference="ABC12345", configure=True,
+        )
+        self.assertEqual(len(blocks), 1)
+        actions = blocks[0]["elements"]
+        self.assertEqual([action["text"]["text"] for action in actions],
+                         ["Retry", "Fix with coding agent", "Report issue", "Configure"])
+
 
     def test_report_modal_uses_selectable_text_and_manual_community_link(self) -> None:
         report = make_error_report(
@@ -2697,6 +2717,240 @@ class SlackBridgeReadinessTests(unittest.TestCase):
 
 
 class SlackAnswerStreamTests(unittest.TestCase):
+    def test_activity_starts_grouped_plan_and_final_answer_uses_same_message(self) -> None:
+        client = MagicMock()
+        client.chat_startStream.return_value = {"ts": "3.45"}
+        stream = slack_socket_agent.SlackAnswerStream(
+            client, "C123", "1.23", "U123", "T123", MagicMock()
+        )
+        start = {"type": "activity_start", "activity_id": "item-1", "label": "Searching the web…"}
+        stream.activity(start)
+        stream.activity({**start, "type": "activity_complete", "status": "completed"})
+
+        self.assertTrue(stream.finish("Here is the answer"))
+        start_args = client.chat_startStream.call_args.kwargs
+        self.assertEqual(start_args["task_display_mode"], "plan")
+        self.assertEqual(start_args["chunks"][0], {"type": "plan_update", "title": "Agent activity"})
+        self.assertEqual(start_args["chunks"][1]["status"], "in_progress")
+        self.assertEqual(client.chat_appendStream.call_args_list[0].kwargs["chunks"][0]["status"], "complete")
+        self.assertEqual(client.chat_appendStream.call_args_list[1].kwargs["chunks"], [
+            {"type": "markdown_text", "text": "Here is the answer"},
+        ])
+        client.chat_stopStream.assert_called_once_with(
+            channel="C123", ts="3.45",
+            chunks=[{"type": "plan_update", "title": "Agent activity"}],
+        )
+
+    def test_activity_rejects_raw_labels_and_missing_completion(self) -> None:
+        client = MagicMock()
+        client.chat_startStream.return_value = {"ts": "3.45"}
+        stream = slack_socket_agent.SlackAnswerStream(
+            client, "C123", "1.23", "U123", "T123", MagicMock()
+        )
+        stream.activity({"type": "activity_complete", "activity_id": "unknown", "label": "secret"})
+        client.chat_startStream.assert_not_called()
+        stream.activity({"type": "activity_start", "activity_id": "item-1", "label": "secret path"})
+        self.assertEqual(client.chat_startStream.call_args.kwargs["chunks"][1]["title"], "Using a connected tool")
+        self.assertTrue(stream.finish("Done"))
+        self.assertEqual(client.chat_appendStream.call_args_list[0].kwargs["chunks"][0]["status"], "complete")
+
+    def test_shared_task_chunks_show_short_identity_but_not_inputs_or_results(self) -> None:
+        client = MagicMock()
+        client.chat_startStream.return_value = {"ts": "3.45"}
+        stream = slack_socket_agent.SlackAnswerStream(
+            client, "C123", "1.23", "U123", "T123", MagicMock()
+        )
+        stream.activity({
+            "type": "activity_start", "activity_id": "item-1", "label": "Reading files…",
+            "details": {"tool": "cat secret-plan.md", "input": "private input"},
+        })
+        stream.activity({
+            "type": "activity_complete", "activity_id": "item-1", "label": "Reading files…",
+            "status": "completed", "details": {"output": "private result"},
+        })
+        stream.finish("Done")
+
+        calls = json.dumps([
+            call.kwargs for call in client.chat_startStream.call_args_list
+            + client.chat_appendStream.call_args_list + client.chat_stopStream.call_args_list
+        ])
+        self.assertIn("Reading secret-plan.md", calls)
+        self.assertNotIn("private input", calls)
+        self.assertNotIn("private result", calls)
+
+    def test_task_start_failure_does_not_prevent_answer_stream(self) -> None:
+        client = MagicMock()
+        client.chat_startStream.side_effect = [RuntimeError("unsupported"), {"ts": "3.45"}]
+        stream = slack_socket_agent.SlackAnswerStream(
+            client, "C123", "1.23", "U123", "T123", MagicMock()
+        )
+        stream.activity({"type": "activity_start", "activity_id": "item-1", "label": "Searching the web…"})
+        self.assertFalse(stream.failed)
+        stream.append("a" * slack_socket_agent.STREAM_START_CHARS)
+        self.assertTrue(stream.finish(stream.received))
+        self.assertEqual(client.chat_startStream.call_count, 2)
+
+    def test_activity_after_text_stream_does_not_switch_modes(self) -> None:
+        client = MagicMock()
+        client.chat_startStream.return_value = {"ts": "3.45"}
+        stream = slack_socket_agent.SlackAnswerStream(
+            client, "C123", "1.23", "U123", "T123", MagicMock()
+        )
+        stream.append("a" * slack_socket_agent.STREAM_START_CHARS)
+        stream.activity({"type": "activity_start", "activity_id": "item-1", "label": "Reading files…"})
+
+        self.assertFalse(stream.task_updates_available)
+        self.assertEqual(client.chat_startStream.call_count, 1)
+        self.assertTrue(stream.finish(stream.received))
+        client.chat_stopStream.assert_called_once_with(channel="C123", ts="3.45")
+
+    def test_repeated_activity_uses_one_counted_card(self) -> None:
+        client = MagicMock()
+        client.chat_startStream.return_value = {"ts": "3.45"}
+        stream = slack_socket_agent.SlackAnswerStream(
+            client, "C123", "1.23", "U123", "T123", MagicMock()
+        )
+        for index in range(8):
+            event = {"type": "activity_start", "activity_id": f"item-{index}",
+                     "label": "Running a command…"}
+            stream.activity(event)
+            stream.activity({**event, "type": "activity_complete", "status": "completed"})
+
+        self.assertTrue(stream.finish("Done"))
+        self.assertEqual(len(stream.task_groups), 1)
+        self.assertEqual(client.chat_appendStream.call_args_list[-2].kwargs["chunks"], [
+            {"type": "task_update", "id": next(iter(stream.task_groups.values()))["id"],
+             "title": "Ran a command · 8 steps", "status": "complete"},
+        ])
+
+    def test_mixed_activity_has_one_card_per_safe_label(self) -> None:
+        client = MagicMock()
+        client.chat_startStream.return_value = {"ts": "3.45"}
+        stream = slack_socket_agent.SlackAnswerStream(
+            client, "C123", "1.23", "U123", "T123", MagicMock()
+        )
+        for index, label in enumerate((
+            "Reading files…", "Running a command…", "Running a command…",
+            "Reading files…", "Running a command…",
+        )):
+            event = {"type": "activity_start", "activity_id": f"item-{index}", "label": label}
+            stream.activity(event)
+            stream.activity({**event, "type": "activity_complete", "status": "completed"})
+
+        self.assertTrue(stream.finish("Done"))
+        self.assertEqual(len(stream.task_groups), 2)
+        self.assertEqual([chunk["title"] for chunk in client.chat_appendStream.call_args_list[-2].kwargs["chunks"]], [
+            "Read files · 2 steps", "Ran a command · 3 steps",
+        ])
+
+    def test_task_groups_are_bounded(self) -> None:
+        client = MagicMock()
+        client.chat_startStream.return_value = {"ts": "3.45"}
+        stream = slack_socket_agent.SlackAnswerStream(
+            client, "C123", "1.23", "U123", "T123", MagicMock()
+        )
+        labels = list(slack_socket_agent.PUBLIC_LABELS)[:slack_socket_agent.MAX_STREAM_TASKS + 1]
+        for index, label in enumerate(labels):
+            stream.activity({"type": "activity_start", "activity_id": f"item-{index}", "label": label})
+
+        self.assertEqual(len(stream.task_groups), slack_socket_agent.MAX_STREAM_TASKS)
+        self.assertEqual(client.chat_appendStream.call_count, len(labels) - 1)
+        self.assertTrue(client.chat_appendStream.call_args.kwargs["chunks"][-1]["title"].startswith("More steps · "))
+
+    def test_live_rows_distinguish_commands_and_update_file_change_names(self) -> None:
+        client = MagicMock()
+        client.chat_startStream.return_value = {"ts": "3.45"}
+        stream = slack_socket_agent.SlackAnswerStream(
+            client, "C123", "1.23", "U123", "T123", MagicMock()
+        )
+        examples = (("cat runtime-agent.md", "Reading runtime-agent.md"),
+                    ("cat SKILL.md", "Reading SKILL.md"),
+                    ("python script.py", "Running script.py"),
+                    ("File change", "Updating files"))
+        for index, (tool, title) in enumerate(examples):
+            event = {"type": "activity_start", "activity_id": f"item-{index}",
+                     "label": "Running a command…", "details": {"tool": tool}}
+            stream.activity(event)
+            chunks = (client.chat_startStream.call_args.kwargs["chunks"] if index == 0
+                      else client.chat_appendStream.call_args.kwargs["chunks"])
+            self.assertEqual(chunks[-1]["title"], title)
+            self.assertEqual(chunks[-1]["status"], "in_progress")
+            if index:
+                self.assertEqual(chunks[0]["status"], "complete")
+            if tool == "File change":
+                event["details"] = {"tool": "File change · app.py"}
+            stream.activity({**event, "type": "activity_complete", "status": "completed"})
+
+        stream.finish("Done")
+        self.assertEqual(len(stream.task_groups), 4)
+        final_cards = client.chat_appendStream.call_args_list[-2].kwargs["chunks"]
+        self.assertEqual(final_cards[-1]["title"], "Updated app.py")
+        self.assertTrue(all(card["status"] == "complete" for card in final_cards))
+
+    def test_live_tool_names_escape_mentions_and_redact_credentials(self) -> None:
+        client = MagicMock()
+        client.chat_startStream.return_value = {"ts": "3.45"}
+        stream = slack_socket_agent.SlackAnswerStream(
+            client, "C123", "1.23", "U123", "T123", MagicMock()
+        )
+        stream.activity({"type": "activity_start", "activity_id": "item-1",
+                         "label": "Running a command…",
+                         "details": {"tool": "cat <@U123> token=secret-value"}})
+        title = client.chat_startStream.call_args.kwargs["chunks"][-1]["title"]
+        self.assertNotIn("<@U123>", title)
+        self.assertNotIn("secret-value", title)
+        stream.abort()
+
+    def test_successful_run_closes_activity_complete_after_tool_level_errors(self) -> None:
+        for outcome, prefix, status in (("completed", "Read app.py", "complete"),
+                                         ("failed", "Failed · Reading app.py", "error"),
+                                         ("declined", "Declined · Reading app.py", "error"),
+                                         ("interrupted", "Stopped · Reading app.py", "error")):
+            with self.subTest(outcome=outcome):
+                client = MagicMock()
+                client.chat_startStream.return_value = {"ts": "3.45"}
+                stream = slack_socket_agent.SlackAnswerStream(client, "C123", "1.23", "U123", "T123", MagicMock())
+                event = {"type": "activity_start", "activity_id": "item-1", "label": "Reading files…",
+                         "details": {"tool": "cat app.py"}}
+                stream.activity(event)
+                stream.activity({**event, "type": "activity_complete", "status": outcome})
+                stream.activity({"type": "activity_start", "activity_id": "item-2",
+                                 "label": "Running a command…", "details": {"tool": "git status"}})
+                live_card = client.chat_appendStream.call_args.kwargs["chunks"][0]
+                self.assertEqual((live_card["title"], live_card["status"]), (prefix, status))
+                stream.finish("Done")
+                cards = client.chat_appendStream.call_args_list[-2].kwargs["chunks"]
+                self.assertTrue(all(card["status"] == "complete" for card in cards))
+                self.assertEqual(cards[0]["title"], "Read app.py" if outcome == "completed" else "Finished · Reading app.py")
+
+    def test_aborting_stream_closes_active_cards_without_claiming_completion(self) -> None:
+        client = MagicMock()
+        client.chat_startStream.return_value = {"ts": "3.45"}
+        stream = slack_socket_agent.SlackAnswerStream(client, "C123", "1.23", "U123", "T123", MagicMock())
+        stream.activity({"type": "activity_start", "activity_id": "item-1", "label": "Reading files…",
+                         "details": {"tool": "cat app.py"}})
+        stream.abort()
+        card = client.chat_stopStream.call_args.kwargs["chunks"][-1]
+        self.assertEqual(card["title"], "Stopped · Reading app.py")
+        self.assertEqual(card["status"], "error")
+
+    def test_successful_run_closes_missing_completion_and_repeated_steps_resume_running(self) -> None:
+        client = MagicMock()
+        client.chat_startStream.return_value = {"ts": "3.45"}
+        stream = slack_socket_agent.SlackAnswerStream(client, "C123", "1.23", "U123", "T123", MagicMock())
+        event = {"type": "activity_start", "activity_id": "item-1", "label": "Reading files…",
+                 "details": {"tool": "cat app.py"}}
+        stream.activity(event)
+        stream.activity({**event, "type": "activity_complete", "status": "completed"})
+        stream.activity({**event, "activity_id": "item-2"})
+        card = client.chat_appendStream.call_args.kwargs["chunks"][-1]
+        self.assertEqual(card["title"], "Reading app.py · 2 steps")
+        self.assertEqual(card["status"], "in_progress")
+        stream.finish("Done")
+        card = client.chat_appendStream.call_args_list[-2].kwargs["chunks"][0]
+        self.assertEqual(card["title"], "Finished · Reading app.py · 2 steps")
+        self.assertEqual(card["status"], "complete")
+
     def test_batches_deltas_and_finishes_stream(self) -> None:
         client = MagicMock()
         client.chat_startStream.return_value = {"ts": "3.45"}
@@ -2799,6 +3053,37 @@ class SlackAnswerStreamTests(unittest.TestCase):
         client.chat_stopStream.assert_called_once_with(
             channel="C123", ts="3.45", markdown_text="Corrected final"
         )
+
+    def test_chunk_stream_recovery_uses_chunks(self) -> None:
+        client = MagicMock()
+        client.chat_startStream.return_value = {"ts": "3.45"}
+        stream = slack_socket_agent.SlackAnswerStream(
+            client, "C123", "1.23", "U123", "T123", MagicMock()
+        )
+        stream.activity({"type": "activity_start", "activity_id": "item-1", "label": "Reading files…"})
+        client.chat_appendStream.side_effect = RuntimeError("temporary failure")
+        stream.append("a" * slack_socket_agent.STREAM_APPEND_CHARS)
+
+        self.assertTrue(stream.failed)
+        self.assertTrue(stream.finish(stream.received))
+        client.chat_stopStream.assert_called_once()
+        chunks = client.chat_stopStream.call_args.kwargs["chunks"]
+        self.assertEqual(chunks[-1], {"type": "markdown_text", "text": stream.received})
+        self.assertEqual(chunks[0]["status"], "complete")
+
+    def test_chunk_stream_replaces_divergent_deltas_with_chunks(self) -> None:
+        client = MagicMock()
+        client.chat_startStream.return_value = {"ts": "3.45"}
+        stream = slack_socket_agent.SlackAnswerStream(
+            client, "C123", "1.23", "U123", "T123", MagicMock()
+        )
+        stream.activity({"type": "activity_start", "activity_id": "item-1", "label": "Reading files…"})
+        stream.append("partial")
+
+        self.assertTrue(stream.finish("Corrected final"))
+        self.assertEqual(client.chat_stopStream.call_args.kwargs["chunks"], [
+            {"type": "markdown_text", "text": "Corrected final"},
+        ])
 
 
 class BackendEventRunnerTests(unittest.TestCase):
@@ -2999,7 +3284,61 @@ class SlackCancellationTests(unittest.TestCase):
 
 
 class SlackAgentSettingsTests(unittest.TestCase):
-    def test_failed_app_server_replies_keep_activity(self) -> None:
+    def setUp(self) -> None:
+        catalog = patch.object(slack_socket_agent, "fetch_codex_model_catalog", return_value=None)
+        self.live_catalog = catalog.start()
+        self.addCleanup(catalog.stop)
+
+    def test_live_account_default_overrides_an_incompatible_shared_cache(self) -> None:
+        self.live_catalog.return_value = [{
+            "model": "gpt-6-astra", "displayName": "Astra", "isDefault": True,
+            "defaultReasoningEffort": "medium", "additionalSpeedTiers": ["fast"],
+            "supportedReasoningEfforts": [{"reasoningEffort": "low"}, {"reasoningEffort": "medium"}],
+        }]
+        with tempfile.TemporaryDirectory() as raw_dir, patch.dict(os.environ, {"CODEX_HOME": raw_dir, "OPENTAG_WORKDIR": raw_dir}, clear=True):
+            (Path(raw_dir) / "models_cache.json").write_text(json.dumps({"models": [
+                {"slug": "gpt-6.1-sol", "visibility": "list", "priority": 1},
+            ]}))
+            models = slack_socket_agent.discover_codex_models()
+            self.assertEqual([model.model_id for model in models], ["gpt-6-astra"])
+            self.assertEqual(slack_socket_agent.default_agent_settings(models).model, "gpt-6-astra")
+            old_saved_choice = slack_socket_agent.AgentSettings("gpt-6.1-sol", "low", False)
+            repaired = slack_socket_agent.normalize_settings(old_saved_choice, models)
+            self.assertEqual((repaired.model, repaired.reasoning_effort), ("gpt-6-astra", "low"))
+            explicit = slack_socket_agent.AgentSettings("gpt-6-astra", "low", False)
+            self.assertEqual(slack_socket_agent.normalize_settings(explicit, models), explicit)
+            # A later cache rewrite cannot bring back the rejected model.
+            self.assertEqual(slack_socket_agent.default_agent_settings(slack_socket_agent.discover_codex_models()).model, "gpt-6-astra")
+
+    def test_malformed_live_reasoning_efforts_preserve_catalog(self) -> None:
+        """Malformed optional metadata must not discard other account models."""
+        for efforts in (None, 42, "medium", {"reasoningEffort": "high"},
+                        [None, "high", {}, {"reasoningEffort": "low"}]):
+            with self.subTest(efforts=efforts), patch.dict(os.environ, {}, clear=True):
+                self.live_catalog.return_value = [
+                    {"model": "malformed", "supportedReasoningEfforts": efforts},
+                    {"model": "valid", "isDefault": True,
+                     "supportedReasoningEfforts": [{"reasoningEffort": "medium"}]},
+                ]
+                models = slack_socket_agent.discover_codex_models()
+                self.assertEqual([model.model_id for model in models], ["malformed", "valid"])
+                self.assertEqual(models[0].reasoning_efforts,
+                                 ("low",) if isinstance(efforts, list)
+                                 else slack_socket_agent.DEFAULT_REASONING_EFFORTS)
+                self.assertEqual(models[1].reasoning_efforts, ("medium",))
+                self.assertEqual(slack_socket_agent.default_agent_settings(models).model, "valid")
+
+    def test_unavailable_live_catalog_never_promotes_cached_priority_to_default(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir, patch.dict(os.environ, {"CODEX_HOME": raw_dir, "OPENTAG_WORKDIR": raw_dir}, clear=True):
+            (Path(raw_dir) / "models_cache.json").write_text(json.dumps({"models": [
+                {"slug": "gpt-6.1-sol", "visibility": "list", "priority": 1},
+            ]}))
+            models = slack_socket_agent.discover_codex_models()
+            self.assertIsNone(slack_socket_agent.default_agent_settings(models).model)
+            modal = slack_socket_agent.settings_modal(metadata={}, settings=slack_socket_agent.AgentSettings(), models=models)
+            self.assertEqual(modal["blocks"][0]["element"]["initial_option"]["text"]["text"], "Codex default")
+
+    def test_failed_app_server_replies_hide_activity(self) -> None:
         for outcome in ("backend_error", "exception"):
             with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as raw_dir:
                 store = ActivityStore(Path(raw_dir) / "activity")
@@ -3042,9 +3381,9 @@ class SlackAgentSettingsTests(unittest.TestCase):
                     for element in block["elements"]
                 ]
                 self.assertIn(slack_socket_agent.RETRY_ACTION_ID, action_ids)
-                self.assertIn(slack_socket_agent.ACTIVITY_ACTION_ID, action_ids)
+                self.assertNotIn("opentag_view_activity", action_ids)
 
-    def test_app_server_request_posts_activity_and_persists_trace(self) -> None:
+    def test_app_server_request_hides_activity_and_persists_trace(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
             store = ActivityStore(Path(raw_dir) / "activity")
             fake_app = FakeApp()
@@ -3082,15 +3421,17 @@ class SlackAgentSettingsTests(unittest.TestCase):
             buttons = [element for block in footer if block.get("type") == "actions"
                        for element in block["elements"]]
             self.assertEqual(
-                [slack_socket_agent.SETTINGS_ACTION_ID, slack_socket_agent.ACTIVITY_ACTION_ID],
+                [slack_socket_agent.SETTINGS_ACTION_ID],
                 [button["action_id"] for button in buttons],
             )
-            run_id = json.loads(buttons[1]["value"])["run_id"]
+            run_id = next(store.root.glob("*.json")).stem
             record = store.get(run_id)
             self.assertEqual("completed", record["outcome"])
             self.assertEqual("Searching the web…", record["events"][0]["label"])
             self.assertEqual("refund policy", record["events"][0]["details"]["input"])
             self.assertEqual("found two pages", record["events"][0]["details"]["output"])
+            client.chat_postEphemeral.assert_not_called()
+            self.assertNotIn("refund policy", json.dumps(footer))
 
     def test_activity_button_opens_only_for_original_requester(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
@@ -3104,12 +3445,9 @@ class SlackAgentSettingsTests(unittest.TestCase):
                 "label": "Searching the web…",
             })
             store.finish(run_id, "completed")
-            blocks = slack_socket_agent.settings_button_blocks(
-                team="T1", channel="C1", thread_ts="1.23", activity_run_id=run_id,
-            )
-            self.assertEqual(2, len(blocks[0]["elements"]))
-            button = blocks[0]["elements"][1]
-            self.assertEqual(slack_socket_agent.ACTIVITY_ACTION_ID, button["action_id"])
+            button = {"value": json.dumps({
+                "team": "T1", "channel": "C1", "thread_ts": "1.23", "run_id": run_id,
+            })}
 
             fake_app = FakeApp()
             client = MagicMock()
@@ -3150,6 +3488,16 @@ class SlackAgentSettingsTests(unittest.TestCase):
             client.views_push.assert_called_once()
             self.assertEqual("trigger", client.views_open.call_args.kwargs["trigger_id"])
             self.assertIn("Searching the web", json.dumps(client.views_open.call_args.kwargs["view"]))
+
+    def test_activity_details_are_preserved_but_hidden(self) -> None:
+        metadata = dict(team="T1", channel="C1", thread_ts="1.23")
+        self.assertEqual([], slack_socket_agent.activity_button_blocks(**metadata, run_id="run-1"))
+        blocks = slack_socket_agent.settings_button_blocks(**metadata, activity_run_id="run-1")
+        self.assertEqual(["Configure"], [item["text"]["text"] for item in blocks[0]["elements"]])
+        with patch.object(slack_socket_agent, "SHOW_ACTIVITY_DETAILS", True):
+            self.assertEqual("Activity", slack_socket_agent.activity_button_blocks(
+                **metadata, run_id="run-1",
+            )[0]["elements"][0]["text"]["text"])
 
     def test_settings_footer_uses_a_compact_configure_button(self) -> None:
         blocks = slack_socket_agent.settings_button_blocks(
@@ -3233,7 +3581,7 @@ class SlackAgentSettingsTests(unittest.TestCase):
         self.assertEqual(["gpt-visible"], [model.model_id for model in models])
         self.assertEqual(("low", "medium"), models[0].reasoning_efforts)
         self.assertTrue(models[0].supports_fast_mode)
-        self.assertTrue(models[0].is_default)
+        self.assertFalse(models[0].is_default)
         self.assertEqual("medium", models[0].default_reasoning_effort)
 
     def test_user_settings_survive_a_new_store_instance(self) -> None:
@@ -3595,6 +3943,7 @@ class SlackAgentSettingsTests(unittest.TestCase):
                 ("low", "high"),
                 supports_fast_mode=True,
                 default_fast_mode=True,
+                is_default=True,
             )
         ]
         with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
