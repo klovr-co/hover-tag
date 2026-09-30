@@ -85,11 +85,14 @@ retained artifact. Later eligible merges on that source line publish `beta.2`,
 follow-up, draft, or separate publication approval.
 
 Stable releases remain explicit owner actions. A maintainer prepares one by
-updating `VERSION`, completing live evidence, and running the `Prepare stable
+updating `VERSION`, adding a dated entry with release changes to `CHANGELOG.md`,
+completing live evidence, and running the `Prepare stable
 release` workflow with the full tested `main` commit SHA. The workflow requires
 successful CI and install-smoke runs for that exact SHA, validates the version
-transition, reruns the release-candidate preflight, and creates a draft from the
-retained archive. A maintainer must inspect and publish that draft explicitly.
+transition and changelog entry, reruns the release-candidate preflight, and
+creates a draft from the retained archive. A maintainer must inspect and publish
+that draft explicitly. Missing or empty stable changelog entries fail CI before
+qualification and draft creation.
 
 Live validation evidence for stable names the candidate commit that was
 exercised. Because a commit cannot contain its own SHA, the release commit may follow that candidate

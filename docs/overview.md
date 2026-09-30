@@ -45,6 +45,7 @@ its workspace, and the sources and tools made available to it. See
 | Understand why I’d bring my assistant into Slack | [Why Tag](index.md) |
 | Know who can use my Tag and see its replies | [Your own Tag](concepts/access.md) |
 | Let someone else make requests to my Tag | [Sharing access to your Tag](concepts/sharing-access.md) |
+| Approve actions, stop tasks, and understand permissions | [Control your Tag](concepts/control-your-tag.md) |
 | See what happens when I ask for help | [How Tag works](concepts/mental-model.md) |
 | Follow up or find an earlier discussion | [What Tag knows](concepts/what-tag-knows.md) |
 | Work with attachments and save files | [Working with files](concepts/workspaces-and-tools.md) |

@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.release_check import validate_release
+from scripts.release_check import validate_release, validate_stable_changelog
 
 
 class ReleaseCheckTests(unittest.TestCase):
@@ -19,6 +19,14 @@ class ReleaseCheckTests(unittest.TestCase):
         self.assertIn("missing required file: VERSION", errors)
         self.assertIn("missing required file: LICENSE", errors)
         self.assertIn("missing required file: NOTICE", errors)
+
+    def test_stable_release_requires_dated_changelog_with_changes(self) -> None:
+        version = "0.3.0"
+        self.assertTrue(validate_stable_changelog("## Unreleased\n- New feature\n", version))
+        self.assertTrue(validate_stable_changelog("## [0.3.0] - 2026-10-01\n", version))
+        self.assertEqual(validate_stable_changelog(
+            "## [0.3.0] - 2026-10-01\n\n### Added\n\n- New feature\n", version
+        ), [])
 
 
 if __name__ == "__main__":

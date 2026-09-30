@@ -60,6 +60,7 @@ Prepare a focused candidate change containing:
 
 - `VERSION` set to the intended version.
 - `docs/releases/v<VERSION>.md` with factual release notes and accurate limitations.
+- `CHANGELOG.md` with a dated, nonempty entry for the intended stable version.
 
 Do not claim qualification before it has happened. Keep the default channel set to `stable`; preparing a prerelease must not change it. Run the relevant tests, `python3 scripts/release_check.py`, and:
 

@@ -53,6 +53,26 @@ where they were saved; Tag does not guess which channel owns them.
 > conversation. See [What Tag knows](what-tag-knows.md) for how indexed search
 > works.
 
+## Use a forwarded Slack file
+
+Tag can read supported files attached to forwarded Slack messages, as well as
+files you upload directly. Forward the message containing the file into a
+conversation where you use Tag, then mention Tag in that thread and explain
+what you want it to do with the file.
+
+The file must be accessible to Tag through Slack. If Tag cannot retrieve it,
+attach a copy you intend to share directly in the task thread. Forwarding a
+message does not give Tag access to the rest of the original conversation.
+
+Forwarded files use the same attachment limits as direct uploads: downloaded
+files are limited to 15 MiB each, and text included in the request is truncated
+at 12,000 characters per item. Reading images and other file formats also
+depends on the backend's available tools. Tag reads bounded thread context, so
+keep the file and request together in a short thread.
+
+Like a direct upload, forwarding a file does not automatically save it in your
+workspace. Ask Tag to save a copy if you want to keep working on it later.
+
 ## Find your workspace
 
 The workspace lives on the computer running Tag. If someone else hosts Tag for

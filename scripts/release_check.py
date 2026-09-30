@@ -38,6 +38,22 @@ def _release_contract_version(version: str) -> str:
     return numbered_prerelease.group(1) if numbered_prerelease else version
 
 
+def validate_stable_changelog(changelog: str, version: str) -> list[str]:
+    heading = re.compile(
+        rf"^## \[{re.escape(version)}\] - \d{{4}}-\d{{2}}-\d{{2}}$", re.MULTILINE
+    )
+    match = heading.search(changelog)
+    if match is None:
+        return [f"CHANGELOG.md is missing a dated v{version} stable release entry"]
+    entry = changelog[match.end():]
+    next_heading = re.search(r"^## ", entry, re.MULTILINE)
+    if next_heading:
+        entry = entry[:next_heading.start()]
+    if not re.search(r"^- \S", entry, re.MULTILINE):
+        return [f"CHANGELOG.md has no release changes for v{version}"]
+    return []
+
+
 def validate_release(root: Path) -> list[str]:
     errors: list[str] = []
 
@@ -78,6 +94,11 @@ def validate_release(root: Path) -> list[str]:
     ):
         if release and token not in release:
             errors.append(f"RELEASE.md is missing contract text: {token!r}")
+
+    if version and VERSION_RE.fullmatch(version) and "-" not in version:
+        changelog = _read(root, "CHANGELOG.md", errors)
+        if changelog:
+            errors.extend(validate_stable_changelog(changelog, version))
 
     security = _read(root, "SECURITY.md", errors)
     if security and "security/advisories/new" not in security:
