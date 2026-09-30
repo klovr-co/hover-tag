@@ -360,12 +360,19 @@ _SECRET_PATTERNS = (
 )
 
 
-def redact_sensitive_text(value: str, *, limit: int = MAX_DIAGNOSTIC_CHARS) -> str:
+def redact_sensitive_text(
+    value: str, *, limit: int = MAX_DIAGNOSTIC_CHARS,
+    preserve_whitespace: bool = False,
+) -> str:
     """Redact common credentials before a value can enter a local/public report."""
     redacted = str(value)
     for pattern in _SECRET_PATTERNS:
         redacted = pattern.sub(lambda match: (match.group(1) if match.lastindex else "") + "<redacted>", redacted)
-    redacted = re.sub(r"\s+", " ", redacted).strip()
+    if preserve_whitespace:
+        redacted = redacted.replace("\r\n", "\n").replace("\r", "\n")
+        redacted = re.sub(r"[\t ]{2,}", " ", redacted).strip()
+    else:
+        redacted = re.sub(r"\s+", " ", redacted).strip()
     return redacted[:limit]
 
 

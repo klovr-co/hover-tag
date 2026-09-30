@@ -11,6 +11,7 @@ unavailable behavior.
 | Read the current thread | Implemented | Tag fetches one page containing up to 30 messages. |
 | Read supported attachments | Implemented | Text content is truncated at 12,000 characters per item; downloaded image or text files are limited to 15 MiB. |
 | Stream answer text | Backend-dependent | Claude streams text deltas; Codex App Server streams final-answer deltas and observed activity. |
+| Review task activity | Implemented with App Server | Codex App Server replies include a requester-only Activity timeline with bounded, redacted tool input and result previews. See [Review task activity](#review-task-activity). |
 | Continue with thread context | Implemented | A later mention receives the current bounded thread context. |
 | Post a requested top-level message | Implemented | Restricted to the channel that invoked Tag. |
 | Create a requested Slack Canvas | Implemented | Requires the Slack Canvas scope and explicit user intent. |
@@ -51,6 +52,44 @@ unavailable behavior.
 | Backend timeout and retry settings | Implemented | Configure the corresponding `OPENTAG_` settings. |
 | Codex action approvals | Implemented fallback | Codex normally reviews sandbox-boundary actions automatically. Any supported approval request delivered to Tag is routed to private, one-time Approve and Deny buttons for the initiating user. |
 | Organization-wide administration and approvals | Not provided | These remain outside the current reference implementation. |
+
+## Review task activity
+
+After a Codex task finishes, select **Activity** on Tag's reply to see the tools
+it used. Successful replies show **Activity** beside **Configure**; failed and
+stopped tasks show **Activity** alongside their recovery actions.
+
+1. Open **Activity** to see a timeline of tool steps, timestamps, and status.
+2. Select **Details** on a step to inspect its available input and result previews.
+3. Select **Back** to return to the timeline.
+
+The example below illustrates a finished task with two observed tool steps.
+Select **Details** to explore a preview.
+
+> **Tag activity**
+>
+> Finished · 2 observed tool steps
+>
+> | Time | Step | Status | Input | Result |
+> | --- | --- | --- | --- | --- |
+> | 13:07:05 UTC | Reading files… | Tool finished | Read launch-plan.md | Launch: Monday. FAQ owner: Maya. Signup testing: Jules. |
+> | 13:07:22 UTC | Writing files… | Tool finished | Create launch-checklist.md from the launch plan | Created launch-checklist.md with the launch tasks and owners. |
+>
+> Tool completion alone does not confirm an external action's outcome.
+
+Only the person who submitted the task can open its activity, and they must
+still have access to use Tag in that conversation. The previews open in a
+private Slack modal.
+
+Tag shortens previews and redacts common credential patterns and secret-named
+fields. Prompts, commentary, and private reasoning are excluded. Activity is
+available for up to 30 days; older records may be removed sooner as new tasks
+reach the storage limit.
+
+A completed step means the tool call ended; check the result to confirm whether
+the requested action succeeded. Calls made inside another tool step may not
+appear separately. Activity requires Codex App Server, Tag's default Codex
+connection; it is unavailable with the legacy Codex exec or Claude backends.
 
 For the full end-to-end behavior, see
 [Connected user flows](../user-flows.md). For configuration and exact backend

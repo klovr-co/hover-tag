@@ -1,0 +1,117 @@
+from __future__ import annotations
+
+import json
+import os
+import tempfile
+import unittest
+from pathlib import Path
+
+from scripts.tag_activity import ActivityStore, MAX_EVENTS, activity_detail_modal, activity_modal
+from scripts.tag_activity_details import MAX_DETAIL_CHARS, item_activity_details
+
+
+class ActivityStoreTests(unittest.TestCase):
+    def test_command_output_and_large_values_are_bounded(self) -> None:
+        details = item_activity_details({
+            "type": "commandExecution", "command": "echo hello", "cwd": "/workspace",
+        }, completed=False)
+        file_read = item_activity_details({
+            "type": "commandExecution",
+            "command": "/bin/zsh -lc 'cat /workspace/references/runtime-agent.md'",
+        }, completed=False)
+        result = item_activity_details({
+            "type": "commandExecution", "aggregatedOutput": "x" * 10_000,
+            "exitCode": 0,
+        }, completed=True)
+        self.assertIn("echo hello", details["input"])
+        self.assertEqual("cat runtime-agent.md", file_read["tool"])
+        self.assertLessEqual(len(result["output"]), MAX_DETAIL_CHARS)
+        self.assertIn("large value omitted", result["output"])
+        lines = item_activity_details({
+            "type": "commandExecution", "aggregatedOutput": "first line\nsecond line",
+            "exitCode": 0,
+        }, completed=True)
+        self.assertIn("first line\nsecond line", lines["output"])
+
+    def test_requester_modal_shows_redacted_tool_input_and_result(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            store = ActivityStore(Path(raw_dir) / "activity")
+            run_id = store.create(
+                team="T1", channel="C1", thread_ts="1.0",
+                request_ts="1.1", requester="U1",
+            )
+            store.observe(run_id, {
+                "type": "activity_start", "activity_id": "tool-1",
+                "label": "Using a connected tool…",
+                "details": {
+                    "tool": "gmail/send_email",
+                    "input": '{"to":"person@example.com","password":"hidden-password"}',
+                },
+            })
+            store.observe(run_id, {
+                "type": "activity_complete", "activity_id": "tool-1",
+                "label": "Using a connected tool…", "status": "completed",
+                "details": {"output": '{"message_id":"sent-123","token":"hidden-token"}'},
+            })
+            record = ActivityStore(store.root).get(run_id)
+            modal = activity_modal(record)
+            self.assertNotIn("person@example.com", json.dumps(modal))
+            self.assertEqual("Details", modal["blocks"][2]["accessory"]["text"]["text"])
+            rendered = json.dumps(activity_detail_modal(record, 0))
+            self.assertIn("person@example.com", rendered)
+            self.assertIn("sent-123", rendered)
+            self.assertNotIn("hidden-password", rendered)
+            self.assertNotIn("hidden-token", rendered)
+            self.assertEqual("gmail/send_email", record["events"][0]["details"]["tool"])
+
+    def test_persists_only_public_labels_and_bounded_events(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            store = ActivityStore(Path(raw_dir) / "activity")
+            run_id = store.create(
+                team="T1", channel="C1", thread_ts="1.0",
+                request_ts="1.1", requester="U1",
+            )
+            for index in range(MAX_EVENTS + 1):
+                store.observe(run_id, {
+                    "type": "activity_start", "activity_id": f"private-{index}",
+                    "label": "private Gmail address and message body",
+                    "arguments": {"password": "sensitive"},
+                })
+            store.observe(run_id, {
+                "type": "activity_complete", "activity_id": "private-0",
+                "label": "private Gmail address and message body", "status": "completed",
+                "result": "sensitive result",
+            })
+            store.finish(run_id, "completed")
+
+            persisted = (store.root / f"{run_id}.json").read_text()
+            self.assertNotIn("sensitive", persisted)
+            self.assertNotIn("private-0", persisted)
+            self.assertNotIn("Gmail address", persisted)
+            record = ActivityStore(store.root).get(run_id)
+            self.assertIsNotNone(record)
+            self.assertEqual(MAX_EVENTS, len(record["events"]))
+            self.assertEqual(1, record["omitted"])
+            self.assertEqual("completed", record["events"][0]["status"])
+            self.assertEqual("unknown", record["events"][1]["status"])
+            modal = activity_modal(record)
+            self.assertEqual("modal", modal["type"])
+            self.assertNotIn("sensitive", json.dumps(modal))
+            if os.name != "nt":
+                self.assertEqual(0o600, (store.root / f"{run_id}.json").stat().st_mode & 0o777)
+
+    def test_rejects_invalid_run_ids_and_expired_records(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            store = ActivityStore(Path(raw_dir) / "activity")
+            run_id = store.create(
+                team="T1", channel="C1", thread_ts="1.0",
+                request_ts="1.1", requester="U1",
+            )
+            self.assertIsNone(store.get("../outside"))
+            path = store.root / f"{run_id}.json"
+            os.utime(path, (0, 0))
+            self.assertIsNone(store.get(run_id))
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -34,7 +34,7 @@ Recognized item and turn lifecycle notifications refresh a bounded idle
 deadline; they never extend the separate absolute task deadline. Slack status
 refreshes are presentation-only and do not count as backend activity.
 
-Only `final_answer` message deltas reach Slack. Unknown phases are buffered
+Only `final_answer` message deltas reach shared Slack replies. Unknown phases are buffered
 until completion, commentary and reasoning remain private, and completed
 messages are distinct from terminal turns. Activity labels are derived from
 identifiable tool items. Slack Stop targets the active team/channel/thread/run
@@ -57,3 +57,14 @@ starts, the stream owns the processing state until finalization.
   raw commands, paths, and permission payloads are not copied into Slack.
 - Persistent Codex threads and cross-request App Server reuse are deferred until
   their isolation and history semantics are designed explicitly.
+
+## Activity-view extension (2026-09-29)
+
+The bridge now stores bounded, redacted previews of documented App Server tool
+inputs and results in a private per-run record. Slack replies for successful,
+failed, and stopped runs contain an
+Activity button, while its timeline and per-tool detail views open only for the
+original requester after a fresh authorization check. Shared replies retain
+sanitized activity labels. Private reasoning, commentary, and prompts remain
+outside the activity record. Connector calls nested inside one tool step may
+not appear as separate App Server items.

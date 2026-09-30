@@ -19,6 +19,11 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+try:
+    from .tag_activity_details import item_activity_details
+except ImportError:  # Direct script execution does not create a package context.
+    from tag_activity_details import item_activity_details
+
 
 # Prompts are controlled by Tag, while completed tool and image events may
 # legitimately contain substantially larger output from Codex. The response
@@ -178,6 +183,8 @@ def activity_label(item: dict[str, Any]) -> str | None:
         return "Inspecting an image…"
     if item_type == "imageGeneration":
         return "Creating an image…"
+    if item_type == "dynamicToolCall":
+        return "Using agent tools…"
     if item_type == "mcpToolCall":
         return mcp_activity_label(item)
     if item_type == "commandExecution":
@@ -237,7 +244,8 @@ class CodexEventMapper:
             service = (MCP_SERVICE_NAMES.get(server.lower())
                        if item.get("type") == "mcpToolCall" and isinstance(server, str) else None)
             return [{"type": "activity_start", "activity_id": item_id, "label": label,
-                     "wait_label": f"Still waiting for {service}…" if service else "This operation is still running…"}]
+                     "wait_label": f"Still waiting for {service}…" if service else "This operation is still running…",
+                     "details": item_activity_details(item, completed=False)}]
         return []
 
     def _message_delta(self, params: dict[str, Any]) -> list[dict[str, Any]]:
@@ -295,6 +303,7 @@ class CodexEventMapper:
                 "activity_id": item_id,
                 "label": label,
                 "status": status,
+                "details": item_activity_details(item, completed=True),
             }]
         return []
 

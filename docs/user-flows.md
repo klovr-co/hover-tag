@@ -233,7 +233,11 @@ Try this:
 3. Watch Slack's loading state while the bounded backend run is active.
 4. Review the answer in the invoking thread. Long results may arrive as
    multiple readable replies.
-5. If the result needs refinement, mention the bot again in the same thread so
+5. For a Codex App Server task, select **Activity** on the reply to review tool
+   steps. Select **Details** for available input and result
+   previews, then **Back** to return to the timeline. Only the original requester
+   can open these views. See [Review task activity](reference/supported-capabilities.md#review-task-activity).
+6. If the result needs refinement, mention the bot again in the same thread so
    the next run receives the recent discussion.
 
 ### Level 3 · Service blueprint
@@ -256,7 +260,7 @@ sequenceDiagram
     M-->>B: Evidence or task result
     B-->>T: Normalized status/delta/final events
     T->>S: Stream or post formatted threaded answer
-    T->>S: Add model/thinking control for successful Codex run
+    T->>S: Add Configure and requester-only Activity controls for Codex run
 ```
 
 Runtime behavior:
@@ -266,8 +270,9 @@ Runtime behavior:
 - The bridge strips the mention before sending the request to the backend.
 - Slack's native loading indicator is used while work is in progress.
 - Claude can stream answer text. Codex uses App Server by default to stream
-  final-answer deltas and report observed tool activity without exposing raw
-  commentary, reasoning, or tool output.
+  final-answer deltas and report observed tool activity. Shared replies omit
+  raw commentary, reasoning, and tool output; the original requester can open
+  bounded tool previews through the Activity control.
 - Long answers are split into readable threaded replies.
 - Failures are returned in the same thread with a bounded error message.
 

@@ -148,6 +148,9 @@ class CodexEventMapperTests(unittest.TestCase):
         self.assertEqual("Reading files…", activity_label({
             "type": "commandExecution", "command": "cat private.txt"
         }))
+        self.assertEqual("Using agent tools…", activity_label({
+            "type": "dynamicToolCall", "tool": "private nested connector",
+        }))
 
     def test_mcp_labels_expose_only_approved_metadata(self) -> None:
         for server, tool, expected in [
@@ -168,8 +171,32 @@ class CodexEventMapperTests(unittest.TestCase):
                     }},
                 })[0]
                 self.assertEqual(expected, event["label"])
-                self.assertEqual({"type", "activity_id", "label", "wait_label"}, set(event))
+                self.assertEqual({"type", "activity_id", "label", "wait_label", "details"}, set(event))
                 self.assertNotIn("secret", event["wait_label"])
+
+    def test_tool_details_are_redacted_before_the_event_leaves_app_server(self) -> None:
+        mapper = CodexEventMapper()
+        start = mapper.map({"method": "item/started", "params": {"item": {
+            "id": "tool-1", "type": "mcpToolCall", "server": "gmail",
+            "tool": "send_email", "arguments": {
+                "to": "person@example.com", "subject": "Refund",
+                "password": "hidden-password", "body": "Please issue a refund.",
+            },
+        }}})[0]
+        complete = mapper.map({"method": "item/completed", "params": {"item": {
+            "id": "tool-1", "type": "mcpToolCall", "server": "gmail",
+            "tool": "send_email", "status": "completed",
+            "result": {"message_id": "sent-123", "access_token": "hidden-token"},
+        }}})[0]
+        self.assertIn("person@example.com", start["details"]["input"])
+        self.assertIn("Please issue a refund", start["details"]["input"])
+        self.assertIn("sent-123", complete["details"]["output"])
+        self.assertNotIn("hidden-password", str(start))
+        self.assertNotIn("hidden-token", str(complete))
+        self.assertEqual([], mapper.map({"method": "item/completed", "params": {"item": {
+            "id": "reason-1", "type": "reasoning", "content": "private reasoning",
+            "summary": "private summary",
+        }}}))
 
     def test_helper_mentions_do_not_claim_execution(self) -> None:
         for command in [

@@ -16,6 +16,7 @@ except ModuleNotFoundError:
 
 from scripts import slack_socket_agent
 from scripts.tag_error_reporting import ErrorReportStore, ReportOrigin, make_error_report
+from scripts.tag_activity import ActivityStore
 
 
 class FakeApp:
@@ -2809,6 +2810,7 @@ class BackendEventRunnerTests(unittest.TestCase):
         register_side_effect: object | None = None,
         on_answer_start: object | None = None,
         on_status: object | None = None,
+        on_trace_event: object | None = None,
     ) -> tuple[str, bool]:
         process = MagicMock()
         process.stdout = iter(json.dumps(event) + "\n" for event in events)
@@ -2832,7 +2834,15 @@ class BackendEventRunnerTests(unittest.TestCase):
                 MagicMock(),
                 on_answer_start=on_answer_start,
                 on_status=on_status,
+                on_trace_event=on_trace_event,
             )
+
+    def test_forwards_lifecycle_activity_to_private_record(self) -> None:
+        callback = MagicMock()
+        start = {"type": "activity_start", "activity_id": "one", "label": "Searching the web…"}
+        complete = {"type": "activity_complete", "activity_id": "one", "label": "Searching the web…", "status": "completed"}
+        self.run_with_events([start, complete], on_trace_event=callback)
+        self.assertEqual([start, complete], [call.args[0] for call in callback.call_args_list])
 
     def test_forwards_backend_retry_status(self) -> None:
         callback = MagicMock()
@@ -2989,6 +2999,158 @@ class SlackCancellationTests(unittest.TestCase):
 
 
 class SlackAgentSettingsTests(unittest.TestCase):
+    def test_failed_app_server_replies_keep_activity(self) -> None:
+        for outcome in ("backend_error", "exception"):
+            with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as raw_dir:
+                store = ActivityStore(Path(raw_dir) / "activity")
+                fake_app = FakeApp()
+                client = MagicMock()
+
+                def run_events(*_args: object, **kwargs: object) -> tuple[str, bool]:
+                    kwargs["on_trace_event"]({
+                        "type": "activity_start", "activity_id": "item-1",
+                        "label": "Searching the web…",
+                    })
+                    if outcome == "exception":
+                        raise RuntimeError("backend crashed")
+                    return "backend failed", False
+
+                with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+                    os.environ, {
+                        "SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_IDS": "C1",
+                        "OPENTAG_SLACK_STREAMING": "0",
+                    }, clear=True,
+                ), patch.object(slack_socket_agent, "discover_codex_models", return_value=[]), patch.object(
+                    slack_socket_agent, "build_thread_text", return_value="thread"
+                ), patch.object(slack_socket_agent, "run_backend_events", side_effect=run_events), patch.object(
+                    slack_socket_agent, "collect_health_checks", return_value=[]
+                ):
+                    slack_socket_agent.create_app(
+                        "codex", 30, frozenset({"UOWNER"}),
+                        activity_store=store, report_store=MagicMock(),
+                    )
+                    fake_app.events["app_mention"](
+                        {"channel": "C1", "ts": "1.23", "user": "UOWNER", "text": "<@BOT> do it"},
+                        {"team_id": "T1"}, client, MagicMock(),
+                    )
+
+                action_ids = [
+                    element["action_id"]
+                    for call in client.chat_postMessage.call_args_list
+                    for block in call.kwargs.get("blocks") or []
+                    if block.get("type") == "actions"
+                    for element in block["elements"]
+                ]
+                self.assertIn(slack_socket_agent.RETRY_ACTION_ID, action_ids)
+                self.assertIn(slack_socket_agent.ACTIVITY_ACTION_ID, action_ids)
+
+    def test_app_server_request_posts_activity_and_persists_trace(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            store = ActivityStore(Path(raw_dir) / "activity")
+            fake_app = FakeApp()
+            client = MagicMock()
+
+            def run_events(*_args: object, **kwargs: object) -> tuple[str, bool]:
+                callback = kwargs["on_trace_event"]
+                callback({"type": "activity_start", "activity_id": "item-1", "label": "Searching the web…",
+                          "details": {"tool": "Web search", "input": "refund policy"}})
+                callback({"type": "activity_complete", "activity_id": "item-1", "label": "Searching the web…", "status": "completed",
+                          "details": {"output": "found two pages"}})
+                return "Done.", True
+
+            with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+                os.environ, {
+                    "SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_IDS": "C1",
+                    "OPENTAG_SLACK_STREAMING": "0",
+                }, clear=True,
+            ), patch.object(slack_socket_agent, "discover_codex_models", return_value=[]), patch.object(
+                slack_socket_agent, "build_thread_text", return_value="thread"
+            ), patch.object(slack_socket_agent, "run_backend_events", side_effect=run_events):
+                slack_socket_agent.create_app(
+                    "codex", 30, frozenset({"UOWNER"}), activity_store=store,
+                )
+                fake_app.events["app_mention"](
+                    {"channel": "C1", "ts": "1.23", "user": "UOWNER", "text": "<@BOT> do it"},
+                    {"team_id": "T1"}, client, MagicMock(),
+                )
+
+            footer = next(
+                call.kwargs["blocks"] for call in client.chat_postMessage.call_args_list
+                if call.kwargs.get("blocks") and
+                any(block.get("type") == "actions" for block in call.kwargs["blocks"])
+            )
+            buttons = [element for block in footer if block.get("type") == "actions"
+                       for element in block["elements"]]
+            self.assertEqual(
+                [slack_socket_agent.SETTINGS_ACTION_ID, slack_socket_agent.ACTIVITY_ACTION_ID],
+                [button["action_id"] for button in buttons],
+            )
+            run_id = json.loads(buttons[1]["value"])["run_id"]
+            record = store.get(run_id)
+            self.assertEqual("completed", record["outcome"])
+            self.assertEqual("Searching the web…", record["events"][0]["label"])
+            self.assertEqual("refund policy", record["events"][0]["details"]["input"])
+            self.assertEqual("found two pages", record["events"][0]["details"]["output"])
+
+    def test_activity_button_opens_only_for_original_requester(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            store = ActivityStore(Path(raw_dir) / "activity")
+            run_id = store.create(
+                team="T1", channel="C1", thread_ts="1.23",
+                request_ts="1.23", requester="UOWNER",
+            )
+            store.observe(run_id, {
+                "type": "activity_start", "activity_id": "tool-1",
+                "label": "Searching the web…",
+            })
+            store.finish(run_id, "completed")
+            blocks = slack_socket_agent.settings_button_blocks(
+                team="T1", channel="C1", thread_ts="1.23", activity_run_id=run_id,
+            )
+            self.assertEqual(2, len(blocks[0]["elements"]))
+            button = blocks[0]["elements"][1]
+            self.assertEqual(slack_socket_agent.ACTIVITY_ACTION_ID, button["action_id"])
+
+            fake_app = FakeApp()
+            client = MagicMock()
+            with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+                os.environ, {"SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_IDS": "C1"}, clear=True,
+            ), patch.object(slack_socket_agent, "discover_codex_models", return_value=[]):
+                slack_socket_agent.create_app(
+                    "codex", 30, frozenset({"UOWNER", "UOTHER"}), activity_store=store,
+                )
+                handler = fake_app.actions[slack_socket_agent.ACTIVITY_ACTION_ID]
+                body = {
+                    "actions": [{"value": button["value"]}],
+                    "trigger_id": "trigger", "user": {"id": "UOTHER"},
+                    "team": {"id": "T1"}, "channel": {"id": "C1"},
+                }
+                handler(MagicMock(), body, client, MagicMock())
+                client.views_open.assert_not_called()
+                body["user"]["id"] = "UOWNER"
+                body["channel"]["id"] = "C2"
+                handler(MagicMock(), body, client, MagicMock())
+                client.views_open.assert_not_called()
+                body["channel"]["id"] = "C1"
+                handler(MagicMock(), body, client, MagicMock())
+                with patch.dict(os.environ, {"SLACK_CHANNEL_IDS": "C2"}):
+                    handler(MagicMock(), body, client, MagicMock())
+                root_view = client.views_open.call_args.kwargs["view"]
+                detail_body = {
+                    "actions": [{"value": "0"}],
+                    "trigger_id": "detail-trigger", "user": {"id": "UOTHER"},
+                    "team": {"id": "T1"}, "view": root_view,
+                }
+                detail_handler = fake_app.actions[slack_socket_agent.ACTIVITY_DETAIL_ACTION_ID]
+                detail_handler(MagicMock(), detail_body, client, MagicMock())
+                client.views_push.assert_not_called()
+                detail_body["user"]["id"] = "UOWNER"
+                detail_handler(MagicMock(), detail_body, client, MagicMock())
+            client.views_open.assert_called_once()
+            client.views_push.assert_called_once()
+            self.assertEqual("trigger", client.views_open.call_args.kwargs["trigger_id"])
+            self.assertIn("Searching the web", json.dumps(client.views_open.call_args.kwargs["view"]))
+
     def test_settings_footer_uses_a_compact_configure_button(self) -> None:
         blocks = slack_socket_agent.settings_button_blocks(
             team="T1",

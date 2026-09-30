@@ -238,7 +238,9 @@ The native Slack loading indicator and response streaming are enabled by
 default. Claude provides live answer deltas. Codex defaults to App Server for
 phased final-answer deltas, observed activity, and interruption; set
 `OPENTAG_CODEX_TRANSPORT=exec` only for legacy rollback. Tag does not
-forward commentary, reasoning, tool output, or raw backend diagnostics.
+forward commentary, reasoning, tool output, or raw backend diagnostics into
+the shared Slack thread. Bounded tool previews appear only in the requester's
+Activity modal.
 
 Codex retries capacity and rate-limit failures up to
 `OPENTAG_BACKEND_ATTEMPTS`, but only when the failed attempt produced no
@@ -293,6 +295,25 @@ Codex's native names. Fast Mode is a
 separate On/Off setting and uses increased usage when enabled. Set
 `OPENTAG_CODEX_MODELS` to restrict what Slack users can select.
 The modal's **Reset to default** button restores every control before saving.
+Successful Codex App Server replies also include **Activity** beside **Configure**.
+Failed and stopped runs show **Activity** alongside their existing actions. The button
+opens a Slack modal only for the original requester, after checking the current
+user allowlist and conversation policy. The first view is a compact timeline of
+tool labels, timestamps, and status. Selecting **Details** for a step opens a
+second modal view with its available input and result; **Back** returns to the
+timeline. Tag checks the original requester again for every detail action.
+Common credential patterns and secret-named fields are redacted, and detail
+previews are shortened before they leave the backend process. Tag checks them
+again before storage. It stores this bounded record under
+the instance's private `state/activity/` directory. Records are available for
+30 days; later requests prune expired records and keep at most 200 runs, with
+up to 60 events per run. It does not store or display raw App Server items,
+prompts, or private reasoning. An item marked complete
+means the tool call ended; it does not verify that an external action succeeded.
+App Server can report an outer agent-tool step without exposing connector calls
+made inside that step, so this view is an activity summary rather than a
+complete audit log. The legacy Codex exec and Claude transports do not provide
+this record.
 When upgrading an existing app, run `tag start` in an interactive terminal.
 Tag merges pending required scopes and event subscriptions into the remote
 manifest without removing operator-owned settings. Slack may still require an
