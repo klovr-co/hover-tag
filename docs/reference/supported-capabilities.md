@@ -9,7 +9,7 @@ unavailable behavior.
 | --- | --- | --- |
 | Respond to app mentions | Implemented | The caller must be in `SLACK_ALLOWED_USER_IDS`. |
 | Read the current thread | Implemented | Tag fetches one page containing up to 30 messages. |
-| Read supported attachments | Implemented | Text content is truncated at 12,000 characters per item; downloaded image or text files are limited to 15 MiB. |
+| Read supported attachments | Implemented | Includes [forwarded Slack files](../concepts/workspaces-and-tools.md#use-a-forwarded-slack-file). Text content is truncated at 12,000 characters per item; downloaded image or text files are limited to 15 MiB. |
 | Stream answer text | Backend-dependent | Claude streams text deltas; Codex App Server streams final-answer deltas and observed activity. |
 | Review task activity | Implemented with App Server | Codex App Server replies include a requester-only Activity timeline with bounded, redacted tool input and result previews. See [Review task activity](#review-task-activity). |
 | Continue with thread context | Implemented | A later mention receives the current bounded thread context. |
@@ -50,8 +50,13 @@ unavailable behavior.
 | Explicit channel restriction | Implemented | Configure `SLACK_CHANNEL_IDS`; the bridge fails closed without selected channels. |
 | MFS retrieval roots | Implemented | Configure `MFS_ALLOWED_SCOPES`. |
 | Backend timeout and retry settings | Implemented | Configure the corresponding `OPENTAG_` settings. |
-| Codex action approvals | Implemented fallback | Codex normally reviews sandbox-boundary actions automatically. Any supported approval request delivered to Tag is routed to private, one-time Approve and Deny buttons for the initiating user. |
+| Codex action approvals | Implemented fallback | Codex normally reviews sandbox-boundary actions automatically. Supported requests delivered to Tag show private **Approve once** and **Deny** buttons for the initiating user. See [Control your Tag](../concepts/control-your-tag.md#respond-to-a-codex-approval-request). |
 | Organization-wide administration and approvals | Not provided | These remain outside the current reference implementation. |
+
+## Respond to a Codex approval request
+
+For the approval walkthrough, example message, and Stop controls, see
+[Control your Tag](../concepts/control-your-tag.md).
 
 ## Review task activity
 

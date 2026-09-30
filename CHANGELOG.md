@@ -6,27 +6,159 @@ All notable changes to Tag are documented here.
 
 ### Added
 
-- Keep normal-install agent workspaces in the visible `~/Tag/NAME` user
-  directory while retaining configuration, credentials, and runtime state in
-  platform application data.
-- Manage independent workspace aliases for multiple Slack workspaces with `tag add`,
-  `tag list`, and target-aware lifecycle, setup, settings, logs, and diagnostics.
-- Share one explicitly owned MFS lifecycle across Tags, with per-Tag
-  credential files and an administrative `tag memory` command.
-- Give the built-in `default` Tag the same `instances/default` isolation and
-  scrubbed runtime environment as every named Tag; existing root-level default
-  data requires a one-time stopped-service migration.
-- Let existing-app setup enable Slack's Agent messaging experience through a
-  targeted, verified manifest sync while preserving unrelated app settings.
-- Check the saved release channel at most daily during normal status, inspect,
-  setup, and start flows, and show a non-blocking upgrade reminder when a newer
-  release is available.
-- Let new-app setup propose **&lt;the operator's first name&gt;'s Tag**, choose a
-  deterministic five-element waterdrop identity with 16 subtle signatures, or
-  choose a validated local PNG, JPEG, or GIF profile picture for upload through
-  Slack CLI.
-- Mark test onboarding throughout the creation flow and prefix its proposed app
-  name with `TEST ·`, since approved Slack operations in test mode remain real.
+- Keep each Tag's working files and private settings, credentials, and state
+  together in `~/Tag/NAME`, with automatic migration from older layouts. New
+  saved deliverables default to `artifacts/CHANNEL_ID/`.
+- Route supported Codex action approvals to private, one-time Slack controls for
+  the original requester.
+- Show failed requests privately with an error reference, retry, a sanitized
+  report preview, and a local coding-agent repair prompt.
+- Let requesters inspect bounded, redacted Codex tool activity through private
+  Slack views after successful, failed, or stopped tasks.
+- Offer optional, privacy-bounded CLI telemetry with an installation-wide
+  preference and `tag telemetry` controls.
+- Prepare pinned Python, uv, and Slack CLI dependencies during installation
+  and upgrade without changing system Python or requiring a preinstalled CLI.
+
+### Fixed
+
+- Include forwarded Slack files in attachment handling and keep downloaded
+  filenames distinct when attachments share a name.
+- Resolve explicit Slack channel mentions by ID when searching authorized,
+  indexed channel history.
+- Include already joined channels in setup and make Slack startup and indexing
+  recover from rate limits more clearly.
+
+## [0.2.0] - 2026-09-22
+
+### Added
+
+- Stream Codex App Server answers and activity into Slack, with native Stop
+  cancellation and direct-message invocation for authorized users.
+- Search approved Slack channel history with caller and channel permission
+  checks; deliver requested workspace files through private links and attach
+  generated images to the originating thread.
+- Provide guided, resumable Slack setup, app personalization, per-user Codex
+  settings, and multiple independent Tags sharing one managed MFS service.
+- Put normal-install agent workspaces under `~/Tag/NAME`, separate from
+  application-managed data, and show non-blocking release update reminders.
+- Add stable, beta, alpha, edge, and exact-version installation and upgrade
+  paths with checksum and provenance checks, rollback safety, and a public
+  release-channel index.
+- Publish product guides covering setup, operation, access, integrations,
+  capabilities, and troubleshooting.
+
+### Fixed
+
+- Recover interrupted Slack activity indicators, refresh the backend idle
+  timeout on progress, accept bounded large completion events, and avoid
+  indexing races during Slack channel invitations.
+- Bundle the MFS CLI and migrate older workspace placeholders automatically.
+
+## [0.2.0-beta.13] - 2026-09-22
+
+- Enable history search for app-scoped Slack connectors.
+
+## [0.2.0-beta.12] - 2026-09-22
+
+- Clarify that stopping one Tag leaves shared memory running.
+
+## [0.2.0-beta.11] - 2026-09-22
+
+- Show the Tag CLI version in terminal headers.
+
+## [0.2.0-beta.10] - 2026-09-22
+
+- Clarify setup and startup readiness cues.
+
+## [0.2.0-beta.9] - 2026-09-22
+
+- Bundle the MFS CLI with the Tag runtime.
+
+## [0.2.0-beta.8] - 2026-09-21
+
+- Handle mentions immediately after channel invitations.
+
+## [0.2.0-beta.7] - 2026-09-21
+
+- Keep public release channels specific to their selected phases.
+
+## [0.2.0-beta.6] - 2026-09-21
+
+- Avoid GitHub API rate limits during public channel installs.
+
+## [0.2.0-beta.5] - 2026-09-21
+
+- Wait for invitation memory before reporting Slack readiness.
+
+## [0.2.0-beta.4] - 2026-09-21
+
+- Fix an invitation memory startup indexing race.
+
+## [0.2.0-beta.3] - 2026-09-21
+
+- Improve onboarding startup status cues.
+
+## [0.2.0-beta.2] - 2026-09-21
+
+- Make guided setup usable interactively and repair beta release preflight.
+
+## [0.2.0-beta.1] - 2026-09-21
+
+- Collect the v0.2 alpha work into the first beta candidate, including Slack
+  streaming and search, guided setup, multiple Tags, and channel-aware upgrades.
+
+## [0.2.0-alpha.12] - 2026-09-21
+
+- Fix validation of automatically numbered alpha releases.
+
+## [0.2.0-alpha.11] - 2026-09-21
+
+- Add guided release management and retain stable as the default install channel.
+
+## [0.2.0-alpha.10] - 2026-09-21
+
+- Move user workspaces outside application data and add update reminders.
+
+## [0.2.0-alpha.9] - 2026-09-21
+
+- Recover stuck Slack working statuses.
+
+## [0.2.0-alpha.8] - 2026-09-21
+
+- Publish Tag product documentation and harden Slack setup and multi-Tag reset.
+
+## [0.2.0-alpha.7] - 2026-09-21
+
+- Support multiple independent Tags for separate Slack workspaces.
+
+## [0.2.0-alpha.6] - 2026-09-21
+
+- Bundle a Tag setup skill for guided installation and first-task verification.
+
+## [0.2.0-alpha.5] - 2026-09-21
+
+- Document the feature catalog issue workflow.
+
+## [0.2.0-alpha.4] - 2026-09-21
+
+- Personalize the Slack app identity during setup.
+
+## [0.2.0-alpha.3] - 2026-09-21
+
+- Accept bounded large Codex response events.
+
+## [0.2.0-alpha.2] - 2026-09-21
+
+- Add permission-aware cross-channel Slack search.
+
+## [0.2.0-alpha.1] - 2026-09-20
+
+- Launch guided Tag setup and lifecycle controls, with a persistent
+  cross-platform installation home.
+- Stream Codex answers into Slack; support direct messages, generated image
+  uploads, private file delivery, and channel-aware upgrades.
+- Harden alpha security, remove the hosted receiver, and simplify CI validation.
 
 ## [0.1.1-alpha] - 2026-09-18
 
@@ -81,5 +213,31 @@ All notable changes to Tag are documented here.
 - This alpha is explicitly limited to trusted sandbox use and is not a
   production security boundary.
 
+[0.2.0]: https://github.com/klovr-co/hover-tag/releases/tag/v0.2.0
+[0.2.0-beta.13]: https://github.com/klovr-co/hover-tag/releases/tag/v0.2.0-beta.13
+[0.2.0-beta.12]: https://github.com/klovr-co/hover-tag/releases/tag/v0.2.0-beta.12
+[0.2.0-beta.11]: https://github.com/klovr-co/hover-tag/releases/tag/v0.2.0-beta.11
+[0.2.0-beta.10]: https://github.com/klovr-co/hover-tag/releases/tag/v0.2.0-beta.10
+[0.2.0-beta.9]: https://github.com/klovr-co/hover-tag/releases/tag/v0.2.0-beta.9
+[0.2.0-beta.8]: https://github.com/klovr-co/hover-tag/releases/tag/v0.2.0-beta.8
+[0.2.0-beta.7]: https://github.com/klovr-co/hover-tag/releases/tag/v0.2.0-beta.7
+[0.2.0-beta.6]: https://github.com/klovr-co/hover-tag/releases/tag/v0.2.0-beta.6
+[0.2.0-beta.5]: https://github.com/klovr-co/hover-tag/releases/tag/v0.2.0-beta.5
+[0.2.0-beta.4]: https://github.com/klovr-co/hover-tag/releases/tag/v0.2.0-beta.4
+[0.2.0-beta.3]: https://github.com/klovr-co/hover-tag/releases/tag/v0.2.0-beta.3
+[0.2.0-beta.2]: https://github.com/klovr-co/hover-tag/releases/tag/v0.2.0-beta.2
+[0.2.0-beta.1]: https://github.com/klovr-co/hover-tag/releases/tag/v0.2.0-beta.1
+[0.2.0-alpha.12]: https://github.com/klovr-co/hover-tag/releases/tag/v0.2.0-alpha.12
+[0.2.0-alpha.11]: https://github.com/klovr-co/hover-tag/releases/tag/v0.2.0-alpha.11
+[0.2.0-alpha.10]: https://github.com/klovr-co/hover-tag/releases/tag/v0.2.0-alpha.10
+[0.2.0-alpha.9]: https://github.com/klovr-co/hover-tag/releases/tag/v0.2.0-alpha.9
+[0.2.0-alpha.8]: https://github.com/klovr-co/hover-tag/releases/tag/v0.2.0-alpha.8
+[0.2.0-alpha.7]: https://github.com/klovr-co/hover-tag/releases/tag/v0.2.0-alpha.7
+[0.2.0-alpha.6]: https://github.com/klovr-co/hover-tag/releases/tag/v0.2.0-alpha.6
+[0.2.0-alpha.5]: https://github.com/klovr-co/hover-tag/releases/tag/v0.2.0-alpha.5
+[0.2.0-alpha.4]: https://github.com/klovr-co/hover-tag/releases/tag/v0.2.0-alpha.4
+[0.2.0-alpha.3]: https://github.com/klovr-co/hover-tag/releases/tag/v0.2.0-alpha.3
+[0.2.0-alpha.2]: https://github.com/klovr-co/hover-tag/releases/tag/v0.2.0-alpha.2
+[0.2.0-alpha.1]: https://github.com/klovr-co/hover-tag/releases/tag/v0.2.0-alpha.1
 [0.1.1-alpha]: https://github.com/klovr-co/hover-tag/releases/tag/v0.1.1-alpha
 [0.1.0-alpha]: https://github.com/klovr-co/hover-tag/releases/tag/v0.1.0-alpha
