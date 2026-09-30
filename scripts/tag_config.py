@@ -21,6 +21,7 @@ DEFAULTS = {
     "OPENTAG_MAX_TIMEOUT_SECONDS": "3600",
     "OPENTAG_BACKEND_ATTEMPTS": "3", "OPENTAG_SLACK_STREAMING": "1",
     "OPENTAG_SLACK_DM_ENABLED": "1",
+    "OPENTAG_FILE_DELIVERY": "local+slack",
     "MFS_URL": "http://127.0.0.1:13619", "MFS_SLACK_HISTORY_DAYS": "30",
 }
 REQUIRED = ("OPENTAG_BACKEND", "MFS_URL", "MFS_ALLOWED_SCOPES",
@@ -53,6 +54,7 @@ LABELS = {
     "MFS_SLACK_CONNECTOR_CONFIG": "Slack history connector config",
     "OPENTAG_BACKEND_ATTEMPTS": "Retry attempts", "OPENTAG_SLACK_STREAMING": "Stream replies (1 on, 0 off)",
     "OPENTAG_SLACK_DM_ENABLED": "Direct messages (1 on, 0 off)",
+    "OPENTAG_FILE_DELIVERY": "File delivery (local or local+slack)",
     "OPENTAG_TRANSPORT": "Chat service",
 }
 
@@ -92,6 +94,8 @@ def validation_error(key: str, value: str) -> str | None:
         return "Use a name from 1 to 35 characters without line breaks"
     if key == "OPENTAG_CODEX_TRANSPORT" and value not in {"exec", "app-server"}:
         return "Choose exec or app-server"
+    if key == "OPENTAG_FILE_DELIVERY" and value not in {"local", "local+slack"}:
+        return "Choose local or local+slack"
     if key == "OPENTAG_TRANSPORT" and value != "slack":
         return "Only slack is supported"
     if key in {"OPENTAG_TIMEOUT_SECONDS", "OPENTAG_MAX_TIMEOUT_SECONDS", "OPENTAG_BACKEND_ATTEMPTS"} and (not value.isascii() or not value.isdigit() or int(value) < 1):
@@ -193,3 +197,22 @@ def update_config(path: Path, changes: dict[str, str], *, only_missing: bool = F
         return values
     finally:
         lock.unlink(missing_ok=True)
+
+
+def migrate_file_delivery(home: Path, path: Path) -> bool:
+    """Version 1: persist the new default without replacing an operator's choice."""
+    marker = home / "state/migrations/file-delivery-v1.json"
+    try:
+        checkpoint = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        checkpoint = {}
+    if isinstance(checkpoint, dict) and checkpoint.get("version") == "1":
+        return False
+    update_config(path, {"OPENTAG_FILE_DELIVERY": "local+slack"}, only_missing=True)
+    saved = read_config(path)
+    mode = saved.get("OPENTAG_FILE_DELIVERY", "")
+    if mode not in {"local", "local+slack"}:
+        raise RuntimeError("File delivery migration could not verify the saved setting")
+    # Atomic checkpoint comes last. Interrupted writes can be retried safely.
+    save_config(marker, {"version": "1"})
+    return True

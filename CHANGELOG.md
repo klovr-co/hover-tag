@@ -6,6 +6,11 @@ All notable changes to Tag are documented here.
 
 ### Added
 
+- Deliver saved files as local copies plus Slack attachments by default.
+  `OPENTAG_FILE_DELIVERY` and individual requests can select local-only delivery.
+  Existing installations adopt the default automatically unless explicitly configured.
+  Successful attachments keep one Open folder button and omit individual file buttons.
+
 - Keep each Tag's working files and private settings, credentials, and state
   together in `~/Tag/NAME`, with automatic migration from older layouts. New
   saved deliverables default to `artifacts/CHANNEL_ID/`.
@@ -21,6 +26,9 @@ All notable changes to Tag are documented here.
   and upgrade without changing system Python or requiring a preinstalled CLI.
 
 ### Fixed
+
+- Keep local Open buttons for oversized output files and explain how to access
+  them when they exceed the Slack upload limit.
 
 - Include forwarded Slack files in attachment handling and keep downloaded
   filenames distinct when attachments share a name.

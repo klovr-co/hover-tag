@@ -107,11 +107,16 @@ Generated file delivery:
 - Call the helper separately for every requested final deliverable, including
   every file in a multi-file request. Never record supporting files or files
   merely mentioned in the conversation. Any regular file type is supported.
-- By default, recording adds a host-local Open button but does not attach the
-  file to Slack. Add `--attach` only when the user explicitly asks to attach,
-  upload, send, return, or provide a downloadable copy of that file in Slack.
-  A request merely to create, save, edit, or update a file is not permission to
-  attach it. Apply the user's delivery instruction to every requested file.
+- Recording keeps the local file available. The configured file delivery
+  default is `{os.getenv("OPENTAG_FILE_DELIVERY", "local+slack")}`: `local` keeps files
+  local, while `local+slack` also uploads requested final deliverables to Slack.
+  Successful uploads appear as Slack attachments with one Open folder button.
+  Individual Open file buttons appear only for local-only files or when uploads
+  fail or exceed the size limit.
+  Without an explicit delivery instruction, omit delivery flags to use that default.
+  Add `--attach` when the user asks to attach, upload, send, return, or provide a
+  downloadable copy in Slack. Add `--local-only` when the user asks to keep a file
+  local or not upload it. Apply the instruction to every requested file.
 - Do not record anything if saving fails. If recording fails, say that the file
   was saved but could not be made available through Tag. The Slack bridge
   performs any requested upload after your run. Do not claim a file is attached

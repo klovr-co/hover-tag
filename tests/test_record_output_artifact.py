@@ -12,6 +12,35 @@ from scripts import record_output_artifact
 
 
 class RecordOutputArtifactTests(unittest.TestCase):
+    def test_delivery_defaults_and_explicit_overrides(self) -> None:
+        import os
+        import sys
+        from contextlib import redirect_stdout
+        from io import StringIO
+        from scripts import tag_config
+
+        self.assertEqual(tag_config.DEFAULTS["OPENTAG_FILE_DELIVERY"], "local+slack")
+        self.assertIsNotNone(tag_config.validation_error("OPENTAG_FILE_DELIVERY", "invalid"))
+        for mode, flags, expected in [
+            (None, [], True), ("local", [], False),
+            ("local+slack", [], True), ("local", ["--attach"], True),
+            ("local+slack", ["--local-only"], False),
+        ]:
+            with self.subTest(mode=mode, flags=flags), tempfile.TemporaryDirectory() as raw:
+                root = Path(raw)
+                artifact = root / "report.txt"
+                artifact.write_text("report")
+                manifest = root / "manifest.json"
+                env = {} if mode is None else {"OPENTAG_FILE_DELIVERY": mode}
+                with patch.dict(os.environ, env, clear=True), patch.object(sys, "argv", [
+                    "record_output_artifact", "--manifest", str(manifest),
+                    "--workdir", str(root), "--file", str(artifact), *flags,
+                ]), redirect_stdout(StringIO()):
+                    self.assertEqual(record_output_artifact.main(), 0)
+                    self.assertEqual(record_output_artifact.main(), 0)
+                self.assertEqual(json.loads(manifest.read_text()),
+                                 [{"path": str(artifact.resolve()), "attach": expected}])
+
     def test_serializes_concurrent_manifest_updates(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
             root = Path(raw_dir)
@@ -96,6 +125,16 @@ class RecordOutputArtifactTests(unittest.TestCase):
                 json.loads(manifest.read_text(encoding="utf-8")),
             )
 
+    def test_local_override_replaces_previously_registered_upload(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            artifact = root / "private.txt"
+            artifact.write_text("local")
+            manifest = root / "manifest.json"
+            record_output_artifact.record_artifact(manifest, artifact, attach=True)
+            record_output_artifact.record_artifact(manifest, artifact, attach=False)
+            self.assertFalse(json.loads(manifest.read_text())[0]["attach"])
+
     def test_rejects_files_outside_the_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir, tempfile.TemporaryDirectory() as outside_dir:
             root = Path(raw_dir)
@@ -131,7 +170,7 @@ class ChannelArtifactTests(unittest.TestCase):
                     self.assertEqual(record_output_artifact.main(), 0)
                 entries, errors = slack_socket_agent.load_output_artifact_entries(manifest, root)
                 self.assertEqual(errors, [])
-                self.assertEqual(entries, [(output, False)])
+                self.assertEqual(entries, [(output, True)])
                 self.assertEqual(slack_socket_agent.resolve_local_artifact(f'artifacts/{channel}/report.md', root), output)
                 self.assertEqual(output.read_text(), channel)
 

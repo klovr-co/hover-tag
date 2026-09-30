@@ -888,7 +888,7 @@ class SlackOutputArtifactTests(unittest.TestCase):
         self.assertEqual(["Attached `report.md` to this thread."], messages)
         logger.warning.assert_called_once()
 
-    def test_rejects_output_above_tag_file_size_limit(self) -> None:
+    def test_oversized_output_keeps_local_access_and_skips_upload(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir, patch.object(
             slack_socket_agent, "MAX_OUTPUT_FILE_BYTES", 3
         ):
@@ -900,8 +900,61 @@ class SlackOutputArtifactTests(unittest.TestCase):
 
             artifacts, messages = slack_socket_agent.load_output_artifacts(manifest, root)
 
-        self.assertEqual([], artifacts)
-        self.assertIn("exceeds Tag’s", messages[0])
+            self.assertEqual([artifact.resolve()], artifacts)
+            self.assertEqual([], messages)
+            client = MagicMock()
+            messages = slack_socket_agent.deliver_output_artifacts(
+                client, "C123", "1.23", manifest, root, MagicMock()
+            )
+            client.files_upload_v2.assert_not_called()
+            self.assertTrue(artifact.exists())
+            self.assertIn("saved locally", messages[0])
+            self.assertIn("exceeds Tag’s", messages[0])
+            self.assertIn("Open button", messages[0])
+
+    def test_mixed_delivery_failures_preserve_files_and_allow_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir, patch.object(
+            slack_socket_agent, "MAX_OUTPUT_FILE_BYTES", 3
+        ):
+            root = Path(raw_dir).resolve()
+            paths = [root / name for name in ("local.bin", "large.bin", "retry.txt", "ok.txt")]
+            for path, content in zip(paths, (b"large", b"large", b"one", b"two")):
+                path.write_bytes(content)
+            manifest = root / "manifest.json"
+            manifest.write_text(json.dumps([
+                {"path": str(path), "attach": index != 0}
+                for index, path in enumerate(paths)
+            ]))
+            client = MagicMock()
+            client.files_upload_v2.side_effect = [RuntimeError("upload failed"), {"file": {"id": "F1"}}]
+            uploaded_paths: set[Path] = set()
+            messages = slack_socket_agent.deliver_output_artifacts(
+                client, "C123", "1.23", manifest, root, MagicMock(),
+                uploaded_paths=uploaded_paths,
+            )
+            self.assertEqual(uploaded_paths, {paths[3]})
+            blocks = slack_socket_agent.output_artifact_button_blocks(
+                paths, root, uploaded_paths=uploaded_paths,
+                user_id="UOWNER", channel="C123", thread_ts="1.23",
+            )
+            rendered = json.dumps(blocks)
+            for name in ("local.bin", "large.bin", "retry.txt"):
+                self.assertIn(name, rendered)
+            self.assertNotIn("ok.txt", rendered)
+            self.assertEqual(len(messages), 3)
+            self.assertIn("exceeds", messages[0])
+            self.assertIn("delivery failed", messages[1])
+            self.assertIn("Attached", messages[2])
+            self.assertEqual(client.files_upload_v2.call_count, 2)
+            self.assertEqual(slack_socket_agent.load_output_artifacts(manifest, root), (paths, []))
+            self.assertTrue(all(path.exists() for path in paths))
+            manifest.write_text(json.dumps([{"path": str(paths[2]), "attach": True}]))
+            client.files_upload_v2.side_effect = None
+            client.files_upload_v2.return_value = {"file": {"permalink": "https://example.test/retry"}}
+            messages = slack_socket_agent.deliver_output_artifacts(
+                client, "C123", "1.23", manifest, root, MagicMock()
+            )
+            self.assertIn("Download", messages[0])
 
     def test_upload_failure_distinguishes_local_save_from_slack_delivery(self) -> None:
         client = MagicMock()
@@ -992,10 +1045,11 @@ class SlackOutputArtifactTests(unittest.TestCase):
             posted,
         )
         posted_blocks = client.chat_postMessage.call_args.kwargs["blocks"]
-        self.assertEqual(
-            "↗ requested.csv",
-            posted_blocks[1]["elements"][0]["text"]["text"],
-        )
+        actions = [element for block in posted_blocks if block["type"] == "actions"
+                   for element in block["elements"]]
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0]["action_id"], slack_socket_agent.OPEN_LOCAL_ARTIFACT_DIRECTORY_ACTION_ID)
+        self.assertEqual(actions[0]["text"]["text"], "📁 Open folder")
 
 
 class SlackGeneratedImageTests(unittest.TestCase):

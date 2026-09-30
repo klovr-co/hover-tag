@@ -347,6 +347,9 @@ class TagControlTests(unittest.TestCase):
     def test_backend_selection_reaches_runtime_for_both_choices(self):
         tag_cli.initialize_instance(self.home)
         def refresh_credentials(home, config_path, values):
+            self.assertEqual(values["OPENTAG_FILE_DELIVERY"], "local+slack")
+            self.assertEqual(os.environ["OPENTAG_FILE_DELIVERY"], "local+slack")
+            self.assertTrue((home / "state/migrations/file-delivery-v1.json").exists())
             tag_config.update_config(config_path, {
                 "SLACK_BOT_TOKEN": "xoxb-refreshed", "SLACK_APP_TOKEN": "xapp-refreshed",
             })
@@ -360,6 +363,11 @@ class TagControlTests(unittest.TestCase):
         for backend in ("codex", "claude"):
             with self.subTest(backend=backend):
                 self.complete(backend)
+                # Emulate an older installation before the delivery setting existed.
+                old_settings = tag_config.read_config(self.path)
+                old_settings.pop("OPENTAG_FILE_DELIVERY", None)
+                tag_config.save_config(self.path, old_settings)
+                (self.home / "state/migrations/file-delivery-v1.json").unlink(missing_ok=True)
                 with patch.object(sys, "argv", ["tag", "start"]), patch.object(
                     tag_cli, "missing_runtime_dependencies", return_value=()
                 ), patch.object(slack_manifest_migrations, "reconcile", side_effect=refresh_credentials

@@ -75,9 +75,9 @@ def _update_manifest(manifest: Path, path: Path, *, attach: bool) -> None:
     recorded = next((item for item in normalized if item["path"] == value), None)
     if recorded is None:
         normalized.append({"path": value, "attach": attach})
-    elif attach:
-        # A later explicit attachment request upgrades a local-only record.
-        recorded["attach"] = True
+    else:
+        # The latest registration reflects the current delivery instruction.
+        recorded["attach"] = attach
 
     manifest.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary = tempfile.mkstemp(prefix=f".{manifest.name}.", dir=manifest.parent)
@@ -121,11 +121,15 @@ def main() -> int:
     parser.add_argument("--workdir", type=Path, required=True)
     parser.add_argument("--file", type=Path, required=True)
     parser.add_argument("--channel-id", help="resolve relative output filenames in this channel's artifact folder")
-    parser.add_argument(
+    delivery = parser.add_mutually_exclusive_group()
+    delivery.add_argument(
         "--attach",
         action="store_true",
+        default=None,
         help="also attach the output to the originating Slack thread",
     )
+    delivery.add_argument("--local-only", dest="attach", action="store_false",
+                          help="keep this output local even when Slack delivery is the default")
     args = parser.parse_args()
     try:
         output = args.file
@@ -134,7 +138,11 @@ def main() -> int:
             if not output.is_absolute():
                 output = validated_output_path(output, directory)
         path = validated_output_path(output, args.workdir)
-        record_artifact(args.manifest, path, attach=args.attach)
+        mode = os.getenv("OPENTAG_FILE_DELIVERY", "local+slack")
+        if mode not in {"local", "local+slack"}:
+            raise ValueError("OPENTAG_FILE_DELIVERY must be local or local+slack")
+        attach = mode == "local+slack" if args.attach is None else args.attach
+        record_artifact(args.manifest, path, attach=attach)
     except (OSError, ValueError) as exc:
         parser.error(str(exc))
     print(path.name)
