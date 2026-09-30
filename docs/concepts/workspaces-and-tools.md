@@ -19,7 +19,7 @@ before launch, then answer its questions in the same thread.
 > Launch: Monday. FAQ: Jules, due Tuesday. Signup testing: Iris, due Wednesday.
 > Support must be briefed before launch. Go/no-go approval is required.
 >
-> **Iris:** @Iris's Tag review this and save the open questions as open-questions.md in your workspace.
+> **Iris:** @Iris's Tag review this and save the open questions as open-questions.md in your workspace and keep the file local.
 >
 > **Iris's Tag:** Saved the questions in open-questions.md:
 > - Are the FAQ and signup testing due the week before launch?
@@ -52,6 +52,36 @@ where they were saved; Tag does not guess which channel owns them.
 > still locate and read them using a filename you mention or one already in the
 > conversation. See [What Tag knows](what-tag-knows.md) for how indexed search
 > works.
+
+## Also attach saved files in Slack
+
+By default, Tag keeps each requested deliverable locally and uploads a copy to
+the requesting Slack thread. The reply keeps one **📁 Open folder** button for
+access to the local copies. Successful uploads omit individual Open file buttons;
+local-only files and files that could not upload keep those file buttons.
+
+To keep saved deliverables local-only, configure your Tag:
+
+```sh
+tag config set OPENTAG_FILE_DELIVERY local
+tag restart
+```
+
+Use `local+slack` to restore the default. Existing installations automatically
+adopt this default during startup if no delivery preference is saved. An explicit
+`local` setting is preserved. This applies to requested final file deliverables,
+not supporting files or every file in the workspace. Generated images retain
+their existing delivery behavior.
+
+An individual request can override the default: ask for an attachment to upload
+a copy, or explicitly ask to keep the file local to prevent an upload.
+
+Slack attachments are copies, not synchronized files. Later edits to the local
+file do not update an earlier attachment. Files above Tag's 15 MiB upload limit
+remain available through their local Open button. If Slack delivery fails, Tag
+keeps the local file, reports the failure, and continues with other files. Ask
+Tag to attach it again after resolving the failure, or to create a smaller copy
+for an oversized file.
 
 ## Use a forwarded Slack file
 

@@ -961,6 +961,20 @@ def settings_button_blocks(
     ]
 
 
+def combine_reply_actions(
+    artifact_blocks: list[dict[str, Any]],
+    settings_blocks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Place Configure beside file actions when one Slack actions block has room."""
+    if (
+        artifact_blocks
+        and len(artifact_blocks[-1]["elements"]) + len(settings_blocks[0]["elements"]) <= 25
+    ):
+        artifact_blocks[-1]["elements"].extend(settings_blocks[0]["elements"])
+        return artifact_blocks
+    return artifact_blocks + settings_blocks
+
+
 def activity_button_blocks(
     *, team: str, channel: str, thread_ts: str, run_id: str,
     direct_message: bool = False,
@@ -986,6 +1000,7 @@ def output_artifact_button_blocks(
     user_id: str,
     channel: str,
     thread_ts: str,
+    uploaded_paths: set[Path] | None = None,
 ) -> list[dict[str, Any]]:
     """Build one compact row of host-local actions for validated output artifacts."""
     root = workdir.expanduser().resolve()
@@ -1000,6 +1015,8 @@ def output_artifact_button_blocks(
         except (OSError, ValueError):
             continue
         valid_paths.append(path)
+        if uploaded_paths is not None and path in uploaded_paths:
+            continue
         metadata = {
             "user": user_id,
             "channel": channel,
@@ -2702,17 +2719,10 @@ def load_output_artifact_entries(
             path.relative_to(root)
             if not path.is_file():
                 raise ValueError("not a regular file")
-            size = path.stat().st_size
         except (OSError, ValueError):
             errors.append(
                 f"Could not attach `{candidate.name or 'requested output'}` because it is missing, "
                 "inaccessible, or outside the workspace."
-            )
-            continue
-        if size > MAX_OUTPUT_FILE_BYTES:
-            errors.append(
-                f"Could not attach `{path.name}` because it exceeds Tag’s "
-                f"{MAX_OUTPUT_FILE_BYTES // (1024 * 1024)} MB output limit."
             )
             continue
         if path not in seen:
@@ -2735,6 +2745,7 @@ def deliver_output_artifacts(
     workdir: Path,
     logger: Any,
     on_upload_start: Callable[[], None] | None = None,
+    uploaded_paths: set[Path] | None = None,
 ) -> list[str]:
     """Attach validated outputs to the authorized originating Slack thread."""
     entries, messages = load_output_artifact_entries(manifest, workdir)
@@ -2744,6 +2755,13 @@ def deliver_output_artifacts(
         if not attach:
             continue
         try:
+            if path.stat().st_size > MAX_OUTPUT_FILE_BYTES:
+                messages.append(
+                    f"`{path.name}` was saved locally, but exceeds Tag’s "
+                    f"{MAX_OUTPUT_FILE_BYTES // (1024 * 1024)} MiB upload limit. "
+                    "Use its local Open button, or ask Tag to create a smaller copy."
+                )
+                continue
             response = client.files_upload_v2(
                 channel=channel,
                 thread_ts=thread_ts,
@@ -2791,6 +2809,8 @@ def deliver_output_artifacts(
                             file_id,
                             exc_info=True,
                         )
+            if uploaded_paths is not None:
+                uploaded_paths.add(path)
             if permalink:
                 messages.append(f"Download [{path.name}]({permalink}).")
             else:
@@ -4234,6 +4254,7 @@ def create_app(
                         output_manifest,
                         default_workdir(),
                     )
+                    uploaded_paths: set[Path] = set()
                     delivery_messages = deliver_output_artifacts(
                         client,
                         channel,
@@ -4241,6 +4262,7 @@ def create_app(
                         output_manifest,
                         default_workdir(),
                         logger,
+                        uploaded_paths=uploaded_paths,
                         on_upload_start=lambda: indicator.status(
                             "Uploading the result…"
                         ),
@@ -4250,6 +4272,7 @@ def create_app(
                     artifact_button_blocks = output_artifact_button_blocks(
                         artifact_paths,
                         default_workdir(),
+                        uploaded_paths=uploaded_paths,
                         user_id=user_id,
                         channel=channel,
                         thread_ts=thread_ts,
@@ -4258,11 +4281,14 @@ def create_app(
                 if succeeded:
                     footer_blocks = artifact_button_blocks
                     if backend == "codex":
-                        footer_blocks += settings_button_blocks(
-                            team=team,
-                            channel=channel,
-                            thread_ts=thread_ts,
-                            direct_message=direct_message,
+                        footer_blocks = combine_reply_actions(
+                            artifact_button_blocks,
+                            settings_button_blocks(
+                                team=team,
+                                channel=channel,
+                                thread_ts=thread_ts,
+                                direct_message=direct_message,
+                            ),
                         )
                     footer_blocks = footer_blocks or None
                 elif answer.startswith("Stopped.") or answer.startswith("Stop requested"):
