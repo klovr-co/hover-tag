@@ -97,8 +97,7 @@ def validate_release(root: Path) -> list[str]:
 
     if version and VERSION_RE.fullmatch(version) and "-" not in version:
         changelog = _read(root, "CHANGELOG.md", errors)
-        if changelog:
-            errors.extend(validate_stable_changelog(changelog, version))
+        errors.extend(validate_stable_changelog(changelog, version))
 
     security = _read(root, "SECURITY.md", errors)
     if security and "security/advisories/new" not in security:

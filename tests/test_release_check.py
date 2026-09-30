@@ -28,6 +28,17 @@ class ReleaseCheckTests(unittest.TestCase):
             "## [0.3.0] - 2026-10-01\n\n### Added\n\n- New feature\n", version
         ), [])
 
+    def test_stable_release_rejects_existing_empty_changelog(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            (root / "VERSION").write_text("0.3.0\n", encoding="utf-8")
+            (root / "CHANGELOG.md").write_text("", encoding="utf-8")
+
+            errors = validate_release(root)
+
+        self.assertIn("CHANGELOG.md is missing a dated v0.3.0 stable release entry", errors)
+        self.assertNotIn("missing required file: CHANGELOG.md", errors)
+
 
 if __name__ == "__main__":
     unittest.main()

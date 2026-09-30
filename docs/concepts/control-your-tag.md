@@ -76,7 +76,7 @@ the result before asking Tag to try again.
 
 Approval buttons and Stop require Codex App Server, Tag's default Codex
 connection. They are not available with the legacy Codex exec or Claude backends.
-After a run, use [Activity](../reference/supported-capabilities.md#review-task-activity)
+With Codex App Server, use [Activity](../reference/supported-capabilities.md#review-task-activity)
 to review the available tool steps and results.
 
 ## Choose who and what Tag can access
