@@ -3036,7 +3036,7 @@ class SlackAgentSettingsTests(unittest.TestCase):
 
                 action_ids = [
                     element["action_id"]
-                    for call in client.chat_postMessage.call_args_list
+                    for call in client.chat_postEphemeral.call_args_list
                     for block in call.kwargs.get("blocks") or []
                     if block.get("type") == "actions"
                     for element in block["elements"]
