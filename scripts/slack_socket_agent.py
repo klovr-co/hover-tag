@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import html
 import json
 import mimetypes
 import os
@@ -17,7 +19,7 @@ import urllib.error
 import urllib.request
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -42,7 +44,9 @@ try:
     )
     from .slack_mrkdwn import to_mrkdwn
     from .slack_search_scope import ScopePlan, SearchIntent, plan_search_scopes
-    from .tag_activity import ACTIVITY_DETAIL_ACTION_ID, ActivityStore, activity_detail_modal, activity_modal
+    from .tag_activity import ACTIVITY_DETAIL_ACTION_ID, PUBLIC_LABELS, ActivityStore, activity_detail_modal, activity_modal
+    from .tag_activity_details import sanitize_activity_details
+    from .tag_activity_labels import activity_title_for_status, readable_activity_title
     from .tag_paths import tag_temp_dir
     from . import slack_channels
 except ImportError:  # Direct script execution does not create a package context.
@@ -63,7 +67,9 @@ except ImportError:  # Direct script execution does not create a package context
     )
     from slack_mrkdwn import to_mrkdwn
     from slack_search_scope import ScopePlan, SearchIntent, plan_search_scopes
-    from tag_activity import ACTIVITY_DETAIL_ACTION_ID, ActivityStore, activity_detail_modal, activity_modal
+    from tag_activity import ACTIVITY_DETAIL_ACTION_ID, PUBLIC_LABELS, ActivityStore, activity_detail_modal, activity_modal
+    from tag_activity_details import sanitize_activity_details
+    from tag_activity_labels import activity_title_for_status, readable_activity_title
     from tag_paths import tag_temp_dir
     import slack_channels
 
@@ -81,6 +87,8 @@ MAX_REPLY_CHARS = 3_800
 STREAM_START_CHARS = 40
 STREAM_APPEND_CHARS = 200
 STREAM_FLUSH_SECONDS = 0.35
+MAX_STREAM_TASKS = 12
+MAX_STREAM_ACTIVITY_EVENTS = 60
 ACTIVITY_DEBOUNCE_SECONDS = 0.25
 ACTIVITY_HOLD_SECONDS = 1.5
 ACTIVITY_WAIT_SECONDS = 12.0
@@ -90,8 +98,9 @@ STATUS_CLEANUP_RETRY_DELAYS = (2, 5, 15, 30, 60, 90, 90, 90)
 SUPPORTED_REASONING_EFFORTS = ("minimal", "low", "medium", "high", "xhigh", "max", "ultra")
 DEFAULT_REASONING_EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultra")
 DEFAULT_CONFIG_VALUE = "__opentag_default__"
-SETTINGS_ACTION_ID = "opentag_change_agent_settings"
 ACTIVITY_ACTION_ID = "opentag_view_activity"
+SHOW_ACTIVITY_DETAILS = False
+SETTINGS_ACTION_ID = "opentag_change_agent_settings"
 SETTINGS_MODEL_ACTION_ID = "opentag_settings_model"
 SETTINGS_EFFORT_ACTION_ID = "opentag_settings_effort"
 SETTINGS_FAST_ACTION_ID = "opentag_settings_fast_mode"
@@ -265,8 +274,20 @@ def configured_codex_defaults() -> tuple[str | None, str | None, bool]:
     )
 
 
+def fetch_codex_model_catalog() -> list[dict[str, Any]] | None:
+    """Use the installed Codex account's catalog, not another client's shared cache."""
+    try:
+        from .codex_app_server import CodexAppServer, CodexAppServerError
+    except ImportError:
+        from codex_app_server import CodexAppServer, CodexAppServerError
+    try:
+        return CodexAppServer(["codex", "app-server"], cwd=default_workdir(), timeout=10).model_catalog()
+    except (CodexAppServerError, OSError, ValueError):
+        return None
+
+
 def discover_codex_models() -> list[CodexModelOption]:
-    """Read Codex's local model metadata, optionally constrained by an operator allowlist."""
+    """Prefer live account metadata; cached ordering never establishes a default."""
     configured = [
         value.strip()
         for value in os.getenv("OPENTAG_CODEX_MODELS", "").split(",")
@@ -274,8 +295,24 @@ def discover_codex_models() -> list[CodexModelOption]:
     ]
     configured_model, configured_effort, configured_fast_mode = configured_codex_defaults()
     discovered: dict[str, CodexModelOption] = {}
+    live_models = fetch_codex_model_catalog()
     try:
-        payload = json.loads(codex_models_cache_path().read_text(encoding="utf-8"))
+        if live_models is not None:
+            payload = {"models": [{
+                "slug": item.get("model"), "display_name": item.get("displayName"),
+                "visibility": "hide" if item.get("hidden") else "list",
+                "is_default": item.get("isDefault") is True,
+                "default_reasoning_level": item.get("defaultReasoningEffort"),
+                "additional_speed_tiers": item.get("additionalSpeedTiers", []),
+                "supported_reasoning_levels": [
+                    {"effort": level.get("reasoningEffort")}
+                    for level in (item.get("supportedReasoningEfforts")
+                                  if isinstance(item.get("supportedReasoningEfforts"), list) else [])
+                    if isinstance(level, dict)
+                ],
+            } for item in live_models]}
+        else:
+            payload = json.loads(codex_models_cache_path().read_text(encoding="utf-8"))
         if not isinstance(payload, dict):
             payload = {}
         raw_models = [
@@ -286,13 +323,8 @@ def discover_codex_models() -> list[CodexModelOption]:
             and isinstance(raw_model.get("slug"), str)
             and raw_model.get("slug")
         ]
-        fallback_default = min(
-            raw_models,
-            key=lambda item: item.get("priority")
-            if isinstance(item.get("priority"), (int, float))
-            else float("inf"),
-            default={},
-        ).get("slug")
+        fallback_default = next((item["slug"] for item in raw_models
+                                 if live_models is not None and item.get("is_default")), None)
         default_model = configured_model or fallback_default
         for raw_model in raw_models:
             if not isinstance(raw_model, dict) or raw_model.get("visibility") == "hide":
@@ -328,8 +360,15 @@ def discover_codex_models() -> list[CodexModelOption]:
     except (OSError, ValueError, TypeError):
         pass
 
+    if configured_model and configured_model not in discovered:
+        discovered[configured_model] = CodexModelOption(
+            configured_model, configured_model, DEFAULT_REASONING_EFFORTS,
+            default_reasoning_effort=configured_effort, is_default=True,
+            default_fast_mode=configured_fast_mode,
+        )
+
     if configured:
-        return [
+        options = [
             discovered.get(
                 model_id,
                 CodexModelOption(
@@ -345,6 +384,9 @@ def discover_codex_models() -> list[CodexModelOption]:
             )
             for model_id in configured
         ]
+        if not any(option.is_default for option in options):
+            options[0] = replace(options[0], is_default=True)
+        return options
     return list(discovered.values())
 
 
@@ -378,7 +420,9 @@ def fast_mode_available(model: str | None, models: list[CodexModelOption]) -> bo
 def default_agent_settings(models: list[CodexModelOption]) -> AgentSettings:
     if not models:
         return AgentSettings()
-    selected = next((item for item in models if item.is_default), models[0])
+    selected = next((item for item in models if item.is_default), None)
+    if selected is None:
+        return AgentSettings()
     efforts = efforts_for_model(selected.model_id, models)
     effort = selected.default_reasoning_effort
     if effort not in efforts:
@@ -901,7 +945,7 @@ def settings_button_blocks(
             "value": value,
         }
     ]
-    if activity_run_id:
+    if SHOW_ACTIVITY_DETAILS and activity_run_id:
         elements.append({
             "type": "button",
             "action_id": ACTIVITY_ACTION_ID,
@@ -921,6 +965,8 @@ def activity_button_blocks(
     *, team: str, channel: str, thread_ts: str, run_id: str,
     direct_message: bool = False,
 ) -> list[dict[str, Any]]:
+    if not SHOW_ACTIVITY_DETAILS:
+        return []
     metadata: dict[str, Any] = {
         "team": team, "channel": channel, "thread_ts": thread_ts, "run_id": run_id,
     }
@@ -1088,6 +1134,8 @@ def settings_modal(
     block_suffix = f"_{revision}" if revision else ""
     normalized = normalize_settings(settings, models)
     model_options = [select_option(item.model_id, item.label) for item in models]
+    if normalized.model is None and model_options:
+        model_options.insert(0, select_option(DEFAULT_CONFIG_VALUE, "Codex default"))
     if not model_options:
         model_options = [select_option(DEFAULT_CONFIG_VALUE, "No models available")]
     selected_model = normalized.model
@@ -1771,7 +1819,7 @@ class WorkingIndicator:
 
 
 class SlackAnswerStream:
-    """Batch answer deltas into Slack's streaming-message APIs."""
+    """Stream public tool steps and final-answer deltas in one Slack message."""
 
     def __init__(
         self,
@@ -1793,9 +1841,121 @@ class SlackAnswerStream:
         self.pending = ""
         self.received = ""
         self.ts: str | None = None
+        self.chunk_mode = False
         self.failed = False
+        self.task_updates_available = True
+        self.tasks: dict[str, str] = {}
+        self.seen_tasks: set[str] = set()
+        self.task_groups: dict[str, dict[str, Any]] = {}
+        self.dirty_task_groups: set[str] = set()
         self.flush_timer: threading.Timer | None = None
         self.lock = threading.RLock()
+
+    def activity(self, event: dict[str, Any]) -> None:
+        """Show short tool identities live; keep full inputs and results private."""
+        if event.get("type") not in {"activity_start", "activity_complete"}:
+            return
+        activity_id, label = event.get("activity_id"), event.get("label")
+        if not isinstance(activity_id, str) or not activity_id or len(activity_id) > 200:
+            return
+        if not isinstance(label, str) or label not in PUBLIC_LABELS:
+            label = "Using a connected tool…"
+        tool = sanitize_activity_details(event.get("details")).get("tool", "")
+        title = readable_activity_title(tool, label)
+        compound = bool(re.search(r" (?:&&|\|\||\|) ", tool))
+        item_id = hashlib.sha256(activity_id.encode("utf-8")).hexdigest()
+        starting = event["type"] == "activity_start"
+        with self.lock:
+            if self.failed or not self.task_updates_available:
+                return
+            if self.ts is not None and not self.chunk_mode:
+                self.task_updates_available = False
+                return
+            if starting:
+                if item_id in self.seen_tasks or len(self.seen_tasks) >= MAX_STREAM_ACTIVITY_EVENTS:
+                    return
+                self.seen_tasks.add(item_id)
+                key = f"tool:{label}:{tool or title}"
+                if key not in self.task_groups and len(self.task_groups) >= MAX_STREAM_TASKS - 1:
+                    key = "overflow"
+                self.tasks[item_id] = key
+                group = self.task_groups.get(key)
+                if group is not None:
+                    group["count"] += 1
+                    group["active"] += 1
+                    if key == "overflow":
+                        group["title"] = f"More steps · {title}"
+                        group["compound"] = compound
+                else:
+                    self.task_groups[key] = {
+                        "id": hashlib.sha256(key.encode("utf-8")).hexdigest(),
+                        "title": f"More steps · {title}" if key == "overflow" else title,
+                        "count": 1, "active": 1, "failed": False,
+                        "outcome": "completed",
+                        "compound": compound,
+                    }
+                self.dirty_task_groups.add(key)
+            elif item_id not in self.tasks:
+                return
+            else:
+                key = self.tasks.pop(item_id)
+                group = self.task_groups[key]
+                group["active"] -= 1
+                if event.get("status") != "completed":
+                    group["failed"] = True
+                    outcome = event.get("status")
+                    group["outcome"] = outcome if isinstance(outcome, str) and outcome in {"failed", "declined", "interrupted"} else "unknown"
+                if tool and tool != "Command" and key != "overflow":
+                    group["title"] = title
+                    group["compound"] = compound
+                # Batch completions with the next start or final answer.
+                self.dirty_task_groups.add(key)
+                return
+            chunks = [self._task_chunk(group) for key, group in self.task_groups.items()
+                      if key in self.dirty_task_groups]
+            try:
+                if self.ts is None:
+                    response = self.client.chat_startStream(
+                        channel=self.channel,
+                        thread_ts=self.thread_ts,
+                        recipient_user_id=self.recipient_user_id,
+                        recipient_team_id=self.recipient_team_id,
+                        task_display_mode="plan",
+                        chunks=[{"type": "plan_update", "title": "Agent activity"}, *chunks],
+                    )
+                    self.ts = response["ts"]
+                    self.chunk_mode = True
+                    if self.on_start is not None:
+                        self.on_start()
+                else:
+                    self.client.chat_appendStream(channel=self.channel, ts=self.ts, chunks=chunks)
+                self.dirty_task_groups.clear()
+            except Exception as exc:  # noqa: BLE001 - task UI is optional; answer delivery remains primary
+                self.task_updates_available = False
+                self.logger.warning("Slack task-card update failed: %s", exc)
+
+    @staticmethod
+    def _task_chunk(group: dict[str, Any], *, final: bool = False, request_completed: bool = False) -> dict[str, Any]:
+        outcome = group.get("outcome", "failed" if group["failed"] else "completed")
+        if group["active"]:
+            outcome = "unknown" if final else "running"
+        title = activity_title_for_status(group["title"], outcome, compound=group.get("compound", False))
+        if request_completed and outcome != "completed":
+            # The run finished successfully; per-attempt outcomes remain in Activity.
+            title = f"Finished · {group['title']}"
+        if group["count"] > 1:
+            title += f" · {group['count']} steps"
+        # Escape Slack links and mentions; only the bounded identity is shared.
+        raw_title = title
+        title = html.escape(raw_title[:200], quote=False)
+        if len(title) > 256:
+            title = html.escape(raw_title[:45], quote=False) + "…"
+        status = "error" if group["failed"] else "complete"
+        if group["active"]:
+            status = "error" if final else "in_progress"
+        if request_completed:
+            status = "complete"
+        return {"type": "task_update", "id": group["id"], "title": title, "status": status}
 
     def append(self, text: str) -> None:
         if not text:
@@ -1837,11 +1997,12 @@ class SlackAnswerStream:
                 if self.on_start is not None:
                     self.on_start()
             else:
-                self.client.chat_appendStream(
-                    channel=self.channel,
-                    ts=self.ts,
-                    markdown_text=self.pending,
-                )
+                append_args: dict[str, Any] = {"channel": self.channel, "ts": self.ts}
+                if self.chunk_mode:
+                    append_args["chunks"] = [{"type": "markdown_text", "text": self.pending}]
+                else:
+                    append_args["markdown_text"] = self.pending
+                self.client.chat_appendStream(**append_args)
             self.pending = ""
         except Exception as exc:  # noqa: BLE001 - preserve the complete final answer
             self.failed = True
@@ -1853,10 +2014,20 @@ class SlackAnswerStream:
             if self.flush_timer is not None:
                 self.flush_timer.cancel()
                 self.flush_timer = None
-            if not self.received:
+            if not self.received and self.ts is None:
                 return False
             if self.failed:
                 return self._replace_and_stop_locked(final_text, blocks)
+
+            # Close grouped cards once, with honest counts and terminal status.
+            if self.ts is not None and self.task_updates_available:
+                chunks = [self._task_chunk(group, final=True, request_completed=True) for group in self.task_groups.values()]
+                try:
+                    if chunks:
+                        self.client.chat_appendStream(channel=self.channel, ts=self.ts, chunks=chunks)
+                except Exception as exc:  # noqa: BLE001 - preserve final answer delivery
+                    self.logger.warning("Could not close Slack task cards: %s", exc)
+                self.tasks.clear()
 
             # The backend final event is authoritative. Most runs exactly match the
             # deltas; append a missing suffix when a backend omitted its last delta.
@@ -1878,7 +2049,12 @@ class SlackAnswerStream:
                     return False
                 stop_args: dict[str, Any] = {"channel": self.channel, "ts": self.ts}
                 if replace_text is not None:
-                    stop_args["markdown_text"] = replace_text
+                    if self.chunk_mode:
+                        stop_args["chunks"] = [{"type": "markdown_text", "text": replace_text}]
+                    else:
+                        stop_args["markdown_text"] = replace_text
+                elif self.chunk_mode:
+                    stop_args["chunks"] = [{"type": "plan_update", "title": "Agent activity"}]
                 if blocks:
                     stop_args["blocks"] = blocks
                 self.client.chat_stopStream(**stop_args)
@@ -1896,11 +2072,14 @@ class SlackAnswerStream:
         """Recover a partial stream without posting a duplicate normal reply."""
         if self.ts is None:
             return False
-        stop_args: dict[str, Any] = {
-            "channel": self.channel,
-            "ts": self.ts,
-            "markdown_text": final_text,
-        }
+        stop_args: dict[str, Any] = {"channel": self.channel, "ts": self.ts}
+        if self.chunk_mode:
+            stop_args["chunks"] = [
+                *(self._task_chunk(group, final=True, request_completed=True) for group in self.task_groups.values()),
+                {"type": "markdown_text", "text": final_text},
+            ]
+        else:
+            stop_args["markdown_text"] = final_text
         if blocks:
             stop_args["blocks"] = blocks
         try:
@@ -1910,7 +2089,7 @@ class SlackAnswerStream:
             self.logger.warning("Could not recover partial Slack answer stream: %s", exc)
             return False
 
-    def abort(self) -> None:
+    def abort(self, outcome: str = "interrupted") -> None:
         with self.lock:
             if self.flush_timer is not None:
                 self.flush_timer.cancel()
@@ -1918,9 +2097,18 @@ class SlackAnswerStream:
             if self.ts is None:
                 return
             try:
-                self.client.chat_stopStream(channel=self.channel, ts=self.ts)
+                stop_args: dict[str, Any] = {"channel": self.channel, "ts": self.ts}
+                if self.chunk_mode:
+                    for group in self.task_groups.values():
+                        if group["active"]:
+                            group.update(active=0, failed=True, outcome=outcome)
+                    stop_args["chunks"] = [
+                        {"type": "plan_update", "title": "Agent activity"},
+                        *(self._task_chunk(group, final=True) for group in self.task_groups.values()),
+                    ]
+                self.client.chat_stopStream(**stop_args)
             except Exception as exc:  # noqa: BLE001 - interruption cleanup is best effort
-                self.logger.warning("Could not stop interrupted Slack answer stream: %s", exc)
+                self.logger.warning("Could not stop Slack answer stream: %s", exc)
 
 
 @dataclass
@@ -2722,6 +2910,7 @@ def failure_action_blocks(
     request_ts: str,
     error_reference: str,
     direct_message: bool = False,
+    configure: bool = False,
 ) -> list[dict[str, Any]]:
     """Render recovery actions without putting diagnostic content in Slack metadata."""
     retry = retry_button_blocks(
@@ -2733,7 +2922,7 @@ def failure_action_blocks(
         error_reference=error_reference,
     )[0]["elements"][0]
     reference = json.dumps({"reference": error_reference}, separators=(",", ":"))
-    return [{
+    blocks = [{
         "type": "actions",
         "elements": [
             retry,
@@ -2751,6 +2940,12 @@ def failure_action_blocks(
             },
         ],
     }]
+    if configure:
+        blocks[0]["elements"].extend(settings_button_blocks(
+            team=team, channel=channel, thread_ts=thread_ts,
+            direct_message=direct_message,
+        )[0]["elements"])
+    return blocks
 
 
 def user_facing_failure(
@@ -3912,13 +4107,14 @@ def create_app(
 
         def trace_activity(trace_event: dict[str, Any]) -> None:
             nonlocal activity_run_id
-            if activity_run_id is None:
-                return
-            try:
-                activity_store.observe(activity_run_id, trace_event)
-            except OSError as exc:
-                logger.warning("Could not save Tag activity: %s", exc)
-                activity_run_id = None
+            if activity_run_id is not None:
+                try:
+                    activity_store.observe(activity_run_id, trace_event)
+                except OSError as exc:
+                    logger.warning("Could not save Tag activity: %s", exc)
+                    activity_run_id = None
+            if answer_stream is not None:
+                answer_stream.activity(trace_event)
 
         def finish_activity(outcome: str) -> None:
             nonlocal activity_run_id
@@ -4014,7 +4210,7 @@ def create_app(
                         scope_plan=scope_plan,
                         slack_search_grant=slack_search_grant,
                         on_error=capture_backend_error,
-                        on_trace_event=trace_activity if activity_run_id else None,
+                        on_trace_event=trace_activity if app_server_selected else None,
                     )
                 else:
                     answer, succeeded = run_backend(
@@ -4076,14 +4272,10 @@ def create_app(
                             channel=channel,
                             thread_ts=thread_ts,
                             direct_message=direct_message,
-                            activity_run_id=activity_run_id,
                         )
                     footer_blocks = footer_blocks or None
                 elif answer.startswith("Stopped.") or answer.startswith("Stop requested"):
-                    footer_blocks = activity_button_blocks(
-                        team=team, channel=channel, thread_ts=thread_ts,
-                        run_id=activity_run_id, direct_message=direct_message,
-                    ) if activity_run_id else None
+                    footer_blocks = None
                 else:
                     error_reference = new_error_reference()
                     logger.error("Tag backend failure [%s]: %s", error_reference, answer)
@@ -4125,12 +4317,8 @@ def create_app(
                         request_ts=event["ts"],
                         error_reference=error_reference,
                         direct_message=direct_message,
+                        configure=report.classification.category == "model_unavailable",
                     )
-                    if activity_run_id:
-                        footer_blocks += activity_button_blocks(
-                            team=team, channel=channel, thread_ts=thread_ts,
-                            run_id=activity_run_id, direct_message=direct_message,
-                        )
                 streamed = (
                     answer_stream is not None
                     and succeeded
@@ -4138,7 +4326,8 @@ def create_app(
                 )
                 if not streamed:
                     if answer_stream is not None:
-                        answer_stream.abort()
+                        outcome = "interrupted" if answer.startswith(("Stopped.", "Stop requested")) else "unknown" if succeeded else "failed"
+                        answer_stream.abort(outcome)
                     if succeeded or answer.startswith(("Stopped.", "Stop requested")):
                         post_final_reply(client, channel, thread_ts, answer, indicator.message_ts, footer_blocks)
                     else:
@@ -4169,7 +4358,7 @@ def create_app(
             finish_activity("failed")
             indicator.clear()
             if answer_stream is not None:
-                answer_stream.abort()
+                answer_stream.abort("failed")
             post_private_failure(
                 client,
                 channel,
@@ -4177,10 +4366,7 @@ def create_app(
                 user_id,
                 str(exc),
                 indicator.message_ts,
-                activity_button_blocks(
-                    team=team, channel=channel, thread_ts=thread_ts,
-                    run_id=activity_run_id, direct_message=direct_message,
-                ) if activity_run_id else None,
+                None,
             )
         except Exception as exc:
             finish_activity("failed")
@@ -4188,7 +4374,7 @@ def create_app(
             logger.exception("Open Tag failed [%s]", error_reference)
             indicator.clear()
             if answer_stream is not None:
-                answer_stream.abort()
+                answer_stream.abort("failed")
             failure_at = utc_timestamp()
             report = make_error_report(
                 error_reference,
@@ -4227,12 +4413,8 @@ def create_app(
                 request_ts=event["ts"],
                 error_reference=error_reference,
                 direct_message=direct_message,
+                configure=report.classification.category == "model_unavailable",
             )
-            if activity_run_id:
-                footer_blocks += activity_button_blocks(
-                    team=team, channel=channel, thread_ts=thread_ts,
-                    run_id=activity_run_id, direct_message=direct_message,
-                )
             post_private_failure(
                 client,
                 channel,

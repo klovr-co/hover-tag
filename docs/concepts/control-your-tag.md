@@ -68,6 +68,15 @@ cannot approve it. Review the task's latest status before starting another
 request. Unsupported or unavailable approval requests are refused rather than
 approved automatically by Tag.
 
+## Follow a task as it works
+
+With Codex App Server, **Agent activity** shows readable tool steps in the Slack thread,
+such as reading a file or reviewing changes. Repeated steps are grouped, and
+the card shows complete when the task succeeds. See the
+[live activity example](../reference/supported-capabilities.md#watch-tag-work).
+Short activity descriptions are shared with the thread; full tool inputs and
+results are not shown. The separate Activity button is currently hidden.
+
 ## Stop a task
 
 Use Slack's **Stop** control to interrupt an active Codex task. Stopping a task
@@ -76,8 +85,8 @@ the result before asking Tag to try again.
 
 Approval buttons and Stop require Codex App Server, Tag's default Codex
 connection. They are not available with the legacy Codex exec or Claude backends.
-After a run, use [Activity](../reference/supported-capabilities.md#review-task-activity)
-to review the available tool steps and results.
+After a successful run, review the completed activity card and final answer in
+the thread. For failed or stopped requests, review the private recovery message.
 
 ## Choose who and what Tag can access
 

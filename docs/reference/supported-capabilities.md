@@ -11,7 +11,7 @@ unavailable behavior.
 | Read the current thread | Implemented | Tag fetches one page containing up to 30 messages. |
 | Read supported attachments | Implemented | Includes [forwarded Slack files](../concepts/workspaces-and-tools.md#use-a-forwarded-slack-file). Text content is truncated at 12,000 characters per item; downloaded image or text files are limited to 15 MiB. |
 | Stream answer text | Backend-dependent | Claude streams text deltas; Codex App Server streams final-answer deltas and observed activity. |
-| Review task activity | Implemented with App Server | Codex App Server replies include a requester-only Activity timeline with bounded, redacted tool input and result previews. See [Review task activity](#review-task-activity). |
+| Watch live activity | Implemented with App Server | Readable tool steps appear in the Slack thread while Codex works. See [Watch Tag work](#watch-tag-work). |
 | Continue with thread context | Implemented | A later mention receives the current bounded thread context. |
 | Post a requested top-level message | Implemented | Restricted to the channel that invoked Tag. |
 | Create a requested Slack Canvas | Implemented | Requires the Slack Canvas scope and explicit user intent. |
@@ -59,43 +59,42 @@ unavailable behavior.
 For the approval walkthrough, example message, and Stop controls, see
 [Control your Tag](../concepts/control-your-tag.md).
 
-## Review task activity
+## Watch Tag work
 
-After a Codex task finishes, select **Activity** on Tag's reply to see the tools
-it used. Successful replies show **Activity** beside **Configure**; failed and
-stopped tasks show **Activity** alongside their recovery actions.
+You can follow a Codex task directly in its Slack thread. Tag starts with a
+working indicator, then shows **Agent activity** as tools run: reading a file,
+running a script, reviewing changes, or updating a document. This is the visible
+progress of the task; Tag does not show private reasoning.
 
-1. Open **Activity** to see a timeline of tool steps, timestamps, and status.
-2. Select **Details** on a step to inspect its available input and result previews.
-3. Select **Back** to return to the timeline.
+Here is an illustrative file task. On the website, the final assistant message
+moves from the working indicator through two tool steps to the answer.
 
-The example below illustrates a finished task with two observed tool steps.
-Select **Details** to explore a preview.
-
-> **Tag activity**
+> **Tag live activity**
 >
-> Finished · 2 observed tool steps
+> **Maya:** @Tag read launch-plan.md and create launch-checklist.md.
 >
-> | Time | Step | Status | Input | Result |
-> | --- | --- | --- | --- | --- |
-> | 13:07:05 UTC | Reading files… | Tool finished | Read launch-plan.md | Launch: Monday. FAQ owner: Maya. Signup testing: Jules. |
-> | 13:07:22 UTC | Writing files… | Tool finished | Create launch-checklist.md from the launch plan | Created launch-checklist.md with the launch tasks and owners. |
+> | In progress | Completed |
+> | --- | --- |
+> | Reading launch-plan.md | Read launch-plan.md |
+> | Creating launch-checklist.md | Created launch-checklist.md |
 >
-> Tool completion alone does not confirm an external action's outcome.
+> **Maya's Tag:** Created launch-checklist.md with the launch tasks and owners from launch-plan.md.
 
-Only the person who submitted the task can open its activity, and they must
-still have access to use Tag in that conversation. The previews open in a
-private Slack modal.
+Steps use short command or file descriptions instead of raw tool payloads.
+Repeated work is grouped with a count, keeping the activity compact. The latest
+action stays visible between tool calls; Tag does not add a new “thinking” row
+every time it waits.
 
-Tag shortens previews and redacts common credential patterns and secret-named
-fields. Prompts, commentary, and private reasoning are excluded. Activity is
-available for up to 30 days; older records may be removed sooner as new tasks
-reach the storage limit.
+When the task succeeds, **Agent activity** shows complete and the answer appears
+in the same message. A failed or stopped task keeps its failure or interruption
+state. Completion is a task status, not proof that every intermediate action
+succeeded; review the final answer and any error message for the outcome.
 
-A completed step means the tool call ended; check the result to confirm whether
-the requested action succeeded. Calls made inside another tool step may not
-appear separately. Activity requires Codex App Server, Tag's default Codex
-connection; it is unavailable with the legacy Codex exec or Claude backends.
+Everyone who can see the thread can see these short activity descriptions,
+including file names. Full tool inputs and results are not shown in the thread.
+The separate **Activity** button is currently hidden; a developer view may return
+in a future release. Live tool activity requires Codex App Server; the legacy
+Codex exec and Claude backends do not show these tool rows.
 
 For the full end-to-end behavior, see
 [Connected user flows](../user-flows.md). For configuration and exact backend
