@@ -20,7 +20,7 @@ class ActivityStoreTests(unittest.TestCase):
             "cat /private/runtime-agent.md | head -20": "cat runtime-agent.md | head",
             "API_TOKEN=private-value python script.py --private-argument": "python script.py",
             "node /private/build.js private-argument": "node build.js",
-            "sed -n '1,20p' /private/file": "sed",
+            "sed -n '1,20p' /private/file": "sed · file",
             "$(private-command) argument": "Command",
         }
         for command, expected in cases.items():

@@ -135,3 +135,23 @@ activity recording, button builders, and requester-authorized modal handlers
 intact. Button visibility is disabled; no user-facing developer-mode setting is
 introduced yet. Existing Slack messages are not rewritten, and their old Activity
 buttons still work for the original requester.
+
+
+## Specific HTTP and Python activity targets
+
+Shared command identities retain HTTP method, hostname, final URL path component,
+and output basename for recognized curl invocations. URL credentials, query
+parameters, fragments, headers, and payloads are excluded. Python execution
+options no longer hide script basenames. Inline Python is parsed without execution
+for explicit file operands and unambiguous literal filename assignments; these
+are shown as “Running Python · filename”, not as an invented script name or outcome.
+Unrecognized or dynamic operands keep the generic fallback. These identities also
+keep unrelated HTTP/file work from collapsing into the same counted row.
+
+
+Other recognized tools use the same compact target suffix: file listing and
+metadata commands, text/JSON searches and transforms, Git file operations,
+test runners and linters, package scripts, shell/TypeScript runners, and wget.
+Only known option arities are parsed; search expressions, filters, configuration
+values, and arbitrary unknown-command arguments are excluded. Inline file work
+uses “Running Python · filename”; scripts retain “Running filename”.

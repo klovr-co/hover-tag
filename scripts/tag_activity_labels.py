@@ -14,12 +14,18 @@ import re
 
 
 COMMAND_TITLES = {
+    "Tests": "Running tests",
     "ls": "Listing files",
     "find": "Finding files",
     "rg": "Searching text",
     "grep": "Searching text",
     "sed": "Processing text",
     "awk": "Processing text",
+    "jq": "Processing JSON",
+    "wc": "Counting content",
+    "du": "Checking disk usage",
+    "file": "Checking file type",
+    "stat": "Inspecting file metadata",
     "pytest": "Running tests",
     "unittest": "Running tests",
     "jest": "Running tests",
@@ -32,6 +38,7 @@ COMMAND_TITLES = {
 def _running_title(tool: str, fallback: str) -> str:
     """Format an already redacted tool identity for a compact live row."""
     tool = " ".join(tool.split())
+    tool = re.sub(r"(?<![\w./-])([A-Za-z0-9_][A-Za-z0-9_.-]*)/SKILL\.md(?=$|[ ,])", r"\1 skill", tool)
     if not tool or tool == "Command":
         return fallback.rstrip("…")
     if re.search(r" (?:&&|\|\||\|) ", tool):
@@ -39,6 +46,16 @@ def _running_title(tool: str, fallback: str) -> str:
         separators = {"&&": "; ", "||": " or ", "|": " → "}
         return "".join(separators[part] if index % 2 else _running_title(part, fallback)
                        for index, part in enumerate(parts))
+    if tool.startswith("Image view · "):
+        return "Viewing " + tool.removeprefix("Image view · ")
+    if tool.startswith("HTTP "):
+        request, _, destination = tool.partition(" · ")
+        method = request.removeprefix("HTTP ")
+        if method == "GET":
+            return ("Downloading " if " → " in destination else "Fetching ") + destination
+        if method == "HEAD":
+            return "Checking headers for " + destination
+        return f"Sending {method} to {destination}"
     for kind, verb in (("change", "Updating"), ("create", "Creating"), ("delete", "Deleting"), ("move", "Moving")):
         prefix = f"File {kind} · "
         if tool.startswith(prefix):
@@ -47,6 +64,11 @@ def _running_title(tool: str, fallback: str) -> str:
         return {"File change": "Updating files", "Web search": "Searching the web",
                 "Image view": "Viewing an image"}[tool]
 
+    if tool.startswith("Package script · "):
+        return "Running script " + tool.removeprefix("Package script · ")
+    if " · " in tool and not re.match(r"python[\d.]* \(inline\)", tool):
+        base, _, targets = tool.partition(" · ")
+        return _running_title(base, fallback) + " · " + targets
     program, _, target = tool.partition(" ")
     if target == "--help":
         return f"Reading {program} help"
@@ -85,6 +107,8 @@ def _running_title(tool: str, fallback: str) -> str:
         language = "Python" if python else {"node": "JavaScript", "ruby": "Ruby", "perl": "Perl"}[program]
         if target in {"-m pytest", "-m unittest"} and python:
             return "Running tests"
+        if target.startswith("(inline) · "):
+            return f"Running {language} · " + target.removeprefix("(inline) · ")
         if target == "(inline)":
             return f"Running {language} code"
         if target.startswith("-m "):
@@ -121,7 +145,7 @@ PAST_VERBS = {
     "Fetching": "Fetched", "Pulling": "Pulled", "Pushing": "Pushed", "Staging": "Staged",
     "Committing": "Committed", "Switching": "Switched", "Restoring": "Restored",
     "Resetting": "Reset", "Merging": "Merged", "Rebasing": "Rebased", "Building": "Built",
-    "Processing": "Processed", "Viewing": "Viewed", "Using": "Used", "Sending": "Sent",
+    "Counting": "Counted", "Processing": "Processed", "Viewing": "Viewed", "Using": "Used", "Sending": "Sent",
     "Posting": "Posted", "Querying": "Queried", "Downloading": "Downloaded", "Uploading": "Uploaded",
     "Inspecting": "Inspected", "Looking": "Looked", "Writing": "Wrote",
 }

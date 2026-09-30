@@ -65,7 +65,7 @@ class ReadableActivityTitleTests(unittest.TestCase):
             "yarn typecheck": "Checking types",
             "cargo test": "Running tests",
             "go build": "Building the project",
-            "ruff format src": "Formatting code",
+            "ruff format src": "Formatting code · src",
             "npx --yes vitest run": "Running tests",
             "pnpm exec tsc --noEmit": "Checking types",
             "cp /private/source /private/destination": "Copying to destination",
@@ -124,3 +124,119 @@ class ReadableActivityTitleTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class GranularActivityTests(unittest.TestCase):
+    def test_http_requests_name_the_target_and_download(self) -> None:
+        cases = {
+            'curl -fsSL https://example.com/assets/logo.png -o /tmp/logo.png':
+                'Downloading example.com/logo.png → logo.png',
+            'curl -sSI https://example.com/docs': 'Checking headers for example.com/docs',
+            'curl -I https://example.com/docs': 'Checking headers for example.com/docs',
+            'curl -X POST -H "Authorization: Bearer private-token" -d "private body" https://api.example.com/v1/items':
+                'Sending POST to api.example.com/items',
+            'curl --url=https://user:private-password@example.com/private/report.csv?token=private-token --output=/tmp/report.csv':
+                'Downloading example.com/report.csv → report.csv',
+            'curl -s https://one.example/a.json && curl -s https://two.example/b.json':
+                'Fetching one.example/a.json; Fetching two.example/b.json',
+            'curl -sS https://example.com/data.json | python -m json.tool':
+                'Fetching example.com/data.json → Running json.tool',
+            'curl -H "https://private.example/secret" https://example.com':
+                'Fetching example.com',
+            'curl --config private-config': 'Running curl',
+        }
+        for command, expected in cases.items():
+            with self.subTest(command=command):
+                details = item_activity_details({'type': 'commandExecution', 'command': command}, completed=False)
+                title = readable_activity_title(details['tool'], 'Running a command…')
+                self.assertEqual(expected, title)
+                self.assertNotIn('private', title)
+
+    def test_python_names_scripts_modules_and_literal_file_operands(self) -> None:
+        cases = {
+            'python3 -uB -X dev -W ignore /private/scripts/report.py --token private-token': 'Running report.py',
+            'uv run python3 -Xutf8 /private/render.py': 'Running render.py',
+            'python -m json.tool /private/data.json': 'Running json.tool',
+            "python -c 'from pathlib import Path; print(Path(\"/private/report.csv\").read_text())'":
+                'Running Python · report.csv',
+            "python - <<'PY'\nwith open('/private/data.json') as f:\n    print(f.read())\nPY":
+                'Running Python · data.json',
+            "python -c 'print(\"private-file.py\")'": 'Running Python code',
+            "python -c 'from PIL import Image; filename = \"/private/logo.png\"; Image.open(filename)'":
+                'Running Python · logo.png',
+            "python -c 'open(variable)'": 'Running Python code',
+            "python -c 'invalid python'": 'Running Python code',
+            "python -c 'open(\"/private/a.json\"); open(\"/private/b.json\")'":
+                'Running Python · a.json, b.json',
+        }
+        for command, expected in cases.items():
+            with self.subTest(command=command):
+                self.assertEqual(expected, readable_activity_title(command_identity(command), 'Running a command…'))
+
+    def test_granular_completion_keeps_the_target(self) -> None:
+        tool = command_identity('curl -s https://example.com/data.json')
+        self.assertEqual('Fetched example.com/data.json', readable_activity_title(tool, '', 'completed'))
+        self.assertEqual('Failed · Fetching example.com/data.json', readable_activity_title(tool, '', 'failed'))
+
+    def test_image_view_names_the_image(self) -> None:
+        details = item_activity_details({'type': 'imageView', 'path': '/private/images/logo.png'}, completed=False)
+        self.assertEqual('Viewing logo.png', readable_activity_title(details['tool'], 'Viewing an image…'))
+
+
+class OtherToolTargetTests(unittest.TestCase):
+    def test_known_tools_preserve_targets_without_patterns_or_option_values(self) -> None:
+        cases = {
+            'rg -n "private-pattern" /private/src': 'Searching text · src',
+            'rg --files /private/src': 'Listing files · src',
+            'grep -e private-pattern /private/server.log': 'Searching text · server.log',
+            "sed -n '1,40p' /private/config.py": 'Processing text · config.py',
+            "jq '.private_field' /private/data.json": 'Processing JSON · data.json',
+            'find /private/assets -name private-pattern': 'Finding files · assets',
+            'ls -la /private/assets': 'Listing files · assets',
+            'du -sh /private/build': 'Checking disk usage · build',
+            'wc -l /private/results.csv': 'Counting content · results.csv',
+            'file /private/image.png': 'Checking file type · image.png',
+            'git diff -- /private/app.py': 'Reviewing changes · app.py',
+            'git add /private/app.py': 'Staging changes · app.py',
+            'pytest -k private-pattern tests/test_api.py': 'Running tests · test_api.py',
+            'npx vitest run tests/api.test.ts': 'Running tests · api.test.ts',
+            'eslint --fix src/app.ts': 'Checking code · app.ts',
+            'npm run docs:sync -- --token private-token': 'Running script docs:sync',
+            'ruff check src/app.py': 'Checking code · app.py',
+            'make preview': 'Running make · preview',
+            'make TOKEN=private-token': 'Running make',
+            'bash scripts/deploy.sh': 'Running bash · deploy.sh',
+            'tsx scripts/report.ts': 'Running tsx · report.ts',
+            'node --require private-hook scripts/report.js': 'Running report.js',
+            'node --test tests/api.test.js': 'Running tests · api.test.js',
+            'ruby scripts/report.rb': 'Running report.rb',
+            'perl scripts/report.pl': 'Running report.pl',
+            'wget -q -O /private/logo.png https://example.com/images/logo.png': 'Downloading example.com/logo.png → logo.png',
+            'rg --unknown private-value file.txt': 'Searching text',
+        }
+        for command, expected in cases.items():
+            with self.subTest(command=command):
+                title = readable_activity_title(command_identity(command), 'Running a command…')
+                self.assertEqual(expected, title)
+                self.assertNotIn('private', title)
+
+
+class SkillActivityTests(unittest.TestCase):
+    def test_skill_reads_keep_the_skill_name_not_the_full_path(self) -> None:
+        cases = {
+            'cat /private/skills/browser-use/SKILL.md': 'Reading browser-use skill',
+            'head -n 40 /private/skills/imagegen/SKILL.md': 'Reading start of imagegen skill',
+            "sed -n '1,80p' /private/skills/tag-release/SKILL.md": 'Processing text · tag-release skill',
+            'cat skills/browser-use/SKILL.md skills/imagegen/SKILL.md': 'Reading browser-use skill, imagegen skill',
+            'cat SKILL.md': 'Reading SKILL.md',
+            'cat ../SKILL.md': 'Reading SKILL.md',
+            'cat /private/skills/browser-use/README.md': 'Reading README.md',
+        }
+        for command, expected in cases.items():
+            with self.subTest(command=command):
+                title = readable_activity_title(command_identity(command), 'Reading files…')
+                self.assertEqual(expected, title)
+                self.assertNotIn('/private', title)
+        one = command_identity('cat /private/skills/browser-use/SKILL.md')
+        two = command_identity('cat /private/skills/imagegen/SKILL.md')
+        self.assertNotEqual(one, two)
+        self.assertEqual('Read browser-use skill', readable_activity_title(one, '', 'completed'))
