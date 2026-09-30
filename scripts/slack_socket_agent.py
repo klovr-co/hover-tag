@@ -100,7 +100,6 @@ REPORT_ISSUE_ACTION_ID = "opentag_report_issue"
 FIX_WITH_AGENT_ACTION_ID = "opentag_fix_with_coding_agent"
 JOIN_COMMUNITY_ACTION_ID = "opentag_join_hover_community"
 REPORT_VIEW_ID = "opentag_report_issue_view"
-TROUBLESHOOT_VIEW_ID = "opentag_troubleshoot_view"
 OPEN_LOCAL_ARTIFACT_ACTION_ID = "opentag_open_local_artifact"
 OPEN_LOCAL_ARTIFACT_ACTION_PATTERN = re.compile(
     rf"^{re.escape(OPEN_LOCAL_ARTIFACT_ACTION_ID)}_[0-9]+$"
@@ -2405,6 +2404,41 @@ def post_final_reply(
         )
 
 
+def post_private_failure(
+    client: Any,
+    channel: str,
+    thread_ts: str,
+    user_id: str,
+    answer: str,
+    placeholder_ts: str | None = None,
+    footer_blocks: list[dict[str, Any]] | None = None,
+) -> None:
+    """Show a failed request only to its requester in a shared channel."""
+    if is_direct_message_channel(channel):
+        post_final_reply(client, channel, thread_ts, answer, placeholder_ts, footer_blocks)
+        return
+    rendered = to_mrkdwn(answer)
+    blocks = [
+        {"type": "section", "text": {"type": "mrkdwn", "text": rendered}},
+        *(footer_blocks or []),
+    ]
+    client.chat_postEphemeral(
+        channel=channel,
+        user=user_id,
+        thread_ts=thread_ts,
+        text=rendered,
+        blocks=blocks,
+    )
+    if placeholder_ts is not None:
+        try:
+            client.chat_delete(channel=channel, ts=placeholder_ts)
+        except Exception:  # noqa: BLE001 - the private failure was already delivered
+            try:
+                client.chat_update(channel=channel, ts=placeholder_ts, text="Request finished.")
+            except Exception:
+                pass  # The public placeholder has no diagnostic details.
+
+
 def load_output_artifact_entries(
     manifest: Path,
     workdir: Path,
@@ -2709,21 +2743,6 @@ def user_facing_failure(
     )
 
 
-def troubleshooting_skill_available(workdir: Path | None = None) -> bool:
-    """Check only supported local skill locations; never invoke a backend to check."""
-    roots = [skill_dir()]
-    if workdir is not None:
-        roots.append(workdir)
-    for root in roots:
-        for relative in (
-            ".agents/skills/tag-troubleshoot/SKILL.md",
-            ".claude/skills/tag-troubleshoot/SKILL.md",
-        ):
-            if (root / relative).is_file():
-                return True
-    return False
-
-
 def _modal_text(value: str, limit: int = 2_900) -> str:
     if len(value) <= limit:
         return value
@@ -2734,48 +2753,31 @@ def _modal_text(value: str, limit: int = 2_900) -> str:
 def report_preview_modal(
     report: ErrorReport,
     *,
-    mode: str,
     private_metadata: dict[str, str],
-    skill_available: bool = False,
 ) -> dict[str, Any]:
     """Build a Slack modal using selectable text; Slack has no clipboard button."""
-    troubleshooting = mode == "troubleshoot"
-    text = (
-        build_troubleshooting_prompt(report, skill_available=skill_available)
-        if troubleshooting
-        else report.report_text()
-    )
-    description = (
-        "Review the prompt before giving it to a coding agent. A local agent must have access to the machine running Tag."
-        if troubleshooting
-        else "Copy your report, join Hover Community, and share it with the developers. Review the report before sharing. Nothing has been sent yet."
-    )
-    text_label = "Troubleshooting prompt" if troubleshooting else "Sanitized report"
-    text_action = "troubleshooting_prompt" if troubleshooting else "report_text"
-    callback_id = TROUBLESHOOT_VIEW_ID if troubleshooting else REPORT_VIEW_ID
-    submit = "Review prompt" if troubleshooting else "Review report"
     return {
         "type": "modal",
-        "callback_id": callback_id,
-        "title": {"type": "plain_text", "text": "Troubleshoot Tag" if troubleshooting else "Report issue"},
-        "submit": {"type": "plain_text", "text": submit},
+        "callback_id": REPORT_VIEW_ID,
+        "title": {"type": "plain_text", "text": "Report issue"},
+        "submit": {"type": "plain_text", "text": "Review report"},
         "close": {"type": "plain_text", "text": "Close"},
         "private_metadata": json.dumps(private_metadata, separators=(",", ":")),
         "blocks": [
-            {"type": "section", "text": {"type": "mrkdwn", "text": description}},
+            {"type": "section", "text": {"type": "mrkdwn", "text": "Copy your report, join Hover Community, and share it with the developers. Review the report before sharing. Nothing has been sent yet."}},
             {
                 "type": "input",
                 "block_id": "tag_report_text",
-                "label": {"type": "plain_text", "text": text_label},
+                "label": {"type": "plain_text", "text": "Sanitized report"},
                 "hint": {
                     "type": "plain_text",
                     "text": "Slack does not provide a clipboard action here. Select the text to copy it.",
                 },
                 "element": {
                     "type": "plain_text_input",
-                    "action_id": text_action,
+                    "action_id": "report_text",
                     "multiline": True,
-                    "initial_value": _modal_text(text),
+                    "initial_value": _modal_text(report.report_text()),
                     "max_length": 3_000,
                 },
             },
@@ -3106,8 +3108,6 @@ def create_app(
         body: dict[str, Any],
         client: Any,
         logger: Any,
-        *,
-        mode: str,
     ) -> None:
         report, user_id = authorized_report(body, logger)
         if report is None:
@@ -3122,16 +3122,13 @@ def create_app(
             "channel": report.origin.channel_id,
             "thread_ts": report.origin.thread_ts,
             "user": user_id,
-            "mode": mode,
         }
         try:
             client.views_open(
                 trigger_id=trigger_id,
                 view=report_preview_modal(
                     report,
-                    mode=mode,
                     private_metadata=metadata,
-                    skill_available=troubleshooting_skill_available(default_workdir()),
                 ),
             )
         except Exception as exc:  # noqa: BLE001 - recovery UI must not stop the listener
@@ -3142,8 +3139,6 @@ def create_app(
         body: dict[str, Any],
         client: Any,
         logger: Any,
-        *,
-        mode: str,
     ) -> None:
         user_id = body.get("user", {}).get("id", "")
         try:
@@ -3168,42 +3163,20 @@ def create_app(
         ):
             ack(response_action="errors", errors={"tag_report_text": "This channel is no longer allowed."})
             return
-        block_id = "tag_report_text"
-        action_id = "troubleshooting_prompt" if mode == "troubleshoot" else "report_text"
-        supplied = _view_input_value(body["view"], block_id, action_id)
+        supplied = _view_input_value(body["view"], "tag_report_text", "report_text")
         context = sanitize_user_context(_view_input_value(body["view"], "tag_user_context", "user_context"))
-        skill_available = troubleshooting_skill_available(default_workdir())
-        original = (
-            build_troubleshooting_prompt(report, skill_available=skill_available)
-            if mode == "troubleshoot"
-            else report.report_text()
-        )
+        original = report.report_text()
         if not supplied or supplied == _modal_text(original):
-            supplied = (
-                build_troubleshooting_prompt(
-                    report,
-                    skill_available=skill_available,
-                    user_context=context,
-                )
-                if mode == "troubleshoot"
-                else report.report_text(context)
-            )
+            supplied = report.report_text(context)
         elif context:
             context_block = f"User-provided context:\n{context}"
             if context_block not in supplied:
                 supplied = f"{supplied.rstrip()}\n\n{context_block}"
         ack()
-        if mode == "troubleshoot":
-            text = (
-                "Troubleshooting prompt ready. Nothing was sent and Tag cannot track whether an external agent "
-                "completes the repair. Select the text below and give it to an agent with access to the machine running Tag.\n\n"
-                + supplied
-            )
-        else:
-            text = (
-                "Report preview — nothing has been sent. Join Hover Community and share this reviewed text with the developers.\n\n"
-                + supplied
-            )
+        text = (
+            "Report preview — nothing has been sent. Join Hover Community and share this reviewed text with the developers.\n\n"
+            + supplied
+        )
         try:
             client.chat_postEphemeral(
                 channel=report.origin.channel_id,
@@ -3217,12 +3190,27 @@ def create_app(
     @app.action(REPORT_ISSUE_ACTION_ID)
     def report_issue_action(ack: Any, body: dict[str, Any], client: Any, logger: Any) -> None:
         ack()
-        open_report_modal(body, client, logger, mode="report")
+        open_report_modal(body, client, logger)
 
     @app.action(FIX_WITH_AGENT_ACTION_ID)
     def fix_with_agent_action(ack: Any, body: dict[str, Any], client: Any, logger: Any) -> None:
         ack()
-        open_report_modal(body, client, logger, mode="troubleshoot")
+        report, user_id = authorized_report(body, logger)
+        if report is None:
+            report_action_failure(client, report, user_id, body, logger)
+            return
+        try:
+            message = {
+                "channel": report.origin.channel_id,
+                "thread_ts": report.origin.thread_ts,
+                "text": build_troubleshooting_prompt(report),
+            }
+            if is_direct_message_channel(report.origin.channel_id):
+                client.chat_postMessage(**message)
+            else:
+                client.chat_postEphemeral(user=user_id, **message)
+        except Exception as exc:  # noqa: BLE001 - recovery UI must not stop the listener
+            logger.warning("Could not show private Tag troubleshooting prompt: %s", exc)
 
     @app.action(JOIN_COMMUNITY_ACTION_ID)
     def join_community_action(ack: Any) -> None:
@@ -3230,11 +3218,7 @@ def create_app(
 
     @app.view(REPORT_VIEW_ID)
     def submit_report_view(ack: Any, body: dict[str, Any], client: Any, logger: Any) -> None:
-        submit_report_preview(ack, body, client, logger, mode="report")
-
-    @app.view(TROUBLESHOOT_VIEW_ID)
-    def submit_troubleshoot_view(ack: Any, body: dict[str, Any], client: Any, logger: Any) -> None:
-        submit_report_preview(ack, body, client, logger, mode="troubleshoot")
+        submit_report_preview(ack, body, client, logger)
 
     @app.event("agent_session_stopped")
     def handle_agent_session_stopped(
@@ -3992,14 +3976,12 @@ def create_app(
                 if not streamed:
                     if answer_stream is not None:
                         answer_stream.abort()
-                    post_final_reply(
-                        client,
-                        channel,
-                        thread_ts,
-                        answer,
-                        indicator.message_ts,
-                        footer_blocks,
-                    )
+                    if succeeded or answer.startswith(("Stopped.", "Stop requested")):
+                        post_final_reply(client, channel, thread_ts, answer, indicator.message_ts, footer_blocks)
+                    else:
+                        post_private_failure(
+                            client, channel, thread_ts, user_id, answer, indicator.message_ts, footer_blocks
+                        )
                 if succeeded:
                     upload_errors = upload_generated_images(
                         client,
@@ -4024,10 +4006,11 @@ def create_app(
             indicator.clear()
             if answer_stream is not None:
                 answer_stream.abort()
-            post_final_reply(
+            post_private_failure(
                 client,
                 channel,
                 thread_ts,
+                user_id,
                 str(exc),
                 indicator.message_ts,
                 None,
@@ -4069,10 +4052,11 @@ def create_app(
                 max_timeout,
                 backend_error_code,
             )
-            post_final_reply(
+            post_private_failure(
                 client,
                 channel,
                 thread_ts,
+                user_id,
                 answer,
                 indicator.message_ts,
                 failure_action_blocks(

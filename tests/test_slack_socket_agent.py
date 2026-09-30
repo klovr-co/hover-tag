@@ -354,7 +354,7 @@ class SlackAttachmentLimitTests(unittest.TestCase):
         working_indicator.assert_not_called()
         run_backend.assert_not_called()
 
-    def test_download_discovered_oversize_gets_direct_reply_without_retry(self) -> None:
+    def test_download_discovered_oversize_gets_private_reply_without_retry(self) -> None:
         fake_app = FakeApp()
         client = MagicMock()
         indicator = MagicMock()
@@ -389,9 +389,11 @@ class SlackAttachmentLimitTests(unittest.TestCase):
 
         indicator.clear.assert_called_once()
         run_backend.assert_not_called()
-        posted = client.chat_postMessage.call_args.kwargs
+        client.chat_postMessage.assert_not_called()
+        posted = client.chat_postEphemeral.call_args.kwargs
+        self.assertEqual("UOWNER", posted["user"])
         self.assertEqual(str(limit_error), posted["text"])
-        self.assertIsNone(posted["blocks"])
+        self.assertEqual("section", posted["blocks"][0]["type"])
 
 
 class SlackOutputArtifactTests(unittest.TestCase):
@@ -1125,6 +1127,11 @@ class SlackGeneratedImageTests(unittest.TestCase):
             )
 
         client.files_upload_v2.assert_not_called()
+        client.chat_postMessage.assert_not_called()
+        private = client.chat_postEphemeral.call_args.kwargs
+        self.assertEqual("UOWNER", private["user"])
+        self.assertIn("Tag couldn't complete this request", private["text"])
+        self.assertEqual("actions", private["blocks"][-1]["type"])
 
 
 class SlackReplyChunkingTests(unittest.TestCase):
@@ -1143,6 +1150,16 @@ class SlackReplyChunkingTests(unittest.TestCase):
 
 
 class SlackFailureReplyTests(unittest.TestCase):
+    def test_private_failure_removes_public_progress_placeholder(self) -> None:
+        client = MagicMock()
+        slack_socket_agent.post_private_failure(
+            client, "C1", "1.0", "UOWNER", "Tag couldn't complete this request.", "1.1"
+        )
+
+        client.chat_postMessage.assert_not_called()
+        client.chat_delete.assert_called_once_with(channel="C1", ts="1.1")
+        self.assertEqual("UOWNER", client.chat_postEphemeral.call_args.kwargs["user"])
+
     def test_timeout_copy_distinguishes_idle_and_maximum_deadlines(self) -> None:
         idle = slack_socket_agent.user_facing_failure(
             "Tag backend timed out: no backend activity for 420s", 420, "IDLE", 3600
@@ -1195,7 +1212,6 @@ class SlackFailureReplyTests(unittest.TestCase):
         )
         modal = slack_socket_agent.report_preview_modal(
             report,
-            mode="report",
             private_metadata={"reference": "ABC12345"},
         )
 
@@ -1316,7 +1332,7 @@ class SlackFailureReplyTests(unittest.TestCase):
         self.assertIn("Summarize token=<redacted>", preview)
         self.assertNotIn("xoxb-secret", preview)
 
-    def test_troubleshooting_submission_regenerates_a_truncated_initial_value(self) -> None:
+    def test_fix_action_posts_prompt_only_to_original_requester(self) -> None:
         fake_app = FakeApp()
         client = MagicMock()
         logger = MagicMock()
@@ -1324,7 +1340,6 @@ class SlackFailureReplyTests(unittest.TestCase):
             "ABC12345",
             "backend failed",
             backend="codex",
-            error_events=tuple(f"event {index}: " + "x" * 220 for index in range(5)),
             origin=ReportOrigin(channel_id="C1", requester_id="UOWNER"),
         )
         with tempfile.TemporaryDirectory() as raw_dir:
@@ -1334,45 +1349,34 @@ class SlackFailureReplyTests(unittest.TestCase):
                 os.environ,
                 {"SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_IDS": "C1"},
                 clear=True,
-            ), patch.object(slack_socket_agent, "troubleshooting_skill_available", return_value=False):
+            ):
                 slack_socket_agent.create_app(
                     "codex",
                     30,
-                    frozenset({"UOWNER"}),
+                    frozenset({"UOWNER", "UOTHER"}),
                     report_store=store,
                 )
-                handler = fake_app.views[slack_socket_agent.TROUBLESHOOT_VIEW_ID]
-                original = slack_socket_agent.build_troubleshooting_prompt(
-                    report,
-                    skill_available=False,
-                )
-                self.assertGreater(len(original), 2_900)
+                handler = fake_app.actions[slack_socket_agent.FIX_WITH_AGENT_ACTION_ID]
                 ack = MagicMock()
-                handler(
-                    ack,
-                    {
-                        "user": {"id": "UOWNER"},
-                        "view": {
-                            "private_metadata": json.dumps({"reference": "ABC12345"}),
-                            "state": {
-                                "values": {
-                                    "tag_report_text": {
-                                        "troubleshooting_prompt": {
-                                            "value": slack_socket_agent._modal_text(original),
-                                        }
-                                    }
-                                }
-                            },
-                        },
-                    },
-                    client,
-                    logger,
-                )
+                body = {
+                    "user": {"id": "UOTHER"},
+                    "channel": {"id": "C1"},
+                    "actions": [{"value": json.dumps({"reference": "ABC12345"})}],
+                }
+                handler(ack, body, client, logger)
+                client.chat_postEphemeral.reset_mock()
+                body["user"] = {"id": "UOWNER"}
+                handler(ack, body, client, logger)
 
-        ack.assert_called_once_with()
-        preview = client.chat_postEphemeral.call_args.kwargs["text"]
-        self.assertIn(original, preview)
-        self.assertNotIn("[Text truncated; use the report reference to request it again]", preview)
+        self.assertEqual(2, ack.call_count)
+        client.views_open.assert_not_called()
+        client.chat_postMessage.assert_not_called()
+        client.chat_postEphemeral.assert_called_once()
+        private = client.chat_postEphemeral.call_args.kwargs
+        self.assertEqual("UOWNER", private["user"])
+        self.assertEqual("C1", private["channel"])
+        self.assertIn("Help me fix this failed Tag request", private["text"])
+        self.assertIn("ABC12345", private["text"])
 
     def test_retry_button_contains_only_request_identity(self) -> None:
         blocks = slack_socket_agent.retry_button_blocks(
