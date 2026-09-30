@@ -53,6 +53,8 @@
     "scripts/slack_post_message.py",
     "scripts/slack_search_scope.py",
     "scripts/slack_socket_agent.py",
+    "scripts/tag_activity.py",
+    "scripts/tag_activity_details.py",
     "scripts/tag_cli.py",
     "scripts/tag_config.py",
     "scripts/tag_control.py",

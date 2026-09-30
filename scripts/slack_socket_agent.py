@@ -42,6 +42,7 @@ try:
     )
     from .slack_mrkdwn import to_mrkdwn
     from .slack_search_scope import ScopePlan, SearchIntent, plan_search_scopes
+    from .tag_activity import ACTIVITY_DETAIL_ACTION_ID, ActivityStore, activity_detail_modal, activity_modal
     from .tag_paths import tag_temp_dir
     from . import slack_channels
 except ImportError:  # Direct script execution does not create a package context.
@@ -62,6 +63,7 @@ except ImportError:  # Direct script execution does not create a package context
     )
     from slack_mrkdwn import to_mrkdwn
     from slack_search_scope import ScopePlan, SearchIntent, plan_search_scopes
+    from tag_activity import ACTIVITY_DETAIL_ACTION_ID, ActivityStore, activity_detail_modal, activity_modal
     from tag_paths import tag_temp_dir
     import slack_channels
 
@@ -89,6 +91,7 @@ SUPPORTED_REASONING_EFFORTS = ("minimal", "low", "medium", "high", "xhigh", "max
 DEFAULT_REASONING_EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultra")
 DEFAULT_CONFIG_VALUE = "__opentag_default__"
 SETTINGS_ACTION_ID = "opentag_change_agent_settings"
+ACTIVITY_ACTION_ID = "opentag_view_activity"
 SETTINGS_MODEL_ACTION_ID = "opentag_settings_model"
 SETTINGS_EFFORT_ACTION_ID = "opentag_settings_effort"
 SETTINGS_FAST_ACTION_ID = "opentag_settings_fast_mode"
@@ -884,25 +887,50 @@ def settings_button_blocks(
     channel: str,
     thread_ts: str,
     direct_message: bool = False,
+    activity_run_id: str | None = None,
 ) -> list[dict[str, Any]]:
     metadata = {"team": team, "channel": channel, "thread_ts": thread_ts}
     if direct_message:
         metadata["direct_message"] = True
     value = json.dumps(metadata, separators=(",", ":"))
+    elements = [
+        {
+            "type": "button",
+            "action_id": SETTINGS_ACTION_ID,
+            "text": {"type": "plain_text", "text": "Configure"},
+            "value": value,
+        }
+    ]
+    if activity_run_id:
+        elements.append({
+            "type": "button",
+            "action_id": ACTIVITY_ACTION_ID,
+            "text": {"type": "plain_text", "text": "Activity"},
+            "value": json.dumps({**metadata, "run_id": activity_run_id}, separators=(",", ":")),
+        })
     return [
         {
             "type": "actions",
             "block_id": f"opentag_settings_{thread_ts}",
-            "elements": [
-                {
-                    "type": "button",
-                    "action_id": SETTINGS_ACTION_ID,
-                    "text": {"type": "plain_text", "text": "Configure"},
-                    "value": value,
-                }
-            ],
+            "elements": elements,
         },
     ]
+
+
+def activity_button_blocks(
+    *, team: str, channel: str, thread_ts: str, run_id: str,
+    direct_message: bool = False,
+) -> list[dict[str, Any]]:
+    metadata: dict[str, Any] = {
+        "team": team, "channel": channel, "thread_ts": thread_ts, "run_id": run_id,
+    }
+    if direct_message:
+        metadata["direct_message"] = True
+    return [{"type": "actions", "elements": [{
+        "type": "button", "action_id": ACTIVITY_ACTION_ID,
+        "text": {"type": "plain_text", "text": "Activity"},
+        "value": json.dumps(metadata, separators=(",", ":")),
+    }]}]
 
 
 def output_artifact_button_blocks(
@@ -2144,6 +2172,7 @@ def run_backend_events(
     scope_plan: ScopePlan | None = None,
     slack_search_grant: ScopePlan | None = None,
     on_error: Callable[[str | None, str], None] | None = None,
+    on_trace_event: Callable[[dict[str, Any]], None] | None = None,
 ) -> tuple[str, bool]:
     """Consume normalized lifecycle events and forward only final-answer text."""
     if max_timeout is None:
@@ -2298,13 +2327,16 @@ def run_backend_events(
                         except Exception as exc:  # noqa: BLE001 - fail closed if Slack cannot ask
                             diagnostics.append(f"Could not present approval: {exc}")
                             active_run.resolve_approval(approval_id, approved=False)
-            elif event_type in {"activity_start", "activity_complete"} and on_activity:
+            elif event_type in {"activity_start", "activity_complete"}:
                 activity_id = event.get("activity_id")
                 label = event.get("label")
                 if isinstance(activity_id, str) and isinstance(label, str):
+                    if on_trace_event:
+                        on_trace_event(event)
                     wait_label = event.get("wait_label")
-                    on_activity(event_type, activity_id, label,
-                                wait_label if isinstance(wait_label, str) else "This operation is still running…")
+                    if on_activity:
+                        on_activity(event_type, activity_id, label,
+                                    wait_label if isinstance(wait_label, str) else "This operation is still running…")
             elif event_type == "turn_complete":
                 status = event.get("status")
                 if isinstance(status, str):
@@ -3022,11 +3054,13 @@ def create_app(
     max_timeout: int | None = None,
     session_journal: SlackSessionJournal | None = None,
     report_store: ErrorReportStore | None = None,
+    activity_store: ActivityStore | None = None,
 ) -> App:
     if max_timeout is None:
         max_timeout = int(os.getenv("OPENTAG_MAX_TIMEOUT_SECONDS", "3600"))
     app = App(token=require_env("SLACK_BOT_TOKEN"))
     report_store = report_store or default_report_store()
+    activity_store = activity_store or ActivityStore()
     fallback_reports: dict[str, ErrorReport] = {}
 
     def stored_report(reference: str) -> ErrorReport | None:
@@ -3437,6 +3471,83 @@ def create_app(
         except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
             logger.warning("Could not open Open Tag settings modal: %s", exc)
 
+    @app.action(ACTIVITY_ACTION_ID)
+    def open_activity(ack: Any, body: dict[str, Any], client: Any, logger: Any) -> None:
+        ack()
+        try:
+            metadata = json.loads(body["actions"][0]["value"])
+            user_id = body["user"]["id"]
+            channel = metadata["channel"]
+            thread_ts = metadata["thread_ts"]
+            run_id = metadata["run_id"]
+            if not all(isinstance(value, str) for value in (
+                user_id, channel, thread_ts, run_id, metadata["team"],
+            )):
+                return
+            if not slack_user_allowed(user_id, allowed_user_ids):
+                return
+            if not slack_conversation_allowed(
+                channel, direct_message=is_direct_message_channel(channel),
+            ):
+                return
+            action_channel = body.get("channel", {}).get("id") or body.get("container", {}).get("channel_id")
+            action_team = body.get("team", {}).get("id") or body.get("team_id")
+            if (action_channel and action_channel != channel) or (action_team and action_team != metadata["team"]):
+                return
+            record = activity_store.get(run_id)
+            if record is None:
+                client.chat_postEphemeral(
+                    channel=channel, user=user_id, thread_ts=thread_ts,
+                    text="Activity for this request is no longer available.",
+                )
+                return
+            if (
+                record["requester"] != user_id
+                or record["team"] != metadata["team"]
+                or record["channel"] != channel
+                or record["thread_ts"] != thread_ts
+            ):
+                logger.warning("Ignoring Tag activity action with mismatched request identity")
+                return
+            client.views_open(trigger_id=body["trigger_id"], view=activity_modal(record))
+        except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            logger.warning("Could not open Tag activity modal: %s", exc)
+
+    @app.action(ACTIVITY_DETAIL_ACTION_ID)
+    def open_activity_detail(ack: Any, body: dict[str, Any], client: Any, logger: Any) -> None:
+        ack()
+        try:
+            metadata = json.loads(body["view"]["private_metadata"])
+            user_id = body["user"]["id"]
+            channel = metadata["channel"]
+            team = metadata["team"]
+            thread_ts = metadata["thread_ts"]
+            run_id = metadata["run_id"]
+            index = int(body["actions"][0]["value"])
+            if not all(isinstance(value, str) for value in (
+                user_id, channel, team, thread_ts, run_id,
+            )) or index < 0:
+                return
+            if not slack_user_allowed(user_id, allowed_user_ids) or not slack_conversation_allowed(
+                channel, direct_message=is_direct_message_channel(channel),
+            ):
+                return
+            action_team = body.get("team", {}).get("id") or body.get("team_id")
+            if action_team and action_team != team:
+                return
+            record = activity_store.get(run_id)
+            if record is None or not (
+                record["requester"] == user_id
+                and record["team"] == team
+                and record["channel"] == channel
+                and record["thread_ts"] == thread_ts
+                and index < len(record["events"])
+            ):
+                return
+            client.views_push(trigger_id=body["trigger_id"], view=activity_detail_modal(record, index))
+        except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            logger.warning("Could not open Tag activity detail: %s", exc)
+
     # Keep the exact listener for buttons posted by older Tag versions while
     # accepting the indexed IDs required for multiple actions in one block.
     @app.action(OPEN_LOCAL_ARTIFACT_ACTION_ID)
@@ -3791,6 +3902,27 @@ def create_app(
         backend_error_code: str | None = None
         backend_error_events: list[str] = []
         failure_stage = "request preparation"
+        activity_run_id: str | None = None
+
+        def trace_activity(trace_event: dict[str, Any]) -> None:
+            nonlocal activity_run_id
+            if activity_run_id is None:
+                return
+            try:
+                activity_store.observe(activity_run_id, trace_event)
+            except OSError as exc:
+                logger.warning("Could not save Tag activity: %s", exc)
+                activity_run_id = None
+
+        def finish_activity(outcome: str) -> None:
+            nonlocal activity_run_id
+            if activity_run_id is None:
+                return
+            try:
+                activity_store.finish(activity_run_id, outcome)
+            except OSError as exc:
+                logger.warning("Could not finish Tag activity: %s", exc)
+                activity_run_id = None
 
         def capture_backend_error(code: str | None, _detail: str) -> None:
             nonlocal backend_error_code
@@ -3827,6 +3959,14 @@ def create_app(
                     backend == "codex"
                     and os.getenv("OPENTAG_CODEX_TRANSPORT", "app-server").strip().lower() == "app-server"
                 )
+                if app_server_selected:
+                    try:
+                        activity_run_id = activity_store.create(
+                            team=team, channel=channel, thread_ts=thread_ts,
+                            request_ts=event["ts"], requester=user_id,
+                        )
+                    except OSError as exc:
+                        logger.warning("Could not start Tag activity record: %s", exc)
                 if stream_available:
                     answer_stream = SlackAnswerStream(
                         client,
@@ -3868,6 +4008,7 @@ def create_app(
                         scope_plan=scope_plan,
                         slack_search_grant=slack_search_grant,
                         on_error=capture_backend_error,
+                        on_trace_event=trace_activity if activity_run_id else None,
                     )
                 else:
                     answer, succeeded = run_backend(
@@ -3887,6 +4028,10 @@ def create_app(
                         slack_search_grant=slack_search_grant,
                         on_error=capture_backend_error,
                     )
+                finish_activity(
+                    "completed" if succeeded else
+                    "interrupted" if answer.startswith(("Stopped.", "Stop requested")) else "failed"
+                )
                 artifact_button_blocks: list[dict[str, Any]] = []
                 if succeeded:
                     artifact_paths, _artifact_errors = load_output_artifacts(
@@ -3922,10 +4067,14 @@ def create_app(
                             channel=channel,
                             thread_ts=thread_ts,
                             direct_message=direct_message,
+                            activity_run_id=activity_run_id,
                         )
                     footer_blocks = footer_blocks or None
                 elif answer.startswith("Stopped.") or answer.startswith("Stop requested"):
-                    footer_blocks = None
+                    footer_blocks = activity_button_blocks(
+                        team=team, channel=channel, thread_ts=thread_ts,
+                        run_id=activity_run_id, direct_message=direct_message,
+                    ) if activity_run_id else None
                 else:
                     error_reference = new_error_reference()
                     logger.error("Tag backend failure [%s]: %s", error_reference, answer)
@@ -3968,6 +4117,11 @@ def create_app(
                         error_reference=error_reference,
                         direct_message=direct_message,
                     )
+                    if activity_run_id:
+                        footer_blocks += activity_button_blocks(
+                            team=team, channel=channel, thread_ts=thread_ts,
+                            run_id=activity_run_id, direct_message=direct_message,
+                        )
                 streamed = (
                     answer_stream is not None
                     and succeeded
@@ -4003,6 +4157,7 @@ def create_app(
                             ),
                         )
         except AttachmentLimitError as exc:
+            finish_activity("failed")
             indicator.clear()
             if answer_stream is not None:
                 answer_stream.abort()
@@ -4013,9 +4168,13 @@ def create_app(
                 user_id,
                 str(exc),
                 indicator.message_ts,
-                None,
+                activity_button_blocks(
+                    team=team, channel=channel, thread_ts=thread_ts,
+                    run_id=activity_run_id, direct_message=direct_message,
+                ) if activity_run_id else None,
             )
         except Exception as exc:
+            finish_activity("failed")
             error_reference = new_error_reference()
             logger.exception("Open Tag failed [%s]", error_reference)
             indicator.clear()
@@ -4052,6 +4211,19 @@ def create_app(
                 max_timeout,
                 backend_error_code,
             )
+            footer_blocks = failure_action_blocks(
+                team=team,
+                channel=channel,
+                thread_ts=thread_ts,
+                request_ts=event["ts"],
+                error_reference=error_reference,
+                direct_message=direct_message,
+            )
+            if activity_run_id:
+                footer_blocks += activity_button_blocks(
+                    team=team, channel=channel, thread_ts=thread_ts,
+                    run_id=activity_run_id, direct_message=direct_message,
+                )
             post_private_failure(
                 client,
                 channel,
@@ -4059,14 +4231,7 @@ def create_app(
                 user_id,
                 answer,
                 indicator.message_ts,
-                failure_action_blocks(
-                    team=team,
-                    channel=channel,
-                    thread_ts=thread_ts,
-                    request_ts=event["ts"],
-                    error_reference=error_reference,
-                    direct_message=direct_message,
-                ),
+                footer_blocks,
             )
         finally:
             output_manifest.unlink(missing_ok=True)
