@@ -3,6 +3,7 @@
   "files": [
     ".agents/skills/tag-troubleshoot/SKILL.md",
     ".env.example",
+    "CHANGELOG.md",
     "LICENSE",
     "NOTICE",
     "README.md",
