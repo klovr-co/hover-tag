@@ -366,6 +366,33 @@ class CodexAppServer:
         self.interrupt_sent = False
         self.reader_threads: list[threading.Thread] = []
 
+    def model_catalog(self) -> list[dict[str, Any]]:
+        """Read models for the signed-in account without creating a thread or turn."""
+        mapper = CodexEventMapper()
+        deadline = time.monotonic() + self.timeout
+        try:
+            self._start()
+            self._request("initialize", {"clientInfo": {"name": "tag", "version": "0.1"}},
+                          mapper, lambda event: None, deadline)
+            self._notify("initialized", {})
+            models: list[dict[str, Any]] = []
+            cursor = None
+            for _ in range(10):
+                result = self._request("model/list", {"cursor": cursor} if cursor else {},
+                                       mapper, lambda event: None, deadline)
+                if not isinstance(result, dict) or not isinstance(result.get("data"), list):
+                    raise CodexAppServerError("Codex returned an invalid model/list response")
+                models.extend(item for item in result["data"] if isinstance(item, dict))
+                next_cursor = result.get("nextCursor")
+                if not next_cursor:
+                    return models
+                if not isinstance(next_cursor, str) or next_cursor == cursor:
+                    break
+                cursor = next_cursor
+            raise CodexAppServerError("Codex model/list pagination did not finish")
+        finally:
+            self.close()
+
     def run(
         self,
         prompt: str,

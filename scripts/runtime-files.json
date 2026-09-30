@@ -56,6 +56,7 @@
     "scripts/slack_socket_agent.py",
     "scripts/tag_activity.py",
     "scripts/tag_activity_details.py",
+    "scripts/tag_activity_labels.py",
     "scripts/tag_cli.py",
     "scripts/tag_config.py",
     "scripts/tag_control.py",

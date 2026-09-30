@@ -40,6 +40,28 @@ class JsonLineDecoderTests(unittest.TestCase):
             decoder.finish()
 
 
+class ModelCatalogTests(unittest.TestCase):
+    def test_catalog_reads_all_pages_without_starting_an_agent_task(self) -> None:
+        server = CodexAppServer(["codex", "app-server"], cwd=Path.cwd(), timeout=10)
+        with patch.object(server, "_start"), patch.object(server, "_notify"), patch.object(server, "close") as close, patch.object(
+            server, "_request", side_effect=[{}, {"data": [{"model": "first"}], "nextCursor": "page-2"},
+                                            {"data": [{"model": "second", "isDefault": True}], "nextCursor": None}],
+        ) as request:
+            self.assertEqual([model["model"] for model in server.model_catalog()], ["first", "second"])
+            self.assertEqual([call.args[0] for call in request.call_args_list], ["initialize", "model/list", "model/list"])
+            self.assertEqual(request.call_args_list[-1].args[1], {"cursor": "page-2"})
+        close.assert_called_once()
+
+    def test_failed_catalog_lookup_cleans_up_and_can_be_retried(self) -> None:
+        server = CodexAppServer(["codex", "app-server"], cwd=Path.cwd(), timeout=10)
+        with patch.object(server, "_start"), patch.object(server, "_notify"), patch.object(server, "close") as close, patch.object(
+            server, "_request", side_effect=[{}, CodexAppServerError("unavailable")],
+        ):
+            with self.assertRaises(CodexAppServerError):
+                server.model_catalog()
+        close.assert_called_once()
+
+
 class CodexEventMapperTests(unittest.TestCase):
     def test_streams_only_explicit_final_answer_messages(self) -> None:
         mapper = CodexEventMapper()

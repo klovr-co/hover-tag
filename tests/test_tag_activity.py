@@ -6,11 +6,37 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.tag_activity import ActivityStore, MAX_EVENTS, activity_detail_modal, activity_modal
-from scripts.tag_activity_details import MAX_DETAIL_CHARS, item_activity_details
+from scripts.tag_activity import ActivityStore, MAX_EVENTS
+from scripts.tag_activity_details import MAX_DETAIL_CHARS, command_identity, item_activity_details
 
 
 class ActivityStoreTests(unittest.TestCase):
+    def test_short_command_names_keep_code_arguments_and_directories_private(self) -> None:
+        cases = {
+            "/bin/zsh -lc 'cd /private/work && python scripts/build.py --token secret-value'": "python build.py",
+            "python3 - <<'PY'\nprint('private body')\nPY": "python3 (inline)",
+            "python -c 'print(123)'": "python (inline)",
+            "python -m pytest /private/tests": "python -m pytest",
+            "cat /private/runtime-agent.md | head -20": "cat runtime-agent.md | head",
+            "API_TOKEN=private-value python script.py --private-argument": "python script.py",
+            "node /private/build.js private-argument": "node build.js",
+            "sed -n '1,20p' /private/file": "sed",
+            "$(private-command) argument": "Command",
+        }
+        for command, expected in cases.items():
+            with self.subTest(command=command):
+                self.assertEqual(command_identity(command), expected)
+
+    def test_file_change_identity_contains_only_filenames(self) -> None:
+        details = item_activity_details({
+            "type": "fileChange", "changes": [
+                {"path": "/private/work/app.py", "diff": "private content"},
+                {"path": "/private/work/test_app.py", "diff": "other content"},
+            ],
+        }, completed=True)
+        self.assertEqual(details["tool"], "File change · app.py, test_app.py")
+        self.assertIn("private content", details["output"])
+
     def test_command_output_and_large_values_are_bounded(self) -> None:
         details = item_activity_details({
             "type": "commandExecution", "command": "echo hello", "cwd": "/workspace",
@@ -33,7 +59,7 @@ class ActivityStoreTests(unittest.TestCase):
         }, completed=True)
         self.assertIn("first line\nsecond line", lines["output"])
 
-    def test_requester_modal_shows_redacted_tool_input_and_result(self) -> None:
+    def test_record_keeps_redacted_tool_input_and_result(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
             store = ActivityStore(Path(raw_dir) / "activity")
             run_id = store.create(
@@ -54,15 +80,13 @@ class ActivityStoreTests(unittest.TestCase):
                 "details": {"output": '{"message_id":"sent-123","token":"hidden-token"}'},
             })
             record = ActivityStore(store.root).get(run_id)
-            modal = activity_modal(record)
-            self.assertNotIn("person@example.com", json.dumps(modal))
-            self.assertEqual("Details", modal["blocks"][2]["accessory"]["text"]["text"])
-            rendered = json.dumps(activity_detail_modal(record, 0))
+            rendered = json.dumps(record)
             self.assertIn("person@example.com", rendered)
             self.assertIn("sent-123", rendered)
             self.assertNotIn("hidden-password", rendered)
             self.assertNotIn("hidden-token", rendered)
             self.assertEqual("gmail/send_email", record["events"][0]["details"]["tool"])
+
 
     def test_persists_only_public_labels_and_bounded_events(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
@@ -94,9 +118,7 @@ class ActivityStoreTests(unittest.TestCase):
             self.assertEqual(1, record["omitted"])
             self.assertEqual("completed", record["events"][0]["status"])
             self.assertEqual("unknown", record["events"][1]["status"])
-            modal = activity_modal(record)
-            self.assertEqual("modal", modal["type"])
-            self.assertNotIn("sensitive", json.dumps(modal))
+            self.assertNotIn("sensitive", json.dumps(record))
             if os.name != "nt":
                 self.assertEqual(0o600, (store.root / f"{run_id}.json").stat().st_mode & 0o777)
 
