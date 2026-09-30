@@ -306,7 +306,9 @@ def discover_codex_models() -> list[CodexModelOption]:
                 "additional_speed_tiers": item.get("additionalSpeedTiers", []),
                 "supported_reasoning_levels": [
                     {"effort": level.get("reasoningEffort")}
-                    for level in item.get("supportedReasoningEfforts", []) if isinstance(level, dict)
+                    for level in (item.get("supportedReasoningEfforts")
+                                  if isinstance(item.get("supportedReasoningEfforts"), list) else [])
+                    if isinstance(level, dict)
                 ],
             } for item in live_models]}
         else:

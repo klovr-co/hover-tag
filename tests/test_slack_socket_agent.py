@@ -3310,6 +3310,24 @@ class SlackAgentSettingsTests(unittest.TestCase):
             # A later cache rewrite cannot bring back the rejected model.
             self.assertEqual(slack_socket_agent.default_agent_settings(slack_socket_agent.discover_codex_models()).model, "gpt-6-astra")
 
+    def test_malformed_live_reasoning_efforts_preserve_catalog(self) -> None:
+        """Malformed optional metadata must not discard other account models."""
+        for efforts in (None, 42, "medium", {"reasoningEffort": "high"},
+                        [None, "high", {}, {"reasoningEffort": "low"}]):
+            with self.subTest(efforts=efforts), patch.dict(os.environ, {}, clear=True):
+                self.live_catalog.return_value = [
+                    {"model": "malformed", "supportedReasoningEfforts": efforts},
+                    {"model": "valid", "isDefault": True,
+                     "supportedReasoningEfforts": [{"reasoningEffort": "medium"}]},
+                ]
+                models = slack_socket_agent.discover_codex_models()
+                self.assertEqual([model.model_id for model in models], ["malformed", "valid"])
+                self.assertEqual(models[0].reasoning_efforts,
+                                 ("low",) if isinstance(efforts, list)
+                                 else slack_socket_agent.DEFAULT_REASONING_EFFORTS)
+                self.assertEqual(models[1].reasoning_efforts, ("medium",))
+                self.assertEqual(slack_socket_agent.default_agent_settings(models).model, "valid")
+
     def test_unavailable_live_catalog_never_promotes_cached_priority_to_default(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir, patch.dict(os.environ, {"CODEX_HOME": raw_dir, "OPENTAG_WORKDIR": raw_dir}, clear=True):
             (Path(raw_dir) / "models_cache.json").write_text(json.dumps({"models": [

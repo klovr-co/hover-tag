@@ -70,7 +70,7 @@ approved automatically by Tag.
 
 ## Follow a task as it works
 
-With Codex, **Agent activity** shows readable tool steps in the Slack thread,
+With Codex App Server, **Agent activity** shows readable tool steps in the Slack thread,
 such as reading a file or reviewing changes. Repeated steps are grouped, and
 the card shows complete when the task succeeds. See the
 [live activity example](../reference/supported-capabilities.md#watch-tag-work).
@@ -85,7 +85,8 @@ the result before asking Tag to try again.
 
 Approval buttons and Stop require Codex App Server, Tag's default Codex
 connection. They are not available with the legacy Codex exec or Claude backends.
-After a run, review the completed activity card and final answer in the thread.
+After a successful run, review the completed activity card and final answer in
+the thread. For failed or stopped requests, review the private recovery message.
 
 ## Choose who and what Tag can access
 
