@@ -289,6 +289,92 @@ class SlackBinaryAttachmentTests(unittest.TestCase):
                 )
 
 
+class RequestAttachmentSelectionTests(unittest.TestCase):
+    def file(self, index, name=None):
+        return {"id": f"F{index}", "name": name or f"image-{index}.png",
+                "mimetype": "image/png", "url_private": f"https://files.slack.com/F{index}"}
+
+    def test_current_upload_ignores_twenty_older_files(self):
+        messages = [{"ts": "1", "files": [self.file(i) for i in range(20)]}]
+        request = {"ts": "2", "files": [self.file(21)], "text": "edit this"}
+        self.assertEqual(slack_socket_agent.select_request_files(messages, request), request["files"])
+
+    def test_followup_uses_latest_generated_group_and_deduplicates(self):
+        latest = self.file(2)
+        messages = [{"files": [self.file(1)]}, {"bot_id": "B1", "files": [latest, latest]}]
+        self.assertEqual(slack_socket_agent.select_request_files(messages, {"text": "try again"}), [latest])
+
+    def test_explicit_older_reference_and_current_upload(self):
+        old, new = self.file(1), self.file(2)
+        for reference in (old["name"], "https://workspace.slack.com/files/U/F1/image-1.png"):
+            with self.subTest(reference=reference):
+                selected = slack_socket_agent.select_request_files(
+                    [{"files": [old]}], {"text": f"compare with {reference}", "files": [new]})
+                self.assertEqual({f["id"] for f in selected}, {"F1", "F2"})
+
+    def test_duplicate_filename_requires_clarification_unless_link_disambiguates(self):
+        messages = [{"files": [self.file(1, "image.png"), self.file(2, "image.png")]}]
+        with self.assertRaisesRegex(slack_socket_agent.AttachmentLimitError, "More than one"):
+            slack_socket_agent.select_request_files(messages, {"text": "edit image.png"})
+        selected = slack_socket_agent.select_request_files(messages, {"text": "edit https://slack.com/files/U/F1/image.png"})
+        self.assertEqual([f["id"] for f in selected], ["F1"])
+
+    def test_explicit_all_retains_limit(self):
+        files = [self.file(i) for i in range(11)]
+        selected = slack_socket_agent.select_request_files(
+            [{"files": files}], {"text": "use all files in this thread"})
+        with self.assertRaisesRegex(slack_socket_agent.AttachmentLimitError, "at most 10"):
+            slack_socket_agent.validate_attachment_metadata(selected)
+
+    def test_paginated_thread_downloads_only_current_upload_and_excludes_future(self):
+        client = MagicMock()
+        client.conversations_replies.side_effect = [
+            {"messages": [{"ts": "1", "files": [self.file(i) for i in range(20)]}],
+             "response_metadata": {"next_cursor": "page2"}},
+            {"messages": [{"ts": "3", "text": "future", "files": [self.file(30)]}]},
+        ]
+        request = {"ts": "2", "text": "edit this", "files": [self.file(21)]}
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"SLACK_BOT_TOKEN": "test"}), patch.object(
+            slack_socket_agent, "download_file_bytes", return_value=b"image"
+        ) as download:
+            text = slack_socket_agent.build_thread_text(client, "C1", "1", Path(directory), request=request)
+        self.assertEqual(download.call_count, 1)
+        self.assertEqual(download.call_args.args[0], "https://files.slack.com/F21")
+        self.assertNotIn("future", text)
+        self.assertIn("Historical attachment, not downloaded", text)
+        self.assertEqual(client.conversations_replies.call_args.kwargs["cursor"], "page2")
+        self.assertEqual(client.conversations_replies.call_args.kwargs["latest"], "2")
+
+    def test_event_without_files_preserves_api_metadata(self):
+        client = MagicMock()
+        client.conversations_replies.return_value = {"messages": [
+            {"ts": "1", "files": [self.file(1)]},
+            {"ts": "2", "files": [self.file(2)]},
+        ]}
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"SLACK_BOT_TOKEN": "test"}), patch.object(
+            slack_socket_agent, "download_file_bytes", return_value=b"image"
+        ) as download:
+            slack_socket_agent.build_thread_text(client, "C1", "1", Path(directory), request={"ts": "2", "text": "edit this"})
+        self.assertEqual(download.call_count, 1)
+        self.assertEqual(download.call_args.args[0], "https://files.slack.com/F2")
+
+    def test_image_with_text_filetype_is_downloaded_once(self):
+        file = {**self.file(1), "filetype": "text"}
+        client = MagicMock()
+        client.conversations_replies.return_value = {"messages": [{"files": [file]}]}
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"SLACK_BOT_TOKEN": "test"}), patch.object(
+            slack_socket_agent, "download_file_bytes", return_value=b"image"
+        ) as download:
+            slack_socket_agent.build_thread_text(client, "C1", "1", Path(directory))
+        self.assertEqual(download.call_count, 1)
+
+    def test_incomplete_pagination_does_not_guess(self):
+        client = MagicMock()
+        client.conversations_replies.return_value = {"messages": [], "has_more": True}
+        with self.assertRaisesRegex(slack_socket_agent.AttachmentLimitError, "complete thread"):
+            slack_socket_agent.build_thread_text(client, "C1", "1", Path("unused"), request={"ts": "2"})
+
+
 class SlackAttachmentLimitTests(unittest.TestCase):
     def test_rejects_too_many_or_too_large_a_combined_attachment_set(self) -> None:
         too_many = [
