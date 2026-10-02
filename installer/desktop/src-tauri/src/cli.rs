@@ -69,15 +69,28 @@ pub fn tool_path() -> std::ffi::OsString {
     std::env::join_paths(dirs).unwrap_or_default()
 }
 
+/// The Python and launcher named by Tag's managed `tag.cmd` (`@"PYTHON" "LAUNCHER" %*`).
+/// Running them directly keeps arguments such as `R&D` or `"` away from cmd.exe.
+pub fn windows_launcher(cli: &Path) -> Option<(PathBuf, PathBuf)> {
+    let text = std::fs::read_to_string(cli).ok()?;
+    let line = text.lines().find(|l| l.trim_start().starts_with("@\""))?;
+    let mut parts = line.trim_start().trim_start_matches('@').split('"').filter(|p| !p.trim().is_empty());
+    let python = PathBuf::from(parts.next()?);
+    let launcher = PathBuf::from(parts.next()?);
+    (parts.next()?.trim() == "%*").then_some((python, launcher))
+}
+
 /// A Command for `tag ARGS`, with plain output and no console window on Windows.
 pub fn command(cli: &Path, args: &[String]) -> Command {
     let is_script = cli.extension().is_some_and(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat"));
-    let mut command = if cfg!(windows) && is_script {
-        let mut c = Command::new("cmd");
-        c.arg("/D").arg("/C").arg(cli);
-        c
-    } else {
-        Command::new(cli)
+    let mut command = match windows_launcher(cli).filter(|_| cfg!(windows) && is_script) {
+        Some((python, launcher)) => {
+            let mut c = Command::new(python);
+            c.arg(launcher);
+            c
+        }
+        // Rust escapes arguments for batch files itself, and refuses ones it can't.
+        None => Command::new(cli),
     };
     command
         .args(args)
@@ -115,6 +128,20 @@ mod tests {
         let kept = tail(&text);
         assert!(kept.len() <= 4000 && kept.chars().all(|c| c == 'é'));
         assert_eq!(tail("short"), "short");
+    }
+
+    #[test]
+    fn reads_the_managed_windows_launcher() {
+        let dir = std::env::temp_dir().join(format!("tag-cli-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cmd = dir.join("tag.cmd");
+        std::fs::write(&cmd, "@rem TAG managed launcher\n@\"C:\\Tag\\python.exe\" \"C:\\Users\\John Smith\\Tag\\bin\\tag-launch.py\" %*\n").unwrap();
+        let (python, launcher) = windows_launcher(&cmd).unwrap();
+        assert_eq!(python, PathBuf::from("C:\\Tag\\python.exe"));
+        assert_eq!(launcher, PathBuf::from("C:\\Users\\John Smith\\Tag\\bin\\tag-launch.py"));
+        std::fs::write(&cmd, "@echo off\nsomething else\n").unwrap();
+        assert!(windows_launcher(&cmd).is_none());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

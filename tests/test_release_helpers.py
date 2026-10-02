@@ -49,8 +49,8 @@ class ReleaseHelperTests(unittest.TestCase):
         self.assertIn("[switch]$DependenciesOnly", script)
         self.assertIn(".venv'", script)
         self.assertIn("Scripts/python.exe", script)
-        self.assertIn("& $uv venv --python $python $venv", script)
-        self.assertIn("& $uv pip install --python $runtimePython -r", script)
+        self.assertIn("Invoke-Native { & $uv venv --python $python $venv }", script)
+        self.assertIn("Invoke-Native { & $uv pip install --python $runtimePython -r", script)
         self.assertIn("requirements-runtime.txt", script)
 
     def test_windows_bootstrap_needs_no_system_python(self) -> None:
@@ -66,6 +66,12 @@ class ReleaseHelperTests(unittest.TestCase):
         self.assertIn("[switch]$RuntimeInfo", script)
         self.assertIn("Write-TagProgress 'tools'", script)
         self.assertIn("Write-TagProgress 'python'", script)
+        # Windows PowerShell 5.1 under 'Stop' fails on any native stderr; every
+        # Python and uv call must go through Invoke-Native.
+        import re
+        for line in script.splitlines():
+            if re.search(r"^\s*& \$(python|uv|runtimePython)\b", line):
+                self.fail("native call outside Invoke-Native: " + line.strip())
 
     def test_installer_output_supports_legacy_console_encodings(self) -> None:
         root = Path(__file__).resolve().parents[1]

@@ -159,7 +159,13 @@ fn default_channel(dir: &std::path::Path) -> String {
 #[tauri::command]
 fn install_start(app: AppHandle, sessions: State<Arc<Sessions>>, channel: String, output: Channel<Output>) -> Result<u32, String> {
     let mut command = installer_command(&app, &channel)?;
-    command.env("TAG_INSTALL_PROGRESS", "jsonl").env("NO_COLOR", "1").env("TERM", "dumb").env("PATH", cli::tool_path());
+    command
+        .env("TAG_INSTALL_PROGRESS", "jsonl")
+        .env("NO_COLOR", "1")
+        .env("TERM", "dumb")
+        .env("PYTHONUTF8", "1")
+        .env("PYTHONIOENCODING", "utf-8")
+        .env("PATH", cli::tool_path());
     let saved = cli::saved_command_file(&config_dir(&app));
     sessions.start(command, true, output, move |line| {
         // Remember the exact command the installer reported, so PATH never matters.
@@ -212,8 +218,17 @@ pub(crate) fn show_window_now(app: &AppHandle) {
 }
 
 pub(crate) fn quit_now(app: &AppHandle) {
-    app.state::<Arc<Sessions>>().stop_all();
-    app.exit(0);
+    // Let setup save its progress and the installer stop before exiting.
+    let sessions = app.state::<Arc<Sessions>>().inner().clone();
+    sessions.stop_all();
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.hide();
+    }
+    let app = app.clone();
+    std::thread::spawn(move || {
+        sessions.wait_all(std::time::Duration::from_secs(6));
+        app.exit(0);
+    });
 }
 
 #[cfg(test)]

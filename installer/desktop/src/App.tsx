@@ -23,6 +23,23 @@ type Screen =
 /** Capabilities this app needs from the installed Tag. */
 const NEEDED = ["list", "setup-jsonl"];
 
+/** Keep the Tags the Swift app restored at login, then let the login service do it. */
+export async function migrateFromSwiftApp(api: Bridge, legacy: string[], existing: string[]) {
+  const version = await api.tag(["version", "--json"]);
+  if (version.code !== 0 || !parseJSON<VersionInfo>(version.stdout).capabilities.includes("autostart-keep")) return false;
+  const keep = legacy.filter((id) => existing.includes(id));
+  if (keep.length && (await api.tag(["autostart", "keep", ...keep, "--json"])).code !== 0) return false;
+  if ((await api.tag(["autostart", "on", "--json"])).code !== 0) return false;
+  // Done only once the result is verified; otherwise the next launch retries.
+  const status = await api.tag(["autostart", "status", "--json"]);
+  if (status.code !== 0) return false;
+  const result = parseJSON<{ enabled: boolean; tags: { tag: string; keep_running: boolean }[] }>(status.stdout);
+  const kept = new Set(result.tags.filter((t) => t.keep_running).map((t) => t.tag));
+  if (!result.enabled || !keep.every((id) => kept.has(id))) return false;
+  await api.markMigrated();
+  return true;
+}
+
 export function App() {
   const [api, setApi] = useState<Bridge | null>(null);
   const [info, setInfo] = useState<AppInfo | null>(null);
@@ -41,20 +58,26 @@ export function App() {
     });
   }, []);
 
-  // Make sure this Tag can be driven by this app, and carry over the old Mac app's login behaviour once.
+  // Make sure this Tag can be driven by this app.
   useEffect(() => {
     if (!api || !info?.cli || screen.name !== "home") return;
     void api.tag(["version", "--json"]).then((r) => {
-      const ok = r.code === 0 && compatibility(parseJSON<VersionInfo>(r.stdout), NEEDED).ok;
-      setOutdated(!ok);
-      const caps = r.code === 0 ? parseJSON<VersionInfo>(r.stdout).capabilities : [];
-      if (info.legacyWantedTags?.length && caps.includes("autostart")) {
-        // The Swift app restored Tags at login itself; the CLI's login service does that now.
-        void tags.setAutostart(true).then((ok) => { if (ok) void api.markMigrated(); });
-      }
+      setOutdated(!(r.code === 0 && compatibility(parseJSON<VersionInfo>(r.stdout), NEEDED).ok));
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [api, info, screen.name]);
+  }, [api, info?.cli, screen.name]);
+
+  // Once: the Swift Tag.app restored Tags at login itself; the CLI's login service does that now.
+  const migrating = useRef(false);
+  useEffect(() => {
+    const legacy = info?.legacyWantedTags;
+    if (!api || !legacy?.length || !tags.loaded || migrating.current) return;
+    migrating.current = true;
+    void migrateFromSwiftApp(api, legacy, tags.rows.map((r) => r.id)).then((done) => {
+      if (done) setInfo((current) => current && { ...current, legacyWantedTags: null });
+      void tags.refresh();
+      void tags.refreshAutostart();
+    });
+  }, [api, info?.legacyWantedTags, tags.loaded, tags.rows, tags]);
 
   // The window always fits its content.
   useLayoutEffect(() => {

@@ -90,7 +90,27 @@ class InstallationTests(unittest.TestCase):
         now[0] += autostart.MAX_BACKOFF_SECONDS
         start.return_value = 0
         self.assertEqual(supervisor.check(), ["first"])
+        self.running = {self.first}
+        now[0] += autostart.STABLE_SECONDS
+        supervisor.check()
         self.assertEqual(supervisor.failures, {})
+
+    def test_a_tag_that_crashes_right_after_starting_backs_off(self) -> None:
+        # `tag start` succeeds, then the bridge dies (say, a revoked token).
+        autostart.set_wanted(self.first, True)
+        now = [0.0]
+        start = Mock(return_value=0)
+        supervisor = autostart.Supervisor(self.root, self.lifecycle, start, clock=lambda: now[0])
+        attempts = 0
+        for _ in range(30):  # 30 minutes of checks
+            attempts += len(supervisor.check())
+            now[0] += autostart.CHECK_SECONDS
+        self.assertLessEqual(attempts, 5)
+
+    def test_a_healthy_restart_is_immediate_the_first_time(self) -> None:
+        autostart.set_wanted(self.first, True)
+        supervisor = autostart.Supervisor(self.root, self.lifecycle, Mock(return_value=0), clock=lambda: 0)
+        self.assertEqual(supervisor.check(), ["first"])
 
     def test_stopping_on_purpose_clears_backoff(self) -> None:
         autostart.set_wanted(self.first, True)
@@ -132,12 +152,23 @@ class ServiceDefinitionTests(unittest.TestCase):
         self.assertTrue(plist["KeepAlive"])
         self.assertEqual(plist["EnvironmentVariables"], {"TAG_HOME": str(self.root)})
         self.assertEqual(plist["Label"], autostart.label(self.root))
+        # Stopping the agent must never stop the Tags it started, nor throttle them.
+        self.assertTrue(plist["AbandonProcessGroup"])
+        self.assertNotIn("ProcessType", plist)
 
     def test_systemd_unit_quotes_paths_and_restarts(self) -> None:
         unit = autostart.systemd_unit(["/bin/sh", "/a b/tag", "autostart", "run"], self.root)
         self.assertIn("ExecStart=/bin/sh '/a b/tag' autostart run", unit)
         self.assertIn("Restart=always", unit)
         self.assertIn("WantedBy=default.target", unit)
+        # The default control-group kill would stop every Tag on `autostart off`.
+        self.assertIn("KillMode=process", unit)
+
+    def test_desktop_entry_quotes_paths_with_spaces(self) -> None:
+        entry = autostart.xdg_entry(["/bin/sh", "/home/a b/50% $x/tag", "autostart", "run"], self.root)
+        line = next(l for l in entry.splitlines() if l.startswith("Exec="))
+        self.assertIn('"/home/a b/50%% \\$x/tag"', line)
+        self.assertNotIn("'", line)
 
     def test_test_homes_never_share_the_real_service_name(self) -> None:
         self.assertNotEqual(autostart.label(self.root), autostart.LABEL)
@@ -148,10 +179,13 @@ class ServiceDefinitionTests(unittest.TestCase):
     def test_enable_writes_and_loads_the_launch_agent(self) -> None:
         home = Path(self.temporary.name) / "user"
         calls = []
+        def run(command, **_):
+            calls.append(command)
+            return Mock(returncode=1 if command[1] == "print" else 0)  # job gone after bootout
         with patch.object(autostart, "mechanism", return_value="launchd"), \
                 patch.object(autostart.Path, "home", return_value=home), \
-                patch.object(autostart.subprocess, "run",
-                             side_effect=lambda command, **_: calls.append(command) or Mock(returncode=0)):
+                patch.object(autostart.time, "sleep"), \
+                patch.object(autostart.subprocess, "run", side_effect=run):
             result = autostart.enable(self.root, Path("/src"))
             self.assertTrue(result["enabled"])
             self.assertTrue(any(command[:2] == ["launchctl", "bootstrap"] for command in calls))
@@ -163,10 +197,22 @@ class ServiceDefinitionTests(unittest.TestCase):
         home = Path(self.temporary.name) / "user"
         with patch.object(autostart, "mechanism", return_value="launchd"), \
                 patch.object(autostart.Path, "home", return_value=home), \
+                patch.object(autostart.time, "sleep"), \
                 patch.object(autostart.subprocess, "run",
                              return_value=Mock(returncode=5, stderr="Bootstrap failed", stdout="")):
             with self.assertRaisesRegex(RuntimeError, "Bootstrap failed"):
                 autostart.enable(self.root, Path("/src"))
+
+    def test_bootstrap_waits_for_the_old_job_and_retries(self) -> None:
+        home = Path(self.temporary.name) / "user"
+        results = iter([Mock(returncode=0),  # bootout
+                        Mock(returncode=0), Mock(returncode=1),  # print: still there, then gone
+                        Mock(returncode=5, stderr="Bootstrap failed: 5", stdout=""), Mock(returncode=0)])
+        with patch.object(autostart, "mechanism", return_value="launchd"), \
+                patch.object(autostart.Path, "home", return_value=home), \
+                patch.object(autostart.time, "sleep"), \
+                patch.object(autostart.subprocess, "run", side_effect=lambda *a, **k: next(results)):
+            self.assertTrue(autostart.enable(self.root, Path("/src"))["enabled"])
 
 
 class CommandTests(unittest.TestCase):
@@ -209,6 +255,32 @@ class CommandTests(unittest.TestCase):
         result = json.loads(output)
         self.assertFalse(result["enabled"])
         self.assertEqual(result["tags"], [{"tag": "t1-a1", "keep_running": True}])
+
+    def test_supervised_start_never_overrides_a_stop(self) -> None:
+        # The login service decided to start this Tag, then the person stopped it.
+        autostart.set_wanted(self.home, False)
+        with patch.dict(os.environ, {autostart.SUPERVISED_ENV: "1"}), \
+                patch.object(tag_cli, "missing_runtime_dependencies", return_value=[]), \
+                patch.object(tag_cli, "legacy_slack_ready", return_value=False), \
+                patch.object(tag_cli, "read_config", return_value={}), \
+                patch.object(tag_cli, "start_process") as start:
+            tag_config_path = self.home / "config/settings.json"
+            tag_config_path.write_text("{}")
+            with patch("scripts.tag_config.config_errors", return_value=[]), \
+                    patch.object(tag_cli, "assert_unique_slack_app"), \
+                    patch("scripts.tag_config.migrate_file_delivery"):
+                code, _ = self.cli("t1-a1", "start")
+        self.assertEqual(code, 0)
+        start.assert_not_called()
+        self.assertFalse(autostart.wanted(self.home))
+
+    def test_keep_records_choices_without_starting(self) -> None:
+        code, output = self.cli("autostart", "keep", "t1-a1", "--json")
+        self.assertEqual(code, 0)
+        self.assertTrue(autostart.wanted(self.home))
+        self.assertEqual(json.loads(output)["tags"], [{"tag": "t1-a1", "keep_running": True}])
+        with self.assertRaises(SystemExit), redirect_stdout(StringIO()), patch("sys.stderr", StringIO()):
+            self.cli("autostart", "keep")
 
     def test_autostart_is_installation_wide(self) -> None:
         with self.assertRaises(SystemExit):

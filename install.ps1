@@ -97,7 +97,7 @@ function Initialize-TagRuntime {
         $python = Invoke-Native { & $uv python find --no-config --managed-python --no-python-downloads $pythonVersion }
     }
     $python = "$python".Trim()
-    & $python -c 'import sys; assert sys.version_info[:3] == (3, 12, 14)'
+    Invoke-Native { & $python -c 'import sys; assert sys.version_info[:3] == (3, 12, 14)' }
     if ($LASTEXITCODE -ne 0) { throw 'The prepared Tag Python is not the expected version.' }
     $env:TAG_BOOTSTRAP_PYTHON = $python
     $env:TAG_BOOTSTRAP_UV = $uv
@@ -119,14 +119,14 @@ if ($DependenciesOnly) {
     $runtimePython = Join-Path $venv 'Scripts/python.exe'
     if (-not (Test-Path $runtimePython)) {
         Write-Host 'Creating Tag runtime...'
-        & $uv venv --python $python $venv
+        Invoke-Native { & $uv venv --python $python $venv }
         if ($LASTEXITCODE -ne 0) { throw "Tag runtime creation failed ($LASTEXITCODE)" }
     }
     Write-Host 'Installing pinned Tag runtime dependencies...'
-    & $uv pip install --python $runtimePython -r (Join-Path $PSScriptRoot 'requirements-runtime.txt')
+    Invoke-Native { & $uv pip install --python $runtimePython -r (Join-Path $PSScriptRoot 'requirements-runtime.txt') }
     if ($LASTEXITCODE -ne 0) { throw "Tag dependency installation failed ($LASTEXITCODE)" }
     Write-Host 'Preparing the local MFS embedding model...'
-    & $runtimePython (Join-Path $PSScriptRoot 'scripts/preload_mfs_model.py')
+    Invoke-Native { & $runtimePython (Join-Path $PSScriptRoot 'scripts/preload_mfs_model.py') }
     if ($LASTEXITCODE -ne 0) { throw "MFS embedding model preparation failed ($LASTEXITCODE)" }
     Write-Host 'Pinned Tag dependencies are installed.'
     exit 0
@@ -138,7 +138,8 @@ if ($BinDir) { $installerArgs += @('--bin-dir', $BinDir) }
 if ($SkipDependencies) { $installerArgs += '--skip-dependencies' }
 if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot 'scripts/tag_install.py'))) {
     if (-not $Version -and -not $Channel) { $installerArgs += @('--source', $PSScriptRoot) }
-    & $python (Join-Path $PSScriptRoot 'scripts/tag_install.py') @installerArgs
+    # The installer writes progress to stderr; never let PowerShell treat that as failure.
+    Invoke-Native { & $python (Join-Path $PSScriptRoot 'scripts/tag_install.py') @installerArgs }
     if ($LASTEXITCODE -ne 0) { throw "TAG installation failed ($LASTEXITCODE)" }
 } else {
     $tagDownload = Join-Path ([IO.Path]::GetTempPath()) ('tag-bootstrap-' + [guid]::NewGuid())
@@ -148,7 +149,7 @@ if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot 'scripts/tag_install.
         $channels = Join-Path $tagDownload 'release-channels.json'
         Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/klovr-co/hover-tag/main/scripts/tag_install.py' -OutFile $installer
         Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/klovr-co/hover-tag/main/release-channels.json' -OutFile $channels
-        & $python $installer @installerArgs
+        Invoke-Native { & $python $installer @installerArgs }
         if ($LASTEXITCODE -ne 0) { throw "TAG installation failed ($LASTEXITCODE)" }
     } finally {
         Remove-Item -LiteralPath $tagDownload -Recurse -Force

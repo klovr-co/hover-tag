@@ -24,6 +24,7 @@ it shows is listed in `capabilities`; otherwise it offers to upgrade Tag.
 | `rename` | `tag NAME rename "Name" --json` |
 | `workspace-lifecycle` | `tag start\|stop\|restart --workspace TEAM --json` |
 | `autostart` | `tag autostart [status\|on\|off] --json`, `keep_running` in `tag list` |
+| `autostart-keep` | `tag autostart keep TAG... --json`: keep Tags running without starting them now |
 | `logs-json` | `tag NAME logs --json [--limit N]` |
 | `upgrade-json` | `tag upgrade --dry-run --json`, `tag upgrade --json` |
 | `install-progress` | `TAG_INSTALL_PROGRESS=jsonl` for `install.sh` and `install.ps1` |

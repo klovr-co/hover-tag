@@ -54,7 +54,7 @@ UPGRADE_CHANNELS = ("stable", "beta", "alpha", "edge")
 APP_PROTOCOL = 1
 CAPABILITIES = (
     "list", "setup-jsonl", "setup-back", "rename", "workspace-lifecycle",
-    "autostart", "logs-json", "upgrade-json", "install-progress",
+    "autostart", "autostart-keep", "logs-json", "upgrade-json", "install-progress",
 )
 UPDATE_CHECK_INTERVAL_SECONDS = 24 * 60 * 60
 COMMANDS = tuple(sorted(tag_instances.RESERVED_NAMES))
@@ -1603,12 +1603,20 @@ def _workspace_lifecycle(installation_root: Path, workspace: str, action: str, j
 def _autostart_command(installation_root: Path, args, parser) -> int:
     """Keep chosen Tags running after login, and restart them if they stop."""
     action = args.arguments[0] if args.arguments else "status"
-    if len(args.arguments) > 1 or action not in {"status", "on", "off", "run"}:
-        parser.error("autostart accepts status, on, off, or run")
+    if action not in {"status", "on", "off", "run", "keep"} or (len(args.arguments) > 1 and action != "keep"):
+        parser.error("autostart accepts status, on, off, run, or keep TAG...")
     if action == "run":
         return autostart.run(installation_root, sys.modules[__name__], ROOT)
     seeded: list[str] = []
-    if action == "on":
+    if action == "keep":
+        # Record that these Tags should keep running, without starting them now.
+        if len(args.arguments) < 2:
+            parser.error("autostart keep needs one or more Tags")
+        for reference in args.arguments[1:]:
+            tag = tag_instances.resolve_reference(installation_root, reference)
+            autostart.set_wanted(tag_instances.resolve(installation_root, tag).home, True)
+        result = autostart.status(installation_root)
+    elif action == "on":
         seeded = autostart.seed_from_running(installation_root, sys.modules[__name__])
         result = autostart.enable(installation_root, ROOT)
     elif action == "off":
@@ -2359,8 +2367,10 @@ def _run_cli() -> int:
         return 0
     if args.command == "start":
         restart_flow = os.getenv("TAG_RESTART_FLOW") == "1"
-        # Recorded even if this start fails: the login service retries with backoff.
-        autostart.set_wanted(home, True)
+        supervised = os.getenv(autostart.SUPERVISED_ENV) == "1"
+        if not supervised:
+            # Recorded even if this start fails: the login service retries with backoff.
+            autostart.set_wanted(home, True)
         if restart_flow:
             display.section("Starting")
         else:
@@ -2371,6 +2381,10 @@ def _run_cli() -> int:
         lock = LifecycleLock(home / "state/start.lock").acquire()
         started = []
         try:
+            if supervised and autostart.wanted(home) is not True:
+                # Someone stopped this Tag while the login service was about to start it.
+                display.info_row("Start", "Skipped · this Tag was switched off")
+                return 0
             try:
                 import slack_manifest_migrations
             except ImportError:

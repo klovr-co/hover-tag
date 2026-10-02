@@ -31,6 +31,12 @@ LABEL = "team.hover.tag.supervisor"
 WINDOWS_VALUE = "Tag"
 CHECK_SECONDS = 60
 MAX_BACKOFF_SECONDS = 3600
+# A Tag that stays up this long has recovered; until then restarts back off,
+# so one that crashes right after starting isn't restarted every minute.
+STABLE_SECONDS = 300
+# Set for starts the supervisor makes: they follow the recorded choice rather
+# than changing it, so a `tag stop` made meanwhile wins.
+SUPERVISED_ENV = "TAG_AUTOSTART_SUPERVISED"
 # Exit status the service manager treats as "start me again with new code".
 RELOAD_EXIT = 75
 
@@ -151,7 +157,8 @@ def launchd_plist(command: list[str], installation_root: Path, log: Path) -> str
         "<key>RunAtLoad</key><true/>\n"
         "<key>KeepAlive</key><true/>\n"
         "<key>ThrottleInterval</key><integer>30</integer>\n"
-        "<key>ProcessType</key><string>Background</string>\n"
+        # Tags it starts outlive it: stopping the service never stops them.
+        "<key>AbandonProcessGroup</key><true/>\n"
         f"<key>StandardOutPath</key><string>{escape(str(log))}</string>\n"
         f"<key>StandardErrorPath</key><string>{escape(str(log))}</string>\n"
         "</dict></plist>\n"
@@ -166,13 +173,22 @@ def systemd_unit(command: list[str], installation_root: Path) -> str:
         "[Service]\n"
         f"ExecStart={shlex.join(command)}\n"
         f"Environment={environment}\n"
-        "Restart=always\nRestartSec=30\n\n"
+        "Restart=always\nRestartSec=30\n"
+        # Only the supervisor itself: stopping or restarting it leaves Tags running.
+        "KillMode=process\n\n"
         "[Install]\nWantedBy=default.target\n"
     )
 
 
+def _desktop_quote(argument: str) -> str:
+    """Quote one Exec= argument as the Desktop Entry spec requires."""
+    escaped = "".join("\\" + c if c in '"`$\\' else c for c in argument).replace("%", "%%")
+    return f'"{escaped}"'
+
+
 def xdg_entry(command: list[str], installation_root: Path) -> str:
-    exec_line = shlex.join(["env", *(f"{k}={v}" for k, v in _environment(installation_root).items()), *command])
+    arguments = ["env", *(f"{k}={v}" for k, v in _environment(installation_root).items()), *command]
+    exec_line = " ".join(_desktop_quote(a) for a in arguments)
     return ("[Desktop Entry]\nType=Application\nName=Tag\n"
             "Comment=Keep chosen Tags running\n"
             f"Exec={exec_line}\nX-GNOME-Autostart-enabled=true\nNoDisplay=true\n")
@@ -207,10 +223,20 @@ def enable(installation_root: Path, source_root: Path) -> dict:
         _write(plist, launchd_plist(command, installation_root, log))
         domain = f"gui/{os.getuid()}"
         # Reload so a changed command takes effect; bootout fails harmlessly when absent.
-        subprocess.run(["launchctl", "bootout", f"{domain}/{label(installation_root)}"],
-                       capture_output=True, check=False)
-        _check(subprocess.run(["launchctl", "bootstrap", domain, str(plist)],
-                              capture_output=True, text=True, check=False), "launchctl bootstrap")
+        service = f"{domain}/{label(installation_root)}"
+        subprocess.run(["launchctl", "bootout", service], capture_output=True, check=False)
+        # bootout returns before the job is gone; bootstrapping too early fails with error 5.
+        for _ in range(50):
+            if subprocess.run(["launchctl", "print", service], capture_output=True, check=False).returncode:
+                break
+            time.sleep(0.1)
+        for attempt in range(3):
+            result = subprocess.run(["launchctl", "bootstrap", domain, str(plist)],
+                                    capture_output=True, text=True, check=False)
+            if not result.returncode:
+                break
+            time.sleep(1)
+        _check(result, "launchctl bootstrap")
     elif kind == "systemd":
         unit, name = _systemd_unit(installation_root), _systemd_name(installation_root)
         unit.parent.mkdir(parents=True, exist_ok=True)
@@ -351,8 +377,9 @@ class Supervisor:
         self.lifecycle = lifecycle
         self.start = start  # (tag_id) -> exit code
         self.clock = clock
-        self.failures: dict[str, int] = {}
+        self.failures: dict[str, int] = {}  # starts since the Tag was last stable
         self.retry_at: dict[str, float] = {}
+        self.started_at: dict[str, float] = {}
 
     def check(self) -> list[str]:
         """One pass. Returns the Tags it tried to start."""
@@ -363,20 +390,26 @@ class Supervisor:
             context = tag_instances.resolve(self.root, str(item["id"]))
             tag_id = context.tag_id
             if wanted(context.home) is not True:
-                self.failures.pop(tag_id, None)
+                self._forget(tag_id)
                 continue
             if self.lifecycle.process_for(context.home / "state/slack.json") is not None:
-                self.failures.pop(tag_id, None)
+                if self.clock() - self.started_at.get(tag_id, float("-inf")) >= STABLE_SECONDS:
+                    self._forget(tag_id)
                 continue
             if self.clock() < self.retry_at.get(tag_id, 0):
                 continue
             attempted.append(tag_id)
+            # Every start counts until the Tag proves stable, so crash loops back off too.
+            count = self.failures[tag_id] = self.failures.get(tag_id, 0) + 1
             if self.start(tag_id) == 0:
-                self.failures.pop(tag_id, None)
-            else:
-                count = self.failures[tag_id] = self.failures.get(tag_id, 0) + 1
+                self.started_at[tag_id] = self.clock()
+            if count > 1 or tag_id not in self.started_at:
                 self.retry_at[tag_id] = self.clock() + min(CHECK_SECONDS * 2 ** count, MAX_BACKOFF_SECONDS)
         return attempted
+
+    def _forget(self, tag_id: str) -> None:
+        for record in (self.failures, self.retry_at, self.started_at):
+            record.pop(tag_id, None)
 
 
 def run(installation_root: Path, lifecycle, source_root: Path) -> int:
@@ -386,6 +419,7 @@ def run(installation_root: Path, lifecycle, source_root: Path) -> int:
     except RuntimeError:
         print("Another Tag supervisor is already running.", flush=True)
         return 0
+    held = True
     try:
         import psutil
         me = psutil.Process()
@@ -397,6 +431,7 @@ def run(installation_root: Path, lifecycle, source_root: Path) -> int:
             # The supervisor has no console; don't let its children open one on Windows.
             hidden = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
             result = subprocess.run([*command, tag_id, "start"], stdin=subprocess.DEVNULL,
+                                    env={**os.environ, SUPERVISED_ENV: "1"},
                                     capture_output=True, text=True, check=False, **hidden)
             if result.returncode:
                 tail = (result.stderr or result.stdout).strip().splitlines()[-3:]
@@ -412,10 +447,13 @@ def run(installation_root: Path, lifecycle, source_root: Path) -> int:
                 # An upgrade changed the code; let the service manager start the new one.
                 print("Tag was upgraded; restarting the supervisor.", flush=True)
                 if mechanism() in {"windows-run", "xdg-autostart"}:
+                    # Nothing restarts us here: hand the lock to a new supervisor.
                     lock.release()
+                    held = False
                     _spawn(service_command(installation_root, source_root), installation_root,
                            installation_root / "state/supervisor.log")
                     return 0
                 return RELOAD_EXIT
     finally:
-        lock.release()
+        if held:
+            lock.release()

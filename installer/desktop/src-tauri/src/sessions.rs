@@ -50,25 +50,41 @@ impl Sessions {
         self.live.lock().unwrap().insert(id, Session { child: child.clone(), stdin });
 
         let on_line = Arc::new(on_line);
+        // Lossy, so one line in another encoding (e.g. cp1252 on Windows) can't stop the stream.
+        fn lines(reader: impl Read) -> impl Iterator<Item = String> {
+            let mut reader = BufReader::new(reader);
+            std::iter::from_fn(move || {
+                let mut buffer = Vec::new();
+                match reader.read_until(b'\n', &mut buffer) {
+                    Ok(0) | Err(_) => None,
+                    Ok(_) => {
+                        while matches!(buffer.last(), Some(b'\n' | b'\r')) {
+                            buffer.pop();
+                        }
+                        Some(String::from_utf8_lossy(&buffer).into_owned())
+                    }
+                }
+            })
+        }
         let errors = Arc::new(Mutex::new(String::new()));
         let err_reader = {
             let (output, errors, on_line) = (output.clone(), errors.clone(), on_line.clone());
             std::thread::spawn(move || {
                 if merge_stderr {
-                    for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                    for line in lines(stderr) {
                         on_line(&line);
                         let _ = output.send(Output::Line(line));
                     }
                 } else {
-                    let mut text = String::new();
-                    let _ = BufReader::new(stderr).read_to_string(&mut text);
-                    *errors.lock().unwrap() = crate::cli::tail(&text);
+                    let mut bytes = Vec::new();
+                    let _ = BufReader::new(stderr).read_to_end(&mut bytes);
+                    *errors.lock().unwrap() = crate::cli::tail(&String::from_utf8_lossy(&bytes));
                 }
             })
         };
         let sessions = self.clone();
         std::thread::spawn(move || {
-            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            for line in lines(stdout) {
                 on_line(&line);
                 let _ = output.send(Output::Line(line));
             }
@@ -117,6 +133,14 @@ impl Sessions {
             self.stop(id);
         }
     }
+
+    /// Wait until every session has ended, up to `limit`.
+    pub fn wait_all(&self, limit: Duration) {
+        let deadline = std::time::Instant::now() + limit;
+        while !self.live.lock().unwrap().is_empty() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
 }
 
 #[cfg(all(test, unix))]
@@ -155,6 +179,17 @@ mod tests {
         assert_eq!(next(&rx), serde_json::json!({"event": "exit", "data": {"code": 3, "stderr": "oops\n"}}));
         assert_eq!(seen.lock().unwrap().len(), 2);
         assert!(sessions.send(id, "late").is_err());
+    }
+
+    #[test]
+    fn a_line_in_another_encoding_does_not_end_the_stream() {
+        let sessions = Arc::new(Sessions::default());
+        let (output, rx) = channel();
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", r"printf 'caf\351\n'; echo after"]);
+        sessions.start(command, false, output, |_| {}).unwrap();
+        assert_eq!(next(&rx)["data"], "caf\u{fffd}");
+        assert_eq!(next(&rx)["data"], "after");
     }
 
     #[test]

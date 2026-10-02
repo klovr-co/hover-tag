@@ -159,13 +159,17 @@ class DependenciesTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, stdout='C:/Tag/python.exe\nC:/Tag/uv.exe\n')
             with patch.object(dependencies.sys, 'platform', 'win32'), \
                     patch.object(dependencies.subprocess, 'run', side_effect=run), \
-                    patch.object(dependencies.os, 'execv', side_effect=SystemExit) as restart:
-                with self.assertRaises(SystemExit):  # execv never returns: startup reruns on the new code
+                    patch.object(dependencies.subprocess, 'call', return_value=3) as rerun, \
+                    patch.object(dependencies.os, 'execv') as execv:
+                # Startup reruns on the new code, and its real result is this process's result.
+                with self.assertRaises(SystemExit) as exit_:
                     dependencies.migrate(home, ROOT)
+            self.assertEqual(exit_.exception.code, 3)
             self.assertEqual(runs[0][0], 'powershell.exe')
             self.assertIn('-RuntimeInfo', runs[0])
             self.assertEqual(runs[1][0], 'C:/Tag/python.exe')
-            restart.assert_called_once()
+            self.assertEqual(rerun.call_args.args[0][0], 'managed')
+            execv.assert_not_called()  # Windows execv would report success before the start finished
 
     def test_migration_rechecks_slack_and_preserves_operator_environment(self):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {'PATH': '/user/bin', 'SLACK_CONFIG_DIR': '/user/slack'}):

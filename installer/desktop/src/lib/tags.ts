@@ -119,7 +119,7 @@ export function useTags(api: Bridge | null, enabled: boolean) {
 
   return {
     rows, loaded, busy, error, setError, keepRunning,
-    refresh, toggle, workspace, all, rename, setAutostart,
+    refresh, refreshAutostart, toggle, workspace, all, rename, setAutostart,
   };
 }
 

@@ -378,8 +378,14 @@ administrator rights:
 | Windows | the per-user `Run` registry key |
 
 The first `tag autostart on` keeps the Tags that are running now, if no choice
-was recorded yet. `tag autostart off` removes the service and leaves running
-Tags as they are. The service runs Tag's stable launcher, so upgrades take
+was recorded yet. `tag autostart keep NAME...` records that Tags should keep
+running without starting them now. A start made by the login service follows
+the recorded choice instead of changing it, so stopping a Tag while the
+service is starting it leaves the Tag off. Each restart counts until the Tag has
+stayed up for five minutes, so a Tag that crashes right after starting also
+backs off. `tag autostart off` removes the service and leaves running
+Tags as they are; the service is set up so that stopping it never stops the
+Tags it started. The service runs Tag's stable launcher, so upgrades take
 effect without registering it again. Its output is in
 `state/supervisor.log` under the installation root. Tag.app's **Keep Tags
 running** setting uses the same commands.

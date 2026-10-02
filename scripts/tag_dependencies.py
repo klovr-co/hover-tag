@@ -159,7 +159,11 @@ def migrate(home: Path, source: Path) -> None:
         if updated.get("dependency_schema") != 1:
             raise RuntimeError("Runtime migration did not finish; retry Tag startup")
         # Reload both the release code and recorded credentials through normal startup.
-        os.execv(updated["python"], [updated["python"], str(home / "releases" / updated["release"] / "scripts/tag_cli.py"), *sys.argv[1:]])
+        command = [updated["python"], str(home / "releases" / updated["release"] / "scripts/tag_cli.py"), *sys.argv[1:]]
+        if sys.platform == "win32":
+            # Windows execv starts a new process and exits 0 at once; wait for its real result.
+            sys.exit(subprocess.call(command))
+        os.execv(updated["python"], command)
     command = ensure_slack(home)
     activate_slack(command)
     # Recheck actual executable even if a previous checkpoint exists.

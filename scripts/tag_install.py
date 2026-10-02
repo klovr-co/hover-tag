@@ -770,7 +770,10 @@ home = pathlib.Path(__file__).resolve().parent.parent
 record = json.loads((home / "current.json").read_text(encoding="utf-8"))
 release = home / "releases" / record["release"]
 os.environ["TAG_HOME"] = str(home)
-raise SystemExit(subprocess.call([record["python"], str(release / "scripts/tag_cli.py"), *sys.argv[1:]]))
+# Started windowless on Windows (pythonw, e.g. at login): keep the child windowless too.
+flags = 0x08000000 if os.name == "nt" and sys.stdout is None else 0
+raise SystemExit(subprocess.call([record["python"], str(release / "scripts/tag_cli.py"), *sys.argv[1:]],
+                                 creationflags=flags))
 '''
         atomic_text(launcher, launcher_text)
         launcher_python = runtime_python if dependencies else Path(sys.executable)
