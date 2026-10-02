@@ -49,6 +49,13 @@ except ImportError:
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_DEPENDENCIES = ("mfs_server", "psutil", "slack_bolt")
 UPGRADE_CHANNELS = ("stable", "beta", "alpha", "edge")
+# Contract between this CLI and desktop apps; see docs/reference/app-protocol.md.
+# Bump only for incompatible changes; add a capability for anything new.
+APP_PROTOCOL = 1
+CAPABILITIES = (
+    "list", "setup-jsonl", "setup-back", "rename", "workspace-lifecycle",
+    "autostart", "logs-json", "upgrade-json", "install-progress",
+)
 UPDATE_CHECK_INTERVAL_SECONDS = 24 * 60 * 60
 COMMANDS = tuple(sorted(tag_instances.RESERVED_NAMES))
 STARTUP_ATTEMPT_ENV_KEYS = (
@@ -1801,8 +1808,10 @@ def _run_cli() -> int:
         parser.error("--no-start, --test and --review are only for setup")
     if args.arguments and args.command not in {"add", "memory", "config", "telemetry", "rename", "autostart"}:
         parser.error("Only add, memory, config, telemetry, rename, and autostart accept additional positional arguments")
-    if args.json_output and args.command not in {"list", "memory", "inspect", "status", "doctor", "config", "paths", "upgrade", "telemetry", "setup", "add", "rename", "start", "stop", "restart", "autostart"}:
-        parser.error("--json supports list, memory, inspect, status, doctor, config, paths, upgrade, telemetry, autostart, setup, add, rename, and start/stop/restart with --workspace")
+    if args.json_output and args.command not in {"list", "memory", "inspect", "status", "doctor", "config", "paths", "upgrade", "telemetry", "setup", "add", "rename", "start", "stop", "restart", "autostart", "version", "logs"}:
+        parser.error("--json supports list, memory, inspect, status, doctor, config, paths, upgrade, telemetry, autostart, version, logs, setup, add, rename, and start/stop/restart with --workspace")
+    if args.json_output and args.follow:
+        parser.error("--json cannot be combined with --follow")
     if args.json_output and args.command in {"start", "stop", "restart"} and not args.workspace:
         parser.error("--json for start, stop, and restart requires --workspace")
     if args.nickname and args.command != "rename":
@@ -1895,6 +1904,13 @@ def _run_cli() -> int:
         return 0
     if args.command == "autostart":
         return _autostart_command(installation_root, args, parser)
+    if args.command == "version" and args.json_output:
+        print(json.dumps({"schema_version": 1,
+                          "version": (ROOT / "VERSION").read_text().strip(),
+                          "app_protocol": APP_PROTOCOL, "capabilities": list(CAPABILITIES),
+                          "platform": sys.platform,
+                          "runtime": runtime_identity(installation_root)}, indent=2))
+        return 0
     if args.command == "add":
         if args.arguments:
             parser.error("add does not accept a name; the workspace alias is chosen during onboarding")
@@ -2276,8 +2292,13 @@ def _run_cli() -> int:
                 report["services"]["mfs"], (home / "state").glob("*.log")))
         return result
     if args.command == "logs":
-        display.header("Logs", selected_target(home, context.tag_id))
         logs = sorted((home / "state").glob("*.log"))
+        if args.json_output:
+            print(json.dumps({"schema_version": 1, "tag": context.tag_id, "services": {
+                log.stem: log_tail(home, log.stem, args.limit or 200).splitlines() for log in logs
+            }}, indent=2, ensure_ascii=False))
+            return 0
+        display.header("Logs", selected_target(home, context.tag_id))
         if not logs:
             display.section("Services")
             display.info_row("Logs", "No service logs found yet")

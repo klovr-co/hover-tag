@@ -150,6 +150,17 @@ def paragraph(text: str, code: str = "", *, indent: str = "  ") -> None:
         emit(indent + (styled(line, code) if code else line))
 
 
+def progress(step: str, **fields: Any) -> None:
+    """Machine-readable install progress for desktop apps (TAG_INSTALL_PROGRESS=jsonl).
+
+    Steps, in order: tools, python, download, release (with version),
+    components, memory, command, done; or failed (with message).
+    """
+    if os.getenv("TAG_INSTALL_PROGRESS") == "jsonl":
+        line = json.dumps({"schema_version": 1, "step": step, **fields}, ensure_ascii=False)
+        print("@tag-progress " + line, file=sys.stderr, flush=True)
+
+
 def header(section: str, detail: str = "") -> None:
     emit()
     emit("  " + styled("tag", "1;" + ACCENT) + "  /  " + styled(section, MUTED))
@@ -480,6 +491,7 @@ def fetch_release(
     destination.mkdir(parents=True, exist_ok=True)
     if version is not None and channel is not None:
         raise ValueError("Choose either --channel or --version, not both")
+    progress("download")
     if version is not None:
         release, version, selected_channel = resolve_version(version)
         provenance_channel = "release"
@@ -665,6 +677,7 @@ def install(
         version = (source / "VERSION").read_text().strip()
         if selection is not None and selection.version != version:
             raise ValueError("Selected release metadata does not match the installed source")
+        progress("release", version=version)
         header("Install", f"Preparing Tag v{version} in an isolated runtime.")
         section("Preparing")
         row("Release", f"Tag v{version}")
@@ -687,6 +700,7 @@ def install(
                 uv = str(uv_path)
             else:
                 uv = shutil.which("uv")
+            progress("components")
             paragraph("Installing runtime dependencies…", MUTED, indent="    ")
             if uv:
                 install_step(
@@ -711,6 +725,7 @@ def install(
             row("Runtime", f"Python {sys.version_info.major}.{sys.version_info.minor} · dependencies ready")
             if mfs_client is not None:
                 row("MFS CLI", f"Bundled {mfs_client.name} in the managed runtime")
+            progress("memory")
             paragraph("Preparing the local memory model…", MUTED, indent="    ")
             install_step(
                 [str(python), str(release / "scripts/preload_mfs_model.py")],
@@ -748,6 +763,7 @@ def install(
                     if not any(bundled.iterdir()):
                         bundled.rmdir()
         # Keep the launcher fixed while the pointer changes atomically on upgrade.
+        progress("command")
         launcher = home / "bin/tag-launch.py"
         launcher_text = '''# TAG managed launcher
 import json, os, pathlib, subprocess, sys
@@ -797,6 +813,7 @@ raise SystemExit(subprocess.call([record["python"], str(release / "scripts/tag_c
         atomic_text(current, json.dumps(current_record, indent=2, sort_keys=True) + "\n")
         row("Command", short_path(command))
         row("Home", short_path(home))
+        progress("done", version=version, command=str(command))
         emit()
         emit("  " + styled("─" * content_width(), MUTED))
         paragraph("✓  Tag is installed", "1;" + SUCCESS)
@@ -848,5 +865,6 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as exc:
+        progress("failed", message=str(exc))
         print(f"Installation failed: {exc}", file=sys.stderr)
         raise SystemExit(1)

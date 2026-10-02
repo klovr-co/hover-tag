@@ -1,0 +1,3 @@
+{"schema_version": 1, "version": "0.2.0", "app_protocol": 1,
+ "capabilities": ["list", "setup-jsonl", "autostart"], "platform": "darwin",
+ "runtime": {"mode": "managed", "version": "0.2.0", "active_release": true}}

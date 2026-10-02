@@ -11,6 +11,12 @@ All notable changes to Tag are documented here.
   systemd or XDG autostart on Linux, the Run key on Windows) starts them and
   restarts any that stop. `tag list --json` reports `keep_running`.
 
+- Document the contract between the CLI and desktop apps
+  (`docs/reference/app-protocol.md`). `tag version --json` reports the app
+  protocol and capabilities, `tag NAME logs --json` returns recent service
+  output, and `TAG_INSTALL_PROGRESS=jsonl` makes the installer report each
+  step as structured progress.
+
 - Choose who can use Tag from a searchable Slack people list during setup.
   Tag.app shows names, usernames, and profile photos; the CLI offers the same
   search with text labels. Manual member-ID entry remains available.
