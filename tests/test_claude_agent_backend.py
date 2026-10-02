@@ -123,6 +123,16 @@ class ClaudeEventMapperTests(unittest.TestCase):
                        if event["type"] == "activity_complete"}
         self.assertEqual({"t1": "completed", "t2": "failed"}, completions)
 
+    def test_reports_the_main_model_once_and_ignores_subagents(self) -> None:
+        events = mapped([
+            AssistantMessage([{"text": "a"}], model="claude-opus-5-5"),
+            AssistantMessage([{"text": "b"}], model="claude-opus-5-5"),
+            AssistantMessage([{"text": "c"}], model="claude-haiku-4-5", parent_tool_use_id="task"),
+            AssistantMessage([{"text": "d"}], model="<synthetic>"),
+        ])
+        self.assertEqual([{"type": "run_info", "model": "claude-opus-5-5"}],
+                         [event for event in events if event["type"] == "run_info"])
+
     def test_tool_secrets_are_redacted_from_activity_details(self) -> None:
         events = mapped([
             AssistantMessage([{"id": "t1", "name": "Bash",
@@ -156,7 +166,7 @@ class ClaudeEventMapperTests(unittest.TestCase):
             AssistantMessage([{"text": "x"}], error="rate_limit"),
             ResultMessage(is_error=True, result="API Error: 429 rate limit", api_error_status=429),
         ])
-        self.assertEqual({"type": "error", "text": "Claude reported rate limit", "code": "rate_limit"}, events[0])
+        self.assertIn({"type": "error", "text": "Claude reported rate limit", "code": "rate_limit"}, events)
         self.assertEqual({"type": "turn_complete", "status": "failed",
                           "text": "API Error: 429 rate limit", "code": "http_429"}, events[-1])
 
@@ -380,7 +390,7 @@ class ClaudeAgentRunTests(unittest.TestCase):
             {"value": "default", "displayName": "Default (recommended)",
              "supportedEffortLevels": ["low", "high"]},
             {"value": "opus", "displayName": "Opus", "supportedEffortLevels": ["low", "max"],
-             "supportsFastMode": True},
+             "supportsFastMode": True, "resolvedModel": "claude-opus-5-5"},
             {"value": "haiku", "displayName": "Haiku"},
             {"displayName": "missing value"},
         ]}
@@ -388,6 +398,7 @@ class ClaudeAgentRunTests(unittest.TestCase):
         self.assertEqual(["default", "opus", "haiku"], [item["model"] for item in catalog])
         self.assertTrue(catalog[0]["isDefault"])
         self.assertTrue(catalog[1]["supportsFastMode"])
+        self.assertEqual("claude-opus-5-5", catalog[1]["resolvedModel"])
         self.assertEqual([], catalog[2]["supportedEfforts"])
         self.assertIsNone(FakeClient.instances[0].prompt)
 

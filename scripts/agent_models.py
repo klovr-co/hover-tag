@@ -35,6 +35,8 @@ class ModelOption:
     is_default: bool = False
     default_fast_mode: bool = False
     backend: str = "codex"
+    # The concrete model an alias such as ``opus`` resolves to, when reported.
+    resolved_model: str | None = None
 
     @property
     def value(self) -> str:
@@ -283,6 +285,7 @@ def discover_claude_models() -> list[ModelOption]:
             default_reasoning_effort=CLAUDE_DEFAULT_EFFORT if CLAUDE_DEFAULT_EFFORT in efforts else None,
             is_default=item.get("isDefault") is True,
             backend="claude",
+            resolved_model=item.get("resolvedModel") if isinstance(item.get("resolvedModel"), str) else None,
         )
     if configured:
         options = [

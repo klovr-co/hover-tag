@@ -3631,11 +3631,92 @@ class ModelSwitchingTests(unittest.TestCase):
 
         ack.assert_called_once_with()
         self.assertIn("Claude · Opus · max · Fast mode on", client.chat_postEphemeral.call_args.kwargs["text"])
+        reply_blocks = client.chat_postMessage.call_args.kwargs["blocks"]
+        summary = next(block for block in reply_blocks if block["type"] == "context")["elements"][0]["text"]
+        self.assertRegex(summary, r"^Claude · Opus · max thinking · Fast mode · \d+s$")
         self.assertEqual("claude", run_events.call_args.args[0])
         self.assertEqual(
             ("opus", "max", True),
             tuple(run_events.call_args.kwargs[key] for key in ("model", "reasoning_effort", "fast_mode")),
         )
+
+
+class RunSummaryTests(unittest.TestCase):
+    MODELS = [slack_socket_agent.ModelOption("opus", "Opus 5.5", ("high",), backend="claude")]
+
+    def test_durations_are_short_and_readable(self) -> None:
+        self.assertEqual(
+            ["0s", "42s", "1m", "1m 12s", "59m 59s", "1h", "1h 3m"],
+            [slack_socket_agent.format_duration(value) for value in (0.2, 42, 60, 72, 3599, 3600, 3780)],
+        )
+
+    def test_summary_names_backend_model_thinking_and_duration(self) -> None:
+        settings = slack_socket_agent.AgentSettings("opus", "high", True, backend="claude")
+        blocks = slack_socket_agent.run_summary_blocks(settings, self.MODELS, "claude", 72)
+        self.assertEqual(
+            [{"type": "context", "elements": [{"type": "mrkdwn",
+                                               "text": "Claude · Opus 5.5 · high thinking · Fast mode · 1m 12s"}]}],
+            blocks,
+        )
+
+    def test_summary_names_the_model_the_backend_reported(self) -> None:
+        models = [
+            slack_socket_agent.ModelOption("default", "Default (recommended)", ("low", "high"), backend="claude",
+                                           resolved_model="claude-sonnet-5-5"),
+            slack_socket_agent.ModelOption("sonnet", "Sonnet 5.5", ("low", "high"), backend="claude",
+                                           resolved_model="claude-sonnet-5-5"),
+        ]
+        settings = slack_socket_agent.AgentSettings("default", None, False, backend="claude")
+        text = lambda reported: slack_socket_agent.run_summary_blocks(
+            settings, models, "claude", 5, reported_model=reported)[0]["elements"][0]["text"]
+        self.assertEqual("Claude · Sonnet 5.5 · default thinking · 5s", text("claude-sonnet-5-5"))
+        self.assertEqual("Claude · claude-new-model · default thinking · 5s", text("claude-new-model"))
+        self.assertEqual("Claude · default model · default thinking · 5s", text(None))
+
+    def test_summary_thinking_level_falls_back_to_reported_then_catalog_default(self) -> None:
+        models = [
+            slack_socket_agent.ModelOption("gpt-6-astra", "GPT-6-Astra", ("low", "high"), default_reasoning_effort="high"),
+            slack_socket_agent.ModelOption("haiku", "Haiku 4.5", (), backend="claude"),
+        ]
+        default = slack_socket_agent.AgentSettings(None, None, False, backend="codex")
+        text = lambda settings, backend, **kwargs: slack_socket_agent.run_summary_blocks(
+            settings, models, backend, 42, **kwargs)[0]["elements"][0]["text"]
+        self.assertEqual("Codex · GPT-6-Astra · high thinking · 42s",
+                         text(default, "codex", reported_model="gpt-6-astra"))
+        self.assertEqual("Codex · GPT-6-Astra · xhigh thinking · 42s",
+                         text(default, "codex", reported_model="gpt-6-astra", reported_effort="xhigh"))
+        self.assertEqual("Codex · GPT-6-Astra · low thinking · 42s",
+                         text(replace(default, reasoning_effort="low"), "codex",
+                              reported_model="gpt-6-astra", reported_effort="xhigh"))
+        haiku = slack_socket_agent.AgentSettings("haiku", None, False, backend="claude")
+        self.assertEqual("Claude · Haiku 4.5 · 42s", text(haiku, "claude"))
+
+    def test_bridge_forwards_reported_model(self) -> None:
+        process = MagicMock()
+        process.stdout = iter([json.dumps(event) + "\n" for event in (
+            {"type": "run_info", "model": "gpt-6-astra", "reasoning_effort": "xhigh"},
+            {"type": "turn_complete", "status": "completed"},
+        )])
+        process.wait.return_value = 0
+        process.poll.return_value = None
+        reported: list[dict[str, str]] = []
+        with tempfile.TemporaryDirectory() as raw_dir, patch.object(
+            slack_socket_agent.subprocess, "Popen", return_value=process
+        ), patch.object(slack_socket_agent.threading, "Timer"), patch.object(
+            slack_socket_agent, "register_active_run"
+        ):
+            slack_socket_agent.run_backend_events(
+                "codex", "T1", "C1", "1.0", "U1", "q", "thread", Path(raw_dir), 30, MagicMock(),
+                on_run_info=reported.append,
+            )
+        self.assertEqual([{"model": "gpt-6-astra", "reasoning_effort": "xhigh"}], reported)
+
+    def test_summary_marks_stopped_and_failed_runs_and_default_models(self) -> None:
+        settings = slack_socket_agent.AgentSettings(None, None, False, backend="codex")
+        text = lambda outcome: slack_socket_agent.run_summary_blocks(
+            settings, [], "codex", 45, outcome=outcome)[0]["elements"][0]["text"]
+        self.assertEqual("Codex · default model · default thinking · stopped after 45s", text("stopped"))
+        self.assertEqual("Codex · default model · default thinking · failed after 45s", text("failed"))
 
 
 class SlackCancellationTests(unittest.TestCase):

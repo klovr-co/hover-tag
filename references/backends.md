@@ -93,8 +93,11 @@ complete response without a fake typewriter animation.
   `opentag_agent.py`, not in Slack event handling.
 - Keep the normalized event contract backend-neutral (`status`, `delta`,
   `final`, `error`, plus the richer `message_*`, `activity_*`,
-  `approval_request`, and `turn_complete` events); chat transports must never
-  parse backend-native event payloads.
+  `approval_request`, `run_info`, and `turn_complete` events); chat transports
+  must never parse backend-native event payloads.
+- Emit `run_info` with the concrete model the backend actually used, even when
+  Tag requested an alias or the account default. Codex reports it from
+  `thread/start`; Claude reports the main thread's assistant model.
 
 Generated images use a file handoff rather than a new stream event. For each
 Slack invocation, the prompt names a temporary `results/images` directory. A

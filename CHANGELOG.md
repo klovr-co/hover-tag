@@ -17,6 +17,8 @@ All notable changes to Tag are documented here.
   mid-thread. `OPENTAG_DEFAULT_MODEL` sets each Tag's default model and
   `OPENTAG_BACKENDS` limits which signed-in backends are offered. Claude is no
   longer experimental.
+- Show the agent, model, thinking level, and task duration above Configure
+  on finished Slack replies, including stopped and failed requests.
 
 - Deliver saved files as local copies plus Slack attachments by default.
   `OPENTAG_FILE_DELIVERY` and individual requests can select local-only delivery.

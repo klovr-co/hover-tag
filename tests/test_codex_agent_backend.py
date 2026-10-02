@@ -540,7 +540,7 @@ for raw in sys.stdin:
     method = message.get("method")
     if message.get("id") == 900 and method is None:
         assert message["result"]["decision"] == "decline"
-        send({"id": pending_thread_start["id"], "result": {"thread": {"id": "thread-1"}}})
+        send({"id": pending_thread_start["id"], "result": {"thread": {"id": "thread-1"}, "model": "gpt-resolved"}})
     elif method == "initialize":
         send({"id": message["id"], "result": {"userAgent": "fake"}})
     elif method == "initialized":
@@ -613,6 +613,7 @@ for raw in sys.stdin:
             )
 
         self.assertEqual(("completed", ""), (status, detail))
+        self.assertEqual({"type": "run_info", "model": "gpt-resolved", "reasoning_effort": "high"}, events[0])
         self.assertEqual("Hello", next(
             event["text"] for event in events if event["type"] == "message_delta"
         ))

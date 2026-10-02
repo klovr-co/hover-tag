@@ -330,6 +330,13 @@ class CodexAppServer:
             if not isinstance(thread, dict) or not isinstance(thread.get("id"), str):
                 raise CodexAppServerError("Codex returned an invalid thread/start response")
             self.thread_id = thread["id"]
+            resolved_model = thread_result.get("model") or thread.get("model")
+            if isinstance(resolved_model, str) and resolved_model:
+                info: dict[str, Any] = {"type": "run_info", "model": resolved_model}
+                resolved_effort = reasoning_effort or thread_result.get("reasoningEffort")
+                if isinstance(resolved_effort, str) and resolved_effort:
+                    info["reasoning_effort"] = resolved_effort
+                emit(info)
             turn_params: dict[str, Any] = {
                 "threadId": self.thread_id,
                 "input": [{"type": "text", "text": prompt}],

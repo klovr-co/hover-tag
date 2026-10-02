@@ -879,6 +879,71 @@ def model_label(model: str | None, models: list[ModelOption], backend: str | Non
     return option.label if option else model
 
 
+def format_duration(seconds: float) -> str:
+    seconds = max(0, int(round(seconds)))
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, seconds = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m {seconds}s" if seconds else f"{minutes}m"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h {minutes}m" if minutes else f"{hours}h"
+
+
+def reported_model_option(model: str, models: list[ModelOption], backend: str) -> ModelOption | None:
+    """Find the backend-reported model, preferring a catalog name over an alias entry."""
+    matches = [
+        item for item in models
+        if item.backend == backend and model in {item.model_id, item.resolved_model}
+    ]
+    exact = next((item for item in matches if item.model_id == model), None)
+    named = next((item for item in matches if item.model_id != "default"), None)
+    return exact or named
+
+
+def reported_model_label(model: str, models: list[ModelOption], backend: str) -> str:
+    option = reported_model_option(model, models, backend)
+    return option.label if option else model
+
+
+def run_summary_blocks(
+    settings: AgentSettings,
+    models: list[ModelOption],
+    backend: str,
+    seconds: float,
+    *,
+    outcome: str = "completed",
+    reported_model: str | None = None,
+    reported_effort: str | None = None,
+) -> list[dict[str, Any]]:
+    """Show which model answered, its thinking level, and how long the request took."""
+    model = settings.model
+    reported_option = reported_model_option(reported_model, models, backend) if reported_model else None
+    option = reported_option or (find_model(model, models, backend) if model else None)
+    if reported_model:
+        label = reported_option.label if reported_option else reported_model
+    elif model in {None, "default"}:
+        label = "default model"
+    else:
+        label = model_label(model, models, backend)
+    parts = [backend_display_name(backend), label]
+    effort = (
+        settings.reasoning_effort
+        or reported_effort
+        or (option.default_reasoning_effort if option else None)
+    )
+    if effort:
+        parts.append(f"{effort} thinking")
+    elif option is None or option.reasoning_efforts:
+        # Models known to have no thinking levels, such as Haiku, show none.
+        parts.append("default thinking")
+    if settings.fast_mode:
+        parts.append("Fast mode")
+    timing = format_duration(seconds)
+    parts.append({"stopped": f"stopped after {timing}", "failed": f"failed after {timing}"}.get(outcome, timing))
+    return [{"type": "context", "elements": [{"type": "mrkdwn", "text": " · ".join(parts)}]}]
+
+
 def settings_context(
     settings: AgentSettings,
     models: list[ModelOption],
@@ -2388,6 +2453,7 @@ def run_backend_events(
     slack_search_grant: ScopePlan | None = None,
     on_error: Callable[[str | None, str], None] | None = None,
     on_trace_event: Callable[[dict[str, Any]], None] | None = None,
+    on_run_info: Callable[[dict[str, str]], None] | None = None,
 ) -> tuple[str, bool]:
     """Consume normalized lifecycle events and forward only final-answer text."""
     if max_timeout is None:
@@ -2523,6 +2589,14 @@ def run_backend_events(
                 error_code = candidate_code if isinstance(candidate_code, str) else error_code
                 if on_error:
                     on_error(error_code, text)
+            elif event_type == "run_info":
+                reported_model = event.get("model")
+                reported_effort = event.get("reasoning_effort")
+                if isinstance(reported_model, str) and reported_model and on_run_info:
+                    info = {"model": reported_model[:120]}
+                    if isinstance(reported_effort, str) and reported_effort in SUPPORTED_REASONING_EFFORTS:
+                        info["reasoning_effort"] = reported_effort
+                    on_run_info(info)
             elif event_type == "status" and isinstance(text, str) and on_status:
                 on_status(text)
             elif event_type == "approval_expired":
@@ -4224,6 +4298,8 @@ def create_app(
         )
         # The requester's model choice selects the backend for this request.
         request_backend = agent_settings.backend or backend
+        request_started = time.monotonic()
+        reported_runs: list[dict[str, str]] = []
         indicator = WorkingIndicator(
             client,
             channel,
@@ -4353,6 +4429,7 @@ def create_app(
                         slack_search_grant=slack_search_grant,
                         on_error=capture_backend_error,
                         on_trace_event=trace_activity if app_server_selected else None,
+                        on_run_info=reported_runs.append,
                     )
                 else:
                     answer, succeeded = run_backend(
@@ -4406,6 +4483,13 @@ def create_app(
                         thread_ts=thread_ts,
                     )
                 indicator.clear()
+                stopped = answer.startswith(("Stopped.", "Stop requested"))
+                summary_blocks = run_summary_blocks(
+                    agent_settings, models, request_backend, time.monotonic() - request_started,
+                    outcome="completed" if succeeded else "stopped" if stopped else "failed",
+                    reported_model=reported_runs[-1]["model"] if reported_runs else None,
+                    reported_effort=reported_runs[-1].get("reasoning_effort") if reported_runs else None,
+                )
                 if succeeded:
                     footer_blocks = artifact_button_blocks
                     if backend in BACKEND_NAMES:
@@ -4418,9 +4502,9 @@ def create_app(
                                 direct_message=direct_message,
                             ),
                         )
-                    footer_blocks = footer_blocks or None
-                elif answer.startswith("Stopped.") or answer.startswith("Stop requested"):
-                    footer_blocks = None
+                    footer_blocks = summary_blocks + (footer_blocks or [])
+                elif stopped:
+                    footer_blocks = summary_blocks
                 else:
                     error_reference = new_error_reference()
                     logger.error("Tag backend failure [%s]: %s", error_reference, answer)
@@ -4455,7 +4539,7 @@ def create_app(
                         max_timeout,
                         backend_error_code,
                     )
-                    footer_blocks = failure_action_blocks(
+                    footer_blocks = summary_blocks + failure_action_blocks(
                         team=team,
                         channel=channel,
                         thread_ts=thread_ts,

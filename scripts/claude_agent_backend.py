@@ -147,6 +147,7 @@ class ClaudeEventMapper:
         self.final_text: dict[str, str] = {}
         self.tools: dict[str, tuple[str, dict[str, Any] | None]] = {}
         self.completed = False
+        self.reported_model: str | None = None
 
     @property
     def tools_running(self) -> bool:
@@ -209,6 +210,15 @@ class ClaudeEventMapper:
 
     def _assistant_message(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         events: list[dict[str, Any]] = []
+        model = payload.get("model")
+        if (
+            payload.get("parent_tool_use_id") is None
+            and isinstance(model, str) and model and not model.startswith("<")
+            and model != self.reported_model
+        ):
+            # Synthetic error messages use placeholder names such as <synthetic>.
+            self.reported_model = model
+            events.append({"type": "run_info", "model": model})
         error = payload.get("error")
         if isinstance(error, str) and error and payload.get("parent_tool_use_id") is None:
             events.append({"type": "error", "text": f"Claude reported {error.replace('_', ' ')}", "code": error})
@@ -349,6 +359,7 @@ def normalize_catalog(models: Any) -> list[dict[str, Any]]:
             "supportedEfforts": [effort for effort in efforts if isinstance(effort, str)]
             if isinstance(efforts, list) else [],
             "supportsFastMode": item.get("supportsFastMode") is True,
+            "resolvedModel": item.get("resolvedModel") if isinstance(item.get("resolvedModel"), str) else None,
         })
     return catalog
 
