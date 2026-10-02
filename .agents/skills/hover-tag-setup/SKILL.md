@@ -10,6 +10,47 @@ Use Tag's installer and installed `tag` CLI for all setup and service operations
 This skill contains no runtime implementation. Do not launch bridge Python
 scripts directly or manually build an MFS connector for initial onboarding.
 
+## Talk like a person
+
+Most people using this skill are not developers. The rules below are for you;
+what you say to the user should be plain and short.
+
+- Keep the number of messages low. Setup already takes many turns, so do
+  everything you can without the user, and stop only when you need them. Put
+  every step they must do in one place, such as the Slack sign-in, together in
+  one numbered message, and ask all questions you already know you need in one
+  go. Say why in a few words.
+- Describe outcomes, not commands. Say "I'll install Tag now", not "running
+  `install.sh`". Mention a command only if the user asks or must run it.
+- Write like a helpful coworker: short sentences, no headings or bullet walls
+  in chat unless listing choices, no filler like "Great question" or "Let's
+  dive in".
+- Translate internal terms. Never show these as written:
+
+| Internal term | Say instead |
+| --- | --- |
+| invitation-following memory | Tag will also read channels you add it to later |
+| selected-channel policy | Tag only reads the channels you picked |
+| authorization ticket, `/slackauthticket` | a one-time sign-in line from Slack |
+| Agent messaging, legacy Assistant experience | Slack's chat feature for the app |
+| App ID | the app's ID, shown in Slack's app settings |
+| MFS, index sync, App Server | Tag's search of your messages (only if asked) |
+| `first_reply: not_verified` | I haven't seen Tag answer in Slack yet |
+
+- When something fails, say what happened, what it means for them, and the one
+  next step. Keep stack traces and raw logs out of chat.
+- When setup is blocked, lead with the outcome in plain words: nothing was
+  changed, what broke in one sentence, and who can fix it. Say whether it's
+  something the user can do or a Tag bug to report. Don't name internal modules
+  or files unless the user asks.
+- If the user is stuck or it looks like a Tag bug, point them to the developers:
+  the [Slack community](https://join.slack.com/t/hover-community/shared_invite/zt-4aghkshid-n7fRukS7_J5sR2jDLBXK9A)
+  for quick help, or a [GitHub issue](https://github.com/klovr-co/hover-tag/issues)
+  for bugs. Offer to draft the issue with redacted details. If the Slack link
+  has expired, use the community link on https://hover.team/tag instead.
+- Report "Tag is running" and "Tag answered in Slack" as two separate facts, in
+  everyday words.
+
 ## Inspect before installing
 
 The primary path is macOS/Linux with Codex CLI already installed, signed in,
@@ -93,7 +134,17 @@ recommended defaults. Include every choice or approval setup is likely to need:
   handoff choice: show the one-time connection in chat (default), or use the
   local clipboard to keep the one-time values out of chat.
 
-Ask the user to reply **Use these defaults** or list all changes in one message.
+Write the proposal for someone who has never seen Tag. Start with what you
+found and what you're about to do, in one or two sentences, such as "Tag is
+already installed on this computer and connected to your klovr-co Slack. I'll
+keep that and finish setup." Then list each choice in everyday words with the
+value you'd use. Avoid "authorized caller", "indexing", "preserving data" and
+similar; say "only you can ask Tag to do things" and "Tag will read the last 30
+days of messages so it has context". If the choice is about to reuse an
+existing setup, never offer an alternative like a different workspace or a
+fresh setup unless you say what it means and what would be lost. Spell out any
+workspace name you mention. Ask the user to reply **Use these defaults** or
+list all changes in one message.
 Do not ask separately for values that inspection can discover. Treat that reply
 as the answer to matching later setup prompts, but do not broaden it to new
 actions or unexpected permission changes. Ask again only for an unavoidable
@@ -119,11 +170,14 @@ Use this by default unless the user selected the private clipboard option:
 1. Run `slack auth login --no-prompt`, retaining its one-time ticket for the
    completion command. Show only the complete `/slackauthticket …` line to the
    user; do not dump the surrounding CLI output.
-2. In the same message, say: “In the Slack workspace you want to connect, paste
-   the line above into the message box of **any channel or DM** and send it. It
-   does not need to be a Tag channel. Choose **Confirm**, then copy the short
-   code from the next Slack window and send that code back here.” Do not split
-   those actions into separate turns.
+2. In the same message, say it as short numbered steps, for example: “Slack
+   needs to confirm it's really you. This takes about a minute.
+   1. Open the Slack workspace you want to connect.
+   2. Paste the line above into the message box of any channel or DM, then send
+      it. It doesn't need to be a Tag channel.
+   3. Click **Confirm**.
+   4. Slack will show a short code. Copy it and paste it here.”
+   Do not split those steps into separate turns.
 3. When the user replies with the code, complete the exchange with `slack auth
    login --ticket <ticket> --challenge <code>`. Do not echo either value again.
 4. Verify the resulting workspace with `slack auth list`, then continue the
@@ -148,11 +202,14 @@ code the user copies from Slack. After approval:
 
 1. Run `scripts/slack_auth_clipboard.py begin`. Do not print or repeat the
    command it places on the clipboard.
-2. Tell the user: “In the Slack workspace you want to connect, paste into the
-   message box of **any channel or DM** and send. It does not need to be a Tag
-   channel. Choose **Confirm**, copy the short code from the next Slack window,
-   then reply **copied** here.” This is one user turn; do not split it into
-   separate checks.
+2. Tell the user, as short numbered steps: “Slack needs to confirm it's really
+   you. I've copied a one-time line to your clipboard.
+   1. Open the Slack workspace you want to connect.
+   2. Paste into the message box of any channel or DM, then send. It doesn't
+      need to be a Tag channel.
+   3. Click **Confirm**.
+   4. Copy the short code Slack shows, then reply **copied** here.”
+   This is one user turn; do not split it into separate checks.
 3. After the user replies, run `scripts/slack_auth_clipboard.py complete --state
    <state_file>` using the state path returned by `begin`.
 4. Verify the resulting workspace with `slack auth list`, then continue the
@@ -183,7 +240,8 @@ Setup owns these steps:
   Preserve the caller allowlist; widen access only on explicit user request.
 - Finish approval, which starts services and indexing unless `--no-start` is used.
 
-Explain the policy shown by the installed version. Current new setups include
+Explain the policy shown by the installed version in one or two plain
+sentences, using the table in "Talk like a person". Current new setups include
 all channels the bot already joined and default to invitation-following memory:
 future invitations can expand the channels eligible for replies and indexing.
 Private channels require an invitation. Do not describe this as permanently
@@ -235,6 +293,14 @@ presence does not prove Codex sign-in. Inspection does not run a model task,
 and `first_reply: not_verified` is not a receipt that changes automatically.
 A healthy service or requested index sync does not prove a successful Slack task.
 If the reply cannot be observed or confirmed, state that verification is pending.
+Close with a short plain summary, for example: “Tag is running on this
+computer. I haven't seen it answer in Slack yet. Mention @Tag in a channel it's
+in and say hi, then tell me what happens.”
+
+Once the first reply works, invite them once to join the
+[Tag community on Slack](https://join.slack.com/t/hover-community/shared_invite/zt-4aghkshid-n7fRukS7_J5sR2jDLBXK9A)
+for tips and to talk with the developers. Keep it to one friendly line, and
+don't repeat it if they ignore it.
 
 ## Recover only what failed
 
