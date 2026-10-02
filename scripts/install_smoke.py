@@ -52,7 +52,13 @@ def check_memory_server(python: Path, directory: Path) -> None:
         with urllib.request.urlopen(request, timeout=60) as response:
             assert json.loads(response.read())["job_id"], "MFS did not queue the indexing job"
     finally:
-        process.terminate()
+        if os.name == "nt":
+            # mfs-server.exe is a launcher that runs Python as a child; stop the
+            # whole tree so no process keeps the runtime's files open.
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(process.pid)],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        else:
+            process.terminate()
         try:
             process.wait(timeout=20)
         except subprocess.TimeoutExpired:
