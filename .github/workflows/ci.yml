@@ -53,7 +53,15 @@ jobs:
           python-version: ${{ matrix.python }}
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
       - name: Run unit tests
+        if: runner.os != 'Windows'
         run: ./scripts/ci_check.sh --tests-only
+      - name: Run unit tests (Windows, every failure reported)
+        # pytest gives each test a time limit, so one hang can't hide the other tracebacks (#160).
+        if: runner.os == 'Windows'
+        run: |
+          uv run --with slack-bolt==1.30.0 --with PyYAML==6.0.3 --with questionary==2.1.1 --with psutil==7.0.0 \
+            --with tomli==2.2.1 --with pytest --with pytest-timeout \
+            python -m pytest tests -p no:cacheprovider -q -rfE --timeout 120 --timeout-method thread
 
 
   desktop:
