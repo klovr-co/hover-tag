@@ -12,6 +12,11 @@ All notable changes to Tag are documented here.
   model, thinking, and Fast Mode settings from the signed-in Claude account.
   `OPENTAG_CLAUDE_TRANSPORT=print` keeps the previous `claude -p` path as a
   rollback. Upgrades install the SDK automatically.
+- Switch models between Codex and Claude from Slack's Configure control. The
+  chosen model selects the backend for that user's next request, including
+  mid-thread. `OPENTAG_DEFAULT_MODEL` sets each Tag's default model and
+  `OPENTAG_BACKENDS` limits which signed-in backends are offered. Claude is no
+  longer experimental.
 
 - Deliver saved files as local copies plus Slack attachments by default.
   `OPENTAG_FILE_DELIVERY` and individual requests can select local-only delivery.

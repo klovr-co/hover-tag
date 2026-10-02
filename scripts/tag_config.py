@@ -25,6 +25,8 @@ DEFAULTS = {
     "OPENTAG_FILE_DELIVERY": "local+slack",
     "MFS_URL": "http://127.0.0.1:13619", "MFS_SLACK_HISTORY_DAYS": "30",
 }
+BACKENDS = frozenset({"codex", "claude"})
+DEFAULT_MODEL_RE = re.compile(r"(?:codex|claude)(?::[A-Za-z0-9][A-Za-z0-9._\[\]-]{0,99})?")
 REQUIRED = ("OPENTAG_BACKEND", "MFS_URL", "MFS_ALLOWED_SCOPES",
             "SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_ALLOWED_USER_IDS",
             "SLACK_TEAM_ID", "SLACK_APP_ID")
@@ -36,12 +38,14 @@ PUBLIC = frozenset((*DEFAULTS, "MFS_ALLOWED_SCOPES", "OPENTAG_WORKDIR",
                     "MFS_SLACK_HISTORY_DAYS",
                     "MFS_SLACK_CONNECTOR_URI", "MFS_SLACK_CONNECTOR_CONFIG",
                     "OPENTAG_CODEX_MODELS", "OPENTAG_CODEX_REASONING_EFFORTS",
-                    "OPENTAG_CLAUDE_MODELS"))
+                    "OPENTAG_CLAUDE_MODELS", "OPENTAG_DEFAULT_MODEL", "OPENTAG_BACKENDS"))
 EDITABLE = PUBLIC - {"OPENTAG_WORKDIR"} | {
     "SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "MFS_TOKEN", "MFS_SLACK_TOKEN", "MFS_HOME"
 }
 LABELS = {
     "OPENTAG_BACKEND": "Agent", "OPENTAG_BOT_NAME": "Bot name",
+    "OPENTAG_DEFAULT_MODEL": "Default model (codex:MODEL, claude:MODEL, or a backend)",
+    "OPENTAG_BACKENDS": "Backends users can choose (codex,claude)",
     "OPENTAG_CODEX_TRANSPORT": "Codex transport (exec or app-server)",
     "OPENTAG_CLAUDE_TRANSPORT": "Claude transport (print or sdk)",
     "OPENTAG_CLAUDE_PERMISSION_MODE": "Claude permission mode",
@@ -89,8 +93,12 @@ def validation_error(key: str, value: str) -> str | None:
         return "Required"
     if "\x00" in value:
         return "Must not contain a null character"
-    if key == "OPENTAG_BACKEND" and value not in {"codex", "claude"}:
-        return "Choose codex or claude (experimental)"
+    if key == "OPENTAG_BACKEND" and value not in BACKENDS:
+        return "Choose codex or claude"
+    if key == "OPENTAG_DEFAULT_MODEL" and value and not DEFAULT_MODEL_RE.fullmatch(value):
+        return "Use codex, claude, codex:MODEL, or claude:MODEL"
+    if key == "OPENTAG_BACKENDS" and value and not set(value.split(",")) <= BACKENDS:
+        return "Use a comma-separated list of codex and claude"
     if key == "OPENTAG_BOT_NAME" and (
         not value.strip()
         or len(value) > 35
@@ -204,10 +212,21 @@ def update_config(path: Path, changes: dict[str, str], *, only_missing: bool = F
     try:
         values = load_config(path)
         values.update({key: value for key, value in changes.items() if not only_missing or key not in values})
+        align_default_backend(values, changes)
         save_config(path, values)
         return values
     finally:
         lock.unlink(missing_ok=True)
+
+
+def align_default_backend(values: dict[str, str], changes: dict[str, str]) -> None:
+    """Keep the default backend and the default model naming the same backend."""
+    default_model = values.get("OPENTAG_DEFAULT_MODEL", "")
+    model_backend = default_model.partition(":")[0]
+    if "OPENTAG_DEFAULT_MODEL" in changes and model_backend in BACKENDS:
+        values["OPENTAG_BACKEND"] = model_backend
+    elif "OPENTAG_BACKEND" in changes and model_backend and model_backend != values.get("OPENTAG_BACKEND"):
+        values["OPENTAG_DEFAULT_MODEL"] = ""
 
 
 def migrate_file_delivery(home: Path, path: Path) -> bool:

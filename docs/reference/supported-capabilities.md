@@ -23,8 +23,9 @@ unavailable behavior.
 
 | Capability | Status | Notes |
 | --- | --- | --- |
-| Codex CLI backend | Supported path | Used by the v0.1 launch qualification. |
-| Claude Code backend | Experimental | Uses the Claude Agent SDK with an authenticated local Claude CLI session; supports the same streaming, activity, approval, Stop, and settings controls as Codex App Server. |
+| Codex CLI backend | Supported | Used by the v0.1 launch qualification. |
+| Switch models between backends | Implemented | Configure lists models from every signed-in backend; the chosen model selects Codex or Claude for that user's next request. `OPENTAG_DEFAULT_MODEL` sets the Tag default. |
+| Claude Code backend | Supported | Uses the Claude Agent SDK with an authenticated local Claude CLI session; supports the same streaming, activity, approval, Stop, and settings controls as Codex App Server. |
 | Inspect and change workspace files | Implemented | Uses the permissions of the backend process. |
 | Run workspace commands and tests | Implemented | Available when the selected backend can perform them. |
 | Use installed local tools and skills | Available | Each tool uses its own credentials and grants. |

@@ -122,7 +122,7 @@ flowchart LR
     Slack["Connect Slack<br/>Create or approve app"]
     Connected["App connected<br/>Tag + workspace"]
     Channel["Choose destination<br/>Visual channel picker"]
-    Agent["Review settings<br/>Codex default, Claude experimental"]
+    Agent["Review settings<br/>Default agent and model"]
     Guardrails["Set boundaries<br/>Users, workspace, MFS roots"]
     Doctor{"Run doctor<br/>Checks pass?"}
     Start["Start services<br/>MFS + Slack bridge"]
@@ -135,8 +135,7 @@ flowchart LR
 
 ### Level 2 · Task flow
 
-1. Install Python 3.10+, `uv`, and an authenticated Codex or experimental Claude
-   Code CLI. Run `./install.sh` (or `./install.ps1` on Windows) for Tag's runtime.
+1. Install Python 3.10+, `uv`, and an authenticated Codex or Claude Code CLI. Run `./install.sh` (or `./install.ps1` on Windows) for Tag's runtime.
 2. Open `tag` for the menu or ask the admin skill to inspect with `tag inspect --json`.
 3. Use `tag setup` to resume missing answers, or let the skill seed defaults with
    `tag config init --json` and apply targeted `tag config set` operations.
@@ -543,8 +542,13 @@ restarts. Reasoning levels retain the names reported by the selected backend;
 Fast Mode is an independent latency setting that uses increased usage.
 “Default” delegates model or reasoning selection to the backend CLI. If a saved
 choice is no longer available, Tag normalizes it back to the applicable default.
-Codex and Claude choices are saved separately, so switching the backend does
-not discard either set.
+When both Codex and Claude are installed and signed in, the picker groups
+their models and the chosen model decides which backend runs that user's next
+request. Switching mid-thread is safe: every request is a fresh run that
+receives the Slack thread (up to 30 messages, including Tag's replies), so the
+new model continues from what is visible in Slack. It does not inherit the
+previous model's private reasoning or tool output; files it saved remain in
+the workspace. A running task keeps its model until it finishes or is stopped.
 
 ## Flow 8: Denials, failures, and recovery
 

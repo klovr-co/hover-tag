@@ -12,7 +12,7 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts import opentag_doctor, opentag_setup, slack_manifest_migrations, tag_cli, tag_config, tag_control, tag_instances
+from scripts import agent_models, opentag_doctor, opentag_setup, slack_manifest_migrations, tag_cli, tag_config, tag_control, tag_instances
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -52,6 +52,82 @@ class TagControlTests(unittest.TestCase):
             tag_control.settings_menu(self.home)
         self.assertEqual(tag_config.read_config(self.path)["OPENTAG_BACKEND"], "claude")
         self.assertEqual(choose.call_args_list[2].kwargs["default"], 0)
+
+    def test_settings_default_model_picker_uses_live_models_and_aligns_backend(self):
+        self.complete()
+        models = [
+            agent_models.ModelOption("gpt-5.5", "GPT-5.5", ("low",), is_default=True),
+            agent_models.ModelOption("default", "Default (recommended)", (), backend="claude"),
+            agent_models.ModelOption("opus", "Opus 5.5", ("max",), backend="claude"),
+        ]
+        seen_workdir = []
+
+        def discover(backend):
+            seen_workdir.append(os.environ.get("OPENTAG_WORKDIR"))
+            self.assertEqual("codex", backend)
+            return models
+
+        with patch.object(tag_control.ui, "keyboard_available", return_value=True), patch.object(
+            tag_control.agent_models, "discover_tag_models", side_effect=discover
+        ), patch.object(tag_control.ui.display, "backend_status", return_value=("Signed in", True)), patch.object(
+            tag_control.ui, "choose", side_effect=[2, 1, 3, 4]
+        ) as choose, redirect_stdout(StringIO()):
+            tag_control.settings_menu(self.home)
+
+        labels = choose.call_args_list[2].args[1]
+        self.assertEqual(
+            ["Codex · account default", "Codex · GPT-5.5", "Claude · Default (recommended)", "Claude · Opus 5.5", "Cancel"],
+            labels,
+        )
+        self.assertEqual(0, choose.call_args_list[2].kwargs["default"])
+        saved = tag_config.read_config(self.path)
+        self.assertEqual(("claude:opus", "claude"), (saved["OPENTAG_DEFAULT_MODEL"], saved["OPENTAG_BACKEND"]))
+        self.assertEqual([str(tag_control.default_workspace(self.home))], seen_workdir)
+        self.assertNotIn("OPENTAG_WORKDIR", os.environ)
+
+    def test_status_shows_default_model_and_other_backends(self):
+        self.complete()
+        tag_config.update_config(self.path, {"OPENTAG_DEFAULT_MODEL": "claude:opus"})
+        statuses = {"claude": ("Signed in · task not tested", True), "codex": ("Not installed", False)}
+        with patch.object(tag_cli, "healthy", return_value=True), patch.object(
+            tag_cli, "slack_ready", return_value=True
+        ), patch.object(tag_control.ui.display, "backend_status",
+                        side_effect=lambda name, **_kwargs: statuses[name]):
+            report = tag_control.status_report(self.home, tag_cli)
+            with redirect_stdout(StringIO()) as output:
+                tag_control.show_status(report)
+        self.assertEqual("claude:opus", report["backend"]["default_model"])
+        self.assertEqual(["claude", "codex"], report["backend"]["offered"])
+        self.assertIn("Agent          Claude · opus", output.getvalue())
+        self.assertNotIn("task not tested", output.getvalue())
+        self.assertNotIn("switch to", output.getvalue())
+
+        agent_models.remember_model_names(
+            [agent_models.ModelOption("opus", "Opus 5.5", (), backend="claude")],
+            agent_models.model_names_path(self.home),
+        )
+        statuses["codex"] = ("Signed in · task not tested", True)
+        with patch.object(tag_cli, "healthy", return_value=True), patch.object(
+            tag_cli, "slack_ready", return_value=True
+        ), patch.object(tag_control.ui.display, "backend_status",
+                        side_effect=lambda name, **_kwargs: statuses[name]):
+            report = tag_control.status_report(self.home, tag_cli)
+            with redirect_stdout(StringIO()) as output:
+                tag_control.show_status(report)
+        self.assertIn("Agent          Claude · Opus 5.5", output.getvalue())
+        self.assertIn("Slack users can also switch to Codex.", output.getvalue())
+
+    def test_status_keeps_sign_in_problem_beside_the_model(self):
+        self.complete(backend="claude")
+        with patch.object(tag_cli, "healthy", return_value=True), patch.object(
+            tag_cli, "slack_ready", return_value=True
+        ), patch.object(tag_control.ui.display, "backend_status",
+                        return_value=("Sign-in unverified · run claude auth status", False)):
+            report = tag_control.status_report(self.home, tag_cli)
+            with redirect_stdout(StringIO()) as output:
+                tag_control.show_status(report)
+        self.assertIn("Agent          Claude · account default · sign-in unverified", output.getvalue())
+        self.assertIn("› tag doctor", output.getvalue())
 
     def test_settings_pause_preserves_config_and_masks_credentials(self):
         self.complete()
@@ -232,7 +308,7 @@ class TagControlTests(unittest.TestCase):
         del values["SLACK_ALLOWED_USER_IDS"]
         values.update(OPENTAG_TIMEOUT_SECONDS="900")
         tag_config.save_config(self.path, values)
-        with patch.object(opentag_setup, "selected_backend_available", return_value=True), patch.object(
+        with patch.object(opentag_setup, "ensure_agent", side_effect=lambda _path, values: values), patch.object(
             opentag_setup, "validate_slack_identity", return_value={"team_id": "TTEST", "app_id": "ATEST"}
         ), patch.object(opentag_setup, "validate_socket_token"
         ), patch.object(
@@ -252,7 +328,7 @@ class TagControlTests(unittest.TestCase):
     def test_no_start_setup_never_calls_service_finish(self):
         tag_config.save_config(self.path, self.complete())
         channels = [opentag_setup.slack_channels.SlackChannel("CTEST", "team", False, True)]
-        with patch.object(opentag_setup, "selected_backend_available", return_value=True), patch.object(
+        with patch.object(opentag_setup, "ensure_agent", side_effect=lambda _path, values: values), patch.object(
             opentag_setup, "validate_slack_identity", return_value={"team_id": "TTEST", "app_id": "ATEST"}
         ), patch.object(opentag_setup, "validate_socket_token"), patch.object(
             opentag_setup.slack_channels, "list_channels", return_value=channels
@@ -269,7 +345,7 @@ class TagControlTests(unittest.TestCase):
         values["MFS_ALLOWED_SCOPES"] = "slack://tag-ttest/channels/team__CTEST"
         tag_config.save_config(self.path, values)
         selected = [opentag_setup.slack_channels.SlackChannel("CTEAM", "team", False, True)]
-        with patch.object(opentag_setup, "selected_backend_available", return_value=True), patch.object(
+        with patch.object(opentag_setup, "ensure_agent", side_effect=lambda _path, values: values), patch.object(
             opentag_setup, "validate_slack_identity", return_value={"team_id": "TTEST", "app_id": "ATEST"}
         ), patch.object(opentag_setup, "validate_socket_token"
         ), patch.object(
@@ -288,7 +364,7 @@ class TagControlTests(unittest.TestCase):
         self.assertEqual(tag_config.read_config(self.path)["SLACK_CHANNEL_IDS"], "CTEAM")
 
     def test_interrupted_setup_keeps_completed_answers(self):
-        with patch.object(opentag_setup, "selected_backend_available", return_value=True), patch.object(
+        with patch.object(opentag_setup, "ensure_agent", side_effect=lambda _path, values: values), patch.object(
             opentag_setup, "connect_slack_cli", return_value="TTEST"
         ), patch.object(opentag_setup, "ask_validated", return_value="TTEST"), patch.object(
             opentag_setup, "choose_slack_app", return_value="ATEST"
@@ -305,7 +381,7 @@ class TagControlTests(unittest.TestCase):
     def test_setup_defaults_return_to_summary_and_update_connector_window(self):
         values = self.complete()
         channels = [opentag_setup.slack_channels.SlackChannel("CTEST", "team", False, True)]
-        with patch.object(opentag_setup, "selected_backend_available", return_value=True), patch.object(
+        with patch.object(opentag_setup, "ensure_agent", side_effect=lambda _path, values: values), patch.object(
             opentag_setup, "validate_slack_identity", return_value={"team_id": "TTEST", "app_id": "ATEST"}
         ), patch.object(opentag_setup, "validate_socket_token"), patch.object(
             opentag_setup.slack_channels, "list_channels", return_value=channels
@@ -325,7 +401,7 @@ class TagControlTests(unittest.TestCase):
     def test_setup_exit_before_approval_does_not_index_or_connect_slack(self):
         self.complete()
         channels = [opentag_setup.slack_channels.SlackChannel("CTEST", "team", False, True)]
-        with patch.object(opentag_setup, "selected_backend_available", return_value=True), patch.object(
+        with patch.object(opentag_setup, "ensure_agent", side_effect=lambda _path, values: values), patch.object(
             opentag_setup, "validate_slack_identity", return_value={"team_id": "TTEST", "app_id": "ATEST"}
         ), patch.object(opentag_setup, "validate_socket_token"), patch.object(
             opentag_setup.slack_channels, "list_channels", return_value=channels

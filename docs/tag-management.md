@@ -129,8 +129,15 @@ or indexes history. Run `tag start` when ready to use the new settings.
 
 `tag setup` saves each completed answer. Ctrl-C pauses; running it again skips
 valid saved answers. It defaults to Codex and puts timeouts, retries, and other
-advanced settings outside the required questions. Claude Code is available in
-Settings or with `tag config set OPENTAG_BACKEND claude` and remains experimental.
+advanced settings outside the required questions. Choose the Tag's default
+model in Settings → Agent or with `tag config set OPENTAG_DEFAULT_MODEL claude:opus`
+(or `codex:MODEL`, or just `codex`/`claude` for that backend's own default).
+Setting a default model also sets `OPENTAG_BACKEND` to match. In Slack, anyone
+authorized can choose any model from the signed-in backends with **Configure**;
+`OPENTAG_BACKENDS=codex` limits the choices to one backend.
+Settings → Agent → Default model lists the live models of every signed-in
+agent. `tag status` shows the default model and which other agents Slack users
+can switch to, and `tag list` shows each Tag's default model.
 
 To start onboarding over, run `tag reset`. A confirmation defaults to Cancel.
 After confirmation, Tag stops its managed services, moves saved settings and

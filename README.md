@@ -109,7 +109,8 @@ conversation. [See how it works →](https://www.hover.team/tag/how-it-works/)
 ## Early, open source, yours to run
 
 Tag is an early project for experimentation in a trusted environment. Codex is
-the supported path; Claude Code is experimental. Your agent runs with local
+and Claude Code are both supported, and users can switch models between them
+in Slack. Your agent runs with local
 account permissions and inherited bot/MFS credentials; Tag is not a hardened
 sandbox. Connected services process requests under their own data policies.
 Read the [security model](docs/adr/0001-credential-boundary.md) before connecting

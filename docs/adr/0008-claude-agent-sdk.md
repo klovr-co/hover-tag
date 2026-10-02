@@ -60,4 +60,15 @@ parse backend-native payloads:
   rather than token by token, because its phase is unknown until then.
 - Each request pays SDK and CLI startup cost, preserving the per-request caller
   and MFS scope isolation established by ADR 0004.
-- Claude remains labelled experimental until it is qualified in a release.
+
+## Model-driven backend selection (2026-10-02)
+
+The backend is no longer fixed per Tag. `OPENTAG_BACKEND` names the Tag's
+default backend and `OPENTAG_DEFAULT_MODEL` (`backend:model` or `backend`) its
+default model; setting the model keeps `OPENTAG_BACKEND` aligned. The bridge
+discovers models from the default backend and from every other backend in
+`OPENTAG_BACKENDS` (all by default) whose CLI is installed and signed in, and
+the Configure picker groups them by backend. A saved choice stores its backend,
+and the bridge runs each request on the requester's chosen backend. Choices
+saved before this change carry no backend and are read as Codex, so no stored
+data is rewritten. Claude is no longer labelled experimental.

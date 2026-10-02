@@ -1,8 +1,9 @@
 # Adding integrations
 
 Integrations let Tag use services such as Gmail from Slack. You make them
-available through the agent running Tag's tasks. This guide covers Codex;
-Claude remains experimental.
+available through the agent running Tag's tasks. This guide uses Codex; for
+Claude, put MCP servers in the workspace `.mcp.json` and skills in
+`.claude/skills`. Add an integration to both if users switch between them.
 
 ## Commands, skills, and MCP
 

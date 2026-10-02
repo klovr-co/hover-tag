@@ -18,12 +18,12 @@ from typing import Any
 
 try:
     from tag_paths import codex_workspace_args, tag_temp_dir
-    from codex_app_server import CodexAppServer, CodexAppServerError
+    from codex_agent_backend import CodexAppServer, CodexAppServerError
     from claude_agent_backend import ClaudeAgentError, ClaudeAgentRun
     from record_output_artifact import channel_artifact_directory
 except ImportError:
     from scripts.tag_paths import codex_workspace_args, tag_temp_dir
-    from scripts.codex_app_server import CodexAppServer, CodexAppServerError
+    from scripts.codex_agent_backend import CodexAppServer, CodexAppServerError
     from scripts.claude_agent_backend import ClaudeAgentError, ClaudeAgentRun
     from scripts.record_output_artifact import channel_artifact_directory
 

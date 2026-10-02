@@ -168,7 +168,12 @@ def header(section, detail=""):
 def status_row(name, value, good):
     marker = "●" if good else "!"
     code = SUCCESS if good else WARNING
-    paragraph(f"{marker}  {name:<14} {value}", code, indent="    ")
+    prefix = f"    {marker}  {name:<14} "
+    lines = textwrap.wrap(str(value), width=max(8, content_width() + 2 - len(prefix)),
+                          break_on_hyphens=False) or [""]
+    emit(styled(prefix + lines[0], code))
+    for line in lines[1:]:
+        emit(styled(" " * len(prefix) + line, code))
 
 
 def section(label):
@@ -302,9 +307,9 @@ def styled(text, code):
     return f"\033[{code}m{text}\033[0m" if color_available() else text
 
 
-def summary(state, command, *, slack=None, memory=None, backend=None, agent=None):
+def summary(state, command, *, slack=None, memory=None, backend=None, agent=None, model=None, others=None):
     agent = agent if agent is not None else backend_status(backend) if backend else None
-    if agent and not agent[1] and state in {"ready", "running"}:
+    if agent and not agent[1] and state in {"ready", "running", "stopped"}:
         state, command = "needs_attention", "tag doctor"
     header("Overview")
     label = state.replace("_", " ").capitalize()
@@ -324,15 +329,24 @@ def summary(state, command, *, slack=None, memory=None, backend=None, agent=None
     emit()
     if agent or slack is not None or memory is not None:
         paragraph("CONNECTIONS", MUTED)
+    names = {"codex": "Codex", "claude": "Claude"}
     if agent:
-        name = {"codex": "Codex", "claude": "Claude"}.get(backend, "Agent")
-        status_row(name, agent[0], agent[1])
+        if model:
+            # The model already names the agent; sign-in detail matters only when it fails.
+            problem = agent[0].split(" · ")[0].lower()
+            status_row("Agent", model if agent[1] else f"{model} · {problem}", agent[1])
+        else:
+            status_row(names.get(backend, "Agent"), agent[0], agent[1])
     for name, value, good, bad in (
         ("Slack", slack, "Connected", "Not connected or unverified"),
         ("Memory", memory, "Ready", "Not ready"),
     ):
         if value is not None:
             status_row(name, good if value else bad, value)
+    switchable = [names.get(name, name) for name, ready in (others or {}).items() if ready]
+    if switchable:
+        emit()
+        paragraph(f"Slack users can also switch to {' and '.join(switchable)}.", MUTED)
     emit()
     prompt = {"tag setup": "Get started" if state == "not_configured" else "Continue setup",
               "tag start": "Start Tag", "tag doctor": "Check what needs attention",

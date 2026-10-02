@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from .codex_app_server import (
+    from .agent_activity import (
         APPROVAL_POLL_SECONDS,
         APPROVAL_TIMEOUT_SECONDS,
         INTERRUPT_GRACE_SECONDS,
@@ -29,7 +29,7 @@ try:
     )
     from .tag_activity_details import item_activity_details, preview
 except ImportError:  # Direct script execution does not create a package context.
-    from codex_app_server import (
+    from agent_activity import (
         APPROVAL_POLL_SECONDS,
         APPROVAL_TIMEOUT_SECONDS,
         INTERRUPT_GRACE_SECONDS,

@@ -34,10 +34,12 @@ try:
     import tag_mfs_runtime
     import tag_slack_backoff
     import tag_display as display
+    import agent_models
 except ImportError:
     from scripts.tag_paths import initialize_instance, initialize_workspace, runtime_environment, tag_home
     from scripts import tag_instances, tag_telemetry
     from scripts.tag_locks import LifecycleLock
+    from scripts import agent_models
     from scripts.tag_config import read_config
     from scripts import tag_credentials
     from scripts import tag_welcome
@@ -1684,7 +1686,12 @@ def _run_cli() -> int:
                     context = tag_instances.resolve(installation_root, str(item["id"]))
                     report = control.inspect(context.home, sys.modules[__name__], tag_id=context.tag_id)
                     record.update(state=report["state"], configuration=report["configuration"],
-                                  services=report["services"], slack_workspace=report.get("slack_workspace"))
+                                  services=report["services"], slack_workspace=report.get("slack_workspace"),
+                                  default_model=report["backend"]["default_model"],
+                                  default_model_label=agent_models.describe_model_choice(
+                                      report["backend"]["default_model"], report["backend"]["selected"] or "codex",
+                                      names=agent_models.load_model_names(agent_models.model_names_path(context.home)),
+                                  ))
                 except (OSError, ValueError, RuntimeError) as exc:
                     record.update(valid=False, state="invalid_configuration", error=str(exc))
             else:
@@ -1697,7 +1704,9 @@ def _run_cli() -> int:
             display.header("Tags", "Independent Slack workspaces managed by this installation.")
             for row in rows:
                 workspace = row.get("slack_workspace") or "Slack not configured"
-                detail = f"{row['state']} · {workspace}" if row.get("valid") else str(row.get("error"))
+                model = row.get("default_model_label") or ""
+                detail = (" · ".join(part for part in (row["state"], workspace, model) if part)
+                          if row.get("valid") else str(row.get("error")))
                 display.info_row(str(row["id"]), detail, good=bool(row.get("valid")))
             display.next_action("Connect another Slack workspace", "tag add")
         return 0

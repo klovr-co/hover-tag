@@ -5,8 +5,8 @@ Slack and ask Tag to save the open questions there. As you answer them, ask Tag
 to update the saved file.
 
 This guide uses Codex and assumes you have completed
-[your first Tag task](../getting-started/first-task.md). Claude remains
-experimental.
+[your first Tag task](../getting-started/first-task.md). Claude uses the same
+workspace with `.claude/skills` and `.mcp.json`.
 
 ## Turn a brief into questions you can resolve
 

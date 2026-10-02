@@ -19,7 +19,7 @@ import urllib.error
 import urllib.request
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +31,19 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 try:
     from . import slack_identity
+    from .agent_models import (
+        BACKEND_NAMES,
+        DEFAULT_REASONING_EFFORTS,
+        SUPPORTED_REASONING_EFFORTS,
+        CodexModelOption,
+        ModelOption,
+        backend_display_name,
+        discover_tag_models,
+        model_names_path,
+        remember_model_names,
+        parse_model_choice,
+        rich_events_selected,
+    )
     from .opentag_process_env import backend_environment
     from .tag_error_reporting import (
         COMMUNITY_INVITE_URL,
@@ -55,6 +68,19 @@ try:
     from . import slack_channels
 except ImportError:  # Direct script execution does not create a package context.
     import slack_identity
+    from agent_models import (
+        BACKEND_NAMES,
+        DEFAULT_REASONING_EFFORTS,
+        SUPPORTED_REASONING_EFFORTS,
+        CodexModelOption,
+        ModelOption,
+        backend_display_name,
+        discover_tag_models,
+        model_names_path,
+        remember_model_names,
+        parse_model_choice,
+        rich_events_selected,
+    )
     from opentag_process_env import backend_environment
     from tag_error_reporting import (
         COMMUNITY_INVITE_URL,
@@ -100,8 +126,6 @@ ACTIVITY_WAIT_SECONDS = 12.0
 CANCEL_GRACE_SECONDS = 6.0
 STATUS_REFRESH_SECONDS = 90
 STATUS_CLEANUP_RETRY_DELAYS = (2, 5, 15, 30, 60, 90, 90, 90)
-SUPPORTED_REASONING_EFFORTS = ("minimal", "low", "medium", "high", "xhigh", "max", "ultra")
-DEFAULT_REASONING_EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultra")
 DEFAULT_CONFIG_VALUE = "__opentag_default__"
 ACTIVITY_ACTION_ID = "opentag_view_activity"
 SHOW_ACTIVITY_DETAILS = False
@@ -209,274 +233,11 @@ GENERATED_IMAGE_MIME_TYPES = {
 
 
 @dataclass(frozen=True)
-class ModelOption:
-    model_id: str
-    label: str
-    reasoning_efforts: tuple[str, ...]
-    supports_fast_mode: bool = False
-    default_reasoning_effort: str | None = None
-    is_default: bool = False
-    default_fast_mode: bool = False
-
-
-CodexModelOption = ModelOption
-BACKEND_NAMES = {"codex": "Codex", "claude": "Claude"}
-# Claude reports supported effort levels but not a default; this is its documented default.
-CLAUDE_DEFAULT_EFFORT = "high"
-
-
-def backend_display_name(backend: str) -> str:
-    return BACKEND_NAMES.get(backend, "Agent")
-
-
-def codex_transport() -> str:
-    return os.getenv("OPENTAG_CODEX_TRANSPORT", "app-server").strip().lower()
-
-
-def claude_transport() -> str:
-    return os.getenv("OPENTAG_CLAUDE_TRANSPORT", "sdk").strip().lower()
-
-
-def rich_events_selected(backend: str) -> bool:
-    """Whether the backend transport reports phased answers, activity, and approvals."""
-    if backend == "codex":
-        return codex_transport() == "app-server"
-    if backend == "claude":
-        return claude_transport() == "sdk"
-    return False
-
-
-@dataclass(frozen=True)
 class AgentSettings:
     model: str | None = None
     reasoning_effort: str | None = None
     fast_mode: bool | None = None
-
-
-def codex_models_cache_path() -> Path:
-    codex_home = Path(os.getenv("CODEX_HOME", str(Path.home() / ".codex"))).expanduser()
-    return codex_home / "models_cache.json"
-
-
-def tag_codex_config_path() -> Path:
-    """Return the project-local Codex configuration owned by Tag."""
-    workdir = Path(os.getenv("OPENTAG_WORKDIR", str(Path.cwd()))).expanduser()
-    return workdir / ".codex" / "config.toml"
-
-
-def read_codex_config(path: Path) -> dict[str, Any]:
-    try:
-        try:
-            import tomllib
-        except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 runtime
-            import tomli as tomllib
-        with path.open("rb") as handle:
-            config = tomllib.load(handle)
-        return config if isinstance(config, dict) else {}
-    except (OSError, TypeError, ValueError):
-        return {}
-
-
-def configured_codex_defaults() -> tuple[str | None, str | None, bool]:
-    """Layer Tag's model defaults over the user's global Codex defaults."""
-    global_config = read_codex_config(codex_models_cache_path().with_name("config.toml"))
-    tag_config = read_codex_config(tag_codex_config_path())
-
-    def layered_value(key: str, validator: Callable[[Any], bool]) -> Any:
-        local = tag_config.get(key)
-        if validator(local):
-            return local
-        global_value = global_config.get(key)
-        return global_value if validator(global_value) else None
-
-    model = layered_value("model", lambda value: isinstance(value, str) and bool(value))
-    effort = layered_value(
-        "model_reasoning_effort",
-        lambda value: isinstance(value, str) and value in SUPPORTED_REASONING_EFFORTS,
-    )
-    service_tier = layered_value(
-        "service_tier",
-        lambda value: isinstance(value, str)
-        and value in {"default", "fast", "priority"},
-    )
-    return (
-        model,
-        effort,
-        service_tier in {"fast", "priority"},
-    )
-
-
-def fetch_codex_model_catalog() -> list[dict[str, Any]] | None:
-    """Use the installed Codex account's catalog, not another client's shared cache."""
-    try:
-        from .codex_app_server import CodexAppServer, CodexAppServerError
-    except ImportError:
-        from codex_app_server import CodexAppServer, CodexAppServerError
-    try:
-        return CodexAppServer(["codex", "app-server"], cwd=default_workdir(), timeout=10).model_catalog()
-    except (CodexAppServerError, OSError, ValueError):
-        return None
-
-
-def discover_codex_models() -> list[CodexModelOption]:
-    """Prefer live account metadata; cached ordering never establishes a default."""
-    configured = [
-        value.strip()
-        for value in os.getenv("OPENTAG_CODEX_MODELS", "").split(",")
-        if value.strip()
-    ]
-    configured_model, configured_effort, configured_fast_mode = configured_codex_defaults()
-    discovered: dict[str, CodexModelOption] = {}
-    live_models = fetch_codex_model_catalog()
-    try:
-        if live_models is not None:
-            payload = {"models": [{
-                "slug": item.get("model"), "display_name": item.get("displayName"),
-                "visibility": "hide" if item.get("hidden") else "list",
-                "is_default": item.get("isDefault") is True,
-                "default_reasoning_level": item.get("defaultReasoningEffort"),
-                "additional_speed_tiers": item.get("additionalSpeedTiers", []),
-                "supported_reasoning_levels": [
-                    {"effort": level.get("reasoningEffort")}
-                    for level in (item.get("supportedReasoningEfforts")
-                                  if isinstance(item.get("supportedReasoningEfforts"), list) else [])
-                    if isinstance(level, dict)
-                ],
-            } for item in live_models]}
-        else:
-            payload = json.loads(codex_models_cache_path().read_text(encoding="utf-8"))
-        if not isinstance(payload, dict):
-            payload = {}
-        raw_models = [
-            raw_model
-            for raw_model in payload.get("models", [])
-            if isinstance(raw_model, dict)
-            and raw_model.get("visibility") != "hide"
-            and isinstance(raw_model.get("slug"), str)
-            and raw_model.get("slug")
-        ]
-        fallback_default = next((item["slug"] for item in raw_models
-                                 if live_models is not None and item.get("is_default")), None)
-        default_model = configured_model or fallback_default
-        for raw_model in raw_models:
-            if not isinstance(raw_model, dict) or raw_model.get("visibility") == "hide":
-                continue
-            model_id = raw_model.get("slug")
-            if not isinstance(model_id, str) or not model_id:
-                continue
-            efforts = tuple(
-                item["effort"]
-                for item in raw_model.get("supported_reasoning_levels", [])
-                if isinstance(item, dict) and isinstance(item.get("effort"), str)
-            )
-            speed_tiers = raw_model.get("additional_speed_tiers", [])
-            if not isinstance(speed_tiers, list):
-                speed_tiers = []
-            catalog_effort = raw_model.get("default_reasoning_level")
-            is_default = model_id == default_model
-            default_effort = configured_effort if is_default and configured_effort else catalog_effort
-            discovered[model_id] = CodexModelOption(
-                model_id=model_id,
-                label=str(raw_model.get("display_name") or model_id),
-                reasoning_efforts=efforts or DEFAULT_REASONING_EFFORTS,
-                supports_fast_mode="fast" in speed_tiers,
-                default_reasoning_effort=(
-                    default_effort
-                    if isinstance(default_effort, str)
-                    and default_effort in SUPPORTED_REASONING_EFFORTS
-                    else None
-                ),
-                is_default=is_default,
-                default_fast_mode=configured_fast_mode,
-            )
-    except (OSError, ValueError, TypeError):
-        pass
-
-    if configured_model and configured_model not in discovered:
-        discovered[configured_model] = CodexModelOption(
-            configured_model, configured_model, DEFAULT_REASONING_EFFORTS,
-            default_reasoning_effort=configured_effort, is_default=True,
-            default_fast_mode=configured_fast_mode,
-        )
-
-    if configured:
-        options = [
-            discovered.get(
-                model_id,
-                CodexModelOption(
-                    model_id,
-                    model_id,
-                    DEFAULT_REASONING_EFFORTS,
-                    default_reasoning_effort=(
-                        configured_effort if model_id == configured_model else None
-                    ),
-                    is_default=model_id == configured_model,
-                    default_fast_mode=configured_fast_mode,
-                ),
-            )
-            for model_id in configured
-        ]
-        if not any(option.is_default for option in options):
-            options[0] = replace(options[0], is_default=True)
-        return options
-    return list(discovered.values())
-
-
-def fetch_claude_model_catalog() -> list[dict[str, Any]] | None:
-    """Read the signed-in Claude account's models from the SDK initialize response."""
-    try:
-        from .claude_agent_backend import ClaudeAgentError, ClaudeAgentRun
-    except ImportError:
-        from claude_agent_backend import ClaudeAgentError, ClaudeAgentRun
-    try:
-        return ClaudeAgentRun(cwd=default_workdir(), timeout=30).model_catalog()
-    except Exception:  # noqa: BLE001 - discovery falls back to the CLI default model
-        return None
-
-
-def discover_claude_models() -> list[ModelOption]:
-    """Offer the Claude account's live catalog; the CLI resolves its own default."""
-    configured = [
-        value.strip()
-        for value in os.getenv("OPENTAG_CLAUDE_MODELS", "").split(",")
-        if value.strip()
-    ]
-    discovered: dict[str, ModelOption] = {}
-    for item in fetch_claude_model_catalog() or []:
-        model_id = item.get("model")
-        if not isinstance(model_id, str) or not model_id:
-            continue
-        efforts = tuple(
-            effort for effort in item.get("supportedEfforts", [])
-            if effort in SUPPORTED_REASONING_EFFORTS
-        )
-        discovered[model_id] = ModelOption(
-            model_id=model_id,
-            label=str(item.get("displayName") or model_id),
-            reasoning_efforts=efforts,
-            supports_fast_mode=item.get("supportsFastMode") is True,
-            default_reasoning_effort=CLAUDE_DEFAULT_EFFORT if CLAUDE_DEFAULT_EFFORT in efforts else None,
-            is_default=item.get("isDefault") is True,
-        )
-    if configured:
-        options = [
-            discovered.get(model_id, ModelOption(model_id, model_id, ()))
-            for model_id in configured
-        ]
-        if not any(option.is_default for option in options):
-            options[0] = replace(options[0], is_default=True)
-        return options
-    if not discovered:
-        return [ModelOption("default", "Claude default", (), is_default=True)]
-    return list(discovered.values())
-
-
-def discover_models(backend: str) -> list[ModelOption]:
-    if backend == "codex":
-        return discover_codex_models()
-    if backend == "claude":
-        return discover_claude_models()
-    return []
+    backend: str | None = None
 
 
 def configured_reasoning_efforts() -> tuple[str, ...]:
@@ -488,31 +249,53 @@ def configured_reasoning_efforts() -> tuple[str, ...]:
     return configured or DEFAULT_REASONING_EFFORTS
 
 
-def efforts_for_model(model: str | None, models: list[CodexModelOption]) -> tuple[str, ...]:
+def find_model(
+    model: str | None,
+    models: list[ModelOption],
+    backend: str | None = None,
+) -> ModelOption | None:
+    if model is None:
+        return None
+    return next(
+        (item for item in models if item.model_id == model and backend in {None, item.backend}),
+        None,
+    )
+
+
+def efforts_for_model(
+    model: str | None,
+    models: list[ModelOption],
+    backend: str | None = None,
+) -> tuple[str, ...]:
     allowed = set(configured_reasoning_efforts())
     if model:
-        selected = next((item for item in models if item.model_id == model), None)
+        selected = find_model(model, models, backend)
         if selected:
             return tuple(effort for effort in selected.reasoning_efforts if effort in allowed)
-    discovered = {effort for item in models for effort in item.reasoning_efforts}
+    scoped = [item for item in models if backend in {None, item.backend}]
+    discovered = {effort for item in scoped for effort in item.reasoning_efforts}
     return tuple(effort for effort in configured_reasoning_efforts() if not discovered or effort in discovered)
 
 
-def fast_mode_available(model: str | None, models: list[CodexModelOption]) -> bool:
-    """Let Codex validate its configured default; validate explicit models locally."""
+def fast_mode_available(
+    model: str | None,
+    models: list[ModelOption],
+    backend: str | None = None,
+) -> bool:
+    """Let the backend validate its configured default; validate explicit models locally."""
     if model is None:
         return True
-    selected = next((item for item in models if item.model_id == model), None)
+    selected = find_model(model, models, backend)
     return bool(selected and selected.supports_fast_mode)
 
 
-def default_agent_settings(models: list[CodexModelOption]) -> AgentSettings:
+def default_agent_settings(models: list[ModelOption]) -> AgentSettings:
     if not models:
         return AgentSettings()
     selected = next((item for item in models if item.is_default), None)
     if selected is None:
-        return AgentSettings()
-    efforts = efforts_for_model(selected.model_id, models)
+        return AgentSettings(backend=models[0].backend)
+    efforts = efforts_for_model(selected.model_id, models, selected.backend)
     effort = selected.default_reasoning_effort
     if effort not in efforts:
         effort = efforts[0] if efforts else None
@@ -520,15 +303,17 @@ def default_agent_settings(models: list[CodexModelOption]) -> AgentSettings:
         model=selected.model_id,
         reasoning_effort=effort,
         fast_mode=selected.default_fast_mode and selected.supports_fast_mode,
+        backend=selected.backend,
     )
 
 
 def default_effort_for_model(
     model: str | None,
-    models: list[CodexModelOption],
+    models: list[ModelOption],
+    backend: str | None = None,
 ) -> str | None:
-    selected = next((item for item in models if item.model_id == model), None)
-    efforts = efforts_for_model(model, models)
+    selected = find_model(model, models, backend)
+    efforts = efforts_for_model(model, models, backend)
     if selected and selected.default_reasoning_effort in efforts:
         return selected.default_reasoning_effort
     return efforts[0] if efforts else None
@@ -536,32 +321,35 @@ def default_effort_for_model(
 
 def normalize_settings(
     settings: AgentSettings,
-    models: list[CodexModelOption],
+    models: list[ModelOption],
 ) -> AgentSettings:
-    known_models = {item.model_id for item in models}
     defaults = default_agent_settings(models)
-    model_is_valid = settings.model is None or settings.model in known_models
-    model = settings.model if settings.model in known_models else defaults.model
-    efforts = efforts_for_model(model, models)
+    selected = find_model(settings.model, models, settings.backend)
+    backend_known = settings.backend is None or any(item.backend == settings.backend for item in models)
+    model_is_valid = (settings.model is None and backend_known) or selected is not None
+    if selected is not None:
+        model, backend = selected.model_id, selected.backend
+    else:
+        model, backend = defaults.model, defaults.backend
+    efforts = efforts_for_model(model, models, backend)
     effort = (
         settings.reasoning_effort
         if settings.reasoning_effort in efforts
-        else default_effort_for_model(model, models)
+        else default_effort_for_model(model, models, backend)
     )
     requested_fast_mode = defaults.fast_mode if settings.fast_mode is None else settings.fast_mode
     fast_mode = bool(
         requested_fast_mode
         and model_is_valid
-        and fast_mode_available(model, models)
+        and fast_mode_available(model, models, backend)
     )
-    return AgentSettings(model=model, reasoning_effort=effort, fast_mode=fast_mode)
+    return AgentSettings(model=model, reasoning_effort=effort, fast_mode=fast_mode, backend=backend)
 
 
 class UserAgentSettingsStore:
     """Persist model choices by Slack user so they follow future requests."""
 
-    def __init__(self, path: Path | None = None, *, backend: str = "codex") -> None:
-        self.backend = backend
+    def __init__(self, path: Path | None = None) -> None:
         self.path = path or Path(
             os.getenv(
                 "OPENTAG_SLACK_SETTINGS_FILE",
@@ -570,10 +358,9 @@ class UserAgentSettingsStore:
         ).expanduser()
         self.lock = threading.Lock()
 
-    def key(self, team: str, user_id: str) -> str:
-        # Codex keeps the original key; other backends keep separate choices.
-        base = f"{team}:{user_id}"
-        return base if self.backend == "codex" else f"{base}:{self.backend}"
+    @staticmethod
+    def key(team: str, user_id: str) -> str:
+        return f"{team}:{user_id}"
 
     def _read(self) -> dict[str, dict[str, str | bool | None]]:
         try:
@@ -590,16 +377,22 @@ class UserAgentSettingsStore:
         model = raw.get("model")
         effort = raw.get("reasoning_effort")
         fast_mode = raw.get("fast_mode")
+        backend = raw.get("backend")
+        if backend not in BACKEND_NAMES:
+            # Choices saved before backend switching were Codex-only.
+            backend = "codex" if isinstance(model, str) and model else None
         return AgentSettings(
             model=model if isinstance(model, str) else None,
             reasoning_effort=effort if isinstance(effort, str) else None,
             fast_mode=fast_mode if isinstance(fast_mode, bool) else None,
+            backend=backend,
         )
 
     def set(self, team: str, user_id: str, settings: AgentSettings) -> None:
         with self.lock:
             payload = self._read()
             payload[self.key(team, user_id)] = {
+                "backend": settings.backend,
                 "model": settings.model,
                 "reasoning_effort": settings.reasoning_effort,
                 "fast_mode": settings.fast_mode,
@@ -998,21 +791,22 @@ def friendly_effort(effort: str | None) -> str:
     return effort or "Default thinking"
 
 
-def model_label(model: str | None, models: list[CodexModelOption]) -> str:
+def model_label(model: str | None, models: list[ModelOption], backend: str | None = None) -> str:
     if model is None:
         return "Default model"
-    option = next((item for item in models if item.model_id == model), None)
+    option = find_model(model, models, backend)
     return option.label if option else model
 
 
 def settings_context(
     settings: AgentSettings,
-    models: list[CodexModelOption],
+    models: list[ModelOption],
     backend: str = "codex",
 ) -> str:
     fast_label = "Fast mode on" if settings.fast_mode else "Fast mode off"
+    backend = settings.backend or backend
     return (
-        f"{backend_display_name(backend)} · {model_label(settings.model, models)} · "
+        f"{backend_display_name(backend)} · {model_label(settings.model, models, backend)} · "
         f"{friendly_effort(settings.reasoning_effort)} · {fast_label}"
     )
 
@@ -1240,18 +1034,40 @@ def settings_modal(
 ) -> dict[str, Any]:
     block_suffix = f"_{revision}" if revision else ""
     normalized = normalize_settings(settings, models)
-    model_options = [select_option(item.model_id, item.label) for item in models]
+    selected_backend = normalized.backend or backend
+    backends = list(dict.fromkeys(item.backend for item in models))
+    model_options = [select_option(item.value, item.label) for item in models]
+    default_option = select_option(DEFAULT_CONFIG_VALUE, f"{backend_display_name(selected_backend)} default")
     if normalized.model is None and model_options:
-        model_options.insert(0, select_option(DEFAULT_CONFIG_VALUE, f"{backend_display_name(backend)} default"))
+        model_options.insert(0, default_option)
     if not model_options:
         model_options = [select_option(DEFAULT_CONFIG_VALUE, "No models available")]
     selected_model = normalized.model
-    efforts = efforts_for_model(selected_model, models)
+    selected_value = f"{selected_backend}:{selected_model}" if selected_model else DEFAULT_CONFIG_VALUE
+    model_element: dict[str, Any] = {
+        "type": "static_select",
+        "action_id": SETTINGS_MODEL_ACTION_ID,
+        "initial_option": next(option for option in model_options if option["value"] == selected_value),
+    }
+    if len(backends) > 1:
+        groups = [
+            {
+                "label": {"type": "plain_text", "text": backend_display_name(name)},
+                "options": [select_option(item.value, item.label) for item in models if item.backend == name],
+            }
+            for name in backends
+        ]
+        if normalized.model is None:
+            groups[0]["options"].insert(0, default_option)
+        model_element["option_groups"] = groups
+    else:
+        model_element["options"] = model_options
+    efforts = efforts_for_model(selected_model, models, selected_backend)
     effort_options = [select_option(effort, friendly_effort(effort)) for effort in efforts]
     if not effort_options:
         effort_options = [select_option(DEFAULT_CONFIG_VALUE, "No thinking levels available")]
     selected_effort = normalized.reasoning_effort
-    fast_available = fast_mode_available(selected_model, models)
+    fast_available = fast_mode_available(selected_model, models, selected_backend)
     fast_option = select_option(
         "on",
         "Enable Fast mode",
@@ -1286,7 +1102,9 @@ def settings_modal(
         "type": "modal",
         "callback_id": SETTINGS_VIEW_ID,
         "private_metadata": json.dumps(metadata, separators=(",", ":")),
-        "title": {"type": "plain_text", "text": f"{backend_display_name(backend)} settings"},
+        "title": {"type": "plain_text", "text": (
+            "Agent settings" if len(backends) > 1 else f"{backend_display_name(selected_backend)} settings"
+        )},
         "submit": {"type": "plain_text", "text": "Save"},
         "close": {"type": "plain_text", "text": "Cancel"},
         "blocks": [
@@ -1295,16 +1113,7 @@ def settings_modal(
                 "block_id": f"model{block_suffix}",
                 "dispatch_action": True,
                 "label": {"type": "plain_text", "text": "Model"},
-                "element": {
-                    "type": "static_select",
-                    "action_id": SETTINGS_MODEL_ACTION_ID,
-                    "options": model_options,
-                    "initial_option": next(
-                        option
-                        for option in model_options
-                        if option["value"] == (selected_model or DEFAULT_CONFIG_VALUE)
-                    ),
-                },
+                "element": model_element,
             },
             {
                 "type": "input",
@@ -3648,8 +3457,11 @@ def create_app(
                     )
                 except OSError as exc:
                     logger.warning("Could not record the orphaned Slack session: %s", exc)
-    settings_store = UserAgentSettingsStore(backend=backend)
-    models = discover_models(backend)
+    settings_store = UserAgentSettingsStore()
+    models = discover_tag_models(backend)
+    if os.getenv("TAG_INSTANCE_HOME"):
+        remember_model_names(models, model_names_path(os.environ["TAG_INSTANCE_HOME"]))
+    default_settings = default_agent_settings(models)
 
     @app.event("app_home_opened")
     def show_app_home(event: dict[str, Any], client: Any, logger: Any) -> None:
@@ -3730,7 +3542,7 @@ def create_app(
                 )
                 return
             result = "Approved once" if approved else "Denied"
-            text = f"{result}. {backend_display_name(backend)} is continuing."
+            text = f"{result}. Tag is continuing."
             respond(
                 text=text,
                 blocks=[{
@@ -4051,11 +3863,14 @@ def create_app(
             view = body["view"]
             metadata = json.loads(view["private_metadata"])
             selected = body["actions"][0]["selected_option"]["value"]
-            model = None if selected == DEFAULT_CONFIG_VALUE else selected
+            model_backend, model = (
+                (default_settings.backend or backend, None) if selected == DEFAULT_CONFIG_VALUE
+                else parse_model_choice(selected, backend)
+            )
             effort = selected_setting(view, SETTINGS_EFFORT_ACTION_ID)
-            if effort not in efforts_for_model(model, models):
-                effort = default_effort_for_model(model, models)
-            fast_mode = selected_fast_mode(view) and fast_mode_available(model, models)
+            if effort not in efforts_for_model(model, models, model_backend):
+                effort = default_effort_for_model(model, models, model_backend)
+            fast_mode = selected_fast_mode(view) and fast_mode_available(model, models, model_backend)
             client.views_update(
                 view_id=view["id"],
                 hash=view.get("hash"),
@@ -4065,6 +3880,7 @@ def create_app(
                         model=model,
                         reasoning_effort=effort,
                         fast_mode=fast_mode,
+                        backend=model_backend,
                     ),
                     models=models,
                     revision=f"model_{time.time_ns()}",
@@ -4120,17 +3936,21 @@ def create_app(
             model_block_id, _ = setting_state(view, SETTINGS_MODEL_ACTION_ID)
             effort_block_id, _ = setting_state(view, SETTINGS_EFFORT_ACTION_ID)
             fast_block_id, _ = setting_state(view, SETTINGS_FAST_ACTION_ID)
-            model = selected_setting(view, SETTINGS_MODEL_ACTION_ID)
+            selected_model = selected_setting(view, SETTINGS_MODEL_ACTION_ID)
+            model_backend, model = (
+                parse_model_choice(selected_model, backend) if selected_model
+                else (default_settings.backend or backend, None)
+            )
             effort = selected_setting(view, SETTINGS_EFFORT_ACTION_ID)
             fast_mode = selected_fast_mode(view)
             errors: dict[str, str] = {}
-            if model and model not in {item.model_id for item in models}:
+            if model and find_model(model, models, model_backend) is None:
                 errors[model_block_id or "model"] = "Choose an available model."
-            if effort and effort not in efforts_for_model(model, models):
+            if effort and effort not in efforts_for_model(model, models, model_backend):
                 errors[effort_block_id or "reasoning_effort"] = (
                     "Choose a thinking level supported by this model."
                 )
-            if fast_mode and not fast_mode_available(model, models):
+            if fast_mode and not fast_mode_available(model, models, model_backend):
                 errors[fast_block_id or "fast_mode"] = (
                     "Fast mode is not supported by this model."
                 )
@@ -4150,6 +3970,7 @@ def create_app(
                 model=model,
                 reasoning_effort=effort,
                 fast_mode=fast_mode,
+                backend=model_backend,
             )
             settings_store.set(
                 metadata.get("team", ""),
@@ -4228,6 +4049,8 @@ def create_app(
             settings_store.get(team, user_id),
             models,
         )
+        # The requester's model choice selects the backend for this request.
+        request_backend = agent_settings.backend or backend
         indicator = WorkingIndicator(
             client,
             channel,
@@ -4305,7 +4128,7 @@ def create_app(
                     and indicator.native
                     and indicator.message_ts is None
                 )
-                app_server_selected = rich_events_selected(backend)
+                app_server_selected = rich_events_selected(request_backend)
                 if app_server_selected:
                     try:
                         activity_run_id = activity_store.create(
@@ -4326,7 +4149,7 @@ def create_app(
                     )
                 if stream_available or app_server_selected:
                     answer, succeeded = run_backend_events(
-                        backend,
+                        request_backend,
                         team,
                         channel,
                         thread_ts,
@@ -4348,7 +4171,7 @@ def create_app(
                             thread_ts=thread_ts,
                             user_id=user_id,
                             approval=approval,
-                            backend=backend,
+                            backend=request_backend,
                         ),
                         fast_mode=agent_settings.fast_mode,
                         output_manifest=output_manifest,
@@ -4360,7 +4183,7 @@ def create_app(
                     )
                 else:
                     answer, succeeded = run_backend(
-                        backend,
+                        request_backend,
                         channel,
                         user_id,
                         question,
@@ -4432,7 +4255,7 @@ def create_app(
                     report = make_error_report(
                         error_reference,
                         answer,
-                        backend=backend,
+                        backend=request_backend,
                         backend_code=backend_error_code,
                         failed_stage=failure_stage,
                         related_reference=prior_error_reference,
@@ -4528,7 +4351,7 @@ def create_app(
             report = make_error_report(
                 error_reference,
                 f"{type(exc).__name__}: {exc}",
-                backend=backend,
+                backend=request_backend,
                 backend_code=backend_error_code,
                 failed_stage=failure_stage,
                 related_reference=prior_error_reference,

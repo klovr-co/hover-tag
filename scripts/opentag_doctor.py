@@ -31,7 +31,8 @@ def recovery_hint(label: str) -> str:
     if label.startswith("Slack") or label.startswith("SLACK_"):
         return "Check Slack tokens, allowed member IDs, channel membership, and app scopes in tag setup or tag config"
     if label.startswith("backend") or label == "OPENTAG_BACKEND":
-        return "Install and sign in with the selected CLI; change it with tag config set OPENTAG_BACKEND codex|claude"
+        return ("Install and sign in to Codex (https://learn.chatgpt.com/docs/codex/cli) or Claude Code "
+                "(https://code.claude.com/docs/en/setup); choose it with tag config set OPENTAG_BACKEND codex|claude")
     return "Review tag inspect --json and tag config show; rerun the installer for missing runtime files"
 
 
