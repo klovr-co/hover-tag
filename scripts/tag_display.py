@@ -294,6 +294,20 @@ def backend_status(backend="codex", *, search_path=None):
         return "Not installed", False
     command = [executable, "auth", "status"] if backend == "claude" else [executable, "login", "status"]
     try:
+        from . import tag_chatgpt
+    except ImportError:
+        import tag_chatgpt
+    try:
+        store = tag_chatgpt.Store()
+        if backend == "codex" and store.enabled():
+            status = store.status()
+            account = status["active_account"]
+            ready = bool(account and account["signed_in"] and account["plan_enabled"] and not account["usage_paused"])
+            return ("ChatGPT plan connected · task not tested" if ready else
+                    "ChatGPT sign-in or plan permission required · run tag chatgpt status"), ready
+    except (tag_chatgpt.ChatGPTError, OSError):
+        return "ChatGPT account store needs attention · run tag chatgpt status", False
+    try:
         result = subprocess.run(command, capture_output=True,
                                 text=True, timeout=3, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.TimeoutExpired):

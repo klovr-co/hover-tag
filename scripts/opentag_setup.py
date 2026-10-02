@@ -1699,22 +1699,46 @@ def finish_setup(config_path: Path, values: dict[str, str], _channels: list[slac
         if not compatible:
             ui.message(f"This Codex CLI does not support the required {transport} command. Update your existing Codex installation, then run tag setup again.")
             return 1
-        while subprocess.run(
-            [shutil.which("codex") or "codex", "login", "status"],
-            capture_output=True,
-            env=backend_environment,
-        ).returncode:
-            ui.message("Codex needs sign-in. Your Slack and memory choices are saved.")
-            action = ui.choose("Sign in to continue", ["Open Codex sign-in", "Check again", "Save and exit"])
-            if action == 2:
-                raise ui.Paused()
-            if action == 0:
-                subprocess.run(
-                    [shutil.which("codex") or "codex", "login"],
-                    check=False,
-                    env=backend_environment,
-                )
-        ui.message("✓ Codex signed in · first task still unverified")
+        try:
+            from . import tag_chatgpt
+        except ImportError:
+            import tag_chatgpt
+        store = tag_chatgpt.Store()
+        if not store.enabled():
+            ui.message("Connect a ChatGPT plan with tag chatgpt login, or use your existing Codex sign-in.")
+        if store.enabled():
+            if transport != "app-server":
+                raise RuntimeError("ChatGPT plan usage requires app-server. Run tag config set OPENTAG_CODEX_TRANSPORT app-server.")
+            store.access()
+            ui.message("✓ ChatGPT plan connected · first task still unverified")
+        else:
+            while subprocess.run(
+                [shutil.which("codex") or "codex", "login", "status"],
+                capture_output=True,
+                env=backend_environment,
+            ).returncode:
+                ui.message("Codex needs sign-in. Your Slack and memory choices are saved.")
+                action = ui.choose("Sign in to continue", ["Continue with ChatGPT", "Open Codex sign-in", "Check again", "Save and exit"])
+                if action == 3:
+                    raise ui.Paused()
+                if action == 0:
+                    if transport != "app-server":
+                        ui.message("ChatGPT plan usage requires app-server. Run tag config set OPENTAG_CODEX_TRANSPORT app-server.")
+                        raise ui.Paused()
+                    try:
+                        tag_chatgpt.cli(["login"])
+                        store.access()
+                    except tag_chatgpt.ChatGPTError as exc:
+                        ui.message(str(exc))
+                        continue
+                    break
+                if action == 1:
+                    subprocess.run(
+                        [shutil.which("codex") or "codex", "login"],
+                        check=False,
+                        env=backend_environment,
+                    )
+            ui.message("✓ Agent connected · first task still unverified")
     else:
         backend_environment = without_telemetry_environment(os.environ)
         while subprocess.run(

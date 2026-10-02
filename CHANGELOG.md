@@ -6,6 +6,9 @@ All notable changes to Tag are documented here.
 
 ### Added
 
+- Connect a ChatGPT plan directly to each Tag with `tag chatgpt login`, including
+  account selection, automatic token renewal, sign-out, and account-specific
+  model choices. Existing installations retain their Codex sign-in until opted in.
 - Run the Claude backend through the Claude Agent SDK with the same Slack
   behavior as Codex App Server: final-answer streaming, live activity rows,
   private one-time approvals, Stop, idle and maximum deadlines, and per-user
@@ -40,6 +43,9 @@ All notable changes to Tag are documented here.
   and upgrade without changing system Python or requiring a preinstalled CLI.
 
 ### Fixed
+
+- Decode large Codex image events without repeatedly scanning the accumulated
+  buffer, preventing avoidable transport timeouts.
 
 - Keep local Open buttons for oversized output files and explain how to access
   them when they exceed the Slack upload limit.

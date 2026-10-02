@@ -67,12 +67,14 @@ tools such as `gws`. The installer does not relocate their credentials.
 
 ## Install from a checkout
 
-On supported macOS/Linux systems, install and sign in to Codex, Claude Code, or
-both separately, then run the installer below. Tag automatically prepares Python and Slack CLI; neither
-Python nor uv needs to be on PATH. Setup checks each agent's CLI and
-sign-in (`codex login status` or `claude auth status`), and explains how to
-update or sign in when needed. Tag does not install either agent or change its
-global configuration or credentials.
+On supported macOS/Linux systems, install Codex, Claude Code, or both separately,
+then run the installer below. Sign in to your agent or
+[connect a ChatGPT plan directly to Tag](reference/chatgpt-connection.md).
+Tag automatically prepares Python and Slack CLI; neither Python nor uv needs
+to be on PATH. Setup checks the selected transport and agent sign-in
+(`codex login status` or `claude auth status`), or Tag’s selected ChatGPT
+connection, and explains how to update or sign in when needed. Tag does not
+install either agent or change its global configuration or credentials.
 
 Native Windows retains its Python 3.10+ and Slack CLI prerequisites; WSL uses the
 Linux bootstrap. No local administrator privileges are needed. Slack sign-in

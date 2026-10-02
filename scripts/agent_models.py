@@ -8,6 +8,7 @@ is written as ``backend:model``.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -140,6 +141,18 @@ def fetch_codex_model_catalog() -> list[dict[str, Any]] | None:
     except ImportError:
         from codex_agent_backend import CodexAppServer, CodexAppServerError
     try:
+        from . import tag_chatgpt
+    except ImportError:
+        import tag_chatgpt
+    if tag_chatgpt.enabled():
+        try:
+            return tag_chatgpt.models()
+        except tag_chatgpt.ChatGPTError as exc:
+            logging.getLogger(__name__).warning("ChatGPT model discovery unavailable: %s", exc)
+            # Keep the bridge available without borrowing another account's catalog.
+            # Each task still validates its selected account before inference.
+            return []
+    try:
         return CodexAppServer(["codex", "app-server"], cwd=default_workdir(), timeout=10).model_catalog()
     except (CodexAppServerError, OSError, ValueError):
         return None
@@ -153,6 +166,13 @@ def discover_codex_models() -> list[CodexModelOption]:
         if value.strip()
     ]
     configured_model, configured_effort, configured_fast_mode = configured_codex_defaults()
+    try:
+        from . import tag_chatgpt
+    except ImportError:
+        import tag_chatgpt
+    plan_connection = tag_chatgpt.enabled()
+    if plan_connection:
+        configured_fast_mode = False
     discovered: dict[str, CodexModelOption] = {}
     live_models = fetch_codex_model_catalog()
     try:
@@ -184,6 +204,14 @@ def discover_codex_models() -> list[CodexModelOption]:
         ]
         fallback_default = next((item["slug"] for item in raw_models
                                  if live_models is not None and item.get("is_default")), None)
+        if plan_connection:
+            available = {item["slug"] for item in raw_models}
+            configured = [name for name in configured if name in available]
+            if configured_model not in available:
+                configured_model = None
+            # The direct catalog guarantees display order, not isDefault. Choose
+            # its first visible entry as Tag's default, without claiming entitlement.
+            fallback_default = raw_models[0]["slug"] if raw_models else None
         default_model = configured_model or fallback_default
         for raw_model in raw_models:
             if not isinstance(raw_model, dict) or raw_model.get("visibility") == "hide":
@@ -313,6 +341,19 @@ def backend_signed_in(backend: str) -> bool:
     executable = shutil.which(backend)
     if not executable:
         return False
+    if backend == "codex":
+        try:
+            from . import tag_chatgpt
+        except ImportError:
+            import tag_chatgpt
+        try:
+            store = tag_chatgpt.Store()
+            if store.enabled():
+                account = store.status()["active_account"]
+                return bool(account and account["signed_in"] and account["plan_enabled"]
+                            and not account["usage_paused"])
+        except (tag_chatgpt.ChatGPTError, OSError):
+            return False
     if backend == "claude" and rich_events_selected("claude"):
         import importlib.util
 
