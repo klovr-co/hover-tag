@@ -147,7 +147,7 @@ class TagInstanceTests(unittest.TestCase):
             "30", home=home, app_id="A456", credential=credential,
         )
         content = connector.read_text(encoding="utf-8")
-        self.assertIn(f'token = "file:{credential}"', content)
+        self.assertIn(f"token = {json.dumps('file:' + str(credential))}", content)
         self.assertNotIn("xoxb-secret", content)
         self.assertEqual(connector.name, "tag-t123-a456.toml")
         if os.name != "nt":

@@ -297,22 +297,25 @@ def _spawn(command: list[str], installation_root: Path, log: Path) -> None:
                          env={**os.environ, **_environment(installation_root)}, **options)
 
 
+RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+
+
 def _windows_key():
     import winreg
-    return winreg.OpenKey(winreg.HKEY_CURRENT_USER,
-                          r"Software\Microsoft\Windows\CurrentVersion\Run", 0,
-                          winreg.KEY_READ | winreg.KEY_SET_VALUE)
+    # A fresh account may not have a Run key yet; create it rather than fail.
+    return winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, RUN_KEY, 0,
+                              winreg.KEY_READ | winreg.KEY_SET_VALUE)
 
 
 def _windows_get(name: str) -> str | None:
     if os.name != "nt":
         return None
     import winreg
-    with _windows_key() as key:
-        try:
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_READ) as key:
             return winreg.QueryValueEx(key, name)[0]
-        except FileNotFoundError:
-            return None
+    except FileNotFoundError:
+        return None  # No Run key, or no value: autostart is off.
 
 
 def _windows_set(name: str, line: str) -> None:

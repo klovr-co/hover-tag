@@ -82,7 +82,8 @@ def _copy(source: Path, destination: Path, mappings=()):
                         return
                 except (ValueError, UnicodeError):
                     pass  # Preserve malformed destination files as conflicts too.
-        existing = destination.read_bytes() if destination.name == "config.toml" else b""
+        # Windows text mode wrote the template with CRLF line endings.
+        existing = destination.read_bytes().replace(b"\r\n", b"\n") if destination.name == "config.toml" else b""
         # Workspace initialization may have created only this empty template.
         templates = {
             b'# TAG-only Codex MCP servers go here: [mcp_servers.NAME]\n',

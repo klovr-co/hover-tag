@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import textwrap
@@ -94,7 +95,8 @@ class SetupSessionTests(unittest.TestCase):
     def test_session_file_is_private_and_answers_are_not_written(self):
         setup_session.step(self.home, self.command)
         directory = self.home / ".setup-session"
-        self.assertEqual((directory / "session.json").stat().st_mode & 0o777, 0o600)
+        if os.name != "nt":  # Windows protects it with an ACL; POSIX mode bits don't apply.
+            self.assertEqual((directory / "session.json").stat().st_mode & 0o777, 0o600)
         self.assertEqual(directory.stat().st_mode & 0o777, 0o700)
         setup_session.answer(self.home, "secret-code-123")
         for path in directory.iterdir():

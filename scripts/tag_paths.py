@@ -157,12 +157,18 @@ def initialize_instance(home: Path) -> None:
     restrict_windows_acl(home)
 
 
+# Bound once: code that replaces subprocess.run elsewhere (tests, hooks) must
+# never intercept the commands that make Tag's private folders private.
+_check_output = subprocess.check_output
+_run = subprocess.run
+
+
 def restrict_windows_acl(home: Path) -> None:
     if os.name != "nt":
         return
-    identity = subprocess.check_output(["whoami", "/user", "/fo", "csv", "/nh"], text=True)
+    identity = _check_output(["whoami", "/user", "/fo", "csv", "/nh"], text=True)
     sid = next(csv.reader([identity.strip()]))[1]
-    subprocess.run(["icacls", str(home), "/inheritance:r", "/grant:r",
+    _run(["icacls", str(home), "/inheritance:r", "/grant:r",
                     f"*{sid}:(OI)(CI)F", "*S-1-5-18:(OI)(CI)F"],
                    check=True, stdout=subprocess.DEVNULL)
 

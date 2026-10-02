@@ -188,16 +188,24 @@ def migrate(root: Path, lifecycle, tag_id: str = tag_instances.DEFAULT_TAG) -> s
             )
         if old_folder.exists():
             start_lock = LifecycleLock(old_home / "state/start.lock").acquire()
+            held = True
             try:
                 tag_config.save_config(_plan_path(root, tag_id), plan)
                 # Identity-checked stop never signals an unrelated process.
                 lifecycle.stop_process(old_home, "slack")
                 new_folder.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                if os.name == "nt":
+                    # Windows can't rename a folder with an open file inside, and the
+                    # held lock is one. The layout lock still excludes other renames,
+                    # and the saved plan makes an interrupted rename resumable.
+                    start_lock.release()
+                    held = False
                 os.rename(old_folder, new_folder)
                 # The held lock moved with its folder; release it there.
                 start_lock.path = new_home / "state/start.lock"
             finally:
-                start_lock.release()
+                if held:
+                    start_lock.release()
         elif not new_folder.exists():
             raise RuntimeError(f"Tag '{tag_id}' disappeared during its rename to '{name}'. Nothing else was changed.")
         with LifecycleLock(new_home / "state/start.lock"):

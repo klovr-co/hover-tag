@@ -78,7 +78,7 @@ class DependenciesTests(unittest.TestCase):
     def test_existing_compatible_cli_never_downloaded_or_replaced(self):
         with patch.object(dependencies.shutil, 'which', return_value='/user/bin/slack'), patch.object(
                 dependencies, 'slack_compatible', return_value=True), patch.object(dependencies, 'download_verified') as download:
-            self.assertEqual(dependencies.ensure_slack(Path('/unused')), Path('/user/bin/slack'))
+            self.assertEqual(dependencies.ensure_slack(Path('/unused')), Path('/user/bin/slack').resolve())
             download.assert_not_called()
 
     def test_missing_and_incompatible_cli_all_targets_and_repeat_recovery(self):
@@ -167,7 +167,7 @@ class DependenciesTests(unittest.TestCase):
             self.assertEqual(exit_.exception.code, 3)
             self.assertEqual(runs[0][0], 'powershell.exe')
             self.assertIn('-RuntimeInfo', runs[0])
-            self.assertEqual(runs[1][0], 'C:/Tag/python.exe')
+            self.assertEqual(Path(runs[1][0]), Path('C:/Tag/python.exe'))
             self.assertEqual(rerun.call_args.args[0][0], 'managed')
             execv.assert_not_called()  # Windows execv would report success before the start finished
 
