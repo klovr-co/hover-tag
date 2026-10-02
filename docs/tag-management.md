@@ -53,6 +53,11 @@ begin with `tag inspect --json` to inspect what is already configured.
 Slack runtime agents load the runtime contract; Tag does not bundle an admin
 skill into their workspace.
 
+## Advanced Slack setup
+
+For organization-level Slack authorization, see
+[Developer sandboxes and Enterprise organizations](reference/slack-organizations.md).
+
 ## The journey
 
 ```mermaid
