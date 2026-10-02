@@ -10,8 +10,10 @@ a local coding-agent backend with optional MFS retrieval.
   Tag, not a synonym for the product.
 - **Slack bridge** — the long-running process that receives Socket Mode events,
   enforces Slack caller policy, invokes a backend, and renders replies.
-- **Backend** — the local Codex or experimental Claude CLI process that performs
-  an agent task.
+- **Backend** — the local Codex App Server or Claude Agent SDK
+  session that performs an agent task. Both emit the same normalized event
+  contract to the Slack bridge. A Tag has a default backend and model; each
+  user's model choice selects the backend for that user's requests.
 - **MFS scope** — an operator-configured URI root used by Tag's helper commands
   to constrain normal list, read, and search operations.
 - **Required service** — local MFS or the Slack bridge. Tag is healthy only when
@@ -37,3 +39,4 @@ compatibility; they do not define a separate product name.
 - [Self-contained Tag folders](docs/adr/0007-self-contained-tag-folders.md)
 
 - [ChatGPT plan connection](docs/adr/0008-chatgpt-plan-connection.md)
+- [Claude Agent SDK transport](docs/adr/0008-claude-agent-sdk.md)

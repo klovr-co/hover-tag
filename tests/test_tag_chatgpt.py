@@ -19,7 +19,7 @@ import jwt
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from scripts import tag_chatgpt as auth
-from scripts import codex_app_server as transport
+from scripts import codex_agent_backend as transport
 
 
 class ChatGPTTests(unittest.TestCase):
@@ -416,17 +416,17 @@ class ChatGPTTests(unittest.TestCase):
         import subprocess
         from scripts import opentag_setup
         self.seed()
-        with patch.object(opentag_setup, "selected_backend_available", return_value=True), patch.object(
+        with patch.object(opentag_setup, "ensure_agent", side_effect=lambda path, values: values), patch.object(
             opentag_setup.lifecycle, "mfs_client_executable", return_value="mfs"
         ), patch.object(opentag_setup.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run, redirect_stdout(io.StringIO()) as output:
             result = opentag_setup.finish_setup(Path("settings.json"), {"OPENTAG_BACKEND": "codex"}, [])
         self.assertEqual(result, 0)
-        self.assertEqual(len(run.call_args_list), 1)
-        self.assertIn("app-server", run.call_args.args[0])
+        self.assertTrue(any("app-server" in call.args[0] for call in run.call_args_list))
+        self.assertFalse(any("login" in call.args[0] for call in run.call_args_list))
         self.assertIn("ChatGPT plan connected", output.getvalue())
 
     def test_chatgpt_catalog_does_not_reintroduce_other_accounts_models(self):
-        from scripts import slack_socket_agent as slack
+        from scripts import agent_models as slack
         self.seed()
         with patch.object(auth, "models", return_value=[{"model": "allowed", "displayName": "Allowed"}]), patch.object(
             slack, "configured_codex_defaults", return_value=("unavailable", "high", True)
@@ -435,6 +435,29 @@ class ChatGPTTests(unittest.TestCase):
         self.assertEqual([model.model_id for model in models], ["allowed"])
         self.assertTrue(models[0].is_default)
         self.assertFalse(models[0].default_fast_mode)
+
+    def test_model_discovery_accepts_chatgpt_without_codex_login(self):
+        from scripts import agent_models
+        self.seed()
+        with patch.object(agent_models.shutil, "which", return_value="/bin/codex"), patch.object(
+            agent_models.subprocess, "run"
+        ) as run:
+            self.assertTrue(agent_models.backend_signed_in("codex"))
+            self.store.pause_usage()
+            self.assertFalse(agent_models.backend_signed_in("codex"))
+        run.assert_not_called()
+
+    def test_claude_status_ignores_chatgpt_connection(self):
+        import subprocess
+        from scripts import tag_display
+        self.seed()
+        with patch.object(tag_display.shutil, "which", return_value="/bin/claude"), patch.object(
+            tag_display.subprocess, "run", return_value=subprocess.CompletedProcess([], 1)
+        ) as run:
+            status, ready = tag_display.backend_status("claude")
+        self.assertFalse(ready)
+        self.assertIn("claude auth status", status)
+        self.assertEqual(run.call_args.args[0], ["/bin/claude", "auth", "status"])
 
     def test_usage_limit_pauses_requests_until_explicit_resume(self):
         self.seed()

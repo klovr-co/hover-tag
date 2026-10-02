@@ -9,6 +9,19 @@ All notable changes to Tag are documented here.
 - Connect a ChatGPT plan directly to each Tag with `tag chatgpt login`, including
   account selection, automatic token renewal, sign-out, and account-specific
   model choices. Existing installations retain their Codex sign-in until opted in.
+- Run the Claude backend through the Claude Agent SDK with the same Slack
+  behavior as Codex App Server: final-answer streaming, live activity rows,
+  private one-time approvals, Stop, idle and maximum deadlines, and per-user
+  model, thinking, and Fast Mode settings from the signed-in Claude account.
+  `OPENTAG_CLAUDE_TRANSPORT=print` keeps the previous `claude -p` path as a
+  rollback. Upgrades install the SDK automatically.
+- Switch models between Codex and Claude from Slack's Configure control. The
+  chosen model selects the backend for that user's next request, including
+  mid-thread. `OPENTAG_DEFAULT_MODEL` sets each Tag's default model and
+  `OPENTAG_BACKENDS` limits which signed-in backends are offered. Claude is no
+  longer experimental.
+- Show the agent, model, thinking level, and task duration above Configure
+  on finished Slack replies, including stopped and failed requests.
 
 - Deliver saved files as local copies plus Slack attachments by default.
   `OPENTAG_FILE_DELIVERY` and individual requests can select local-only delivery.

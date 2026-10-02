@@ -7,9 +7,8 @@ or Linux. It is intended for trusted, isolated sandbox use. Native Windows
 installation and lifecycle support are included in the CI matrix; live Windows
 Slack/backend qualification must be recorded before claiming that path qualified.
 
-Claude Code is included for experimentation, but is not part of the
-v0.2 alpha qualification unless its live checks are recorded
-separately. Hosted operation, enterprise policy, automated Slack OAuth,
+Codex and Claude Code are both supported agents. Record live checks for each
+agent before claiming a release qualified for it. Hosted operation, enterprise policy, automated Slack OAuth,
 and production-grade sandboxing are out of scope.
 
 The canonical source repository is <https://github.com/klovr-co/hover-tag>. `VERSION`

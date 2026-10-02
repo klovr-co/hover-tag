@@ -4,9 +4,9 @@ Your workspace is the folder where Tag works on your files. Upload a brief in
 Slack and ask Tag to save the open questions there. As you answer them, ask Tag
 to update the saved file.
 
-This guide uses Codex and assumes you have completed
-[your first Tag task](../getting-started/first-task.md). Claude remains
-experimental.
+This guide works with Codex or Claude and assumes you have completed
+[your first Tag task](../getting-started/first-task.md). Claude uses the same
+workspace with `.claude/skills` and `.mcp.json`.
 
 ## Turn a brief into questions you can resolve
 

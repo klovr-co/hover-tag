@@ -10,8 +10,8 @@ unavailable behavior.
 | Respond to app mentions | Implemented | The caller must be in `SLACK_ALLOWED_USER_IDS`. |
 | Read the current thread | Implemented | Tag fetches one page containing up to 30 messages. |
 | Read supported attachments | Implemented | Includes [forwarded Slack files](../concepts/workspaces-and-tools.md#use-a-forwarded-slack-file). Text content is truncated at 12,000 characters per item; downloaded image or text files are limited to 15 MiB. |
-| Stream answer text | Backend-dependent | Claude streams text deltas; Codex App Server streams final-answer deltas and observed activity. |
-| Watch live activity | Implemented with App Server | Readable tool steps appear in the Slack thread while Codex works. See [Watch Tag work](#watch-tag-work). |
+| Stream answer text | Implemented | Codex App Server and the Claude Agent SDK stream only final-answer text; commentary and reasoning stay private. |
+| Watch live activity | Implemented with App Server or Agent SDK | Readable tool steps appear in the Slack thread while the agent works. See [Watch Tag work](#watch-tag-work). |
 | Continue with thread context | Implemented | A later mention receives the current bounded thread context. |
 | Post a requested top-level message | Implemented | Restricted to the channel that invoked Tag. |
 | Create a requested Slack Canvas | Implemented | Requires the Slack Canvas scope and explicit user intent. |
@@ -23,8 +23,10 @@ unavailable behavior.
 
 | Capability | Status | Notes |
 | --- | --- | --- |
-| Codex CLI backend | Supported path | Used by the v0.1 launch qualification. |
-| Claude Code backend | Experimental | Requires an authenticated local Claude CLI session. |
+| Codex CLI backend | Supported | Used by the v0.1 launch qualification. |
+| Show model and duration | Implemented | Finished replies show the agent, the model the agent reports it actually used (including when the account default was used), thinking level, Fast Mode, and how long the request took, for example `Claude · Opus 5.5 · high thinking · 1m 12s`. The legacy Codex exec and Claude print transports do not report a model, so their replies show the chosen model instead. |
+| Switch models between backends | Implemented | Configure lists models from every signed-in backend; the chosen model selects Codex or Claude for that user's next request. `OPENTAG_DEFAULT_MODEL` sets the Tag default. |
+| Claude Code backend | Supported | Uses the Claude Agent SDK with an authenticated local Claude CLI session; supports streaming, activity, private one-time approvals, Stop, and model settings; approval scope differences are listed below. |
 | Inspect and change workspace files | Implemented | Uses the permissions of the backend process. |
 | Run workspace commands and tests | Implemented | Available when the selected backend can perform them. |
 | Use installed local tools and skills | Available | Each tool uses its own credentials and grants. |
@@ -52,6 +54,7 @@ unavailable behavior.
 | MFS retrieval roots | Implemented | Configure `MFS_ALLOWED_SCOPES`. |
 | Backend timeout and retry settings | Implemented | Configure the corresponding `OPENTAG_` settings. |
 | Codex action approvals | Implemented fallback | Codex normally reviews sandbox-boundary actions automatically. Supported requests show private native choices, including one-time, task-scoped, and proposed persistent-rule decisions. Auto-review denials offer **Approve retry** / **Dismiss**. See [Control your Tag](../concepts/control-your-tag.md#respond-to-a-codex-approval-request). |
+| Claude action approvals | One-time decisions | SDK permission requests offer private Approve / Deny controls. The Claude adapter does not expose task-scoped grants, persistent-rule choices, or automatic-review denial retries; missing approval channels and unanswered requests are denied. |
 | Organization-wide administration and approvals | Not provided | These remain outside the current reference implementation. |
 
 ## Respond to a Codex approval request
@@ -93,8 +96,9 @@ succeeded; review the final answer and any error message for the outcome.
 Everyone who can see the thread can see these short activity descriptions,
 including file names. Full tool inputs and results are not shown in the thread.
 The separate **Activity** button is currently hidden; a developer view may return
-in a future release. Live tool activity requires Codex App Server; the legacy
-Codex exec and Claude backends do not show these tool rows.
+in a future release. Live tool activity requires Codex App Server or the
+Claude Agent SDK; the legacy Codex exec and Claude print transports do not show
+these tool rows.
 
 For the full end-to-end behavior, see
 [Connected user flows](../user-flows.md). For configuration and exact backend

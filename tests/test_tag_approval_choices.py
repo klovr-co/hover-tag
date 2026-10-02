@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from scripts.codex_app_server import CodexAppServer
+from scripts.codex_agent_backend import CodexAppServer
 from scripts.tag_approval_choices import approval_choices, public_approval_choices
 
 COMMAND = "item/commandExecution/requestApproval"
