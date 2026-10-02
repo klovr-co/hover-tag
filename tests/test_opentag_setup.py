@@ -902,6 +902,7 @@ class OpenTagSetupTests(unittest.TestCase):
             config = home / "config/settings.json"
             environment = {
                 "HOME": str(user_home),
+                "USERPROFILE": str(user_home),  # Windows expands ~ from USERPROFILE
                 "TAG_HOME": str(root / "app"),
                 "TAG_INSTANCE_HOME": str(home),
                 "OPENTAG_WORKDIR": "~/chosen",

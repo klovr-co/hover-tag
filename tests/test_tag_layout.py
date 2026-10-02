@@ -186,7 +186,8 @@ class SelfContainedHomeTests(unittest.TestCase):
                 self.assertEqual((migrated.home / 'integrations/mfs/Cargo.lock').read_text(encoding="utf-8"), 'dependency lock')
                 self.assertEqual(values['OPENTAG_CUSTOM_SETTING'], '/some/unrelated/path')
                 self.assertEqual(values['MFS_SLACK_CONNECTOR_CONFIG'], str(migrated.home / 'integrations/mfs/slack.toml'))
-                self.assertIn(str(migrated.home / 'config/slack-history-token'),
+                # The path is a TOML string, so Windows backslashes appear escaped.
+                self.assertIn(json.dumps(str(migrated.home / 'config/slack-history-token'))[1:-1],
                               Path(values['MFS_SLACK_CONNECTOR_CONFIG']).read_text(encoding="utf-8"))
                 self.assertEqual(json.loads((migrated.home / 'state/slack-active-sessions.json').read_text(encoding="utf-8")), {'thread': 'session'})
                 self.assertTrue((context.home / 'config/settings.json').exists())

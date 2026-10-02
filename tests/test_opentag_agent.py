@@ -134,7 +134,7 @@ class OpenTagAgentPromptTests(unittest.TestCase):
         self.assertIn(str(Path("/tmp/invocation/results/images")), prompt)
         self.assertIn("Slack bridge uploads supported files", prompt)
         self.assertIn("Do not call Slack's API to upload them", prompt)
-        self.assertIn("/tmp/invocation/results/artifacts", prompt)
+        self.assertIn(str(Path("/tmp/invocation/results/artifacts")), prompt)
         self.assertIn("including generated HTML", prompt)
 
     @patch("scripts.opentag_agent.backend_command", return_value=["codex"])

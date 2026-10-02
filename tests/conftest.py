@@ -71,10 +71,19 @@ if os.name == "nt":
 
     _tag_paths.restrict_windows_acl = _no_acl
 
+    def _isatty_only():
+        # In-process tests fake a terminal by patching sys.stdin.isatty; follow
+        # that. Tests that run Tag as a subprocess still get the console check.
+        return sys.stdin is not None and sys.stdin.isatty()
+
     @pytest.fixture(autouse=True)
-    def no_windows_acl(monkeypatch):
+    def windows_test_environment(monkeypatch):
         for name in ("tag_paths", "scripts.tag_paths", "tag_activity", "scripts.tag_activity"):
             module = sys.modules.get(name)
             if module is not None and hasattr(module, "restrict_windows_acl"):
                 monkeypatch.setattr(module, "restrict_windows_acl", _no_acl)
+        for name in ("tag_display", "scripts.tag_display"):
+            module = sys.modules.get(name)
+            if module is not None:
+                monkeypatch.setattr(module, "stdin_is_terminal", _isatty_only)
         yield

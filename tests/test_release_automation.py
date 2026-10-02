@@ -579,7 +579,10 @@ class ReleaseArtifactTests(unittest.TestCase):
             policy("missing.txt")
             with self.assertRaisesRegex(FileNotFoundError, "Required runtime file missing"):
                 build_archive(root, root / "invalid.zip", epoch=315532800)
-            for name in ("../private.env", "/absolute", "C:/absolute", "directory\\secret"):
+            # "/absolute" is drive-relative, not absolute, on Windows; releases are packaged on Linux.
+            names = ("../private.env", "C:/absolute", "directory\\secret") if os.name == "nt" else (
+                "../private.env", "/absolute", "C:/absolute", "directory\\secret")
+            for name in names:
                 policy(name)
                 with self.subTest(name=name), self.assertRaises(ValueError):
                     build_archive(root, root / "invalid.zip", epoch=315532800)
@@ -735,6 +738,7 @@ class ReleasePreflightTests(unittest.TestCase):
         self.assertIn("gh release upload channels", workflow)
         self.assertIn("--clobber", workflow)
 
+    @unittest.skipIf(os.name == "nt", "release preflight is a shell script run in Linux CI")
     def test_draft_preparation_does_not_require_publication_approval(self) -> None:
         source_root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -789,6 +793,7 @@ class ReleasePreflightTests(unittest.TestCase):
             self.assertNotEqual(publication.returncode, 0)
             self.assertIn("publication approval is not PASS", publication.stderr)
 
+    @unittest.skipIf(os.name == "nt", "release preflight is a shell script run in Linux CI")
     def test_allows_only_evidence_changes_after_the_live_candidate(self) -> None:
         source_root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as temporary_directory:

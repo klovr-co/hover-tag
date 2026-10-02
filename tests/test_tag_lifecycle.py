@@ -157,6 +157,7 @@ class TagLifecycleTests(unittest.TestCase):
         self.assertEqual(start.call_args.kwargs["state_dir"], context.shared_mfs_home)
         self.assertEqual(start.call_args.kwargs["cwd"], context.workspace)
 
+    @unittest.skipIf(os.name == "nt", "Tag finds the listener with lsof only on macOS and Linux")
     def test_local_mfs_listener_matches_the_resolved_configured_address(self) -> None:
         expected = MagicMock(pid=22)
         expected.cmdline.return_value = ["python", "-m", "mfs_server", "run"]
@@ -191,6 +192,7 @@ class TagLifecycleTests(unittest.TestCase):
         )
         process.assert_called_once_with(22)
 
+    @unittest.skipIf(os.name == "nt", "Tag finds the listener with lsof only on macOS and Linux")
     def test_local_mfs_listener_rejects_multiple_matching_processes(self) -> None:
         first = MagicMock(pid=11)
         first.cmdline.return_value = ["mfs-server", "run"]

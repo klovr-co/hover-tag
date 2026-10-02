@@ -690,7 +690,8 @@ def install(
                 bundled = workspace / backend / "skills/open-tag-admin"
                 skill = bundled / "SKILL.md"
                 try:
-                    managed = skill.is_file() and skill.read_bytes() in {
+                    # Older installs on Windows wrote it with CRLF line endings.
+                    managed = skill.is_file() and skill.read_bytes().replace(b"\r\n", b"\n") in {
                         LEGACY_ADMIN_SKILL.encode(), ADMIN_SKILL.encode()
                     }
                 except OSError:

@@ -257,7 +257,7 @@ def screen(step: int, title: str, detail: str = "", *, target: str = "") -> None
 
 
 def keyboard_available() -> bool:
-    return sys.stdin.isatty() and sys.stdout.isatty() and os.getenv("TERM") != "dumb"
+    return display.stdin_is_terminal() and sys.stdout.isatty() and os.getenv("TERM") != "dumb"
 
 
 def _instructions(*, multiple: bool = False, setup_incomplete: bool = False) -> str:

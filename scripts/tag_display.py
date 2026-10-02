@@ -36,6 +36,28 @@ ASCII_FALLBACK = str.maketrans({
 })
 
 
+
+def stdin_is_terminal() -> bool:
+    """Whether a person can answer prompts on standard input.
+
+    On Windows, the null device (NUL) reports isatty() as true, so a command
+    started without input would wait for answers forever. Require a real
+    console there.
+    """
+    stream = sys.stdin
+    if stream is None or not stream.isatty():
+        return False
+    if os.name != "nt":
+        return True
+    try:
+        import ctypes
+        import msvcrt
+        mode = ctypes.c_uint32()
+        handle = msvcrt.get_osfhandle(stream.fileno())
+        return bool(ctypes.windll.kernel32.GetConsoleMode(handle, ctypes.byref(mode)))
+    except (OSError, ValueError, AttributeError):
+        return False
+
 def terminal_text(text):
     """Return text the active stdout encoding can write without failing."""
     encoding = getattr(sys.stdout, "encoding", None)

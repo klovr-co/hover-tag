@@ -91,6 +91,14 @@ All notable changes to Tag are documented here.
   setup kept treating memory as unconfigured. Tag's launcher also runs Python
   in UTF-8 mode, which existing installations adopt on their next upgrade.
 
+- Fix several Windows-only problems found by running the full test suite on
+  Windows: renaming a Tag's folder failed while its start lock was open; the
+  layout migration and upgrades misread untouched files written with CRLF
+  line endings; `tag autostart` failed on accounts without a Run registry
+  key; two agents recording output files at once could fail; and commands
+  started without a terminal treated the null device as one and waited for
+  input.
+
 - Keep local Open buttons for oversized output files and explain how to access
   them when they exceed the Slack upload limit.
 

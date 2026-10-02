@@ -1834,7 +1834,7 @@ def main() -> int:
     args = parser.parse_args()
     config_path = args.config.expanduser().resolve()
     ui.enter_protocol()
-    if not sys.stdin.isatty() and not ui.protocol_active():
+    if not ui.display.stdin_is_terminal() and not ui.protocol_active():
         print("Use a terminal for setup, or tag inspect --json and tag config set for automation.", file=sys.stderr)
         return 2
     telemetry_session: tag_telemetry.SetupSession | None = None
