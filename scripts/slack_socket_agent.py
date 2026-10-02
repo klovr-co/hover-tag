@@ -2521,6 +2521,11 @@ def run_backend_events(
                     on_error(error_code, text)
             elif event_type == "status" and isinstance(text, str) and on_status:
                 on_status(text)
+            elif event_type == "approval_expired":
+                approval_id = event.get("approval_id")
+                if isinstance(approval_id, str):
+                    with active_run.lock:
+                        active_run.pending_approvals.discard(approval_id)
             elif event_type == "approval_request":
                 approval_id = event.get("approval_id")
                 label = event.get("label")
@@ -2870,7 +2875,9 @@ def approval_button_blocks(
     approval_id: str,
     label: str,
 ) -> list[dict[str, Any]]:
+    retry = label == "retry an action denied by automatic review"
     safe_labels = {
+        "retry an action denied by automatic review",
         "run a command outside the workspace sandbox",
         "change files outside the workspace sandbox",
         "use additional filesystem or network access",
@@ -2895,7 +2902,9 @@ def approval_button_blocks(
                 "type": "mrkdwn",
                 "text": (
                     f"*Codex needs approval* to {action}. "
-                    "Approve only if you expect this request."
+                    + ("Automatic review denied this action. Approve one retry for this action; "
+                     "it will still undergo automatic review. This request expires when the run ends."
+                     if retry else "Approve only if you expect this request.")
                 ),
             },
         },
@@ -2906,14 +2915,14 @@ def approval_button_blocks(
                     "type": "button",
                     "action_id": APPROVAL_APPROVE_ACTION_ID,
                     "style": "primary",
-                    "text": {"type": "plain_text", "text": "Approve once"},
+                    "text": {"type": "plain_text", "text": "Approve retry" if retry else "Approve once"},
                     "value": metadata,
                 },
                 {
                     "type": "button",
                     "action_id": APPROVAL_DENY_ACTION_ID,
                     "style": "danger",
-                    "text": {"type": "plain_text", "text": "Deny"},
+                    "text": {"type": "plain_text", "text": "Dismiss" if retry else "Deny"},
                     "value": metadata,
                 },
             ],

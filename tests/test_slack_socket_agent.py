@@ -1543,6 +1543,16 @@ class SlackApprovalTests(unittest.TestCase):
         )
         self.assertNotIn("command", buttons[0]["value"])
 
+    def test_auto_review_buttons_explain_one_retry(self) -> None:
+        blocks = slack_socket_agent.approval_button_blocks(
+            team="T1", channel="C1", thread_ts="1.0", user_id="U1",
+            approval_id="a" * 32, label="retry an action denied by automatic review",
+        )
+        self.assertEqual(["Approve retry", "Dismiss"],
+                         [b["text"]["text"] for b in blocks[1]["elements"]])
+        self.assertIn("still undergo automatic review", blocks[0]["text"]["text"])
+        self.assertEqual("U1", json.loads(blocks[1]["elements"][0]["value"])["user"])
+
     def test_approval_prompt_is_visible_only_to_requesting_user(self) -> None:
         client = MagicMock()
 

@@ -155,3 +155,26 @@ test runners and linters, package scripts, shell/TypeScript runners, and wget.
 Only known option arities are parsed; search expressions, filters, configuration
 values, and arbitrary unknown-command arguments are excluded. Inline file work
 uses “Running Python · filename”; scripts retain “Running filename”.
+
+
+## Auto-review denial retries (2026-10-02)
+
+Tag retains supported `item/autoApprovalReview/completed` denials in memory for
+its request-scoped thread. After the turn completes, it offers the initiating
+Slack user private Approve retry / Dismiss controls. Approval calls
+`thread/approveGuardianDeniedAction` with the exact denied action, then starts
+a follow-up turn in the same ephemeral thread with automatic review still on.
+The intermediate blocked answer is held while a decision is pending and is
+replaced by the retry answer when approved. No action payload or reviewer
+rationale is copied into Slack button metadata.
+
+The adapter opts into the experimental App Server protocol. Supported action
+variants are command, execve, terminal input, file patch, network access, and
+MCP tool call. Unknown variants (including permission-profile conversions) are
+not offered for override. Duplicate reviews are ignored, at most ten reviews
+are retained per run, and the existing approval timeout and absolute runtime
+bound the wait. Dismissal, Stop, expiry, unavailable UI, or rejected override
+APIs never grant permission. Expired controls are removed from the active
+approval registry. The process stays alive only within the original run's
+bounded lifetime; approval after cleanup cannot resume it. This adds no stored
+configuration or migration requirement.

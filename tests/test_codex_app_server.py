@@ -372,6 +372,157 @@ class ServerRequestTests(unittest.TestCase):
         self.assertEqual(-32601, payload["error"]["code"])
 
 
+class AutoReviewTests(unittest.TestCase):
+    def denial(self, **overrides):
+        params = {
+            "threadId": "thread-1", "turnId": "turn-1", "reviewId": "review-1",
+            "startedAtMs": 1, "completedAtMs": 2,
+            "review": {"status": "denied", "rationale": "private rationale"},
+            "action": {"type": "mcpToolCall", "server": "chrome",
+                       "toolName": "connect", "connectorId": "private-id"},
+        }
+        params.update(overrides)
+        return {"method": "item/autoApprovalReview/completed", "params": params}
+
+    def server(self, root):
+        server = CodexAppServer(["codex"], cwd=root, timeout=5, approval_dir=root)
+        server.thread_id, server.turn_id = "thread-1", "turn-1"
+        return server
+
+    def test_only_matching_supported_denials_are_retained_once(self):
+        server = self.server(Path("/tmp"))
+        for override in [{"threadId": "other"}, {"turnId": "old"},
+                         {"review": {"status": "approved"}},
+                         {"action": {"type": "futureAction"}},
+                         {"action": {"type": "command"}}]:
+            server._remember_auto_review(self.denial(**override))
+        self.assertEqual([], server.auto_review_denials)
+        server._remember_auto_review(self.denial())
+        server._remember_auto_review(self.denial())
+        self.assertEqual(1, len(server.auto_review_denials))
+        event = server.auto_review_denials[0]
+        self.assertEqual("mcp_tool_call", event["action"]["type"])
+        self.assertEqual("connect", event["action"]["tool_name"])
+        self.assertEqual("private-id", event["action"]["connector_id"])
+
+    def test_early_denial_buffers_answer_and_caps_offers(self):
+        server = self.server(Path("/tmp"))
+        mapper = CodexEventMapper()
+        emitted = []
+        server._dispatch(self.denial(), mapper, emitted.append, time.monotonic() + 5)
+        server._dispatch({"method": "item/completed", "params": {"item": {
+            "id": "answer", "type": "agentMessage", "phase": "final_answer",
+            "text": "blocked answer",
+        }}}, mapper, emitted.append, time.monotonic() + 5)
+        self.assertEqual([], emitted)
+        self.assertEqual("blocked answer", server.held_auto_review_messages[0]["text"])
+        for index in range(20):
+            server._remember_auto_review(self.denial(reviewId=f"extra-{index}"))
+        self.assertEqual(10, len(server.auto_review_denials))
+
+    def test_command_enum_conversion_does_not_rewrite_command_text(self):
+        server = self.server(Path("/tmp"))
+        server._remember_auto_review(self.denial(action={
+            "type": "command", "source": "unifiedExec", "cwd": "/tmp",
+            "command": "echo toolName unifiedExec",
+        }))
+        self.assertEqual({"type": "command", "source": "unified_exec", "cwd": "/tmp",
+                          "command": "echo toolName unifiedExec"},
+                         server.auto_review_denials[0]["action"])
+
+    def test_approval_is_exact_private_and_bounded(self):
+        server = self.server(Path("/tmp"))
+        server._remember_auto_review(self.denial())
+        exact = server.auto_review_denials[0]
+        server._wait_for_approval = MagicMock(return_value=True)
+        server._request = MagicMock(return_value={})
+        events = []
+        deadline = time.monotonic() + 5
+        self.assertTrue(server._approve_auto_review_denials(CodexEventMapper(), events.append, deadline))
+        args = server._request.call_args.args
+        self.assertEqual("thread/approveGuardianDeniedAction", args[0])
+        self.assertEqual({"threadId": "thread-1", "event": exact}, args[1])
+        self.assertLessEqual(server._wait_for_approval.call_args.args[1], deadline)
+        self.assertNotIn("private", json.dumps(events))
+        self.assertEqual("approval_expired", events[-1]["type"])
+        self.assertFalse(server._approve_auto_review_denials(CodexEventMapper(), events.append, deadline))
+        server._request.assert_called_once()
+
+    def test_dismiss_expiry_stop_and_unavailable_api_never_retry(self):
+        for mode in ("dismiss", "expired", "stopped", "unsupported"):
+            with self.subTest(mode=mode):
+                server = self.server(Path("/tmp"))
+                server._remember_auto_review(self.denial())
+                server._wait_for_approval = MagicMock(return_value=mode == "unsupported")
+                server._request = MagicMock(side_effect=CodexAppServerError("unsupported"))
+                server.interrupt_sent = mode == "stopped"
+                deadline = time.monotonic() + (-1 if mode == "expired" else 5)
+                if mode == "unsupported":
+                    with self.assertRaises(CodexAppServerError):
+                        server._approve_auto_review_denials(CodexEventMapper(), lambda e: None, deadline)
+                else:
+                    self.assertFalse(server._approve_auto_review_denials(CodexEventMapper(), lambda e: None, deadline))
+                    server._request.assert_not_called()
+
+    def test_wire_retry_preserves_thread_and_emits_only_retry_answer(self):
+        fake = r'''
+import json, sys
+turn = 0
+approved = False
+for line in sys.stdin:
+    m = json.loads(line)
+    method = m.get("method")
+    def send(p): print(json.dumps(p), flush=True)
+    if method == "initialize":
+        assert m["params"]["capabilities"]["experimentalApi"]
+        send({"id":m["id"], "result":{}})
+    elif method == "thread/start":
+        assert m["params"]["approvalsReviewer"] == "auto_review"
+        send({"id":m["id"], "result":{"thread":{"id":"thread-1"}}})
+    elif method == "thread/approveGuardianDeniedAction":
+        assert m["params"]["threadId"] == "thread-1"
+        event = m["params"]["event"]
+        assert event["id"] == "review-1"
+        assert event["action"]["tool_name"] == "connect"
+        approved = True
+        send({"id":m["id"], "result":{}})
+    elif method == "turn/start":
+        turn += 1
+        assert m["params"]["threadId"] == "thread-1"
+        if turn > 1: assert approved
+        tid = "turn-" + str(turn)
+        send({"id":m["id"], "result":{"turn":{"id":tid}}})
+        if turn == 1:
+            send({"method":"item/autoApprovalReview/completed", "params":{
+                "threadId":"thread-1", "turnId":tid, "reviewId":"review-1",
+                "review":{"status":"denied"}, "action":{
+                    "type":"mcpToolCall", "server":"chrome", "toolName":"connect"}}})
+        send({"method":"item/completed", "params":{"item":{
+            "id":"answer-"+tid, "type":"agentMessage", "phase":"final_answer",
+            "text":"Created form" if approved else "Browser denied"}}})
+        send({"method":"turn/completed", "params":{"turn":{"id":tid,"status":"completed"}}})
+'''
+        for approve in (True, False):
+            with self.subTest(approve=approve), tempfile.TemporaryDirectory() as raw:
+                root = Path(raw)
+                script = root / "server.py"
+                script.write_text(fake)
+                server = CodexAppServer([sys.executable, "-u", str(script)], cwd=root,
+                                        timeout=5, max_timeout=10, approval_dir=root)
+                events = []
+                def emit(event):
+                    events.append(event)
+                    if event["type"] == "approval_request":
+                        (root / (event["approval_id"] + ".json")).write_text(json.dumps(
+                            {"decision": "approve" if approve else "deny"}))
+                self.assertEqual(("completed", ""), server.run("Create form", model=None,
+                                 reasoning_effort=None, emit=emit))
+                answers = [e["text"] for e in events if e["type"] == "message_complete"]
+                self.assertEqual(["Created form" if approve else "Browser denied"], answers)
+                self.assertEqual(1, sum(e["type"] == "turn_complete" for e in events))
+                self.assertIsNotNone(server.process.poll())
+
+
 class AppServerWireTests(unittest.TestCase):
     FAKE_SERVER = r'''
 import json
@@ -471,7 +622,8 @@ for raw in sys.stdin:
             server = CodexAppServer(
                 [sys.executable, "-u", str(self.fake_server_path(root))],
                 cwd=root,
-                timeout=5,
+                # Payload-size coverage must not depend on host throughput.
+                timeout=30,
             )
 
             status, detail = server.run(
