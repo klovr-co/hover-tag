@@ -36,6 +36,8 @@ All notable changes to Tag are documented here.
   indexed channel history.
 - Include already joined channels in setup and make Slack startup and indexing
   recover from rate limits more clearly.
+- Resume automatic edge and prerelease publishing after a merge whose release
+  processing failed or never ran, and start the `0.3.0` alpha line.
 
 ## [0.2.0] - 2026-09-22
 
