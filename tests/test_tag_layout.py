@@ -193,7 +193,8 @@ class SelfContainedHomeTests(unittest.TestCase):
                 self.assertTrue((context.home / 'config/settings.json').exists())
                 self.assertEqual((workspace / 'notes.md').read_text(encoding="utf-8"), 'my files')
                 lifecycle.stop_process.assert_any_call(context.home, 'slack')
-                self.assertEqual((migrated.home / 'config/slack-history-token').stat().st_mode & 0o777, 0o600)
+                if os.name != "nt":  # Windows keeps it private with the folder's ACL instead.
+                    self.assertEqual((migrated.home / 'config/slack-history-token').stat().st_mode & 0o777, 0o600)
                 self.assertFalse(tag_layout.migrate(migrated, lifecycle))
                 records = [item for item in tag_instances.discover(self.root) if item['id'] == name]
                 self.assertEqual(len(records), 1)
