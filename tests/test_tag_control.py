@@ -381,7 +381,9 @@ class TagControlTests(unittest.TestCase):
     def test_setup_defaults_return_to_summary_and_update_connector_window(self):
         values = self.complete()
         channels = [opentag_setup.slack_channels.SlackChannel("CTEST", "team", False, True)]
-        with patch.object(opentag_setup, "ensure_agent", side_effect=lambda _path, values: values), patch.object(
+        with patch.object(
+            opentag_setup.shutil, "which", return_value="/test/bin/claude"
+        ), patch.object(opentag_setup, "ensure_agent", side_effect=lambda _path, values: values), patch.object(
             opentag_setup, "validate_slack_identity", return_value={"team_id": "TTEST", "app_id": "ATEST"}
         ), patch.object(opentag_setup, "validate_socket_token"), patch.object(
             opentag_setup.slack_channels, "list_channels", return_value=channels
