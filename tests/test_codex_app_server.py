@@ -280,7 +280,7 @@ class ServerRequestTests(unittest.TestCase):
             approval_dir = Path(raw_dir)
             approval_id = "a" * 32
             (approval_dir / f"{approval_id}.json").write_text(
-                json.dumps({"decision": "approve"}), encoding="utf-8"
+                json.dumps({"choice": "0"}), encoding="utf-8"
             )
             server = CodexAppServer(
                 ["codex"], cwd=Path(raw_dir), timeout=1, approval_dir=approval_dir
@@ -301,14 +301,11 @@ class ServerRequestTests(unittest.TestCase):
                 )
 
         self.assertTrue(handled)
-        self.assertEqual(
-            [{
-                "type": "approval_request",
-                "approval_id": approval_id,
-                "label": "run a command outside the workspace sandbox",
-            }],
-            emitted,
-        )
+        self.assertEqual("approval_request", emitted[0]["type"])
+        self.assertEqual(approval_id, emitted[0]["approval_id"])
+        self.assertEqual(["Allow once", "Allow for this task", "Deny", "Deny and stop"],
+                         [c["label"] for c in emitted[0]["choices"]])
+        self.assertEqual("approval_expired", emitted[-1]["type"])
         self.assertNotIn("private command", json.dumps(emitted))
         server._send.assert_called_once_with({"id": 8, "result": {"decision": "accept"}})
 
@@ -338,7 +335,7 @@ class ServerRequestTests(unittest.TestCase):
                 ["codex"], cwd=Path(raw_dir), timeout=1, approval_dir=Path(raw_dir)
             )
             server._send = MagicMock()  # type: ignore[method-assign]
-            server._wait_for_approval = MagicMock(return_value=False)  # type: ignore[method-assign]
+            server._wait_for_approval_decision = MagicMock(return_value={})  # type: ignore[method-assign]
 
             for outer_deadline, expected_deadline in [
                 (10_000.0, 100.0 + APPROVAL_TIMEOUT_SECONDS),
@@ -359,7 +356,7 @@ class ServerRequestTests(unittest.TestCase):
 
                 self.assertEqual(
                     expected_deadline,
-                    server._wait_for_approval.call_args.args[1],
+                    server._wait_for_approval_decision.call_args.args[1],
                 )
 
     def test_unknown_server_request_gets_json_rpc_error(self) -> None:

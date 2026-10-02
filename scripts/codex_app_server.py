@@ -21,8 +21,10 @@ from typing import Any
 
 try:
     from .tag_activity_details import item_activity_details
+    from .tag_approval_choices import approval_choices, public_approval_choices
 except ImportError:  # Direct script execution does not create a package context.
     from tag_activity_details import item_activity_details
+    from tag_approval_choices import approval_choices, public_approval_choices
 
 
 # Prompts are controlled by Tag, while completed tool and image events may
@@ -744,23 +746,26 @@ class CodexAppServer:
             and deadline is not None
         ):
             approval_id = uuid.uuid4().hex
-            emit({
-                "type": "approval_request",
-                "approval_id": approval_id,
-                "label": APPROVAL_REQUEST_LABELS[method],
-            })
-            approved = self._wait_for_approval(
-                approval_id,
-                min(deadline, time.monotonic() + APPROVAL_TIMEOUT_SECONDS),
-            )
-            self._send({
-                "id": request_id,
-                "result": self._approval_result(
-                    method,
-                    params if isinstance(params, dict) else {},
-                    approved,
-                ),
-            })
+            request_params = params if isinstance(params, dict) else {}
+            choices = approval_choices(method, request_params)
+            result = self._approval_result(method, request_params, False)
+            if choices:
+                emit({
+                    "type": "approval_request", "approval_id": approval_id,
+                    "label": APPROVAL_REQUEST_LABELS[method],
+                    "choices": public_approval_choices(choices),
+                })
+                try:
+                    selected = self._wait_for_approval_decision(
+                        approval_id, min(deadline, time.monotonic() + APPROVAL_TIMEOUT_SECONDS),
+                    )
+                finally:
+                    emit({"type": "approval_expired", "approval_id": approval_id})
+                choice = next((c for c in choices if c["id"] == selected.get("choice")), None)
+                self._check_control()
+                if choice is not None and not self.interrupt_sent and time.monotonic() < deadline:
+                    result = choice["result"]
+            self._send({"id": request_id, "result": result})
             return True
         responses: dict[str, dict[str, Any]] = {
             "item/commandExecution/requestApproval": {"decision": "decline"},
@@ -781,12 +786,15 @@ class CodexAppServer:
         return False
 
     def _wait_for_approval(self, approval_id: str, deadline: float) -> bool:
+        return self._wait_for_approval_decision(approval_id, deadline).get("decision") == "approve"
+
+    def _wait_for_approval_decision(self, approval_id: str, deadline: float) -> dict[str, Any]:
         assert self.approval_dir is not None
         decision_file = self.approval_dir / f"{approval_id}.json"
         while time.monotonic() < deadline:
             self._check_control()
             if self.interrupt_sent:
-                return False
+                return {}
             try:
                 payload = json.loads(decision_file.read_text(encoding="utf-8"))
             except FileNotFoundError:
@@ -794,10 +802,12 @@ class CodexAppServer:
                 continue
             except (OSError, json.JSONDecodeError):
                 decision_file.unlink(missing_ok=True)
-                return False
+                return {}
             decision_file.unlink(missing_ok=True)
-            return isinstance(payload, dict) and payload.get("decision") == "approve"
-        return False
+            if time.monotonic() >= deadline:
+                return {}
+            return payload if isinstance(payload, dict) else {}
+        return {}
 
     @staticmethod
     def _approval_result(method: str, params: dict[str, Any], approved: bool) -> dict[str, Any]:
