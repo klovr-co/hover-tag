@@ -22,6 +22,26 @@ from scripts import tag_chatgpt as auth
 from scripts import codex_agent_backend as transport
 
 
+class RequestErrorTests(unittest.TestCase):
+    def test_plan_codes_preserve_specific_recovery_guidance(self):
+        for code, guidance in auth.PLAN_ERRORS.items():
+            with self.subTest(code=code):
+                error = auth.RequestError(403, code)
+                self.assertEqual(error.code, code)
+                self.assertIn(code, str(error))
+                self.assertIn(guidance, str(error))
+
+    def test_invalid_codes_are_filtered_and_length_limit_is_preserved(self):
+        self.assertEqual(auth.RequestError(403, "a" * 99 + "2").code, "a" * 99 + "2")
+        for code in ("", "a" * 101, "code\nsecret", "code-secret", "CODE", "code/secret"):
+            with self.subTest(code=code):
+                error = auth.RequestError(403, code)
+                self.assertEqual(error.code, "")
+                self.assertIn("HTTP 403, unavailable", str(error))
+                if code:
+                    self.assertNotIn(code, str(error))
+
+
 class ChatGPTTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

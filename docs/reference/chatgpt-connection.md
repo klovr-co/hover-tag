@@ -13,8 +13,11 @@ tag chatgpt login
 tag start
 ```
 
-The browser displays **Continue with ChatGPT** and asks permission for Tag to use
-your plan. Tag verifies your identity and the returned grant before making the
+New registrations send **Tag** as the display-name hint. The browser displays
+**Continue with ChatGPT** and asks permission for Tag to use your plan. OpenAI
+controls this page; its documented dynamic-registration flow has no custom-icon
+parameter. Returning sign-ins reuse the saved registration, so a local name
+change does not rename an existing registration. Tag verifies your identity and the returned grant before making the
 connection active. A connection does not import ChatGPT conversation history.
 You do not need to sign in to Codex separately for this mode. Setup also offers
 Continue with ChatGPT when Codex has no existing sign-in.

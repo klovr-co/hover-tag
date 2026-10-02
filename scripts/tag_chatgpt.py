@@ -38,7 +38,7 @@ TOKEN = ISSUER + "/api/accounts/oauth/token"
 RESOURCE = "https://api.openai.com/v1"
 SCOPES = "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct"
 PLAN_SCOPE = "chatgpt.tokens.use.direct"
-APP_NAME = "tag"
+APP_NAME = "Tag"
 PLAN_ERRORS = {
     "subscription_sharing_user_not_eligible": "ChatGPT plan usage is unavailable for this account or workspace. Check its access policy.",
     "subscription_sharing_usage_limit_exceeded": "Tag's ChatGPT plan usage limit was reached. Review https://chatgpt.com/settings/usage before retrying.",
@@ -64,7 +64,7 @@ class ChatGPTError(RuntimeError):
 class RequestError(ChatGPTError):
     def __init__(self, status: int, code: str = "", request_id: str = ""):
         self.status = status
-        self.code = code if re.fullmatch(r"[a-z_]{1,100}", code) else ""
+        self.code = code if re.fullmatch(r"[a-z0-9_]{1,100}", code) else ""
         self.request_id = request_id if re.fullmatch(r"[A-Za-z0-9_-]{1,100}", request_id) else ""
         detail = PLAN_ERRORS.get(self.code, {
             401: "Check the selected ChatGPT account and plan permission with tag chatgpt status.",
