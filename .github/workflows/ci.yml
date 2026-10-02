@@ -54,3 +54,38 @@ jobs:
         run: sh installer/macos/tests/run.sh
       - name: Build Tag.app
         run: sh installer/macos/build.sh
+
+  desktop:
+    name: ${{ matrix.os }} / Tag.app
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-22.04]
+    defaults:
+      run:
+        working-directory: installer/desktop
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: installer/desktop/package-lock.json
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: installer/desktop/src-tauri
+      - name: Install Linux build libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - run: npm ci
+      - name: Typecheck and test the window
+        run: npm run typecheck && npm test
+      - name: Test the native side
+        run: npm run bundle-installer && cargo test --manifest-path src-tauri/Cargo.toml
+      - name: Build Tag.app
+        run: npx tauri build --debug --no-bundle

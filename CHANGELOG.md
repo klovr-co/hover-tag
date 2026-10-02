@@ -6,6 +6,13 @@ All notable changes to Tag are documented here.
 
 ### Added
 
+- Tag.app for macOS, Windows, and Linux, built with Tauri
+  (`installer/desktop`). It installs Tag with the installer bundled in the app,
+  showing structured progress, then lists, starts, renames, and adds Tags,
+  shows each Tag's logs, upgrades Tag, and stays in the menu bar or system
+  tray. Settings turn on **Open Tag at login** and **Keep Tags running**, and
+  Tag.app notifies you when a Tag goes offline unexpectedly.
+
 - Keep Tags running after login with `tag autostart on`. Tag remembers which
   Tags you started or stopped, and a per-user login service (launchd on macOS,
   systemd or XDG autostart on Linux, the Run key on Windows) starts them and
