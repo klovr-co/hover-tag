@@ -164,7 +164,7 @@ def create_app(project: Path, team_id: str, config_path: Path, run_cli) -> str:
         ui.message("Slack CLI will create and install the app. Tag still runs on this computer.")
         ui.message("Requested bot permissions: " + ", ".join(manifest["oauth_config"]["scopes"]["bot"]))
         ui.message("Channel indexing and service startup are approved separately.")
-        if ui.choose("Create this app?", ["Create and install app", "Save and exit"], default=1) == 1:
+        if ui.choose("Create this app?", ["Create and install app", "Save and exit"], default=1, qid="create_app") == 1:
             raise ui.Paused()
         state = {"team_id": team_id, "status": "attempting"}
         # Exclusive checkpoint prevents two setup processes from creating two apps.
@@ -184,6 +184,7 @@ def create_app(project: Path, team_id: str, config_path: Path, run_cli) -> str:
             app_id = linked_app(project, team_id)
             if app_id:
                 state.update(app_id=app_id, status="created")
+                ui.commit()  # A real Slack app now exists: Back stops here.
                 settings.save_config(marker, state)
                 settings.update_config(config_path, {"SLACK_APP_ID": app_id})
         if not app_id:
@@ -194,7 +195,7 @@ def create_app(project: Path, team_id: str, config_path: Path, run_cli) -> str:
         print()
         ui.message(f"App {app_id} is saved; installation is not confirmed.")
         ui.message("Slack may need administrator approval. You can leave and resume later.")
-        action = ui.choose("Finish app installation", ["Check approval again", "Continue installation", "Save and exit"], default=2)
+        action = ui.choose("Finish app installation", ["Check approval again", "Continue installation", "Save and exit"], default=2, qid="app_install")
         if action == 2:
             raise ui.Paused()
         if action == 1:

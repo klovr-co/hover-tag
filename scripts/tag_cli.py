@@ -1537,11 +1537,185 @@ def upgrade_command(
     return 0
 
 
+SETUP_PROTOCOL_ENV = "TAG_SETUP_PROTOCOL"
+
+
+DEFER_RENAME_ENV = "TAG_DEFER_RENAME"
+
+
+def _workspace_tags(installation_root: Path, workspace: str) -> list[str]:
+    """Tags whose Slack workspace matches a team ID or (case-insensitively) its name."""
+    wanted = workspace.strip().casefold()
+    matches = []
+    for item in tag_instances.discover(installation_root):
+        if not item["valid"] or not Path(str(item["home"])).exists():
+            continue
+        home = Path(str(item["home"]))
+        path = home / "config/settings.json"
+        team = read_config(path).get("SLACK_TEAM_ID", "") if path.is_file() else ""
+        name = tag_instances.workspace_name(home) or ""
+        if wanted and wanted in {team.casefold(), name.casefold()}:
+            matches.append(str(item["id"]))
+    return matches
+
+
+def _workspace_lifecycle(installation_root: Path, workspace: str, action: str, json_output: bool) -> int:
+    """Start, stop, or restart every Tag in one Slack workspace, one at a time."""
+    tags = _workspace_tags(installation_root, workspace)
+    if not tags:
+        raise RuntimeError(f"No Tags are connected to the Slack workspace '{workspace}'. See tag list.")
+    results = []
+    for tag_id in tags:
+        path = tag_instances.resolve(installation_root, tag_id).home / "config/settings.json"
+        if action != "stop" and not (path.is_file() and read_config(path).get("SLACK_APP_ID")):
+            # Unfinished setup isn't a failure; it just can't start yet.
+            results.append({"tag": tag_id, "exit_code": None, "skipped": "setup_incomplete"})
+            continue
+        command = [sys.executable, str(ROOT / "scripts/tag_cli.py"), tag_id, action]
+        # Each Tag runs its own lifecycle; one failure doesn't stop the others.
+        code = subprocess.call(command, stdout=subprocess.DEVNULL if json_output else None)
+        results.append({"tag": tag_id, "exit_code": code})
+    failed = [item["tag"] for item in results if item["exit_code"]]
+    skipped = [item["tag"] for item in results if item.get("skipped")]
+    if json_output:
+        print(json.dumps({"schema_version": 1, "workspace": workspace, "action": action,
+                          "ok": not failed, "tags": results}, indent=2))
+    else:
+        attempted = len(tags) - len(skipped)
+        display.info_row(action.title(), f"{attempted - len(failed)} of {attempted} Tags in {workspace}",
+                         good=not failed)
+        for tag_id in failed:
+            display.info_row(tag_id, f"needs attention · tag {tag_id} status", good=False)
+        for tag_id in skipped:
+            display.info_row(tag_id, f"setup not finished · tag {tag_id} setup", good=False)
+    return 1 if failed else 0
+
+
+def _rename_command(context: tag_instances.InstanceContext, args) -> int:
+    """Rename a Tag in Slack and give it a nickname for commands."""
+    try:
+        import slack_manifest_migrations
+    except ImportError:
+        from scripts import slack_manifest_migrations
+    try:
+        import tag_config as settings
+    except ImportError:
+        from scripts import tag_config as settings
+    if len(args.arguments) != 1 or not args.arguments[0].strip():
+        raise ValueError('rename needs the new Slack name, for example: tag rename "Research Tag"')
+    name = args.arguments[0].strip()
+    if error := settings.validation_error("OPENTAG_BOT_NAME", name):
+        raise ValueError(error)
+    alias = args.nickname or tag_instances.slugify(name)
+    root = context.installation_root
+    # Check the nickname before changing anything in Slack.
+    tag_instances.validate_name(alias, allow_default=False)
+    for other in tag_instances.discover(root):
+        if other["valid"] and other["id"] != context.tag_id and Path(str(other["home"])).exists():
+            if alias in {other["id"], tag_instances.nickname(Path(str(other["home"])))}:
+                raise ValueError(f"Another Tag already uses '{alias}'; choose one with --nickname")
+    config_path = context.home / "config/settings.json"
+    values = read_config(config_path) if config_path.is_file() else {}
+    retry = f'tag {context.tag_id} rename "{name}"'
+    changed = slack_manifest_migrations.set_display_name(context.home, values, name, retry=retry)
+    settings.update_config(config_path, {"OPENTAG_BOT_NAME": name})
+    tag_instances.set_nickname(root, context.tag_id, alias)
+    if args.json_output:
+        print(json.dumps({"schema_version": 1, "tag": context.tag_id, "slack_name": name,
+                          "nickname": alias, "slack_changed": changed}, indent=2))
+    else:
+        display.header("Rename", f"Tag '{context.tag_id}'")
+        display.info_row("Slack", f"Now called {name}" if changed else f"Already called {name}", good=True)
+        display.info_row("Command", f"tag {alias} start", good=True)
+        if process_for(context.home / "state/slack.json") is not None:
+            display.next_action("Use the new name in Tag's own messages", f"tag {alias} restart")
+    return 0
+
+
+def _avatar(home: Path) -> str | None:
+    """The profile picture setup gave this Tag's Slack app, if it has one."""
+    icons = sorted((home / "integrations/slack-cli/assets").glob("tag-profile.*"))
+    return str(icons[0]) if icons else None
+
+
+def _slack_name(home: Path) -> str | None:
+    """The Tag's display name in Slack, for lists that show people names, not IDs."""
+    path = home / "config/settings.json"
+    name = read_config(path).get("OPENTAG_BOT_NAME", "") if path.is_file() else ""
+    return name or None
+
+
+def _rename(installation_root: Path, tag_id: str) -> str | None:
+    """Name a provisionally named Tag after its Slack IDs once its app exists."""
+    try:
+        import tag_rename
+    except ImportError:
+        from scripts import tag_rename
+    return tag_rename.migrate(installation_root, sys.modules[__name__], tag_id)
+
+
+def _setup_ui():
+    try:
+        import setup_ui as ui
+    except ImportError:
+        from scripts import setup_ui as ui
+    return ui
+
+
+def _setup_result(code: int, tag_id: str, protocol: bool) -> int:
+    """Close a JSON-lines setup session with the outcome and selected Tag."""
+    if protocol:
+        configured = False
+        try:
+            try:
+                import tag_config as settings
+            except ImportError:
+                from scripts import tag_config as settings
+            context = tag_instances.resolve(tag_home(), tag_id)
+            configured = not settings.config_errors(read_config(context.home / "config/settings.json"))
+        except (OSError, ValueError, RuntimeError):
+            pass
+        status = "complete" if code == 0 and configured else "paused" if code == 0 else "failed"
+        _setup_ui().emit({"type": "result", "status": status, "tag": tag_id, "exit_code": code})
+    return code
+
+
+def _setup_step(args: argparse.Namespace, installation_root: Path, *, raw_tag: str | None) -> int:
+    """Drive JSON-lines setup one question per command, for agents and scripts."""
+    try:
+        import setup_session
+    except ImportError:
+        from scripts import setup_session
+    command = [sys.executable, str(ROOT / "scripts/tag_cli.py"), *([raw_tag] if raw_tag else []), args.command]
+    command += [flag for flag, on in (("--review", args.review), ("--no-start", args.no_start)) if on]
+    command.append("--json")
+    try:
+        if args.step:
+            reply = setup_session.step(installation_root, command)
+        elif args.step_stop:
+            reply = setup_session.stop(installation_root)
+        elif args.step_back:
+            reply = setup_session.back(installation_root)
+        else:
+            try:
+                value = json.loads(args.step_answer)
+            except ValueError:
+                print(json.dumps({"schema_version": 1, "error": "--answer must be a JSON value, such as 0, true, or \"text\""}))
+                return 2
+            reply = setup_session.answer(installation_root, value, args.step_question)
+    except setup_session.SessionError as error:
+        print(json.dumps({"schema_version": 1, "error": str(error)}))
+        return 1
+    print(json.dumps({"schema_version": 1, **reply}, ensure_ascii=False))
+    result = reply.get("result") or {}
+    return 1 if reply.get("state") == "ended" and result.get("status") == "failed" else 0
+
+
 def _run_cli() -> int:
     parser = argparse.ArgumentParser(description="Tag: set up, inspect, and manage your Slack teammate.",
                                      usage="tag [TAG] [COMMAND] [OPTIONS]",
                                      epilog=(
-                                         "Use tag for default status, or tag NAME status for a named Tag. "
+                                         "Use tag status for your main Tag, or tag NAME status for another Tag. "
                                          "Start with tag setup; change configuration with tag settings.\n\n"
                                          "Telemetry: Tag can collect minimal anonymous CLI usage without prompts, "
                                          "Slack messages, agent output, paths, logs, credentials, or configuration "
@@ -1567,6 +1741,13 @@ def _run_cli() -> int:
     parser.add_argument("--dry-run", action="store_true", help="upgrade: verify and report the target without installing")
     parser.add_argument("--no-restart", action="store_true", help="upgrade: leave running services on the previous code")
     parser.add_argument("--allow-downgrade", action="store_true", help="upgrade: explicitly permit installing an older release")
+    parser.add_argument("--step", action="store_true", help="setup, add: start or continue setup in the background and print the next question as JSON")
+    parser.add_argument("--answer", dest="step_answer", metavar="JSON", help="setup, add: answer the current --step question with a JSON value")
+    parser.add_argument("--question", dest="step_question", metavar="ID", help="setup, add: with --answer, only answer if this question is being asked")
+    parser.add_argument("--stop", action="store_true", dest="step_stop", help="setup, add: pause the background setup, saving progress")
+    parser.add_argument("--back", action="store_true", dest="step_back", help="setup, add: return to the previous --step question when it says can_go_back")
+    parser.add_argument("--nickname", help="rename: short name for commands (default: derived from the new name)")
+    parser.add_argument("--workspace", help="start, stop, restart: every Tag in this Slack workspace (team ID or name)")
     raw_arguments = sys.argv[1:]
     explicit_tag = bool(
         raw_arguments
@@ -1577,10 +1758,25 @@ def _run_cli() -> int:
     args = parser.parse_args(raw_arguments)
     if (args.no_start or args.test or args.review) and args.command != "setup":
         parser.error("--no-start, --test and --review are only for setup")
-    if args.arguments and args.command not in {"add", "memory", "config", "telemetry"}:
-        parser.error("Only add, memory, config, and telemetry accept additional positional arguments")
-    if args.json_output and args.command not in {"list", "memory", "inspect", "status", "doctor", "config", "paths", "upgrade", "telemetry"}:
-        parser.error("--json supports list, memory, inspect, status, doctor, config, paths, upgrade, and telemetry")
+    if args.arguments and args.command not in {"add", "memory", "config", "telemetry", "rename"}:
+        parser.error("Only add, memory, config, telemetry, and rename accept additional positional arguments")
+    if args.json_output and args.command not in {"list", "memory", "inspect", "status", "doctor", "config", "paths", "upgrade", "telemetry", "setup", "add", "rename", "start", "stop", "restart"}:
+        parser.error("--json supports list, memory, inspect, status, doctor, config, paths, upgrade, telemetry, setup, add, rename, and start/stop/restart with --workspace")
+    if args.json_output and args.command in {"start", "stop", "restart"} and not args.workspace:
+        parser.error("--json for start, stop, and restart requires --workspace")
+    if args.nickname and args.command != "rename":
+        parser.error("--nickname is only for rename")
+    if args.workspace and args.command not in {"start", "stop", "restart"}:
+        parser.error("--workspace is only for start, stop, and restart")
+    if args.workspace and explicit_tag:
+        parser.error("--workspace selects Tags itself; don't also name a Tag")
+    if args.json_output and args.command in {"setup", "add"}:
+        if args.test:
+            parser.error("--json cannot be combined with --test")
+        # A graphical client drives the same setup flow over JSON lines.
+        os.environ[SETUP_PROTOCOL_ENV] = "jsonl"
+    if os.getenv(SETUP_PROTOCOL_ENV) == "jsonl" and args.command in {"setup", "add"}:
+        _setup_ui().enter_protocol()
     if args.stdin and args.command != "config":
         parser.error("--stdin is only for config set")
     if args.offline and args.command not in {"inspect", "doctor"}:
@@ -1592,7 +1788,24 @@ def _run_cli() -> int:
     if args.limit is not None and args.limit < 1:
         parser.error("--limit must be at least 1")
     installation_root = tag_home()
+    stepping = args.step or args.step_answer is not None or args.step_stop or args.step_back
+    if stepping or args.step_question:
+        if args.command not in {"setup", "add"}:
+            parser.error("--step, --answer, --question, --back and --stop are only for setup and add")
+        if sum(map(bool, (args.step, args.step_answer is not None, args.step_stop, args.step_back))) != 1:
+            parser.error("Use exactly one of --step, --answer, --back, or --stop")
+        if args.step_question and args.step_answer is None:
+            parser.error("--question is only used with --answer")
+        if args.test:
+            parser.error("--step cannot be combined with --test")
+        return _setup_step(args, installation_root, raw_tag=sys.argv[1] if explicit_tag else None)
+    if explicit_tag:
+        # A nickname from `tag rename` works anywhere a Tag's ID does.
+        tag_id = tag_instances.resolve_reference(installation_root, tag_id)
     tag_instances.validate_name(tag_id)
+    if tag_id == tag_instances.DEFAULT_TAG:
+        # Plain commands and the legacy `tag default …` both mean the main Tag.
+        tag_id = tag_instances.select_unnamed(installation_root)
     if args.command in {"version", "upgrade", "rollback", "migrate", "list", "add", "memory", "telemetry"} and explicit_tag:
         parser.error(f"Tag selection is not supported for installation-wide command '{args.command}'")
     try:
@@ -1642,7 +1855,7 @@ def _run_cli() -> int:
     if args.command == "add":
         if args.arguments:
             parser.error("add does not accept a name; the workspace alias is chosen during onboarding")
-        if not sys.stdin.isatty():
+        if not sys.stdin.isatty() and not args.json_output:
             print(
                 "Interactive setup requires a terminal. Use tag inspect --json and tag config set for automation.",
                 file=sys.stderr,
@@ -1656,22 +1869,21 @@ def _run_cli() -> int:
         if not selected:
             return 1
         team_id, workspace_name = selected
-        suggestion = tag_instances.suggest_name(installation_root, workspace_name)
-        display.header("Add", f"Slack workspace connected: {workspace_name}")
-        display.paragraph("Choose a workspace alias. It is used in commands and does not change your assistant's Slack name.")
-        while True:
-            alias = setup.ask("Workspace alias", suggestion).strip()
-            try:
-                context = tag_instances.create(installation_root, alias)
-                break
-            except ValueError as exc:
-                display.paragraph(str(exc), display.WARNING)
+        # Setup renames the Tag after its Slack IDs; nobody invents an alias.
+        context = tag_instances.create(
+            installation_root, tag_instances.suggest_name(installation_root, "new tag"), provisional=True
+        )
+        tag_instances.record_workspace_name(context.home, workspace_name)
         settings.update_config(settings.config_path(context.home), {"SLACK_TEAM_ID": team_id})
-        display.header("Add", f"Created workspace alias '{context.tag_id}'.")
+        display.header("Add", f"New Tag for {workspace_name}")
         display.info_row("Home", display.short_path(context.home), good=True)
         display.info_row("Command", context.command("setup"), good=True)
         command = [sys.executable, str(ROOT / "scripts/tag_cli.py"), *context.command_arguments("setup")]
-        return subprocess.call(command, env=instance_environment(context))
+        result = subprocess.call(command, env={**instance_environment(context), DEFER_RENAME_ENV: "1"})
+        renamed = _rename(installation_root, context.tag_id) if result == 0 else None
+        if renamed and not args.json_output:
+            display.info_row("Tag", f"Named '{renamed}' after its Slack team and app IDs", good=True)
+        return _setup_result(result, renamed or context.tag_id, args.json_output)
     if args.command == "list":
         if args.arguments:
             parser.error("list does not accept positional arguments")
@@ -1683,27 +1895,56 @@ def _run_cli() -> int:
                     context = tag_instances.resolve(installation_root, str(item["id"]))
                     report = control.inspect(context.home, sys.modules[__name__], tag_id=context.tag_id)
                     record.update(state=report["state"], configuration=report["configuration"],
-                                  services=report["services"], slack_workspace=report.get("slack_workspace"))
+                                  services=report["services"], slack_workspace=report.get("slack_workspace"),
+                                  workspace_name=tag_instances.workspace_name(context.home),
+                                  slack_name=_slack_name(context.home),
+                                  nickname=tag_instances.nickname(context.home),
+                                  avatar=_avatar(context.home),
+                                  main=context.tag_id == tag_id)
                 except (OSError, ValueError, RuntimeError) as exc:
                     record.update(valid=False, state="invalid_configuration", error=str(exc))
             else:
                 record["state"] = "invalid_tag"
+            # Before first setup there is no Tag yet; don't list a placeholder.
+            if record["id"] == tag_instances.DEFAULT_TAG and not Path(str(record["home"])).exists():
+                continue
             rows.append(record)
         result = {"schema_version": 1, "installation_root": str(installation_root), "tags": rows}
         if args.json_output:
             print(json.dumps(result, indent=2))
         else:
-            display.header("Tags", "Independent Slack workspaces managed by this installation.")
+            display.header("Tags", "Grouped by Slack workspace. Several Tags can share one.")
+            groups: dict[str, list[dict]] = {}
             for row in rows:
-                workspace = row.get("slack_workspace") or "Slack not configured"
-                detail = f"{row['state']} · {workspace}" if row.get("valid") else str(row.get("error"))
-                display.info_row(str(row["id"]), detail, good=bool(row.get("valid")))
-            display.next_action("Connect another Slack workspace", "tag add")
+                label = row.get("workspace_name") or row.get("slack_workspace") or "Slack not connected yet"
+                groups.setdefault(str(label), []).append(row)
+            for label, members in groups.items():
+                team = members[0].get("slack_workspace")
+                display.section(f"{label} ({team})" if team and team != label else label)
+                for row in members:
+                    name = row.get("slack_name") or "New Tag"
+                    alias = f" · tag {row['nickname']}" if row.get("nickname") else ""
+                    main = " · main" if row.get("main") else ""
+                    detail = (f"{name} · {row['state']}{alias}{main}" if row.get("valid")
+                              else str(row.get("error")))
+                    display.info_row(str(row["id"]), detail, good=bool(row.get("valid")))
+            if len(groups) and any(row.get("slack_workspace") for row in rows):
+                display.next_action("Start every Tag in a workspace", "tag start --workspace TEAM_ID")
+            display.next_action("Add a Tag", "tag add")
         return 0
+    if args.workspace:
+        return _workspace_lifecycle(installation_root, args.workspace, args.command, args.json_output)
     initializes_default = tag_id == "default" and (
         args.command in {"start", "dev", "setup"}
         or (args.command == "config" and args.arguments and args.arguments[0] in {"init", "set"})
     )
+    if initializes_default and not tag_instances.instance_path(installation_root, tag_id).exists():
+        existing = [str(item["id"]) for item in tag_instances.discover(installation_root)
+                    if item["valid"] and Path(str(item["home"])).exists()]
+        if existing:
+            # Several Tags and no main one: don't guess, and don't create another.
+            raise RuntimeError("Several Tags exist. Name one, for example tag " + existing[0] + " "
+                               + args.command + ", or run tag add for a new Tag.")
     context = (tag_instances.ensure_default(installation_root) if initializes_default
                else tag_instances.resolve(installation_root, tag_id))
     home = context.home
@@ -1719,6 +1960,10 @@ def _run_cli() -> int:
             from scripts.tag_layout import migrate as migrate_layout
         migrate_layout(context, sys.modules[__name__])
         context = tag_instances.resolve(installation_root, tag_id)
+        if args.command != "setup":
+            # Setup renames once the Slack name is chosen; start renames first.
+            tag_id = _rename(installation_root, tag_id) or tag_id
+            context = tag_instances.resolve(installation_root, tag_id)
         home = context.home
     environment = instance_environment(context)
     startup_attempt_overrides = {
@@ -1777,7 +2022,9 @@ def _run_cli() -> int:
             control.show_status(report)
             show_upgrade_reminder(installation_root)
         return int(args.command == "status" and report["state"] != "running")
-    if args.command in {"setup", "settings", "reset"} and not sys.stdin.isatty():
+    if args.command in {"setup", "settings", "reset"} and not sys.stdin.isatty() and not (
+        args.command == "setup" and os.getenv(SETUP_PROTOCOL_ENV) == "jsonl"
+    ):
         print("Interactive setup requires a terminal. Use tag inspect --json and tag config set for automation.", file=sys.stderr)
         return 2
     if args.command == "reset":
@@ -1790,6 +2037,8 @@ def _run_cli() -> int:
         initialize_instance(home)
         control.settings_menu(home)
         return 0
+    if args.command == "rename":
+        return _rename_command(context, args)
     if args.command == "restart":
         display.header("Restart", selected_target(home, context.tag_id))
         command = [sys.executable, str(ROOT / "scripts/tag_cli.py")]
@@ -1930,9 +2179,25 @@ def _run_cli() -> int:
         if args.review:
             command.append("--review")
         result = subprocess.call(command, env=environment)
-        if result == 0 and not args.test:
+        tag_id = context.tag_id
+        if result == 0 and not args.test and not os.getenv(DEFER_RENAME_ENV):
+            was_running = process_for(home / "state/slack.json") is not None
+            renamed = _rename(installation_root, tag_id)
+            if renamed:
+                tag_id = renamed
+                if not args.json_output:
+                    display.info_row("Tag", f"Named '{renamed}' after its Slack team and app IDs", good=True)
+                if was_running:
+                    result = subprocess.call(
+                        [sys.executable, str(ROOT / "scripts/tag_cli.py"), "start"],
+                        env={key: value for key, value in os.environ.items()
+                             # Drop the pre-rename instance's paths; start rebuilds them.
+                             if not key.startswith(("TAG_INSTANCE_HOME", "TAG_ID", "OPENTAG_"))
+                             and key not in {"TMPDIR", "TEMP", "TMP"}},
+                    )
+        if result == 0 and not args.test and not args.json_output:
             show_upgrade_reminder(installation_root)
-        return result
+        return _setup_result(result, tag_id, args.json_output)
     if args.command == "doctor" and args.json_output:
         report = control.inspect(home, sys.modules[__name__], offline=True, tag_id=context.tag_id)
         if not report["configuration"]["complete"]:
@@ -2318,7 +2583,9 @@ if __name__ == "__main__":
             print("\nInterrupted. Run tag setup to resume saved setup.", file=sys.stderr)
         raise SystemExit(130)
     except (OSError, ValueError, RuntimeError, ImportError) as exc:
-        if "--json" in sys.argv:
+        if os.getenv(SETUP_PROTOCOL_ENV) == "jsonl":
+            _setup_ui().emit({"type": "result", "status": "failed", "error": str(exc), "exit_code": 1})
+        elif "--json" in sys.argv:
             print(json.dumps({"schema_version": 1, "ok": False, "error": str(exc)}))
         elif len(sys.argv) > 1 and sys.argv[1] in {"start", "restart", "dev"}:
             title = "Dev" if sys.argv[1] == "dev" else (

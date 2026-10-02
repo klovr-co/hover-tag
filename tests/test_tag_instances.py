@@ -159,15 +159,14 @@ class TagInstanceTests(unittest.TestCase):
             sys.stdin, "isatty", return_value=True
         ), patch.object(
             opentag_setup, "connect_slack_workspace", return_value=("T123", "Personal")
-        ), patch.object(
-            opentag_setup, "ask", return_value="personal"
         ), patch.object(tag_cli.subprocess, "call", return_value=0) as call, redirect_stdout(StringIO()):
             self.assertEqual(tag_cli.main(), 0)
-        self.assertEqual(call.call_args.args[0][-2:], ["personal", "setup"])
+        # A provisional name until setup creates the Slack app and Tag renames it.
+        self.assertEqual(call.call_args.args[0][-2:], ["new-tag", "setup"])
         self.assertEqual(call.call_args.kwargs["env"]["TAG_INSTANCE_HOME"],
-                         str(self.root / "instances/personal"))
+                         str(self.root / "instances/new-tag"))
         self.assertEqual(
-            json.loads((self.root / "instances/personal/config/settings.json").read_text())["SLACK_TEAM_ID"],
+            json.loads((self.root / "instances/new-tag/config/settings.json").read_text())["SLACK_TEAM_ID"],
             "T123",
         )
 
@@ -187,6 +186,30 @@ class TagInstanceTests(unittest.TestCase):
 
         connect.assert_not_called()
         self.assertFalse((self.root / "instances/default").exists())
+
+    def test_cli_add_json_runs_without_terminal_and_reports_a_result(self) -> None:
+        raw = StringIO()
+        with patch.dict(os.environ, {"TAG_HOME": str(self.root)}, clear=False), patch.object(
+            sys, "argv", ["tag", "add", "--json"]
+        ), patch.object(sys.stdin, "isatty", return_value=False), patch.object(
+            sys, "__stdout__", raw
+        ), patch.object(sys, "stdout", sys.stdout), patch.object(
+            opentag_setup, "connect_slack_workspace", return_value=("T123", "Acme Inc")
+        ), patch.object(opentag_setup, "ask") as ask, patch.object(
+            tag_cli.subprocess, "call", return_value=0
+        ) as call:
+            self.assertEqual(tag_cli.main(), 0)
+            self.assertEqual(os.environ["TAG_SETUP_PROTOCOL"], "jsonl")
+        ask.assert_not_called()  # The Tag is named by Tag, never by the person.
+        self.assertEqual(call.call_args.args[0][-2:], ["new-tag", "setup"])
+        self.assertEqual(call.call_args.kwargs["env"]["TAG_SETUP_PROTOCOL"], "jsonl")
+        self.assertEqual(call.call_args.kwargs["env"]["TAG_DEFER_RENAME"], "1")
+        self.assertEqual(tag_instances.workspace_name(self.root / "instances/new-tag"), "Acme Inc")
+        events = [json.loads(line) for line in raw.getvalue().splitlines()]
+        self.assertTrue(all(event["type"] in {"message", "result"} for event in events))
+        # Setup was mocked, so the new Tag has no app yet: it keeps its
+        # provisional name and progress is saved.
+        self.assertEqual(events[-1], {"type": "result", "status": "paused", "tag": "new-tag", "exit_code": 0})
 
     def test_cli_stop_targets_only_the_selected_bridge(self) -> None:
         home = tag_instances.create(self.root, "personal").home

@@ -1,7 +1,16 @@
-"""Questionary setup prompts with a numbered fallback for plain terminals."""
+"""Questionary setup prompts with a numbered fallback for plain terminals.
+
+Setting ``TAG_SETUP_PROTOCOL=jsonl`` turns every prompt into a JSON-lines
+exchange so a graphical client can drive the same setup flow: questions,
+progress messages and the final result are written to stdout one JSON object
+per line, and each answer is read from stdin as ``{"answer": ...}``. Clients
+should ignore stdout lines that are not JSON objects.
+"""
 from __future__ import annotations
 
+import json
 import os
+import re
 import shutil
 import sys
 import textwrap
@@ -17,6 +26,167 @@ class Paused(Exception):
 
 
 SAVE_AND_EXIT = "Exit · finish setup later"
+PROTOCOL_ENV = "TAG_SETUP_PROTOCOL"
+_ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+
+
+def protocol_active() -> bool:
+    return os.getenv(PROTOCOL_ENV) == "jsonl"
+
+
+class _MessageStream:
+    """Turn ordinary setup prose into protocol message events, line by line."""
+
+    def __init__(self, raw):
+        self.raw = raw
+        self.pending = ""
+
+    def write(self, text: str) -> int:
+        self.pending += text
+        while "\n" in self.pending:
+            line, self.pending = self.pending.split("\n", 1)
+            line = _ANSI.sub("", line).strip()
+            if line:
+                _emit_raw(self.raw, {"type": "message", "text": line})
+        return len(text)
+
+    def flush(self) -> None:
+        self.raw.flush()
+
+    def isatty(self) -> bool:
+        return False
+
+
+def _emit_raw(raw, event: dict) -> None:
+    raw.write(json.dumps(event, ensure_ascii=False) + "\n")
+    raw.flush()
+
+
+def enter_protocol() -> None:
+    """Route prose through message events when a client drives setup. Idempotent."""
+    if protocol_active() and not isinstance(sys.stdout, _MessageStream):
+        sys.stdout = _MessageStream(sys.__stdout__)
+
+
+def emit(event: dict) -> None:
+    raw = sys.stdout.raw if isinstance(sys.stdout, _MessageStream) else sys.__stdout__
+    _emit_raw(raw, event)
+
+
+def question_id(prompt: str) -> str:
+    """Fallback identifier for prompts without an explicit ``qid``."""
+    return re.sub(r"[^a-z0-9]+", "_", prompt.casefold()).strip("_") or "question"
+
+
+class GoBack(Exception):
+    """The client asked to return to the previous question.
+
+    Setup restarts from the top, replays ``replay`` without showing it, and
+    asks ``target`` again with its earlier answer as the default.
+    """
+
+    def __init__(self, replay: list[tuple[str, object]], target: tuple[str, object]):
+        super().__init__(target[0])
+        self.replay, self.target = replay, target
+
+
+# Answers given since the last step that can't be undone (see commit()).
+_history: list[tuple[str, object]] = []
+_replay: list[tuple[str, object]] = []
+_target: tuple[str, object] | None = None
+
+
+def commit() -> None:
+    """Mark a point of no return, such as a Slack-side change: Back stops here."""
+    _history.clear()
+
+
+def start_replay(replay: list[tuple[str, object]], target: tuple[str, object]) -> None:
+    global _target
+    _history.clear()
+    _replay[:] = replay
+    _target = target
+
+
+def _previous(kind: str, answer: object, details: dict) -> dict:
+    """Offer the earlier answer as the default when a question is asked again."""
+    options = details.get("options") or []
+    if kind == "choose":
+        index = options.index(answer) if isinstance(answer, str) and answer in options else answer
+        return {"default": index} if isinstance(index, int) and not isinstance(index, bool) else {}
+    if kind == "multi" and isinstance(answer, list):
+        return {"selected": sorted(options.index(item) if isinstance(item, str) and item in options else item
+                                   for item in answer if isinstance(item, (int, str)))}
+    if kind in {"text", "confirm"}:
+        return {"default": answer}
+    return {}  # Secrets are never sent back to the client.
+
+
+def ask_client(kind: str, prompt: str, *, qid: str | None = None, **details):
+    """Send one question and block for its answer. EOF pauses setup.
+
+    ``id`` is a stable name for the question, so clients can match answers
+    without parsing prompt wording, which may change between releases.
+    ``can_go_back`` says whether ``{"back": true}`` may be sent instead of an
+    answer; it is false for the first question and after Slack-side changes.
+    """
+    global _target
+    qid = qid or question_id(prompt)
+    if _replay:
+        if _replay[0][0] == qid:
+            answer = _replay.pop(0)[1]
+            _history.append((qid, answer))
+            return answer
+        _replay.clear()  # The flow changed; ask normally from here.
+    if _target and _target[0] == qid:
+        details = {**details, **_previous(kind, _target[1], details)}
+    _target = None
+    while True:
+        emit({"type": "question", "id": qid, "kind": kind, "prompt": prompt, **details,
+              "can_go_back": bool(_history)})
+        line = sys.stdin.readline()
+        if not line:
+            raise Paused()
+        try:
+            reply = json.loads(line)
+        except ValueError:
+            raise RuntimeError("The setup client sent an unreadable answer") from None
+        if isinstance(reply, dict) and reply.get("back"):
+            if not _history:
+                message("There is nothing to go back to here.")
+                continue
+            target = _history.pop()
+            raise GoBack(list(_history), target)
+        if not isinstance(reply, dict) or "answer" not in reply:
+            raise RuntimeError("The setup client sent an answer without a value")
+        if reply.get("pause"):
+            raise Paused()
+        _history.append((qid, reply["answer"]))
+        return reply["answer"]
+
+
+def _option_index(answer, labels: list[str]) -> int:
+    if isinstance(answer, int) and not isinstance(answer, bool) and 0 <= answer < len(labels):
+        return answer
+    if isinstance(answer, str) and answer in labels:
+        return labels.index(answer)
+    raise RuntimeError("The setup client chose an option that was not offered")
+
+
+def text(prompt: str, default: str | None = None, *, secret: bool = False, qid: str | None = None) -> str:
+    """Protocol counterpart of input()/getpass for free-form answers."""
+    answer = ask_client("secret" if secret else "text", prompt, qid=qid,
+                        **({} if secret else {"default": default or ""}))
+    if not isinstance(answer, str):
+        raise RuntimeError("The setup client sent a non-text answer")
+    return answer.strip() or ("" if secret else (default or ""))
+
+
+def confirm(prompt: str, default: bool, *, qid: str | None = None) -> bool:
+    answer = ask_client("confirm", prompt, qid=qid, default=default)
+    if not isinstance(answer, bool):
+        raise RuntimeError("The setup client sent a non-boolean confirmation")
+    return answer
 
 
 def _setup_label(label: str) -> str:
@@ -150,9 +320,14 @@ def _ask(question):
     return answer
 
 
-def choose(title: str, options: list[str], *, default: int = 0) -> int:
+def choose(title: str, options: list[str], *, default: int = 0, qid: str | None = None) -> int:
     setup_incomplete = "Save and exit" in options
     labels = [_setup_label(label) for label in options]
+    if protocol_active():
+        index = _option_index(ask_client("choose", title, qid=qid, options=labels, default=default), labels)
+        if options[index] == "Save and exit":
+            raise Paused()
+        return index
     print()
     if not keyboard_available():
         print(f"  {title}\n")
@@ -185,8 +360,13 @@ def choose(title: str, options: list[str], *, default: int = 0) -> int:
     ))
 
 
-def checklist(labels: list[str], selected: set[int]) -> set[int]:
+def checklist(labels: list[str], selected: set[int], *, qid: str = "channels") -> set[int]:
     selected = set(selected)
+    if protocol_active():
+        answer = ask_client("multi", "Choose channels", qid=qid, options=labels, selected=sorted(selected))
+        if not isinstance(answer, list) or not answer:
+            raise RuntimeError("The setup client must choose at least one channel")
+        return {_option_index(item, labels) for item in answer}
     print()
     if not keyboard_available():
         print("  Choose channels")

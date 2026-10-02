@@ -128,7 +128,9 @@ def runtime_requirement(package: str) -> str:
     raise RuntimeError(f"{requirements} does not pin {package}")
 
 
-def ask(prompt: str, default: str | None = None) -> str:
+def ask(prompt: str, default: str | None = None, *, qid: str | None = None) -> str:
+    if ui.protocol_active():
+        return ui.text(prompt, default, qid=qid)
     suffix = f" [{default}]" if default else ""
     value = input(f"  {prompt}{suffix}: ").strip()
     return value or (default or "")
@@ -158,7 +160,7 @@ def choose_backend() -> str:
     }
     while True:
         print()
-        answer = ask("Agent", "1").lower()
+        answer = ask("Agent", "1", qid="backend").lower()
         backend = aliases.get(answer)
         if backend:
             return backend
@@ -177,15 +179,23 @@ def selected_backend_available(backend: str) -> bool:
     return False
 
 
-def ask_secret(prompt: str, prefix: str) -> str:
+def ask_secret(prompt: str, prefix: str, *, qid: str | None = None) -> str:
     while True:
-        value = getpass.getpass(f"  {prompt}: ").strip()
+        value = read_secret(prompt, qid=qid)
         if value.startswith(prefix):
             return value
         ui.message(f"Enter the {prefix} token issued by Slack.")
 
 
-def confirm(prompt: str, default: bool = True) -> bool:
+def read_secret(prompt: str, *, qid: str | None = None) -> str:
+    if ui.protocol_active():
+        return ui.text(prompt, secret=True, qid=qid)
+    return getpass.getpass(f"  {prompt}: ").strip()
+
+
+def confirm(prompt: str, default: bool = True, *, qid: str | None = None) -> bool:
+    if ui.protocol_active():
+        return ui.confirm(prompt, default, qid=qid)
     choice = "Y/n" if default else "y/N"
     answer = input(f"  {prompt} [{choice}]: ").strip().lower()
     return default if not answer else answer in {"y", "yes"}
@@ -205,6 +215,10 @@ def run_slack_cli(arguments: list[str], *, cwd: Path | None = None, interactive:
         icons = sorted((cwd / "assets").glob("tag-profile.*"))
         if icons:
             environment = dict(os.environ, SLACK_CLI_APP_ICON_PATH=str(icons[0]))
+    if interactive and ui.protocol_active():
+        # Keep Slack CLI's own prompts and output off the protocol stream.
+        return subprocess.run(command, cwd=cwd, env=environment, check=False,
+                              stdin=subprocess.DEVNULL, stdout=sys.stderr, stderr=sys.stderr).returncode
     if interactive:
         return subprocess.run(command, cwd=cwd, env=environment, check=False).returncode
     completed = subprocess.run(
@@ -283,7 +297,7 @@ def inspect_slack_app(project: Path, app_id: str, *, issues: list[str] | None = 
     if detail:
         ui.message(detail)
     ui.message("Slack CLI could not inspect the remote manifest with this authorization.")
-    return confirm("Have you manually compared the app with Tag's manifest?", default=False)
+    return confirm("Have you manually compared the app with Tag's manifest?", default=False, qid="manifest_compared")
 
 
 def authorized_workspaces(output: str) -> list[tuple[str, str]]:
@@ -314,10 +328,75 @@ def authorized_members(output: str, team_id: str) -> list[str]:
     return members
 
 
-def choose_allowed_users(team_id: str, current: str = "") -> str:
+def slack_people(token: str, team_id: str) -> list[dict[str, str]]:
+    """Read only picker fields, across every page of the workspace directory."""
+    people: dict[str, dict[str, str]] = {}
+    cursor = ""
+    seen: set[str] = set()
+    while True:
+        payload = slack_channels.slack_api(token, "users.list", {
+            "team_id": team_id, "limit": "200", "cursor": cursor,
+        })
+        members = payload.get("members")
+        if not isinstance(members, list):
+            raise slack_channels.SlackChannelError("Slack returned an unreadable people list")
+        for member in members:
+            if not isinstance(member, dict):
+                continue
+            uid = member.get("id", "")
+            if (not isinstance(uid, str) or not re.fullmatch(r"[UW][A-Z0-9]+", uid)
+                    or member.get("deleted") or member.get("is_bot") or member.get("is_app_user")
+                    or member.get("is_invited_user")
+                    or member.get("team_id", team_id) != team_id):
+                continue
+            profile = member.get("profile") or {}
+            if not isinstance(profile, dict):
+                profile = {}
+            def clean(value):
+                return " ".join(value.split()) if isinstance(value, str) else ""
+            username = clean(member.get("name"))
+            name = clean(profile.get("display_name")) or clean(profile.get("real_name")) or clean(member.get("real_name")) or username or uid
+            photo = profile.get("image_48", "")
+            if not isinstance(photo, str) or not photo.startswith("https://"):
+                photo = ""
+            people[uid] = {"id": uid, "name": name, "username": username, "image_url": photo}
+        metadata = payload.get("response_metadata") or {}
+        cursor = metadata.get("next_cursor", "") if isinstance(metadata, dict) else ""
+        if not cursor:
+            break
+        if not isinstance(cursor, str) or cursor in seen:
+            raise slack_channels.SlackChannelError("Slack returned an unreadable people list")
+        seen.add(cursor)
+    return sorted(people.values(), key=lambda person: (person["name"].casefold(), person["id"]))
+
+
+def choose_slack_person(people: list[dict[str, str]]) -> str | None:
+    """Select an offered identity, or explicitly fall back to member-ID entry."""
+    if ui.protocol_active():
+        answer = ui.ask_client("people", "Which one is you?", people=people, qid="person")
+        if answer == "manual":
+            return None
+        if not isinstance(answer, str) or answer not in {person["id"] for person in people}:
+            raise RuntimeError("The setup client chose a person that was not offered")
+        return answer
+    while True:
+        query = ask("Find yourself (name, username, or member ID; Enter for all)", qid="people_search").casefold()
+        matches = [person for person in people if any(query in person[key].casefold() for key in ("name", "username", "id"))]
+        labels = [person["name"] + (f" · @{person['username']}" if person["username"] else "") for person in matches]
+        choice = ui.choose("Which one is you?", labels + ["Search again", "Enter a member ID", "Save and exit"],
+                           qid="person_terminal")
+        if choice < len(matches):
+            return matches[choice]["id"]
+        if choice == len(matches) + 1:
+            return None
+        if choice == len(matches) + 2:
+            raise ui.Paused()
+
+
+def choose_allowed_users(team_id: str, current: str = "", *, token: str = "") -> str:
+    """Make the person setting up Tag its owner; only they can use it by default."""
     if not settings.validation_error("SLACK_ALLOWED_USER_IDS", current):
         return current
-    members: list[str] = []
     slack = shutil.which("slack")
     if slack and re.fullmatch(r"T[A-Z0-9]+", team_id):
         try:
@@ -326,21 +405,28 @@ def choose_allowed_users(team_id: str, current: str = "") -> str:
                 check=False, text=True, capture_output=True, timeout=15,
             )
             if result.returncode == 0:
-                members = authorized_members(result.stdout + "\n" + result.stderr, team_id)
+                if members := authorized_members(result.stdout + "\n" + result.stderr, team_id):
+                    ui.message(f"Owner: your Slack account ({members[0]}). Only you can use this Tag.")
+                    return members[0]
         except (OSError, subprocess.TimeoutExpired):
             pass
-    if members:
-        options = [f"Use my Slack account ({member})" for member in members]
-        options += ["Choose someone else", "Save and exit"]
-        choice = ui.choose("Who can use Tag?", options)
-        if choice < len(members):
-            return members[choice]
-        if choice == len(members) + 1:
-            raise ui.Paused()
-    else:
-        ui.message("Could not identify your Slack account for this workspace. Enter your member ID below.")
+    # The signed-in account is unknown, so ask who is setting Tag up.
+    if token:
+        ui.message("Loading people from Slack…")
+        try:
+            people = slack_people(token, team_id)
+        except slack_permissions.MissingScope:
+            ui.message("Slack needs users:read to list people. You can enter your member ID instead.")
+        except slack_channels.SlackChannelError:
+            ui.message("Could not load people from Slack. You can enter your member ID instead.")
+        else:
+            if people:
+                if selected := choose_slack_person(people):
+                    return selected
+            else:
+                ui.message("No active people were found. You can enter your member ID instead.")
     return ask_validated(
-        "Slack member ID (profile > More > Copy member ID)", "SLACK_ALLOWED_USER_IDS"
+        "Your Slack member ID (profile > More > Copy member ID)", "SLACK_ALLOWED_USER_IDS", qid="member_id"
     )
 
 
@@ -360,16 +446,70 @@ def connect_slack_workspace(current: str = "") -> tuple[str, str] | None:
             ui.message("No authorized workspaces could be listed. Connect through Slack CLI to continue.")
         options = [name + (" (saved)" if team_id == current else "") for name, team_id in accounts]
         options += ["Connect another workspace" if accounts else "Connect Slack", "Save and exit"]
-        index = ui.choose("Choose a workspace", options)
+        index = ui.choose("Choose a workspace", options, qid="workspace")
         if index < len(accounts):
             name, team_id = accounts[index]
             ui.message(f"✓ {name}")
             return team_id, name
         if index == len(accounts) + 1:
             return None
+        if ui.protocol_active():
+            if not slack_login_with_client():
+                ui.message("Slack authorization was not completed. Try connecting again.")
+                return None
+            continue
         if run_slack_cli(["auth", "login"], interactive=True):
             ui.message("Slack CLI authorization was not completed. Run tag setup to try again.")
             return None
+
+
+# Settings a question saves, cleared when the operator goes back to change it.
+BACK_CLEARS: dict[str, tuple[str, ...]] = {
+    "workspace": ("SLACK_TEAM_ID",),
+    "allowed_user": ("SLACK_ALLOWED_USER_IDS",),
+    "person": ("SLACK_ALLOWED_USER_IDS",),
+    "people_search": ("SLACK_ALLOWED_USER_IDS",),
+    "member_id": ("SLACK_ALLOWED_USER_IDS",),
+    "channels": ("SLACK_CHANNEL_IDS",),
+}
+
+SLACK_TICKET_LINE = re.compile(r"(?m)^\s*/slackauthticket\s+(\S+)\s*$")
+
+
+def slack_login_with_client() -> bool:
+    """Slack CLI sign-in without a terminal: the client shows the one-time
+    ticket line, the operator sends it in Slack, and returns Slack's code."""
+    slack = shutil.which("slack") or "slack"
+    try:
+        started = subprocess.run(
+            [slack, "auth", "login", "--no-prompt", "--skip-update", "--no-color"],
+            check=False, text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        raise RuntimeError("Slack CLI could not start sign-in") from None
+    match = SLACK_TICKET_LINE.search((started.stdout or "") + "\n" + (started.stderr or ""))
+    if not match:
+        raise RuntimeError("Slack CLI did not return a sign-in line")
+    ticket = match.group(1)
+    for _attempt in range(3):
+        code = ui.ask_client("slack_login", "Sign in to Slack", sign_in_line=f"/slackauthticket {ticket}", qid="slack_login")
+        if not isinstance(code, str) or not re.fullmatch(r"[A-Za-z0-9_-]{4,128}", code.strip()):
+            ui.message("That doesn't look like the code Slack shows. Copy it again.")
+            continue
+        try:
+            finished = subprocess.run(
+                [slack, "auth", "login", "--ticket", ticket, "--challenge", code.strip(),
+                 "--skip-update", "--no-color"],
+                check=False, capture_output=True, stdin=subprocess.DEVNULL, timeout=60,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            raise RuntimeError("Slack CLI could not finish sign-in") from None
+        # Never relay Slack CLI output here: it can echo the ticket or code.
+        if finished.returncode == 0:
+            ui.commit()  # Signed in to Slack: Back can't undo that.
+            return True
+        ui.message("Slack didn't accept that code. Check it and try again.")
+    return False
 
 
 def connect_slack_cli(current: str = "") -> str | None:
@@ -377,9 +517,9 @@ def connect_slack_cli(current: str = "") -> str | None:
     return selected[0] if selected else None
 
 
-def ask_validated(prompt: str, key: str, default: str | None = None) -> str:
+def ask_validated(prompt: str, key: str, default: str | None = None, *, qid: str | None = None) -> str:
     while True:
-        value = ask(prompt, default)
+        value = ask(prompt, default, qid=qid)
         if not (error := settings.validation_error(key, value)):
             return value
         ui.message(error)
@@ -886,7 +1026,7 @@ def customize_new_app(
 
     def choose_name(default: str) -> str:
         while True:
-            candidate = ask("Assistant name", default).strip()
+            candidate = ask("Assistant name", default, qid="assistant_name").strip()
             if error := settings.validation_error("OPENTAG_BOT_NAME", candidate):
                 ui.message(error)
                 continue
@@ -914,6 +1054,7 @@ def customize_new_app(
                 [label for label, _ in WATERDROP_ELEMENTS]
                 + ["Choose my own picture", "Save and exit"],
                 default=element_default,
+                qid="profile_picture",
             )
             if action == len(WATERDROP_ELEMENTS) + 1:
                 raise ui.Paused()
@@ -935,7 +1076,7 @@ def customize_new_app(
                 ui.message("Drag a picture here, or paste its local path.")
                 ui.message("PNG, JPEG, or GIF · 512–2000 px in each dimension")
                 while True:
-                    source = parse_local_path(ask("Picture path"))
+                    source = parse_local_path(ask("Picture path", qid="picture_path"))
                     error = "Enter one local image path." if source is None else validate_profile_icon(source)
                     if error:
                         ui.message(error)
@@ -957,7 +1098,7 @@ def customize_new_app(
         review = ui.choose("Ready?", [
             "Create this Tag", "Change name", "Change picture",
             "Open picture preview", "Save and exit",
-        ])
+        ], qid="app_review")
         if review == 0:
             return
         if review == 1:
@@ -1013,7 +1154,7 @@ def choose_slack_app(
         action = ui.choose("Slack app", [
             "Create a new TEST Tag app" if test_mode else "Create a new Tag app",
             "Use an existing app", "Save and exit",
-        ])
+        ], qid="slack_app")
         if action == 2:
             raise ui.Paused()
         if action == 0:
@@ -1030,14 +1171,14 @@ def choose_slack_app(
             ui.message("3. Go to Basic Information → App Credentials → App ID.")
             ui.message("4. Copy the ID starting with A and paste it below.")
             ui.message("This is not a token or Client ID. Ctrl+C exits without saving an ID.")
-            app_id = ask_validated("App ID", "SLACK_APP_ID")
+            app_id = ask_validated("App ID", "SLACK_APP_ID", qid="app_id")
             settings.update_config(config_path, {"SLACK_APP_ID": app_id})
     ui.message(f"Selected app: {app_id}")
     # Keep link progress separately from credential validation, including across exits.
     marker = project / "tag-linked.json"
     if not saved_slack_app(project, team_id, app_id):
         ui.message("Linking keeps your app's existing permissions.")
-        if ui.choose("Continue with this app?", ["Link app and check settings", "Save and exit"]) == 1:
+        if ui.choose("Continue with this app?", ["Link app and check settings", "Save and exit"], qid="link_app") == 1:
             raise ui.Paused()
         while not saved_slack_app(project, team_id, app_id):
             result = run_slack_cli(
@@ -1047,10 +1188,11 @@ def choose_slack_app(
                 break
             if result == 0:
                 ui.message("Slack returned success, but the app link could not be confirmed locally.")
-            if ui.choose("App linking needs attention", ["Check again", "Save and exit"]) == 1:
+            if ui.choose("App linking needs attention", ["Check again", "Save and exit"], qid="link_app_retry") == 1:
                 raise ui.Paused()
     settings.save_config(marker, {"app_id": app_id, "team_id": team_id})
     ui.message("✓ App linked")
+    ui.commit()  # The Slack app exists and is linked: Back stops here.
 
     def enable_agent_messaging() -> bool:
         def approve_legacy() -> bool:
@@ -1058,7 +1200,7 @@ def choose_slack_app(
                 "Slack currently uses the legacy Assistant messaging experience",
                 "Switching this app to Agent messaging cannot be reversed.",
             )
-            return confirm("Switch permanently to Agent messaging?", default=False)
+            return confirm("Switch permanently to Agent messaging?", default=False, qid="agent_messaging_switch")
 
         return slack_manifest_migrations.enable_agent_view(
             project, app_id, team_id, approve_legacy=approve_legacy
@@ -1086,7 +1228,7 @@ def choose_slack_app(
             options = (["Retry Agent messaging with Slack CLI"] if can_enable_agent else []) + [
                 "Open app settings", "Check again", "Save and exit",
             ]
-            choice = ui.choose("App settings need attention", options)
+            choice = ui.choose("App settings need attention", options, qid="app_settings_repair")
             if can_enable_agent and choice == 0:
                 try:
                     changed = enable_agent_messaging()
@@ -1146,7 +1288,7 @@ def connect_app_credentials(home: Path, config_path: Path, team_id: str, app_id:
             while True:
                 action = ui.choose("Next step", [
                     "Retry connection", "Enter tokens manually", "Open app settings", "Save and exit",
-                ], default=3)
+                ], default=3, qid="credentials_next")
                 if action == 3:
                     raise ui.Paused()
                 if action == 1:
@@ -1159,6 +1301,7 @@ def connect_app_credentials(home: Path, config_path: Path, team_id: str, app_id:
         # Commit the validated pair atomically. No unrelated settings are replaced.
         values = settings.update_config(config_path, credentials)
         ui.message("✓ Credentials connected and saved privately")
+        ui.commit()
         return values
 
 
@@ -1234,7 +1377,7 @@ def check_prerequisites(backend: str) -> bool:
     if not installed_server.is_file() and not shutil.which("mfs-server"):
         ui.message("✗ mfs-server: MFS memory server")
         mfs_server_spec = runtime_requirement("mfs-server")
-        if shutil.which("uv") and confirm(f"Install {mfs_server_spec} with uv now?"):
+        if shutil.which("uv") and confirm(f"Install {mfs_server_spec} with uv now?", qid="install_mfs"):
             completed = subprocess.run(
                 ["uv", "tool", "install", "--force", mfs_server_spec], check=False
             )
@@ -1251,9 +1394,9 @@ def check_prerequisites(backend: str) -> bool:
     return ok
 
 
-def absolute_directory(prompt: str, default: Path) -> Path:
+def absolute_directory(prompt: str, default: Path, *, qid: str | None = None) -> Path:
     while True:
-        value = Path(ask(prompt, str(default))).expanduser()
+        value = Path(ask(prompt, str(default), qid=qid)).expanduser()
         if value.is_dir():
             return value.resolve()
         ui.message("That directory does not exist. Create it first or choose an existing workspace.")
@@ -1356,7 +1499,7 @@ def guided_setup(
             ui.message("Socket Mode: Basic Information → App-Level Tokens → connections:write.")
             ui.message("Bot: OAuth & Permissions → Bot User OAuth Token.")
         while settings.validation_error("SLACK_APP_TOKEN", values.get("SLACK_APP_TOKEN", "")):
-            app_token = getpass.getpass("Socket Mode app token (xapp-…): ").strip()
+            app_token = read_secret("Socket Mode app token (xapp-…)", qid="app_token")
             if error := settings.validation_error("SLACK_APP_TOKEN", app_token):
                 ui.message(error)
                 continue
@@ -1368,7 +1511,7 @@ def guided_setup(
             values = settings.update_config(config_path, {"SLACK_APP_TOKEN": app_token})
             break
         while settings.validation_error("SLACK_BOT_TOKEN", values.get("SLACK_BOT_TOKEN", "")):
-            bot_token = getpass.getpass("Bot token (xoxb-…): ").strip()
+            bot_token = read_secret("Bot token (xoxb-…)", qid="bot_token")
             if error := settings.validation_error("SLACK_BOT_TOKEN", bot_token):
                 ui.message(error)
                 continue
@@ -1411,7 +1554,7 @@ def guided_setup(
         ),
     )
     if settings.validation_error("SLACK_ALLOWED_USER_IDS", values.get("SLACK_ALLOWED_USER_IDS", "")):
-        owner_id = choose_allowed_users(values.get("SLACK_TEAM_ID", ""))
+        owner_id = choose_allowed_users(values.get("SLACK_TEAM_ID", ""), token=values["SLACK_BOT_TOKEN"])
         values = settings.update_config(config_path, {"SLACK_ALLOWED_USER_IDS": owner_id})
 
     if not values.get("SLACK_CHANNEL_IDS") and values.get("SLACK_CHANNEL_ID"):
@@ -1463,7 +1606,7 @@ def guided_setup(
         choice = ui.choose("Ready to continue?", [
             f"Use {len(selected_channels)} channel(s) and finish setup",
             "Change channels", "Change defaults", "Save and exit",
-        ])
+        ], qid="ready")
         if choice == 3:
             raise ui.Paused()
         if choice == 1:
@@ -1471,12 +1614,12 @@ def guided_setup(
             values = settings.update_config(config_path, {"SLACK_CHANNEL_IDS": ",".join(c.channel_id for c in selected_channels)})
         elif choice == 2:
             days = ("7", "30", "90")
-            day = ui.choose("Slack history window", [f"Last {d} days" for d in days], default=days.index(values["MFS_SLACK_HISTORY_DAYS"]))
-            agent = ui.choose("Agent", ["Codex · recommended", "Claude · experimental"], default=int(values["OPENTAG_BACKEND"] == "claude"))
+            day = ui.choose("Slack history window", [f"Last {d} days" for d in days], default=days.index(values["MFS_SLACK_HISTORY_DAYS"]), qid="history_days")
+            agent = ui.choose("Agent", ["Codex · recommended", "Claude · experimental"], default=int(values["OPENTAG_BACKEND"] == "claude"), qid="agent")
             values = settings.update_config(config_path, {"MFS_SLACK_HISTORY_DAYS": days[day], "OPENTAG_BACKEND": ("codex", "claude")[agent]})
         else:
             ui.message("Continue saves these choices only. No services or indexing will start.")
-            if ui.choose("Approve setup", ["Continue", "Back"], default=1) == 0:
+            if ui.choose("Approve setup", ["Continue", "Back"], default=1, qid="approve_setup") == 0:
                 if channel_policy == "invited":
                     values = settings.update_config(config_path, {"SLACK_CHANNEL_POLICY": channel_policy})
                 break
@@ -1531,11 +1674,11 @@ def guided_setup(
                 ui.message(f"History access needs attention: {exc}")
                 if isinstance(exc, slack_permissions.MissingScope):
                     slack_permissions.guidance(exc, values.get("SLACK_APP_ID", ""))
-                action = ui.choose("Continue with saved channels", ["Check again", "Use a different history credential", "Save and exit"])
+                action = ui.choose("Continue with saved channels", ["Check again", "Use a different history credential", "Save and exit"], qid="saved_channels")
                 if action == 2:
                     raise ui.Paused()
                 if action == 1:
-                    history_token = ask_secret("Slack-history token (hidden)", "xox")
+                    history_token = ask_secret("Slack-history token (hidden)", "xox", qid="history_token")
         if not lifecycle.local_mfs_endpoint(
             values.get("MFS_URL", settings.DEFAULTS["MFS_URL"])
         ):
@@ -1581,7 +1724,7 @@ def finish_setup(_config_path: Path, values: dict[str, str], _channels: list[sla
     ui.message("✓ MFS client ready")
     backend = values["OPENTAG_BACKEND"]
     while not selected_backend_available(backend):
-        if ui.choose("Agent needs installation", ["Check again", "Save and exit"]) == 1:
+        if ui.choose("Agent needs installation", ["Check again", "Save and exit"], qid="agent_install") == 1:
             raise ui.Paused()
     if backend == "codex":
         backend_environment = without_telemetry_environment(os.environ)
@@ -1602,7 +1745,7 @@ def finish_setup(_config_path: Path, values: dict[str, str], _channels: list[sla
             env=backend_environment,
         ).returncode:
             ui.message("Codex needs sign-in. Your Slack and memory choices are saved.")
-            action = ui.choose("Sign in to continue", ["Open Codex sign-in", "Check again", "Save and exit"])
+            action = ui.choose("Sign in to continue", ["Open Codex sign-in", "Check again", "Save and exit"], qid="agent_sign_in")
             if action == 2:
                 raise ui.Paused()
             if action == 0:
@@ -1661,7 +1804,8 @@ def main() -> int:
     parser.add_argument("--completion-file", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
     config_path = args.config.expanduser().resolve()
-    if not sys.stdin.isatty():
+    ui.enter_protocol()
+    if not sys.stdin.isatty() and not ui.protocol_active():
         print("Use a terminal for setup, or tag inspect --json and tag config set for automation.", file=sys.stderr)
         return 2
     telemetry_session: tag_telemetry.SetupSession | None = None
@@ -1686,7 +1830,17 @@ def main() -> int:
         )
         telemetry_session.start()
         setup_options["telemetry_session"] = telemetry_session
-        result = guided_setup(config_path, **setup_options)
+        while True:
+            try:
+                result = guided_setup(config_path, **setup_options)
+                break
+            except ui.GoBack as back:
+                # Forget only what the earlier question saved, then replay to it.
+                cleared = BACK_CLEARS.get(back.target[0], ())
+                if cleared:
+                    values = settings.load_config(config_path)
+                    settings.save_config(config_path, {k: v for k, v in values.items() if k not in cleared})
+                ui.start_replay(back.replay, back.target)
         if result == 0:
             backend = settings.load_config(config_path).get("OPENTAG_BACKEND", "")
             telemetry_session.complete(backend)

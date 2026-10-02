@@ -6,6 +6,33 @@ All notable changes to Tag are documented here.
 
 ### Added
 
+- Choose who can use Tag from a searchable Slack people list during setup.
+  Tag.app shows names, usernames, and profile photos; the CLI offers the same
+  search with text labels. Manual member-ID entry remains available.
+
+- Name every Tag after its Slack team and app IDs, for example
+  `~/Tag/t0abc123-a0xyz789`, so several Tags can share a workspace or a Slack
+  name without collisions. `tag add` no longer asks for an alias. Commands
+  without a name use the main Tag. Existing installations rename their
+  `default` Tag automatically on the next `tag start` or `tag setup`;
+  `tag default …` keeps working.
+
+- Rename a Tag in Slack with `tag NAME rename "New name"`, which also gives it a
+  nickname for commands. Start, stop, or restart every Tag in a Slack workspace
+  with `--workspace`, and see Tags grouped by workspace in `tag list`.
+
+- Go back to the previous setup question in the Mac app or with
+  `tag setup --step --back`, with the earlier answer selected. Back stops at
+  steps that already changed something in Slack.
+
+- Let apps drive guided setup without a terminal. `tag setup --json` and
+  `tag add --json` ask the same questions as JSON lines, including a Slack
+  sign-in step that shows the one-time line to send in Slack and accepts the
+  code Slack returns.
+  Every question has a stable `id`. Agents and scripts can instead run
+  `tag setup --step`, `--answer`, and `--stop`, one question per command,
+  while setup keeps running in the background.
+
 - Deliver saved files as local copies plus Slack attachments by default.
   `OPENTAG_FILE_DELIVERY` and individual requests can select local-only delivery.
   Existing installations adopt the default automatically unless explicitly configured.

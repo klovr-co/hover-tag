@@ -236,6 +236,42 @@ def enable_agent_view(
     return True
 
 
+def _named(manifest: dict, name: str) -> tuple[dict, bool]:
+    renamed = json.loads(json.dumps(manifest))
+    information = renamed.setdefault("display_information", {})
+    bot_user = renamed.setdefault("features", {}).setdefault("bot_user", {})
+    changed = information.get("name") != name or bot_user.get("display_name") != name
+    information["name"] = name
+    bot_user["display_name"] = name
+    return renamed, changed
+
+
+def set_display_name(home: Path, values: dict[str, str], name: str, *, retry: str) -> bool:
+    """Rename the Tag's Slack app and bot user, then verify Slack kept it.
+
+    Uses existing Slack CLI authorization without prompts. ``retry`` is the
+    command to repeat after the operator resolves a Slack requirement.
+    """
+    team_id, app_id = values.get("SLACK_TEAM_ID", ""), values.get("SLACK_APP_ID", "")
+    if not team_id or not app_id:
+        raise RuntimeError("This Tag has no Slack app yet; finish its setup first")
+    slack = shutil.which("slack")
+    if not slack:
+        raise RuntimeError(f"Slack CLI is required to rename the app; install it, then retry `{retry}`")
+    project = home / "integrations/slack-cli"
+    renamed, changed = _named(remote_manifest(slack, project, app_id), name)
+    if not changed:
+        return False
+    with tempfile.TemporaryDirectory(prefix="tag-slack-rename-") as directory:
+        migration_project = _migration_project(project, renamed, team_id, app_id, Path(directory))
+        result = _run(_sync_command(slack, migration_project, app_id, team_id), cwd=migration_project)
+        if result.returncode:
+            raise RuntimeError(f"Slack could not rename the app; run `slack login`, then retry `{retry}`")
+    if _named(remote_manifest(slack, project, app_id), name)[1]:
+        raise RuntimeError(f"Slack did not save the new name; retry `{retry}`")
+    return True
+
+
 def reconcile(home: Path, config_path: Path, values: dict[str, str]) -> bool:
     """Apply release requirements using existing CLI authorization, without prompts."""
     team_id, app_id = values["SLACK_TEAM_ID"], values["SLACK_APP_ID"]

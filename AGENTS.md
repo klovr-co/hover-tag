@@ -86,6 +86,15 @@ When Slack or another provider requires fresh sign-in or administrator approval,
 report the exact remaining action and resume the migration on retry. Existing
 confirmation requirements for destructive operations still apply.
 
+### CLI and Tag.app consistency
+
+Whenever the CLI or Tag.app changes, check whether the change should also be
+reflected in the other interface. Review affected commands, options, behavior,
+output, and setup flows for shared dependencies and corresponding user
+experiences. Update the other interface where applicable and validate the
+affected flows in both the CLI and Tag.app. If no corresponding change is
+needed, briefly explain why in the change summary or PR description.
+
 ### Domain docs
 
 This is a single-context repository. Read the root `CONTEXT.md` and relevant

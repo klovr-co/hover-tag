@@ -128,7 +128,8 @@ def target_detail(
     tag_id="default", team_id="", app_id="", app_name="", *, suffix=""
 ):
     """Format one consistent, user-facing command target description."""
-    parts = [f"Tag '{tag_id}'"]
+    # The built-in Tag is renamed after its workspace once setup chooses one.
+    parts = ["New Tag" if tag_id == "default" else f"Tag '{tag_id}'"]
     parts.append(
         f"Slack workspace {team_id}" if team_id else "Slack workspace not configured"
     )

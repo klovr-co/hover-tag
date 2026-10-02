@@ -11,3 +11,4 @@ out/
 .playwright-cli/
 .gstack/
 node_modules
+installer/macos/build/

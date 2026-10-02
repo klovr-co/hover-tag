@@ -1,27 +1,57 @@
 # Set up and manage Tag
 
-## Multiple Slack workspaces
+## Multiple Tags
 
-One installation can run independent Tags for separate Slack apps/workspaces.
-The reserved `default` Tag uses the same isolated layout as every named Tag:
+One installation can run several independent Tags, each with its own Slack app.
+Tags can be in different Slack workspaces or share one. Every Tag is named
+after its Slack workspace and app IDs, in lowercase:
 
 ```sh
 tag add
 tag list
-tag personal setup
-tag personal start
-tag personal status
-tag personal logs
-tag personal stop
+tag t0abc123-a0xyz789 start
+tag t0abc123-a0xyz789 status
+tag t0abc123-a0xyz789 logs
+tag t0abc123-a0xyz789 stop
 ```
 
-Omitting the alias selects `~/Tag/default`, with private data in its `.tag` folder. During `tag add`, Tag connects
-Slack first and suggests a lowercase workspace alias derived from the selected workspace's
-name. The alias is only used in local commands; it is independent of the Slack app's display
-name. Paused onboarding appears in `tag list` and resumes
-with the targeted setup command. Each Tag has its own settings, Slack app,
-agent working folder, conversations, logs, and lifecycle. Use Slack's settings
-for that specific app to change its remote name or profile image.
+The name is the Tag's working folder, `~/Tag/t0abc123-a0xyz789`, with private
+data in its `.tag` folder. IDs never collide, so nobody chooses or edits a
+name. A Tag gets its name when setup creates or links its Slack app; until then
+a new Tag from `tag add` is called `new-tag` (or `new-tag-2`, …), and the first
+Tag of a fresh installation is set up before it is named. The Slack display name
+(for example “Maya's Tag”) is separate and can be the same for several Tags.
+
+Rename a Tag with `tag NAME rename "Research Tag"`. This changes the
+assistant's name in Slack, verifies Slack saved it, and gives the Tag a
+nickname for commands, here `research-tag`, so `tag research-tag start` works.
+Choose a different nickname with `--nickname`; nicknames never repeat another
+Tag's ID or nickname. If Slack needs a fresh `slack login`, nothing changes
+locally and the error repeats the exact command to retry.
+
+Tags are grouped by Slack workspace in `tag list`. Start, stop, or restart every
+Tag in one workspace with `tag start --workspace T0ABC123` (a team ID or the
+workspace's name). Each Tag runs its own lifecycle; one failure doesn't stop the
+others, and Tags that haven't finished setup are skipped. `--json` reports each
+Tag's outcome.
+
+Commands without a name, such as `tag start`, use the **main Tag**: the first
+Tag you set up, or your only Tag. `tag default …` remains an alias for the main
+Tag. With several Tags and no main Tag, unnamed commands ask you to name one.
+
+Paused onboarding appears in `tag list` and resumes with the targeted setup
+command. Each Tag has its own settings, Slack app, agent working folder,
+conversations, logs, and lifecycle. Use Slack's settings for that specific app
+to change its remote name or profile image.
+
+Installations from earlier releases have a first Tag called `default`. The next
+`tag start` or `tag setup` renames it, for example `~/Tag/default` to
+`~/Tag/t0abc123-a0xyz789`, after stopping it, and makes it the main Tag. The
+folder is moved in one step, never copied; paths saved in Tag's private data are
+updated; working files are untouched. A plan file makes an interrupted rename
+resume with the same name, and an existing folder at the new name stops the
+rename with both preserved. After the rename, rolling back to a release without
+named Tags is blocked, as for any named Tag.
 
 MFS is shared by the installation. `tag NAME stop`, restart, reset, and
 failed startup leave shared memory and other Tags running. Inspect it with
@@ -42,7 +72,9 @@ scopes. These local Tags share the trusted-sandbox limitations described
 in the security model; they are not hardened tenants from one another.
 
 For automation, `tag list --json` returns `schema_version`, the installation
-root, and one independently readable record per Tag. Existing inspect/status
+root, and one independently readable record per Tag, including `main`, the
+Slack display name `slack_name`, `nickname`, `workspace_name` when known, and
+`avatar`, the path of the Tag's Slack profile picture when setup created one. Existing inspect/status
 objects retain their fields and add `tag` plus nullable `slack_workspace`;
 their `next_command` starts with `tag NAME` for named Tags. A malformed Tag is
 returned with its own error and does not suppress other records.
@@ -193,7 +225,7 @@ before approval. Approving Finish setup saves these choices without starting
 services or indexing history.
 
 After the first successful `tag start`, Tag sends a welcome DM to the single
-account configured under **Who can use Tag?**, including a first-task suggestion
+account set as its owner, including a first-task suggestion
 and the [Hover Community help link](https://join.slack.com/t/hover-community/shared_invite/zt-4aghkshid-n7fRukS7_J5sR2jDLBXK9A).
 Multiple allowed accounts do not receive a broadcast; the welcome is skipped
 when there is no single recipient. Delivery is recorded per Slack workspace,
@@ -311,6 +343,7 @@ Manual permission recovery still needs live acceptance testing.
 | Upgrade | `tag upgrade` | Stage and atomically select the verified release, restarting managed services when needed |
 | Install an older release | `tag upgrade --version X.Y.Z --allow-downgrade` | Explicitly override the downgrade guard; prefer rollback for the previous release |
 | Start or stop | `tag start` / `tag stop` | Use the existing managed-process lifecycle |
+| Drive setup from an app | `tag setup --json` / `tag add --json` | Run the same guided setup over a JSON-lines conversation; see below |
 
 Pass secrets through a process stdin pipe or use settings' hidden token prompt;
 do not put literal tokens in command arguments or shell history. There is no
@@ -324,8 +357,69 @@ if setup is incomplete. `status` exits 1 for unhealthy services; `doctor` exits 
 for failed checks. Operational errors exit 1; invalid command usage exits 2.
 JSON commands emit a single object with `schema_version: 1`; consumers should
 ignore unknown fields. Argparse usage errors are still written to stderr.
-Plain `tag` prints a summary, and `tag settings` / `tag setup` reject nonterminal
+Plain `tag` prints a summary, and `tag settings` / `tag setup` (without `--json`) reject nonterminal
 input rather than waiting for answers. Agents should use configuration commands.
+
+### Guided setup over JSON lines
+
+`tag setup --json` and `tag add --json` run the same guided setup as the
+terminal, for graphical clients such as the Mac app. Instead of drawing prompts,
+setup writes one JSON object per line to stdout and reads each answer from stdin:
+
+- `{"type": "message", "text": …}` — progress prose, without color.
+- `{"type": "question", "id": …, "kind": …, "prompt": …}` — setup is waiting.
+  `id` is a stable name such as `workspace`, `history_days`, or
+  `approve_setup`; match answers by `id`, not by prompt wording. `kind` is
+  `choose` (with `options` and `default`), `multi` (channel `options` and
+  `selected`), `text` (with `default`), `secret`, `confirm`, `people`, or
+  `slack_login`.
+- `{"type": "result", "status": "complete" | "paused" | "failed", "tag": …}` —
+  the session is over. `paused` means progress was saved and setup can resume.
+
+Answer with `{"answer": …}`: an option index or its exact label for `choose`, a
+list of them for `multi`, a string for `text` and `secret`, a boolean for
+`confirm`, and an offered member ID (or `"manual"`) for `people`. Choosing the exit option, sending `{"answer": null, "pause": true}`,
+or closing stdin saves progress and pauses. Questions carry `can_go_back`; when
+it is true, `{"back": true}` returns to the previous question with the earlier
+answer as its default, after clearing only the setting that question saved.
+Back stops at steps that already changed something in Slack (sign-in, creating
+or linking the app, connecting its credentials). With `--step`, use `--back`. Clients should ignore stdout lines
+that are not JSON objects.
+
+The `people` question includes a `people` array with `id`, `name`, `username`,
+and `image_url` for each active person. Tag.app lets you search names, usernames,
+and member IDs, with profile photos or an initial when no photo loads. The CLI
+provides the same people search with text labels. Selecting a person stores their
+member ID; choosing `manual` opens member-ID entry. If Slack's directory is
+unavailable, setup falls back to manual entry. Existing caller choices are kept.
+This uses the already-required `users:read` scope after the bot is connected.
+
+`slack_login` (id `slack_login`) replaces the terminal's Slack CLI sign-in. Its `sign_in_line` is a
+one-time `/slackauthticket` command for the person to send in Slack; answer with
+the code Slack then shows. Setup never echoes the code. `tag add --json` never asks
+for a name; its result reports the Tag's final name once setup has named it.
+
+#### One question per command
+
+Clients that can't hold a process open between answers, such as coding agents,
+can use `--step` instead of `--json`. Each call prints one JSON object and exits;
+setup keeps running in the background between calls:
+
+- `tag setup --step` (or `tag add --step`) starts setup, or continues the one
+  already running, and prints the next question.
+- `tag setup --answer JSON [--question ID]` answers the current question with a
+  JSON value, such as `0`, `true`, or `"Maya's Tag"`, and prints the next one.
+  With `--question`, the answer is refused unless setup is asking that `id`.
+- `tag setup --stop` pauses setup and saves progress.
+
+The reply has `state` (`waiting`, `working` while setup is busy for more than
+about 25 seconds, or `ended`), the new `events` since the last call, the pending
+`question`, and the `result` once setup ends. Calling `--step` again while
+setup is waiting returns the same question. Only one background setup runs per
+Tag home. It listens only on 127.0.0.1, requires a token kept in an owner-only
+file under `.setup-session/`, and never writes answers to disk. If nothing talks
+to it for 30 minutes, it pauses setup and exits. `--step` can't be combined
+with `--test`.
 
 The inspection object includes `configuration.fields` (missing/invalid settings),
 `backend`, `services`, `runtime`, `state`, and `next_command`. Offline services

@@ -43,7 +43,7 @@ Reply **Use these defaults** or list all changes in one message. After you
 approve the plan, Codex helps with missing prerequisites and installs Tag if
 needed.
 
-Use your own Slack account as the owner. Review the channel list, history
+Tag makes the Slack account you sign in with its owner. Review the channel list, history
 window, and invitation policy before finishing. New setups include channels
 the app has already joined; later invitations also make channels eligible for
 replies and history indexing.
@@ -98,7 +98,7 @@ Follow the prompts to:
 2. Create a new Slack app for your Tag, or link an existing app you manage.
    Setup attempts to connect credentials automatically; hidden token entry is
    a recovery option.
-3. Select your own Slack account as the owner and choose channels.
+3. Choose channels. Tag makes your signed-in Slack account its owner.
    Private channels need an invitation before they appear.
 4. Review the channels, history window, and invitation policy. New setups
    include channels the app has already joined; later invitations also make
@@ -125,7 +125,7 @@ you don't need to repeat setup.
 Setup does not start services or index history. After `tag start` completes,
 you can check the connection anytime with `tag status`.
 
-On the first successful start, if **Who can use Tag?** has exactly one configured
+On the first successful start, if the Tag has exactly one owner
 account, Tag sends that account a welcome DM with a first-task suggestion and a
 [Hover Community help link](https://join.slack.com/t/hover-community/shared_invite/zt-4aghkshid-n7fRukS7_J5sR2jDLBXK9A).
 When sent, the welcome confirms the connection; try a task to verify your
