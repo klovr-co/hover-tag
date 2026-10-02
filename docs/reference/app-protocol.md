@@ -2,7 +2,7 @@
 
 Tag.app and other graphical clients do no Tag work themselves. They run the
 `tag` command with `--json` and read its output. This page lists the commands a
-client relies on. Example payloads live in `installer/protocol/examples/`; the
+client relies on. Example payloads live in `protocol/examples/`; the
 CLI and app tests both check against them, so a change that breaks a client
 fails CI.
 

@@ -3,7 +3,7 @@
 // Small building blocks shared by every screen.
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import icon from "../../../../assets/branding/tag-icon.png";
+import icon from "../../../assets/branding/tag-icon.png";
 import { status, type TagRow } from "../lib/protocol";
 
 export const tagIcon = icon;

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // The app's side of docs/reference/app-protocol.md. Tag does the work; this
 // file only reads what `tag … --json` prints. Tests parse the shared examples
-// in installer/protocol/examples, the same files the CLI tests check.
+// in protocol/examples, the same files the CLI tests check.
 
 /** Newest incompatible protocol this app understands. */
 export const APP_PROTOCOL = 1;

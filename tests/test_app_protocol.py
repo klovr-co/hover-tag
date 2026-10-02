@@ -1,6 +1,6 @@
 """The CLI side of the app contract in docs/reference/app-protocol.md.
 
-Desktop apps parse installer/protocol/examples/. These tests fail when real CLI
+Desktop apps parse protocol/examples/. These tests fail when real CLI
 output stops providing a field those examples promise, so the CLI and the
 apps can't drift apart silently. The app's own tests parse the same files.
 """
@@ -20,7 +20,7 @@ from unittest.mock import patch
 from scripts import tag_autostart, tag_cli, tag_config, tag_install, tag_instances
 
 ROOT = Path(__file__).resolve().parents[1]
-EXAMPLES = ROOT / "installer/protocol/examples"
+EXAMPLES = ROOT / "protocol/examples"
 DOC = ROOT / "docs/reference/app-protocol.md"
 
 

@@ -114,7 +114,7 @@ assets retain the original build-on-publication fallback.
 
 ## Tag.app
 
-Each published release also builds Tag.app (`installer/desktop`) on macOS,
+Each published release also builds Tag.app (`desktop/`) on macOS,
 Windows, and Linux and attaches `Tag-VERSION-macos.dmg` (universal),
 `Tag-VERSION-windows-setup.exe`, `Tag-VERSION-linux-amd64.deb`, and
 `Tag-VERSION-linux-x86_64.AppImage`, with checksums in

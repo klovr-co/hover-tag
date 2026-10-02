@@ -14,7 +14,7 @@ All notable changes to Tag are documented here.
   upstream publishes no Windows build.
 
 - Tag.app for macOS, Windows, and Linux, built with Tauri
-  (`installer/desktop`). It installs Tag with the installer bundled in the app,
+  (`desktop/`). It installs Tag with the installer bundled in the app,
   showing structured progress, then lists, starts, renames, and adds Tags,
   shows each Tag's logs, upgrades Tag, and stays in the menu bar or system
   tray. Settings turn on **Open Tag at login** and **Keep Tags running**, and

@@ -3,8 +3,8 @@
 import { cpSync, mkdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-const repo = join(dirname(fileURLToPath(import.meta.url)), "../../..");
-const out = join(repo, "installer/desktop/src-tauri/resources/installer");
+const repo = join(dirname(fileURLToPath(import.meta.url)), "../..");
+const out = join(repo, "desktop/src-tauri/resources/installer");
 rmSync(out, { recursive: true, force: true });
 mkdirSync(join(out, "scripts"), { recursive: true });
 for (const file of ["install.sh", "install.ps1", "release-channels.json", "scripts/tag_install.py"]) {

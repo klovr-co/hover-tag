@@ -4,7 +4,7 @@ The desktop app for macOS, Windows, and Linux, built with
 [Tauri](https://tauri.app). It installs Tag on first run, then lists, starts,
 and adds Tags. It does no Tag work itself: everything goes through the `tag`
 command's JSON interface, described in
-[`docs/reference/app-protocol.md`](../../docs/reference/app-protocol.md).
+[`docs/reference/app-protocol.md`](../docs/reference/app-protocol.md).
 
 - `src/` — the window (React and TypeScript). `src/lib/` holds the protocol
   parsing and state, with no UI, and is unit-tested.
@@ -47,7 +47,7 @@ still verifies each release's checksum and provenance.
 
 Release builds need signing credentials in CI: a Developer ID certificate and
 notarization credentials for macOS, and a code-signing certificate for
-Windows. See [`RELEASE.md`](../../RELEASE.md).
+Windows. See [`RELEASE.md`](../RELEASE.md).
 
 ## Upgrading from the Swift Tag.app
 
