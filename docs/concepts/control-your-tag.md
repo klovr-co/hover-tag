@@ -23,11 +23,11 @@ approval request, you see this private message in Slack:
 > **Tag**
 >
 > **Codex needs approval** to change files outside the workspace sandbox.
-> Approve only if you expect this request.
+> Choose the scope you want to allow.
 >
-> **Approve once** · **Deny**
+> **Allow once** · **Allow for this task** · **Deny** · **Deny and stop**
 
-Choose **Approve once** if you expected Tag to edit the shared budget. Choose
+Choose **Allow once** if you expected Tag to edit the shared budget. Choose
 **Deny** if you want to review the changes first; you can then ask Tag to
 prepare a separate draft in its workspace. Approval does not grant access
 that your local account lacks or change the shared folder's permissions for
@@ -48,16 +48,35 @@ buttons only when Codex sends it a supported approval request.
 
 ### Make your decision
 
-1. Read the action category and check that it matches the work you requested.
-   The Slack prompt does not include the raw command, file paths, or full
-   permission details. If you cannot tell whether the action is expected,
-   choose **Deny**.
-2. Select **Approve once** to allow that pending request, or **Deny** to refuse
-   it. Approval applies to that request; it does not automatically approve later
-   requests.
-3. Tag replaces the controls with **Approved once** or **Denied**. Codex
-   continues with your decision. Denying an action may prevent it from
-   completing the task; it does not itself stop the entire task.
+1. Read the action category and any proposed permission or rule details.
+   If the action is not what you expected, choose **Deny**.
+2. Select one of the choices Codex supports for that request:
+
+   | Choice | Effect |
+   | --- | --- |
+   | **Allow once** | Approve the pending command or file change. |
+   | **Allow for this turn** | Grant the requested permissions for the current agent turn. |
+   | **Allow for this task** | Use Codex's session-scoped approval for this Tag task, including follow-up turns. It does not carry over to later Slack requests. |
+   | **Always allow this prefix** | Save Codex's proposed command-prefix rule for future matching commands. |
+   | **Always allow this host** / **Always deny this host** | Save Codex's proposed network rule for that host. |
+   | **Deny** | Refuse the action; Codex may continue with another approach. |
+   | **Deny and stop** | Refuse the action and interrupt the agent turn. |
+
+   Not every request offers every choice. Tag respects Codex's explicit choice
+   list when provided. Persistent choices appear only when Codex proposes a rule;
+   review the complete prefix or host in the private prompt before confirming it.
+   These rules are saved by Codex and can affect future Codex runs.
+3. Tag replaces the controls with an acknowledgment that your choice was sent
+   to Codex. The task's activity and final response show what happened next.
+
+If automatic review already denied an action, supported denials instead offer
+**Approve retry** / **Dismiss**. The private prompt identifies the denied action
+and shows Codex's stated reason. Common credentials and URL credentials/query
+parameters are redacted, and long details are marked as truncated or omitted.
+Terminal input content is withheld. If Codex provides no reason, Tag says so.
+Approve retry applies only to that exact action
+and the retry still undergoes automatic review; this override has no persistent
+or session-wide option.
 
 In a channel, only the person who started the task sees the approval prompt.
 In a direct message, it appears in that conversation. Only the original

@@ -290,6 +290,9 @@ class ChatGPTTests(unittest.TestCase):
         self.assertEqual(start.call_count, 2)
         calls = request.call_args_list
         self.assertEqual([call.args[0] for call in calls], ["initialize", "thread/start", "turn/start", "initialize", "thread/resume", "turn/start"])
+        for call in (calls[0], calls[3]):
+            self.assertTrue(call.args[1]["capabilities"]["experimentalApi"])
+            self.assertEqual(call.args[1]["clientInfo"]["name"], auth.APP_NAME)
         self.assertFalse(calls[1].args[1]["ephemeral"])
         self.assertEqual(calls[4].args[1]["threadId"], "thread-one")
         self.assertEqual(consume.call_args_list[0].kwargs["max_deadline"], consume.call_args_list[1].kwargs["max_deadline"])

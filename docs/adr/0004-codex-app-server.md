@@ -155,3 +155,74 @@ test runners and linters, package scripts, shell/TypeScript runners, and wget.
 Only known option arities are parsed; search expressions, filters, configuration
 values, and arbitrary unknown-command arguments are excluded. Inline file work
 uses “Running Python · filename”; scripts retain “Running filename”.
+
+
+## Auto-review denial retries (2026-10-02)
+
+Tag retains supported `item/autoApprovalReview/completed` denials in memory for
+its request-scoped thread. After the turn completes, it offers the initiating
+Slack user private Approve retry / Dismiss controls. Approval calls
+`thread/approveGuardianDeniedAction` with the exact denied action, then starts
+a follow-up turn in the same ephemeral thread with automatic review still on.
+The intermediate blocked answer is held while a decision is pending and is
+replaced by the retry answer when approved. No action payload or reviewer
+rationale is copied into Slack button metadata.
+
+The adapter opts into the experimental App Server protocol. Supported action
+variants are command, execve, terminal input, file patch, network access, and
+MCP tool call. Unknown variants (including permission-profile conversions) are
+not offered for override. Duplicate reviews are ignored, at most ten reviews
+are retained per run, and the existing approval timeout and absolute runtime
+bound the wait. Dismissal, Stop, expiry, unavailable UI, or rejected override
+APIs never grant permission. Expired controls are removed from the active
+approval registry. The process stays alive only within the original run's
+bounded lifetime; approval after cleanup cannot resume it. This adds no stored
+configuration or migration requirement.
+
+
+## Native approval choices (2026-10-02)
+
+Normal approval requests now carry Codex's supported decisions through to the
+requester's private Slack prompt. An explicit `availableDecisions` list is
+authoritative; absent that list, Tag uses the documented decisions for the
+request type. Command, file, and permission approvals can offer task-scoped
+(session) grants. Persistent command-prefix and host rules are offered only
+from backend proposals. Auto-review denial overrides remain exact-action retries.
+
+The full proposed prefix, host, or permission grant is displayed privately so
+the user can assess its scope. This extends the earlier category-only display
+rule; raw commands and approval payloads still do not enter button metadata.
+Persistent rules require confirmation showing the complete target. Oversized,
+unknown, or malformed choices are not offered. Up to twenty choices fit within
+Slack's block limit. Runtime decision payloads remain in the transport; button
+metadata contains only request identity and an opaque choice ID. Both the
+bridge and transport validate selections against that request's offered choices.
+Expired, replayed, or forged selections cannot broaden access. Final UI text
+acknowledges submission, without claiming that Codex has already saved a rule.
+
+The helper is included in the runtime manifest for fresh installs and upgrades.
+No Tag configuration or stored-state migration is needed; Codex owns persistent
+rules created only after explicit selection. Tag's session remains one bounded
+Slack task, not a persistent Slack conversation.
+
+
+## Explain auto-review denials in private prompts (2026-10-02)
+
+Retry prompts now include a bounded action description and the explicit Codex
+review rationale. The transport derives the description from the retained
+canonical action: command/program, terminal process (without stdin content),
+file targets, network host/port, or connected server/tool. Missing details are
+reported as unavailable rather than inferred. This extends the earlier rule
+that excluded the rationale from all Slack output: a redacted preview is now
+allowed only in the requester's private approval message.
+
+The original event remains local and unchanged for the exact-action override.
+Only the display preview is forwarded to Slack. Common credentials and URL
+credentials/query strings/fragments are removed before forwarding; the bridge
+sanitizes again before rendering. Both fields are bounded and rendered as literal text in separate rich-text
+sections with bold labels and a compact expiry/scope footer. Backend prose cannot
+become Slack mentions or formatted links. Connected tools put their human-readable
+title first when Codex supplies one.
+Button metadata continues to contain only request identity, never review text
+or action payloads. Approval scope, expiry, and requester authorization are
+unchanged. This presentation change requires no stored-state migration.
