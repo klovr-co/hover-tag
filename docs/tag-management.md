@@ -385,3 +385,10 @@ The older installed CLI also offers `tag update` and `tag restart`.
 Its `slack-run` command remains a compatibility
 alias for `run`; use `run` only for foreground debugging. The workspace lifecycle
 does not yet expose the same update/restart commands.
+
+## ChatGPT account connection
+
+Use `tag chatgpt login` to connect a ChatGPT plan directly to this Tag,
+`tag chatgpt status --json` to inspect it, and `tag chatgpt use-codex` to return
+to the existing Codex sign-in. Stop the Tag before changing accounts. See
+[ChatGPT connection commands and recovery](reference/chatgpt-connection.md).

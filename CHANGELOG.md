@@ -6,6 +6,10 @@ All notable changes to Tag are documented here.
 
 ### Added
 
+- Connect a ChatGPT plan directly to each Tag with `tag chatgpt login`, including
+  account selection, automatic token renewal, sign-out, and account-specific
+  model choices. Existing installations retain their Codex sign-in until opted in.
+
 - Deliver saved files as local copies plus Slack attachments by default.
   `OPENTAG_FILE_DELIVERY` and individual requests can select local-only delivery.
   Existing installations adopt the default automatically unless explicitly configured.
@@ -26,6 +30,9 @@ All notable changes to Tag are documented here.
   and upgrade without changing system Python or requiring a preinstalled CLI.
 
 ### Fixed
+
+- Decode large Codex image events without repeatedly scanning the accumulated
+  buffer, preventing avoidable transport timeouts.
 
 - Keep local Open buttons for oversized output files and explain how to access
   them when they exceed the Slack upload limit.

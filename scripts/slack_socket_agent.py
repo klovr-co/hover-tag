@@ -286,6 +286,12 @@ def fetch_codex_model_catalog() -> list[dict[str, Any]] | None:
     except ImportError:
         from codex_app_server import CodexAppServer, CodexAppServerError
     try:
+        from . import tag_chatgpt
+    except ImportError:
+        import tag_chatgpt
+    if tag_chatgpt.enabled():
+        return tag_chatgpt.models()  # Never fall back to another account's cached catalog.
+    try:
         return CodexAppServer(["codex", "app-server"], cwd=default_workdir(), timeout=10).model_catalog()
     except (CodexAppServerError, OSError, ValueError):
         return None
@@ -299,6 +305,13 @@ def discover_codex_models() -> list[CodexModelOption]:
         if value.strip()
     ]
     configured_model, configured_effort, configured_fast_mode = configured_codex_defaults()
+    try:
+        from . import tag_chatgpt
+    except ImportError:
+        import tag_chatgpt
+    plan_connection = tag_chatgpt.enabled()
+    if plan_connection:
+        configured_fast_mode = False
     discovered: dict[str, CodexModelOption] = {}
     live_models = fetch_codex_model_catalog()
     try:
@@ -330,6 +343,14 @@ def discover_codex_models() -> list[CodexModelOption]:
         ]
         fallback_default = next((item["slug"] for item in raw_models
                                  if live_models is not None and item.get("is_default")), None)
+        if plan_connection:
+            available = {item["slug"] for item in raw_models}
+            configured = [name for name in configured if name in available]
+            if configured_model not in available:
+                configured_model = None
+            # The direct catalog guarantees display order, not isDefault. Choose
+            # its first visible entry as Tag's default, without claiming entitlement.
+            fallback_default = raw_models[0]["slug"] if raw_models else None
         default_model = configured_model or fallback_default
         for raw_model in raw_models:
             if not isinstance(raw_model, dict) or raw_model.get("visibility") == "hide":

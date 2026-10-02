@@ -8,6 +8,7 @@ NOTICE for attribution.
 from __future__ import annotations
 
 import json
+import os
 import queue
 import re
 import shlex
@@ -20,8 +21,10 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from . import tag_chatgpt
     from .tag_activity_details import item_activity_details
 except ImportError:  # Direct script execution does not create a package context.
+    import tag_chatgpt
     from tag_activity_details import item_activity_details
 
 
@@ -151,16 +154,20 @@ class JsonLineDecoder:
         self.buffer = bytearray()
 
     def feed(self, chunk: bytes) -> list[bytes]:
+        # The previous partial buffer contains no newline. Scan only new bytes
+        # so a large image event delivered in small chunks remains linear-time.
+        scan_from = len(self.buffer)
         self.buffer.extend(chunk)
-        if len(self.buffer) > self.max_line_bytes and b"\n" not in self.buffer:
-            raise CodexAppServerError("Codex App Server emitted an oversized JSONL line")
         lines: list[bytes] = []
         while True:
-            newline = self.buffer.find(b"\n")
+            newline = self.buffer.find(b"\n", scan_from)
             if newline < 0:
+                if len(self.buffer) > self.max_line_bytes:
+                    raise CodexAppServerError("Codex App Server emitted an oversized JSONL line")
                 break
             line = bytes(self.buffer[:newline]).strip()
             del self.buffer[: newline + 1]
+            scan_from = 0
             if len(line) > self.max_line_bytes:
                 raise CodexAppServerError("Codex App Server emitted an oversized JSONL line")
             if line:
@@ -200,6 +207,7 @@ class CodexEventMapper:
         self.pending_deltas: dict[str, list[str]] = {}
         self.completed_messages: list[tuple[str, str | None, str]] = []
         self.emitted_final_ids: set[str] = set()
+        self.failure_detail = ""
 
     def map(self, message: dict[str, Any]) -> list[dict[str, Any]]:
         method = message.get("method")
@@ -218,7 +226,10 @@ class CodexEventMapper:
             error = params.get("error")
             text = error.get("message") if isinstance(error, dict) else None
             if isinstance(text, str) and text and not params.get("willRetry"):
-                return [{"type": "error", "text": text}]
+                code = error.get("code")
+                prefix = f"{code}: " if isinstance(code, str) and code in tag_chatgpt.PLAN_ERRORS else ""
+                self.failure_detail = prefix + text
+                return [{"type": "error", "text": self.failure_detail}]
         return []
 
     def _item_started(self, params: dict[str, Any]) -> list[dict[str, Any]]:
@@ -330,7 +341,11 @@ class CodexEventMapper:
         terminal = {"type": "turn_complete", "status": status or "failed"}
         error = turn.get("error")
         if isinstance(error, dict) and isinstance(error.get("message"), str):
-            terminal["text"] = error["message"]
+            code = error.get("code")
+            prefix = f"{code}: " if isinstance(code, str) and code in tag_chatgpt.PLAN_ERRORS else ""
+            terminal["text"] = prefix + error["message"]
+        elif status == "failed" and self.failure_detail:
+            terminal["text"] = self.failure_detail
         events.append(terminal)
         return events
 
@@ -350,6 +365,9 @@ class CodexAppServer:
         approval_dir: Path | None = None,
     ) -> None:
         self.command = command
+        self.chatgpt_token = ""
+        self.token_renewal_deadline = float("inf")
+        self.renewing_token = False
         self.cwd = cwd
         self.timeout = timeout
         self.max_timeout = max_timeout if max_timeout is not None else timeout
@@ -368,11 +386,13 @@ class CodexAppServer:
 
     def model_catalog(self) -> list[dict[str, Any]]:
         """Read models for the signed-in account without creating a thread or turn."""
+        if tag_chatgpt.enabled():
+            return tag_chatgpt.models()
         mapper = CodexEventMapper()
         deadline = time.monotonic() + self.timeout
         try:
             self._start()
-            self._request("initialize", {"clientInfo": {"name": "tag", "version": "0.1"}},
+            self._request("initialize", {"clientInfo": self._client_info()},
                           mapper, lambda event: None, deadline)
             self._notify("initialized", {})
             models: list[dict[str, Any]] = []
@@ -407,7 +427,7 @@ class CodexAppServer:
         try:
             self._request(
                 "initialize",
-                {"clientInfo": {"name": "tag", "title": "Tag", "version": "0.1"}},
+                {"clientInfo": self._client_info()},
                 mapper,
                 emit,
                 max_deadline,
@@ -417,7 +437,7 @@ class CodexAppServer:
                 "cwd": str(self.cwd),
                 "sandbox": "workspace-write",
                 "approvalsReviewer": "auto_review",
-                "ephemeral": True,
+                "ephemeral": not bool(self.chatgpt_token),
                 "serviceName": "tag_slack_bridge",
             }
             if model:
@@ -435,24 +455,69 @@ class CodexAppServer:
                 turn_params["model"] = model
             if reasoning_effort:
                 turn_params["effort"] = reasoning_effort
-            turn_result = self._request("turn/start", turn_params, mapper, emit, max_deadline)
-            turn = turn_result.get("turn") if isinstance(turn_result, dict) else None
-            if not isinstance(turn, dict) or not isinstance(turn.get("id"), str):
-                raise CodexAppServerError("Codex returned an invalid turn/start response")
-            self.turn_id = turn["id"]
-            return self._consume_turn(
-                mapper,
-                emit,
-                idle_deadline=time.monotonic() + self.timeout,
-                max_deadline=max_deadline,
-            )
+            while True:
+                turn_result = self._request("turn/start", turn_params, mapper, emit, max_deadline)
+                turn = turn_result.get("turn") if isinstance(turn_result, dict) else None
+                if not isinstance(turn, dict) or not isinstance(turn.get("id"), str):
+                    raise CodexAppServerError("Codex returned an invalid turn/start response")
+                self.turn_id = turn["id"]
+                status, detail = self._consume_turn(
+                    mapper, emit, idle_deadline=time.monotonic() + self.timeout,
+                    max_deadline=max_deadline,
+                )
+                if status != "renew_token":
+                    if self.chatgpt_token and "subscription_sharing_usage_limit_exceeded" in detail:
+                        tag_chatgpt.Store().pause_usage()
+                    return status, detail
+                if self._stop_requested():
+                    return "interrupted", "Stopped by requester"
+                # Resume the same saved history only after acknowledged interruption;
+                # never rerun the original prompt or restart an unacknowledged turn.
+                self.close()
+                self.process = None
+                self.messages = queue.Queue()
+                self.stderr.clear()
+                self.reader_threads = []
+                self.interrupt_sent = False
+                self.renewing_token = False
+                self.turn_id = None
+                self._start()
+                self._request("initialize", {"clientInfo": self._client_info()}, mapper, emit, max_deadline)
+                self._notify("initialized", {})
+                resumed = self._request("thread/resume", {"threadId": self.thread_id,
+                    "cwd": str(self.cwd), "sandbox": "workspace-write", "approvalsReviewer": "auto_review"},
+                    mapper, emit, max_deadline)
+                if not isinstance(resumed, dict) or resumed.get("thread", {}).get("id") != self.thread_id:
+                    raise CodexAppServerError("Codex could not resume the task after ChatGPT token renewal")
+                turn_params["input"] = [{"type": "text", "text":
+                    "Continue the interrupted task from the saved history. Authentication was renewed. "
+                    "Check the outcome of interrupted tools before proceeding; do not repeat completed actions."}]
+                emit({"type": "status", "text": "ChatGPT connection renewed; continuing the task."})
         finally:
             self.close()
 
+    @staticmethod
+    def _client_info() -> dict[str, str]:
+        return {"name": tag_chatgpt.APP_NAME, "title": "Tag",
+                "version": (Path(__file__).resolve().parents[1] / "VERSION").read_text().strip()}
+
     def _start(self) -> None:
+        environment = None
+        command = self.command
+        if tag_chatgpt.enabled():
+            try:
+                self.chatgpt_token, expiry = tag_chatgpt.Store().lease()
+                self.token_renewal_deadline = time.monotonic() + max(0, expiry - time.time() - 90)
+            except tag_chatgpt.ChatGPTError as exc:
+                raise CodexAppServerError(str(exc)) from None
+            environment = dict(os.environ)
+            environment[tag_chatgpt.TOKEN_ENV] = self.chatgpt_token
+            command = [part for part in command if part != "--stdio"]
+            command += ["--listen", "stdio://", *tag_chatgpt.provider_options()]
         try:
             self.process = subprocess.Popen(
-                self.command,
+                command,
+                env=environment,
                 cwd=self.cwd,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
@@ -475,7 +540,8 @@ class CodexAppServer:
             while chunk := self.process.stdout.read(4096):
                 for raw_line in decoder.feed(chunk):
                     try:
-                        payload = json.loads(raw_line)
+                        payload = json.loads(raw_line.replace(self.chatgpt_token.encode(), b"<redacted>")
+                                             if self.chatgpt_token else raw_line)
                     except (UnicodeDecodeError, json.JSONDecodeError):
                         continue
                     if isinstance(payload, dict):
@@ -569,11 +635,13 @@ class CodexAppServer:
         interrupt_deadline = float("inf")
         while True:
             try:
-                deadline = min(idle_deadline, max_deadline) if not timed_out else interrupt_deadline
+                deadline = min(idle_deadline, max_deadline, self.token_renewal_deadline) if not timed_out else interrupt_deadline
                 message = self._next_message(deadline)
             except CodexAppServerError as exc:
                 now = time.monotonic()
                 if not timed_out and now >= deadline:
+                    self.renewing_token = (self.chatgpt_token != "" and not self.interrupt_sent
+                                           and self.token_renewal_deadline < min(idle_deadline, max_deadline))
                     timed_out = True
                     timeout_detail = (
                         f"maximum runtime of {self.max_timeout}s exceeded"
@@ -592,6 +660,12 @@ class CodexAppServer:
                 if self._is_progress_notification(message) and not timed_out:
                     idle_deadline = time.monotonic() + self.timeout
                 for event in events:
+                    if event.get("type") == "turn_complete" and self.renewing_token:
+                        if event.get("status") == "interrupted":
+                            return "renew_token", ""
+                        # A task can complete while interruption is in flight.
+                        emit(event)
+                        return str(event.get("status", "failed")), str(event.get("text", ""))
                     emit(event)
                     if event.get("type") == "turn_complete":
                         if timed_out:
@@ -703,6 +777,14 @@ class CodexAppServer:
             return {"decision": decision}
         return {}
 
+    def _stop_requested(self) -> bool:
+        if not self.control_file or not self.run_id:
+            return False
+        try:
+            return self.control_file.read_text(encoding="utf-8").strip() == self.run_id
+        except OSError:
+            return False
+
     def _check_control(self) -> None:
         if self.interrupt_sent or not self.control_file or not self.run_id:
             return
@@ -756,6 +838,8 @@ class CodexAppServer:
     def _exit_message(self) -> str:
         assert self.process is not None
         detail = bytes(self.stderr).decode("utf-8", errors="replace").strip()
+        if self.chatgpt_token:
+            detail = detail.replace(self.chatgpt_token, "<redacted>")
         suffix = f": {detail[-4000:]}" if detail else ""
         return f"Codex App Server exited with code {self.process.returncode}{suffix}"
 

@@ -294,6 +294,8 @@ def run_codex_once(
 
 def retryable_backend_failure(output: str) -> bool:
     lowered = output.lower()
+    if "subscription_sharing_" in lowered or "chatpass_v2_" in lowered:
+        return False
     return any(
         marker in lowered
         for marker in (
@@ -892,6 +894,14 @@ def main() -> int:
     )
 
     try:
+        try:
+            from . import tag_chatgpt
+        except ImportError:
+            import tag_chatgpt
+        if args.backend == "codex" and tag_chatgpt.enabled() and (
+            not args.event_stream or codex_event_transport() != "app-server"
+        ):
+            raise tag_chatgpt.ChatGPTError("ChatGPT plan usage requires the app-server event transport; run tag config set OPENTAG_CODEX_TRANSPORT app-server.")
         if args.event_stream:
             if args.backend == "codex":
                 if codex_event_transport() == "app-server":
@@ -944,6 +954,12 @@ def main() -> int:
             attachments_dir=args.attachments_dir.resolve() if args.attachments_dir else None,
             timeout=args.timeout,
         )
+    except tag_chatgpt.ChatGPTError as exc:
+        if args.event_stream:
+            emit_event("error", str(exc))
+        else:
+            print(str(exc), file=sys.stderr)
+        return 1
     except subprocess.TimeoutExpired:
         print(f"Open Tag backend timed out after {args.timeout}s", file=sys.stderr)
         return 124

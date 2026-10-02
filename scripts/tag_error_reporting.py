@@ -335,6 +335,19 @@ def classify_failure(detail: str, backend_code: str | None = None) -> FailureCla
     """Classify from an allowlist; an explicit structured code always wins."""
     safe_detail = detail if isinstance(detail, str) else ""
     normalized_code = _normalize_code(backend_code)
+    try:
+        from .tag_chatgpt import PLAN_ERRORS
+    except ImportError:
+        from tag_chatgpt import PLAN_ERRORS
+    plan_code = next((code for code in PLAN_ERRORS if code == normalized_code or code in safe_detail), None)
+    if plan_code:
+        category = (FailureCategory.RATE_LIMIT if plan_code == "subscription_sharing_usage_limit_exceeded"
+                    else FailureCategory.AUTHENTICATION if plan_code in {
+                        "subscription_sharing_invalid_user", "chatpass_v2_scope_not_authorized",
+                        "chatpass_v2_invalid_authorization_context", "subscription_sharing_user_not_eligible"}
+                    else FailureCategory.UNKNOWN)
+        return FailureClassification(category, PLAN_ERRORS[plan_code],
+                                     "The ChatGPT plan route returned an explicit failure code.", plan_code)
     if normalized_code in _CODE_CATEGORIES:
         return _classification_for_category(
             _CODE_CATEGORIES[normalized_code], code=normalized_code, detail=safe_detail
@@ -370,6 +383,8 @@ def classify_failure(detail: str, backend_code: str | None = None) -> FailureCla
 
 
 _SECRET_PATTERNS = (
+    re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+"),
+    re.compile(r"(?i)(\b(?:access_token|refresh_token|id_token|id_token_hint)[\"']?\s*[:=]\s*[\"']?)[^\s,;\"'&]+"),
     re.compile(r"\bxapp-[A-Za-z0-9-]+\b", re.IGNORECASE),
     re.compile(r"\bxox[a-z]-[A-Za-z0-9-]+\b", re.IGNORECASE),
     re.compile(r"\b(?:sk|rk)-[A-Za-z0-9_-]+\b", re.IGNORECASE),
