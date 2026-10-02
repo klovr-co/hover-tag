@@ -17,6 +17,17 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+# Started from PowerShell 7 (pwsh), Windows PowerShell inherits pwsh's module
+# path and can't load its own built-in commands such as Get-FileHash. Use
+# Windows PowerShell's own module folders.
+if ($PSVersionTable.PSEdition -ne 'Core') {
+    $env:PSModulePath = @(
+        (Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'WindowsPowerShell\Modules'),
+        (Join-Path $env:ProgramFiles 'WindowsPowerShell\Modules'),
+        (Join-Path $PSHOME 'Modules')
+    ) -join ';'
+}
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
 function Write-TagProgress([string]$Step) {
     if ($env:TAG_INSTALL_PROGRESS -eq 'jsonl') {

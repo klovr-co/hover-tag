@@ -64,6 +64,11 @@ class ReleaseHelperTests(unittest.TestCase):
             self.assertIn(pin, shell)
         self.assertIn("Get-FileHash -Algorithm SHA256", script)
         self.assertIn("[switch]$RuntimeInfo", script)
+        # Run from pwsh (as CI and many users do), Windows PowerShell must not
+        # inherit PowerShell 7's module path, or Get-FileHash can't load.
+        reset = script.index("$env:PSModulePath")
+        self.assertLess(reset, script.index("Get-FileHash"))
+        self.assertIn("$PSVersionTable.PSEdition -ne 'Core'", script)
         self.assertIn("Write-TagProgress 'tools'", script)
         self.assertIn("Write-TagProgress 'python'", script)
         # Windows PowerShell 5.1 under 'Stop' fails on any native stderr; every

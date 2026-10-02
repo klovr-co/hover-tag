@@ -1322,8 +1322,12 @@ class TagHomeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp)
             initialize_instance(home)
+            # Identified by script name, like Tag's real services; a bare `python -c`
+            # reports a different executable name under macOS framework builds.
+            sleeper = home / "sleeper.py"
+            sleeper.write_text("import time\ntime.sleep(90)\n")
             try:
-                self.assertTrue(start_process(home, "test", [sys.executable, "-c", "import time; time.sleep(90)"]))
+                self.assertTrue(start_process(home, "test", [sys.executable, str(sleeper)]))
                 self.assertFalse(start_process(home, "test", ["must-not-run"]))
                 self.assertIsNotNone(process_for(home / "state/test.json"))
             finally:
