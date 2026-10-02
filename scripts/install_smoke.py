@@ -73,8 +73,13 @@ def stop_leftovers(directory: Path) -> None:
     script = ("$p = Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like $env:TAG_SMOKE_DIR + '*' };"
               " $p | ForEach-Object { Write-Output ($_.ProcessId.ToString() + ' ' + $_.CommandLine) };"
               " $p | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }")
-    result = subprocess.run(["powershell.exe", "-NoProfile", "-Command", script], capture_output=True, text=True,
-                            env=dict(os.environ, TAG_SMOKE_DIR=str(directory.resolve())), check=False)
+    try:
+        result = subprocess.run(["powershell.exe", "-NoProfile", "-Command", script], capture_output=True,
+                                text=True, env=dict(os.environ, TAG_SMOKE_DIR=str(directory.resolve())),
+                                check=False, timeout=60)
+    except subprocess.TimeoutExpired:
+        print("Could not list leftover processes within 60 seconds; continuing.")
+        return  # Best effort: never let cleanup hide the test result.
     if result.stdout.strip():
         print("Processes left running by Tag (stopped):\n" + result.stdout.strip())
 
