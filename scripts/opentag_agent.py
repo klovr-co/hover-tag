@@ -956,10 +956,10 @@ def main() -> int:
     )
 
     try:
-        try:
-            from . import tag_chatgpt
-        except ImportError:
-            import tag_chatgpt
+        from . import tag_chatgpt
+    except ImportError:
+        import tag_chatgpt
+    try:
         if args.backend == "codex" and tag_chatgpt.enabled() and (
             not args.event_stream or codex_event_transport() != "app-server"
         ):

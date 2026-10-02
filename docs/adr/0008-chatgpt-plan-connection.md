@@ -27,6 +27,12 @@ each Codex invocation reads fresh credentials. Terminal refresh errors clear
 unusable tokens but retain the registration. Temporary errors preserve it.
 Logout never silently selects a different billing path. Account changes require
 a stopped Slack bridge, so its model catalog and task credentials stay aligned.
+Account mutation commits share the bridge startup lock and recheck the live
+process after browser consent. Each task pins its authentication mode,
+registration, and subject; renewal and usage-pause updates fail closed if that
+identity changes. A failed model-catalog lookup logs the recovery error and
+leaves the catalog empty without reading inherited Codex models; task startup
+still validates the selected account before inference.
 
 Codex receives the access token through its child environment and a custom
 Responses provider using HTTP/SSE. Global Codex credentials are untouched.

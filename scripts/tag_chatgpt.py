@@ -7,7 +7,7 @@ consent happens outside that lock and only a validated result can become active.
 from __future__ import annotations
 
 import base64
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import hashlib
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
@@ -253,6 +253,34 @@ class Store:
         self.path = self.home / "config/chatgpt/accounts.json"
         self.lock_path = self.path.with_suffix(".lock")
 
+    @contextmanager
+    def account_change(self):
+        """Exclude bridge startup and reject changes while its process is live."""
+        try:
+            from .tag_cli import process_for
+        except ImportError:
+            from tag_cli import process_for
+        try:
+            lock = LifecycleLock(self.home / "state/start.lock").acquire()
+        except RuntimeError as exc:
+            raise ChatGPTError(str(exc)) from None
+        try:
+            if process_for(self.home / "state/slack.json"):
+                raise ChatGPTError("Stop this Tag before changing its ChatGPT account, then retry.")
+            yield
+        finally:
+            lock.release()
+
+    def identity(self) -> tuple[str, str | None, str | None]:
+        """Identify the billing mode and registration used by one task."""
+        return self._identity(self.read())
+
+    @staticmethod
+    def _identity(record: dict) -> tuple[str, str | None, str | None]:
+        selected = record.get("active")
+        account = record["accounts"].get(selected, {})
+        return record["mode"], selected, account.get("subject")
+
     def read(self) -> dict:
         record = read_object(self.path)
         if not record and not self.path.exists():
@@ -292,9 +320,12 @@ class Store:
     def access(self, account_id: str | None = None, *, activate: bool = False) -> str:
         return self.lease(account_id, activate=activate)[0]
 
-    def lease(self, account_id: str | None = None, *, activate: bool = False) -> tuple[str, float]:
-        with locked(self.lock_path):
+    def lease(self, account_id: str | None = None, *, activate: bool = False,
+              expected_identity: tuple | None = None) -> tuple[str, float]:
+        with self.account_change() if activate else nullcontext(), locked(self.lock_path):
             record = self.read()
+            if expected_identity is not None and self._identity(record) != expected_identity:
+                raise ChatGPTError("ChatGPT account changed during the task; restart the task with the intended account.")
             selected = account_id or record.get("active")
             account = record["accounts"].get(selected)
             if not account or not account.get("refresh_token"):
@@ -332,9 +363,11 @@ class Store:
                 atomic_write(self.path, record)
             return account["access_token"], account["expires_at"]
 
-    def pause_usage(self) -> None:
+    def pause_usage(self, *, expected_identity: tuple | None = None) -> None:
         with locked(self.lock_path):
             record = self.read()
+            if expected_identity is not None and self._identity(record) != expected_identity:
+                raise ChatGPTError("ChatGPT account changed during the task; usage state was not updated.")
             account = record["accounts"].get(record.get("active"))
             if account:
                 account["usage_paused"] = True
@@ -346,7 +379,7 @@ class Store:
             account.pop(key, None)
 
     def logout(self, account_id: str | None = None) -> bool:
-        with locked(self.lock_path):
+        with self.account_change(), locked(self.lock_path):
             record = self.read()
             selected = account_id or record.get("active")
             account = record["accounts"].get(selected)
@@ -369,7 +402,7 @@ class Store:
             return revoked
 
     def use_codex(self) -> None:
-        with locked(self.lock_path):
+        with self.account_change(), locked(self.lock_path):
             record = self.read()
             record["mode"] = "codex"
             atomic_write(self.path, record)
@@ -457,7 +490,7 @@ class Store:
         replacement = token_record(response, {"client_id": issued, "subject": claims["sub"],
                                               "issuer": ISSUER, "email": claims.get("email", ""),
                                               "ext_agent_host_id": host, "id_token": response["id_token"]})
-        with locked(self.lock_path):
+        with self.account_change(), locked(self.lock_path):
             record = self.read()
             if record != before:
                 raise ChatGPTError("ChatGPT accounts changed during sign-in. Retry with the intended account.")

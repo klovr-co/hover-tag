@@ -8,6 +8,7 @@ is written as ``backend:model``.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -144,7 +145,13 @@ def fetch_codex_model_catalog() -> list[dict[str, Any]] | None:
     except ImportError:
         import tag_chatgpt
     if tag_chatgpt.enabled():
-        return tag_chatgpt.models()  # Never fall back to another account's cached catalog.
+        try:
+            return tag_chatgpt.models()
+        except tag_chatgpt.ChatGPTError as exc:
+            logging.getLogger(__name__).warning("ChatGPT model discovery unavailable: %s", exc)
+            # Keep the bridge available without borrowing another account's catalog.
+            # Each task still validates its selected account before inference.
+            return []
     try:
         return CodexAppServer(["codex", "app-server"], cwd=default_workdir(), timeout=10).model_catalog()
     except (CodexAppServerError, OSError, ValueError):

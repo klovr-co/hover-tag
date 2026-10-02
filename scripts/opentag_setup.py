@@ -1725,8 +1725,12 @@ def finish_setup(config_path: Path, values: dict[str, str], _channels: list[slac
                     if transport != "app-server":
                         ui.message("ChatGPT plan usage requires app-server. Run tag config set OPENTAG_CODEX_TRANSPORT app-server.")
                         raise ui.Paused()
-                    tag_chatgpt.cli(["login"])
-                    store.access()
+                    try:
+                        tag_chatgpt.cli(["login"])
+                        store.access()
+                    except tag_chatgpt.ChatGPTError as exc:
+                        ui.message(str(exc))
+                        continue
                     break
                 if action == 1:
                     subprocess.run(

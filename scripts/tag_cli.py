@@ -494,13 +494,14 @@ def start_development_slack(home: Path) -> None:
         "--process-id",
         instance_id,
     ]
-    start_process(
-        home,
-        "slack",
-        command,
-        environment=environment,
-        metadata={"instance_id": instance_id},
-    )
+    with LifecycleLock(home / "state/start.lock"):
+        start_process(
+            home,
+            "slack",
+            command,
+            environment=environment,
+            metadata={"instance_id": instance_id},
+        )
     attempts = int(os.getenv("OPENTAG_STARTUP_ATTEMPTS", "30"))
     for _ in range(attempts):
         if slack_ready(home):

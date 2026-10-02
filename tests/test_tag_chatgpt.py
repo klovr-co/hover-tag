@@ -298,6 +298,96 @@ class ChatGPTTests(unittest.TestCase):
         self.assertEqual(consume.call_args_list[0].kwargs["max_deadline"], consume.call_args_list[1].kwargs["max_deadline"])
         self.assertNotIn("original task", calls[-1].args[1]["input"][0]["text"])
 
+    def test_login_commit_rechecks_bridge_after_browser_consent(self):
+        before = self.seed()
+        with patch("scripts.tag_cli.process_for", return_value=object()):
+            with self.assertRaisesRegex(auth.ChatGPTError, "Stop this Tag"):
+                self.browser_login(account="oaiapp_one")
+        self.assertEqual(self.store.read(), before)
+
+    def test_renewal_cannot_switch_to_inherited_codex_authentication(self):
+        self.seed()
+        server = transport.CodexAppServer(["codex", "app-server"], cwd=self.root, timeout=10)
+        server.auth_identity = self.store.identity()
+        self.store.use_codex()
+        with patch.object(transport.subprocess, "Popen") as popen:
+            with self.assertRaisesRegex(transport.CodexAppServerError, "account changed"):
+                server._start()
+        popen.assert_not_called()
+
+    def test_catalog_failure_never_uses_inherited_models(self):
+        from scripts import agent_models
+        self.seed()
+        with patch.object(auth, "models", side_effect=auth.RequestError(503)), patch.object(
+            agent_models, "codex_models_cache_path"
+        ) as cache, patch.object(agent_models, "configured_codex_defaults", return_value=("other", None, False)), self.assertLogs("scripts.agent_models", level="WARNING"):
+            self.assertEqual(agent_models.discover_codex_models(), [])
+        cache.assert_not_called()
+
+    def test_renewal_rejects_malformed_resume_response(self):
+        for resumed in (None, {}, {"thread": None}, {"thread": []},
+                        {"thread": "bad"}, {"thread": {"id": "other"}}):
+            with self.subTest(resumed=resumed):
+                server = transport.CodexAppServer(["codex", "app-server"], cwd=self.root, timeout=10)
+                replies = [{}, {"thread": {"id": "one"}}, {"turn": {"id": "turn"}}, {}, resumed]
+                with patch.object(server, "_start"), patch.object(server, "close"), patch.object(
+                    server, "_notify"
+                ), patch.object(server, "_request", side_effect=replies), patch.object(
+                    server, "_consume_turn", return_value=("renew_token", "")
+                ), self.assertRaisesRegex(transport.CodexAppServerError, "could not resume"):
+                    server.run("task", model=None, reasoning_effort=None, emit=lambda event: None)
+
+    def test_task_lease_and_usage_update_reject_changed_identity(self):
+        self.seed()
+        identity = self.store.identity()
+        for change in ("active", "subject", "mode"):
+            with self.subTest(change=change):
+                record = self.seed()
+                if change == "active":
+                    account = dict(record["accounts"]["oaiapp_one"], client_id="oaiapp_two")
+                    record["accounts"]["oaiapp_two"] = account
+                    record["active"] = "oaiapp_two"
+                elif change == "subject":
+                    record["accounts"]["oaiapp_one"]["subject"] = "another-person"
+                else:
+                    record["mode"] = "codex"
+                auth.atomic_write(self.store.path, record)
+                with self.assertRaisesRegex(auth.ChatGPTError, "account changed"):
+                    self.store.lease(expected_identity=identity)
+                with self.assertRaisesRegex(auth.ChatGPTError, "account changed"):
+                    self.store.pause_usage(expected_identity=identity)
+                self.assertEqual(self.store.read(), record)
+
+    def test_account_changes_exclude_startup_and_running_bridge(self):
+        self.seed()
+        for operation in (self.store.use_codex, self.store.logout,
+                          lambda: self.store.access("oaiapp_one", activate=True)):
+            with self.subTest(operation=operation):
+                with auth.LifecycleLock(self.root / "instance/state/start.lock"):
+                    with self.assertRaisesRegex(auth.ChatGPTError, "lifecycle operation"):
+                        operation()
+                with patch("scripts.tag_cli.process_for", return_value=object()):
+                    with self.assertRaisesRegex(auth.ChatGPTError, "Stop this Tag"):
+                        operation()
+                self.assertTrue(self.store.enabled())
+
+    def test_setup_returns_to_sign_in_menu_after_chatgpt_failure(self):
+        import subprocess
+        from scripts import opentag_setup as setup
+        for failure in ("login", "access"):
+            with self.subTest(failure=failure), patch.object(
+                setup, "ensure_agent", side_effect=lambda path, values: values
+            ), patch.object(setup.lifecycle, "mfs_client_executable", return_value="mfs"), patch.object(
+                setup.subprocess, "run", side_effect=[subprocess.CompletedProcess([], 0),
+                    subprocess.CompletedProcess([], 1), subprocess.CompletedProcess([], 1)]
+            ), patch.object(setup.ui, "choose", side_effect=[0, 3]) as choose, patch.object(
+                auth, "cli", side_effect=auth.ChatGPTError("declined") if failure == "login" else None
+            ), patch.object(auth.Store, "access", side_effect=auth.ChatGPTError("permission missing")), redirect_stdout(io.StringIO()) as output:
+                with self.assertRaises(setup.ui.Paused):
+                    setup.finish_setup(Path("settings.json"), {"OPENTAG_BACKEND": "codex"}, [])
+                self.assertEqual(choose.call_count, 2)
+                self.assertIn("declined" if failure == "login" else "permission missing", output.getvalue())
+
     def test_renewal_waits_for_interruption_and_hides_intermediate_terminal_event(self):
         server = transport.CodexAppServer(["codex", "app-server"], cwd=self.root, timeout=10)
         server.chatgpt_token = "access-fixture"

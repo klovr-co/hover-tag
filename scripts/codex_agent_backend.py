@@ -265,6 +265,7 @@ class CodexAppServer:
     ) -> None:
         self.command = command
         self.chatgpt_token = ""
+        self.auth_identity: tuple | None = None
         self.token_renewal_deadline = float("inf")
         self.renewing_token = False
         self.cwd = cwd
@@ -377,7 +378,10 @@ class CodexAppServer:
                 )
                 if status != "renew_token":
                     if self.chatgpt_token and "subscription_sharing_usage_limit_exceeded" in detail:
-                        tag_chatgpt.Store().pause_usage()
+                        try:
+                            tag_chatgpt.Store().pause_usage(expected_identity=self.auth_identity)
+                        except tag_chatgpt.ChatGPTError as exc:
+                            raise CodexAppServerError(str(exc)) from None
                     return status, detail
                 if self._stop_requested():
                     return "interrupted", "Stopped by requester"
@@ -398,7 +402,8 @@ class CodexAppServer:
                 resumed = self._request("thread/resume", {"threadId": self.thread_id,
                     "cwd": str(self.cwd), "sandbox": "workspace-write", "approvalsReviewer": "auto_review"},
                     mapper, emit, max_deadline)
-                if not isinstance(resumed, dict) or resumed.get("thread", {}).get("id") != self.thread_id:
+                resumed_thread = resumed.get("thread") if isinstance(resumed, dict) else None
+                if not isinstance(resumed_thread, dict) or resumed_thread.get("id") != self.thread_id:
                     raise CodexAppServerError("Codex could not resume the task after ChatGPT token renewal")
                 turn_params["input"] = [{"type": "text", "text":
                     "Continue the interrupted task from the saved history. Authentication was renewed. "
@@ -415,9 +420,18 @@ class CodexAppServer:
     def _start(self) -> None:
         environment = None
         command = self.command
-        if tag_chatgpt.enabled():
+        store = tag_chatgpt.Store()
+        try:
+            identity = store.identity()
+            if self.auth_identity is None:
+                self.auth_identity = identity
+            elif self.auth_identity != identity:
+                raise tag_chatgpt.ChatGPTError("ChatGPT account changed during the task; restart the task with the intended account.")
+        except tag_chatgpt.ChatGPTError as exc:
+            raise CodexAppServerError(str(exc)) from None
+        if self.auth_identity[0] == "chatgpt":
             try:
-                self.chatgpt_token, expiry = tag_chatgpt.Store().lease()
+                self.chatgpt_token, expiry = store.lease(expected_identity=self.auth_identity)
                 self.token_renewal_deadline = time.monotonic() + max(0, expiry - time.time() - 90)
             except tag_chatgpt.ChatGPTError as exc:
                 raise CodexAppServerError(str(exc)) from None
