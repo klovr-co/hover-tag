@@ -1629,6 +1629,106 @@ class SlackApprovalTests(unittest.TestCase):
         )
         self.assertNotIn("command", buttons[0]["value"])
 
+    def test_native_rule_buttons_show_target_but_keep_metadata_opaque(self) -> None:
+        from scripts.tag_approval_choices import approval_choices, public_approval_choices
+        choices = public_approval_choices(approval_choices("item/commandExecution/requestApproval", {
+            "availableDecisions": ["acceptForSession", {"applyNetworkPolicyAmendment": {
+                "network_policy_amendment": {"host": "forms.google.com", "action": "allow"}}}],
+        }))
+        blocks = slack_socket_agent.approval_button_blocks(
+            team="T1", channel="C1", thread_ts="1", user_id="U1", approval_id="a" * 32,
+            label="run a command outside the workspace sandbox", choices=choices,
+        )
+        buttons = [b["elements"][0] for b in blocks if b["type"] == "actions"]
+        self.assertEqual(["Allow for this task", "Always allow this host"],
+                         [b["text"]["text"] for b in buttons])
+        self.assertIn("forms.google.com", buttons[1]["confirm"]["text"]["text"])
+        self.assertNotIn("forms.google.com", buttons[1]["value"])
+        self.assertEqual("1", json.loads(buttons[1]["value"])["choice"])
+
+    def test_native_choice_registry_rejects_forgery_replay_and_expiry(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            process = MagicMock()
+            process.poll.return_value = None
+            run = slack_socket_agent.ActiveBackendRun(process, Path(raw) / "control", "run", Path(raw))
+            aid = "a" * 32
+            self.assertTrue(run.register_approval(aid, [{"id": "0"}, {"id": "1"}]))
+            self.assertFalse(run.resolve_approval(aid, choice="99"))
+            self.assertFalse(run.resolve_approval(aid, approved=True))
+            self.assertTrue(run.resolve_approval(aid, choice="1"))
+            self.assertEqual({"choice": "1"}, json.loads((Path(raw) / (aid + ".json")).read_text()))
+            self.assertFalse(run.resolve_approval(aid, choice="1"))
+            self.assertTrue(run.register_approval("b" * 32, [{"id": "0"}]))
+            run.finish()
+            self.assertFalse(run.resolve_approval("b" * 32, choice="0"))
+
+    def test_native_choice_callback_authorizes_owner_and_preserves_selection(self) -> None:
+        fake_app = FakeApp()
+        with tempfile.TemporaryDirectory() as raw, patch.object(
+            slack_socket_agent, "App", return_value=fake_app
+        ), patch.dict(os.environ, {"SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_IDS": "C1"}, clear=True), patch.object(
+            slack_socket_agent, "discover_codex_models", return_value=[]
+        ):
+            slack_socket_agent.create_app("codex", 30, frozenset({"UOWNER", "UOTHER"}))
+            handler = next(fn for key, fn in fake_app.actions.items()
+                           if hasattr(key, "pattern") and "approval_choice" in key.pattern)
+            process = MagicMock()
+            process.poll.return_value = None
+            run = slack_socket_agent.ActiveBackendRun(process, Path(raw) / "control", "run", Path(raw))
+            aid = "d" * 32
+            run.register_approval(aid, [{"id": "0"}, {"id": "1"}])
+            slack_socket_agent.register_active_run(slack_socket_agent.RunKey("T1", "C1", "1.0"), run)
+            value = {"team": "T1", "channel": "C1", "thread_ts": "1.0", "user": "UOWNER",
+                     "approval_id": aid, "choice": "1"}
+            body = {"team": {"id": "T1"}, "channel": {"id": "C1"}, "user": {"id": "UOTHER"},
+                    "actions": [{"action_id": slack_socket_agent.APPROVAL_CHOICE_ACTION_PREFIX + "1",
+                                 "value": json.dumps(value)}]}
+            client, respond = MagicMock(), MagicMock()
+            handler(MagicMock(), body, client, MagicMock(), respond)
+            self.assertFalse((Path(raw) / (aid + ".json")).exists())
+            client.chat_postEphemeral.assert_called_once()
+            body["user"]["id"] = "UOWNER"
+            handler(MagicMock(), body, client, MagicMock(), respond)
+            self.assertEqual({"choice": "1"}, json.loads((Path(raw) / (aid + ".json")).read_text()))
+            self.assertIn("sent to Codex", respond.call_args.kwargs["text"])
+            handler(MagicMock(), body, client, MagicMock(), respond)
+            self.assertIn("expired", respond.call_args.kwargs["text"])
+
+    def test_auto_review_details_are_literal_rich_text_and_not_button_metadata(self) -> None:
+        client = MagicMock()
+        slack_socket_agent.post_codex_approval(
+            client, team="T1", channel="C1", thread_ts="1", user_id="UOWNER",
+            approval={"approval_id": "a" * 32, "label": "retry an action denied by automatic review",
+                      "review_details": {"action": "Use connected tool: chrome/connect",
+                                         "reason": "Other signed-in tabs. <!channel> token=hidden-token"}},
+        )
+        client.chat_postMessage.assert_not_called()
+        sent = client.chat_postEphemeral.call_args.kwargs
+        self.assertEqual("UOWNER", sent["user"])
+        blocks = sent["blocks"]
+        self.assertEqual("header", blocks[0]["type"])
+        action = blocks[1]["elements"][0]["elements"]
+        reason = blocks[2]["elements"][0]["elements"]
+        self.assertEqual({"bold": True}, action[0]["style"])
+        self.assertIn("chrome/connect", action[1]["text"])
+        self.assertIn("Other signed-in tabs.", reason[1]["text"])
+        self.assertEqual("text", reason[1]["type"])
+        self.assertIn("<!channel>", reason[1]["text"])
+        self.assertNotIn("hidden-token", json.dumps(sent))
+        for button in blocks[-1]["elements"]:
+            self.assertNotIn("chrome", button["value"])
+            self.assertNotIn("tabs", button["value"])
+
+    def test_auto_review_buttons_explain_one_retry(self) -> None:
+        blocks = slack_socket_agent.approval_button_blocks(
+            team="T1", channel="C1", thread_ts="1.0", user_id="U1",
+            approval_id="a" * 32, label="retry an action denied by automatic review",
+        )
+        self.assertEqual(["Approve retry", "Dismiss"],
+                         [b["text"]["text"] for b in blocks[-1]["elements"]])
+        self.assertIn("Automatic review still applies", blocks[-2]["elements"][0]["text"])
+        self.assertEqual("U1", json.loads(blocks[-1]["elements"][0]["value"])["user"])
+
     def test_approval_prompt_is_visible_only_to_requesting_user(self) -> None:
         client = MagicMock()
 
