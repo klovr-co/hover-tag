@@ -74,9 +74,7 @@ Slack CLI; neither Python nor uv needs to be on PATH. Setup checks the selected 
 not install Codex or change its global configuration or credentials.
 
 Native Windows uses `install.ps1`, which needs only Windows PowerShell 5.1; WSL
-uses the Linux bootstrap. On Windows, the MFS command-line client is not
-bundled because upstream publishes no Windows build; install it on `PATH` to
-use it. No local administrator privileges are needed. Slack sign-in
+uses the Linux bootstrap. No local administrator privileges are needed. Slack sign-in
 and any workspace administrator approval remain explicit user actions.
 
 macOS/Linux:
@@ -107,8 +105,9 @@ Each release has its own Python environment with the pinned runtime requirements
 Installation also downloads and validates MFS's default local embedding model
 into its reusable cache, so the first `tag start` does not wait for a cold model
 download. Later installs reuse the cached model.
-The MFS Python server and matching MFS CLI are installed into Tag's managed
-runtime on macOS and Linux. Google Workspace CLI and third-party MCP packages are
+The MFS Python server is installed into Tag's managed runtime on every
+platform. Tag talks to it over its HTTP API, so the separate `mfs`
+command-line client is not needed. Google Workspace CLI and third-party MCP packages are
 optional integrations, installed and authenticated separately.
 
 The installer keeps dependency-manager output behind a concise Install screen.
@@ -361,6 +360,7 @@ Measured on macOS ARM64 on 2026-09-27, using Python 3.12.14, uv 0.12.19,
 Slack CLI 4.8.0 and the current runtime requirements. These are measurements,
 not size limits or promises for other platforms. Transitive package updates,
 platform wheels, filesystem allocation, and existing caches change the totals.
+Since this measurement, Tag no longer installs the MFS CLI (about 2 MB less).
 
 | Component | Download payload | Installed logical bytes |
 | --- | ---: | ---: |

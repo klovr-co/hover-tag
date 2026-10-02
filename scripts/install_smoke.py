@@ -53,6 +53,5 @@ with tempfile.TemporaryDirectory(prefix="Tag smoke ") as temporary:
     if not any(slack.rglob("slack.exe" if os.name == "nt" else "slack")):
         import shutil
         assert shutil.which("slack"), "Slack CLI was neither provisioned nor already installed"
-    if os.name != "nt":
-        mfs = Path(current["python"]).parent / "mfs"
-        subprocess.run([str(mfs), "--version"], check=True)
+    # Memory needs only the MFS server package; Tag talks to it over HTTP.
+    assert not (Path(current["python"]).parent / "mfs").exists()

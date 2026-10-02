@@ -10,8 +10,13 @@ All notable changes to Tag are documented here.
   pinned Python with a checksum-verified uv, like `install.sh`, and installs
   the Slack CLI for Windows. Existing Windows installations move to the private
   Python automatically on the next `tag start`; the system Python is no longer
-  used. The MFS command-line client still comes from `PATH` on Windows because
-  upstream publishes no Windows build.
+  used.
+
+- Index Slack history through the MFS server's HTTP API instead of the `mfs`
+  command-line client. Tag no longer downloads or needs the client on any
+  platform, which also lets Windows finish setup; the separate check for it is
+  gone from setup. Nothing changes for existing installations: their indexed
+  memory and connectors stay as they are.
 
 - Tag.app for macOS, Windows, and Linux, built with Tauri
   (`desktop/`). It installs Tag with the installer bundled in the app,

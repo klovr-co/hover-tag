@@ -1386,11 +1386,6 @@ def check_prerequisites(backend: str) -> bool:
             ok = False
     else:
         ui.message("✓ mfs-server: MFS memory server")
-    if lifecycle.mfs_client_executable() is None:
-        ui.message("✗ mfs: MFS client (reinstall or upgrade Tag)")
-        ok = False
-    else:
-        ui.message("✓ mfs: MFS client")
     return ok
 
 
@@ -1472,10 +1467,6 @@ def guided_setup(
     backend = values["OPENTAG_BACKEND"]
     if not selected_backend_available(backend):
         return 1
-    if lifecycle.mfs_client_executable() is None:
-        ui.message("The MFS client is missing. Reinstall or upgrade Tag, then resume setup.")
-        return 1
-
     needs_slack_connection = any(
         settings.validation_error(key, values.get(key, ""))
         for key in ("SLACK_APP_TOKEN", "SLACK_BOT_TOKEN")
@@ -1719,9 +1710,6 @@ def guided_setup(
 def finish_setup(_config_path: Path, values: dict[str, str], _channels: list[slack_channels.SlackChannel]) -> int:
     """Finish configuration without starting services or indexing history."""
     ui.message("✓ Slack memory configured")
-    if lifecycle.mfs_client_executable() is None:
-        raise RuntimeError("The bundled MFS client is missing; reinstall or upgrade Tag before starting")
-    ui.message("✓ MFS client ready")
     backend = values["OPENTAG_BACKEND"]
     while not selected_backend_available(backend):
         if ui.choose("Agent needs installation", ["Check again", "Save and exit"], qid="agent_install") == 1:

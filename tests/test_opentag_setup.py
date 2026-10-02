@@ -35,15 +35,13 @@ class OpenTagSetupTests(unittest.TestCase):
         with patch.dict(os.environ, {"TAG_ID": "personal"}), patch.object(
             opentag_setup, "selected_backend_available", return_value=True
         ), patch.object(
-            opentag_setup.lifecycle, "mfs_client_executable", return_value="/runtime/bin/mfs"
-        ), patch.object(
             opentag_setup.subprocess, "run", return_value=started
         ) as run, redirect_stdout(StringIO()) as output:
             result = opentag_setup.finish_setup(Path("settings.json"), values, [channel])
 
         self.assertEqual(result, 0)
         run.assert_not_called()
-        self.assertIn("MFS client ready", output.getvalue())
+        self.assertNotIn("MFS client", output.getvalue())  # memory needs only the MFS server
         self.assertIn("Next step · start Tag", output.getvalue())
         self.assertIn("tag personal start", output.getvalue())
         self.assertIn("Tag is still stopped. Run this command", output.getvalue())
@@ -52,7 +50,6 @@ class OpenTagSetupTests(unittest.TestCase):
 
     def test_codex_compatibility_failure_does_not_attempt_login_or_install(self):
         with patch.object(opentag_setup, "selected_backend_available", return_value=True), patch.object(
-                opentag_setup.lifecycle, "mfs_client_executable", return_value="/runtime/bin/mfs"), patch.object(
                 opentag_setup.shutil, "which", return_value="/user/codex"), patch.object(
                 opentag_setup.subprocess, "run", return_value=subprocess.CompletedProcess([], 1)) as run, redirect_stdout(StringIO()) as output:
             result = opentag_setup.finish_setup(Path("settings.json"), {"OPENTAG_BACKEND": "codex"}, [])

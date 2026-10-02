@@ -629,13 +629,6 @@ def mfs_server_executable() -> str | None:
     return str(bundled) if bundled.is_file() else shutil.which(name)
 
 
-def mfs_client_executable() -> str | None:
-    """Prefer Tag's bundled MFS client, but support an independent install."""
-    name = "mfs.exe" if os.name == "nt" else "mfs"
-    bundled = Path(sys.executable).parent / name
-    return str(bundled) if bundled.is_file() else shutil.which(name)
-
-
 def instance_environment(
     context: tag_instances.InstanceContext,
     values: dict[str, str] | None = None,
@@ -876,48 +869,49 @@ def selected_target(home: Path, tag_id: str | None = None, *, suffix: str = "") 
     )
 
 
+def load_connector_config(path: Path) -> dict[str, object]:
+    """A connector's TOML configuration, as the JSON object MFS expects."""
+    try:
+        import tomllib
+    except ImportError:
+        import tomli as tomllib
+    with path.open("rb") as handle:
+        return tomllib.load(handle)
+
+
 def sync_configured_slack_memory(environment: dict[str, str] | None = None) -> None:
-    """Register and incrementally sync the connector approved during setup."""
+    """Register and incrementally sync the connector approved during setup.
+
+    Talks to the MFS server's HTTP API directly (POST /v1/add), as the `mfs`
+    client did, so no separate client program is needed on any platform.
+    """
     source = environment if environment is not None else os.environ
     uri = source.get("MFS_SLACK_CONNECTOR_URI", "").strip()
     config = Path(source.get("MFS_SLACK_CONNECTOR_CONFIG", "")).expanduser()
     if not uri or not config.is_file():
         return
-    executable = mfs_client_executable()
-    if not executable:
-        raise RuntimeError("MFS client is unavailable; install it before indexing Slack history")
-    completed = subprocess.run(
-        [executable, "add", uri, "--config", str(config), "--yes"],
-        check=False,
-        text=True,
-        capture_output=True,
-        env=environment,
-        timeout=120,
-    )
-    if completed.returncode:
-        detail = completed.stdout + completed.stderr
+    settings = load_connector_config(config)
+    try:
+        mfs_post_json("/v1/add", {"target": uri, "config": settings, "full": False, "process": False}, source)
+        return
+    except MfsRequestError as error:
+        failure = error
+    if failure.code == "connector_already_registered":
         # The managed connector survives MFS restarts. Re-adding it reports a
         # conflict, so update that same registered connector instead of
         # pretending that its old configuration describes new channel consent.
-        if "connector_already_registered" in detail or "connector already registered" in detail.lower():
-            completed = subprocess.run(
-                [executable, "connector", "update", uri, "--config", str(config)],
-                check=False,
-                text=True,
-                capture_output=True,
-                env=environment,
-                timeout=120,
-            )
-            if not completed.returncode:
-                return
-            detail = completed.stdout + completed.stderr
-        if "sync_already_running" in detail:
+        try:
+            mfs_post_json("/v1/add", {"target": uri, "update": True, "config": settings}, source)
             return
-        if "environment variable MFS_SLACK_TOKEN is not set" in detail:
-            raise MfsHistoryCredentialUnavailable(MFS_HISTORY_CREDENTIAL_MESSAGE)
-        if "no plugin for slack" in detail.lower():
-            raise MfsSlackConnectorUnavailable(MFS_SLACK_CONNECTOR_MESSAGE)
-        raise RuntimeError("Slack history indexing could not start; run tag logs and mfs status")
+        except MfsRequestError as error:
+            failure = error
+    if failure.code == "sync_already_running":
+        return
+    if "environment variable MFS_SLACK_TOKEN is not set" in failure.detail:
+        raise MfsHistoryCredentialUnavailable(MFS_HISTORY_CREDENTIAL_MESSAGE)
+    if "no plugin for slack" in failure.detail.lower():
+        raise MfsSlackConnectorUnavailable(MFS_SLACK_CONNECTOR_MESSAGE)
+    raise RuntimeError(f"Slack history indexing could not start ({failure.detail}); run tag logs and tag memory")
 
 
 def reconcile_invitation_memory(home: Path) -> None:
@@ -982,9 +976,9 @@ def doctor_report(offline: bool) -> tuple[int, dict[str, object]]:
     return completed.returncode, report
 
 
-def authenticated_mfs_url() -> str:
+def authenticated_mfs_url(raw: str | None = None) -> str:
     """Return an MFS base URL that is safe to receive a bearer token."""
-    raw = os.getenv("MFS_URL", "http://127.0.0.1:13619").rstrip("/")
+    raw = (raw or os.getenv("MFS_URL") or "http://127.0.0.1:13619").rstrip("/")
     try:
         parsed = urllib.parse.urlsplit(raw)
         host = parsed.hostname
@@ -1030,15 +1024,61 @@ class RejectMfsRedirects(urllib.request.HTTPRedirectHandler):
         )
 
 
+def mfs_token(source: dict[str, str] | os._Environ | None = None) -> str | None:
+    """MFS_TOKEN, else the token a local mfs-server wrote under MFS_HOME (default ~/.mfs)."""
+    source = os.environ if source is None else source
+    token = source.get("MFS_TOKEN", "").strip()
+    if token:
+        return token
+    home = Path(source.get("MFS_HOME") or Path.home() / ".mfs").expanduser()
+    try:
+        return (home / "server.token").read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
+
+
+class MfsRequestError(RuntimeError):
+    """MFS answered with its {code, detail} error envelope."""
+
+    def __init__(self, status: int, code: str, detail: str):
+        super().__init__(f"MFS error {status} {code}: {detail}")
+        self.status, self.code, self.detail = status, code, detail
+
+
+def mfs_post_json(path: str, body: dict[str, object], environment: dict[str, str] | None = None,
+                  *, timeout: float = 120) -> dict[str, object]:
+    """POST to an authenticated MFS endpoint, under the same rules as mfs_request_json."""
+    source = os.environ if environment is None else environment
+    base = authenticated_mfs_url(source.get("MFS_URL"))
+    headers = {"Content-Type": "application/json"}
+    token = mfs_token(source)
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    data = json.dumps(body, default=str).encode("utf-8")
+    request = urllib.request.Request(f"{base}{path}", data=data, headers=headers, method="POST")
+    opener = urllib.request.build_opener(RejectMfsRedirects())
+    try:
+        with opener.open(request, timeout=timeout) as response:  # noqa: S310
+            payload = json.loads(response.read().decode("utf-8") or "{}")
+    except urllib.error.HTTPError as error:
+        try:
+            envelope = json.loads(error.read().decode("utf-8"))
+        except (OSError, ValueError):
+            envelope = {}
+        envelope = envelope if isinstance(envelope, dict) else {}
+        raise MfsRequestError(error.code, str(envelope.get("code") or "error"),
+                              str(envelope.get("detail") or error.reason)) from None
+    except (OSError, ValueError, urllib.error.URLError) as error:
+        raise RuntimeError(f"Memory isn't reachable at {base}; run tag memory status") from error
+    return payload if isinstance(payload, dict) else {}
+
+
 def mfs_request_json(path: str, parameters: dict[str, str]) -> dict[str, object] | None:
     """Call an authenticated MFS endpoint after enforcing its transport boundary."""
     base = authenticated_mfs_url()
-    token = os.getenv("MFS_TOKEN", "").strip()
+    token = mfs_token()
     if not token:
-        try:
-            token = (Path.home() / ".mfs/server.token").read_text(encoding="utf-8").strip()
-        except OSError:
-            return None
+        return None
     query = urllib.parse.urlencode(parameters)
     request = urllib.request.Request(
         f"{base}{path}?{query}", headers={"Authorization": f"Bearer {token}"}
@@ -2426,7 +2466,7 @@ def _run_cli() -> int:
                 raise RuntimeError(
                     "MFS scope did not become readable after indexing: "
                     + unavailable_scopes[0]
-                    + ". Run mfs status and tag doctor, then retry tag start."
+                    + ". Run tag memory and tag doctor, then retry tag start."
                 )
             display.info_row("Channel memory", "Ready", good=True)
             preflight_result, preflight = doctor_report(False)
