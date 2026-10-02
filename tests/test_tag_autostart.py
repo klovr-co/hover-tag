@@ -130,6 +130,7 @@ class ServiceDefinitionTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
+    @unittest.skipIf(os.name == "nt", "launchd and the POSIX launcher exist only on macOS and Linux")
     def test_managed_install_uses_the_upgrade_stable_command(self) -> None:
         bin_dir = Path(self.temporary.name) / "bin"
         bin_dir.mkdir()
@@ -140,9 +141,22 @@ class ServiceDefinitionTests(unittest.TestCase):
             command = autostart.service_command(self.root, Path("/src"))
         self.assertEqual(command, ["/bin/sh", str(bin_dir / "tag"), "autostart", "run"])
 
+    @unittest.skipUnless(os.name == "nt", "the Windows Run-key command; CI runs it on Windows")
+    def test_windows_runs_the_launcher_without_a_console(self) -> None:
+        (self.root / "bin/tag-launch.py").write_text("")
+        (self.root / "current.json").write_text(json.dumps({"bin_dir": str(self.root / "bin"), "release": "r1"}))
+        python = Path(self.temporary.name) / "python" / "python.exe"
+        python.parent.mkdir()
+        python.write_text("")
+        python.with_name("pythonw.exe").write_text("")
+        with patch.object(autostart.sys, "_base_executable", str(python), create=True):
+            command = autostart.service_command(self.root, Path("/src"))
+        self.assertEqual(command, [str(python.with_name("pythonw.exe")), str(self.root / "bin/tag-launch.py"),
+                                   "autostart", "run"])
+
     def test_source_checkout_runs_its_own_cli(self) -> None:
         command = autostart.service_command(self.root, Path("/src"))
-        self.assertEqual(command[1:], ["/src/scripts/tag_cli.py", "autostart", "run"])
+        self.assertEqual(command[1:], [str(Path("/src/scripts/tag_cli.py")), "autostart", "run"])
 
     def test_launchd_agent_restarts_and_runs_at_login(self) -> None:
         text = autostart.launchd_plist(["/bin/sh", "/a b/tag", "autostart", "run"], self.root, self.root / "log")
@@ -176,6 +190,7 @@ class ServiceDefinitionTests(unittest.TestCase):
         with patch("scripts.tag_paths.platform_tag_home", return_value=self.root):
             self.assertEqual(autostart.label(self.root), autostart.LABEL)
 
+    @unittest.skipIf(os.name == "nt", "launchd and the POSIX launcher exist only on macOS and Linux")
     def test_enable_writes_and_loads_the_launch_agent(self) -> None:
         home = Path(self.temporary.name) / "user"
         calls = []
@@ -193,6 +208,7 @@ class ServiceDefinitionTests(unittest.TestCase):
             result = autostart.disable(self.root)
         self.assertFalse(result["enabled"])
 
+    @unittest.skipIf(os.name == "nt", "launchd and the POSIX launcher exist only on macOS and Linux")
     def test_failed_registration_is_reported(self) -> None:
         home = Path(self.temporary.name) / "user"
         with patch.object(autostart, "mechanism", return_value="launchd"), \
@@ -203,6 +219,7 @@ class ServiceDefinitionTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "Bootstrap failed"):
                 autostart.enable(self.root, Path("/src"))
 
+    @unittest.skipIf(os.name == "nt", "launchd and the POSIX launcher exist only on macOS and Linux")
     def test_bootstrap_waits_for_the_old_job_and_retries(self) -> None:
         home = Path(self.temporary.name) / "user"
         results = iter([Mock(returncode=0),  # bootout

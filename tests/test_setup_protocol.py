@@ -196,7 +196,7 @@ class QuestionIdTests(unittest.TestCase):
         missing = []
         for module in self.SETUP_MODULES:
             path = Path(__file__).resolve().parents[1] / "scripts" / f"{module}.py"
-            tree = ast.parse(path.read_text())
+            tree = ast.parse(path.read_text(encoding="utf-8"))
             for function in ast.walk(tree):
                 if not isinstance(function, ast.FunctionDef) or function.name in wrappers:
                     continue
