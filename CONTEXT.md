@@ -35,3 +35,4 @@ compatibility; they do not define a separate product name.
 - [Multiple Tags](docs/adr/0005-multiple-tag-instances.md)
 - [User-owned workspaces](docs/adr/0006-user-owned-workspaces.md)
 - [Self-contained Tag folders](docs/adr/0007-self-contained-tag-folders.md)
+- [Login supervisor](docs/adr/0008-login-supervisor.md)

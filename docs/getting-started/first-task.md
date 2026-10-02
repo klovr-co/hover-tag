@@ -43,7 +43,7 @@ Reply **Use these defaults** or list all changes in one message. After you
 approve the plan, Codex helps with missing prerequisites and installs Tag if
 needed.
 
-Use your own Slack account as the owner. Review the channel list, history
+Tag makes the Slack account you sign in with its owner. Review the channel list, history
 window, and invitation policy before finishing. New setups include channels
 the app has already joined; later invitations also make channels eligible for
 replies and history indexing.
@@ -53,9 +53,7 @@ one-time connection in the conversation. In the Slack workspace you want to
 connect, paste it into the message box of **any channel or DM** and send it; it
 does not need to be a Tag channel. Choose **Confirm**, then return the short code
 from the next Slack window in one reply. These values are single-use and
-short-lived. If you prefer to keep them out of chat, choose the private clipboard
-handoff in the initial setup proposal and follow the same Slack steps, then reply
-**copied**. Codex completes setup and reports service readiness separately from
+short-lived. Codex completes setup and reports service readiness separately from
 the first verified Slack reply. Slack's illustrated
 [authorization guide](https://docs.slack.dev/tools/slack-cli/guides/authorizing-the-slack-cli/)
 shows where the command and short code appear. Once Tag is connected, continue to
@@ -98,12 +96,12 @@ Follow the prompts to:
 2. Create a new Slack app for your Tag, or link an existing app you manage.
    Setup attempts to connect credentials automatically; hidden token entry is
    a recovery option.
-3. Select your own Slack account as the owner and choose channels.
+3. Choose channels. Tag makes your signed-in Slack account its owner.
    Private channels need an invitation before they appear.
 4. Review the channels, history window, and invitation policy. New setups
    include channels the app has already joined; later invitations also make
    channels eligible for replies and history indexing.
-5. Finish setup to save the approved configuration and verify the MFS client.
+5. Finish setup to save the approved configuration.
 
 Setup saves completed answers. If you pause or encounter an error, run
 `tag setup` again to resume.
@@ -125,7 +123,7 @@ you don't need to repeat setup.
 Setup does not start services or index history. After `tag start` completes,
 you can check the connection anytime with `tag status`.
 
-On the first successful start, if **Who can use Tag?** has exactly one configured
+On the first successful start, if the Tag has exactly one owner
 account, Tag sends that account a welcome DM with a first-task suggestion and a
 [Hover Community help link](https://join.slack.com/t/hover-community/shared_invite/zt-4aghkshid-n7fRukS7_J5sR2jDLBXK9A).
 When sent, the welcome confirms the connection; try a task to verify your

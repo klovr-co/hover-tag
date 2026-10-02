@@ -24,7 +24,7 @@ RESERVED_NAMES = frozenset({
     "add", "list", "memory", "settings", "inspect", "config", "setup",
     "reset", "migrate", "upgrade", "rollback", "version", "paths",
     "doctor", "start", "stop", "restart", "status", "logs", "dev",
-    "telemetry",
+    "telemetry", "rename", "autostart",
 })
 
 
@@ -46,12 +46,24 @@ class InstanceContext:
     def workspace(self) -> Path:
         return workspace_home(self.home, self.installation_root, self.tag_id)
 
+    @property
+    def is_main(self) -> bool:
+        """Whether plain ``tag ACTION`` (no name) selects this Tag.
+
+        A saved main Tag that still exists wins; ``default`` is main only otherwise,
+        so exactly one Tag is ever reported as main.
+        """
+        saved = main_tag(self.installation_root)
+        if saved and saved != self.tag_id and instance_path(self.installation_root, saved).exists():
+            return False
+        return self.is_default or saved == self.tag_id
+
     def command(self, action: str) -> str:
-        target = "" if self.is_default else f"{self.tag_id} "
+        target = "" if self.is_main else f"{self.tag_id} "
         return f"tag {target}{action}"
 
     def command_arguments(self, action: str) -> list[str]:
-        return [action] if self.is_default else [self.tag_id, action]
+        return [action] if self.is_main else [self.tag_id, action]
 
 
 def validate_name(name: str, *, allow_default: bool = True) -> str:
@@ -64,6 +76,144 @@ def validate_name(name: str, *, allow_default: bool = True) -> str:
     if name in RESERVED_NAMES:
         raise ValueError(f"The alias '{name}' is reserved for a Tag command")
     return name
+
+
+def _main_record(installation_root: Path) -> Path:
+    return installation_root.expanduser().absolute() / "state/main-tag.json"
+
+
+def main_tag(installation_root: Path) -> str | None:
+    """Return the saved main Tag, if it still names a valid alias."""
+    try:
+        record = json.loads(_main_record(installation_root).read_text(encoding="utf-8"))
+        name = record.get("id") if isinstance(record, dict) else None
+        return validate_name(name) if isinstance(name, str) else None
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def set_main_tag(installation_root: Path, tag_id: str) -> None:
+    validate_name(tag_id)
+    path = _main_record(installation_root)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    descriptor, temporary = tempfile.mkstemp(prefix=".main-tag-", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump({"schema_version": SCHEMA_VERSION, "id": tag_id}, handle)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def select_unnamed(installation_root: Path) -> str:
+    """Choose the Tag for commands given without a name.
+
+    Prefers the saved main Tag, then a not-yet-renamed built-in Tag, then the
+    only Tag. Falls back to the built-in name, which first-run setup creates.
+    """
+    main = main_tag(installation_root)
+    # Discovery always lists the built-in Tag; only count Tags that exist.
+    valid = [str(item["id"]) for item in discover(installation_root)
+             if item["valid"] and Path(str(item["home"])).exists()]
+    if main and main in valid:
+        return main
+    if DEFAULT_TAG in valid or len(valid) != 1:
+        return DEFAULT_TAG
+    return valid[0]
+
+
+def workspace_name(home: Path) -> str | None:
+    try:
+        record = json.loads((home / "instance.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    name = record.get("workspace_name") if isinstance(record, dict) else None
+    return name if isinstance(name, str) and name.strip() else None
+
+
+def record_workspace_name(home: Path, name: str) -> None:
+    """Remember the Slack workspace's display name beside the instance id."""
+    path = home / "instance.json"
+    record = json.loads(path.read_text(encoding="utf-8"))
+    if record.get("workspace_name") == name:
+        return
+    record["workspace_name"] = name
+    descriptor, temporary = tempfile.mkstemp(prefix=".instance-", dir=home)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(record, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def slugify(text: str) -> str:
+    """Command-safe form of a display name: "Maya's Tag" -> "mayas-tag"."""
+    ascii_text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
+    ascii_text = re.sub(r"['’]", "", ascii_text.lower())
+    return re.sub(r"[^a-z0-9]+", "-", ascii_text).strip("-")[:32].rstrip("-")
+
+
+def _record(home: Path) -> dict:
+    try:
+        record = json.loads((home / "instance.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return record if isinstance(record, dict) else {}
+
+
+def nickname(home: Path) -> str | None:
+    value = _record(home).get("nickname")
+    return value if isinstance(value, str) and NAME_PATTERN.fullmatch(value) else None
+
+
+def _existing(installation_root: Path) -> list[InstanceContext]:
+    contexts = []
+    for item in discover(installation_root):
+        if item["valid"] and Path(str(item["home"])).exists():
+            contexts.append(resolve(installation_root, str(item["id"])))
+    return contexts
+
+
+def resolve_reference(installation_root: Path, reference: str) -> str:
+    """Accept a Tag's ID or its nickname; IDs win, so a nickname never shadows one."""
+    contexts = _existing(installation_root)
+    if any(context.tag_id == reference for context in contexts):
+        return reference
+    for context in contexts:
+        if nickname(context.home) == reference:
+            return context.tag_id
+    return reference
+
+
+def set_nickname(installation_root: Path, tag_id: str, value: str) -> None:
+    validate_name(value, allow_default=False)
+    for context in _existing(installation_root):
+        if context.tag_id != tag_id and value in {context.tag_id, nickname(context.home)}:
+            raise ValueError(f"Another Tag already uses '{value}'; choose a different nickname with --nickname")
+    home = resolve(installation_root, tag_id).home
+    record = _record(home)
+    if record.get("nickname") == value:
+        return
+    record["nickname"] = value
+    descriptor, temporary = tempfile.mkstemp(prefix=".instance-", dir=home)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(record, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, home / "instance.json")
+    finally:
+        Path(temporary).unlink(missing_ok=True)
 
 
 def suggest_name(installation_root: Path, workspace_name: str) -> str:
@@ -141,12 +291,15 @@ def ensure_default(installation_root: Path) -> InstanceContext:
     return _create(root, DEFAULT_TAG)
 
 
-def _write_metadata(path: Path, tag_id: str) -> None:
+def _write_metadata(path: Path, tag_id: str, *, provisional: bool = False) -> None:
     metadata = {
         "schema_version": SCHEMA_VERSION,
         "id": tag_id,
         "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     }
+    if provisional:
+        # Renamed after its Slack name once setup chooses one (tag_rename).
+        metadata["provisional"] = True
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
         json.dump(metadata, handle, indent=2, sort_keys=True)
@@ -155,12 +308,12 @@ def _write_metadata(path: Path, tag_id: str) -> None:
         os.fsync(handle.fileno())
 
 
-def create(installation_root: Path, tag_id: str) -> InstanceContext:
+def create(installation_root: Path, tag_id: str, *, provisional: bool = False) -> InstanceContext:
     validate_name(tag_id, allow_default=False)
-    return _create(installation_root, tag_id)
+    return _create(installation_root, tag_id, provisional=provisional)
 
 
-def _create(installation_root: Path, tag_id: str) -> InstanceContext:
+def _create(installation_root: Path, tag_id: str, *, provisional: bool = False) -> InstanceContext:
     validate_name(tag_id)
     root = installation_root.expanduser().absolute()
     destination = instance_path(root, tag_id)
@@ -172,7 +325,7 @@ def _create(installation_root: Path, tag_id: str) -> InstanceContext:
     try:
         initialize_instance(staging)
         path = staging / "instance.json"
-        _write_metadata(path, tag_id)
+        _write_metadata(path, tag_id, provisional=provisional)
         try:
             os.rename(staging, destination)
         except FileExistsError:

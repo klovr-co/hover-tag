@@ -73,6 +73,143 @@ jobs:
             echo "docs_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
             echo "docs_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           fi
+  desktop:
+    # Tag.app for each platform, attached to the same release. Its checksums
+    # live in DESKTOP-SHA256SUMS so the CLI release contract is unchanged.
+    needs: package
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            name: macos
+          - os: windows-latest
+            name: windows
+          - os: ubuntu-22.04
+            name: linux
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.release.tag_name }}
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+      # Runners ship rustup; only org-approved actions are allowed here.
+      - name: Prepare Rust
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal && rustup default stable
+          if [ "${{ matrix.name }}" = macos ]; then rustup target add aarch64-apple-darwin x86_64-apple-darwin; fi
+      - name: Install Linux build libraries
+        if: matrix.name == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - name: Build Tag.app
+        working-directory: desktop
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          # Signing and notarization happen only when these secrets are configured.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Signs the update bundles Tag.app installs itself (see scripts/desktop_update_manifest.py).
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          npm ci
+          npm version --no-git-tag-version --allow-same-version "${RELEASE_TAG#v}"
+          # Signed update bundles need the updater key; without it, ship unsigned downloads only.
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            updates='{"bundle":{"createUpdaterArtifacts":true}}'
+          else
+            echo "::warning::TAURI_SIGNING_PRIVATE_KEY is not set; Tag.app will not offer this update in place."
+            updates='{}'
+          fi
+          if [ "${{ matrix.name }}" = macos ]; then
+            npx tauri build --target universal-apple-darwin --bundles app,dmg --config "$updates"
+          else
+            npx tauri build --config "$updates"
+          fi
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version=${RELEASE_TAG#v}
+          mkdir -p out
+          bundle=desktop/src-tauri/target
+          case "${{ matrix.name }}" in
+            macos)
+              mac="$bundle"/universal-apple-darwin/release/bundle
+              cp "$mac"/dmg/*.dmg "out/Tag-$version-macos.dmg"
+              if ls "$mac"/macos/*.app.tar.gz.sig >/dev/null 2>&1; then
+                cp "$mac"/macos/*.app.tar.gz "out/Tag-$version-macos.app.tar.gz"
+                cp "$mac"/macos/*.app.tar.gz.sig "out/Tag-$version-macos.app.tar.gz.sig"
+              fi ;;
+            windows)
+              cp "$bundle"/release/bundle/nsis/*-setup.exe "out/Tag-$version-windows-setup.exe"
+              if ls "$bundle"/release/bundle/nsis/*-setup.exe.sig >/dev/null 2>&1; then
+                cp "$bundle"/release/bundle/nsis/*-setup.exe.sig "out/Tag-$version-windows-setup.exe.sig"
+              fi ;;
+            linux)
+              cp "$bundle"/release/bundle/deb/*.deb "out/Tag-$version-linux-amd64.deb"
+              cp "$bundle"/release/bundle/appimage/*.AppImage "out/Tag-$version-linux-x86_64.AppImage"
+              if ls "$bundle"/release/bundle/appimage/*.AppImage.sig >/dev/null 2>&1; then
+                cp "$bundle"/release/bundle/appimage/*.AppImage.sig "out/Tag-$version-linux-x86_64.AppImage.sig"
+              fi ;;
+          esac
+          cd out
+          if command -v sha256sum >/dev/null; then sum="sha256sum"; else sum="shasum -a 256"; fi
+          $sum * > "DESKTOP-SHA256SUMS-${{ matrix.name }}"
+          gh release upload "$RELEASE_TAG" * --clobber
+  desktop-updates:
+    # Point each release line's Tag.app at this release once its builds are attached.
+    needs: desktop
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: tag-channel-index
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - name: Publish Tag.app update manifests
+        run: |
+          mkdir -p signatures current manifests
+          if ! gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | grep -q '^Tag-.*\.sig$'; then
+            echo "No signed Tag.app updates in this release; channel manifests are unchanged."
+            exit 0
+          fi
+          gh release download "$RELEASE_TAG" --dir signatures --pattern 'Tag-*.sig'
+          # Only a missing manifest may be skipped; any other failure must stop
+          # publication, or an older release could overwrite a newer manifest.
+          existing=$(gh release view channels --json assets --jq '.assets[].name | select(startswith("tag-app-"))')
+          if [ -n "$existing" ]; then
+            gh release download channels --dir current --pattern 'tag-app-*.json'
+          fi
+          python scripts/desktop_update_manifest.py --version "$RELEASE_TAG" \
+            --signatures signatures --current current --output manifests \
+            --notes "See https://github.com/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG"
+          if ls manifests/*.json >/dev/null 2>&1; then
+            gh release upload channels manifests/*.json --clobber
+          fi
   notify-site-docs:
     needs: package
     if: needs.package.outputs.docs_tag != ''

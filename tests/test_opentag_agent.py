@@ -171,18 +171,19 @@ class BackendStreamEventTests(unittest.TestCase):
 
     def test_watchdog_resets_idle_deadline_but_not_maximum_runtime(self) -> None:
         stopped = threading.Event()
+        # Proportions matter, not absolute times; generous margins keep slow CI runners honest.
         watchdog = opentag_agent.BackendWatchdog(
-            idle_timeout=0.08,
-            max_timeout=0.18,
+            idle_timeout=0.8,
+            max_timeout=1.8,
             stop=stopped.set,
         )
         watchdog.start()
         try:
-            self.assertFalse(stopped.wait(0.05))
+            self.assertFalse(stopped.wait(0.5))
             watchdog.touch()
-            self.assertFalse(stopped.wait(0.05))
+            self.assertFalse(stopped.wait(0.5))
             watchdog.touch()
-            self.assertTrue(stopped.wait(0.12))
+            self.assertTrue(stopped.wait(1.2))
             self.assertEqual("maximum", watchdog.reason)
         finally:
             watchdog.close()

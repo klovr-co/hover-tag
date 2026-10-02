@@ -49,9 +49,34 @@ class ReleaseHelperTests(unittest.TestCase):
         self.assertIn("[switch]$DependenciesOnly", script)
         self.assertIn(".venv'", script)
         self.assertIn("Scripts/python.exe", script)
-        self.assertIn("& python -m venv $runtime", script)
-        self.assertIn("-m pip install -r", script)
+        self.assertIn("Invoke-Native { & $uv venv --python $python $venv }", script)
+        self.assertIn("Invoke-Native { & $uv pip install --python $runtimePython -r", script)
         self.assertIn("requirements-runtime.txt", script)
+
+    def test_windows_bootstrap_needs_no_system_python(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        script = (root / "install.ps1").read_text(encoding="utf-8")
+        shell = (root / "install.sh").read_text(encoding="utf-8")
+        self.assertNotIn("Get-Command python", script)
+        # Same pinned uv and Python as install.sh, verified before use.
+        for pin in ("0.12.19", "3.12.14"):
+            self.assertIn(pin, script)
+            self.assertIn(pin, shell)
+        self.assertIn("Get-FileHash -Algorithm SHA256", script)
+        self.assertIn("[switch]$RuntimeInfo", script)
+        # Run from pwsh (as CI and many users do), Windows PowerShell must not
+        # inherit PowerShell 7's module path, or Get-FileHash can't load.
+        reset = script.index("$env:PSModulePath")
+        self.assertLess(reset, script.index("Get-FileHash -Algorithm"))
+        self.assertIn("$PSVersionTable.PSEdition -ne 'Core'", script)
+        self.assertIn("Write-TagProgress 'tools'", script)
+        self.assertIn("Write-TagProgress 'python'", script)
+        # Windows PowerShell 5.1 under 'Stop' fails on any native stderr; every
+        # Python and uv call must go through Invoke-Native.
+        import re
+        for line in script.splitlines():
+            if re.search(r"^\s*& \$(python|uv|runtimePython)\b", line):
+                self.fail("native call outside Invoke-Native: " + line.strip())
 
     def test_installer_output_supports_legacy_console_encodings(self) -> None:
         root = Path(__file__).resolve().parents[1]

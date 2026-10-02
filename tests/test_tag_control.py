@@ -86,13 +86,6 @@ class TagControlTests(unittest.TestCase):
         self.environment = patch.dict(os.environ, environment, clear=True)
         self.environment.start()
         self.addCleanup(self.environment.stop)
-        self.mfs_client = patch.object(
-            opentag_setup.lifecycle,
-            "mfs_client_executable",
-            return_value="/runtime/bin/mfs",
-        )
-        self.mfs_client.start()
-        self.addCleanup(self.mfs_client.stop)
         welcome = patch.object(tag_cli.tag_welcome, "send_once", return_value=None)
         self.welcome = welcome.start()
         self.addCleanup(welcome.stop)
@@ -368,7 +361,10 @@ class TagControlTests(unittest.TestCase):
                 old_settings.pop("OPENTAG_FILE_DELIVERY", None)
                 tag_config.save_config(self.path, old_settings)
                 (self.home / "state/migrations/file-delivery-v1.json").unlink(missing_ok=True)
+                # Renaming is covered by test_tag_rename; keep this home fixed.
                 with patch.object(sys, "argv", ["tag", "start"]), patch.object(
+                    tag_cli, "_rename", return_value=None
+                ), patch.object(
                     tag_cli, "missing_runtime_dependencies", return_value=()
                 ), patch.object(slack_manifest_migrations, "reconcile", side_effect=refresh_credentials
                 ), patch.object(tag_cli, "healthy", return_value=True

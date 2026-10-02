@@ -78,7 +78,11 @@ class FlowTests(unittest.TestCase):
         ), patch.object(tag_cli, "development_loop", return_value=0) as development:
             code, _ = self.invoke(["dev"])
         self.assertEqual(code, 0)
-        development.assert_called_once_with(self.home)
+        # Starting a configured built-in Tag first names it after its Slack IDs.
+        renamed = self.root / "instances/told-aold"
+        development.assert_called_once_with(renamed)
+        self.assertFalse(self.home.exists())
+        self.assertEqual(tag_instances.main_tag(self.root), "told-aold")
         self.assertEqual(os.environ["OPENTAG_BACKEND"], "codex")
 
     def test_development_loop_owns_and_cleans_up_slack_bridge(self):

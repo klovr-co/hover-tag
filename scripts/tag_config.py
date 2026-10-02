@@ -42,7 +42,7 @@ LABELS = {
     "OPENTAG_BACKEND": "Agent", "OPENTAG_BOT_NAME": "Bot name",
     "OPENTAG_CODEX_TRANSPORT": "Codex transport (exec or app-server)",
     "SLACK_APP_TOKEN": "Slack app token", "SLACK_BOT_TOKEN": "Slack bot token",
-    "SLACK_ALLOWED_USER_IDS": "Who can use Tag", "SLACK_CHANNEL_ID": "Legacy channel restriction",
+    "SLACK_ALLOWED_USER_IDS": "Owners", "SLACK_CHANNEL_ID": "Legacy channel restriction",
     "SLACK_CHANNEL_IDS": "Selected channels", "SLACK_TEAM_ID": "Slack workspace",
     "SLACK_CHANNEL_POLICY": "Channel policy (selected or invited)",
     "SLACK_ENTERPRISE_ID": "Slack organization authorization",

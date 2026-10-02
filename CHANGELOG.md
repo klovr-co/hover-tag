@@ -6,6 +6,65 @@ All notable changes to Tag are documented here.
 
 ### Added
 
+- Install on Windows without Python. `install.ps1` now prepares Tag's own
+  pinned Python with a checksum-verified uv, like `install.sh`, and installs
+  the Slack CLI for Windows. Existing Windows installations move to the private
+  Python automatically on the next `tag start`; the system Python is no longer
+  used.
+
+- Index Slack history through the MFS server's HTTP API instead of the `mfs`
+  command-line client. Tag no longer downloads or needs the client on any
+  platform, which also lets Windows finish setup; the separate check for it is
+  gone from setup. Nothing changes for existing installations: their indexed
+  memory and connectors stay as they are.
+
+- Tag.app for macOS, Windows, and Linux, built with Tauri
+  (`desktop/`). It installs Tag with the installer bundled in the app,
+  showing structured progress, then lists, starts, renames, and adds Tags,
+  shows each Tag's logs, upgrades Tag, and stays in the menu bar or system
+  tray. Settings turn on **Open Tag at login** and **Keep Tags running**, and
+  Tag.app notifies you when a Tag goes offline unexpectedly. It updates itself
+  from signed releases on its own release line, when you choose **Restart to
+  update**.
+
+- Keep Tags running after login with `tag autostart on`. Tag remembers which
+  Tags you started or stopped, and a per-user login service (launchd on macOS,
+  systemd or XDG autostart on Linux, the Run key on Windows) starts them and
+  restarts any that stop. `tag list --json` reports `keep_running`.
+
+- Document the contract between the CLI and desktop apps
+  (`docs/reference/app-protocol.md`). `tag version --json` reports the app
+  protocol and capabilities, `tag NAME logs --json` returns recent service
+  output, and `TAG_INSTALL_PROGRESS=jsonl` makes the installer report each
+  step as structured progress.
+
+- Choose who can use Tag from a searchable Slack people list during setup.
+  Tag.app shows names, usernames, and profile photos; the CLI offers the same
+  search with text labels. Manual member-ID entry remains available.
+
+- Name every Tag after its Slack team and app IDs, for example
+  `~/Tag/t0abc123-a0xyz789`, so several Tags can share a workspace or a Slack
+  name without collisions. `tag add` no longer asks for an alias. Commands
+  without a name use the main Tag. Existing installations rename their
+  `default` Tag automatically on the next `tag start` or `tag setup`;
+  `tag default …` keeps working.
+
+- Rename a Tag in Slack with `tag NAME rename "New name"`, which also gives it a
+  nickname for commands. Start, stop, or restart every Tag in a Slack workspace
+  with `--workspace`, and see Tags grouped by workspace in `tag list`.
+
+- Go back to the previous setup question in Tag.app or with
+  `tag setup --step --back`, with the earlier answer selected. Back stops at
+  steps that already changed something in Slack.
+
+- Let apps drive guided setup without a terminal. `tag setup --json` and
+  `tag add --json` ask the same questions as JSON lines, including a Slack
+  sign-in step that shows the one-time line to send in Slack and accepts the
+  code Slack returns.
+  Every question has a stable `id`. Agents and scripts can instead run
+  `tag setup --step`, `--answer`, and `--stop`, one question per command,
+  while setup keeps running in the background.
+
 - Deliver saved files as local copies plus Slack attachments by default.
   `OPENTAG_FILE_DELIVERY` and individual requests can select local-only delivery.
   Existing installations adopt the default automatically unless explicitly configured.

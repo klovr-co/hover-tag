@@ -7,7 +7,6 @@ set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 MFS_SERVER_SPEC=$(awk '/^mfs-server(\[[^]]+\])?==/ { print; exit }' "$ROOT/requirements-runtime.txt")
 MFS_VERSION=${MFS_SERVER_SPEC##*==}
-MFS_RELEASE=https://github.com/zilliztech/mfs/releases/download/v${MFS_VERSION}
 RUNTIME_PYTHON="$ROOT/.venv/bin/python"
 RUNTIME_BIN="$ROOT/.venv/bin"
 PATH="$RUNTIME_BIN:$PATH"
@@ -28,76 +27,14 @@ require_command() {
     command -v "$1" >/dev/null 2>&1 || fail "$1 is required. $2"
 }
 
-command_has_version() {
-    version_output=$("$1" --version 2>/dev/null || true)
-    case "$version_output" in
-        *"$2"*) return 0 ;;
-        *) return 1 ;;
-    esac
-}
-
 mfs_server_has_version() {
     "$RUNTIME_PYTHON" -c 'import importlib.metadata, sys; sys.exit(importlib.metadata.version("mfs-server") != sys.argv[1])' "$MFS_VERSION" 2>/dev/null
-}
-
-sha256_file() {
-    if command -v shasum >/dev/null 2>&1; then
-        shasum -a 256 "$1" | awk '{print $1}'
-    elif command -v sha256sum >/dev/null 2>&1; then
-        sha256sum "$1" | awk '{print $1}'
-    else
-        fail "shasum or sha256sum is required to verify downloads."
-    fi
-}
-
-install_mfs_cli() {
-    os=$(uname -s)
-    arch=$(uname -m)
-    case "$os/$arch" in
-        Darwin/arm64)
-            artifact=mfs-cli-aarch64-apple-darwin.tar.xz
-            expected=1fd7c9fe38d5f27e72cde3fca8e895c2185eb6113d17d352bc33c1e661e18cfe
-            ;;
-        Darwin/x86_64)
-            artifact=mfs-cli-x86_64-apple-darwin.tar.xz
-            expected=807eeba5c7d35b02123a25bfc244ad8dae3b478d79757d30373d282f234bbd25
-            ;;
-        Linux/aarch64|Linux/arm64)
-            artifact=mfs-cli-aarch64-unknown-linux-musl.tar.xz
-            expected=a6a4cc90dc73118ae6f6b2c0fd779a43057ae1fd88b27e6cc32a3352ac3cc978
-            ;;
-        Linux/x86_64|Linux/amd64)
-            artifact=mfs-cli-x86_64-unknown-linux-musl.tar.xz
-            expected=2b4721bce6ebcea84d19a33d517d4963932d0696a106555753f145de6e767ae4
-            ;;
-        *)
-            fail "No prebuilt MFS CLI is available for $os/$arch. See https://github.com/zilliztech/mfs#install-the-cli"
-            ;;
-    esac
-
-    download_dir=$(mktemp -d "${TMPDIR:-/tmp}/tag-mfs.XXXXXX")
-    trap 'rm -rf "$download_dir"' EXIT HUP INT TERM
-    archive="$download_dir/$artifact"
-    say "Downloading MFS CLI v$MFS_VERSION..."
-    curl --proto '=https' --tlsv1.2 -fsSL "$MFS_RELEASE/$artifact" -o "$archive"
-    actual=$(sha256_file "$archive")
-    [ "$actual" = "$expected" ] || fail "MFS CLI checksum verification failed."
-    tar -xJf "$archive" -C "$download_dir"
-    install_dir="$RUNTIME_BIN"
-    mkdir -p "$install_dir"
-    mfs_binary=$(find "$download_dir" -type f -name mfs -perm -u+x | head -n 1)
-    [ -n "$mfs_binary" ] || fail "The MFS CLI archive did not contain an executable."
-    cp "$mfs_binary" "$install_dir/mfs"
-    chmod 0755 "$install_dir/mfs"
-    PATH="$install_dir:$PATH"
-    export PATH
-    say "Installed MFS CLI to $install_dir/mfs"
 }
 
 check_install() {
     check_mode=${1:-full}
     failed=0
-    for command in mfs-server mfs; do
+    for command in mfs-server; do
         if command -v "$command" >/dev/null 2>&1; then
             say "✓ $command"
         else
@@ -107,10 +44,6 @@ check_install() {
     done
     if command -v mfs-server >/dev/null 2>&1 && ! mfs_server_has_version; then
         say "✗ mfs-server must be v$MFS_VERSION"
-        failed=1
-    fi
-    if command -v mfs >/dev/null 2>&1 && ! command_has_version mfs "$MFS_VERSION"; then
-        say "✗ mfs must be v$MFS_VERSION"
         failed=1
     fi
     if [ -x "$RUNTIME_PYTHON" ] && "$RUNTIME_PYTHON" -c 'import mfs_server, psutil, slack_bolt' >/dev/null 2>&1; then
@@ -165,11 +98,6 @@ say "Installing pinned Tag runtime dependencies..."
 say "Preparing the local MFS embedding model..."
 "$RUNTIME_PYTHON" "$ROOT/scripts/preload_mfs_model.py"
 
-if [ -x "$ROOT/.venv/bin/mfs" ] && command_has_version "$ROOT/.venv/bin/mfs" "$MFS_VERSION"; then
-    cp "$ROOT/.venv/bin/mfs" "$RUNTIME_BIN/mfs"
-else
-    install_mfs_cli
-fi
 check_install dependencies
 "$RUNTIME_PYTHON" - "$ROOT" "$prepared_runtime" <<'PYTHON'
 import os, sys, uuid

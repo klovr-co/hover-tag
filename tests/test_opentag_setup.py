@@ -35,15 +35,13 @@ class OpenTagSetupTests(unittest.TestCase):
         with patch.dict(os.environ, {"TAG_ID": "personal"}), patch.object(
             opentag_setup, "selected_backend_available", return_value=True
         ), patch.object(
-            opentag_setup.lifecycle, "mfs_client_executable", return_value="/runtime/bin/mfs"
-        ), patch.object(
             opentag_setup.subprocess, "run", return_value=started
         ) as run, redirect_stdout(StringIO()) as output:
             result = opentag_setup.finish_setup(Path("settings.json"), values, [channel])
 
         self.assertEqual(result, 0)
         run.assert_not_called()
-        self.assertIn("MFS client ready", output.getvalue())
+        self.assertNotIn("MFS client", output.getvalue())  # memory needs only the MFS server
         self.assertIn("Next step · start Tag", output.getvalue())
         self.assertIn("tag personal start", output.getvalue())
         self.assertIn("Tag is still stopped. Run this command", output.getvalue())
@@ -52,7 +50,6 @@ class OpenTagSetupTests(unittest.TestCase):
 
     def test_codex_compatibility_failure_does_not_attempt_login_or_install(self):
         with patch.object(opentag_setup, "selected_backend_available", return_value=True), patch.object(
-                opentag_setup.lifecycle, "mfs_client_executable", return_value="/runtime/bin/mfs"), patch.object(
                 opentag_setup.shutil, "which", return_value="/user/codex"), patch.object(
                 opentag_setup.subprocess, "run", return_value=subprocess.CompletedProcess([], 1)) as run, redirect_stdout(StringIO()) as output:
             result = opentag_setup.finish_setup(Path("settings.json"), {"OPENTAG_BACKEND": "codex"}, [])
@@ -112,7 +109,7 @@ class OpenTagSetupTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             output = StringIO()
-            def enter_id(*args):
+            def enter_id(*args, **_kwargs):
                 instructions = output.getvalue()
                 self.assertIn("https://api.slack.com/apps", instructions)
                 self.assertIn("workspace TTEST", instructions)
@@ -276,7 +273,7 @@ class OpenTagSetupTests(unittest.TestCase):
             project = opentag_setup.slack_project(home)
             config = home / "settings.json"
 
-            def accept_default(prompt, default=None):
+            def accept_default(prompt, default=None, **_kwargs):
                 self.assertEqual((prompt, default), ("Assistant name", "TEST · Maxine's Tag"))
                 return default
 
@@ -449,33 +446,56 @@ class OpenTagSetupTests(unittest.TestCase):
         self.assertEqual(opentag_setup.authorized_members(listing, "T123"), ["U111", "W222"])
         self.assertEqual(opentag_setup.authorized_members(listing, "TNONE"), [])
 
+    def test_people_directory_paginates_filters_and_minimizes_profile_data(self):
+        pages = [
+            {"members": [
+                {"id": "U222", "name": "jamie", "profile": {"display_name": "Jamie", "image_48": "https://example.com/j.png", "email": "private@example.com"}},
+                {"id": "UBOT", "is_bot": True}, {"id": "UAPP", "is_app_user": True},
+                {"id": "UDELETED", "deleted": True}, {"id": "UINVITED", "is_invited_user": True},
+                {"id": "UOTHER", "team_id": "TOTHER"}, {"id": "USLACKBOT", "is_bot": True},
+            ], "response_metadata": {"next_cursor": "page2"}},
+            {"members": [{"id": "W111", "name": "alex", "profile": {"real_name": "Alex", "image_48": "file:///private"}},
+                         {"id": "U222", "name": "jamie", "profile": {"display_name": "Jamie"}},
+                         {"id": "U333", "profile": None}, None]},
+        ]
+        with patch.object(opentag_setup.slack_channels, "slack_api", side_effect=pages) as api:
+            people = opentag_setup.slack_people("token", "T123")
+        self.assertEqual([p["id"] for p in people], ["W111", "U222", "U333"])
+        self.assertEqual(people[0], {"id": "W111", "name": "Alex", "username": "alex", "image_url": ""})
+        self.assertNotIn("email", str(people))
+        self.assertEqual(api.call_args.args, ("token", "users.list", {"team_id": "T123", "limit": "200", "cursor": "page2"}))
+
+    def test_people_directory_rejects_repeated_cursor_and_malformed_list(self):
+        for pages in ([{"members": None}], [{"members": [], "response_metadata": {"next_cursor": "same"}}] * 2):
+            with self.subTest(pages=pages), patch.object(opentag_setup.slack_channels, "slack_api", side_effect=pages):
+                with self.assertRaises(opentag_setup.slack_channels.SlackChannelError):
+                    opentag_setup.slack_people("token", "T123")
+
+    def test_terminal_people_picker_searches_and_returns_stable_id(self):
+        people = [{"id": "U111", "name": "Alex", "username": "alex", "image_url": ""},
+                  {"id": "U222", "name": "Jamie", "username": "jchen", "image_url": ""}]
+        with patch.object(opentag_setup, "ask", side_effect=["nobody", "JCHEN"]), patch.object(
+            opentag_setup.ui, "choose", side_effect=[0, 0]
+        ) as choose:
+            self.assertEqual(opentag_setup.choose_slack_person(people), "U222")
+        self.assertEqual(choose.call_args.args[1][0], "Jamie · @jchen")
+
     def test_allowed_users_preserves_saved_policy_without_cli(self):
         with patch.object(opentag_setup.subprocess, "run") as run:
             self.assertEqual(opentag_setup.choose_allowed_users("T123", "U111,U222"), "U111,U222")
         run.assert_not_called()
 
-    def test_allowed_users_offers_cli_identity_without_manual_entry(self):
+    def test_signed_in_account_becomes_owner_without_a_question(self):
         result = subprocess.CompletedProcess([], 0, "", "Team (Team ID: T123)\nUser ID: U111\n")
         with patch.object(opentag_setup.shutil, "which", return_value="/bin/slack"), patch.object(
             opentag_setup.subprocess, "run", return_value=result
-        ), patch.object(opentag_setup.ui, "choose", return_value=0) as choose, patch.object(
+        ), patch.object(opentag_setup.ui, "choose") as choose, patch.object(
             opentag_setup, "ask_validated"
-        ) as manual:
-            self.assertEqual(opentag_setup.choose_allowed_users("T123"), "U111")
+        ) as manual, patch.object(opentag_setup, "slack_people") as directory, redirect_stdout(StringIO()):
+            self.assertEqual(opentag_setup.choose_allowed_users("T123", token="token"), "U111")
+        choose.assert_not_called()
         manual.assert_not_called()
-        self.assertIn("Use my Slack account (U111)", choose.call_args.args[1])
-
-    def test_allowed_users_manual_and_pause_are_explicit_choices(self):
-        result = subprocess.CompletedProcess([], 0, "Team (Team ID: T123)\nUser ID: U111\n", "")
-        with patch.object(opentag_setup.shutil, "which", return_value="/bin/slack"), patch.object(
-            opentag_setup.subprocess, "run", return_value=result
-        ), patch.object(opentag_setup.ui, "choose", side_effect=[1, 2]), patch.object(
-            opentag_setup, "ask_validated", return_value="U222"
-        ) as manual:
-            self.assertEqual(opentag_setup.choose_allowed_users("T123"), "U222")
-            with self.assertRaises(opentag_setup.ui.Paused):
-                opentag_setup.choose_allowed_users("T123")
-            self.assertEqual(manual.call_count, 1)
+        directory.assert_not_called()
 
     def test_allowed_users_falls_back_on_failed_or_unmatched_auth(self):
         for result in (

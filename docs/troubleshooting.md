@@ -4,11 +4,11 @@ Start with `./tag doctor`, then use the first failed check below.
 
 | Failure | What it means | Fix |
 | --- | --- | --- |
-| `mfs-server` or `mfs` missing/wrong version | The pinned memory runtime is unavailable | Run `./install.sh` again and ensure uv's tool directory and `~/.local/bin` are on `PATH`. |
+| `mfs-server` missing or the wrong version | The pinned memory runtime is unavailable | Run the installer again: `./install.sh` on macOS and Linux, or `./install.ps1` in PowerShell on Windows. Ensure `~/.local/bin` (or `%LOCALAPPDATA%\Tag\bin` on Windows) is on `PATH`. |
 | MFS health fails | Nothing is listening at `MFS_URL` | Run `./tag start`; inspect `./tag logs` and `~/.mfs/server.log`. |
 | Local MFS is healthy but untracked | Another process owns the loopback endpoint | `tag start` and `tag dev` replace an identifiable `mfs-server` with Tag's current runtime. If another kind of service owns the port, stop it or configure a different `MFS_URL`. Remote endpoints are never replaced. |
 | MFS status has no connectors | MFS has no indexed source | Add a source with MFS, then include its exact root in `MFS_ALLOWED_SCOPES`. |
-| MFS scope fails | The scope is absent, outside policy, or its connector credential is unavailable | Compare the exact URI with `mfs ls`; restart MFS after exporting credentials referenced by connector configuration. |
+| MFS scope fails | The scope is absent, outside policy, or its connector credential is unavailable | Check that each URI in `MFS_ALLOWED_SCOPES` (`tag config show`) is, or lies under, a source MFS has indexed (a channel scope sits beneath its connector's root); run `tag doctor`; restart MFS after exporting credentials referenced by connector configuration. |
 | Cross-channel search rejects a channel | The requested name is absent or non-unique in the caller's live grant | Check the channel name, bot membership, caller membership for private/guest access, indexing, and Slack connectivity. The runtime helper never searches outside its bridge-generated grant. |
 | Slack app token fails | Socket Mode cannot connect | Create an `xapp-` app-level token with `connections:write`. |
 | Slack bot token fails | Web API calls cannot authenticate | Reinstall the Slack app and rerun `tag setup`; enter the `xoxb-` token only in its hidden prompt. |

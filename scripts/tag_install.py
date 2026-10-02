@@ -6,13 +6,11 @@ import argparse
 import hashlib
 import json
 import os
-import platform
 import re
 import shlex
 import shutil
 import subprocess
 import sys
-import tarfile
 import tempfile
 import textwrap
 import urllib.error
@@ -36,24 +34,6 @@ API_RELEASES = "https://api.github.com/repos/klovr-co/hover-tag/releases"
 RELEASE_DOWNLOADS = "https://github.com/klovr-co/hover-tag/releases/download"
 CHANNEL_INDEX_URL = RELEASE_DOWNLOADS + "/channels/tag-release-channels.json"
 CHANNELS = ("stable", "beta", "alpha", "edge")
-MFS_CLI_RELEASES = {
-    ("darwin", "arm64"): (
-        "mfs-cli-aarch64-apple-darwin.tar.xz",
-        "1fd7c9fe38d5f27e72cde3fca8e895c2185eb6113d17d352bc33c1e661e18cfe",
-    ),
-    ("darwin", "x86_64"): (
-        "mfs-cli-x86_64-apple-darwin.tar.xz",
-        "807eeba5c7d35b02123a25bfc244ad8dae3b478d79757d30373d282f234bbd25",
-    ),
-    ("linux", "arm64"): (
-        "mfs-cli-aarch64-unknown-linux-musl.tar.xz",
-        "a6a4cc90dc73118ae6f6b2c0fd779a43057ae1fd88b27e6cc32a3352ac3cc978",
-    ),
-    ("linux", "x86_64"): (
-        "mfs-cli-x86_64-unknown-linux-musl.tar.xz",
-        "2b4721bce6ebcea84d19a33d517d4963932d0696a106555753f145de6e767ae4",
-    ),
-}
 VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta)(?:\.(\d+))?)?$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 ACCENT = "38;2;56;207;241"
@@ -150,6 +130,17 @@ def paragraph(text: str, code: str = "", *, indent: str = "  ") -> None:
         emit(indent + (styled(line, code) if code else line))
 
 
+def progress(step: str, **fields: Any) -> None:
+    """Machine-readable install progress for desktop apps (TAG_INSTALL_PROGRESS=jsonl).
+
+    Steps, in order: tools, python, download, release (with version),
+    components, memory, command, done; or failed (with message).
+    """
+    if os.getenv("TAG_INSTALL_PROGRESS") == "jsonl":
+        line = json.dumps({"schema_version": 1, "step": step, **fields}, ensure_ascii=False)
+        print("@tag-progress " + line, file=sys.stderr, flush=True)
+
+
 def header(section: str, detail: str = "") -> None:
     emit()
     emit("  " + styled("tag", "1;" + ACCENT) + "  /  " + styled(section, MUTED))
@@ -192,45 +183,6 @@ def download(url: str, *, timeout: float = 120) -> bytes:
         ):
             raise RuntimeError("GitHub API rate limit exceeded; try again later") from error
         raise RuntimeError(f"Download failed with HTTP {error.code}: {url}") from error
-
-
-def install_mfs_cli(release: Path, python: Path) -> Path | None:
-    """Install the pinned MFS client beside Tag's managed Python executable."""
-    requirements = (release / "requirements-runtime.txt").read_text(encoding="utf-8")
-    match = re.search(r"(?m)^mfs-server(?:\[[^]]+\])?==([^\s;]+)", requirements)
-    if not match:
-        raise ValueError("requirements-runtime.txt does not pin mfs-server")
-    version = match.group(1)
-    machine = platform.machine().lower()
-    machine = {"aarch64": "arm64", "amd64": "x86_64"}.get(machine, machine)
-    target = MFS_CLI_RELEASES.get((sys.platform, machine))
-    if target is None:
-        # Upstream does not currently publish a native Windows client. Keep the
-        # existing PATH fallback there until an official artifact is available.
-        return None
-    artifact, expected = target
-    url = f"https://github.com/zilliztech/mfs/releases/download/v{version}/{artifact}"
-    archive_data = download(url)
-    actual = hashlib.sha256(archive_data).hexdigest()
-    if actual != expected:
-        raise ValueError(f"MFS CLI checksum mismatch for {artifact}")
-    with tempfile.TemporaryDirectory(prefix="tag-mfs-cli-") as temporary:
-        archive = Path(temporary) / artifact
-        archive.write_bytes(archive_data)
-        with tarfile.open(archive, "r:xz") as bundle:
-            members = [
-                member for member in bundle.getmembers()
-                if member.isfile() and Path(member.name).name == "mfs"
-            ]
-            if len(members) != 1:
-                raise ValueError("MFS CLI archive does not contain exactly one client executable")
-            source = bundle.extractfile(members[0])
-            if source is None:
-                raise ValueError("MFS CLI executable could not be read")
-            destination = python.parent / "mfs"
-            destination.write_bytes(source.read())
-    destination.chmod(0o755)
-    return destination
 
 
 def _json_download(url: str, *, timeout: float = 120) -> Any:
@@ -480,6 +432,7 @@ def fetch_release(
     destination.mkdir(parents=True, exist_ok=True)
     if version is not None and channel is not None:
         raise ValueError("Choose either --channel or --version, not both")
+    progress("download")
     if version is not None:
         release, version, selected_channel = resolve_version(version)
         provenance_channel = "release"
@@ -665,6 +618,7 @@ def install(
         version = (source / "VERSION").read_text().strip()
         if selection is not None and selection.version != version:
             raise ValueError("Selected release metadata does not match the installed source")
+        progress("release", version=version)
         header("Install", f"Preparing Tag v{version} in an isolated runtime.")
         section("Preparing")
         row("Release", f"Tag v{version}")
@@ -682,11 +636,12 @@ def install(
         python = release / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
         if dependencies:
             runtime_python = Path(sys.executable)
-            if os.name != "nt" and tag_dependencies is not None:
+            if tag_dependencies is not None:
                 runtime_python, uv_path = tag_dependencies.prepare_python(source, home)
                 uv = str(uv_path)
             else:
                 uv = shutil.which("uv")
+            progress("components")
             paragraph("Installing runtime dependencies…", MUTED, indent="    ")
             if uv:
                 install_step(
@@ -707,20 +662,17 @@ def install(
                      "-r", str(release / "requirements-runtime.txt")],
                     "Installing Tag dependencies with pip",
                 )
-            mfs_client = install_mfs_cli(release, python)
             row("Runtime", f"Python {sys.version_info.major}.{sys.version_info.minor} · dependencies ready")
-            if mfs_client is not None:
-                row("MFS CLI", f"Bundled {mfs_client.name} in the managed runtime")
+            progress("memory")
             paragraph("Preparing the local memory model…", MUTED, indent="    ")
             install_step(
                 [str(python), str(release / "scripts/preload_mfs_model.py")],
                 "Preparing the MFS embedding model",
             )
             row("Memory", "Local embedding model cached")
-            if os.name != "nt":
-                if tag_dependencies is not None:
-                    tag_dependencies.ensure_slack(home)
-                install_step([str(python), "-c", "import mfs_server, psutil, slack_bolt"], "Checking the prepared runtime")
+            if tag_dependencies is not None:
+                tag_dependencies.ensure_slack(home)
+            install_step([str(python), "-c", "import mfs_server, psutil, slack_bolt"], "Checking the prepared runtime")
         else:
             # Explicit test/development mode; never advertised as a complete install.
             python = Path(sys.executable)
@@ -748,6 +700,7 @@ def install(
                     if not any(bundled.iterdir()):
                         bundled.rmdir()
         # Keep the launcher fixed while the pointer changes atomically on upgrade.
+        progress("command")
         launcher = home / "bin/tag-launch.py"
         launcher_text = '''# TAG managed launcher
 import json, os, pathlib, subprocess, sys
@@ -755,7 +708,10 @@ home = pathlib.Path(__file__).resolve().parent.parent
 record = json.loads((home / "current.json").read_text(encoding="utf-8"))
 release = home / "releases" / record["release"]
 os.environ["TAG_HOME"] = str(home)
-raise SystemExit(subprocess.call([record["python"], str(release / "scripts/tag_cli.py"), *sys.argv[1:]]))
+# Started windowless on Windows (pythonw, e.g. at login): keep the child windowless too.
+flags = 0x08000000 if os.name == "nt" and sys.stdout is None else 0
+raise SystemExit(subprocess.call([record["python"], str(release / "scripts/tag_cli.py"), *sys.argv[1:]],
+                                 creationflags=flags))
 '''
         atomic_text(launcher, launcher_text)
         launcher_python = runtime_python if dependencies else Path(sys.executable)
@@ -764,9 +720,9 @@ raise SystemExit(subprocess.call([record["python"], str(release / "scripts/tag_c
         if (command.exists() or command.is_symlink()) and command_owner(command) is None:
             raise RuntimeError(f"Refusing to replace unrelated command: {command}")
         if os.name == "nt":
-            if any(c in str(path) for path in (Path(sys.executable), launcher) for c in '%\r\n"'):
+            if any(c in str(path) for path in (launcher_python, launcher) for c in '%\r\n"'):
                 raise ValueError("Windows launcher paths cannot contain percent signs, quotes or newlines")
-            script = f'@rem TAG managed launcher\n@"{sys.executable}" "{launcher}" %*\n'
+            script = f'@rem TAG managed launcher\n@"{launcher_python}" "{launcher}" %*\n'
         else:
             script = f'#!/bin/sh\n# TAG managed launcher\nexec {shlex.quote(str(launcher_python))} {shlex.quote(str(launcher))} "$@"\n'
         atomic_text(command, script, 0o755)
@@ -781,7 +737,7 @@ raise SystemExit(subprocess.call([record["python"], str(release / "scripts/tag_c
             "bin_dir": str(bin_dir.resolve()),
             "installed_version": version,
         }
-        if dependencies and os.name != "nt":
+        if dependencies and tag_dependencies is not None:
             current_record["dependency_schema"] = 1
         if selection is not None:
             current_record.update({
@@ -797,6 +753,7 @@ raise SystemExit(subprocess.call([record["python"], str(release / "scripts/tag_c
         atomic_text(current, json.dumps(current_record, indent=2, sort_keys=True) + "\n")
         row("Command", short_path(command))
         row("Home", short_path(home))
+        progress("done", version=version, command=str(command))
         emit()
         emit("  " + styled("─" * content_width(), MUTED))
         paragraph("✓  Tag is installed", "1;" + SUCCESS)
@@ -848,5 +805,6 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as exc:
+        progress("failed", message=str(exc))
         print(f"Installation failed: {exc}", file=sys.stderr)
         raise SystemExit(1)

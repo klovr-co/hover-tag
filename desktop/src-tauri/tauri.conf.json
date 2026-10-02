@@ -1,0 +1,88 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Tag",
+  "version": "../package.json",
+  "identifier": "team.hover.tag",
+  "build": {
+    "beforeDevCommand": "npm run bundle-installer && npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run bundle-installer && npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Tag",
+        "width": 520,
+        "height": 640,
+        "resizable": false,
+        "maximizable": false,
+        "visible": false,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost https: data:; style-src 'self' 'unsafe-inline'",
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$HOME/Tag/**",
+          "$HOME/Library/Application Support/Tag/**",
+          "$HOME/.local/share/tag/**",
+          "$LOCALDATA/Tag/**"
+        ]
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "app",
+      "dmg",
+      "nsis",
+      "deb",
+      "appimage"
+    ],
+    "category": "Productivity",
+    "shortDescription": "Your personal assistant, in Slack.",
+    "copyright": "Copyright 2026 klovr.co",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "resources/installer/": "installer/",
+      "icons/tray.png": "tray.png",
+      "icons/tray-online.png": "tray-online.png",
+      "icons/tray-light.png": "tray-light.png",
+      "icons/tray-light-online.png": "tray-light-online.png"
+    },
+    "macOS": {
+      "minimumSystemVersion": "12.0"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    },
+    "linux": {
+      "deb": {
+        "depends": [
+          "libayatana-appindicator3-1"
+        ]
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDNBM0U3NjE5MTk2QzM1RDkKUldUWk5Xd1pHWFkrT250Z0lPVFBtWjQwWHFXdEgrRVM3QzJVZ1NXVDIwQlhtYkRCSU8zK3ZQaCsK",
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}

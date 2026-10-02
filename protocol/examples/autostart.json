@@ -1,0 +1,4 @@
+{"schema_version": 1, "enabled": true, "mechanism": "launchd",
+ "path": "/Users/maya/Library/LaunchAgents/team.hover.tag.supervisor.plist",
+ "log": "/Users/maya/Library/Application Support/Tag/state/supervisor.log",
+ "tags": [{"tag": "t0klovr1-a0maya01", "keep_running": true}]}
