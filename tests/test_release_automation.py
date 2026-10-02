@@ -556,7 +556,7 @@ class ReleaseArtifactTests(unittest.TestCase):
         for name in sorted(names):
             if not name.endswith(".py"):
                 continue
-            tree = ast.parse((root / name).read_text())
+            tree = ast.parse((root / name).read_text(encoding="utf-8"))
             for node in ast.walk(tree):
                 imports = []
                 if isinstance(node, ast.Import):
@@ -575,7 +575,7 @@ class ReleaseArtifactTests(unittest.TestCase):
             (root / "scripts").mkdir()
             manifest = root / "scripts/runtime-files.json"
             def policy(name):
-                manifest.write_text(json.dumps({"schema_version": 1, "files": ["scripts/runtime-files.json", name]}))
+                manifest.write_text(json.dumps({"schema_version": 1, "files": ["scripts/runtime-files.json", name]}), encoding="utf-8")
             policy("missing.txt")
             with self.assertRaisesRegex(FileNotFoundError, "Required runtime file missing"):
                 build_archive(root, root / "invalid.zip", epoch=315532800)
@@ -584,8 +584,8 @@ class ReleaseArtifactTests(unittest.TestCase):
                 with self.subTest(name=name), self.assertRaises(ValueError):
                     build_archive(root, root / "invalid.zip", epoch=315532800)
             policy("included.txt")
-            (root / "included.txt").write_text("included")
-            (root / "secret.env").write_text("must not ship")
+            (root / "included.txt").write_text("included", encoding="utf-8")
+            (root / "secret.env").write_text("must not ship", encoding="utf-8")
             build_archive(root, root / "valid.zip", epoch=315532800)
             with zipfile.ZipFile(root / "valid.zip") as bundle:
                 self.assertEqual(set(bundle.namelist()), {"scripts/runtime-files.json", "included.txt"})
@@ -596,8 +596,8 @@ class ReleaseArtifactTests(unittest.TestCase):
             root = Path(temp)
             (root / "scripts").mkdir()
             (root / "scripts/runtime-files.json").write_text(json.dumps({
-                "schema_version": 1, "files": ["scripts/runtime-files.json", "linked.txt"]}))
-            (root / "target.txt").write_text("private")
+                "schema_version": 1, "files": ["scripts/runtime-files.json", "linked.txt"]}), encoding="utf-8")
+            (root / "target.txt").write_text("private", encoding="utf-8")
             (root / "linked.txt").symlink_to(root / "target.txt")
             with self.assertRaisesRegex(ValueError, "symlinks"):
                 build_archive(root, root / "invalid.zip", epoch=315532800)

@@ -186,7 +186,8 @@ class SlackAppCreationTests(unittest.TestCase):
         with patch.object(creation.sys, "executable", "/new uv environment/bin/python"):
             creation.prepare_project(self.project, "Tag Test")
         hook = creation.read_object(self.project / ".slack/hooks.json")["hooks"]["get-manifest"]
-        self.assertIn("/new uv environment/bin/python", hook)
+        expected = Path("/new uv environment/bin/python")
+        self.assertIn(str(expected.resolve() if os.name == "nt" else expected), hook)
         self.assertNotIn("/old uv environment/bin/python", hook)
         self.assertEqual((self.project / "manifest.json").read_bytes(), manifest_before)
 
@@ -208,12 +209,12 @@ class SlackAppCreationTests(unittest.TestCase):
         import yaml
         name = 'Tag "Test" $(do-not-run)'
         actual = creation.prepare_project(self.project, name)
-        expected = yaml.safe_load((setup.ROOT / "slack-app-manifest.yaml").read_text())
+        expected = yaml.safe_load((setup.ROOT / "slack-app-manifest.yaml").read_text(encoding="utf-8"))
         expected["display_information"]["name"] = name
         expected["features"]["bot_user"]["display_name"] = name
         self.assertEqual(actual, expected)
         self.assertEqual(creation.read_object(self.project / "manifest.json"), expected)
-        self.assertNotIn(name, (self.project / ".slack/hooks.json").read_text())
+        self.assertNotIn(name, (self.project / ".slack/hooks.json").read_text(encoding="utf-8"))
 
     def test_install_status_requires_exact_app_workspace_and_installed(self):
         for app, team, status, expected in (

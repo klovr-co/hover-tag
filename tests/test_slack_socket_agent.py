@@ -1010,7 +1010,7 @@ class SlackOutputArtifactTests(unittest.TestCase):
             manifest.write_text(json.dumps([
                 {"path": str(path), "attach": index != 0}
                 for index, path in enumerate(paths)
-            ]))
+            ]), encoding="utf-8")
             client = MagicMock()
             client.files_upload_v2.side_effect = [RuntimeError("upload failed"), {"file": {"id": "F1"}}]
             uploaded_paths: set[Path] = set()
@@ -1034,7 +1034,7 @@ class SlackOutputArtifactTests(unittest.TestCase):
             self.assertEqual(client.files_upload_v2.call_count, 2)
             self.assertEqual(slack_socket_agent.load_output_artifacts(manifest, root), (paths, []))
             self.assertTrue(all(path.exists() for path in paths))
-            manifest.write_text(json.dumps([{"path": str(paths[2]), "attach": True}]))
+            manifest.write_text(json.dumps([{"path": str(paths[2]), "attach": True}]), encoding="utf-8")
             client.files_upload_v2.side_effect = None
             client.files_upload_v2.return_value = {"file": {"permalink": "https://example.test/retry"}}
             messages = slack_socket_agent.deliver_output_artifacts(
@@ -1656,7 +1656,7 @@ class SlackApprovalTests(unittest.TestCase):
             self.assertFalse(run.resolve_approval(aid, choice="99"))
             self.assertFalse(run.resolve_approval(aid, approved=True))
             self.assertTrue(run.resolve_approval(aid, choice="1"))
-            self.assertEqual({"choice": "1"}, json.loads((Path(raw) / (aid + ".json")).read_text()))
+            self.assertEqual({"choice": "1"}, json.loads((Path(raw) / (aid + ".json")).read_text(encoding="utf-8")))
             self.assertFalse(run.resolve_approval(aid, choice="1"))
             self.assertTrue(run.register_approval("b" * 32, [{"id": "0"}]))
             run.finish()
@@ -1689,7 +1689,7 @@ class SlackApprovalTests(unittest.TestCase):
             client.chat_postEphemeral.assert_called_once()
             body["user"]["id"] = "UOWNER"
             handler(MagicMock(), body, client, MagicMock(), respond)
-            self.assertEqual({"choice": "1"}, json.loads((Path(raw) / (aid + ".json")).read_text()))
+            self.assertEqual({"choice": "1"}, json.loads((Path(raw) / (aid + ".json")).read_text(encoding="utf-8")))
             self.assertIn("sent to Codex", respond.call_args.kwargs["text"])
             handler(MagicMock(), body, client, MagicMock(), respond)
             self.assertIn("expired", respond.call_args.kwargs["text"])
@@ -3538,7 +3538,7 @@ class SlackAgentSettingsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw_dir, patch.dict(os.environ, {"CODEX_HOME": raw_dir, "OPENTAG_WORKDIR": raw_dir}, clear=True):
             (Path(raw_dir) / "models_cache.json").write_text(json.dumps({"models": [
                 {"slug": "gpt-6.1-sol", "visibility": "list", "priority": 1},
-            ]}))
+            ]}), encoding="utf-8")
             models = slack_socket_agent.discover_codex_models()
             self.assertEqual([model.model_id for model in models], ["gpt-6-astra"])
             self.assertEqual(slack_socket_agent.default_agent_settings(models).model, "gpt-6-astra")
@@ -3572,7 +3572,7 @@ class SlackAgentSettingsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw_dir, patch.dict(os.environ, {"CODEX_HOME": raw_dir, "OPENTAG_WORKDIR": raw_dir}, clear=True):
             (Path(raw_dir) / "models_cache.json").write_text(json.dumps({"models": [
                 {"slug": "gpt-6.1-sol", "visibility": "list", "priority": 1},
-            ]}))
+            ]}), encoding="utf-8")
             models = slack_socket_agent.discover_codex_models()
             self.assertIsNone(slack_socket_agent.default_agent_settings(models).model)
             modal = slack_socket_agent.settings_modal(metadata={}, settings=slack_socket_agent.AgentSettings(), models=models)

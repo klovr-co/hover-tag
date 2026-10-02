@@ -57,3 +57,18 @@ if os.name == "nt":
         return _real_expanduser(path)
 
     ntpath.expanduser = _expanduser
+
+    # Folder permissions (whoami + icacls) aren't what these unit tests check,
+    # and many tests mock subprocess for their own purposes, which would
+    # intercept those commands. Patch before any test module imports Tag.
+    import sys
+    from pathlib import Path
+
+    _scripts = str(Path(__file__).resolve().parents[1] / "scripts")
+    if _scripts not in sys.path:
+        sys.path.append(_scripts)
+    import tag_paths as _plain_paths  # noqa: E402  (scripts/ on sys.path)
+    from scripts import tag_paths as _package_paths  # noqa: E402
+
+    for _module in (_plain_paths, _package_paths):
+        _module.restrict_windows_acl = lambda home: None

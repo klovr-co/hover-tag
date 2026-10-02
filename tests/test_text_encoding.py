@@ -33,7 +33,8 @@ def text_calls_without_encoding(path: Path) -> list[str]:
                 mode_node = ast.Constant("r")
             elif isinstance(node.args[0], ast.Constant) and re.fullmatch(r"[rwaxbt+]+", str(node.args[0].value)):
                 mode_node = node.args[0]
-        mode_node = next((k.value for k in node.keywords if k.arg == "mode"), mode_node)
+        if mode_node is not None:
+            mode_node = next((k.value for k in node.keywords if k.arg == "mode"), mode_node)
         if (isinstance(mode_node, ast.Constant) and isinstance(mode_node.value, str)  # os.open's mode is permissions
                 and "b" not in mode_node.value and "encoding" not in keywords):
             found.append(f"{path.name}:{node.lineno} open({mode_node.value!r})")
@@ -41,8 +42,9 @@ def text_calls_without_encoding(path: Path) -> list[str]:
 
 
 class TextEncodingTests(unittest.TestCase):
-    def test_scripts_name_utf8_for_every_text_file(self) -> None:
-        missing = [hit for path in sorted((ROOT / "scripts").glob("*.py")) for hit in text_calls_without_encoding(path)]
+    def test_scripts_and_tests_name_utf8_for_every_text_file(self) -> None:
+        files = sorted((ROOT / "scripts").glob("*.py")) + sorted((ROOT / "tests").glob("*.py"))
+        missing = [hit for path in files for hit in text_calls_without_encoding(path)]
         self.assertEqual(missing, [], "add encoding=\"utf-8\"")
 
 

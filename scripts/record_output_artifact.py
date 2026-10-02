@@ -102,6 +102,13 @@ def record_artifact(manifest: Path, path: Path, *, attach: bool = False) -> None
         except FileExistsError:
             time.sleep(LOCK_RETRY_SECONDS)
             continue
+        except PermissionError:
+            # Windows reports a lock file another writer is deleting as access
+            # denied, not as existing: it is just as busy.
+            if os.name != "nt":
+                raise
+            time.sleep(LOCK_RETRY_SECONDS)
+            continue
         os.close(descriptor)
         break
     else:

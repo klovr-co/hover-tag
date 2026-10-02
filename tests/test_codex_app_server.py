@@ -508,7 +508,7 @@ for line in sys.stdin:
             with self.subTest(approve=approve, reject=reject), tempfile.TemporaryDirectory() as raw:
                 root = Path(raw)
                 script = root / "server.py"
-                script.write_text(fake)
+                script.write_text(fake, encoding="utf-8")
                 server = CodexAppServer([sys.executable, "-u", str(script),
                                          "reject" if reject else "accept"], cwd=root,
                                         timeout=5, max_timeout=10, approval_dir=root)
@@ -517,7 +517,7 @@ for line in sys.stdin:
                     events.append(event)
                     if event["type"] == "approval_request":
                         (root / (event["approval_id"] + ".json")).write_text(json.dumps(
-                            {"decision": "approve" if approve else "deny"}))
+                            {"decision": "approve" if approve else "deny"}), encoding="utf-8")
                 self.assertEqual(("completed", ""), server.run("Create form", model=None,
                                  reasoning_effort=None, emit=emit))
                 answers = [e["text"] for e in events if e["type"] == "message_complete"]

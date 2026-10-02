@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def signatures(directory: Path, version: str, *suffixes: str) -> Path:
     for suffix in suffixes or ("macos.app.tar.gz", "windows-setup.exe", "linux-x86_64.AppImage"):
-        (directory / f"Tag-{version}-{suffix}.sig").write_text(f"sig-{version}-{suffix}\n")
+        (directory / f"Tag-{version}-{suffix}.sig").write_text(f"sig-{version}-{suffix}\n", encoding="utf-8")
     return directory
 
 
@@ -64,7 +64,7 @@ class ManifestTests(unittest.TestCase):
     def test_command_writes_only_the_lines_that_move(self) -> None:
         current, output = self.dir / "current", self.dir / "out"
         current.mkdir()
-        (current / "tag-app-alpha.json").write_text(json.dumps({"version": "0.4.0-alpha.1", "platforms": {}}))
+        (current / "tag-app-alpha.json").write_text(json.dumps({"version": "0.4.0-alpha.1", "platforms": {}}), encoding="utf-8")
         signatures(self.dir, "0.3.0")
         result = subprocess.run([sys.executable, str(ROOT / "scripts/desktop_update_manifest.py"),
                                  "--version", "v0.3.0", "--signatures", str(self.dir),

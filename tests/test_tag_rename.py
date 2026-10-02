@@ -33,16 +33,16 @@ class PortableRenameTests(unittest.TestCase):
     def test_built_in_tag_is_renamed_after_its_ids_and_becomes_main(self) -> None:
         old = tag_instances.ensure_default(self.root).home
         configure(old)
-        (old / "workspace/notes.md").write_text("mine\n")
+        (old / "workspace/notes.md").write_text("mine\n", encoding="utf-8")
 
         self.assertEqual(tag_rename.migrate(self.root, self.lifecycle), NAME)
 
         new = self.root / "instances" / NAME
         self.assertFalse(old.exists())
-        self.assertEqual((new / "workspace/notes.md").read_text(), "mine\n")
+        self.assertEqual((new / "workspace/notes.md").read_text(encoding="utf-8"), "mine\n")
         settings = tag_config.load_config(new / "config/settings.json")
         self.assertEqual(settings["MFS_SLACK_CONNECTOR_CONFIG"], str(new / "integrations/mfs/tag.toml"))
-        self.assertEqual(json.loads((new / "instance.json").read_text())["id"], NAME)
+        self.assertEqual(json.loads((new / "instance.json").read_text(encoding="utf-8"))["id"], NAME)
         self.assertEqual(tag_instances.main_tag(self.root), NAME)
         self.assertEqual(tag_instances.select_unnamed(self.root), NAME)
         self.assertFalse((self.root / "state/rename-default.json").exists())
@@ -94,7 +94,7 @@ class PortableRenameTests(unittest.TestCase):
 
         self.assertEqual(tag_rename.migrate(self.root, self.lifecycle, "new-tag"), "t0abc123-a0second1")
         self.assertEqual(tag_instances.main_tag(self.root), NAME)
-        record = json.loads((self.root / "instances/t0abc123-a0second1/instance.json").read_text())
+        record = json.loads((self.root / "instances/t0abc123-a0second1/instance.json").read_text(encoding="utf-8"))
         self.assertNotIn("provisional", record)
 
     def test_tags_with_final_names_are_left_alone(self) -> None:
@@ -112,7 +112,7 @@ class NativeRenameTests(unittest.TestCase):
     """A normal installation keeps each Tag's files in ~/Tag/NAME."""
 
     def test_user_folder_moves_with_its_private_data(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"HOME": directory}):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"HOME": directory, "USERPROFILE": directory}):
             root = Path(directory) / "Library/Application Support/Tag"
             with patch.object(tag_instances, "native_installation", return_value=True), patch(
                 "scripts.tag_paths.platform_tag_home", return_value=root
@@ -120,13 +120,13 @@ class NativeRenameTests(unittest.TestCase):
                 old = tag_instances.ensure_default(root).home
                 self.assertEqual(old, Path(directory) / "Tag/default/.tag")
                 configure(old)
-                (old.parent / "plan.md").write_text("draft\n")
+                (old.parent / "plan.md").write_text("draft\n", encoding="utf-8")
 
                 self.assertEqual(tag_rename.migrate(root, Mock()), NAME)
 
                 folder = Path(directory) / "Tag" / NAME
                 self.assertFalse((Path(directory) / "Tag/default").exists())
-                self.assertEqual((folder / "plan.md").read_text(), "draft\n")
+                self.assertEqual((folder / "plan.md").read_text(encoding="utf-8"), "draft\n")
                 settings = tag_config.load_config(folder / ".tag/config/settings.json")
                 self.assertEqual(settings["MFS_SLACK_CONNECTOR_CONFIG"],
                                  str(folder / ".tag/integrations/mfs/tag.toml"))
