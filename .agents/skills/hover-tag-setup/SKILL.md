@@ -299,8 +299,10 @@ in and say hi, then tell me what happens.”
 
 Once the first reply works, invite them once to join the
 [Tag community on Slack](https://join.slack.com/t/hover-community/shared_invite/zt-4aghkshid-n7fRukS7_J5sR2jDLBXK9A)
-for tips and to talk with the developers. Keep it to one friendly line, and
-don't repeat it if they ignore it.
+for tips and to talk with the developers. Also ask, in the same message, if
+they'd star the [repo on GitHub](https://github.com/klovr-co/hover-tag) to
+support the project. Keep it to one or two friendly lines, never star it for
+them, and don't repeat the ask if they ignore it.
 
 ## Recover only what failed
 
