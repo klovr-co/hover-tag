@@ -13,10 +13,11 @@ separately. Hosted operation, enterprise policy, automated Slack OAuth,
 and production-grade sandboxing are out of scope.
 
 The canonical source repository is <https://github.com/klovr-co/hover-tag>. `VERSION`
-selects the current release candidate (`v0.2.0-beta.1`). On an alpha source
+selects the current release line (`v0.3.0-alpha`). On an alpha source
 line, automatic releases append a monotonically increasing candidate number
-such as `v0.2.0-alpha.3`. Alpha releases are GitHub prereleases and remain
-explicitly experimental.
+such as `v0.3.0-alpha.3`. Alpha releases are GitHub prereleases and remain
+explicitly experimental. The previous line published `v0.2.0-alpha` and
+`v0.2.0-beta` candidates before stable `v0.2.0`.
 
 Published releases trigger `.github/workflows/release-package.yml`, which
 verifies or creates `tag-<version>.zip`, `SHA256SUMS`, and
@@ -73,8 +74,17 @@ edge artifact. A merged PR needs no release label for the normal path. Apply
 `release:skip` to publish no prerelease, `release:next-patch` to start the next
 patch line, or `release:next-minor` to start the next minor line. Conflicting release
 labels fail closed and publish nothing. Patch and minor labels apply only to
-alpha lines. Once a line exists, unlabeled merges advance its alpha or beta
-candidate number.
+alpha lines and never select a line below `VERSION`. Once a line exists,
+unlabeled merges advance its alpha or beta candidate number. While `VERSION`
+names a published stable release, unlabeled merges publish no prerelease; set
+`VERSION` to the next alpha line, such as `0.3.0-alpha`, or label the PR to
+start it.
+
+Each edge build waits for the previous `main` commit to finish its own release
+processing so candidate numbers follow merge order. A predecessor that never
+ran the required workflows, failed them, or finished its edge build
+unsuccessfully does not block later merges; rerun its edge build only if that
+commit still needs its own prerelease.
 
 Moving from alpha to beta is a source change: update `VERSION` to the complete
 semantic beta version `<major>.<minor>.<patch>-beta.1` (for example,

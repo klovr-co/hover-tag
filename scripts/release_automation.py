@@ -24,6 +24,7 @@ from typing import Any, Iterable
 VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta)(?:\.(\d+))?)?$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 REQUIRED_WORKFLOWS = ("ci.yml", "install-smoke.yml")
+EDGE_WORKFLOW = "edge-build.yml"
 AUTO_RELEASE_LABELS = {
     "release:next-patch", "release:next-minor", "release:skip",
 }
@@ -166,7 +167,9 @@ def select_auto_prerelease(
         raise ValueError(
             "conflicting automatic release labels: " + ", ".join(sorted(selected_labels))
         )
-    if "release:skip" in selected_labels or base.phase == "stable":
+    if "release:skip" in selected_labels:
+        return None
+    if base.phase == "stable" and not selected_labels:
         return None
 
     if base.phase == "beta" and selected_labels:
@@ -197,9 +200,9 @@ def select_auto_prerelease(
     if previous is None:
         core = base.core
     elif "release:next-patch" in selected_labels:
-        core = (previous.major, previous.minor, previous.patch + 1)
+        core = max((previous.major, previous.minor, previous.patch + 1), base.core)
     elif "release:next-minor" in selected_labels:
-        core = (previous.major, previous.minor + 1, 0)
+        core = max((previous.major, previous.minor + 1, 0), base.core)
     elif base.core > previous.core:
         core = base.core
     elif previous.phase == "alpha" and previous.number is not None:
@@ -385,8 +388,25 @@ def find_edge_artifact(repository: str, sha: str) -> tuple[int, str] | None:
     return int(artifact["workflow_run"]["id"]), name
 
 
+def find_edge_runs(repository: str, sha: str) -> list[dict[str, Any]]:
+    """Return edge build runs that processed exactly this main commit."""
+    payload = _github_json(repository, f"actions/workflows/{EDGE_WORKFLOW}/runs", {
+        "event": "workflow_run", "per_page": "100"
+    })
+    return [
+        run for run in payload.get("workflow_runs", [])
+        if run.get("display_title") == f"Edge build {sha}"
+        # Runs created before run-name was set are titled only "Edge build".
+        or (run.get("display_title") == "Edge build" and run.get("head_sha") == sha)
+    ]
+
+
 def wait_for_predecessor(repository: str, sha: str, wait_seconds: int) -> list[str]:
-    """Wait until the preceding main commit is ineligible or fully processed."""
+    """Wait until the preceding main commit is ineligible or fully processed.
+
+    A predecessor whose release processing finished unsuccessfully does not
+    block later commits; otherwise one failure would fail every later merge.
+    """
     deadline = time.monotonic() + wait_seconds
     while True:
         gate_states = []
@@ -394,19 +414,30 @@ def wait_for_predecessor(repository: str, sha: str, wait_seconds: int) -> list[s
             payload = _github_json(repository, f"actions/workflows/{workflow}/runs", {
                 "head_sha": sha, "event": "push", "per_page": "20"
             })
-            gate_states.append(workflow_gate_state(payload.get("workflow_runs", []), sha))
+            runs = payload.get("workflow_runs", [])
+            if any(run.get("head_sha") == sha and run.get("event") == "push" for run in runs):
+                gate_states.append(workflow_gate_state(runs, sha))
+            else:
+                gate_states.append("missing")
 
         if "failure" in gate_states:
+            return []
+        if "pending" not in gate_states and "missing" in gate_states:
+            # Commits pushed together, marked [skip ci], or pushed while
+            # automation was disabled never ran the required gates.
+            print(f"predecessor {sha} never ran the required workflows; continuing")
             return []
 
         if gate_states and all(state == "success" for state in gate_states):
             artifact = find_edge_artifact(repository, sha)
             if artifact is not None:
-                run = _github_json(repository, f"actions/runs/{artifact[0]}")
-                if run.get("status") == "completed":
-                    if run.get("conclusion") == "success":
-                        return []
-                    return [f"edge build did not pass for predecessor {sha}"]
+                runs = [_github_json(repository, f"actions/runs/{artifact[0]}")]
+            else:
+                runs = find_edge_runs(repository, sha)
+            if runs and all(run.get("status") == "completed" for run in runs):
+                if not any(run.get("conclusion") == "success" for run in runs):
+                    print(f"edge build did not pass for predecessor {sha}; continuing")
+                return []
 
         if time.monotonic() >= deadline:
             return [f"predecessor {sha} has not completed release processing"]

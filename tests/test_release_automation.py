@@ -20,6 +20,7 @@ from scripts.release_automation import (
     build_channel_index,
     derive_next_version,
     find_edge_artifact,
+    find_edge_runs,
     promote_edge_bundle,
     select_auto_prerelease,
     successful_run,
@@ -135,6 +136,34 @@ class VersionTransitionTests(unittest.TestCase):
             "0.2.0-alpha", tags, ["release:skip"]
         ))
         self.assertIsNone(select_auto_prerelease("0.2.0", tags, []))
+
+    def test_release_labels_start_a_line_after_stable(self) -> None:
+        tags = ["v0.2.0-beta.13", "v0.2.0"]
+
+        self.assertIsNone(select_auto_prerelease("0.2.0", tags, []))
+        self.assertEqual(
+            str(select_auto_prerelease("0.2.0", tags, ["release:next-patch"])),
+            "0.2.1-alpha.1",
+        )
+        self.assertEqual(
+            str(select_auto_prerelease("0.2.0", tags, ["release:next-minor"])),
+            "0.3.0-alpha.1",
+        )
+
+    def test_release_labels_never_select_a_line_below_source(self) -> None:
+        tags = ["v0.2.0"]
+
+        for labels in ([], ["release:next-patch"], ["release:next-minor"]):
+            self.assertEqual(
+                str(select_auto_prerelease("0.3.0-alpha", tags, labels)),
+                "0.3.0-alpha.1",
+            )
+        self.assertEqual(
+            str(select_auto_prerelease(
+                "0.3.0-alpha", tags + ["v0.3.0-alpha.2"], ["release:next-patch"]
+            )),
+            "0.3.1-alpha.1",
+        )
 
     def test_automatic_beta_starts_after_alpha_and_then_increments(self) -> None:
         self.assertEqual(
@@ -304,6 +333,75 @@ class SelectedCommitTests(unittest.TestCase):
             }]
         }):
             self.assertEqual(wait_for_predecessor("klovr-co/hover-tag", sha, 0), [])
+
+    @staticmethod
+    def predecessor_responses(sha, *, gate_runs=True, artifact_run=None, edge_runs=()):
+        def github_response(repository, path, parameters=None):
+            if path in ("actions/workflows/ci.yml/runs", "actions/workflows/install-smoke.yml/runs"):
+                return {"workflow_runs": [{
+                    "id": 1,
+                    "head_sha": sha,
+                    "event": "push",
+                    "status": "completed",
+                    "conclusion": "success",
+                }] if gate_runs else []}
+            if path == "actions/artifacts":
+                return {"artifacts": [{
+                    "name": f"tag-edge-{sha}",
+                    "expired": False,
+                    "created_at": "2026-09-21T00:00:00Z",
+                    "workflow_run": {"id": 42},
+                }] if artifact_run else []}
+            if path == "actions/runs/42":
+                return artifact_run
+            if path == "actions/workflows/edge-build.yml/runs":
+                return {"workflow_runs": list(edge_runs)}
+            raise AssertionError(path)
+
+        return github_response
+
+    def test_predecessor_without_gate_runs_is_ineligible(self) -> None:
+        sha = "b" * 40
+        responses = self.predecessor_responses(sha, gate_runs=False)
+        with patch("scripts.release_automation._github_json", side_effect=responses):
+            self.assertEqual(wait_for_predecessor("klovr-co/hover-tag", sha, 0), [])
+
+    def test_failed_predecessor_edge_build_does_not_block_later_commit(self) -> None:
+        sha = "b" * 40
+        failed = {"status": "completed", "conclusion": "failure"}
+        for responses in (
+            self.predecessor_responses(sha, artifact_run=failed),
+            self.predecessor_responses(sha, edge_runs=[{
+                "display_title": f"Edge build {sha}", "head_sha": "c" * 40, **failed,
+            }]),
+        ):
+            with patch("scripts.release_automation._github_json", side_effect=responses):
+                self.assertEqual(wait_for_predecessor("klovr-co/hover-tag", sha, 0), [])
+
+    def test_predecessor_edge_build_in_progress_still_blocks(self) -> None:
+        sha = "b" * 40
+        for responses in (
+            self.predecessor_responses(sha),
+            self.predecessor_responses(sha, artifact_run={"status": "in_progress"}),
+            self.predecessor_responses(sha, edge_runs=[{
+                "display_title": f"Edge build {sha}", "status": "in_progress",
+            }]),
+        ):
+            with patch("scripts.release_automation._github_json", side_effect=responses):
+                self.assertEqual(wait_for_predecessor("klovr-co/hover-tag", sha, 0), [
+                    f"predecessor {sha} has not completed release processing"
+                ])
+
+    def test_edge_runs_match_titled_commit_before_head_sha(self) -> None:
+        sha = "b" * 40
+        runs = [
+            {"id": 1, "display_title": f"Edge build {sha}", "head_sha": "c" * 40},
+            {"id": 2, "display_title": f"Edge build {'d' * 40}", "head_sha": sha},
+            {"id": 3, "display_title": "Edge build", "head_sha": sha},
+            {"id": 4, "display_title": "Edge build", "head_sha": "e" * 40},
+        ]
+        with patch("scripts.release_automation._github_json", return_value={"workflow_runs": runs}):
+            self.assertEqual([run["id"] for run in find_edge_runs("klovr-co/hover-tag", sha)], [1, 3])
 
 
 class ReleaseArtifactTests(unittest.TestCase):
@@ -539,6 +637,9 @@ class ReleasePreflightTests(unittest.TestCase):
         self.assertIn('startswith("release:")', workflow)
         self.assertIn("edge-release-${{ github.event.workflow_run.head_sha }}", workflow)
         self.assertIn("wait-for-predecessor", workflow)
+        self.assertIn(
+            "run-name: Edge build ${{ github.event.workflow_run.head_sha }}", workflow
+        )
 
     def test_release_workflows_gate_telemetry_stamping_on_explicit_approval(self) -> None:
         root = Path(__file__).resolve().parents[1]
