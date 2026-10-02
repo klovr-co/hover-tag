@@ -390,15 +390,23 @@ def find_edge_artifact(repository: str, sha: str) -> tuple[int, str] | None:
 
 def find_edge_runs(repository: str, sha: str) -> list[dict[str, Any]]:
     """Return edge build runs that processed exactly this main commit."""
-    payload = _github_json(repository, f"actions/workflows/{EDGE_WORKFLOW}/runs", {
-        "event": "workflow_run", "per_page": "100"
-    })
-    return [
-        run for run in payload.get("workflow_runs", [])
-        if run.get("display_title") == f"Edge build {sha}"
-        # Runs created before run-name was set are titled only "Edge build".
-        or (run.get("display_title") == "Edge build" and run.get("head_sha") == sha)
-    ]
+    matches = []
+    page = 1
+    while True:
+        payload = _github_json(repository, f"actions/workflows/{EDGE_WORKFLOW}/runs", {
+            "event": "workflow_run", "per_page": "100", "page": str(page)
+        })
+        runs = payload.get("workflow_runs", [])
+        matches.extend(
+            run for run in runs
+            if run.get("display_title") == f"Edge build {sha}"
+            # Runs created before run-name was set are titled only "Edge build".
+            or (run.get("display_title") == "Edge build" and run.get("head_sha") == sha)
+        )
+        # Inspect every page: another matching run may still be active.
+        if len(runs) < 100:
+            return matches
+        page += 1
 
 
 def wait_for_predecessor(repository: str, sha: str, wait_seconds: int) -> list[str]:
@@ -430,10 +438,9 @@ def wait_for_predecessor(repository: str, sha: str, wait_seconds: int) -> list[s
 
         if gate_states and all(state == "success" for state in gate_states):
             artifact = find_edge_artifact(repository, sha)
+            runs = find_edge_runs(repository, sha)
             if artifact is not None:
-                runs = [_github_json(repository, f"actions/runs/{artifact[0]}")]
-            else:
-                runs = find_edge_runs(repository, sha)
+                runs.append(_github_json(repository, f"actions/runs/{artifact[0]}"))
             if runs and all(run.get("status") == "completed" for run in runs):
                 if not any(run.get("conclusion") == "success" for run in runs):
                     print(f"edge build did not pass for predecessor {sha}; continuing")

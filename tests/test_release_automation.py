@@ -403,6 +403,55 @@ class SelectedCommitTests(unittest.TestCase):
         with patch("scripts.release_automation._github_json", return_value={"workflow_runs": runs}):
             self.assertEqual([run["id"] for run in find_edge_runs("klovr-co/hover-tag", sha)], [1, 3])
 
+    def test_edge_runs_paginate_past_matches_and_stop_at_empty_page(self) -> None:
+        """Older active retries must not be hidden by a newer completed run."""
+        sha = "b" * 40
+        completed = {"display_title": f"Edge build {sha}", "status": "completed"}
+        active = {"display_title": "Edge build", "head_sha": sha, "status": "queued"}
+        unrelated = {"display_title": "Edge build", "head_sha": "c" * 40}
+        for first_match in (True, False):
+            pages = [
+                {"workflow_runs": [completed if first_match else unrelated] + [unrelated] * 99},
+                {"workflow_runs": [active] + [unrelated] * 99},
+                {"workflow_runs": []},
+            ]
+            with self.subTest(first_match=first_match), patch(
+                "scripts.release_automation._github_json", side_effect=pages
+            ) as github:
+                self.assertEqual(
+                    find_edge_runs("klovr-co/hover-tag", sha),
+                    [completed, active] if first_match else [active],
+                )
+                self.assertEqual(
+                    [call.args[2] for call in github.call_args_list],
+                    [{"event": "workflow_run", "per_page": "100", "page": str(page)}
+                     for page in (1, 2, 3)],
+                )
+
+    def test_completed_artifact_does_not_hide_active_edge_retry(self) -> None:
+        """An old artifact cannot allow publication while a retry is active."""
+        sha = "b" * 40
+        for conclusion in ("success", "failure"):
+            for status in ("queued", "in_progress", "completed"):
+                responses = self.predecessor_responses(
+                    sha,
+                    artifact_run={"status": "completed", "conclusion": conclusion},
+                    edge_runs=[{
+                        "display_title": f"Edge build {sha}",
+                        "status": status,
+                        "conclusion": "success" if status == "completed" else None,
+                    }],
+                )
+                with self.subTest(conclusion=conclusion, status=status), patch(
+                    "scripts.release_automation._github_json", side_effect=responses
+                ):
+                    self.assertEqual(
+                        wait_for_predecessor("klovr-co/hover-tag", sha, 0),
+                        [] if status == "completed" else [
+                            f"predecessor {sha} has not completed release processing"
+                        ],
+                    )
+
 
 class ReleaseArtifactTests(unittest.TestCase):
     def test_package_is_reproducible_for_the_same_commit(self) -> None:
