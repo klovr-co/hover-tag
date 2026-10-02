@@ -730,7 +730,7 @@ def download_thread_text_files(
     for message in messages:
         for file in message_files(message):
             file_id = file.get("id")
-            if not file_id or file_id in seen_file_ids or not is_text_file(file):
+            if not file_id or file_id in seen_file_ids or not is_text_file(file) or (file.get("mimetype") or "").lower().startswith("image/"):
                 continue
             seen_file_ids.add(file_id)
             name = attachment_name(file, len(seen_file_ids))
@@ -855,26 +855,103 @@ def upload_generated_images(
     return errors
 
 
-def build_thread_text(client: Any, channel: str, thread_ts: str, attachment_dir: Path) -> str:
-    response = client.conversations_replies(channel=channel, ts=thread_ts, limit=30)
-    messages = response.get("messages", [])
-    unique_files: dict[str, dict[str, Any]] = {}
+def select_request_files(
+    messages: list[dict[str, Any]], request: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Select explicit references, current uploads, or the latest attachment group."""
+    unique: dict[str, dict[str, Any]] = {}
     for message in messages:
         for file in message_files(message):
-            file_id = file.get("id")
-            if isinstance(file_id, str) and file_id:
-                unique_files.setdefault(file_id, file)
-    validate_attachment_metadata(list(unique_files.values()))
+            if file.get("id"):
+                unique.setdefault(file["id"], file)
+    current = {file["id"]: file for file in message_files(request) if file.get("id")}
+    unique.update(current)
+    text = request.get("text", "")
+    if re.search(r"\ball (?:the )?(?:files|images|attachments) (?:in|from) (?:this|the) thread\b", text, re.I):
+        return list(unique.values())
+    selected = dict(current)
+    explicit_ids = {
+        file_id for file_id in unique
+        if re.search(r"(?<![A-Za-z0-9])" + re.escape(file_id) + r"(?![A-Za-z0-9])", text)
+    }
+    for file_id in explicit_ids:
+        selected[file_id] = unique[file_id]
+    names: dict[str, list[dict[str, Any]]] = {}
+    for file in unique.values():
+        if file.get("name"):
+            names.setdefault(file["name"], []).append(file)
+    for name, matches in names.items():
+        if not re.search(r"(?<![\w.-])" + re.escape(name) + r"(?![\w.-])", text, re.I):
+            continue
+        preferred = [file for file in matches if file["id"] in selected]
+        if len(matches) > 1 and not preferred:
+            raise AttachmentLimitError(
+                f"More than one attachment is named {name}. Please share the Slack file link "
+                "or reattach the version you want me to use."
+            )
+        for file in preferred or matches:
+            selected[file["id"]] = file
+    if not selected:
+        for message in reversed(messages):
+            files = message_files(message)
+            if files:
+                selected = {file["id"]: file for file in files if file.get("id")}
+                if selected:
+                    break
+    return list(selected.values())
+
+
+def build_thread_text(
+    client: Any, channel: str, thread_ts: str, attachment_dir: Path,
+    *, request: dict[str, Any] | None = None,
+) -> str:
+    messages: list[dict[str, Any]] = []
+    cursor = ""
+    seen_cursors: set[str] = set()
+    for _ in range(20):
+        kwargs: dict[str, Any] = {"channel": channel, "ts": thread_ts, "limit": 100}
+        if request is not None:
+            kwargs.update(latest=request["ts"], inclusive=True)
+        if cursor:
+            kwargs["cursor"] = cursor
+        response = client.conversations_replies(**kwargs)
+        messages.extend(response.get("messages", []))
+        cursor = (response.get("response_metadata") or {}).get("next_cursor", "")
+        if not cursor:
+            if response.get("has_more"):
+                raise AttachmentLimitError("I couldn’t retrieve the complete thread. Please start a new thread with the files you want me to use.")
+            break
+        if cursor in seen_cursors:
+            raise AttachmentLimitError("I couldn’t retrieve the complete thread. Please retry or start a new thread with the files you want me to use.")
+        seen_cursors.add(cursor)
+    else:
+        raise AttachmentLimitError("This thread is too long to select attachments reliably. Please start a new thread with the files you want me to use.")
+    if request is not None:
+        messages = [message for message in messages if float(message.get("ts", "0")) <= float(request["ts"])]
+        # Preserve API-enriched file metadata when the event omits it; event
+        # fields win, including uploads not yet returned by replies.
+        fetched_request = next((message for message in messages if message.get("ts") == request["ts"]), {})
+        request = {**fetched_request, **request}
+        messages = [message for message in messages if message.get("ts") != request["ts"]]
+        messages.append(request)
+    messages.sort(key=lambda message: float(message.get("ts", "0")))
+    files = select_request_files(messages, request or (messages[-1] if messages else {}))
+    validate_attachment_metadata(files)
+    selected_ids = {file["id"] for file in files}
     budget = AttachmentBudget()
     lines = []
-    for message in messages:
+    for message in messages[-30:]:
         user = message.get("user") or message.get("bot_id") or "unknown"
         text = message.get("text", "")
         lines.append(f"{user}: {text}")
         lines.extend(format_message_attachments(message))
-    lines.extend(download_thread_text_files(messages, budget))
-    lines.extend(download_thread_images(messages, attachment_dir, budget))
-    lines.extend(download_thread_binary_files(messages, attachment_dir, budget))
+        for file in message_files(message):
+            if file.get("id") not in selected_ids:
+                lines.append(f"[Historical attachment, not downloaded: {file.get('name', 'unnamed')} ({file.get('id', 'unknown')})]")
+    selected_messages = [{"files": files}]
+    lines.extend(download_thread_text_files(selected_messages, budget))
+    lines.extend(download_thread_images(selected_messages, attachment_dir, budget))
+    lines.extend(download_thread_binary_files(selected_messages, attachment_dir, budget))
     return "\n".join(lines)
 
 
@@ -4199,7 +4276,7 @@ def create_app(
                 image_results_dir = generated_images_dir(attachment_dir)
                 image_results_dir.mkdir(parents=True)
                 (attachment_dir / "results" / "artifacts").mkdir()
-                thread_text = build_thread_text(client, channel, thread_ts, attachment_dir)
+                thread_text = build_thread_text(client, channel, thread_ts, attachment_dir, request=event)
                 failure_stage = "backend execution"
                 stream_available = (
                     env_enabled("OPENTAG_SLACK_STREAMING", default=True)
