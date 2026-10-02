@@ -38,7 +38,7 @@ Take that discussion into a private AI chat and you’ve given yourself a relay 
 Copy over the context, work through the answer, then bring it back to Slack. If
 someone questions it, you’re explaining a conversation they never saw.
 
-Tag brings your personal Codex assistant into that thread. You ask for help where
+Tag brings your personal Codex or Claude assistant into that thread. You ask for help where
 the discussion is already happening, and your teammates can follow the work,
 add a missing detail, or take on the next step.
 
@@ -54,7 +54,7 @@ They can question the answer, volunteer for a task, or point out what’s missin
 
 ## Your assistant, your own environment
 
-Tag runs on a computer you control, using your Codex setup. You choose its skills,
+Tag runs on a computer you control, using your Codex or Claude Code setup. You choose its skills,
 connect your accounts, and give it a place to work. Add your weekly report template
 or the checklist you use before a launch. Make it yours.
 
@@ -62,7 +62,7 @@ By default, only you can ask your Tag to work. Your teammates can bring their ow
 with their own setup. You share the conversation and the results; each assistant
 stays personal. See [Your own Tag](concepts/access.md) for access details.
 
-We don’t host your conversations or working files. Codex and connected services
+We don’t host your conversations or working files. Your agent provider and connected services
 still process the information needed for your requests, under their own data policies.
 Tag’s optional CLI telemetry has a separate, privacy-bounded collection policy;
 you can [review or disable it](reference/telemetry.md) at any time.

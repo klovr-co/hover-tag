@@ -67,11 +67,12 @@ tools such as `gws`. The installer does not relocate their credentials.
 
 ## Install from a checkout
 
-On supported macOS/Linux systems, install and sign in to Codex separately, then
-run the installer below. Tag automatically prepares Python and Slack CLI; neither
-Python nor uv needs to be on PATH. Setup checks the selected Codex transport and
-`codex login status`, and explains how to update or sign in when needed. Tag does
-not install Codex or change its global configuration or credentials.
+On supported macOS/Linux systems, install and sign in to Codex, Claude Code, or
+both separately, then run the installer below. Tag automatically prepares Python and Slack CLI; neither
+Python nor uv needs to be on PATH. Setup checks each agent's CLI and
+sign-in (`codex login status` or `claude auth status`), and explains how to
+update or sign in when needed. Tag does not install either agent or change its
+global configuration or credentials.
 
 Native Windows retains its Python 3.10+ and Slack CLI prerequisites; WSL uses the
 Linux bootstrap. No local administrator privileges are needed. Slack sign-in
