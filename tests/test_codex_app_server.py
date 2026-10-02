@@ -456,11 +456,11 @@ class AutoReviewTests(unittest.TestCase):
                 server._request = MagicMock(side_effect=CodexAppServerError("unsupported"))
                 server.interrupt_sent = mode == "stopped"
                 deadline = time.monotonic() + (-1 if mode == "expired" else 5)
+                self.assertFalse(server._approve_auto_review_denials(CodexEventMapper(), lambda e: None, deadline))
                 if mode == "unsupported":
-                    with self.assertRaises(CodexAppServerError):
-                        server._approve_auto_review_denials(CodexEventMapper(), lambda e: None, deadline)
+                    server._request.assert_called_once()
+                    self.assertEqual("thread/approveGuardianDeniedAction", server._request.call_args.args[0])
                 else:
-                    self.assertFalse(server._approve_auto_review_denials(CodexEventMapper(), lambda e: None, deadline))
                     server._request.assert_not_called()
 
     def test_wire_retry_preserves_thread_and_emits_only_retry_answer(self):
@@ -483,8 +483,11 @@ for line in sys.stdin:
         event = m["params"]["event"]
         assert event["id"] == "review-1"
         assert event["action"]["tool_name"] == "connect"
-        approved = True
-        send({"id":m["id"], "result":{}})
+        if sys.argv[1] == "reject":
+            send({"id":m["id"], "error":{"code":-32601, "message":"unsupported"}})
+        else:
+            approved = True
+            send({"id":m["id"], "result":{}})
     elif method == "turn/start":
         turn += 1
         assert m["params"]["threadId"] == "thread-1"
@@ -501,12 +504,13 @@ for line in sys.stdin:
             "text":"Created form" if approved else "Browser denied"}}})
         send({"method":"turn/completed", "params":{"turn":{"id":tid,"status":"completed"}}})
 '''
-        for approve in (True, False):
-            with self.subTest(approve=approve), tempfile.TemporaryDirectory() as raw:
+        for approve, reject in ((True, False), (False, False), (True, True)):
+            with self.subTest(approve=approve, reject=reject), tempfile.TemporaryDirectory() as raw:
                 root = Path(raw)
                 script = root / "server.py"
                 script.write_text(fake)
-                server = CodexAppServer([sys.executable, "-u", str(script)], cwd=root,
+                server = CodexAppServer([sys.executable, "-u", str(script),
+                                         "reject" if reject else "accept"], cwd=root,
                                         timeout=5, max_timeout=10, approval_dir=root)
                 events = []
                 def emit(event):
@@ -517,7 +521,8 @@ for line in sys.stdin:
                 self.assertEqual(("completed", ""), server.run("Create form", model=None,
                                  reasoning_effort=None, emit=emit))
                 answers = [e["text"] for e in events if e["type"] == "message_complete"]
-                self.assertEqual(["Created form" if approve else "Browser denied"], answers)
+                self.assertEqual(["Created form" if approve and not reject else "Browser denied"], answers)
+                self.assertEqual("turn-2" if approve and not reject else "turn-1", server.turn_id)
                 self.assertEqual(1, sum(e["type"] == "turn_complete" for e in events))
                 self.assertIsNotNone(server.process.poll())
 

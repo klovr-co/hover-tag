@@ -713,9 +713,13 @@ class CodexAppServer:
             )
             emit({"type": "approval_expired", "approval_id": approval_id})
             if approved and not self.interrupt_sent and time.monotonic() < deadline:
-                self._request("thread/approveGuardianDeniedAction", {
-                    "threadId": self.thread_id, "event": event,
-                }, mapper, emit, deadline)
+                try:
+                    self._request("thread/approveGuardianDeniedAction", {
+                        "threadId": self.thread_id, "event": event,
+                    }, mapper, emit, deadline)
+                except CodexAppServerError:
+                    # A rejected override grants no retry; preserve the held answer.
+                    continue
                 approved_any = True
         return approved_any and not self.interrupt_sent and time.monotonic() < deadline
 
