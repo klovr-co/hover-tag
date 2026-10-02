@@ -23,7 +23,9 @@ All notable changes to Tag are documented here.
   showing structured progress, then lists, starts, renames, and adds Tags,
   shows each Tag's logs, upgrades Tag, and stays in the menu bar or system
   tray. Settings turn on **Open Tag at login** and **Keep Tags running**, and
-  Tag.app notifies you when a Tag goes offline unexpectedly.
+  Tag.app notifies you when a Tag goes offline unexpectedly. It updates itself
+  from signed releases on its own release line, when you choose **Restart to
+  update**.
 
 - Keep Tags running after login with `tag autostart on`. Tag remembers which
   Tags you started or stopped, and a per-user login service (launchd on macOS,

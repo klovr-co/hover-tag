@@ -46,8 +46,14 @@ installs with reviewed code and passes `--channel` explicitly. The installer
 still verifies each release's checksum and provenance.
 
 Release builds need signing credentials in CI: a Developer ID certificate and
-notarization credentials for macOS, and a code-signing certificate for
-Windows. See [`RELEASE.md`](../RELEASE.md).
+notarization credentials for macOS (`scripts/set-apple-secrets.sh` stores
+them), and a code-signing certificate for Windows. Update bundles are signed
+with the updater key in `TAURI_SIGNING_PRIVATE_KEY`. See
+[`RELEASE.md`](../RELEASE.md).
+
+Tag.app checks for a newer version of itself every six hours and offers
+**Restart to update**; it never restarts on its own. Sample data shows the
+offer with `npm run dev` and `?update=1`.
 
 ## Upgrading from the Swift Tag.app
 

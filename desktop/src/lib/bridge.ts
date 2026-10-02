@@ -57,6 +57,15 @@ export interface Bridge {
   quit(): Promise<void>;
   /** Record that the Swift app's login behaviour was carried over. */
   markMigrated(): Promise<void>;
+  /** A newer signed Tag.app on this build's release line, if any. */
+  checkAppUpdate(): Promise<AppUpdate | null>;
+  /** Install the update found by checkAppUpdate and restart into it. */
+  installAppUpdate(): Promise<void>;
+}
+
+export interface AppUpdate {
+  version: string;
+  notes?: string | null;
 }
 
 const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -114,6 +123,8 @@ async function tauriBridge(): Promise<Bridge> {
     fitWindow: (height) => getCurrentWindow().setSize(new LogicalSize(520, Math.min(Math.max(height, 300), 860))),
     quit: () => invoke("quit"),
     markMigrated: () => invoke("mark_migrated"),
+    checkAppUpdate: () => invoke<AppUpdate | null>("app_update_check"),
+    installAppUpdate: () => invoke("app_update_install"),
   };
 }
 
@@ -224,6 +235,8 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
     fitWindow: async () => {},
     quit: async () => {},
     markMigrated: async () => {},
+    checkAppUpdate: async () => (new URLSearchParams(location.search).get("update") ? { version: "0.3.0" } : null),
+    installAppUpdate: async () => { await sleep(1500); },
   };
 }
 

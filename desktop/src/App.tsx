@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Tag.app: installs Tag on first run, then lists, starts and adds Tags.
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { bridge, type AppInfo, type Bridge } from "./lib/bridge";
+import { bridge, type AppInfo, type AppUpdate, type Bridge } from "./lib/bridge";
 import { compatibility, parseJSON, status, type TagRow, type VersionInfo } from "./lib/protocol";
 import { useTags } from "./lib/tags";
 import { Connect } from "./components/Connect";
@@ -22,6 +22,8 @@ type Screen =
 
 /** Capabilities this app needs from the installed Tag. */
 const NEEDED = ["list", "setup-jsonl"];
+/** How often Tag.app looks for a newer version of itself. */
+const APP_UPDATE_HOURS = 6;
 
 /** Keep the Tags the Swift app restored at login, then let the login service do it. */
 export async function migrateFromSwiftApp(api: Bridge, legacy: string[], existing: string[]) {
@@ -45,6 +47,8 @@ export function App() {
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [screen, setScreen] = useState<Screen>({ name: "loading" });
   const [outdated, setOutdated] = useState(false);
+  const [appUpdate, setAppUpdate] = useState<AppUpdate | null>(null);
+  const [installingUpdate, setInstallingUpdate] = useState(false);
   const installed = !!info?.cli && !["loading", "welcome", "installing"].includes(screen.name);
   const tags = useTags(api, installed);
   const root = useRef<HTMLDivElement>(null);
@@ -78,6 +82,25 @@ export function App() {
       void tags.refreshAutostart();
     });
   }, [api, info?.legacyWantedTags, tags.loaded, tags.rows, tags]);
+
+  // Look for a newer Tag.app now and then; installing always waits for a click.
+  useEffect(() => {
+    if (!api) return;
+    const check = () => void api.checkAppUpdate().then(setAppUpdate).catch(() => {});
+    check();
+    const timer = setInterval(check, APP_UPDATE_HOURS * 3600 * 1000);
+    return () => clearInterval(timer);
+  }, [api]);
+  const installUpdate = async () => {
+    if (!api) return;
+    setInstallingUpdate(true);
+    try {
+      await api.installAppUpdate();
+    } catch (error) {
+      tags.setError(`Couldn't update Tag.app: ${error}`);
+      setInstallingUpdate(false);
+    }
+  };
 
   // The window always fits its content.
   useLayoutEffect(() => {
@@ -117,6 +140,16 @@ export function App() {
       )}
       {screen.name === "home" && (
         <>
+          {appUpdate && (
+            <div className="well row gap-10">
+              <span className="stack gap-4" style={{ flex: 1 }}>
+                <span style={{ fontWeight: 600 }}>Tag.app {appUpdate.version} is ready</span>
+                <span className="caption secondary">Your Tags keep running while the app restarts.</span>
+              </span>
+              <Primary title={installingUpdate ? "Updating…" : "Restart to update"} disabled={installingUpdate}
+                onClick={() => void installUpdate()} />
+            </div>
+          )}
           {outdated && (
             <div className="well row gap-10">
               <ErrorLine>This version of Tag is too old for this app.</ErrorLine>
@@ -137,7 +170,11 @@ export function App() {
           <Connect api={api} args={screen.args} done={home} />
         </>
       )}
-      {screen.name === "settings" && <Settings api={api} info={info} tags={tags} close={home} />}
+      {screen.name === "settings" && (
+        <Settings api={api} info={info} tags={tags} close={home} appUpdate={appUpdate}
+          checkApp={async () => { const found = await api.checkAppUpdate(); setAppUpdate(found); return found; }}
+          installApp={() => void installUpdate()} installingApp={installingUpdate} />
+      )}
       {screen.name === "logs" && <Logs api={api} row={screen.row} close={home} />}
     </main>
   );

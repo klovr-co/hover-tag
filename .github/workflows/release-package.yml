@@ -118,13 +118,17 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Signs the update bundles Tag.app installs itself (see scripts/desktop_update_manifest.py).
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           npm ci
           npm version --no-git-tag-version --allow-same-version "${RELEASE_TAG#v}"
+          updates='{"bundle":{"createUpdaterArtifacts":true}}'
           if [ "${{ matrix.name }}" = macos ]; then
-            npx tauri build --target universal-apple-darwin --bundles dmg
+            npx tauri build --target universal-apple-darwin --bundles app,dmg --config "$updates"
           else
-            npx tauri build
+            npx tauri build --config "$updates"
           fi
       - name: Attach to the release
         env:
@@ -135,16 +139,53 @@ jobs:
           mkdir -p out
           bundle=desktop/src-tauri/target
           case "${{ matrix.name }}" in
-            macos) cp "$bundle"/universal-apple-darwin/release/bundle/dmg/*.dmg "out/Tag-$version-macos.dmg" ;;
-            windows) cp "$bundle"/release/bundle/nsis/*-setup.exe "out/Tag-$version-windows-setup.exe" ;;
+            macos)
+              mac="$bundle"/universal-apple-darwin/release/bundle
+              cp "$mac"/dmg/*.dmg "out/Tag-$version-macos.dmg"
+              cp "$mac"/macos/*.app.tar.gz "out/Tag-$version-macos.app.tar.gz"
+              cp "$mac"/macos/*.app.tar.gz.sig "out/Tag-$version-macos.app.tar.gz.sig" ;;
+            windows)
+              cp "$bundle"/release/bundle/nsis/*-setup.exe "out/Tag-$version-windows-setup.exe"
+              cp "$bundle"/release/bundle/nsis/*-setup.exe.sig "out/Tag-$version-windows-setup.exe.sig" ;;
             linux)
               cp "$bundle"/release/bundle/deb/*.deb "out/Tag-$version-linux-amd64.deb"
-              cp "$bundle"/release/bundle/appimage/*.AppImage "out/Tag-$version-linux-x86_64.AppImage" ;;
+              cp "$bundle"/release/bundle/appimage/*.AppImage "out/Tag-$version-linux-x86_64.AppImage"
+              cp "$bundle"/release/bundle/appimage/*.AppImage.sig "out/Tag-$version-linux-x86_64.AppImage.sig" ;;
           esac
           cd out
           if command -v sha256sum >/dev/null; then sum="sha256sum"; else sum="shasum -a 256"; fi
           $sum * > "DESKTOP-SHA256SUMS-${{ matrix.name }}"
           gh release upload "$RELEASE_TAG" * --clobber
+  desktop-updates:
+    # Point each release line's Tag.app at this release once its builds are attached.
+    needs: desktop
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: tag-channel-index
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - name: Publish Tag.app update manifests
+        run: |
+          mkdir -p signatures current manifests
+          gh release download "$RELEASE_TAG" --dir signatures --pattern 'Tag-*.sig'
+          gh release download channels --dir current --pattern 'tag-app-*.json' || true
+          python scripts/desktop_update_manifest.py --version "$RELEASE_TAG" \
+            --signatures signatures --current current --output manifests \
+            --notes "See https://github.com/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG"
+          if ls manifests/*.json >/dev/null 2>&1; then
+            gh release upload channels manifests/*.json --clobber
+          fi
   notify-site-docs:
     needs: package
     if: needs.package.outputs.docs_tag != ''

@@ -37,7 +37,13 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app", "dmg", "nsis", "deb", "appimage"],
+    "targets": [
+      "app",
+      "dmg",
+      "nsis",
+      "deb",
+      "appimage"
+    ],
     "category": "Productivity",
     "shortDescription": "Your personal assistant, in Slack.",
     "copyright": "Copyright 2026 klovr.co",
@@ -59,10 +65,24 @@
       "minimumSystemVersion": "12.0"
     },
     "windows": {
-      "nsis": { "installMode": "currentUser" }
+      "nsis": {
+        "installMode": "currentUser"
+      }
     },
     "linux": {
-      "deb": { "depends": ["libayatana-appindicator3-1"] }
+      "deb": {
+        "depends": [
+          "libayatana-appindicator3-1"
+        ]
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDNBM0U3NjE5MTk2QzM1RDkKUldUWk5Xd1pHWFkrT250Z0lPVFBtWjQwWHFXdEgrRVM3QzJVZ1NXVDIwQlhtYkRCSU8zK3ZQaCsK",
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // App settings, updates, and a Tag's recent logs.
 import { useCallback, useEffect, useState } from "react";
-import type { AppInfo, Bridge } from "../lib/bridge";
+import type { AppInfo, AppUpdate, Bridge } from "../lib/bridge";
 import { parseJSON, title, type TagRow } from "../lib/protocol";
 import { failureLine, type Tags } from "../lib/tags";
 import { CommunityLinks } from "./CommunityLinks";
@@ -29,7 +29,20 @@ function Toggle({ label, detail, on, busy, onChange }: {
   );
 }
 
-export function Settings({ api, info, tags, close }: { api: Bridge; info: AppInfo; tags: Tags; close: () => void }) {
+interface SettingsProps {
+  api: Bridge;
+  info: AppInfo;
+  tags: Tags;
+  close: () => void;
+  appUpdate: AppUpdate | null;
+  checkApp: () => Promise<AppUpdate | null>;
+  installApp: () => void;
+  installingApp: boolean;
+}
+
+export function Settings({ api, info, tags, close, appUpdate, checkApp, installApp, installingApp }: SettingsProps) {
+  const [appChecked, setAppChecked] = useState(false);
+  const [checkingApp, setCheckingApp] = useState(false);
   const [login, setLogin] = useState(false);
   const [keepBusy, setKeepBusy] = useState(false);
   const [tagVersion, setTagVersion] = useState("");
@@ -92,12 +105,32 @@ export function Settings({ api, info, tags, close }: { api: Bridge; info: AppInf
             </span>
             <span className="caption secondary">
               {update?.status === "available" ? "Running Tags restart on the new version. Your settings are kept."
-                : `App ${info.version}`}
+                : "The tag command and your Tags"}
             </span>
           </span>
           {upgrading ? <><Spinner small /><span className="caption secondary">Upgrading…</span></>
             : update?.status === "available" ? <Primary title="Upgrade" onClick={() => void upgrade()} />
             : <Secondary title={checking ? "Checking…" : "Check for updates"} disabled={checking} onClick={() => void check()} />}
+        </div>
+        <div className="card list-item" style={{ gap: 12 }}>
+          <span className="stack gap-4" style={{ flex: 1 }}>
+            <span style={{ fontWeight: 500 }}>
+              {appUpdate ? `Tag.app ${appUpdate.version} is available`
+                : appChecked ? "Tag.app is up to date" : `Tag.app ${info.version}`}
+            </span>
+            <span className="caption secondary">
+              {appUpdate ? "Restarts the app; your Tags keep running." : "Checks automatically every few hours"}
+            </span>
+          </span>
+          {installingApp ? <><Spinner small /><span className="caption secondary">Updating…</span></>
+            : appUpdate ? <Primary title="Restart to update" onClick={installApp} />
+            : <Secondary title={checkingApp ? "Checking…" : "Check for updates"} disabled={checkingApp}
+                onClick={async () => {
+                  setCheckingApp(true);
+                  try { await checkApp(); setAppChecked(true); }
+                  catch { setError("Couldn't check for a new Tag.app. Check your connection and try again."); }
+                  setCheckingApp(false);
+                }} />}
         </div>
       </div>
       {(error || tags.error) && <ErrorLine>{error || tags.error}</ErrorLine>}

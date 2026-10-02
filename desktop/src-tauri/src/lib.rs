@@ -12,9 +12,60 @@ use serde::Serialize;
 use sessions::{Output, Sessions};
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, RunEvent, State, WindowEvent};
+
+/// Where each release line publishes its newest Tag.app (see scripts/desktop_update_manifest.py).
+const UPDATE_BASE: &str = "https://github.com/klovr-co/hover-tag/releases/download/channels";
+
+/// The release line this build follows: alpha builds also take newer betas
+/// and stable releases, which the manifests for each line already include.
+fn update_channel(version: &str) -> &'static str {
+    if version.contains("-alpha") {
+        "alpha"
+    } else if version.contains("-beta") {
+        "beta"
+    } else {
+        "stable"
+    }
+}
+
+#[derive(Default)]
+struct PendingUpdate(Mutex<Option<tauri_plugin_updater::Update>>);
+
+#[derive(Serialize)]
+struct AppUpdate {
+    version: String,
+    notes: Option<String>,
+}
+
+/// Ask the release line's manifest for a newer, signed Tag.app.
+#[tauri::command]
+async fn app_update_check(app: AppHandle, pending: State<'_, PendingUpdate>) -> Result<Option<AppUpdate>, String> {
+    use tauri_plugin_updater::UpdaterExt;
+    let version = app.package_info().version.to_string();
+    let url = format!("{UPDATE_BASE}/tag-app-{}.json", update_channel(&version));
+    let updater = app
+        .updater_builder()
+        .endpoints(vec![url.parse().map_err(|e| format!("{e}"))?])
+        .map_err(|e| e.to_string())?
+        .build()
+        .map_err(|e| e.to_string())?;
+    let update = updater.check().await.map_err(|e| e.to_string())?;
+    let found = update.as_ref().map(|u| AppUpdate { version: u.version.clone(), notes: u.body.clone() });
+    *pending.0.lock().unwrap() = update;
+    Ok(found)
+}
+
+/// Download, verify the signature, install, and restart into the new version.
+#[tauri::command]
+async fn app_update_install(app: AppHandle, pending: State<'_, PendingUpdate>) -> Result<(), String> {
+    let update = pending.0.lock().unwrap().take().ok_or("No update is ready; check again.")?;
+    update.download_and_install(|_, _| {}, || {}).await.map_err(|e| e.to_string())?;
+    app.state::<Arc<Sessions>>().stop_all();
+    app.restart();
+}
 
 /// Passed by the login item so the app starts quietly in the tray.
 const AUTOSTART_FLAG: &str = "--autostart";
@@ -236,6 +287,13 @@ mod tests {
     use super::parse_defaults_array;
 
     #[test]
+    fn each_build_follows_its_own_release_line() {
+        assert_eq!(super::update_channel("0.3.0-alpha.2"), "alpha");
+        assert_eq!(super::update_channel("0.3.0-beta.1"), "beta");
+        assert_eq!(super::update_channel("0.3.0"), "stable");
+    }
+
+    #[test]
     fn reads_the_swift_apps_saved_tags() {
         let text = "(\n    \"t0klovr1-a0maya01\",\n    research\n)\n";
         assert_eq!(parse_defaults_array(text), ["t0klovr1-a0maya01", "research"]);
@@ -254,10 +312,13 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Arc::new(Sessions::default()))
+        .manage(PendingUpdate::default())
         .invoke_handler(tauri::generate_handler![
             app_info, run_tag, setup_start, install_start, session_send, session_stop,
-            update_tray, show_window, quit, mark_migrated
+            update_tray, show_window, quit, mark_migrated,
+            app_update_check, app_update_install
         ])
         .setup(|app| {
             tray::create(app.handle())?;

@@ -121,12 +121,37 @@ Windows, and Linux and attaches `Tag-VERSION-macos.dmg` (universal),
 `DESKTOP-SHA256SUMS-PLATFORM`. These are separate from the CLI archive and its
 `SHA256SUMS`, which the installer verifies.
 
+### Signing
+
+To set the Apple secrets, run `desktop/scripts/set-apple-secrets.sh` on a Mac
+that has the Developer ID certificate; it checks the credentials with Apple
+before storing them and prints nothing secret.
+
 macOS builds are signed and notarized only when these repository secrets are
 set: `APPLE_CERTIFICATE` (base64 Developer ID Application `.p12`),
 `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`,
 `APPLE_PASSWORD` (an app-specific password), and `APPLE_TEAM_ID`. Without them
 the DMG is unsigned and Gatekeeper blocks it, so don't announce it as an
 end-user download. Windows builds are unsigned until a code-signing certificate
-is configured; SmartScreen warns on them. Before a stable release, qualify
+is configured; SmartScreen warns on them.
+
+### App updates
+
+Tag.app updates itself from signed update bundles. Each release also attaches
+`Tag-VERSION-macos.app.tar.gz`, the Windows installer, and the AppImage with
+`.sig` signatures, and the `desktop-updates` job writes
+`tag-app-{stable,beta,alpha}.json` to the `channels` release. A build follows
+its own line: alpha builds also receive newer betas and stable releases. A
+manifest never moves to an older version, and a platform whose build failed
+gets no update from that release.
+
+Updates are signed with the key in the `TAURI_SIGNING_PRIVATE_KEY` and
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD` secrets; the public half is in
+`desktop/src-tauri/tauri.conf.json`. Keep an offline backup of the private key
+and its password. If the key is lost, installed copies can't accept updates
+signed with a new key; people must download Tag.app again once.
+
+Before a stable release, qualify
 Tag.app on each platform: first-run install, adding a Tag, start and stop from
-the window and the tray, Keep Tags running across a logout, and upgrade.
+the window and the tray, Keep Tags running across a logout, upgrade, and an
+app update from the previous release.
