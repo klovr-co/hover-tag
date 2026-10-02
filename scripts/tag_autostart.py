@@ -394,8 +394,10 @@ def run(installation_root: Path, lifecycle, source_root: Path) -> int:
 
         def start(tag_id: str) -> int:
             print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} starting {tag_id}", flush=True)
+            # The supervisor has no console; don't let its children open one on Windows.
+            hidden = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
             result = subprocess.run([*command, tag_id, "start"], stdin=subprocess.DEVNULL,
-                                    capture_output=True, text=True, check=False)
+                                    capture_output=True, text=True, check=False, **hidden)
             if result.returncode:
                 tail = (result.stderr or result.stdout).strip().splitlines()[-3:]
                 print(f"  {tag_id} did not start (exit {result.returncode}): {' / '.join(tail)}", flush=True)
