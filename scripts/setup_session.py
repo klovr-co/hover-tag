@@ -263,14 +263,42 @@ def _finished(directory: Path) -> dict | None:
 _launched: list[subprocess.Popen] = []
 
 
+def _start_lock(directory: Path):
+    """Wait for, then hold, the lock that lets only one caller start a session."""
+    try:
+        from tag_locks import LifecycleLock
+    except ImportError:
+        from scripts.tag_locks import LifecycleLock
+    deadline = time.monotonic() + START_SECONDS
+    while True:
+        try:
+            return LifecycleLock(directory / "start.lock").acquire()
+        except RuntimeError:
+            if time.monotonic() > deadline:
+                raise SessionError("Another setup is starting; try again in a moment.") from None
+            time.sleep(0.1)
+
+
 def step(home: Path, command: list[str]) -> dict:
     """Return the next setup question, starting a session when none is running."""
     directory = session_dir(home)
     if (reply := _request(directory, {"op": "next"})) is not None:
         return reply
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    # Held from "is one running?" until the new one answers, so two concurrent
+    # --step calls can't each start a setup (one background setup per Tag home).
+    lock = _start_lock(directory)
+    try:
+        return _start(directory, command)
+    finally:
+        lock.release()
+
+
+def _start(directory: Path, command: list[str]) -> dict:
+    if (reply := _request(directory, {"op": "next"})) is not None:
+        return reply  # Another caller started it while we waited.
     if (reply := _finished(directory)) is not None:
         return reply
-    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     _launched.append(subprocess.Popen(
         [sys.executable, str(Path(__file__).resolve()), "serve", str(directory), "--", *command],
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,

@@ -37,8 +37,8 @@ export function useTags(api: Bridge | null, enabled: boolean) {
 
   const refresh = useCallback(async () => {
     if (!api) return;
-    const result = await api.tag(["list", "--json"]);
     try {
+      const result = await api.tag(["list", "--json"]);
       if (result.code !== 0) throw new Error();
       const next = parseList(result.stdout);
       for (const row of droppedTags(previous.current, next, stopping.current)) {
@@ -50,14 +50,18 @@ export function useTags(api: Bridge | null, enabled: boolean) {
       setLoaded(true);
       setError((e) => (e === "Couldn't read your Tags." ? "" : e));
     } catch {
-      setError("Couldn't read your Tags.");
+      setError((current) => current || "Couldn't read your Tags.");  // keep a more specific message
     }
   }, [api]);
 
   const refreshAutostart = useCallback(async () => {
     if (!api) return;
-    const result = await api.tag(["autostart", "status", "--json"]);
-    if (result.code === 0) setKeepRunning(!!parseJSON<{ enabled: boolean }>(result.stdout).enabled);
+    try {
+      const result = await api.tag(["autostart", "status", "--json"]);
+      if (result.code === 0) setKeepRunning(!!parseJSON<{ enabled: boolean }>(result.stdout).enabled);
+    } catch {
+      // An older Tag without autostart: the setting simply shows as off.
+    }
   }, [api]);
 
   useEffect(() => {
@@ -84,6 +88,10 @@ export function useTags(api: Bridge | null, enabled: boolean) {
       const result = await api.tag(args);
       setError(result.code === 0 ? "" : failureLine(result, fallback));
       return result.code === 0;
+    } catch (error) {
+      // Tag couldn't be run at all, for example after it was uninstalled.
+      setError(`${fallback} ${String(error)}`);
+      return false;
     } finally {
       mark(key, false);
       await refresh();

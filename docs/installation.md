@@ -369,8 +369,8 @@ Since this measurement, Tag no longer installs the MFS CLI (about 2 MB less).
 | Python | approximately 23.9 MiB reported by uv | 69,627,389 B |
 | Slack CLI | 7,607,363 B | 20,527,232 B |
 | Runtime packages (118 wheels) | 196,784,133 B | included in release environment below |
-| MFS CLI | 2,038,676 B | included in release environment below |
-| Release environment, including packages and MFS CLI | see above | 583,249,864 B |
+| MFS CLI (no longer installed) | 2,038,676 B | included in release environment below |
+| Release environment, including packages and the MFS CLI then installed | see above | 583,249,864 B |
 | MFS embedding model and tokenizer | 587,042,498 B | 587,042,939 B including cache metadata |
 
 The dependency payload is approximately 797 MiB before the Tag runtime archive,

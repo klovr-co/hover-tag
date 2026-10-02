@@ -399,6 +399,13 @@ def choose_slack_person(people: list[dict[str, str]]) -> str | None:
             raise ui.Paused()
 
 
+def needs_backend_choice(values: dict[str, str]) -> bool:
+    """Ask for the agent when none is valid, or when Back returns to that question
+    (the default would otherwise fill it in and skip it)."""
+    return bool(settings.validation_error("OPENTAG_BACKEND", values.get("OPENTAG_BACKEND", ""))) \
+        or ui.going_back_to("backend")
+
+
 def choose_allowed_users(team_id: str, current: str = "", *, token: str = "", workspace_id: str = "") -> str:
     """Make the person setting up Tag its owner; only they can use it by default."""
     if not settings.validation_error("SLACK_ALLOWED_USER_IDS", current):
@@ -1490,7 +1497,7 @@ def guided_setup(
     defaults = {key: value for key, value in settings.DEFAULTS.items() if key not in values}
     if defaults:
         values = settings.update_config(config_path, defaults, only_missing=True)
-    if settings.validation_error("OPENTAG_BACKEND", values["OPENTAG_BACKEND"]):
+    if needs_backend_choice(values):
         values = settings.update_config(config_path, {"OPENTAG_BACKEND": choose_backend()})
     backend = values["OPENTAG_BACKEND"]
     if not selected_backend_available(backend):

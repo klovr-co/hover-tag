@@ -150,3 +150,26 @@ class MainTagTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RestartAfterRenameTests(unittest.TestCase):
+    def test_a_running_tag_restarts_under_its_new_name(self) -> None:
+        import sys
+        from contextlib import redirect_stdout
+        from io import StringIO
+        from scripts import tag_cli
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "Tag"
+            tag_instances.ensure_default(root)
+            with patch.dict(os.environ, {"TAG_HOME": str(root)}), \
+                    patch.object(sys, "argv", ["tag", "setup"]), \
+                    patch.object(sys.stdin, "isatty", return_value=True), \
+                    patch("scripts.tag_dependencies.migrate"), patch("scripts.tag_layout.migrate"), \
+                    patch.object(tag_cli, "_rename", return_value=NAME), \
+                    patch.object(tag_cli, "process_for", return_value=object()), \
+                    patch.object(tag_cli, "show_upgrade_reminder"), \
+                    patch.object(tag_cli.subprocess, "call", return_value=0) as call, \
+                    redirect_stdout(StringIO()):
+                self.assertEqual(tag_cli.main(), 0)
+            restart = call.call_args_list[-1].args[0]
+            self.assertEqual(restart[-2:], [NAME, "start"])

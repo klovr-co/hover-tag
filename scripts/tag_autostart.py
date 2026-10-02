@@ -430,9 +430,15 @@ def run(installation_root: Path, lifecycle, source_root: Path) -> int:
             print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} starting {tag_id}", flush=True)
             # The supervisor has no console; don't let its children open one on Windows.
             hidden = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
-            result = subprocess.run([*command, tag_id, "start"], stdin=subprocess.DEVNULL,
-                                    env={**os.environ, SUPERVISED_ENV: "1"},
-                                    capture_output=True, text=True, check=False, **hidden)
+            try:
+                result = subprocess.run([*command, tag_id, "start"], stdin=subprocess.DEVNULL,
+                                        env={**os.environ, SUPERVISED_ENV: "1"},
+                                        capture_output=True, text=True, check=False, **hidden)
+            except (OSError, subprocess.SubprocessError) as error:
+                # For example, the launcher is briefly missing during an upgrade.
+                # Count it as a failed start; the loop backs off and tries again.
+                print(f"  {tag_id} could not be started: {error}", flush=True)
+                return 1
             if result.returncode:
                 tail = (result.stderr or result.stdout).strip().splitlines()[-3:]
                 print(f"  {tag_id} did not start (exit {result.returncode}): {' / '.join(tail)}", flush=True)

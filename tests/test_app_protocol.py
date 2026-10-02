@@ -102,7 +102,8 @@ class ProtocolTests(unittest.TestCase):
         for event in events:
             if event["type"] == "question":
                 self.assertIn(event["kind"], kinds)
-                self.assertIn(f'qid="{event["id"]}"', sources, f"unknown setup question {event['id']}")
+                known = f'qid="{event["id"]}"' in sources or f'qid: str = "{event["id"]}"' in sources
+                self.assertTrue(known, f"unknown setup question {event['id']}")
                 self.assertIn("can_go_back", event)
         self.assertEqual(events[-1]["type"], "result")
 

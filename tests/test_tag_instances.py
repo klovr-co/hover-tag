@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+import shutil
 import stat
 from contextlib import redirect_stdout
 from io import StringIO
@@ -305,3 +306,19 @@ class NativeTagFolderTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'symlink'):
                     tag_instances.create(root, 'work')
             self.assertFalse((outside / '.tag').exists())
+
+
+class MainTagTests(unittest.TestCase):
+    def test_only_one_tag_is_ever_main(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "Tag"
+            default = tag_instances.ensure_default(root)
+            other = tag_instances.create(root, "t1-a1")
+            self.assertTrue(tag_instances.resolve(root, "default").is_main)
+            tag_instances.set_main_tag(root, "t1-a1")
+            self.assertTrue(tag_instances.resolve(root, "t1-a1").is_main)
+            self.assertFalse(tag_instances.resolve(root, "default").is_main)
+            self.assertEqual(default.tag_id, "default")
+            # A saved main Tag that no longer exists doesn't take the role from default.
+            shutil.rmtree(other.home)
+            self.assertTrue(tag_instances.resolve(root, "default").is_main)

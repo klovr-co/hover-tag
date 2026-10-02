@@ -48,8 +48,15 @@ class InstanceContext:
 
     @property
     def is_main(self) -> bool:
-        """Whether plain ``tag ACTION`` (no name) selects this Tag."""
-        return self.is_default or main_tag(self.installation_root) == self.tag_id
+        """Whether plain ``tag ACTION`` (no name) selects this Tag.
+
+        A saved main Tag that still exists wins; ``default`` is main only otherwise,
+        so exactly one Tag is ever reported as main.
+        """
+        saved = main_tag(self.installation_root)
+        if saved and saved != self.tag_id and instance_path(self.installation_root, saved).exists():
+            return False
+        return self.is_default or saved == self.tag_id
 
     def command(self, action: str) -> str:
         target = "" if self.is_main else f"{self.tag_id} "

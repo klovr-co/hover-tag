@@ -80,10 +80,10 @@ export function heading(question: SetupQuestion): [string, string] {
   switch (question.id) {
     case "workspace":
       return ["Which workspace?", "Pick the Slack workspace this Tag will work in."];
-    case "join_channels":
-    case "keep_channels":
-    case "saved_channels":
+    case "channels":
       return ["Where should Tag respond?", "Tag answers and remembers conversations in these channels."];
+    case "approve_setup":
+      return ["Ready to create Tag's Slack app?", "Continue to create and install it, or go back to change your choices."];
     case "create_app":
       return ["Create the Slack app", "Slack creates and installs Tag's app in this workspace."];
     default:

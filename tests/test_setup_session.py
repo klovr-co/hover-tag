@@ -119,3 +119,35 @@ class SetupSessionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ConcurrentStartTests(unittest.TestCase):
+    def test_two_concurrent_steps_start_one_setup(self) -> None:
+        import threading
+        from unittest.mock import patch
+        from scripts import setup_session
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            directory = setup_session.session_dir(home)
+            launches = []
+
+            class FakeSupervisor:
+                def __init__(self, *_args, **_kwargs):
+                    launches.append(self)
+                    time.sleep(0.3)  # starting takes a moment
+                    (directory / "session.json").write_text("{}")
+
+            def request(_directory, _message):
+                return {"state": "waiting"} if launches else None
+
+            replies = []
+            with patch.object(setup_session.subprocess, "Popen", FakeSupervisor), \
+                    patch.object(setup_session, "_request", side_effect=request):
+                threads = [threading.Thread(target=lambda: replies.append(setup_session.step(home, ["tag", "setup"])))
+                           for _ in range(2)]
+                for thread in threads:
+                    thread.start()
+                for thread in threads:
+                    thread.join()
+            self.assertEqual(len(launches), 1)
+            self.assertEqual(replies, [{"state": "waiting"}] * 2)

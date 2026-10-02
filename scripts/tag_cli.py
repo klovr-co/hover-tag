@@ -2299,7 +2299,8 @@ def _run_cli() -> int:
                     display.info_row("Tag", f"Named '{renamed}' after its Slack team and app IDs", good=True)
                 if was_running:
                     result = subprocess.call(
-                        [sys.executable, str(ROOT / "scripts/tag_cli.py"), "start"],
+                        # Name the renamed Tag: it isn't necessarily the main one.
+                        [sys.executable, str(ROOT / "scripts/tag_cli.py"), tag_id, "start"],
                         env={key: value for key, value in os.environ.items()
                              # Drop the pre-rename instance's paths; start rebuilds them.
                              if not key.startswith(("TAG_INSTANCE_HOME", "TAG_ID", "OPENTAG_"))

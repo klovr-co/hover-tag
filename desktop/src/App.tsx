@@ -65,9 +65,14 @@ export function App() {
   // Make sure this Tag can be driven by this app.
   useEffect(() => {
     if (!api || !info?.cli || screen.name !== "home") return;
+    // A failed call or unreadable output counts as outdated, so the banner offers an update.
     void api.tag(["version", "--json"]).then((r) => {
-      setOutdated(!(r.code === 0 && compatibility(parseJSON<VersionInfo>(r.stdout), NEEDED).ok));
-    });
+      try {
+        setOutdated(!(r.code === 0 && compatibility(parseJSON<VersionInfo>(r.stdout), NEEDED).ok));
+      } catch {
+        setOutdated(true);
+      }
+    }, () => setOutdated(true));
   }, [api, info?.cli, screen.name]);
 
   // Once: the Swift Tag.app restored Tags at login itself; the CLI's login service does that now.
@@ -76,7 +81,7 @@ export function App() {
     const legacy = info?.legacyWantedTags;
     if (!api || !legacy?.length || !tags.loaded || migrating.current) return;
     migrating.current = true;
-    void migrateFromSwiftApp(api, legacy, tags.rows.map((r) => r.id)).then((done) => {
+    void migrateFromSwiftApp(api, legacy, tags.rows.map((r) => r.id)).catch(() => false).then((done) => {
       if (done) setInfo((current) => current && { ...current, legacyWantedTags: null });
       void tags.refresh();
       void tags.refreshAutostart();

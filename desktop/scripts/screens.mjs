@@ -47,10 +47,10 @@ for (const scheme of ["light", "dark"]) {
   await page.getByText("Where should Tag respond?").waitFor();
   await shot(page, "connect-channels");
   await page.getByRole("button", { name: "Continue" }).click();
-  await page.getByText("Create the Slack app now?").waitFor();
-  await shot(page, "connect-confirm");
-  await page.getByRole("button", { name: "Yes" }).click();
-  await page.getByText("What should Tag be called").waitFor();
+  await page.getByText("Ready to create Tag's Slack app?").waitFor();
+  await shot(page, "connect-approve");
+  await page.getByRole("option", { name: "Continue" }).click();
+  await page.getByText("Assistant name").first().waitFor();
   await shot(page, "connect-text");
   await page.getByRole("button", { name: "Continue" }).click();
   await page.getByText("Which one is you?").waitFor();

@@ -107,7 +107,10 @@ function Initialize-TagRuntime {
         if ($LASTEXITCODE -ne 0) { throw "Tag Python preparation failed ($LASTEXITCODE)" }
         $python = Invoke-Native { & $uv python find --no-config --managed-python --no-python-downloads $pythonVersion }
     }
-    $python = "$python".Trim()
+    if ($LASTEXITCODE -ne 0) { throw "Tag Python could not be found after preparing it ($LASTEXITCODE)" }
+    # uv may print more than one candidate; use the first.
+    $python = @($python | ForEach-Object { "$_".Trim() } | Where-Object { $_ }) | Select-Object -First 1
+    if (-not $python) { throw 'Tag Python could not be found after preparing it.' }
     Invoke-Native { & $python -c 'import sys; assert sys.version_info[:3] == (3, 12, 14)' }
     if ($LASTEXITCODE -ne 0) { throw 'The prepared Tag Python is not the expected version.' }
     $env:TAG_BOOTSTRAP_PYTHON = $python

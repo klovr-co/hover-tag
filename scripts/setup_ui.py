@@ -101,6 +101,11 @@ def commit() -> None:
     _history.clear()
 
 
+def going_back_to(qid: str) -> bool:
+    """Whether Back is returning to this question, so it must be asked even if already answered."""
+    return bool(_target and _target[0] == qid)
+
+
 def start_replay(replay: list[tuple[str, object]], target: tuple[str, object]) -> None:
     global _target
     _history.clear()

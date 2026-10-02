@@ -139,7 +139,7 @@ Ctrl-C stops both; configured remote MFS endpoints remain external. Managed
 releases do not expose development watching.
 
 Completed `tag setup` checks readiness and exits without repeating onboarding.
-Setup saves approved choices and verifies the MFS client, but it does
+Setup saves approved choices, but it does
 not start services or index history; run `tag start` when ready. Use
 `tag setup --review` to review choices explicitly. For a separate,
 resumable test configuration, use `tag setup --test`; it keeps data under

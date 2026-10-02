@@ -127,7 +127,13 @@ jobs:
         run: |
           npm ci
           npm version --no-git-tag-version --allow-same-version "${RELEASE_TAG#v}"
-          updates='{"bundle":{"createUpdaterArtifacts":true}}'
+          # Signed update bundles need the updater key; without it, ship unsigned downloads only.
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            updates='{"bundle":{"createUpdaterArtifacts":true}}'
+          else
+            echo "::warning::TAURI_SIGNING_PRIVATE_KEY is not set; Tag.app will not offer this update in place."
+            updates='{}'
+          fi
           if [ "${{ matrix.name }}" = macos ]; then
             npx tauri build --target universal-apple-darwin --bundles app,dmg --config "$updates"
           else
@@ -145,15 +151,21 @@ jobs:
             macos)
               mac="$bundle"/universal-apple-darwin/release/bundle
               cp "$mac"/dmg/*.dmg "out/Tag-$version-macos.dmg"
-              cp "$mac"/macos/*.app.tar.gz "out/Tag-$version-macos.app.tar.gz"
-              cp "$mac"/macos/*.app.tar.gz.sig "out/Tag-$version-macos.app.tar.gz.sig" ;;
+              if ls "$mac"/macos/*.app.tar.gz.sig >/dev/null 2>&1; then
+                cp "$mac"/macos/*.app.tar.gz "out/Tag-$version-macos.app.tar.gz"
+                cp "$mac"/macos/*.app.tar.gz.sig "out/Tag-$version-macos.app.tar.gz.sig"
+              fi ;;
             windows)
               cp "$bundle"/release/bundle/nsis/*-setup.exe "out/Tag-$version-windows-setup.exe"
-              cp "$bundle"/release/bundle/nsis/*-setup.exe.sig "out/Tag-$version-windows-setup.exe.sig" ;;
+              if ls "$bundle"/release/bundle/nsis/*-setup.exe.sig >/dev/null 2>&1; then
+                cp "$bundle"/release/bundle/nsis/*-setup.exe.sig "out/Tag-$version-windows-setup.exe.sig"
+              fi ;;
             linux)
               cp "$bundle"/release/bundle/deb/*.deb "out/Tag-$version-linux-amd64.deb"
               cp "$bundle"/release/bundle/appimage/*.AppImage "out/Tag-$version-linux-x86_64.AppImage"
-              cp "$bundle"/release/bundle/appimage/*.AppImage.sig "out/Tag-$version-linux-x86_64.AppImage.sig" ;;
+              if ls "$bundle"/release/bundle/appimage/*.AppImage.sig >/dev/null 2>&1; then
+                cp "$bundle"/release/bundle/appimage/*.AppImage.sig "out/Tag-$version-linux-x86_64.AppImage.sig"
+              fi ;;
           esac
           cd out
           if command -v sha256sum >/dev/null; then sum="sha256sum"; else sum="shasum -a 256"; fi
@@ -181,8 +193,17 @@ jobs:
       - name: Publish Tag.app update manifests
         run: |
           mkdir -p signatures current manifests
+          if ! gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | grep -q '^Tag-.*\.sig$'; then
+            echo "No signed Tag.app updates in this release; channel manifests are unchanged."
+            exit 0
+          fi
           gh release download "$RELEASE_TAG" --dir signatures --pattern 'Tag-*.sig'
-          gh release download channels --dir current --pattern 'tag-app-*.json' || true
+          # Only a missing manifest may be skipped; any other failure must stop
+          # publication, or an older release could overwrite a newer manifest.
+          existing=$(gh release view channels --json assets --jq '.assets[].name | select(startswith("tag-app-"))')
+          if [ -n "$existing" ]; then
+            gh release download channels --dir current --pattern 'tag-app-*.json'
+          fi
           python scripts/desktop_update_manifest.py --version "$RELEASE_TAG" \
             --signatures signatures --current current --output manifests \
             --notes "See https://github.com/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG"

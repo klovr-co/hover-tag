@@ -37,7 +37,7 @@ and dark, from `npm run dev`.
 ## Build
 
 ```sh
-npx tauri build        # Tag.app and .dmg, .msi and setup.exe, or .deb and .AppImage
+npx tauri build        # Tag.app and .dmg, setup.exe, or .deb and .AppImage
 ```
 
 The build copies `install.sh`, `install.ps1`, and `scripts/tag_install.py`
