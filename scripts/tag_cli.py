@@ -34,6 +34,7 @@ try:
     import tag_mfs_runtime
     import tag_slack_backoff
     import tag_display as display
+    import tag_autostart as autostart
 except ImportError:
     from scripts.tag_paths import initialize_instance, initialize_workspace, runtime_environment, tag_home
     from scripts import tag_instances, tag_telemetry
@@ -43,6 +44,7 @@ except ImportError:
     from scripts import tag_welcome
     from scripts import tag_mfs_runtime, tag_slack_backoff
     from scripts import tag_display as display
+    from scripts import tag_autostart as autostart
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_DEPENDENCIES = ("mfs_server", "psutil", "slack_bolt")
@@ -1591,6 +1593,45 @@ def _workspace_lifecycle(installation_root: Path, workspace: str, action: str, j
     return 1 if failed else 0
 
 
+def _autostart_command(installation_root: Path, args, parser) -> int:
+    """Keep chosen Tags running after login, and restart them if they stop."""
+    action = args.arguments[0] if args.arguments else "status"
+    if len(args.arguments) > 1 or action not in {"status", "on", "off", "run"}:
+        parser.error("autostart accepts status, on, off, or run")
+    if action == "run":
+        return autostart.run(installation_root, sys.modules[__name__], ROOT)
+    seeded: list[str] = []
+    if action == "on":
+        seeded = autostart.seed_from_running(installation_root, sys.modules[__name__])
+        result = autostart.enable(installation_root, ROOT)
+    elif action == "off":
+        result = autostart.disable(installation_root)
+    else:
+        result = autostart.status(installation_root)
+    tags = []
+    for item in tag_instances.discover(installation_root):
+        if item.get("valid") and Path(str(item["home"])).exists():
+            home = tag_instances.resolve(installation_root, str(item["id"])).home
+            tags.append({"tag": str(item["id"]), "keep_running": autostart.wanted(home) is True})
+    result = {"schema_version": 1, **result, "tags": tags}
+    if args.json_output:
+        print(json.dumps(result, indent=2))
+        return 0
+    display.header("Autostart", "Start your Tags after you log in, and restart them if they stop.")
+    display.info_row("Login service", "On" if result["enabled"] else "Off", good=result["enabled"])
+    display.info_row("Mechanism", result["mechanism"])
+    for tag in tags:
+        display.info_row(tag["tag"], "kept running" if tag["keep_running"] else "left off",
+                         good=tag["keep_running"])
+    if seeded:
+        display.info_row("Kept running", "Tags already running: " + ", ".join(seeded), good=True)
+    display.next_action("Choose which Tags run", "tag NAME start  ·  tag NAME stop",
+                        detail="Starting a Tag keeps it running; stopping it leaves it off.")
+    if not result["enabled"]:
+        display.next_action("Turn on", "tag autostart on")
+    return 0
+
+
 def _rename_command(context: tag_instances.InstanceContext, args) -> int:
     """Rename a Tag in Slack and give it a nickname for commands."""
     try:
@@ -1758,10 +1799,10 @@ def _run_cli() -> int:
     args = parser.parse_args(raw_arguments)
     if (args.no_start or args.test or args.review) and args.command != "setup":
         parser.error("--no-start, --test and --review are only for setup")
-    if args.arguments and args.command not in {"add", "memory", "config", "telemetry", "rename"}:
-        parser.error("Only add, memory, config, telemetry, and rename accept additional positional arguments")
-    if args.json_output and args.command not in {"list", "memory", "inspect", "status", "doctor", "config", "paths", "upgrade", "telemetry", "setup", "add", "rename", "start", "stop", "restart"}:
-        parser.error("--json supports list, memory, inspect, status, doctor, config, paths, upgrade, telemetry, setup, add, rename, and start/stop/restart with --workspace")
+    if args.arguments and args.command not in {"add", "memory", "config", "telemetry", "rename", "autostart"}:
+        parser.error("Only add, memory, config, telemetry, rename, and autostart accept additional positional arguments")
+    if args.json_output and args.command not in {"list", "memory", "inspect", "status", "doctor", "config", "paths", "upgrade", "telemetry", "setup", "add", "rename", "start", "stop", "restart", "autostart"}:
+        parser.error("--json supports list, memory, inspect, status, doctor, config, paths, upgrade, telemetry, autostart, setup, add, rename, and start/stop/restart with --workspace")
     if args.json_output and args.command in {"start", "stop", "restart"} and not args.workspace:
         parser.error("--json for start, stop, and restart requires --workspace")
     if args.nickname and args.command != "rename":
@@ -1806,7 +1847,7 @@ def _run_cli() -> int:
     if tag_id == tag_instances.DEFAULT_TAG:
         # Plain commands and the legacy `tag default …` both mean the main Tag.
         tag_id = tag_instances.select_unnamed(installation_root)
-    if args.command in {"version", "upgrade", "rollback", "migrate", "list", "add", "memory", "telemetry"} and explicit_tag:
+    if args.command in {"version", "upgrade", "rollback", "migrate", "list", "add", "memory", "telemetry", "autostart"} and explicit_tag:
         parser.error(f"Tag selection is not supported for installation-wide command '{args.command}'")
     try:
         import tag_control as control
@@ -1852,6 +1893,8 @@ def _run_cli() -> int:
                 str(result["privacy_notice"] or "Not configured in this build"),
             )
         return 0
+    if args.command == "autostart":
+        return _autostart_command(installation_root, args, parser)
     if args.command == "add":
         if args.arguments:
             parser.error("add does not accept a name; the workspace alias is chosen during onboarding")
@@ -1900,6 +1943,7 @@ def _run_cli() -> int:
                                   slack_name=_slack_name(context.home),
                                   nickname=tag_instances.nickname(context.home),
                                   avatar=_avatar(context.home),
+                                  keep_running=autostart.wanted(context.home) is True,
                                   main=context.tag_id == tag_id)
                 except (OSError, ValueError, RuntimeError) as exc:
                     record.update(valid=False, state="invalid_configuration", error=str(exc))
@@ -2255,6 +2299,9 @@ def _run_cli() -> int:
         return development_loop(home)
     if args.command == "stop":
         restart_flow = os.getenv("TAG_RESTART_FLOW") == "1"
+        if not restart_flow:
+            # Stopping on purpose means the login service leaves this Tag off.
+            autostart.set_wanted(home, False)
         if restart_flow:
             display.section("Stopping")
         else:
@@ -2291,6 +2338,8 @@ def _run_cli() -> int:
         return 0
     if args.command == "start":
         restart_flow = os.getenv("TAG_RESTART_FLOW") == "1"
+        # Recorded even if this start fails: the login service retries with backoff.
+        autostart.set_wanted(home, True)
         if restart_flow:
             display.section("Starting")
         else:

@@ -6,6 +6,11 @@ All notable changes to Tag are documented here.
 
 ### Added
 
+- Keep Tags running after login with `tag autostart on`. Tag remembers which
+  Tags you started or stopped, and a per-user login service (launchd on macOS,
+  systemd or XDG autostart on Linux, the Run key on Windows) starts them and
+  restarts any that stop. `tag list --json` reports `keep_running`.
+
 - Choose who can use Tag from a searchable Slack people list during setup.
   Tag.app shows names, usernames, and profile photos; the CLI offers the same
   search with text labels. Manual member-ID entry remains available.

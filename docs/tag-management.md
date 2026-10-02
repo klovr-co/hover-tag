@@ -342,7 +342,8 @@ Manual permission recovery still needs live acceptance testing.
 | Check for updates | `tag upgrade --dry-run --json` | Verify the saved channel's target without changing the installation |
 | Upgrade | `tag upgrade` | Stage and atomically select the verified release, restarting managed services when needed |
 | Install an older release | `tag upgrade --version X.Y.Z --allow-downgrade` | Explicitly override the downgrade guard; prefer rollback for the previous release |
-| Start or stop | `tag start` / `tag stop` | Use the existing managed-process lifecycle |
+| Start or stop | `tag start` / `tag stop` | Use the existing managed-process lifecycle, and remember whether this Tag should keep running |
+| Keep Tags running after login | `tag autostart on` / `off` / `status --json` | Register a per-user login service that starts wanted Tags and restarts them if they stop |
 | Drive setup from an app | `tag setup --json` / `tag add --json` | Run the same guided setup over a JSON-lines conversation; see below |
 
 Pass secrets through a process stdin pipe or use settings' hidden token prompt;
@@ -359,6 +360,29 @@ JSON commands emit a single object with `schema_version: 1`; consumers should
 ignore unknown fields. Argparse usage errors are still written to stderr.
 Plain `tag` prints a summary, and `tag settings` / `tag setup` (without `--json`) reject nonterminal
 input rather than waiting for answers. Agents should use configuration commands.
+
+### Keeping Tags running
+
+`tag start` records that a Tag should keep running and `tag stop` records that
+it should stay off; `tag restart` keeps the choice. `tag list --json` reports it
+as `keep_running`. `tag autostart on` registers a per-user login service that
+starts those Tags after login and checks every minute, restarting a Tag whose
+bridge has stopped. After a failed start it waits longer each time, up to an
+hour. The service uses the operating system's own mechanism and needs no
+administrator rights:
+
+| Platform | Mechanism |
+| --- | --- |
+| macOS | launchd agent in `~/Library/LaunchAgents` |
+| Linux | systemd user service, or an XDG autostart entry without systemd |
+| Windows | the per-user `Run` registry key |
+
+The first `tag autostart on` keeps the Tags that are running now, if no choice
+was recorded yet. `tag autostart off` removes the service and leaves running
+Tags as they are. The service runs Tag's stable launcher, so upgrades take
+effect without registering it again. Its output is in
+`state/supervisor.log` under the installation root. Tag.app's **Keep Tags
+running** setting uses the same commands.
 
 ### Guided setup over JSON lines
 
