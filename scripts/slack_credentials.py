@@ -11,10 +11,11 @@ import sys
 import tempfile
 
 try:
+    import slack_identity
     import slack_app_create
     import tag_config as settings
 except ImportError:
-    from scripts import slack_app_create, tag_config as settings
+    from scripts import slack_identity, slack_app_create, tag_config as settings
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -41,6 +42,8 @@ def handoff_failure(output: str) -> ConnectionFailure:
         "invalid_auth": "Slack CLI authorization is invalid. Run slack login in your terminal, then retry.",
         "token_expired": "Slack CLI authorization expired. Run slack login in your terminal, then retry.",
         "token_revoked": "Slack CLI authorization was revoked. Run slack login in your terminal, then retry.",
+        "org_grant_exists": "This app already has a different workspace grant. Select the matching workspace or use a separate app; Tag will not broaden its grants.",
+        "team_access_not_granted": "Ask an organization admin to grant this app access to the selected workspace, then retry.",
         "missing_scope": (
             "Slack rejected the installation refresh: missing_scope. Review the required permissions "
             "in Slack app settings or ask your workspace admin. Tag will not repair permissions."
@@ -57,12 +60,19 @@ def handoff_failure(output: str) -> ConnectionFailure:
     )
 
 
-def receive(project: Path, team_id: str, app_id: str) -> dict[str, str]:
+def receive(project: Path, team_id: str, app_id: str, *, enterprise_id: str = "") -> dict[str, str]:
     """Call only after operator approval of installation/credential refresh."""
     if not re.fullmatch(r"T[A-Z0-9]+", team_id) or not re.fullmatch(r"A[A-Z0-9]+", app_id):
         raise RuntimeError("Select a valid Slack workspace and app before connecting.")
-    if app_id not in slack_app_create.saved_app_ids(project, team_id):
+    grant = slack_identity.grant_flags(team_id, enterprise_id)
+    authorization_id = enterprise_id or team_id
+    if app_id not in slack_app_create.saved_app_ids(project, authorization_id):
         raise RuntimeError("The selected app link could not be confirmed. No connection was attempted.")
+    # Installed org apps may already have several grants. Refresh their existing
+    # installation without asking CLI to replace or broaden those grants; the
+    # returned credential must still prove the selected workspace in setup.
+    if enterprise_id and slack_app_create.is_installed(project, authorization_id, app_id):
+        grant = []
     slack = shutil.which("slack")
     if not slack:
         raise RuntimeError("Slack CLI is required for automatic connection.")
@@ -75,7 +85,7 @@ def receive(project: Path, team_id: str, app_id: str) -> dict[str, str]:
         settings.save_config(handoff / ".slack/config.json", {"manifest": {"source": "remote"}})
         settings.save_config(handoff / ".slack/hooks.json", {"hooks": {"deploy": hook}})
         settings.save_config(handoff / ".slack/apps.json", {
-            "apps": {team_id: {"team_id": team_id, "app_id": app_id}}
+            "apps": {authorization_id: {"team_id": authorization_id, "app_id": app_id}}
         })
         environment = {
             key: value for key, value in os.environ.items()
@@ -84,7 +94,7 @@ def receive(project: Path, team_id: str, app_id: str) -> dict[str, str]:
         environment["TAG_SLACK_HANDOFF_FILE"] = str(destination)
         try:
             result = subprocess.run(
-                [slack, "deploy", "--team", team_id, "--app", app_id,
+                [slack, "deploy", "--team", authorization_id, "--app", app_id, *grant,
                  "--hide-triggers", "--skip-update", "--no-color"],
                 cwd=handoff, env=environment, input="", capture_output=True, text=True,
                 check=False, timeout=120,

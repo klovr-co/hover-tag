@@ -17,10 +17,12 @@ from collections.abc import Callable
 
 try:
     import slack_app_create
+    import slack_identity
+    import slack_channels
     import slack_credentials
     import tag_config as settings
 except ImportError:
-    from scripts import slack_app_create, slack_credentials, tag_config as settings
+    from scripts import slack_identity, slack_channels, slack_app_create, slack_credentials, tag_config as settings
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -32,7 +34,7 @@ DM_EVENT = "message.im"
 AGENT_DESCRIPTION = "Run approved Codex or Claude tasks from Slack."
 
 
-def migrate_manifest(remote: dict) -> tuple[dict, bool]:
+def migrate_manifest(remote: dict, *, enterprise: bool = False) -> tuple[dict, bool]:
     """Reconcile the release manifest without replacing operator-owned values."""
     migrated = json.loads(json.dumps(remote))
     try:
@@ -64,6 +66,8 @@ def migrate_manifest(remote: dict) -> tuple[dict, bool]:
         )
     migrated, _, _ = migrate_agent_view(migrated)
     migrated["features"]["agent_view"].setdefault("agent_description", AGENT_DESCRIPTION)
+    if enterprise:
+        migrated["settings"]["org_deploy_enabled"] = True
     return migrated, migrated != remote
 
 
@@ -190,12 +194,15 @@ def _migration_project(project: Path, manifest: dict, team_id: str, app_id: str,
     return temporary
 
 
-def _marker_matches(marker: Path, team_id: str, app_id: str) -> bool:
+def _marker_matches(marker: Path, team_id: str, app_id: str, enterprise_id: str = "") -> bool:
     try:
         value = json.loads(marker.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return False
-    return value == {"version": MIGRATION_VERSION, "team_id": team_id, "app_id": app_id}
+    expected = {"version": MIGRATION_VERSION, "team_id": team_id, "app_id": app_id}
+    if enterprise_id:
+        expected.update(enterprise_id=enterprise_id, organization_version=1)
+    return value == expected
 
 
 def enable_agent_view(
@@ -239,31 +246,43 @@ def enable_agent_view(
 def reconcile(home: Path, config_path: Path, values: dict[str, str]) -> bool:
     """Apply release requirements using existing CLI authorization, without prompts."""
     team_id, app_id = values["SLACK_TEAM_ID"], values["SLACK_APP_ID"]
+    enterprise_id = values.get("SLACK_ENTERPRISE_ID", "")
+    authorization_id = enterprise_id or team_id
+    receipt = {"version": MIGRATION_VERSION, "team_id": team_id, "app_id": app_id}
+    if enterprise_id:
+        receipt.update(enterprise_id=enterprise_id, organization_version=1)
     marker = home / "state/slack-manifest-migrations.json"
-    if _marker_matches(marker, team_id, app_id):
+    if _marker_matches(marker, team_id, app_id, enterprise_id):
         return False
     slack = shutil.which("slack")
     if not slack:
         raise RuntimeError("Slack CLI is required to migrate app settings; install it, then retry `tag start`")
     project = home / "integrations/slack-cli"
     remote = remote_manifest(slack, project, app_id)
-    migrated, changed = migrate_manifest(remote)
+    migrated, changed = migrate_manifest(remote, enterprise=bool(enterprise_id))
     scopes = granted_bot_scopes(values["SLACK_BOT_TOKEN"])
+    if enterprise_id:
+        slack_identity.validate(values["SLACK_BOT_TOKEN"], team_id=team_id, app_id=app_id,
+                                enterprise_id=enterprise_id, label="Bot token", api=slack_channels.slack_api)
     if not changed and set(REQUIRED_BOT_SCOPES).issubset(scopes):
-        settings.save_config(marker, {"version": MIGRATION_VERSION, "team_id": team_id, "app_id": app_id})
+        settings.save_config(marker, receipt)
         return False
     with tempfile.TemporaryDirectory(prefix="tag-slack-migration-") as directory:
-        migration_project = _migration_project(project, migrated, team_id, app_id, Path(directory))
+        migration_project = _migration_project(project, migrated, authorization_id, app_id, Path(directory))
         if changed:
-            result = _run(_sync_command(slack, migration_project, app_id, team_id), cwd=migration_project)
+            result = _run(_sync_command(slack, migration_project, app_id, authorization_id), cwd=migration_project)
             if result.returncode:
                 raise RuntimeError("Slack app settings migration failed; run `slack login`, then retry `tag start`")
     verified = remote_manifest(slack, project, app_id)
-    if migrate_manifest(verified)[1]:
+    if migrate_manifest(verified, enterprise=bool(enterprise_id))[1]:
         raise RuntimeError("Slack did not save the required app settings; retry `tag start`")
     # The credential handoff refreshes the installation itself. It captures
     # output and closes stdin, so background upgrades never wait for input.
-    credentials = slack_credentials.receive(project, team_id, app_id)
+    credentials = slack_credentials.receive(project, team_id, app_id,
+        **({"enterprise_id": enterprise_id} if enterprise_id else {}))
+    if enterprise_id:
+        slack_identity.validate(credentials["SLACK_BOT_TOKEN"], team_id=team_id, app_id=app_id,
+                                enterprise_id=enterprise_id, label="Bot token", api=slack_channels.slack_api)
     settings.update_config(config_path, credentials)
     missing = set(REQUIRED_BOT_SCOPES) - granted_bot_scopes(credentials["SLACK_BOT_TOKEN"])
     if missing:
@@ -271,5 +290,22 @@ def reconcile(home: Path, config_path: Path, values: dict[str, str]) -> bool:
             "Slack reinstalled the app without " + ", ".join(sorted(missing))
             + "; approve those permissions in Slack and retry `tag start`"
         )
-    settings.save_config(marker, {"version": MIGRATION_VERSION, "team_id": team_id, "app_id": app_id})
+    settings.save_config(marker, receipt)
     return True
+
+
+def enable_org_deployment(project: Path, app_id: str, enterprise_id: str) -> None:
+    """Retryable setup prerequisite; preserve all unrelated remote settings."""
+    slack = shutil.which("slack") or "slack"
+    remote = remote_manifest(slack, project, app_id)
+    if remote.get("settings", {}).get("org_deploy_enabled") is True:
+        return
+    migrated = json.loads(json.dumps(remote))
+    migrated.setdefault("settings", {})["org_deploy_enabled"] = True
+    with tempfile.TemporaryDirectory(prefix="tag-slack-org-") as directory:
+        target = _migration_project(project, migrated, enterprise_id, app_id, Path(directory))
+        result = _run(_sync_command(slack, target, app_id, enterprise_id), cwd=target)
+        if result.returncode:
+            raise RuntimeError("Slack could not enable organization deployment. Ask an organization admin to approve the app, then retry setup.")
+    if remote_manifest(slack, project, app_id).get("settings", {}).get("org_deploy_enabled") is not True:
+        raise RuntimeError("Organization deployment is not yet enabled; retry setup after Slack approval.")
