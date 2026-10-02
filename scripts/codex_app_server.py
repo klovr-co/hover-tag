@@ -21,10 +21,10 @@ from typing import Any
 
 try:
     from .tag_activity_details import item_activity_details
-    from .tag_approval_choices import approval_choices, public_approval_choices
+    from .tag_approval_choices import approval_choices, public_approval_choices, auto_review_details
 except ImportError:  # Direct script execution does not create a package context.
     from tag_activity_details import item_activity_details
-    from tag_approval_choices import approval_choices, public_approval_choices
+    from tag_approval_choices import approval_choices, public_approval_choices, auto_review_details
 
 
 # Prompts are controlled by Tag, while completed tool and image events may
@@ -645,7 +645,7 @@ class CodexAppServer:
                 idle_deadline = time.monotonic() + self.timeout
 
     def _remember_auto_review(self, message: dict[str, Any]) -> None:
-        """Retain exact backend denials locally; never emit action payloads to Slack."""
+        """Retain exact denials locally; Slack receives only a separate redacted preview."""
         if message.get("method") != "item/autoApprovalReview/completed" or self.approval_dir is None:
             return
         params = message.get("params")
@@ -707,7 +707,7 @@ class CodexAppServer:
                 break
             approval_id = uuid.uuid4().hex
             emit({"type": "approval_request", "approval_id": approval_id,
-                  "label": AUTO_REVIEW_RETRY_LABEL})
+                  "label": AUTO_REVIEW_RETRY_LABEL, "review_details": auto_review_details(event)})
             approved = self._wait_for_approval(
                 approval_id, min(deadline, time.monotonic() + APPROVAL_TIMEOUT_SECONDS),
             )

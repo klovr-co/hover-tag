@@ -6,8 +6,15 @@ opaque choice ID, never an editable permission or policy payload.
 from __future__ import annotations
 
 import json
+import re
 import shlex
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
+
+try:
+    from .tag_activity_details import preview
+except ImportError:
+    from tag_activity_details import preview
 
 
 def approval_choices(method: str, params: dict[str, Any]) -> list[dict[str, Any]]:
@@ -90,3 +97,77 @@ def approval_choices(method: str, params: dict[str, Any]) -> list[dict[str, Any]
 
 def public_approval_choices(choices: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [{k: v for k, v in choice.items() if k != "result"} for choice in choices]
+
+
+def _review_text(value: Any, fallback: str, limit: int = 900) -> str:
+    """Bound and redact review text before private Slack delivery."""
+    if not isinstance(value, str) or not value.strip():
+        return fallback
+    if len(value) > 8000:
+        return "Details omitted because Codex returned an oversized value."
+    value = re.sub(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----",
+                   "[private key redacted]", value)
+    value = re.sub(r"(?i)([\"'])(?:authorization|cookie|set-cookie)\s*:[^\r\n]*?\1",
+                   "[header redacted]", value)
+    value = re.sub(r"(?i)(\bbasic\s+)[A-Za-z0-9+/=]+", r"\1[redacted]", value)
+    value = preview(value, limit=8000)
+    def scrub_url(match: re.Match[str]) -> str:
+        try:
+            url = urlsplit(match.group(0))
+            host = url.hostname or ""
+            port = f":{url.port}" if url.port else ""
+            return urlunsplit((url.scheme, host + port, url.path, "", ""))
+        except ValueError:
+            return "[URL omitted]"
+    value = re.sub(r"https?://[^\s<>\"']+", scrub_url, value)
+    value = re.sub(
+        r"(?i)((?:--)?(?:password|passwd|token|secret|api[_-]?key|cookie|authorization)"
+        r"[\"']?\s*(?:[:=]\s*|\s+))(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)",
+        r"\1[redacted]", value,
+    )
+    value = re.sub(r"[\x00-\x08\x0b-\x1f\x7f]", " ", value)
+    return preview(value, limit=limit)
+
+
+def sanitize_review_details(value: Any) -> dict[str, str]:
+    value = value if isinstance(value, dict) else {}
+    return {
+        "action": _review_text(value.get("action"), "Codex did not provide action details."),
+        "reason": _review_text(value.get("reason"), "Codex did not provide a reason."),
+    }
+
+
+def auto_review_details(event: dict[str, Any]) -> dict[str, str]:
+    """Summarize only the denied action and its explicit review rationale."""
+    action = event.get("action")
+    action = action if isinstance(action, dict) else {}
+    kind = action.get("type")
+    summary = "Codex did not provide action details."
+    if kind == "command" and isinstance(action.get("command"), str):
+        summary = "Run command: " + action["command"]
+    elif kind == "execve" and isinstance(action.get("program"), str):
+        summary = "Run program: " + action["program"]
+        argv = action.get("argv")
+        if isinstance(argv, list) and all(isinstance(arg, str) for arg in argv):
+            summary += "\nArguments: " + shlex.join(argv)
+    elif kind == "write_stdin":
+        summary = "Send input to terminal process " + str(action.get("process_id", "unknown"))
+        summary += " (input content withheld)."
+    elif kind == "apply_patch":
+        files = action.get("files")
+        if isinstance(files, list) and all(isinstance(path, str) for path in files):
+            summary = "Change files: " + ", ".join(files)
+    elif kind == "network_access":
+        summary = "Connect to host: " + str(action.get("host", "unknown"))
+        if isinstance(action.get("port"), int):
+            summary += ":" + str(action["port"])
+        if isinstance(action.get("protocol"), str):
+            summary += " via " + action["protocol"]
+    elif kind == "mcp_tool_call":
+        server, tool = action.get("server"), action.get("tool_name")
+        if isinstance(server, str) and isinstance(tool, str):
+            summary = "Use connected tool: " + server + "/" + tool
+            title = action.get("tool_title")
+            if isinstance(title, str) and title.strip():
+                summary = title + "\nTool: " + server + "/" + tool
+    return sanitize_review_details({"action": summary, "reason": event.get("rationale")})

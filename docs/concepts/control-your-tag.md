@@ -70,7 +70,11 @@ buttons only when Codex sends it a supported approval request.
    to Codex. The task's activity and final response show what happened next.
 
 If automatic review already denied an action, supported denials instead offer
-**Approve retry** / **Dismiss**. Approve retry applies only to that exact action
+**Approve retry** / **Dismiss**. The private prompt identifies the denied action
+and shows Codex's stated reason. Common credentials and URL credentials/query
+parameters are redacted, and long details are marked as truncated or omitted.
+Terminal input content is withheld. If Codex provides no reason, Tag says so.
+Approve retry applies only to that exact action
 and the retry still undergoes automatic review; this override has no persistent
 or session-wide option.
 

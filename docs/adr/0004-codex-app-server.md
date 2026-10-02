@@ -204,3 +204,25 @@ The helper is included in the runtime manifest for fresh installs and upgrades.
 No Tag configuration or stored-state migration is needed; Codex owns persistent
 rules created only after explicit selection. Tag's session remains one bounded
 Slack task, not a persistent Slack conversation.
+
+
+## Explain auto-review denials in private prompts (2026-10-02)
+
+Retry prompts now include a bounded action description and the explicit Codex
+review rationale. The transport derives the description from the retained
+canonical action: command/program, terminal process (without stdin content),
+file targets, network host/port, or connected server/tool. Missing details are
+reported as unavailable rather than inferred. This extends the earlier rule
+that excluded the rationale from all Slack output: a redacted preview is now
+allowed only in the requester's private approval message.
+
+The original event remains local and unchanged for the exact-action override.
+Only the display preview is forwarded to Slack. Common credentials and URL
+credentials/query strings/fragments are removed before forwarding; the bridge
+sanitizes again before rendering. Both fields are bounded and rendered as literal text in separate rich-text
+sections with bold labels and a compact expiry/scope footer. Backend prose cannot
+become Slack mentions or formatted links. Connected tools put their human-readable
+title first when Codex supplies one.
+Button metadata continues to contain only request identity, never review text
+or action payloads. Approval scope, expiry, and requester authorization are
+unchanged. This presentation change requires no stored-state migration.

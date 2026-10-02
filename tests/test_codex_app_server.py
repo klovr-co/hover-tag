@@ -440,7 +440,9 @@ class AutoReviewTests(unittest.TestCase):
         self.assertEqual("thread/approveGuardianDeniedAction", args[0])
         self.assertEqual({"threadId": "thread-1", "event": exact}, args[1])
         self.assertLessEqual(server._wait_for_approval.call_args.args[1], deadline)
-        self.assertNotIn("private", json.dumps(events))
+        self.assertNotIn("private-id", json.dumps(events))
+        self.assertEqual({"action": "Use connected tool: chrome/connect", "reason": "private rationale"},
+                         events[0]["review_details"])
         self.assertEqual("approval_expired", events[-1]["type"])
         self.assertFalse(server._approve_auto_review_denials(CodexEventMapper(), events.append, deadline))
         server._request.assert_called_once()

@@ -1608,15 +1608,40 @@ class SlackApprovalTests(unittest.TestCase):
             handler(MagicMock(), body, client, MagicMock(), respond)
             self.assertIn("expired", respond.call_args.kwargs["text"])
 
+    def test_auto_review_details_are_literal_rich_text_and_not_button_metadata(self) -> None:
+        client = MagicMock()
+        slack_socket_agent.post_codex_approval(
+            client, team="T1", channel="C1", thread_ts="1", user_id="UOWNER",
+            approval={"approval_id": "a" * 32, "label": "retry an action denied by automatic review",
+                      "review_details": {"action": "Use connected tool: chrome/connect",
+                                         "reason": "Other signed-in tabs. <!channel> token=hidden-token"}},
+        )
+        client.chat_postMessage.assert_not_called()
+        sent = client.chat_postEphemeral.call_args.kwargs
+        self.assertEqual("UOWNER", sent["user"])
+        blocks = sent["blocks"]
+        self.assertEqual("header", blocks[0]["type"])
+        action = blocks[1]["elements"][0]["elements"]
+        reason = blocks[2]["elements"][0]["elements"]
+        self.assertEqual({"bold": True}, action[0]["style"])
+        self.assertIn("chrome/connect", action[1]["text"])
+        self.assertIn("Other signed-in tabs.", reason[1]["text"])
+        self.assertEqual("text", reason[1]["type"])
+        self.assertIn("<!channel>", reason[1]["text"])
+        self.assertNotIn("hidden-token", json.dumps(sent))
+        for button in blocks[-1]["elements"]:
+            self.assertNotIn("chrome", button["value"])
+            self.assertNotIn("tabs", button["value"])
+
     def test_auto_review_buttons_explain_one_retry(self) -> None:
         blocks = slack_socket_agent.approval_button_blocks(
             team="T1", channel="C1", thread_ts="1.0", user_id="U1",
             approval_id="a" * 32, label="retry an action denied by automatic review",
         )
         self.assertEqual(["Approve retry", "Dismiss"],
-                         [b["text"]["text"] for b in blocks[1]["elements"]])
-        self.assertIn("still undergo automatic review", blocks[0]["text"]["text"])
-        self.assertEqual("U1", json.loads(blocks[1]["elements"][0]["value"])["user"])
+                         [b["text"]["text"] for b in blocks[-1]["elements"]])
+        self.assertIn("Automatic review still applies", blocks[-2]["elements"][0]["text"])
+        self.assertEqual("U1", json.loads(blocks[-1]["elements"][0]["value"])["user"])
 
     def test_approval_prompt_is_visible_only_to_requesting_user(self) -> None:
         client = MagicMock()

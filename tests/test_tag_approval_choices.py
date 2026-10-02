@@ -97,3 +97,58 @@ class NativeApprovalChoiceTests(unittest.TestCase):
                 server._resolve_server_request({"id": 1, "method": COMMAND, "params": {
                     "availableDecisions": ["accept"]}}, emit=lambda e: None, deadline=time.monotonic() + 5)
                 server._send.assert_called_once_with({"id": 1, "result": {"decision": "decline"}})
+
+
+class AutoReviewDetailTests(unittest.TestCase):
+    def details(self, action, reason="Connection can access other signed-in Chrome tabs."):
+        from scripts.tag_approval_choices import auto_review_details
+        return auto_review_details({"action": action, "rationale": reason})
+
+    def test_browser_action_and_actual_rationale(self):
+        details = self.details({"type": "mcp_tool_call", "server": "chrome", "tool_name": "connect",
+                                "tool_title": "Connect browser", "connector_id": "hidden-id"})
+        self.assertEqual("Connect browser\nTool: chrome/connect", details["action"])
+        self.assertEqual("Connection can access other signed-in Chrome tabs.", details["reason"])
+        self.assertNotIn("hidden-id", json.dumps(details))
+
+    def test_all_supported_actions_have_concrete_context(self):
+        for action, expected in [
+            ({"type": "command", "command": "python create_form.py"}, "python create_form.py"),
+            ({"type": "execve", "program": "curl", "argv": ["curl", "https://example.com/form"]}, "example.com/form"),
+            ({"type": "write_stdin", "process_id": "42", "stdin": "sensitive-input"}, "process 42"),
+            ({"type": "apply_patch", "files": ["/tmp/survey.md"]}, "/tmp/survey.md"),
+            ({"type": "network_access", "host": "forms.google.com", "port": 443, "protocol": "https"}, "forms.google.com:443"),
+        ]:
+            with self.subTest(action=action):
+                details = self.details(action)
+                self.assertIn(expected, details["action"])
+                self.assertNotIn("sensitive-input", json.dumps(details))
+
+    def test_secrets_are_redacted_in_action_and_reason(self):
+        text = ('curl https://user:pass@example.com/form?code=private-query#fragment '
+                '--password hiddenpass -H "Authorization: Bearer opaque-value" '
+                '-H "Cookie: session=private-cookie" token=private-token xoxb-secret-slack')
+        details = self.details({"type": "command", "command": text}, text)
+        rendered = json.dumps(details)
+        for secret in ("user:pass", "private-query", "hiddenpass", "opaque-value", "private-cookie",
+                       "private-token", "xoxb-secret-slack"):
+            self.assertNotIn(secret, rendered)
+        self.assertIn("example.com/form", rendered)
+
+    def test_private_keys_basic_auth_and_cookie_headers_are_redacted(self):
+        text = ('curl -H "Cookie: session=cookie-one; other=cookie-two" '
+                '-H "Authorization: Basic dXNlcjpwYXNz" '
+                '-----BEGIN ' + 'PRIVATE KEY-----\nkey-material\n-----END ' + 'PRIVATE KEY-----')
+        details = self.details({"type": "command", "command": text}, text)
+        for secret in ("cookie-one", "cookie-two", "dXNlcjpwYXNz", "key-material"):
+            self.assertNotIn(secret, json.dumps(details))
+
+    def test_missing_malformed_and_long_details_are_honest_and_bounded(self):
+        details = self.details(None, None)
+        self.assertIn("did not provide action", details["action"])
+        self.assertIn("did not provide a reason", details["reason"])
+        details = self.details({"type": "command", "command": "x" * 2000}, "r" * 2000)
+        self.assertLessEqual(len(details["action"]), 900)
+        self.assertIn("truncated", details["reason"])
+        details = self.details({"type": "command", "command": "x" * 9000})
+        self.assertIn("oversized", details["action"])

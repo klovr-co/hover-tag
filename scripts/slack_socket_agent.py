@@ -50,6 +50,7 @@ try:
     from .slack_search_scope import ScopePlan, SearchIntent, plan_search_scopes
     from .tag_activity import ACTIVITY_DETAIL_ACTION_ID, PUBLIC_LABELS, ActivityStore, activity_detail_modal, activity_modal
     from .tag_activity_details import sanitize_activity_details
+    from .tag_approval_choices import sanitize_review_details
     from .tag_activity_labels import activity_title_for_status, readable_activity_title
     from .tag_paths import tag_temp_dir
     from . import slack_channels
@@ -74,6 +75,7 @@ except ImportError:  # Direct script execution does not create a package context
     from slack_search_scope import ScopePlan, SearchIntent, plan_search_scopes
     from tag_activity import ACTIVITY_DETAIL_ACTION_ID, PUBLIC_LABELS, ActivityStore, activity_detail_modal, activity_modal
     from tag_activity_details import sanitize_activity_details
+    from tag_approval_choices import sanitize_review_details
     from tag_activity_labels import activity_title_for_status, readable_activity_title
     from tag_paths import tag_temp_dir
     import slack_channels
@@ -2571,6 +2573,8 @@ def run_backend_events(
                             prompt = {"approval_id": approval_id, "label": label}
                             if "choices" in event:
                                 prompt["choices"] = event["choices"]
+                            if "review_details" in event:
+                                prompt["review_details"] = sanitize_review_details(event["review_details"])
                             on_approval(prompt)
                         except Exception as exc:  # noqa: BLE001 - fail closed if Slack cannot ask
                             diagnostics.append(f"Could not present approval: {exc}")
@@ -2908,6 +2912,7 @@ def approval_button_blocks(
     approval_id: str,
     label: str,
     choices: list[dict[str, Any]] | None = None,
+    review_details: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     retry = label == "retry an action denied by automatic review"
     safe_labels = {
@@ -2955,19 +2960,25 @@ def approval_button_blocks(
             # Keep each rule description immediately above its own button.
             blocks.append({"type": "actions", "elements": [button]})
         return blocks
-    return [
-        {
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": (
-                    f"*Codex needs approval* to {action}. "
-                    + ("Automatic review denied this action. Approve one retry for this action; "
-                     "it will still undergo automatic review. This request expires when the run ends."
-                     if retry else "Approve only if you expect this request.")
-                ),
-            },
-        },
+    details = sanitize_review_details(review_details)
+    if retry:
+        intro = [
+            {"type": "header", "text": {"type": "plain_text", "text": "Approval needed"}},
+            {"type": "rich_text", "elements": [{"type": "rich_text_section", "elements": [
+                {"type": "text", "text": "Requested action\n", "style": {"bold": True}},
+                {"type": "text", "text": details["action"]},
+            ]}]},
+            {"type": "rich_text", "elements": [{"type": "rich_text_section", "elements": [
+                {"type": "text", "text": "Why Codex blocked it\n", "style": {"bold": True}},
+                {"type": "text", "text": details["reason"]},
+            ]}]},
+            {"type": "context", "elements": [{"type": "plain_text", "text":
+                "One retry only • Automatic review still applies • Expires when this task ends"}]},
+        ]
+    else:
+        intro = [{"type": "section", "text": {"type": "mrkdwn", "text":
+            f"*Codex needs approval* to {action}. Approve only if you expect this request."}}]
+    return intro + [
         {
             "type": "actions",
             "elements": [
@@ -3198,6 +3209,7 @@ def post_codex_approval(
             approval_id=approval["approval_id"],
             label=approval["label"],
             choices=approval.get("choices"),
+            review_details=approval.get("review_details"),
         ),
     }
     if is_direct_message_channel(channel):
