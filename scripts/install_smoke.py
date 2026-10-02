@@ -66,6 +66,19 @@ def check_memory_server(python: Path, directory: Path) -> None:
         log.close()
 
 
+def stop_leftovers(directory: Path) -> None:
+    """Report and stop processes still running from this test's Tag folder (Windows locks open files)."""
+    if os.name != "nt":
+        return
+    script = ("$p = Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like $env:TAG_SMOKE_DIR + '*' };"
+              " $p | ForEach-Object { Write-Output ($_.ProcessId.ToString() + ' ' + $_.CommandLine) };"
+              " $p | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }")
+    result = subprocess.run(["powershell.exe", "-NoProfile", "-Command", script], capture_output=True, text=True,
+                            env=dict(os.environ, TAG_SMOKE_DIR=str(directory.resolve())), check=False)
+    if result.stdout.strip():
+        print("Processes left running by Tag (stopped):\n" + result.stdout.strip())
+
+
 with tempfile.TemporaryDirectory(prefix="Tag smoke ") as temporary:
     directory = Path(temporary)
     env = dict(os.environ, TAG_HOME=str(directory / "home"))
@@ -112,3 +125,4 @@ with tempfile.TemporaryDirectory(prefix="Tag smoke ") as temporary:
     assert not (Path(current["python"]).parent / "mfs").exists()
     check_memory_server(Path(current["python"]), directory)
     print("Memory server: starts, answers, and accepts an indexing request")
+    stop_leftovers(directory)
