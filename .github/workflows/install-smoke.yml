@@ -17,7 +17,7 @@ jobs:
   clean-install:
     name: ${{ matrix.os }} clean install
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:

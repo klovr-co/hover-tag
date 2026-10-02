@@ -67,14 +67,16 @@ tools such as `gws`. The installer does not relocate their credentials.
 
 ## Install from a checkout
 
-On supported macOS/Linux systems, install and sign in to Codex separately, then
-run the installer below. Tag automatically prepares Python and Slack CLI; neither
-Python nor uv needs to be on PATH. Setup checks the selected Codex transport and
+On supported macOS, Linux, and Windows systems, install and sign in to Codex
+separately, then run the installer below. Tag automatically prepares Python and
+Slack CLI; neither Python nor uv needs to be on PATH. Setup checks the selected Codex transport and
 `codex login status`, and explains how to update or sign in when needed. Tag does
 not install Codex or change its global configuration or credentials.
 
-Native Windows retains its Python 3.10+ and Slack CLI prerequisites; WSL uses the
-Linux bootstrap. No local administrator privileges are needed. Slack sign-in
+Native Windows uses `install.ps1`, which needs only Windows PowerShell 5.1; WSL
+uses the Linux bootstrap. On Windows, the MFS command-line client is not
+bundled because upstream publishes no Windows build; install it on `PATH` to
+use it. No local administrator privileges are needed. Slack sign-in
 and any workspace administrator approval remain explicit user actions.
 
 macOS/Linux:
@@ -320,6 +322,13 @@ an exact uv-managed Python already on the machine, otherwise downloads one into
 `TAG_HOME/runtime/python`. uv verifies its pinned Python distribution checksums.
 System Python and shell profiles are left alone. Paths containing spaces work;
 activation of a virtual environment is not required.
+
+The Windows bootstrap, `install.ps1`, does the same with `Invoke-WebRequest`
+and `Get-FileHash`: the same pinned uv (x86_64 or ARM64) and Python 3.12.14,
+under `TAG_HOME\runtime`. Installations made before this used a system Python;
+on the next `tag start`, Tag prepares the private Python, reinstalls the
+current release with it, and records `dependency_schema: 1`. If that fails, the
+previous runtime stays selected and the next start retries.
 
 Each release has a separate environment. The launcher records an explicit
 interpreter path, so changing the default `python3` does not change Tag's runtime.

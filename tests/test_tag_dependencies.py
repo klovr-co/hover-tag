@@ -9,6 +9,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -18,6 +19,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def archive(path, content=b'#!/bin/sh\nprintf "slack v4.8.0\\n"\n'):
+    if str(path).endswith('.zip'):
+        # Slack's Windows release: bin/slack.exe beside a LICENSE.
+        with zipfile.ZipFile(path, 'w') as bundle:
+            bundle.writestr('LICENSE', 'license')
+            bundle.writestr('bin/slack.exe', content)
+        return
     with tarfile.open(path, 'w:gz') as bundle:
         member = tarfile.TarInfo('bin/slack')
         member.size = len(content)
@@ -80,12 +87,14 @@ class DependenciesTests(unittest.TestCase):
                 home = Path(tmp)
                 auth = home / 'credentials.json'
                 auth.write_text('keep existing authorization')
-                destination = home / 'runtime/slack' / dependencies.SLACK_VERSION / 'slack'
+                name = 'slack.exe' if platform == 'win32' else 'slack'
+                destination = home / 'runtime/slack' / dependencies.SLACK_VERSION / name
                 def compatible(command):
                     return Path(command).is_file() and Path(command).read_bytes().startswith(b'#!/bin/sh')
                 def fetch(url, path, digest):
                     target, checksum = dependencies.SLACK_ARTIFACTS[(platform, machine)]
                     self.assertIn(target, url)
+                    self.assertTrue(url.endswith('.zip' if platform == 'win32' else '.tar.gz'))
                     self.assertEqual(digest, checksum)
                     archive(path)
                 with patch.object(dependencies.sys, 'platform', platform), patch.object(dependencies.platform, 'machine', return_value=machine), patch.object(
@@ -133,6 +142,30 @@ class DependenciesTests(unittest.TestCase):
                     dependencies.migrate(home, ROOT)
             self.assertEqual((home / 'current.json').read_text(), original)
             self.assertFalse((home / 'state/dependencies-v1.json').exists())
+
+    def test_older_windows_installs_move_to_the_private_python(self):
+        # Before dependency_schema 1, Windows ran on a system Python. The migration
+        # prepares Tag's own Python through install.ps1, then reinstalls with it.
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            (home / 'current.json').write_text(json.dumps(
+                {'python': 'C:/Python312/python.exe', 'bin_dir': str(home / 'bin'), 'release': 'old'}))
+            runs = []
+            def run(command, **_):
+                runs.append(command)
+                if '--migrate-dependencies' in command:
+                    (home / 'current.json').write_text(json.dumps(
+                        {'dependency_schema': 1, 'python': 'managed', 'release': 'new'}))
+                return subprocess.CompletedProcess(command, 0, stdout='C:/Tag/python.exe\nC:/Tag/uv.exe\n')
+            with patch.object(dependencies.sys, 'platform', 'win32'), \
+                    patch.object(dependencies.subprocess, 'run', side_effect=run), \
+                    patch.object(dependencies.os, 'execv', side_effect=SystemExit) as restart:
+                with self.assertRaises(SystemExit):  # execv never returns: startup reruns on the new code
+                    dependencies.migrate(home, ROOT)
+            self.assertEqual(runs[0][0], 'powershell.exe')
+            self.assertIn('-RuntimeInfo', runs[0])
+            self.assertEqual(runs[1][0], 'C:/Tag/python.exe')
+            restart.assert_called_once()
 
     def test_migration_rechecks_slack_and_preserves_operator_environment(self):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {'PATH': '/user/bin', 'SLACK_CONFIG_DIR': '/user/slack'}):

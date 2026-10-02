@@ -23,9 +23,11 @@ with tempfile.TemporaryDirectory(prefix="Tag smoke ") as temporary:
         for entry in bundle.infolist():
             if entry.external_attr >> 16 & 0o111:
                 (source / entry.filename).chmod(0o755)
-    installer = ([sys.executable, str(source / "scripts/tag_install.py"), "--source", str(source)]
-                 if os.name == "nt" else ["sh", str(source / "install.sh")])
-    subprocess.run([*installer, "--bin-dir", str(directory / "bin")], env=env, check=True)
+    # The real bootstraps: neither needs a system Python.
+    installer = (["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                  "-File", str(source / "install.ps1"), "-BinDir"]
+                 if os.name == "nt" else ["sh", str(source / "install.sh"), "--bin-dir"])
+    subprocess.run([*installer, str(directory / "bin")], env=env, check=True)
     command = directory / "bin" / ("tag.cmd" if os.name == "nt" else "tag")
     subprocess.run([str(command), "version"], cwd=directory, env=env, check=True)
     subprocess.run([str(command), "config", "init", "--json"], cwd=directory, env=env, check=True)
@@ -44,6 +46,13 @@ with tempfile.TemporaryDirectory(prefix="Tag smoke ") as temporary:
     subprocess.run([str(command), "doctor", "--offline"], cwd=directory, env=env, check=True)
     current = json.loads((directory / "home/current.json").read_text())
     subprocess.run([current["python"], "-c", "import slack_bolt, psutil, mfs_server"], check=True)
+    assert current.get("dependency_schema") == 1, current
+    # Tag runs on its own Python, never the one that started this script.
+    assert Path(current["python"]).resolve() != Path(sys.executable).resolve()
+    slack = directory / "home/runtime/slack"
+    if not any(slack.rglob("slack.exe" if os.name == "nt" else "slack")):
+        import shutil
+        assert shutil.which("slack"), "Slack CLI was neither provisioned nor already installed"
     if os.name != "nt":
         mfs = Path(current["python"]).parent / "mfs"
         subprocess.run([str(mfs), "--version"], check=True)

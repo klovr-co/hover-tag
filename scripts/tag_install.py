@@ -695,7 +695,7 @@ def install(
         python = release / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
         if dependencies:
             runtime_python = Path(sys.executable)
-            if os.name != "nt" and tag_dependencies is not None:
+            if tag_dependencies is not None:
                 runtime_python, uv_path = tag_dependencies.prepare_python(source, home)
                 uv = str(uv_path)
             else:
@@ -732,10 +732,9 @@ def install(
                 "Preparing the MFS embedding model",
             )
             row("Memory", "Local embedding model cached")
-            if os.name != "nt":
-                if tag_dependencies is not None:
-                    tag_dependencies.ensure_slack(home)
-                install_step([str(python), "-c", "import mfs_server, psutil, slack_bolt"], "Checking the prepared runtime")
+            if tag_dependencies is not None:
+                tag_dependencies.ensure_slack(home)
+            install_step([str(python), "-c", "import mfs_server, psutil, slack_bolt"], "Checking the prepared runtime")
         else:
             # Explicit test/development mode; never advertised as a complete install.
             python = Path(sys.executable)
@@ -780,9 +779,9 @@ raise SystemExit(subprocess.call([record["python"], str(release / "scripts/tag_c
         if (command.exists() or command.is_symlink()) and command_owner(command) is None:
             raise RuntimeError(f"Refusing to replace unrelated command: {command}")
         if os.name == "nt":
-            if any(c in str(path) for path in (Path(sys.executable), launcher) for c in '%\r\n"'):
+            if any(c in str(path) for path in (launcher_python, launcher) for c in '%\r\n"'):
                 raise ValueError("Windows launcher paths cannot contain percent signs, quotes or newlines")
-            script = f'@rem TAG managed launcher\n@"{sys.executable}" "{launcher}" %*\n'
+            script = f'@rem TAG managed launcher\n@"{launcher_python}" "{launcher}" %*\n'
         else:
             script = f'#!/bin/sh\n# TAG managed launcher\nexec {shlex.quote(str(launcher_python))} {shlex.quote(str(launcher))} "$@"\n'
         atomic_text(command, script, 0o755)
@@ -797,7 +796,7 @@ raise SystemExit(subprocess.call([record["python"], str(release / "scripts/tag_c
             "bin_dir": str(bin_dir.resolve()),
             "installed_version": version,
         }
-        if dependencies and os.name != "nt":
+        if dependencies and tag_dependencies is not None:
             current_record["dependency_schema"] = 1
         if selection is not None:
             current_record.update({

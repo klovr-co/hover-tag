@@ -6,6 +6,13 @@ All notable changes to Tag are documented here.
 
 ### Added
 
+- Install on Windows without Python. `install.ps1` now prepares Tag's own
+  pinned Python with a checksum-verified uv, like `install.sh`, and installs
+  the Slack CLI for Windows. Existing Windows installations move to the private
+  Python automatically on the next `tag start`; the system Python is no longer
+  used. The MFS command-line client still comes from `PATH` on Windows because
+  upstream publishes no Windows build.
+
 - Tag.app for macOS, Windows, and Linux, built with Tauri
   (`installer/desktop`). It installs Tag with the installer bundled in the app,
   showing structured progress, then lists, starts, renames, and adds Tags,
