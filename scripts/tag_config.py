@@ -30,7 +30,7 @@ REQUIRED = ("OPENTAG_BACKEND", "MFS_URL", "MFS_ALLOWED_SCOPES",
 # Unknown extension settings are preserved but never exposed by config show.
 PUBLIC = frozenset((*DEFAULTS, "MFS_ALLOWED_SCOPES", "OPENTAG_WORKDIR",
                     "SLACK_CHANNEL_ID", "SLACK_CHANNEL_IDS", "SLACK_TEAM_ID",
-                    "SLACK_APP_ID", "SLACK_ALLOWED_USER_IDS",
+                    "SLACK_APP_ID", "SLACK_ALLOWED_USER_IDS", "SLACK_ENTERPRISE_ID",
                     "SLACK_CHANNEL_POLICY",
                     "MFS_SLACK_HISTORY_DAYS",
                     "MFS_SLACK_CONNECTOR_URI", "MFS_SLACK_CONNECTOR_CONFIG",
@@ -45,6 +45,7 @@ LABELS = {
     "SLACK_ALLOWED_USER_IDS": "Owners", "SLACK_CHANNEL_ID": "Legacy channel restriction",
     "SLACK_CHANNEL_IDS": "Selected channels", "SLACK_TEAM_ID": "Slack workspace",
     "SLACK_CHANNEL_POLICY": "Channel policy (selected or invited)",
+    "SLACK_ENTERPRISE_ID": "Slack organization authorization",
     "SLACK_APP_ID": "Slack app ID", "MFS_SLACK_TOKEN": "Slack history credential",
     "MFS_ALLOWED_SCOPES": "Allowed memory sources", "MFS_URL": "Memory server",
     "MFS_TOKEN": "Memory server token", "OPENTAG_TIMEOUT_SECONDS": "Agent idle timeout (seconds)",
@@ -124,6 +125,8 @@ def validation_error(key: str, value: str) -> str | None:
             return "Select one or more comma-separated Slack channel IDs"
     if key == "SLACK_TEAM_ID" and value and not re.fullmatch(r"T[A-Z0-9]+", value):
         return "Use a Slack workspace Team ID"
+    if key == "SLACK_ENTERPRISE_ID" and value and not re.fullmatch(r"E[A-Z0-9]+", value):
+        return "Use a Slack organization ID starting with E"
     if key == "SLACK_APP_ID" and value and not re.fullmatch(r"A[A-Z0-9]+", value):
         return "Use a Slack App ID"
     if key == "MFS_URL":

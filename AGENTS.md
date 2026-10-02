@@ -49,7 +49,8 @@ use at most one of these release labels:
 - No release label — continue the active prerelease line. For example,
   `v0.2.0-alpha.3` becomes `v0.2.0-alpha.4`, and `v0.2.0-beta.1` becomes
   `v0.2.0-beta.2`. If no numbered prerelease line is active, automation starts
-  the release line configured by `VERSION`.
+  the release line configured by `VERSION`. While `VERSION` names a published
+  stable release, unlabeled merges publish nothing.
 - `release:next-patch` — start the next patch line at `alpha.1`. For example,
   `v0.1.0-alpha` becomes `v0.1.1-alpha.1`.
 - `release:next-minor` — start the next minor line at `alpha.1` and reset the

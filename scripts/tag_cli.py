@@ -721,7 +721,7 @@ def ensure_shared_memory(
     try:
         process = process_for(shared / "mfs.json")
         if process is not None and not tag_mfs_runtime.active(shared, process):
-            # Migration v1: only restart an identity-verified Tag-owned process.
+            # Runtime migrations only restart an identity-verified Tag-owned process.
             # Stored indexes, connector settings, and credentials stay in place.
             stop_process(context.home, "mfs", state_dir=shared)
         if not healthy(url):
@@ -1975,13 +1975,15 @@ def _run_cli() -> int:
         selected = setup.connect_slack_workspace()
         if not selected:
             return 1
-        team_id, workspace_name = selected
+        team_id, workspace_name = selected[:2]
         # Setup renames the Tag after its Slack IDs; nobody invents an alias.
         context = tag_instances.create(
             installation_root, tag_instances.suggest_name(installation_root, "new tag"), provisional=True
         )
         tag_instances.record_workspace_name(context.home, workspace_name)
-        settings.update_config(settings.config_path(context.home), {"SLACK_TEAM_ID": team_id})
+        settings.update_config(settings.config_path(context.home), {
+            "SLACK_TEAM_ID": team_id, "SLACK_ENTERPRISE_ID": getattr(selected, "enterprise_id", ""),
+        })
         display.header("Add", f"New Tag for {workspace_name}")
         display.info_row("Home", display.short_path(context.home), good=True)
         display.info_row("Command", context.command("setup"), good=True)

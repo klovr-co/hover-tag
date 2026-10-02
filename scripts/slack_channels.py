@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import urllib.error
 import urllib.parse
@@ -36,6 +37,8 @@ class SlackChannelError(RuntimeError):
 
 
 def slack_api(token: str, method: str, parameters: dict[str, str]) -> dict[str, Any]:
+    if method == "auth.teams.list":
+        return slack_api_post(token, method, parameters)
     request = urllib.request.Request(
         f"{SLACK_API}/{method}?{urllib.parse.urlencode(parameters)}",
         headers={"Authorization": f"Bearer {token}"},
@@ -79,7 +82,7 @@ def slack_api_post(token: str, method: str, parameters: dict[str, str] | None = 
     return payload
 
 
-def list_channels(token: str) -> list[SlackChannel]:
+def list_channels(token: str, *, team_id: str = "") -> list[SlackChannel]:
     channels: list[SlackChannel] = []
     cursor = ""
     while True:
@@ -88,6 +91,9 @@ def list_channels(token: str) -> list[SlackChannel]:
             "exclude_archived": "true",
             "limit": "200",
         }
+        selected_team = team_id or (os.getenv("SLACK_TEAM_ID", "") if os.getenv("SLACK_ENTERPRISE_ID") else "")
+        if selected_team:
+            parameters["team_id"] = selected_team
         if cursor:
             parameters["cursor"] = cursor
         payload = slack_api(token, "conversations.list", parameters)
@@ -166,7 +172,7 @@ def parse_channel_ids(value: str) -> tuple[str, ...]:
     return tuple(result)
 
 
-def join_selected_channels(token: str, selected: list[SlackChannel], *, app_id: str = "") -> list[SlackChannel] | None:
+def join_selected_channels(token: str, selected: list[SlackChannel], *, app_id: str = "", team_id: str = "") -> list[SlackChannel] | None:
     """Join only explicitly approved public channels; verify before returning."""
     try:
         import setup_ui as ui
@@ -213,7 +219,7 @@ def join_selected_channels(token: str, selected: list[SlackChannel], *, app_id: 
                 if action == 2:
                     raise ui.Paused()
                 # A manual invitation or an earlier partial join may now be visible.
-                refreshed = list_channels(token)
+                refreshed = list_channels(token, **({"team_id": team_id} if team_id else {}))
                 channel = next((item for item in refreshed if item.channel_id == channel.channel_id), channel)
         confirmed.append(channel)
     return confirmed
@@ -225,6 +231,7 @@ def choose_channels(
     *,
     input_fn: Callable[[str], str] | None = None,
     app_id: str = "",
+    team_id: str = "",
 ) -> list[SlackChannel]:
     """Include joined channels automatically and offer approved public joins."""
     reader = input_fn or input
@@ -232,7 +239,7 @@ def choose_channels(
         import setup_ui as ui
     except ImportError:
         from scripts import setup_ui as ui
-    channels = list_channels(token)
+    channels = list_channels(token, **({"team_id": team_id} if team_id else {}))
     if input_fn is None:
         while True:
             joined = [channel for channel in channels if channel.is_member]
@@ -253,13 +260,13 @@ def choose_channels(
                     ui.message("Optional: select public channels for Tag to join.")
                     indices = ui.checklist([f"#{channel.name} (public; Tag will join)" for channel in public_options], set())
                     requested = [channel for index, channel in enumerate(public_options) if index in indices]
-                    added = join_selected_channels(token, requested, app_id=app_id)
+                    added = join_selected_channels(token, requested, app_id=app_id, **({"team_id": team_id} if team_id else {}))
                     if added is not None:
                         return joined + added
-                    channels = list_channels(token)
+                    channels = list_channels(token, **({"team_id": team_id} if team_id else {}))
                     continue
                 if (public_options and action == 2) or (not public_options and action == 1):
-                    channels = list_channels(token)
+                    channels = list_channels(token, **({"team_id": team_id} if team_id else {}))
                     continue
                 raise ui.Paused()
 
@@ -271,12 +278,12 @@ def choose_channels(
                     ui.message("Select public channels for Tag to join.")
                     indices = ui.checklist([f"#{channel.name} (public; Tag will join)" for channel in public_options], set())
                     requested = [channel for index, channel in enumerate(public_options) if index in indices]
-                    added = join_selected_channels(token, requested, app_id=app_id)
+                    added = join_selected_channels(token, requested, app_id=app_id, **({"team_id": team_id} if team_id else {}))
                     if added is not None:
                         return added
                 elif action == 2:
                     raise ui.Paused()
-                channels = list_channels(token)
+                channels = list_channels(token, **({"team_id": team_id} if team_id else {}))
                 continue
 
             print()
@@ -286,7 +293,7 @@ def choose_channels(
             ui.message("Then choose Check again below. Nothing is indexed yet.")
             if ui.choose("Ready to check membership?", ["Check again", "Save and exit"], qid="membership_check") == 1:
                 raise ui.Paused()
-            channels = list_channels(token)
+            channels = list_channels(token, **({"team_id": team_id} if team_id else {}))
 
     available = [channel for channel in channels if not channel.is_private or channel.is_member]
     if not available:

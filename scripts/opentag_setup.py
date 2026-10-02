@@ -43,6 +43,7 @@ try:
     import slack_app_create
     import slack_manifest_migrations
     import slack_credentials
+    import slack_identity
     import tag_credentials
     import tag_telemetry
     import tag_cli as lifecycle
@@ -62,6 +63,7 @@ except ImportError:
     from scripts import slack_app_create
     from scripts import slack_manifest_migrations
     from scripts import slack_credentials
+    from scripts import slack_identity
     from scripts import tag_credentials
     from scripts import tag_telemetry
     from scripts import tag_cli as lifecycle
@@ -300,16 +302,20 @@ def inspect_slack_app(project: Path, app_id: str, *, issues: list[str] | None = 
     return confirm("Have you manually compared the app with Tag's manifest?", default=False, qid="manifest_compared")
 
 
-def authorized_workspaces(output: str) -> list[tuple[str, str]]:
+def authorized_accounts(output: str) -> list[tuple[str, str]]:
     """Parse the CLI's text account listing without reading its credential files."""
     output = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", output)
     workspaces: dict[str, str] = {}
     for line in output.splitlines():
-        match = re.fullmatch(r"\s*(.+?)\s+\(Team ID:\s*(T[A-Z0-9]+)\)\s*", line)
+        match = re.fullmatch(r"\s*(.+?)\s+\(Team ID:\s*([TE][A-Z0-9]+)\)\s*", line)
         if match:
             name, team_id = match.groups()
             workspaces.setdefault(team_id, name.strip())
     return [(name, team_id) for team_id, name in workspaces.items()]
+
+
+def authorized_workspaces(output: str) -> list[tuple[str, str]]:
+    return [(name, identity) for name, identity in authorized_accounts(output) if identity.startswith("T")]
 
 
 def authorized_members(output: str, team_id: str) -> list[str]:
@@ -319,7 +325,7 @@ def authorized_members(output: str, team_id: str) -> list[str]:
     members: list[str] = []
     for line in output.splitlines():
         if "Team ID:" in line:
-            match = re.fullmatch(r"\s*.+?\s+\(Team ID:\s*(T[A-Z0-9]+)\)\s*", line)
+            match = re.fullmatch(r"\s*.+?\s+\(Team ID:\s*([TE][A-Z0-9]+)\)\s*", line)
             selected = bool(match and match.group(1) == team_id)
         elif selected:
             match = re.fullmatch(r"\s*User ID:\s*([UW][A-Z0-9]+)\s*", line)
@@ -393,12 +399,12 @@ def choose_slack_person(people: list[dict[str, str]]) -> str | None:
             raise ui.Paused()
 
 
-def choose_allowed_users(team_id: str, current: str = "", *, token: str = "") -> str:
+def choose_allowed_users(team_id: str, current: str = "", *, token: str = "", workspace_id: str = "") -> str:
     """Make the person setting up Tag its owner; only they can use it by default."""
     if not settings.validation_error("SLACK_ALLOWED_USER_IDS", current):
         return current
     slack = shutil.which("slack")
-    if slack and re.fullmatch(r"T[A-Z0-9]+", team_id):
+    if slack and re.fullmatch(r"[TE][A-Z0-9]+", team_id):
         try:
             result = subprocess.run(
                 [slack, "auth", "list", "--skip-update", "--no-color"],
@@ -414,7 +420,7 @@ def choose_allowed_users(team_id: str, current: str = "", *, token: str = "") ->
     if token:
         ui.message("Loading people from Slack…")
         try:
-            people = slack_people(token, team_id)
+            people = slack_people(token, workspace_id or team_id)
         except slack_permissions.MissingScope:
             ui.message("Slack needs users:read to list people. You can enter your member ID instead.")
         except slack_channels.SlackChannelError:
@@ -430,7 +436,7 @@ def choose_allowed_users(team_id: str, current: str = "", *, token: str = "") ->
     )
 
 
-def connect_slack_workspace(current: str = "") -> tuple[str, str] | None:
+def connect_slack_workspace(current: str = "") -> slack_identity.WorkspaceSelection | None:
     try:
         from tag_paths import tag_home
     except ImportError:
@@ -441,16 +447,28 @@ def connect_slack_workspace(current: str = "") -> tuple[str, str] | None:
             [shutil.which("slack") or "slack", "auth", "list", "--skip-update", "--no-color"],
             check=False, text=True, capture_output=True,
         )
-        accounts = authorized_workspaces(result.stdout + "\n" + result.stderr) if result.returncode == 0 else []
+        accounts = authorized_accounts(result.stdout + "\n" + result.stderr) if result.returncode == 0 else []
         if not accounts:
             ui.message("No authorized workspaces could be listed. Connect through Slack CLI to continue.")
-        options = [name + (" (saved)" if team_id == current else "") for name, team_id in accounts]
+        options = [name + (" (organization)" if team_id.startswith("E") else "")
+                   + (" (saved)" if team_id == current else "") for name, team_id in accounts]
         options += ["Connect another workspace" if accounts else "Connect Slack", "Save and exit"]
         index = ui.choose("Choose a workspace", options, qid="workspace")
         if index < len(accounts):
             name, team_id = accounts[index]
             ui.message(f"✓ {name}")
-            return team_id, name
+            if team_id.startswith("E"):
+                enterprise_id = team_id
+                ui.message(f"Organization authorization found: {name} ({enterprise_id}).")
+                ui.message("Choose the one workspace this Tag should use. Open that workspace in Slack's browser app;")
+                ui.message("copy its T… ID from app.slack.com/client/T… in the address bar.")
+                ui.message("Slack will verify access during installation. An organization admin may need to approve it.")
+                if ui.choose("Connect a workspace in this organization", ["Enter workspace ID", "Save and exit"],
+                             qid="org_workspace") == 1:
+                    return None
+                team_id = ask_validated("Workspace Team ID (T…)", "SLACK_TEAM_ID", qid="org_workspace_id")
+                return slack_identity.WorkspaceSelection(team_id, team_id, enterprise_id)
+            return slack_identity.WorkspaceSelection(team_id, name)
         if index == len(accounts) + 1:
             return None
         if ui.protocol_active():
@@ -465,7 +483,8 @@ def connect_slack_workspace(current: str = "") -> tuple[str, str] | None:
 
 # Settings a question saves, cleared when the operator goes back to change it.
 BACK_CLEARS: dict[str, tuple[str, ...]] = {
-    "workspace": ("SLACK_TEAM_ID",),
+    "workspace": ("SLACK_TEAM_ID", "SLACK_ENTERPRISE_ID"),
+    "org_workspace_id": ("SLACK_TEAM_ID", "SLACK_ENTERPRISE_ID"),
     "allowed_user": ("SLACK_ALLOWED_USER_IDS",),
     "person": ("SLACK_ALLOWED_USER_IDS",),
     "people_search": ("SLACK_ALLOWED_USER_IDS",),
@@ -512,8 +531,11 @@ def slack_login_with_client() -> bool:
     return False
 
 
-def connect_slack_cli(current: str = "") -> str | None:
+def connect_slack_cli(current: str = "", *, config_path: Path | None = None) -> str | None:
     selected = connect_slack_workspace(current)
+    if selected and config_path:
+        settings.update_config(config_path, {"SLACK_TEAM_ID": selected.team_id,
+                                             "SLACK_ENTERPRISE_ID": selected.enterprise_id})
     return selected[0] if selected else None
 
 
@@ -1137,6 +1159,7 @@ def choose_slack_app(
     config_path = config_path or settings.config_path(home)
     values = settings.load_config(config_path)
     app_id = values.get("SLACK_APP_ID", "")
+    team_id = slack_identity.cli_team(values) or team_id
     ui.screen(
         2,
         "Which app should Tag use?",
@@ -1192,6 +1215,9 @@ def choose_slack_app(
                 raise ui.Paused()
     settings.save_config(marker, {"app_id": app_id, "team_id": team_id})
     ui.message("✓ App linked")
+    if values.get("SLACK_ENTERPRISE_ID"):
+        ui.message("Enabling organization deployment for the selected workspace.")
+        slack_manifest_migrations.enable_org_deployment(project, app_id, values["SLACK_ENTERPRISE_ID"])
     ui.commit()  # The Slack app exists and is linked: Back stops here.
 
     def enable_agent_messaging() -> bool:
@@ -1248,12 +1274,11 @@ def choose_slack_app(
     return app_id
 
 
-def validate_slack_identity(token: str, *, team_id: str = "", app_id: str = "", label: str) -> dict[str, object]:
-    payload = slack_permissions.recover(lambda: slack_channels.slack_api(token, "auth.test", {}), app_id)
-    if team_id and payload.get("team_id") != team_id:
-        raise RuntimeError(f"{label} belongs to a different Slack workspace")
-    if app_id and payload.get("app_id") and payload.get("app_id") != app_id:
-        raise RuntimeError(f"{label} belongs to a different Slack app")
+def validate_slack_identity(token: str, *, team_id: str = "", app_id: str = "", enterprise_id: str = "", label: str) -> dict[str, object]:
+    payload = slack_permissions.recover(
+        lambda: slack_identity.validate(token, team_id=team_id, app_id=app_id,
+                                        enterprise_id=enterprise_id, label=label,
+                                        api=slack_channels.slack_api), app_id)
     ui.message(f"✓ {label} authenticates for the selected workspace")
     return payload
 
@@ -1274,9 +1299,11 @@ def connect_app_credentials(home: Path, config_path: Path, team_id: str, app_id:
               footer="No app settings changed. No services or indexing started.")
     while True:
         try:
-            credentials = slack_credentials.receive(slack_project(home), team_id, app_id)
+            credentials = slack_credentials.receive(slack_project(home), team_id, app_id,
+                                                    **({"enterprise_id": values["SLACK_ENTERPRISE_ID"]}
+                                                       if values.get("SLACK_ENTERPRISE_ID") else {}))
             validate_slack_identity(credentials["SLACK_BOT_TOKEN"], team_id=team_id,
-                                    app_id=app_id, label="Bot token")
+                                    app_id=app_id, enterprise_id=values.get("SLACK_ENTERPRISE_ID", ""), label="Bot token")
             validate_socket_token(credentials["SLACK_APP_TOKEN"], app_id)
         except RuntimeError as error:
             if isinstance(error, slack_credentials.ConnectionFailure):
@@ -1325,6 +1352,7 @@ def render_slack_connector(team_id: str, channels: list[slack_channels.SlackChan
         f"# URI: {connector_uri(team_id, app_id)}",
         "# Generated by Tag. Contains no token; the credential is read from a private reference.",
         f"token = {json.dumps('file:' + str(credential) if credential else 'env:MFS_SLACK_TOKEN')}",
+        f"team_id = {json.dumps(team_id)}",
         f"channel_types = [{channel_types}]",
         f"channel_ids = [{ids}]",
         f'oldest = "now-{days}d"',
@@ -1473,7 +1501,7 @@ def guided_setup(
     )
     if needs_slack_connection:
         ui.message("Authorize access in Slack. Private credentials stay in this terminal.")
-        team_id = values.get("SLACK_TEAM_ID", "") or connect_slack_cli()
+        team_id = values.get("SLACK_TEAM_ID", "") or connect_slack_cli(config_path=config_path)
         if not team_id:
             ui.message("Slack authorization is required; run tag setup again when ready.")
             return 1
@@ -1507,7 +1535,7 @@ def guided_setup(
                 ui.message(error)
                 continue
             try:
-                validate_slack_identity(bot_token, team_id=team_id, app_id=app_id, label="Bot token")
+                validate_slack_identity(bot_token, team_id=team_id, app_id=app_id, enterprise_id=values.get("SLACK_ENTERPRISE_ID", ""), label="Bot token")
             except (slack_channels.SlackChannelError, RuntimeError) as exc:
                 ui.message(str(exc))
                 continue
@@ -1520,6 +1548,7 @@ def guided_setup(
         values["SLACK_BOT_TOKEN"],
         team_id=values.get("SLACK_TEAM_ID", ""),
         app_id=values.get("SLACK_APP_ID", ""),
+        enterprise_id=values.get("SLACK_ENTERPRISE_ID", ""),
         label="Bot token",
     )
     validate_socket_token(values["SLACK_APP_TOKEN"], values.get("SLACK_APP_ID", ""))
@@ -1545,7 +1574,10 @@ def guided_setup(
         ),
     )
     if settings.validation_error("SLACK_ALLOWED_USER_IDS", values.get("SLACK_ALLOWED_USER_IDS", "")):
-        owner_id = choose_allowed_users(values.get("SLACK_TEAM_ID", ""), token=values["SLACK_BOT_TOKEN"])
+        # Slack CLI accounts are keyed by the organization in Enterprise Grid;
+        # the people directory is the workspace's own.
+        owner_id = choose_allowed_users(slack_identity.cli_team(values), token=values["SLACK_BOT_TOKEN"],
+                                        workspace_id=values.get("SLACK_TEAM_ID", ""))
         values = settings.update_config(config_path, {"SLACK_ALLOWED_USER_IDS": owner_id})
 
     if not values.get("SLACK_CHANNEL_IDS") and values.get("SLACK_CHANNEL_ID"):
@@ -1556,7 +1588,8 @@ def guided_setup(
     def choose_setup_channels():
         return slack_permissions.recover(
             lambda: slack_channels.choose_channels(values["SLACK_BOT_TOKEN"], values.get("SLACK_CHANNEL_IDS", ""),
-                                                  app_id=values.get("SLACK_APP_ID", "")),
+                                                  app_id=values.get("SLACK_APP_ID", ""),
+                                                  **({"team_id": values["SLACK_TEAM_ID"]} if values.get("SLACK_ENTERPRISE_ID") else {})),
             values.get("SLACK_APP_ID", ""),
         )
 
@@ -1569,7 +1602,8 @@ def guided_setup(
 
     if not selected_channels:
         available = slack_permissions.recover(
-            lambda: slack_channels.list_channels(values["SLACK_BOT_TOKEN"]), values.get("SLACK_APP_ID", ""),
+            lambda: slack_channels.list_channels(values["SLACK_BOT_TOKEN"],
+                **({"team_id": values["SLACK_TEAM_ID"]} if values.get("SLACK_ENTERPRISE_ID") else {})), values.get("SLACK_APP_ID", ""),
         )
         visible = {channel.channel_id: channel for channel in available}
         selected_channels = [
@@ -1657,7 +1691,7 @@ def guided_setup(
         history_token = values.get("MFS_SLACK_TOKEN") or values["SLACK_BOT_TOKEN"]
         while True:
             try:
-                validate_slack_identity(history_token, team_id=values.get("SLACK_TEAM_ID", ""), label="Slack-history credential")
+                validate_slack_identity(history_token, team_id=values.get("SLACK_TEAM_ID", ""), enterprise_id=values.get("SLACK_ENTERPRISE_ID", ""), label="Slack-history credential")
                 for channel in selected_channels:
                     slack_channels.slack_api(history_token, "conversations.history", {"channel": channel.channel_id, "limit": "1"})
                 break

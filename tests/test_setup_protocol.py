@@ -162,7 +162,7 @@ class SetupProtocolTests(unittest.TestCase):
         ), patch.object(opentag_setup.subprocess, "run", side_effect=listings), patch.object(
             opentag_setup, "slack_login_with_client", return_value=True
         ) as login, patch.object(opentag_setup, "run_slack_cli") as terminal_login:
-            self.assertEqual(opentag_setup.connect_slack_workspace(), ("T123", "Example Team"))
+            self.assertEqual(opentag_setup.connect_slack_workspace()[:2], ("T123", "Example Team"))
         login.assert_called_once()
         terminal_login.assert_not_called()
 

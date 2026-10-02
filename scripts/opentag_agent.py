@@ -654,6 +654,7 @@ def run_codex_app_server_events(
             event_type = str(payload.pop("type"))
             text = str(payload.pop("text", ""))
             if event_type in {
+                "approval_request",
                 "activity_start",
                 "message_start",
                 "message_delta",
