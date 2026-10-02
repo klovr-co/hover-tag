@@ -257,7 +257,7 @@ class OpenTagSetupTests(unittest.TestCase):
             )
             browser.assert_called_once_with((project / "assets/tag-profile.png").resolve().as_uri())
             assignments = json.loads(
-                (project / "assets/tag-waterdrop-identities.json").read_text()
+                (project / "assets/tag-waterdrop-identities.json").read_text(encoding="utf-8")
             )
             self.assertEqual(
                 assignments["TTEST:First Tag"]["index"],
@@ -535,7 +535,7 @@ class OpenTagSetupTests(unittest.TestCase):
             opentag_setup.settings.save_config(config, {"SLACK_APP_ID": "ATEST", "SLACK_TEAM_ID": "TTEST"})
             def link_app(*args, **kwargs):
                 path = kwargs["cwd"] / ".slack/apps.dev.json"
-                path.write_text(json.dumps({"TTEST": {"app_id": "ATEST", "team_id": "TTEST"}}))
+                path.write_text(json.dumps({"TTEST": {"app_id": "ATEST", "team_id": "TTEST"}}), encoding="utf-8")
                 return 0
             with patch.object(opentag_setup, "run_slack_cli", side_effect=link_app) as link, patch.object(
                 opentag_setup, "inspect_slack_app", side_effect=[False, True]
@@ -556,7 +556,7 @@ class OpenTagSetupTests(unittest.TestCase):
                 project = opentag_setup.slack_project(home)
                 (project / ".slack" / filename).write_text(json.dumps({
                     "TTEST": {"app_id": "ATEST", "team_id": "TTEST", "user_id": "UTEST"}
-                }))
+                }), encoding="utf-8")
                 config = home / "config/settings.json"
                 opentag_setup.settings.save_config(config, {"SLACK_APP_ID": "ATEST"})
                 with patch.object(opentag_setup, "run_slack_cli") as link, patch.object(
@@ -573,18 +573,18 @@ class OpenTagSetupTests(unittest.TestCase):
             project = opentag_setup.slack_project(home)
             path = project / ".slack/apps.dev.json"
             original = json.dumps({"TTEST": {"app_id": "AOTHER", "team_id": "TTEST"}})
-            path.write_text(original)
-            (project / "tag-linked.json").write_text(json.dumps({"app_id": "ATEST", "team_id": "TTEST"}))
+            path.write_text(original, encoding="utf-8")
+            (project / "tag-linked.json").write_text(json.dumps({"app_id": "ATEST", "team_id": "TTEST"}), encoding="utf-8")
             config = home / "config/settings.json"
             opentag_setup.settings.save_config(config, {"SLACK_APP_ID": "ATEST"})
             with patch.object(opentag_setup, "run_slack_cli") as link, redirect_stdout(StringIO()):
                 with self.assertRaisesRegex(RuntimeError, "already linked to another app"):
                     opentag_setup.choose_slack_app(home, "TTEST", config)
             link.assert_not_called()
-            self.assertEqual(path.read_text(), original)
+            self.assertEqual(path.read_text(encoding="utf-8"), original)
 
     def test_missing_home_event_explains_repair_without_opening_browser(self) -> None:
-        manifest = (opentag_setup.ROOT / "slack-app-manifest.yaml").read_text().replace("      - app_home_opened\n", "")
+        manifest = (opentag_setup.ROOT / "slack-app-manifest.yaml").read_text(encoding="utf-8").replace("      - app_home_opened\n", "")
         with patch.object(opentag_setup.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, manifest, "")), patch.object(
             opentag_setup.webbrowser, "open"
         ) as browser, redirect_stdout(StringIO()) as output:
@@ -594,7 +594,7 @@ class OpenTagSetupTests(unittest.TestCase):
         browser.assert_not_called()
 
     def test_missing_agent_view_omits_redundant_manual_guidance(self) -> None:
-        manifest = (opentag_setup.ROOT / "slack-app-manifest.yaml").read_text().replace(
+        manifest = (opentag_setup.ROOT / "slack-app-manifest.yaml").read_text(encoding="utf-8").replace(
             "  agent_view:\n    agent_description: Run approved Codex or Claude tasks from Slack.\n",
             "",
         )
@@ -703,9 +703,9 @@ class OpenTagSetupTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             project = opentag_setup.slack_project(Path(directory))
             hooks = project / ".slack/hooks.json"
-            self.assertEqual(json.loads(hooks.read_text()), {"hooks": {}})
+            self.assertEqual(json.loads(hooks.read_text(encoding="utf-8")), {"hooks": {}})
             config = project / ".slack/config.json"
-            self.assertEqual(json.loads(config.read_text())["manifest"]["source"], "remote")
+            self.assertEqual(json.loads(config.read_text(encoding="utf-8"))["manifest"]["source"], "remote")
             config_before = config.read_bytes()
             hooks.unlink()
             opentag_setup.slack_project(Path(directory))
@@ -902,6 +902,7 @@ class OpenTagSetupTests(unittest.TestCase):
             config = home / "config/settings.json"
             environment = {
                 "HOME": str(user_home),
+                "USERPROFILE": str(user_home),  # Windows expands ~ from USERPROFILE
                 "TAG_HOME": str(root / "app"),
                 "TAG_INSTANCE_HOME": str(home),
                 "OPENTAG_WORKDIR": "~/chosen",

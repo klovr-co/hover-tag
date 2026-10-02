@@ -108,7 +108,7 @@ class ActivityStoreTests(unittest.TestCase):
             })
             store.finish(run_id, "completed")
 
-            persisted = (store.root / f"{run_id}.json").read_text()
+            persisted = (store.root / f"{run_id}.json").read_text(encoding="utf-8")
             self.assertNotIn("sensitive", persisted)
             self.assertNotIn("private-0", persisted)
             self.assertNotIn("Gmail address", persisted)

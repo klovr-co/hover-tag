@@ -207,7 +207,7 @@ class OrganizationSetupTests(unittest.TestCase):
             self.assertFalse(migrations.reconcile(self.home, self.config, self.values))
             self.assertFalse(migrations.reconcile(self.home, self.config, self.values))
         self.assertEqual(validate.call_count, 2)
-        self.assertEqual(json.loads(marker.read_text())["enterprise_id"], "EORG")
+        self.assertEqual(json.loads(marker.read_text(encoding="utf-8"))["enterprise_id"], "EORG")
         self.assertEqual(tag_config.load_config(self.config)["MFS_TOKEN"], "keep")
 
     def test_org_manifest_upgrade_preserves_custom_settings(self):

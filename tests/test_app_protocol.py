@@ -62,7 +62,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_autostart_and_logs_provide_what_apps_read(self) -> None:
         home = tag_instances.create(self.root, "t1-a1").home
-        (home / "state/slack.log").write_text("Connected to Slack\n")
+        (home / "state/slack.log").write_text("Connected to Slack\n", encoding="utf-8")
         with patch.object(tag_autostart, "mechanism", return_value="launchd"), \
                 patch.object(tag_autostart.Path, "home", return_value=self.root / "user"):
             result = self.cli("autostart", "status", "--json")
@@ -98,7 +98,7 @@ class ProtocolTests(unittest.TestCase):
     def test_setup_example_uses_real_question_ids_and_kinds(self) -> None:
         sources = "".join(path.read_text(encoding="utf-8") for path in (ROOT / "scripts").glob("*.py"))
         kinds = {"choose", "multi", "text", "secret", "confirm", "people", "slack_login"}
-        events = [json.loads(line) for line in (EXAMPLES / "setup.jsonl").read_text().splitlines()]
+        events = [json.loads(line) for line in (EXAMPLES / "setup.jsonl").read_text(encoding="utf-8").splitlines()]
         for event in events:
             if event["type"] == "question":
                 self.assertIn(event["kind"], kinds)

@@ -33,12 +33,12 @@ class TagInstanceTests(unittest.TestCase):
             self.assertTrue((context.home / "workspace/.codex/config.toml").is_file())
             self.assertFalse((context.home / "releases").exists())
             self.assertEqual(
-                json.loads((context.home / "instance.json").read_text())["id"],
+                json.loads((context.home / "instance.json").read_text(encoding="utf-8"))["id"],
                 context.tag_id,
             )
         self.assertFalse((self.root / "config").exists())
         self.assertFalse((self.root / "workspace").exists())
-        self.assertEqual(json.loads((personal.home / "instance.json").read_text())["id"], "personal")
+        self.assertEqual(json.loads((personal.home / "instance.json").read_text(encoding="utf-8"))["id"], "personal")
 
     def test_native_install_creates_editable_workspace_in_user_directory(self) -> None:
         user_home = self.root.parent / "person"
@@ -147,7 +147,7 @@ class TagInstanceTests(unittest.TestCase):
             "30", home=home, app_id="A456", credential=credential,
         )
         content = connector.read_text(encoding="utf-8")
-        self.assertIn(f'token = "file:{credential}"', content)
+        self.assertIn(f"token = {json.dumps('file:' + str(credential))}", content)
         self.assertNotIn("xoxb-secret", content)
         self.assertEqual(connector.name, "tag-t123-a456.toml")
         if os.name != "nt":
@@ -167,7 +167,7 @@ class TagInstanceTests(unittest.TestCase):
         self.assertEqual(call.call_args.kwargs["env"]["TAG_INSTANCE_HOME"],
                          str(self.root / "instances/new-tag"))
         self.assertEqual(
-            json.loads((self.root / "instances/new-tag/config/settings.json").read_text())["SLACK_TEAM_ID"],
+            json.loads((self.root / "instances/new-tag/config/settings.json").read_text(encoding="utf-8"))["SLACK_TEAM_ID"],
             "T123",
         )
 
@@ -266,7 +266,7 @@ class NativeTagFolderTests(unittest.TestCase):
                 self.assertTrue((default.home / 'instance.json').exists())
                 self.assertTrue((default.workspace / '.codex/config.toml').exists())
                 self.assertFalse((root / 'instances/default').exists())
-                (work.home / 'config/settings.json').write_text('{"SLACK_TEAM_ID":"TWORK"}')
+                (work.home / 'config/settings.json').write_text('{"SLACK_TEAM_ID":"TWORK"}', encoding="utf-8")
                 # A replacement installation discovers the folders without an
                 # installation-local registry or setup.
                 if root.exists():

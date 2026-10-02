@@ -143,7 +143,7 @@ def migrate(home: Path, source: Path) -> None:
         if (home / "runtime/slack").is_dir():
             activate_slack(ensure_slack(home))
         return  # A fresh source checkout still provisions Slack during setup.
-    record = json.loads(current.read_text())
+    record = json.loads(current.read_text(encoding="utf-8"))
     if record.get("dependency_schema", 0) < 1:
         # Includes Windows installs made with a system Python: they move to
         # Tag's private Python, and the system one is no longer needed.
@@ -155,7 +155,7 @@ def migrate(home: Path, source: Path) -> None:
         )
         if result.returncode:
             raise RuntimeError("Tag runtime migration failed; the active release was preserved. Retry startup to resume")
-        updated = json.loads(current.read_text())
+        updated = json.loads(current.read_text(encoding="utf-8"))
         if updated.get("dependency_schema") != 1:
             raise RuntimeError("Runtime migration did not finish; retry Tag startup")
         # Reload both the release code and recorded credentials through normal startup.

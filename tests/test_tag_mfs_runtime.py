@@ -60,7 +60,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertTrue(args[2][1].endswith("tag_mfs_server.py"))
         self.assertEqual(kwargs["environment"]["CUSTOM"], "keep")
         self.assertEqual(kwargs["metadata"]["slack_runtime_version"], tag_mfs_runtime.VERSION)
-        self.assertEqual(json.loads((self.shared / "slack-runtime-migration-v1.json").read_text()), {"version": tag_mfs_runtime.VERSION})
+        self.assertEqual(json.loads((self.shared / "slack-runtime-migration-v1.json").read_text(encoding="utf-8")), {"version": tag_mfs_runtime.VERSION})
 
     def test_failed_replacement_does_not_commit_migration(self):
         with patch.object(tag_cli, "replace_unmanaged_local_mfs"), patch.object(

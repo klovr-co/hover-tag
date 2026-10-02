@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import textwrap
@@ -35,7 +36,7 @@ class SetupSessionTests(unittest.TestCase):
     def setUp(self):
         self.home = Path(tempfile.mkdtemp())
         script = self.home / "fake_setup.py"
-        script.write_text(FAKE_SETUP)
+        script.write_text(FAKE_SETUP, encoding="utf-8")
         self.command = [sys.executable, str(script)]
 
     def tearDown(self):
@@ -83,22 +84,24 @@ class SetupSessionTests(unittest.TestCase):
             setup_session.answer(self.home, 0)
         setup_session.step(self.home, self.command)
         path = self.home / ".setup-session/session.json"
-        session = json.loads(path.read_text())
-        path.write_text(json.dumps({**session, "token": "wrong"}))
+        session = json.loads(path.read_text(encoding="utf-8"))
+        path.write_text(json.dumps({**session, "token": "wrong"}), encoding="utf-8")
         try:
             with self.assertRaisesRegex(setup_session.SessionError, "another client"):
                 setup_session.answer(self.home, 0)
         finally:
-            path.write_text(json.dumps(session))
+            path.write_text(json.dumps(session), encoding="utf-8")
 
     def test_session_file_is_private_and_answers_are_not_written(self):
         setup_session.step(self.home, self.command)
         directory = self.home / ".setup-session"
-        self.assertEqual((directory / "session.json").stat().st_mode & 0o777, 0o600)
-        self.assertEqual(directory.stat().st_mode & 0o777, 0o700)
+        if os.name != "nt":  # Windows protects it with an ACL; POSIX mode bits don't apply.
+            self.assertEqual((directory / "session.json").stat().st_mode & 0o777, 0o600)
+        if os.name != "nt":
+            self.assertEqual(directory.stat().st_mode & 0o777, 0o700)
         setup_session.answer(self.home, "secret-code-123")
         for path in directory.iterdir():
-            self.assertNotIn("secret-code-123", path.read_text())
+            self.assertNotIn("secret-code-123", path.read_text(encoding="utf-8"))
 
     def test_unfetched_ending_is_kept_for_the_next_step(self):
         directory = self.home / ".setup-session"
@@ -111,7 +114,7 @@ class SetupSessionTests(unittest.TestCase):
     def test_stale_session_file_starts_a_new_session(self):
         directory = self.home / ".setup-session"
         directory.mkdir()
-        (directory / "session.json").write_text(json.dumps({"pid": 1, "port": 1, "token": "x"}))
+        (directory / "session.json").write_text(json.dumps({"pid": 1, "port": 1, "token": "x"}), encoding="utf-8")
         started = time.monotonic()
         self.assertEqual(setup_session.step(self.home, self.command)["question"]["id"], "workspace")
         self.assertLess(time.monotonic() - started, setup_session.START_SECONDS)
@@ -135,7 +138,7 @@ class ConcurrentStartTests(unittest.TestCase):
                 def __init__(self, *_args, **_kwargs):
                     launches.append(self)
                     time.sleep(0.3)  # starting takes a moment
-                    (directory / "session.json").write_text("{}")
+                    (directory / "session.json").write_text("{}", encoding="utf-8")
 
             def request(_directory, _message):
                 return {"state": "waiting"} if launches else None

@@ -231,6 +231,9 @@ class TagControlTests(unittest.TestCase):
         ), patch.object(
             opentag_setup.slack_channels, "list_channels",
             return_value=[opentag_setup.slack_channels.SlackChannel("CTEST", "team", False, True)],
+        ), patch.object(
+            # Slack's people directory is unavailable here, so setup asks for the member ID.
+            opentag_setup, "slack_people", side_effect=opentag_setup.slack_channels.SlackChannelError("offline")
         ), patch(
             "builtins.input", side_effect=["UOWNER", "1", "1"]
         ), patch.object(

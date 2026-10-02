@@ -166,7 +166,7 @@ class FlowTests(unittest.TestCase):
             self.assertEqual(opentag_setup.main(), 0)
         guided.assert_called_once()
         status.assert_not_called()
-        self.assertTrue(json.loads(self.config.with_name("setup-progress.json").read_text())["completed"])
+        self.assertTrue(json.loads(self.config.with_name("setup-progress.json").read_text(encoding="utf-8"))["completed"])
 
     def test_review_forwards_no_start_and_only_success_writes_receipt(self):
         self.seed()
@@ -250,7 +250,7 @@ class FlowTests(unittest.TestCase):
         )
         connector = Path(original["MFS_SLACK_CONNECTOR_CONFIG"])
         connector.write_text(
-            connector.read_text().replace(
+            connector.read_text(encoding="utf-8").replace(
                 'token = "env:MFS_SLACK_TOKEN"',
                 "token = " + json.dumps("file:" + str(old_credential)),
             ),

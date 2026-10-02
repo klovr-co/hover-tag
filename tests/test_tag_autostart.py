@@ -34,9 +34,9 @@ class IntentTests(unittest.TestCase):
 
     def test_unreadable_choice_counts_as_unrecorded(self) -> None:
         (self.home / "state").mkdir()
-        (self.home / autostart.INTENT).write_text("{not json")
+        (self.home / autostart.INTENT).write_text("{not json", encoding="utf-8")
         self.assertIsNone(autostart.wanted(self.home))
-        (self.home / autostart.INTENT).write_text('{"running": "yes"}')
+        (self.home / autostart.INTENT).write_text('{"running": "yes"}', encoding="utf-8")
         self.assertIsNone(autostart.wanted(self.home))
 
 
@@ -134,21 +134,21 @@ class ServiceDefinitionTests(unittest.TestCase):
     def test_managed_install_uses_the_upgrade_stable_command(self) -> None:
         bin_dir = Path(self.temporary.name) / "bin"
         bin_dir.mkdir()
-        (bin_dir / "tag").write_text("#!/bin/sh\n")
-        (self.root / "bin/tag-launch.py").write_text("")
-        (self.root / "current.json").write_text(json.dumps({"bin_dir": str(bin_dir), "release": "r1"}))
+        (bin_dir / "tag").write_text("#!/bin/sh\n", encoding="utf-8")
+        (self.root / "bin/tag-launch.py").write_text("", encoding="utf-8")
+        (self.root / "current.json").write_text(json.dumps({"bin_dir": str(bin_dir), "release": "r1"}), encoding="utf-8")
         with patch.object(autostart.os, "name", "posix"):
             command = autostart.service_command(self.root, Path("/src"))
         self.assertEqual(command, ["/bin/sh", str(bin_dir / "tag"), "autostart", "run"])
 
     @unittest.skipUnless(os.name == "nt", "the Windows Run-key command; CI runs it on Windows")
     def test_windows_runs_the_launcher_without_a_console(self) -> None:
-        (self.root / "bin/tag-launch.py").write_text("")
-        (self.root / "current.json").write_text(json.dumps({"bin_dir": str(self.root / "bin"), "release": "r1"}))
+        (self.root / "bin/tag-launch.py").write_text("", encoding="utf-8")
+        (self.root / "current.json").write_text(json.dumps({"bin_dir": str(self.root / "bin"), "release": "r1"}), encoding="utf-8")
         python = Path(self.temporary.name) / "python" / "python.exe"
         python.parent.mkdir()
-        python.write_text("")
-        python.with_name("pythonw.exe").write_text("")
+        python.write_text("", encoding="utf-8")
+        python.with_name("pythonw.exe").write_text("", encoding="utf-8")
         with patch.object(autostart.sys, "_base_executable", str(python), create=True):
             command = autostart.service_command(self.root, Path("/src"))
         self.assertEqual(command, [str(python.with_name("pythonw.exe")), str(self.root / "bin/tag-launch.py"),
@@ -282,7 +282,7 @@ class CommandTests(unittest.TestCase):
                 patch.object(tag_cli, "read_config", return_value={}), \
                 patch.object(tag_cli, "start_process") as start:
             tag_config_path = self.home / "config/settings.json"
-            tag_config_path.write_text("{}")
+            tag_config_path.write_text("{}", encoding="utf-8")
             with patch("scripts.tag_config.config_errors", return_value=[]), \
                     patch.object(tag_cli, "assert_unique_slack_app"), \
                     patch("scripts.tag_config.migrate_file_delivery"):

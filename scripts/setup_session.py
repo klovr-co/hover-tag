@@ -48,7 +48,7 @@ def _write_private(path: Path, payload: dict) -> None:
 
 def _read(path: Path) -> dict | None:
     try:
-        value = json.loads(path.read_text())
+        value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     return value if isinstance(value, dict) else None

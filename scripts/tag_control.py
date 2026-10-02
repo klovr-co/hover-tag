@@ -79,7 +79,7 @@ def inspect(home: Path, lifecycle, *, offline: bool = False, tag_id: str = "defa
     memory_sync = {"policy": values.get("SLACK_CHANNEL_POLICY", "selected"), "state": "not_checked"}
     if memory_sync["policy"] == "invited":
         try:
-            sync = json.loads((home / "state/slack-memory.json").read_text())
+            sync = json.loads((home / "state/slack-memory.json").read_text(encoding="utf-8"))
             allowed = {"syncing", "sync_requested", "no_joined_channels", "settings_changed", "needs_attention"}
             memory_sync["state"] = sync["state"] if sync["state"] in allowed and 0 <= time.time() - sync["checked_at"] < 600 else "stale"
             if sync.get("check") in {"membership", "history_access", "index_submission", "mfs_slack_connector"}:

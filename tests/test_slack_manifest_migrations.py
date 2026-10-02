@@ -69,7 +69,7 @@ class SlackManifestMigrationTests(unittest.TestCase):
         current, _ = migrations.migrate_manifest(original)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "slack-app-manifest.yaml").write_text(yaml.safe_dump(current))
+            (root / "slack-app-manifest.yaml").write_text(yaml.safe_dump(current), encoding="utf-8")
             self.assertEqual([], validate_manifest(root))
         self.assertIn("reactions:read", current["oauth_config"]["scopes"]["bot"])
         self.assertIn("reaction_added", current["settings"]["event_subscriptions"]["bot_events"])
@@ -174,7 +174,7 @@ class SlackManifestMigrationTests(unittest.TestCase):
             ) as run:
                 self.assertFalse(migrations.reconcile(home, config, self.values()))
             run.assert_not_called()
-            marker = json.loads((home / "state/slack-manifest-migrations.json").read_text())
+            marker = json.loads((home / "state/slack-manifest-migrations.json").read_text(encoding="utf-8"))
             self.assertEqual(marker["version"], migrations.MIGRATION_VERSION)
 
     def test_background_start_syncs_refreshes_and_checkpoints(self):
@@ -205,7 +205,7 @@ class SlackManifestMigrationTests(unittest.TestCase):
             saved = migrations.settings.read_config(config)
             self.assertEqual(saved["SLACK_BOT_TOKEN"], "xoxb-fresh-token")
             self.assertTrue((home / "state/slack-manifest-migrations.json").is_file())
-            self.assertEqual(migrations.MIGRATION_VERSION, json.loads(marker.read_text())["version"])
+            self.assertEqual(migrations.MIGRATION_VERSION, json.loads(marker.read_text(encoding="utf-8"))["version"])
             with patch.object(migrations, "remote_manifest") as inspect:
                 self.assertFalse(migrations.reconcile(home, config, self.values() | fresh))
                 inspect.assert_not_called()
@@ -252,7 +252,7 @@ class SlackManifestMigrationTests(unittest.TestCase):
                 temporary = migrations._migration_project(
                     project, self.manifest(), "TTEST", "ATEST", Path(transaction)
                 )
-                config = json.loads((temporary / ".slack/config.json").read_text())
+                config = json.loads((temporary / ".slack/config.json").read_text(encoding="utf-8"))
                 self.assertEqual(config["manifest"]["source"], "local")
             self.assertFalse((project / ".slack/config.json").exists())
 

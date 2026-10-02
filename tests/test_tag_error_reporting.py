@@ -165,7 +165,7 @@ class ErrorReportStoreTests(unittest.TestCase):
             )
             store = ErrorReportStore(Path(raw_dir), max_records=1)
             store.save(report)
-            payload = json.loads((Path(raw_dir) / "ABC12345.json").read_text())
+            payload = json.loads((Path(raw_dir) / "ABC12345.json").read_text(encoding="utf-8"))
 
             self.assertEqual("C123", payload["origin"]["channel_id"])
             self.assertNotIn("xoxb-secret", report.report_text())

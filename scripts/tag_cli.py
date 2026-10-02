@@ -1954,7 +1954,7 @@ def _run_cli() -> int:
         return _autostart_command(installation_root, args, parser)
     if args.command == "version" and args.json_output:
         print(json.dumps({"schema_version": 1,
-                          "version": (ROOT / "VERSION").read_text().strip(),
+                          "version": (ROOT / "VERSION").read_text(encoding="utf-8").strip(),
                           "app_protocol": APP_PROTOCOL, "capabilities": list(CAPABILITIES),
                           "platform": sys.platform,
                           "runtime": runtime_identity(installation_root)}, indent=2))
@@ -1962,7 +1962,7 @@ def _run_cli() -> int:
     if args.command == "add":
         if args.arguments:
             parser.error("add does not accept a name; the workspace alias is chosen during onboarding")
-        if not sys.stdin.isatty() and not args.json_output:
+        if not display.stdin_is_terminal() and not args.json_output:
             print(
                 "Interactive setup requires a terminal. Use tag inspect --json and tag config set for automation.",
                 file=sys.stderr,
@@ -2132,7 +2132,7 @@ def _run_cli() -> int:
             control.show_status(report)
             show_upgrade_reminder(installation_root)
         return int(args.command == "status" and report["state"] != "running")
-    if args.command in {"setup", "settings", "reset"} and not sys.stdin.isatty() and not (
+    if args.command in {"setup", "settings", "reset"} and not display.stdin_is_terminal() and not (
         args.command == "setup" and os.getenv(SETUP_PROTOCOL_ENV) == "jsonl"
     ):
         print("Interactive setup requires a terminal. Use tag inspect --json and tag config set for automation.", file=sys.stderr)
@@ -2171,7 +2171,7 @@ def _run_cli() -> int:
             show_upgrade_reminder(installation_root)
         return int(args.command == "status" and not all(report["services"].values()))
     if args.command == "version":
-        print("Tag v" + (ROOT / "VERSION").read_text().strip())
+        print("Tag v" + (ROOT / "VERSION").read_text(encoding="utf-8").strip())
         return 0
     if args.command == "paths":
         paths = {key: str(home / key) for key in ("config", "integrations", "state", "tmp")}
@@ -2333,7 +2333,7 @@ def _run_cli() -> int:
     os.environ["OPENTAG_WORKDIR"] = str(context.workspace)
     if args.command == "doctor":
         result = doctor(home, args.offline, args.json_output, tag_id=context.tag_id)
-        if not args.offline and not args.json_output and sys.stdin.isatty():
+        if not args.offline and not args.json_output and display.stdin_is_terminal():
             try:
                 import tag_diagnose
             except ImportError:
@@ -2576,7 +2576,7 @@ def _offer_first_run_telemetry(installation_root: Path) -> None:
         tag_telemetry.hard_disabled()
         or not tag_telemetry.collection_available()
         or tag_telemetry.saved_preference(installation_root) is not None
-        or not sys.stdin.isatty()
+        or not display.stdin_is_terminal()
         or not sys.stdout.isatty()
     ):
         return
@@ -2654,7 +2654,7 @@ def main() -> int:
     if enabled:
         invocation = (
             "interactive"
-            if sys.stdin.isatty() and sys.stdout.isatty()
+            if display.stdin_is_terminal() and sys.stdout.isatty()
             else "non_interactive"
         )
         tag_telemetry.tui_started(installation_root, invocation)

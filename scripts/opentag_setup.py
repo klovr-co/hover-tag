@@ -560,12 +560,12 @@ def slack_project(home: Path) -> Path:
     (project / ".slack").mkdir(parents=True, exist_ok=True, mode=0o700)
     config = project / ".slack/config.json"
     if not config.exists():
-        config.write_text(json.dumps({"manifest": {"source": "remote"}}, indent=2) + "\n")
+        config.write_text(json.dumps({"manifest": {"source": "remote"}}, indent=2) + "\n", encoding="utf-8")
     # Remote-manifest management needs project metadata but no SDK run hooks:
     # Tag supervises its own bridge rather than using `slack run`.
     hooks = project / ".slack/hooks.json"
     if not hooks.exists():
-        hooks.write_text(json.dumps({"hooks": {}}, indent=2) + "\n")
+        hooks.write_text(json.dumps({"hooks": {}}, indent=2) + "\n", encoding="utf-8")
     return project
 
 
@@ -760,7 +760,7 @@ def _waterdrop_assignments(project: Path) -> tuple[Path, dict[str, object]]:
     assets.mkdir(parents=True, exist_ok=True, mode=0o700)
     assignments_path = assets / "tag-waterdrop-identities.json"
     try:
-        assignments = json.loads(assignments_path.read_text())
+        assignments = json.loads(assignments_path.read_text(encoding="utf-8"))
         if not isinstance(assignments, dict):
             assignments = {}
     except (OSError, json.JSONDecodeError):
@@ -776,7 +776,7 @@ def _remember_waterdrop_index(project: Path, seed: str, identity_index: int) -> 
         "element": waterdrop_recipe(seed, identity_index)["body"].name,
     }
     temporary = assignments_path.with_suffix(".json.tmp")
-    temporary.write_text(json.dumps(assignments, indent=2, sort_keys=True) + "\n")
+    temporary.write_text(json.dumps(assignments, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     os.replace(temporary, assignments_path)
     if os.name != "nt":
         assignments_path.chmod(0o600)
@@ -1692,7 +1692,7 @@ def guided_setup(
         or not saved_connector.is_file()
         or not (set(required_scopes).issubset(saved_scopes)
                 or set(legacy_scopes).issubset(saved_scopes))
-        or saved_connector.read_text() not in expected_connectors
+        or saved_connector.read_text(encoding="utf-8") not in expected_connectors
     )
     if memory_incomplete:
         history_token = values.get("MFS_SLACK_TOKEN") or values["SLACK_BOT_TOKEN"]
@@ -1834,7 +1834,7 @@ def main() -> int:
     args = parser.parse_args()
     config_path = args.config.expanduser().resolve()
     ui.enter_protocol()
-    if not sys.stdin.isatty() and not ui.protocol_active():
+    if not ui.display.stdin_is_terminal() and not ui.protocol_active():
         print("Use a terminal for setup, or tag inspect --json and tag config set for automation.", file=sys.stderr)
         return 2
     telemetry_session: tag_telemetry.SetupSession | None = None

@@ -556,7 +556,7 @@ class ReleaseArtifactTests(unittest.TestCase):
         for name in sorted(names):
             if not name.endswith(".py"):
                 continue
-            tree = ast.parse((root / name).read_text())
+            tree = ast.parse((root / name).read_text(encoding="utf-8"))
             for node in ast.walk(tree):
                 imports = []
                 if isinstance(node, ast.Import):
@@ -575,17 +575,20 @@ class ReleaseArtifactTests(unittest.TestCase):
             (root / "scripts").mkdir()
             manifest = root / "scripts/runtime-files.json"
             def policy(name):
-                manifest.write_text(json.dumps({"schema_version": 1, "files": ["scripts/runtime-files.json", name]}))
+                manifest.write_text(json.dumps({"schema_version": 1, "files": ["scripts/runtime-files.json", name]}), encoding="utf-8")
             policy("missing.txt")
             with self.assertRaisesRegex(FileNotFoundError, "Required runtime file missing"):
                 build_archive(root, root / "invalid.zip", epoch=315532800)
-            for name in ("../private.env", "/absolute", "C:/absolute", "directory\\secret"):
+            # "/absolute" is drive-relative, not absolute, on Windows; releases are packaged on Linux.
+            names = ("../private.env", "C:/absolute", "directory\\secret") if os.name == "nt" else (
+                "../private.env", "/absolute", "C:/absolute", "directory\\secret")
+            for name in names:
                 policy(name)
                 with self.subTest(name=name), self.assertRaises(ValueError):
                     build_archive(root, root / "invalid.zip", epoch=315532800)
             policy("included.txt")
-            (root / "included.txt").write_text("included")
-            (root / "secret.env").write_text("must not ship")
+            (root / "included.txt").write_text("included", encoding="utf-8")
+            (root / "secret.env").write_text("must not ship", encoding="utf-8")
             build_archive(root, root / "valid.zip", epoch=315532800)
             with zipfile.ZipFile(root / "valid.zip") as bundle:
                 self.assertEqual(set(bundle.namelist()), {"scripts/runtime-files.json", "included.txt"})
@@ -596,8 +599,8 @@ class ReleaseArtifactTests(unittest.TestCase):
             root = Path(temp)
             (root / "scripts").mkdir()
             (root / "scripts/runtime-files.json").write_text(json.dumps({
-                "schema_version": 1, "files": ["scripts/runtime-files.json", "linked.txt"]}))
-            (root / "target.txt").write_text("private")
+                "schema_version": 1, "files": ["scripts/runtime-files.json", "linked.txt"]}), encoding="utf-8")
+            (root / "target.txt").write_text("private", encoding="utf-8")
             (root / "linked.txt").symlink_to(root / "target.txt")
             with self.assertRaisesRegex(ValueError, "symlinks"):
                 build_archive(root, root / "invalid.zip", epoch=315532800)
@@ -735,6 +738,7 @@ class ReleasePreflightTests(unittest.TestCase):
         self.assertIn("gh release upload channels", workflow)
         self.assertIn("--clobber", workflow)
 
+    @unittest.skipIf(os.name == "nt", "release preflight is a shell script run in Linux CI")
     def test_draft_preparation_does_not_require_publication_approval(self) -> None:
         source_root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -789,6 +793,7 @@ class ReleasePreflightTests(unittest.TestCase):
             self.assertNotEqual(publication.returncode, 0)
             self.assertIn("publication approval is not PASS", publication.stderr)
 
+    @unittest.skipIf(os.name == "nt", "release preflight is a shell script run in Linux CI")
     def test_allows_only_evidence_changes_after_the_live_candidate(self) -> None:
         source_root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as temporary_directory:

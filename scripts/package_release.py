@@ -113,7 +113,7 @@ def main() -> None:
     )
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
-    version = args.version or (root / "VERSION").read_text().strip()
+    version = args.version or (root / "VERSION").read_text(encoding="utf-8").strip()
     args.output.mkdir(parents=True, exist_ok=True)
     archive = args.output / ("tag-edge.zip" if args.channel == "edge" else f"tag-{version}.zip")
     digest = build_archive(

@@ -22,7 +22,7 @@ class OpenTagAgentPromptTests(unittest.TestCase):
             attachments_dir=None,
             allowed_scopes="slack://tag-t1/channels/general__C123",
         )
-        self.assertIn("/tmp/open-tag/references/runtime-agent.md", prompt)
+        self.assertIn(str(Path("/tmp/open-tag/references/runtime-agent.md")), prompt)
         self.assertNotIn("/tmp/open-tag/SKILL.md", prompt)
         self.assertIn("search general workspace all", prompt)
         self.assertIn("ask a short scope", prompt)
@@ -33,7 +33,7 @@ class OpenTagAgentPromptTests(unittest.TestCase):
             root = Path(temp)
             script = root / "node_modules/@openai/codex/bin/codex.js"
             script.parent.mkdir(parents=True)
-            script.write_text("// fixture")
+            script.write_text("// fixture", encoding="utf-8")
             shim = root / "codex.cmd"
             with patch.object(opentag_agent, "os", SimpleNamespace(name="nt")), patch(
                 "scripts.opentag_agent.shutil.which", side_effect=[str(shim), "node.exe"]
@@ -131,10 +131,10 @@ class OpenTagAgentPromptTests(unittest.TestCase):
             allowed_scopes="file://local/tmp/workspace",
         )
 
-        self.assertIn("/tmp/invocation/results/images", prompt)
+        self.assertIn(str(Path("/tmp/invocation/results/images")), prompt)
         self.assertIn("Slack bridge uploads supported files", prompt)
         self.assertIn("Do not call Slack's API to upload them", prompt)
-        self.assertIn("/tmp/invocation/results/artifacts", prompt)
+        self.assertIn(str(Path("/tmp/invocation/results/artifacts")), prompt)
         self.assertIn("including generated HTML", prompt)
 
     @patch("scripts.opentag_agent.backend_command", return_value=["codex"])
@@ -163,6 +163,12 @@ class OpenTagAgentPromptTests(unittest.TestCase):
 
 
 class BackendStreamEventTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # On Windows, Tag resolves codex's npm shim on PATH; these tests don't install Codex.
+        resolve = patch.object(opentag_agent, "backend_command", side_effect=lambda name: [name])
+        resolve.start()
+        self.addCleanup(resolve.stop)
+
     def test_backend_progress_requires_a_recognized_lifecycle_event(self) -> None:
         self.assertTrue(opentag_agent.backend_made_progress({"type": "item.started"}))
         self.assertTrue(opentag_agent.backend_made_progress({"type": "stream_event"}))
@@ -393,7 +399,7 @@ class ChannelArtifactRoutingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             legacy = root / 'existing.md'
-            legacy.write_text('existing')
+            legacy.write_text('existing', encoding="utf-8")
             def backend(prompt, **kwargs):
                 self.assertEqual(kwargs['workdir'], root)
                 self.assertTrue((root / 'artifacts/C123').is_dir())
@@ -401,7 +407,7 @@ class ChannelArtifactRoutingTests(unittest.TestCase):
                 self.assertIn('--channel-id C123', prompt)
                 self.assertIn('edit existing', prompt)
                 self.assertIn('workspace root for older files', prompt)
-                self.assertEqual(legacy.read_text(), 'existing')
+                self.assertEqual(legacy.read_text(encoding="utf-8"), 'existing')
                 return 0
             with patch.dict(os.environ, {}, clear=True), patch.object(sys, 'argv', [
                 'opentag_agent', '--backend', 'claude', '--channel-id', 'C123',
