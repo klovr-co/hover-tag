@@ -5,6 +5,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import time
 from pathlib import Path
 
@@ -19,7 +20,7 @@ except ImportError:
     from tag_slack_backoff import Coordinator
     from tag_config import save_config
 
-RUNTIME_VERSION = 1
+RUNTIME_VERSION = 2
 
 
 def install_connector(state: Path):
@@ -50,10 +51,33 @@ def install_connector(state: Path):
                 cached = identities.get(token_key)
                 if cached is None or time.monotonic() - cached[0] >= 60:
                     identity = await self._client.auth_test()
-                    identities[token_key] = (time.monotonic(), identity["team_id"])
-                # Conservatively share a workspace budget across credentials.
-                self._client.identity = identities[token_key][1]
+                    identities[token_key] = (time.monotonic(), identity)
+                identity = identities[token_key][1]
+            selected_team = self._cfg("team_id") or identity.get("team_id")
+            if not isinstance(selected_team, str) or not re.fullmatch(r"T[A-Z0-9]+", selected_team):
+                raise RuntimeError("Slack memory requires a selected workspace Team ID")
+            if identity.get("is_enterprise_install"):
+                if not self._cfg("team_id"):
+                    raise RuntimeError("Organization Slack memory requires an explicit workspace")
+                cursor, seen, granted = "", set(), False
+                while True:
+                    page = await self._client.auth_teams_list(limit=200, cursor=cursor or None)
+                    if any(team.get("id") == selected_team for team in page.get("teams", [])):
+                        granted = True
+                        break
+                    cursor = (page.get("response_metadata") or {}).get("next_cursor", "")
+                    if not cursor or cursor in seen:
+                        break
+                    seen.add(cursor)
+                if not granted:
+                    raise RuntimeError("Slack history token has no grant for the selected workspace")
+            elif identity.get("team_id") != selected_team:
+                raise RuntimeError("Slack history token belongs to a different workspace")
+            self._client.default_params["team_id"] = selected_team
+            # Share a workspace budget across credentials, never cache its channels across teams.
+            self._client.identity = selected_team
             filters = [
+                selected_team,
                 self._cfg("channel_types", "public_channel"),
                 bool(self._cfg("include_unjoined", False)),
                 sorted(self._cfg_set("channel_ids")),

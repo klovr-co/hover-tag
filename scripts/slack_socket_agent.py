@@ -24,9 +24,13 @@ from pathlib import Path
 from typing import Any
 
 from slack_bolt import App
+from slack_bolt.response import BoltResponse
+from slack_bolt.authorization import AuthorizeResult
+from slack_sdk import WebClient
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 try:
+    from . import slack_identity
     from .opentag_process_env import backend_environment
     from .tag_error_reporting import (
         COMMUNITY_INVITE_URL,
@@ -50,6 +54,7 @@ try:
     from .tag_paths import tag_temp_dir
     from . import slack_channels
 except ImportError:  # Direct script execution does not create a package context.
+    import slack_identity
     from opentag_process_env import backend_environment
     from tag_error_reporting import (
         COMMUNITY_INVITE_URL,
@@ -3273,7 +3278,37 @@ def create_app(
 ) -> App:
     if max_timeout is None:
         max_timeout = int(os.getenv("OPENTAG_MAX_TIMEOUT_SECONDS", "3600"))
-    app = App(token=require_env("SLACK_BOT_TOKEN"))
+    selected_team = os.getenv("SLACK_TEAM_ID", "").strip()
+    selected_enterprise = os.getenv("SLACK_ENTERPRISE_ID", "").strip()
+    selected_app = os.getenv("SLACK_APP_ID", "").strip()
+
+    def workspace_boundary(body, context, next):
+        if not slack_identity.event_allowed(body, selected_team, selected_enterprise, selected_app):
+            return BoltResponse(status=200, body="")
+        if selected_team:
+            body["team_id"] = selected_team
+            if body.get("type") in {"block_actions", "view_submission", "view_closed", "shortcut", "message_action"} and body.get("team") is None:
+                body["team"] = {"id": selected_team}
+        if selected_enterprise:
+            context["team_id"] = selected_team
+            context.client.default_params["team_id"] = selected_team
+        return next()
+
+    token = require_env("SLACK_BOT_TOKEN")
+    if selected_enterprise:
+        identity = slack_identity.validate(token, team_id=selected_team, app_id=selected_app,
+            enterprise_id=selected_enterprise, label="Bot token", api=slack_channels.slack_api)
+
+        def authorize(enterprise_id, team_id, user_id):
+            if enterprise_id not in (None, selected_enterprise) or team_id not in (None, selected_team):
+                return None
+            return AuthorizeResult(enterprise_id=selected_enterprise, team_id=selected_team,
+                bot_token=token, bot_id=identity.get("bot_id"), bot_user_id=identity.get("user_id"))
+
+        app = App(client=WebClient(token=token, team_id=selected_team),
+                  authorize=authorize, before_authorize=workspace_boundary)
+    else:
+        app = App(token=token, before_authorize=workspace_boundary)
     report_store = report_store or default_report_store()
     activity_store = activity_store or ActivityStore()
     fallback_reports: dict[str, ErrorReport] = {}

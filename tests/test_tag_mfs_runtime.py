@@ -23,13 +23,13 @@ class RuntimeTests(unittest.TestCase):
         self.process = SimpleNamespace(pid=123, cmdline=lambda: ["python", "/release/scripts/tag_mfs_server.py"])
 
     def test_identity_requires_matching_adapter_version_process_and_nonce(self):
-        tag_config.save_config(self.shared / "mfs.json", {"slack_runtime_version": 1, "instance_id": "new"})
+        tag_config.save_config(self.shared / "mfs.json", {"slack_runtime_version": tag_mfs_runtime.VERSION, "instance_id": "new"})
         path = self.shared / "slack-runtime-ready-v1.json"
         for ready, expected in (
-            ({"version": 1, "pid": 123, "instance_id": "old"}, False),
-            ({"version": 1, "pid": 999, "instance_id": "new"}, False),
+            ({"version": tag_mfs_runtime.VERSION, "pid": 123, "instance_id": "old"}, False),
+            ({"version": tag_mfs_runtime.VERSION, "pid": 999, "instance_id": "new"}, False),
             ({"version": 0, "pid": 123, "instance_id": "new"}, False),
-            ({"version": 1, "pid": 123, "instance_id": "new"}, True),
+            ({"version": tag_mfs_runtime.VERSION, "pid": 123, "instance_id": "new"}, True),
         ):
             tag_config.save_config(path, ready)
             self.assertEqual(tag_mfs_runtime.active(self.shared, self.process), expected)
@@ -59,8 +59,8 @@ class RuntimeTests(unittest.TestCase):
         args, kwargs = starts[0]
         self.assertTrue(args[2][1].endswith("tag_mfs_server.py"))
         self.assertEqual(kwargs["environment"]["CUSTOM"], "keep")
-        self.assertEqual(kwargs["metadata"]["slack_runtime_version"], 1)
-        self.assertEqual(json.loads((self.shared / "slack-runtime-migration-v1.json").read_text()), {"version": 1})
+        self.assertEqual(kwargs["metadata"]["slack_runtime_version"], tag_mfs_runtime.VERSION)
+        self.assertEqual(json.loads((self.shared / "slack-runtime-migration-v1.json").read_text()), {"version": tag_mfs_runtime.VERSION})
 
     def test_failed_replacement_does_not_commit_migration(self):
         with patch.object(tag_cli, "replace_unmanaged_local_mfs"), patch.object(

@@ -46,6 +46,7 @@
     "scripts/slack_credential_hook.py",
     "scripts/slack_credentials.py",
     "scripts/slack_history_search.py",
+    "scripts/slack_identity.py",
     "scripts/slack_invitation_memory.py",
     "scripts/slack_manifest_hook.py",
     "scripts/slack_manifest_migrations.py",
