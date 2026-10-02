@@ -111,3 +111,22 @@ after upload. Manually published releases trigger `.github/workflows/release-pac
 which verifies attached archives, checksums, provenance, internal versions, and
 the prerelease setting instead of rebuilding. Older releases without prepared
 assets retain the original build-on-publication fallback.
+
+## Tag.app
+
+Each published release also builds Tag.app (`installer/desktop`) on macOS,
+Windows, and Linux and attaches `Tag-VERSION-macos.dmg` (universal),
+`Tag-VERSION-windows-setup.exe`, `Tag-VERSION-linux-amd64.deb`, and
+`Tag-VERSION-linux-x86_64.AppImage`, with checksums in
+`DESKTOP-SHA256SUMS-PLATFORM`. These are separate from the CLI archive and its
+`SHA256SUMS`, which the installer verifies.
+
+macOS builds are signed and notarized only when these repository secrets are
+set: `APPLE_CERTIFICATE` (base64 Developer ID Application `.p12`),
+`APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`,
+`APPLE_PASSWORD` (an app-specific password), and `APPLE_TEAM_ID`. Without them
+the DMG is unsigned and Gatekeeper blocks it, so don't announce it as an
+end-user download. Windows builds are unsigned until a code-signing certificate
+is configured; SmartScreen warns on them. Before a stable release, qualify
+Tag.app on each platform: first-run install, adding a Tag, start and stop from
+the window and the tray, Keep Tags running across a logout, and upgrade.

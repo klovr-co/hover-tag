@@ -37,7 +37,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app", "dmg", "nsis", "msi", "deb", "appimage"],
+    "targets": ["app", "dmg", "nsis", "deb", "appimage"],
     "category": "Productivity",
     "shortDescription": "Your personal assistant, in Slack.",
     "copyright": "Copyright 2026 klovr.co",
