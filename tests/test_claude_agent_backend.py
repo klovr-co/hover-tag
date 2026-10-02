@@ -391,6 +391,40 @@ class ClaudeAgentRunTests(unittest.TestCase):
         self.assertEqual([], catalog[2]["supportedEfforts"])
         self.assertIsNone(FakeClient.instances[0].prompt)
 
+    def test_pending_receive_is_cancelled_before_disconnect_on_timeout_or_error(self):
+        for fail_interrupt in (False, True):
+            cancelled = []
+            disconnect_states = []
+
+            async def script(_client):
+                try:
+                    await asyncio.sleep(30)
+                    yield ResultMessage(result="late")
+                finally:
+                    cancelled.append(True)
+
+            async def disconnect(_client):
+                disconnect_states.append(list(cancelled))
+
+            async def interrupt(_agent):
+                raise RuntimeError("interrupt failed")
+
+            with self.subTest(fail_interrupt=fail_interrupt), patch.object(
+                FakeClient, "disconnect", disconnect
+            ), patch.object(claude_agent_backend, "INTERRUPT_GRACE_SECONDS", 0.01), patch.object(
+                claude_agent_backend, "CONTROL_POLL_SECONDS", 0.01
+            ):
+                if fail_interrupt:
+                    with patch.object(ClaudeAgentRun, "interrupt", interrupt), self.assertRaisesRegex(
+                        RuntimeError, "interrupt failed"
+                    ):
+                        self.run_agent(script, timeout=0, max_timeout=30)
+                else:
+                    (status, _), _events = self.run_agent(script, timeout=0, max_timeout=30)
+                    self.assertEqual("timeout", status)
+                self.assertEqual([True], cancelled)
+                self.assertEqual([[True]], disconnect_states)
+
     def test_permission_mode_is_validated(self) -> None:
         with patch.dict(os.environ, {"OPENTAG_CLAUDE_PERMISSION_MODE": "plan"}):
             with self.assertRaisesRegex(ValueError, "OPENTAG_CLAUDE_PERMISSION_MODE"):

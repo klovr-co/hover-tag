@@ -750,6 +750,7 @@ def claude_stream_command(
     skill_dir: Path,
     workdir: Path,
     attachments_dir: Path | None,
+    model: str | None = None,
 ) -> list[str]:
     cmd = [
         "claude",
@@ -764,6 +765,8 @@ def claude_stream_command(
         "--add-dir",
         str(skill_dir),
     ]
+    if model and model != "default":
+        cmd.extend(["--model", model])
     if attachments_dir:
         cmd.extend(["--add-dir", str(attachments_dir)])
     return cmd
@@ -777,12 +780,14 @@ def run_claude_events(
     attachments_dir: Path | None,
     timeout: int,
     max_timeout: int | None = None,
+    model: str | None = None,
 ) -> int:
     code, output, emitted_final, timed_out = stream_command(
         claude_stream_command(
             skill_dir=skill_dir,
             workdir=workdir,
             attachments_dir=attachments_dir,
+            model=model,
         ),
         parser=parse_claude_stream_event,
         timeout=timeout,
@@ -847,6 +852,7 @@ def run_claude(
     workdir: Path,
     attachments_dir: Path | None,
     timeout: int,
+    model: str | None = None,
 ) -> int:
     # Pass the prompt on stdin, not as a trailing positional: `claude --add-dir`
     # is variadic and would otherwise swallow the prompt as another directory.
@@ -859,6 +865,8 @@ def run_claude(
         "--add-dir",
         str(skill_dir),
     ]
+    if model and model != "default":
+        cmd.extend(["--model", model])
     if attachments_dir:
         cmd.extend(["--add-dir", str(attachments_dir)])
     result = subprocess.run(
@@ -994,6 +1002,7 @@ def main() -> int:
                 attachments_dir=args.attachments_dir.resolve() if args.attachments_dir else None,
                 timeout=args.timeout,
                 max_timeout=args.max_timeout,
+                model=args.model,
             )
         if args.backend == "codex":
             return run_codex(
@@ -1012,6 +1021,7 @@ def main() -> int:
             workdir=args.workdir.resolve(),
             attachments_dir=args.attachments_dir.resolve() if args.attachments_dir else None,
             timeout=args.timeout,
+            model=args.model,
         )
     except subprocess.TimeoutExpired:
         print(f"Open Tag backend timed out after {args.timeout}s", file=sys.stderr)

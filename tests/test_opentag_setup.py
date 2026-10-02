@@ -995,3 +995,30 @@ class OpenTagSetupTests(unittest.TestCase):
             mode = stat.S_IMODE(path.stat().st_mode)
 
         self.assertEqual(mode, 0o600)
+
+class SetupDefaultSelectionTests(unittest.TestCase):
+    def test_missing_agent_keeps_saved_defaults_for_both_backends(self):
+        for current, selected in (("codex", 1), ("claude", 0)):
+            values = {"OPENTAG_BACKEND": current, "MFS_SLACK_HISTORY_DAYS": "30"}
+            with self.subTest(current=current), patch.object(
+                opentag_setup.ui, "choose", side_effect=[0, selected]
+            ), patch.object(opentag_setup.shutil, "which", return_value=None), patch.object(
+                opentag_setup.settings, "update_config"
+            ) as update, patch.object(opentag_setup.ui, "message") as message:
+                self.assertEqual(values, opentag_setup.change_setup_defaults(Path('/config'), values))
+                update.assert_not_called()
+                self.assertIn("not installed", message.call_args.args[0])
+
+    def test_installed_agent_saves_selected_defaults_for_both_backends(self):
+        for selected, backend in enumerate(("codex", "claude")):
+            with self.subTest(backend=backend), patch.object(
+                opentag_setup.ui, "choose", side_effect=[0, selected]
+            ), patch.object(opentag_setup.shutil, "which", return_value='/bin/agent'), patch.object(
+                opentag_setup.settings, "update_config", return_value={"saved": "yes"}
+            ) as update:
+                result = opentag_setup.change_setup_defaults(Path('/config'), {
+                    "OPENTAG_BACKEND": "codex", "MFS_SLACK_HISTORY_DAYS": "30",
+                })
+                self.assertEqual({"saved": "yes"}, result)
+                self.assertEqual({"MFS_SLACK_HISTORY_DAYS": "7", "OPENTAG_BACKEND": backend},
+                                 update.call_args.args[1])

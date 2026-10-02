@@ -457,3 +457,19 @@ class ChannelArtifactRoutingTests(unittest.TestCase):
                 '--output-manifest', str(root / 'manifest.json'),
             ]), patch.object(opentag_agent, 'run_claude', side_effect=backend):
                 self.assertEqual(opentag_agent.main(), 0)
+
+class ClaudePrintModelTests(unittest.TestCase):
+    def test_both_print_paths_forward_only_explicit_models(self):
+        for model in (None, "default", "opus"):
+            with self.subTest(model=model), patch.object(
+                opentag_agent, "stream_command", return_value=(0, "ok", True, False)
+            ) as stream, patch.object(opentag_agent.subprocess, "run") as run:
+                run.return_value = SimpleNamespace(stdout="", returncode=0)
+                kwargs = dict(skill_dir=Path('/skill'), workdir=Path('/work'),
+                              attachments_dir=None, timeout=30, model=model)
+                opentag_agent.run_claude_events("prompt", **kwargs)
+                opentag_agent.run_claude("prompt", **kwargs)
+                for command in (stream.call_args.args[0], run.call_args.args[0]):
+                    self.assertEqual(model == "opus", "--model" in command)
+                    if model == "opus":
+                        self.assertEqual("opus", command[command.index("--model") + 1])

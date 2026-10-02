@@ -530,6 +530,7 @@ class ClaudeAgentRun:
         self.client = client_factory(options)
         mapper = ClaudeEventMapper()
         terminal: dict[str, Any] | None = None
+        next_message: asyncio.Task[Any] | None = None
         try:
             try:
                 await asyncio.wait_for(self.client.connect(), timeout=max(1.0, max_deadline - time.monotonic()))
@@ -539,7 +540,6 @@ class ClaudeAgentRun:
             except Exception as exc:  # noqa: BLE001 - SDK raises several connection error types
                 raise ClaudeAgentError(self._failure_message(exc)) from exc
             stream = self.client.receive_response().__aiter__()
-            next_message: asyncio.Task[Any] | None = None
             timed_out = False
             timeout_detail = ""
             interrupt_deadline = float("inf")
@@ -551,7 +551,6 @@ class ClaudeAgentRun:
                 if not done:
                     if timed_out:
                         if now >= interrupt_deadline:
-                            next_message.cancel()
                             return "timeout", f"{timeout_detail}; Claude did not confirm interruption before cleanup"
                         continue
                     if self._control_requested():
@@ -591,6 +590,9 @@ class ClaudeAgentRun:
                 raise ClaudeAgentError(self._failure_message(None))
             return str(terminal.get("status", "failed")), str(terminal.get("text", ""))
         finally:
+            if next_message is not None and not next_message.done():
+                next_message.cancel()
+                await asyncio.gather(next_message, return_exceptions=True)
             await self.close()
 
     async def interrupt(self) -> None:

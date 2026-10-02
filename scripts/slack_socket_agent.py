@@ -270,14 +270,15 @@ def efforts_for_model(
     models: list[ModelOption],
     backend: str | None = None,
 ) -> tuple[str, ...]:
-    allowed = set(configured_reasoning_efforts())
+    available = configured_reasoning_efforts() if backend in {None, "codex"} else SUPPORTED_REASONING_EFFORTS
+    allowed = set(available)
     if model:
         selected = find_model(model, models, backend)
         if selected:
             return tuple(effort for effort in selected.reasoning_efforts if effort in allowed)
     scoped = [item for item in models if backend in {None, item.backend}]
     discovered = {effort for item in scoped for effort in item.reasoning_efforts}
-    return tuple(effort for effort in configured_reasoning_efforts() if not discovered or effort in discovered)
+    return tuple(effort for effort in available if not discovered or effort in discovered)
 
 
 def fast_mode_available(

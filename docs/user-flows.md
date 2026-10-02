@@ -542,7 +542,7 @@ restarts. Reasoning levels retain the names reported by the selected backend;
 Fast Mode is an independent latency setting that uses increased usage.
 “Default” delegates model or reasoning selection to the backend CLI. If a saved
 choice is no longer available, Tag normalizes it back to the applicable default.
-When both Codex and Claude are installed and signed in, the picker groups
+When both Codex and Claude are allowed, installed, and signed in, the picker groups
 their models and the chosen model decides which backend runs that user's next
 request. Switching mid-thread is safe: every request is a fresh run that
 receives the Slack thread (up to 30 messages, including Tag's replies), so the

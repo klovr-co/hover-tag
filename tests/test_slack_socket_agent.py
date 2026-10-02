@@ -4574,3 +4574,15 @@ class SlackStreamingConfigurationTests(unittest.TestCase):
             self.assertTrue(slack_socket_agent.env_enabled("OPENTAG_SLACK_STREAMING", default=True))
         with patch.dict(os.environ, {"OPENTAG_SLACK_STREAMING": "0"}, clear=True):
             self.assertFalse(slack_socket_agent.env_enabled("OPENTAG_SLACK_STREAMING", default=True))
+
+class BackendEffortIsolationTests(unittest.TestCase):
+    def test_codex_allowlist_does_not_remove_claude_efforts_or_default(self):
+        models = [slack_socket_agent.ModelOption(
+            "opus", "Opus", ("high", "max"), backend="claude",
+            default_reasoning_effort="high", is_default=True,
+        ), slack_socket_agent.ModelOption("gpt", "GPT", ("low", "high"))]
+        with patch.dict(os.environ, {"OPENTAG_CODEX_REASONING_EFFORTS": "low,medium"}):
+            self.assertEqual(("high", "max"), slack_socket_agent.efforts_for_model("opus", models, "claude"))
+            self.assertEqual(("high", "max"), slack_socket_agent.efforts_for_model(None, models, "claude"))
+            self.assertEqual("high", slack_socket_agent.default_agent_settings(models).reasoning_effort)
+            self.assertEqual(("low",), slack_socket_agent.efforts_for_model("gpt", models, "codex"))

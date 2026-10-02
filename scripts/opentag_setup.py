@@ -170,6 +170,18 @@ def choose_backend() -> str:
         ui.message("Choose 1 for Codex or 2 for Claude Code.")
 
 
+def change_setup_defaults(config_path: Path, values: dict[str, str]) -> dict[str, str]:
+    """Save default changes only when the selected agent is installed."""
+    days = ("7", "30", "90")
+    day = ui.choose("Slack history window", [f"Last {d} days" for d in days], default=days.index(values["MFS_SLACK_HISTORY_DAYS"]))
+    agent = ui.choose("Agent", ["Codex", "Claude"], default=int(values["OPENTAG_BACKEND"] == "claude"))
+    selected_backend = ("codex", "claude")[agent]
+    if not shutil.which(selected_backend):
+        ui.message(f"{selected_backend} is not installed. Install it before selecting it as the default agent.")
+        return values
+    return settings.update_config(config_path, {"MFS_SLACK_HISTORY_DAYS": days[day], "OPENTAG_BACKEND": selected_backend})
+
+
 def ensure_agent(config_path: Path, values: dict[str, str]) -> dict[str, str] | None:
     """Make an installed agent the default; return None when the user pauses."""
     checked = False
@@ -1563,10 +1575,7 @@ def guided_setup(
             selected_channels = choose_setup_channels()
             values = settings.update_config(config_path, {"SLACK_CHANNEL_IDS": ",".join(c.channel_id for c in selected_channels)})
         elif choice == 2:
-            days = ("7", "30", "90")
-            day = ui.choose("Slack history window", [f"Last {d} days" for d in days], default=days.index(values["MFS_SLACK_HISTORY_DAYS"]))
-            agent = ui.choose("Agent", ["Codex", "Claude"], default=int(values["OPENTAG_BACKEND"] == "claude"))
-            values = settings.update_config(config_path, {"MFS_SLACK_HISTORY_DAYS": days[day], "OPENTAG_BACKEND": ("codex", "claude")[agent]})
+            values = change_setup_defaults(config_path, values)
         else:
             ui.message("Continue saves these choices only. No services or indexing will start.")
             if ui.choose("Approve setup", ["Continue", "Back"], default=1) == 0:
