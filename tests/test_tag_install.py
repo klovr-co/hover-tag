@@ -1332,6 +1332,36 @@ class TagHomeTests(unittest.TestCase):
             "preload_mfs_model.py",
         )
 
+    @unittest.skipIf(os.name == "nt", "POSIX managed runtime bootstrap")
+    def test_install_supports_releases_without_managed_dependencies(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / "source"
+            for name in runtime_files(ROOT):
+                if name == "scripts/tag_dependencies.py":
+                    continue
+                destination = source / name
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes((ROOT / name).read_bytes())
+            manifest = source / "scripts/runtime-files.json"
+            names = json.loads(manifest.read_text())
+            names = [n for n in names if n != "scripts/tag_dependencies.py"] if isinstance(names, list) else {
+                key: [n for n in value if n != "scripts/tag_dependencies.py"] if isinstance(value, list) else value
+                for key, value in names.items()
+            }
+            manifest.write_text(json.dumps(names))
+            with patch.dict(sys.modules, {"tag_dependencies": None}), patch(
+                "scripts.tag_install.tag_dependencies", None
+            ), patch("scripts.tag_install.shutil.which", return_value=None), patch(
+                "scripts.tag_install.subprocess.run",
+                return_value=subprocess.CompletedProcess([], 0, "", ""),
+            ) as run, patch(
+                "scripts.tag_install.install_mfs_cli", return_value=None
+            ):
+                install(source, Path(temp) / "home", Path(temp) / "bin")
+
+        commands = [call.args[0] for call in run.call_args_list]
+        self.assertEqual(commands[0][1:3], ["-m", "venv"])
+
     def test_background_lifecycle_and_stale_pid_safety(self):
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp)
