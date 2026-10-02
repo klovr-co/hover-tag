@@ -8,7 +8,7 @@
 ## Context
 
 Tags stopped when their machine restarted, and nothing restarted a bridge that
-exited. The Mac app restored Tags at login from its own preferences, so the CLI
+exited. The Swift Tag.app prototype restored Tags at login from its own preferences, so the CLI
 and the app disagreed about which Tags should run, and Tags stayed off unless
 the app was open. Windows and Linux had no equivalent.
 

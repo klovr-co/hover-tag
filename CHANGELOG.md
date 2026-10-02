@@ -39,7 +39,7 @@ All notable changes to Tag are documented here.
   nickname for commands. Start, stop, or restart every Tag in a Slack workspace
   with `--workspace`, and see Tags grouped by workspace in `tag list`.
 
-- Go back to the previous setup question in the Mac app or with
+- Go back to the previous setup question in Tag.app or with
   `tag setup --step --back`, with the earlier answer selected. Back stops at
   steps that already changed something in Slack.
 

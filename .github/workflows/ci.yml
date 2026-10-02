@@ -44,16 +44,6 @@ jobs:
       - name: Run unit tests
         run: ./scripts/ci_check.sh --tests-only
 
-  mac-setup:
-    name: macOS / Tag.app setup
-    runs-on: macos-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Test setup choices and people search
-        run: sh installer/macos/tests/run.sh
-      - name: Build Tag.app
-        run: sh installer/macos/build.sh
 
   desktop:
     name: ${{ matrix.os }} / Tag.app

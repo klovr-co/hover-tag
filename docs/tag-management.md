@@ -387,7 +387,7 @@ running** setting uses the same commands.
 ### Guided setup over JSON lines
 
 `tag setup --json` and `tag add --json` run the same guided setup as the
-terminal, for graphical clients such as the Mac app. Instead of drawing prompts,
+terminal, for graphical clients such as Tag.app. Instead of drawing prompts,
 setup writes one JSON object per line to stdout and reads each answer from stdin:
 
 - `{"type": "message", "text": …}` — progress prose, without color.
