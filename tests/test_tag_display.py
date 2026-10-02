@@ -90,6 +90,15 @@ class DisplayTests(unittest.TestCase):
         self.assertIn("Signed in · task not tested", output.getvalue())
         self.assertNotIn("sensitive", output.getvalue())
 
+    def test_stopped_tag_without_agent_points_to_doctor_not_start(self):
+        with redirect_stdout(StringIO()) as output:
+            tag_display.summary("stopped", "tag start", backend="codex", agent=("Not installed", False),
+                                model="Codex · account default")
+        self.assertIn("Needs attention", output.getvalue())
+        self.assertIn("Codex · account default · not installed", output.getvalue())
+        self.assertIn("› tag doctor", output.getvalue())
+        self.assertNotIn("› tag start", output.getvalue())
+
     def test_auth_timeout_is_unverified(self):
         with patch.object(tag_display.shutil, "which", return_value="/custom/codex"), patch.object(tag_display.subprocess, "run", side_effect=tag_display.subprocess.TimeoutExpired("codex", 3)):
             self.assertFalse(tag_display.backend_status()[1])

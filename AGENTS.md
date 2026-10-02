@@ -87,6 +87,27 @@ When Slack or another provider requires fresh sign-in or administrator approval,
 report the exact remaining action and resume the migration on retry. Existing
 confirmation requirements for destructive operations still apply.
 
+### Agent backend parity
+
+Tag supports two agent backends: Codex (`scripts/codex_agent_backend.py`, App
+Server) and Claude (`scripts/claude_agent_backend.py`, Agent SDK). Any feature
+that depends on the backend must be implemented, tested, and documented for
+both in the same change. This includes streaming, activity, approvals,
+cancellation, timeouts, retries, model and settings controls, error
+classification, setup, sign-in checks, doctor output, and upgrade migrations.
+
+- Keep the Slack bridge backend-neutral. Backends emit the normalized event
+  contract described in `references/backends.md`; the bridge must never parse
+  backend-native payloads or branch on the backend name for behavior.
+- Put shared vocabulary and policy in backend-neutral modules such as
+  `scripts/agent_activity.py`, not in one backend's adapter.
+- If a provider cannot support a capability, make the limitation explicit in
+  code and in `docs/reference/supported-capabilities.md`, and degrade safely
+  (fail closed for approvals and permissions). Do not silently ship it for one
+  backend only.
+- Add regression tests for each backend. Claude tests use a fake
+  `claude_agent_sdk` module, so CI does not need the SDK installed.
+
 ### Domain docs
 
 This is a single-context repository. Read the root `CONTEXT.md` and relevant

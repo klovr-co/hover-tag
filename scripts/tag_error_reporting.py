@@ -280,6 +280,8 @@ _CODE_CATEGORIES = {
     "missing_executable": FailureCategory.MISSING_EXECUTABLE,
     "executable_missing": FailureCategory.MISSING_EXECUTABLE,
     "rate_limit": FailureCategory.RATE_LIMIT,
+    "http_429": FailureCategory.RATE_LIMIT,
+    "http_401": FailureCategory.AUTHENTICATION,
     "too_many_requests": FailureCategory.RATE_LIMIT,
     "idle_timeout": FailureCategory.IDLE_TIMEOUT,
     "maximum_runtime": FailureCategory.MAXIMUM_RUNTIME,

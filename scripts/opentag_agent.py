@@ -18,11 +18,13 @@ from typing import Any
 
 try:
     from tag_paths import codex_workspace_args, tag_temp_dir
-    from codex_app_server import CodexAppServer, CodexAppServerError
+    from codex_agent_backend import CodexAppServer, CodexAppServerError
+    from claude_agent_backend import ClaudeAgentError, ClaudeAgentRun
     from record_output_artifact import channel_artifact_directory
 except ImportError:
     from scripts.tag_paths import codex_workspace_args, tag_temp_dir
-    from scripts.codex_app_server import CodexAppServer, CodexAppServerError
+    from scripts.codex_agent_backend import CodexAppServer, CodexAppServerError
+    from scripts.claude_agent_backend import ClaudeAgentError, ClaudeAgentRun
     from scripts.record_output_artifact import channel_artifact_directory
 
 
@@ -302,6 +304,7 @@ def retryable_backend_failure(output: str) -> bool:
             "rate_limit",
             "too many requests",
             "http 429",
+            "overloaded",
         )
     )
 
@@ -621,31 +624,15 @@ def codex_event_transport() -> str:
     return transport
 
 
-def run_codex_app_server_events(
-    prompt: str,
+def run_rich_events(
+    start: Callable[[Callable[[dict[str, Any]], None]], tuple[str, str]],
     *,
-    workdir: Path,
-    timeout: int,
-    max_timeout: int | None = None,
-    model: str | None = None,
-    reasoning_effort: str | None = None,
-    fast_mode: bool = False,
-    control_file: Path | None = None,
-    run_id: str | None = None,
-    approval_dir: Path | None = None,
+    errors: tuple[type[BaseException], ...],
+    backend_name: str,
 ) -> int:
-    """Run one request-scoped App Server and emit the richer event contract."""
+    """Run one request-scoped turn per attempt and emit the richer event contract."""
     attempts = max(1, int(os.getenv("OPENTAG_BACKEND_ATTEMPTS", "3")))
     for attempt in range(1, attempts + 1):
-        server = CodexAppServer(
-            codex_app_server_command(workdir, fast_mode=fast_mode),
-            cwd=workdir,
-            timeout=timeout,
-            max_timeout=max_timeout,
-            control_file=control_file,
-            run_id=run_id,
-            approval_dir=approval_dir,
-        )
         made_progress = False
 
         def forward_event(event: dict[str, Any]) -> None:
@@ -664,13 +651,8 @@ def run_codex_app_server_events(
             emit_event(event_type, text, **payload)
 
         try:
-            status, detail = server.run(
-                prompt,
-                model=model,
-                reasoning_effort=reasoning_effort,
-                emit=forward_event,
-            )
-        except CodexAppServerError as exc:
+            status, detail = start(forward_event)
+        except errors as exc:
             status, detail = "failed", str(exc)
         if status == "completed":
             return 0
@@ -687,9 +669,80 @@ def run_codex_app_server_events(
             emit_event("status", retry_status(attempt + 1, attempts))
             time.sleep(min(2 * attempt, 8))
             continue
-        emit_event("error", detail or f"Codex turn ended with status {status}")
+        emit_event("error", detail or f"{backend_name} turn ended with status {status}")
         return 1
     return 1
+
+
+def run_codex_app_server_events(
+    prompt: str,
+    *,
+    workdir: Path,
+    timeout: int,
+    max_timeout: int | None = None,
+    model: str | None = None,
+    reasoning_effort: str | None = None,
+    fast_mode: bool = False,
+    control_file: Path | None = None,
+    run_id: str | None = None,
+    approval_dir: Path | None = None,
+) -> int:
+    """Run one request-scoped App Server and emit the richer event contract."""
+    def start(emit: Callable[[dict[str, Any]], None]) -> tuple[str, str]:
+        server = CodexAppServer(
+            codex_app_server_command(workdir, fast_mode=fast_mode),
+            cwd=workdir,
+            timeout=timeout,
+            max_timeout=max_timeout,
+            control_file=control_file,
+            run_id=run_id,
+            approval_dir=approval_dir,
+        )
+        return server.run(prompt, model=model, reasoning_effort=reasoning_effort, emit=emit)
+
+    return run_rich_events(start, errors=(CodexAppServerError,), backend_name="Codex")
+
+
+def claude_event_transport() -> str:
+    """Return the validated transport, keeping print mode as an explicit rollback."""
+    transport = os.getenv("OPENTAG_CLAUDE_TRANSPORT", "sdk").strip().lower()
+    if transport not in {"print", "sdk"}:
+        raise ValueError("OPENTAG_CLAUDE_TRANSPORT must be print or sdk")
+    return transport
+
+
+def run_claude_sdk_events(
+    prompt: str,
+    *,
+    skill_dir: Path,
+    workdir: Path,
+    attachments_dir: Path | None,
+    timeout: int,
+    max_timeout: int | None = None,
+    model: str | None = None,
+    reasoning_effort: str | None = None,
+    fast_mode: bool = False,
+    control_file: Path | None = None,
+    run_id: str | None = None,
+    approval_dir: Path | None = None,
+) -> int:
+    """Run one request-scoped Claude Agent SDK session with the Codex event contract."""
+    add_dirs = [skill_dir, *([attachments_dir] if attachments_dir else [])]
+
+    def start(emit: Callable[[dict[str, Any]], None]) -> tuple[str, str]:
+        run = ClaudeAgentRun(
+            cwd=workdir,
+            add_dirs=add_dirs,
+            timeout=timeout,
+            max_timeout=max_timeout,
+            control_file=control_file,
+            run_id=run_id,
+            approval_dir=approval_dir,
+        )
+        return run.run(prompt, model=model, reasoning_effort=reasoning_effort,
+                       fast_mode=fast_mode, emit=emit)
+
+    return run_rich_events(start, errors=(ClaudeAgentError, ValueError), backend_name="Claude")
 
 
 def claude_stream_command(
@@ -697,6 +750,7 @@ def claude_stream_command(
     skill_dir: Path,
     workdir: Path,
     attachments_dir: Path | None,
+    model: str | None = None,
 ) -> list[str]:
     cmd = [
         "claude",
@@ -711,6 +765,8 @@ def claude_stream_command(
         "--add-dir",
         str(skill_dir),
     ]
+    if model and model != "default":
+        cmd.extend(["--model", model])
     if attachments_dir:
         cmd.extend(["--add-dir", str(attachments_dir)])
     return cmd
@@ -724,12 +780,14 @@ def run_claude_events(
     attachments_dir: Path | None,
     timeout: int,
     max_timeout: int | None = None,
+    model: str | None = None,
 ) -> int:
     code, output, emitted_final, timed_out = stream_command(
         claude_stream_command(
             skill_dir=skill_dir,
             workdir=workdir,
             attachments_dir=attachments_dir,
+            model=model,
         ),
         parser=parse_claude_stream_event,
         timeout=timeout,
@@ -794,6 +852,7 @@ def run_claude(
     workdir: Path,
     attachments_dir: Path | None,
     timeout: int,
+    model: str | None = None,
 ) -> int:
     # Pass the prompt on stdin, not as a trailing positional: `claude --add-dir`
     # is variadic and would otherwise swallow the prompt as another directory.
@@ -806,6 +865,8 @@ def run_claude(
         "--add-dir",
         str(skill_dir),
     ]
+    if model and model != "default":
+        cmd.extend(["--model", model])
     if attachments_dir:
         cmd.extend(["--add-dir", str(attachments_dir)])
     result = subprocess.run(
@@ -839,13 +900,13 @@ def main() -> int:
     parser.add_argument(
         "--reasoning-effort",
         choices=("minimal", "low", "medium", "high", "xhigh", "max", "ultra"),
-        help="Codex reasoning-effort override for this run",
+        help="backend reasoning-effort override for this run",
     )
     parser.add_argument(
         "--fast-mode",
         choices=("on", "off"),
         default="off",
-        help="Codex Fast Mode override for this run",
+        help="backend Fast Mode override for this run",
     )
     parser.add_argument(
         "--event-stream",
@@ -919,6 +980,21 @@ def main() -> int:
                     reasoning_effort=args.reasoning_effort,
                     fast_mode=args.fast_mode == "on",
                 )
+            if claude_event_transport() == "sdk":
+                return run_claude_sdk_events(
+                    prompt,
+                    skill_dir=args.skill_dir.resolve(),
+                    workdir=args.workdir.resolve(),
+                    attachments_dir=args.attachments_dir.resolve() if args.attachments_dir else None,
+                    timeout=args.timeout,
+                    max_timeout=args.max_timeout,
+                    model=args.model,
+                    reasoning_effort=args.reasoning_effort,
+                    fast_mode=args.fast_mode == "on",
+                    control_file=args.control_file,
+                    run_id=args.run_id,
+                    approval_dir=args.approval_dir,
+                )
             return run_claude_events(
                 prompt,
                 skill_dir=args.skill_dir.resolve(),
@@ -926,6 +1002,7 @@ def main() -> int:
                 attachments_dir=args.attachments_dir.resolve() if args.attachments_dir else None,
                 timeout=args.timeout,
                 max_timeout=args.max_timeout,
+                model=args.model,
             )
         if args.backend == "codex":
             return run_codex(
@@ -944,6 +1021,7 @@ def main() -> int:
             workdir=args.workdir.resolve(),
             attachments_dir=args.attachments_dir.resolve() if args.attachments_dir else None,
             timeout=args.timeout,
+            model=args.model,
         )
     except subprocess.TimeoutExpired:
         print(f"Open Tag backend timed out after {args.timeout}s", file=sys.stderr)

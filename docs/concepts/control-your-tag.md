@@ -1,7 +1,7 @@
 # Control your Tag
 
 You choose who can ask your Tag to work, which sources it can use, and when to
-stop a task. Some Codex actions also ask for a decision while the task is running.
+stop a task. Some agent actions also ask for a decision while the task is running.
 
 ## Respond to a Codex approval request
 
@@ -86,6 +86,15 @@ If Tag says the request has expired or was already decided, the old buttons
 cannot approve it. Review the task's latest status before starting another
 request. Unsupported or unavailable approval requests are refused rather than
 approved automatically by Tag.
+
+## Respond to a Claude approval request
+
+Claude runs in its automatic permission mode, so most actions proceed without a
+prompt. When Claude would still ask, Tag privately shows **Claude needs
+approval** with **Approve** and **Deny**. These are one-time decisions: Claude
+requests do not offer task-scoped, persistent-rule, or **Approve retry**
+choices. The same requester and expiry rules apply, and unanswered or
+unavailable requests are denied.
 
 ## Follow a task as it works
 
