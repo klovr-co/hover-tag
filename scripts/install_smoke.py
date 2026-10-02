@@ -11,6 +11,55 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+def check_memory_server(python: Path, directory: Path) -> None:
+    """Start the installed MFS server and send it the request Tag uses to index a source."""
+    import socket
+    import time
+    import urllib.request
+
+    server = python.parent / ("mfs-server.exe" if os.name == "nt" else "mfs-server")
+    assert server.is_file(), f"mfs-server is missing from the Tag runtime: {server}"
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    home = directory / "mfs-home"
+    notes = directory / "notes"
+    notes.mkdir()
+    (notes / "hello.md").write_text("Tag memory smoke test\n", encoding="utf-8")
+    log = (directory / "mfs-server.log").open("wb")
+    process = subprocess.Popen([str(server), "run", "--bind", f"127.0.0.1:{port}"],
+                               env=dict(os.environ, MFS_HOME=str(home)), stdout=log, stderr=log)
+    base = f"http://127.0.0.1:{port}"
+    try:
+        deadline = time.monotonic() + 180
+        while True:
+            try:
+                with urllib.request.urlopen(base + "/healthz", timeout=2) as response:
+                    if response.status == 200:
+                        break
+            except OSError:
+                pass
+            if process.poll() is not None or time.monotonic() > deadline:
+                log.flush()
+                raise RuntimeError("mfs-server did not become healthy:\n"
+                                   + (directory / "mfs-server.log").read_text(errors="replace")[-3000:])
+            time.sleep(1)
+        token = (home / "server.token").read_text(encoding="utf-8").strip()
+        request = urllib.request.Request(
+            base + "/v1/add", method="POST",
+            data=json.dumps({"target": str(notes), "full": False, "process": False}).encode(),
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"})
+        with urllib.request.urlopen(request, timeout=60) as response:
+            assert json.loads(response.read())["job_id"], "MFS did not queue the indexing job"
+    finally:
+        process.terminate()
+        try:
+            process.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            process.kill()
+        log.close()
+
+
 with tempfile.TemporaryDirectory(prefix="Tag smoke ") as temporary:
     directory = Path(temporary)
     env = dict(os.environ, TAG_HOME=str(directory / "home"))
@@ -55,3 +104,5 @@ with tempfile.TemporaryDirectory(prefix="Tag smoke ") as temporary:
         assert shutil.which("slack"), "Slack CLI was neither provisioned nor already installed"
     # Memory needs only the MFS server package; Tag talks to it over HTTP.
     assert not (Path(current["python"]).parent / "mfs").exists()
+    check_memory_server(Path(current["python"]), directory)
+    print("Memory server: starts, answers, and accepts an indexing request")
