@@ -28,7 +28,7 @@ except ImportError:
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATION_VERSION = 3
 DM_SCOPE = "im:history"
-REQUIRED_MANIFEST = yaml.safe_load((ROOT / "slack-app-manifest.yaml").read_text())
+REQUIRED_MANIFEST = yaml.safe_load((ROOT / "slack-app-manifest.yaml").read_text(encoding="utf-8"))
 REQUIRED_BOT_SCOPES = tuple(REQUIRED_MANIFEST["oauth_config"]["scopes"]["bot"])
 DM_EVENT = "message.im"
 AGENT_DESCRIPTION = "Run approved Codex or Claude tasks from Slack."

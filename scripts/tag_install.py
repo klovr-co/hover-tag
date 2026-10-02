@@ -480,7 +480,7 @@ def fetch_release(
     archive = destination / name
     archive.write_bytes(data)
     source = unpack_release(archive, destination / "source")
-    if (source / "VERSION").read_text().strip() != version:
+    if (source / "VERSION").read_text(encoding="utf-8").strip() != version:
         raise ValueError("Release version does not match requested version")
     return FetchedRelease(
         source,
@@ -615,7 +615,7 @@ def install(
     lock = home / "state/install.lock"
     install_lock = LifecycleLock(lock).acquire()
     try:
-        version = (source / "VERSION").read_text().strip()
+        version = (source / "VERSION").read_text(encoding="utf-8").strip()
         if selection is not None and selection.version != version:
             raise ValueError("Selected release metadata does not match the installed source")
         progress("release", version=version)
@@ -708,6 +708,8 @@ home = pathlib.Path(__file__).resolve().parent.parent
 record = json.loads((home / "current.json").read_text(encoding="utf-8"))
 release = home / "releases" / record["release"]
 os.environ["TAG_HOME"] = str(home)
+# UTF-8 everywhere, including Windows, for files and subprocess text.
+os.environ.setdefault("PYTHONUTF8", "1")
 # Started windowless on Windows (pythonw, e.g. at login): keep the child windowless too.
 flags = 0x08000000 if os.name == "nt" and sys.stdout is None else 0
 raise SystemExit(subprocess.call([record["python"], str(release / "scripts/tag_cli.py"), *sys.argv[1:]],
@@ -727,7 +729,7 @@ raise SystemExit(subprocess.call([record["python"], str(release / "scripts/tag_c
             script = f'#!/bin/sh\n# TAG managed launcher\nexec {shlex.quote(str(launcher_python))} {shlex.quote(str(launcher))} "$@"\n'
         atomic_text(command, script, 0o755)
         current = home / "current.json"
-        original_record = json.loads(current.read_text()) if current.exists() else {}
+        original_record = json.loads(current.read_text(encoding="utf-8")) if current.exists() else {}
         if current.exists() and not migrate_dependencies:
             atomic_text(home / "previous.json", current.read_text(encoding="utf-8"))
         current_record: dict[str, Any] = {

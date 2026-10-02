@@ -117,7 +117,7 @@ def _migrate_workspace(context, lifecycle) -> bool:
     """Preserve originals; only copy while the affected managed bridge is stopped."""
     root, home, workspace = context.installation_root, context.home, context.workspace
     marker = home / "state/layout-migrations.json"
-    if marker.is_file() and json.loads(marker.read_text()).get("version") == VERSION:
+    if marker.is_file() and json.loads(marker.read_text(encoding="utf-8")).get("version") == VERSION:
         return False
     legacy = context.is_default and (root / "config/settings.json").is_file()
     sources = [(home / "workspace", workspace)] if home / "workspace" != workspace else []
@@ -128,7 +128,7 @@ def _migrate_workspace(context, lifecycle) -> bool:
         return False
     with LifecycleLock(root / "state/layout.lock"):
         with LifecycleLock(home / "state/start.lock"):
-            if marker.is_file() and json.loads(marker.read_text()).get("version") == VERSION:
+            if marker.is_file() and json.loads(marker.read_text(encoding="utf-8")).get("version") == VERSION:
                 return False
             # Identity-checked stop never signals an unrelated reused PID.
             if legacy:

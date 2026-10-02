@@ -1954,7 +1954,7 @@ def _run_cli() -> int:
         return _autostart_command(installation_root, args, parser)
     if args.command == "version" and args.json_output:
         print(json.dumps({"schema_version": 1,
-                          "version": (ROOT / "VERSION").read_text().strip(),
+                          "version": (ROOT / "VERSION").read_text(encoding="utf-8").strip(),
                           "app_protocol": APP_PROTOCOL, "capabilities": list(CAPABILITIES),
                           "platform": sys.platform,
                           "runtime": runtime_identity(installation_root)}, indent=2))
@@ -2171,7 +2171,7 @@ def _run_cli() -> int:
             show_upgrade_reminder(installation_root)
         return int(args.command == "status" and not all(report["services"].values()))
     if args.command == "version":
-        print("Tag v" + (ROOT / "VERSION").read_text().strip())
+        print("Tag v" + (ROOT / "VERSION").read_text(encoding="utf-8").strip())
         return 0
     if args.command == "paths":
         paths = {key: str(home / key) for key in ("config", "integrations", "state", "tmp")}

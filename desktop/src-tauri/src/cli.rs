@@ -98,6 +98,7 @@ pub fn command(cli: &Path, args: &[String]) -> Command {
         .env("NO_COLOR", "1")
         .env("TERM", "dumb")
         .env("PYTHONIOENCODING", "utf-8")
+        .env("PYTHONUTF8", "1")
         .stdin(Stdio::null());
     #[cfg(windows)]
     command.creation_flags(CREATE_NO_WINDOW);

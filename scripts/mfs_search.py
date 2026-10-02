@@ -22,7 +22,7 @@ def token_from_env() -> str | None:
         return os.environ["MFS_TOKEN"]
     token_file = Path.home() / ".mfs" / "server.token"
     if token_file.exists():
-        return token_file.read_text().strip()
+        return token_file.read_text(encoding="utf-8").strip()
     return None
 
 
