@@ -60,15 +60,21 @@ if os.name == "nt":
 
     # Folder permissions (whoami + icacls) aren't what these unit tests check,
     # and many tests mock subprocess for their own purposes, which would
-    # intercept those commands. Patch before any test module imports Tag.
+    # intercept those commands. Stub the helper in whichever copy of Tag's
+    # modules a test loaded, without changing how modules are imported.
     import sys
-    from pathlib import Path
 
-    _scripts = str(Path(__file__).resolve().parents[1] / "scripts")
-    if _scripts not in sys.path:
-        sys.path.append(_scripts)
-    import tag_paths as _plain_paths  # noqa: E402  (scripts/ on sys.path)
-    from scripts import tag_paths as _package_paths  # noqa: E402
+    from scripts import tag_paths as _tag_paths
 
-    for _module in (_plain_paths, _package_paths):
-        _module.restrict_windows_acl = lambda home: None
+    def _no_acl(home):
+        return None
+
+    _tag_paths.restrict_windows_acl = _no_acl
+
+    @pytest.fixture(autouse=True)
+    def no_windows_acl(monkeypatch):
+        for name in ("tag_paths", "scripts.tag_paths", "tag_activity", "scripts.tag_activity"):
+            module = sys.modules.get(name)
+            if module is not None and hasattr(module, "restrict_windows_acl"):
+                monkeypatch.setattr(module, "restrict_windows_acl", _no_acl)
+        yield
