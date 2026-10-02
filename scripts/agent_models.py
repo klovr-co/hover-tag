@@ -342,9 +342,10 @@ def discover_tag_models(default_backend: str) -> list[ModelOption]:
     """Combine every usable backend's catalog and mark the Tag's default model."""
     default_choice_backend, default_model = tag_default_choice(default_backend)
     models: list[ModelOption] = []
-    for name in allowed_backends(default_backend):
-        if name not in {default_backend, default_choice_backend} and not backend_signed_in(name):
-            continue
+    connected = [name for name in allowed_backends(default_backend) if backend_signed_in(name)]
+    if default_choice_backend not in connected and connected:
+        default_choice_backend, default_model = connected[0], None
+    for name in connected:
         options = discover_models(name)
         if name != default_choice_backend:
             options = [replace(item, is_default=False) for item in options]

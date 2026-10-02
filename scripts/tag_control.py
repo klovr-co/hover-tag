@@ -314,7 +314,7 @@ def _settings_menu(home: Path) -> None:
     groups = (
         ("Slack connection and access", ("SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_ALLOWED_USER_IDS", "SLACK_CHANNEL_IDS", "OPENTAG_BOT_NAME", "SLACK_CHANNEL_POLICY", "change_app", "reconnect")),
         ("Workspace and memory", ("MFS_SLACK_HISTORY_DAYS", "MFS_ALLOWED_SCOPES", "MFS_URL", "MFS_TOKEN")),
-        ("Agent", ("OPENTAG_BACKEND", "OPENTAG_DEFAULT_MODEL", "OPENTAG_BACKENDS")),
+        ("Model", ("OPENTAG_DEFAULT_MODEL",)),
         ("Advanced", ("OPENTAG_TIMEOUT_SECONDS", "OPENTAG_MAX_TIMEOUT_SECONDS", "OPENTAG_BACKEND_ATTEMPTS", "OPENTAG_SLACK_STREAMING",
                       "OPENTAG_SLACK_DM_ENABLED",
                       "OPENTAG_CODEX_TRANSPORT", "OPENTAG_CLAUDE_TRANSPORT", "OPENTAG_CLAUDE_PERMISSION_MODE")),
@@ -354,11 +354,12 @@ def _settings_menu(home: Path) -> None:
             ui.message(f"Workspace: {home / 'workspace'} (managed by Tag)")
             ui.message("Memory uses sources already indexed in MFS; changing scopes does not index a source.")
         if selection == "3":
-            ui.message("Choose this Tag's default agent and model. In Slack, users can switch with Configure")
-            ui.message("to any model from the agents installed and signed in on this computer.")
-            missing = [name for key, name in (("codex", "Codex"), ("claude", "Claude Code")) if not shutil.which(key)]
-            if missing:
-                ui.message(f"Install and sign in to {' and '.join(missing)} to offer its models too.")
+            ui.message("Choose a model from your connected Codex and Claude accounts.")
+            value = choose_default_model(home, raw_values)
+            if value is not None:
+                settings.update_config(settings.config_path(home), {"OPENTAG_DEFAULT_MODEL": value})
+                ui.message("Saved. Restart Tag to apply the default model.")
+            continue
         actions = {"change_app": "Change Slack app or workspace", "reconnect": "Reconnect credentials with Slack CLI"}
         labels = [actions.get(key, f"{settings.LABELS.get(key, key)}: {values.get(key, 'not set')}") for key in keys]
         if ui.keyboard_available():
@@ -381,16 +382,6 @@ def _settings_menu(home: Path) -> None:
                         "MFS_SLACK_HISTORY_DAYS": "history", "SLACK_CHANNEL_POLICY": "policy"}[key]
                 tag_reconfigure.edit(home, kind)
                 continue
-            elif key == "OPENTAG_DEFAULT_MODEL" and ui.keyboard_available():
-                value = choose_default_model(home, raw_values)
-                if value is None:
-                    continue
-            elif key == "OPENTAG_BACKEND" and ui.keyboard_available():
-                choice = ui.choose("Choose your agent", ["Codex", "Claude", "Cancel"],
-                                   default=int(raw_values.get(key) == "claude"))
-                if choice == 2:
-                    continue
-                value = ("codex", "claude")[choice]
             else:
                 reader = input if key in settings.PUBLIC else getpass.getpass
                 value = reader("New value (Enter to cancel; /clear to empty an optional setting): ").strip()

@@ -3526,7 +3526,7 @@ class ModelSwitchingTests(unittest.TestCase):
     def test_tag_default_model_can_select_another_backend(self) -> None:
         with patch.dict(os.environ, {"OPENTAG_DEFAULT_MODEL": "claude:opus"}, clear=True), patch.object(
             agent_models, "discover_models", side_effect=self.discover
-        ), patch.object(agent_models, "backend_signed_in", return_value=False):
+        ), patch.object(agent_models, "backend_signed_in", return_value=True):
             models = slack_socket_agent.discover_tag_models("codex")
         defaults = slack_socket_agent.default_agent_settings(models)
         self.assertEqual(("claude", "opus"), (defaults.backend, defaults.model))
@@ -3535,13 +3535,32 @@ class ModelSwitchingTests(unittest.TestCase):
     def test_unavailable_or_disallowed_backends_are_not_offered(self) -> None:
         with patch.dict(os.environ, {}, clear=True), patch.object(
             agent_models, "discover_models", side_effect=self.discover
-        ), patch.object(agent_models, "backend_signed_in", return_value=False):
+        ), patch.object(agent_models, "backend_signed_in", side_effect=lambda name: name == "codex"):
             self.assertEqual({"codex"}, {item.backend for item in slack_socket_agent.discover_tag_models("codex")})
         with patch.dict(os.environ, {"OPENTAG_BACKENDS": "codex"}, clear=True), patch.object(
             agent_models, "discover_models", side_effect=self.discover
         ), patch.object(agent_models, "backend_signed_in", return_value=True) as signed_in:
             self.assertEqual({"codex"}, {item.backend for item in slack_socket_agent.discover_tag_models("codex")})
-        signed_in.assert_not_called()
+        signed_in.assert_called_once_with("codex")
+
+    def test_disconnected_default_is_excluded_and_connected_account_becomes_default(self):
+        for disconnected, connected in (("claude", "codex"), ("codex", "claude")):
+            with self.subTest(disconnected=disconnected), patch.dict(os.environ, {
+                "OPENTAG_DEFAULT_MODEL": f"{disconnected}:saved-model",
+            }, clear=True), patch.object(agent_models, "discover_models", side_effect=self.discover), patch.object(
+                agent_models, "backend_signed_in", side_effect=lambda name: name == connected
+            ):
+                models = agent_models.discover_tag_models(disconnected)
+                self.assertEqual({connected}, {item.backend for item in models})
+                self.assertEqual(connected, slack_socket_agent.default_agent_settings(models).backend)
+                self.assertTrue(any(item.is_default for item in models))
+
+    def test_no_connected_accounts_offer_no_models(self):
+        with patch.object(agent_models, "backend_signed_in", return_value=False), patch.object(
+            agent_models, "discover_models"
+        ) as discover:
+            self.assertEqual([], agent_models.discover_tag_models("codex"))
+            discover.assert_not_called()
 
     def test_picker_groups_models_by_backend(self) -> None:
         models = self.CODEX + [replace(item, is_default=False) for item in self.CLAUDE]
@@ -3730,6 +3749,9 @@ class SlackCancellationTests(unittest.TestCase):
 
 class SlackAgentSettingsTests(unittest.TestCase):
     def setUp(self) -> None:
+        connected = patch.object(agent_models, "backend_signed_in", side_effect=lambda name: name == "codex")
+        connected.start()
+        self.addCleanup(connected.stop)
         catalog = patch.object(agent_models, "fetch_codex_model_catalog", return_value=None)
         self.live_catalog = catalog.start()
         self.addCleanup(catalog.stop)

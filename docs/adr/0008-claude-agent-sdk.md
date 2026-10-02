@@ -72,3 +72,16 @@ the Configure picker groups them by backend. A saved choice stores its backend,
 and the bridge runs each request on the requester's chosen backend. Choices
 saved before this change carry no backend and are read as Codex, so no stored
 data is rewritten. Claude is no longer labelled experimental.
+
+
+## Connected accounts in the model picker (2026-10-03)
+
+Settings → Model opens the model picker directly. Agent selection follows the
+model; the settings menu no longer exposes separate backend and allowlist
+choices. Existing explicit operator restrictions remain supported through
+configuration, while both backends are available by default. Discovery checks
+sign-in for every backend, including the configured default, and excludes
+disconnected accounts. If the saved default's account is disconnected, the
+remaining connected account supplies the catalog default without rewriting
+stored preferences. Reopen settings to rediscover accounts; restart the Slack
+bridge to refresh its startup catalog.

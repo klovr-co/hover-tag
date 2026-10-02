@@ -44,14 +44,15 @@ class TagControlTests(unittest.TestCase):
             "Edit settings interactively", "tag personal settings"
         )
 
-    def test_settings_keyboard_agent_choice_saves_and_returns(self):
+    def test_settings_model_cancel_preserves_configuration(self):
         self.complete()
+        before = tag_config.read_config(self.path)
         with patch.object(tag_control.ui, "keyboard_available", return_value=True), patch.object(
-            tag_control.ui, "choose", side_effect=[2, 0, 1, 4]
-        ) as choose, redirect_stdout(StringIO()):
+            tag_control.ui, "choose", side_effect=[2, 4]
+        ) as choose, patch.object(tag_control, "choose_default_model", return_value=None), redirect_stdout(StringIO()):
             tag_control.settings_menu(self.home)
-        self.assertEqual(tag_config.read_config(self.path)["OPENTAG_BACKEND"], "claude")
-        self.assertEqual(choose.call_args_list[2].kwargs["default"], 0)
+        self.assertEqual(before, tag_config.read_config(self.path))
+        self.assertEqual("Model", choose.call_args_list[0].args[1][2])
 
     def test_settings_default_model_picker_uses_live_models_and_aligns_backend(self):
         self.complete()
@@ -70,16 +71,16 @@ class TagControlTests(unittest.TestCase):
         with patch.object(tag_control.ui, "keyboard_available", return_value=True), patch.object(
             tag_control.agent_models, "discover_tag_models", side_effect=discover
         ), patch.object(tag_control.ui.display, "backend_status", return_value=("Signed in", True)), patch.object(
-            tag_control.ui, "choose", side_effect=[2, 1, 3, 4]
+            tag_control.ui, "choose", side_effect=[2, 3, 4]
         ) as choose, redirect_stdout(StringIO()):
             tag_control.settings_menu(self.home)
 
-        labels = choose.call_args_list[2].args[1]
+        labels = choose.call_args_list[1].args[1]
         self.assertEqual(
             ["Codex · account default", "Codex · GPT-5.5", "Claude · Default (recommended)", "Claude · Opus 5.5", "Cancel"],
             labels,
         )
-        self.assertEqual(0, choose.call_args_list[2].kwargs["default"])
+        self.assertEqual(0, choose.call_args_list[1].kwargs["default"])
         saved = tag_config.read_config(self.path)
         self.assertEqual(("claude:opus", "claude"), (saved["OPENTAG_DEFAULT_MODEL"], saved["OPENTAG_BACKEND"]))
         self.assertEqual([str(tag_control.default_workspace(self.home))], seen_workdir)
@@ -146,8 +147,10 @@ class TagControlTests(unittest.TestCase):
     def test_settings_plain_number_navigation_still_works(self):
         self.complete()
         with patch.object(tag_control.ui, "keyboard_available", return_value=False), patch(
-            "builtins.input", side_effect=["3", "1", "claude", "0"]
-        ), redirect_stdout(StringIO()):
+            "builtins.input", side_effect=["3", "1", "0"]
+        ), patch.object(tag_control.agent_models, "discover_tag_models", return_value=[
+            agent_models.ModelOption("opus", "Opus", (), backend="claude"),
+        ]), redirect_stdout(StringIO()):
             tag_control.settings_menu(self.home)
         self.assertEqual(tag_config.read_config(self.path)["OPENTAG_BACKEND"], "claude")
 
