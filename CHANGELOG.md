@@ -6,6 +6,13 @@ All notable changes to Tag are documented here.
 
 ### Added
 
+- Run the Claude backend through the Claude Agent SDK with the same Slack
+  behavior as Codex App Server: final-answer streaming, live activity rows,
+  private one-time approvals, Stop, idle and maximum deadlines, and per-user
+  model, thinking, and Fast Mode settings from the signed-in Claude account.
+  `OPENTAG_CLAUDE_TRANSPORT=print` keeps the previous `claude -p` path as a
+  rollback. Upgrades install the SDK automatically.
+
 - Deliver saved files as local copies plus Slack attachments by default.
   `OPENTAG_FILE_DELIVERY` and individual requests can select local-only delivery.
   Existing installations adopt the default automatically unless explicitly configured.

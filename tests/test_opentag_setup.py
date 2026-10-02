@@ -42,7 +42,10 @@ class OpenTagSetupTests(unittest.TestCase):
             result = opentag_setup.finish_setup(Path("settings.json"), values, [channel])
 
         self.assertEqual(result, 0)
-        run.assert_not_called()
+        # Only Claude's sign-in status is checked; setup never starts services.
+        run.assert_called_once()
+        self.assertEqual(run.call_args.args[0][1:], ["auth", "status"])
+        self.assertIn("Claude signed in", output.getvalue())
         self.assertIn("MFS client ready", output.getvalue())
         self.assertIn("Next step · start Tag", output.getvalue())
         self.assertIn("tag personal start", output.getvalue())

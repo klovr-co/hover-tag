@@ -26,6 +26,7 @@
     "references/slack-adapter.md",
     "release-channels.json",
     "requirements-runtime.txt",
+    "scripts/claude_agent_backend.py",
     "scripts/codex_app_server.py",
     "scripts/install_dependencies.sh",
     "scripts/mfs_cat.py",

@@ -226,6 +226,14 @@ def check_backend() -> bool:
             "backend claude",
             "claude executable found" if ok else "claude executable missing",
         )
+        if (env("OPENTAG_CLAUDE_TRANSPORT") or "sdk") == "sdk":
+            sdk_ok = importlib.util.find_spec("claude_agent_sdk") is not None
+            print_check(
+                sdk_ok,
+                "Claude Agent SDK",
+                "installed" if sdk_ok else "missing; run tag upgrade to reinstall the runtime",
+            )
+            ok = ok and sdk_ok
         return ok
     if backend == "codex":
         ok = shutil.which("codex") is not None

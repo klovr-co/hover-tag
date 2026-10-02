@@ -222,9 +222,10 @@ Use environment references (`env_vars`, `bearer_token_env_var`,
 Configure OAuth with the backend's supported login flow. TAG does not grant
 access merely by adding a server definition; normal backend permissions apply.
 
-Claude remains experimental. It runs from the same stable workspace, with
-project skills under `.claude/skills` and normal Claude project MCP settings in
-`.mcp.json`; use Claude's own trust/approval setup for project MCP servers.
+Claude remains experimental. It runs from the same stable workspace through
+the Claude Agent SDK, with project skills under `.claude/skills`. Tag passes
+the workspace `.mcp.json` servers to each Claude run, mirroring how it layers
+`.codex/config.toml` MCP servers for Codex.
 
 Codex discovery references: [skills](https://developers.openai.com/codex/skills)
 and [MCP](https://developers.openai.com/codex/mcp).

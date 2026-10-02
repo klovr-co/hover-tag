@@ -17,6 +17,7 @@ except ImportError:
 DEFAULTS = {
     "OPENTAG_BACKEND": "codex", "OPENTAG_BOT_NAME": "Tag",
     "OPENTAG_CODEX_TRANSPORT": "app-server",
+    "OPENTAG_CLAUDE_TRANSPORT": "sdk", "OPENTAG_CLAUDE_PERMISSION_MODE": "auto",
     "OPENTAG_TRANSPORT": "slack", "OPENTAG_TIMEOUT_SECONDS": "420",
     "OPENTAG_MAX_TIMEOUT_SECONDS": "3600",
     "OPENTAG_BACKEND_ATTEMPTS": "3", "OPENTAG_SLACK_STREAMING": "1",
@@ -34,13 +35,16 @@ PUBLIC = frozenset((*DEFAULTS, "MFS_ALLOWED_SCOPES", "OPENTAG_WORKDIR",
                     "SLACK_CHANNEL_POLICY",
                     "MFS_SLACK_HISTORY_DAYS",
                     "MFS_SLACK_CONNECTOR_URI", "MFS_SLACK_CONNECTOR_CONFIG",
-                    "OPENTAG_CODEX_MODELS", "OPENTAG_CODEX_REASONING_EFFORTS"))
+                    "OPENTAG_CODEX_MODELS", "OPENTAG_CODEX_REASONING_EFFORTS",
+                    "OPENTAG_CLAUDE_MODELS"))
 EDITABLE = PUBLIC - {"OPENTAG_WORKDIR"} | {
     "SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "MFS_TOKEN", "MFS_SLACK_TOKEN", "MFS_HOME"
 }
 LABELS = {
     "OPENTAG_BACKEND": "Agent", "OPENTAG_BOT_NAME": "Bot name",
     "OPENTAG_CODEX_TRANSPORT": "Codex transport (exec or app-server)",
+    "OPENTAG_CLAUDE_TRANSPORT": "Claude transport (print or sdk)",
+    "OPENTAG_CLAUDE_PERMISSION_MODE": "Claude permission mode",
     "SLACK_APP_TOKEN": "Slack app token", "SLACK_BOT_TOKEN": "Slack bot token",
     "SLACK_ALLOWED_USER_IDS": "Who can use Tag", "SLACK_CHANNEL_ID": "Legacy channel restriction",
     "SLACK_CHANNEL_IDS": "Selected channels", "SLACK_TEAM_ID": "Slack workspace",
@@ -95,6 +99,10 @@ def validation_error(key: str, value: str) -> str | None:
         return "Use a name from 1 to 35 characters without line breaks"
     if key == "OPENTAG_CODEX_TRANSPORT" and value not in {"exec", "app-server"}:
         return "Choose exec or app-server"
+    if key == "OPENTAG_CLAUDE_TRANSPORT" and value not in {"print", "sdk"}:
+        return "Choose print or sdk"
+    if key == "OPENTAG_CLAUDE_PERMISSION_MODE" and value not in {"auto", "acceptEdits", "default", "dontAsk", "bypassPermissions"}:
+        return "Choose auto, acceptEdits, default, dontAsk, or bypassPermissions"
     if key == "OPENTAG_FILE_DELIVERY" and value not in {"local", "local+slack"}:
         return "Choose local or local+slack"
     if key == "OPENTAG_TRANSPORT" and value != "slack":

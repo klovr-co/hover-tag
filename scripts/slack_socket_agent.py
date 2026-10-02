@@ -209,7 +209,7 @@ GENERATED_IMAGE_MIME_TYPES = {
 
 
 @dataclass(frozen=True)
-class CodexModelOption:
+class ModelOption:
     model_id: str
     label: str
     reasoning_efforts: tuple[str, ...]
@@ -217,6 +217,33 @@ class CodexModelOption:
     default_reasoning_effort: str | None = None
     is_default: bool = False
     default_fast_mode: bool = False
+
+
+CodexModelOption = ModelOption
+BACKEND_NAMES = {"codex": "Codex", "claude": "Claude"}
+# Claude reports supported effort levels but not a default; this is its documented default.
+CLAUDE_DEFAULT_EFFORT = "high"
+
+
+def backend_display_name(backend: str) -> str:
+    return BACKEND_NAMES.get(backend, "Agent")
+
+
+def codex_transport() -> str:
+    return os.getenv("OPENTAG_CODEX_TRANSPORT", "app-server").strip().lower()
+
+
+def claude_transport() -> str:
+    return os.getenv("OPENTAG_CLAUDE_TRANSPORT", "sdk").strip().lower()
+
+
+def rich_events_selected(backend: str) -> bool:
+    """Whether the backend transport reports phased answers, activity, and approvals."""
+    if backend == "codex":
+        return codex_transport() == "app-server"
+    if backend == "claude":
+        return claude_transport() == "sdk"
+    return False
 
 
 @dataclass(frozen=True)
@@ -395,6 +422,63 @@ def discover_codex_models() -> list[CodexModelOption]:
     return list(discovered.values())
 
 
+def fetch_claude_model_catalog() -> list[dict[str, Any]] | None:
+    """Read the signed-in Claude account's models from the SDK initialize response."""
+    try:
+        from .claude_agent_backend import ClaudeAgentError, ClaudeAgentRun
+    except ImportError:
+        from claude_agent_backend import ClaudeAgentError, ClaudeAgentRun
+    try:
+        return ClaudeAgentRun(cwd=default_workdir(), timeout=30).model_catalog()
+    except Exception:  # noqa: BLE001 - discovery falls back to the CLI default model
+        return None
+
+
+def discover_claude_models() -> list[ModelOption]:
+    """Offer the Claude account's live catalog; the CLI resolves its own default."""
+    configured = [
+        value.strip()
+        for value in os.getenv("OPENTAG_CLAUDE_MODELS", "").split(",")
+        if value.strip()
+    ]
+    discovered: dict[str, ModelOption] = {}
+    for item in fetch_claude_model_catalog() or []:
+        model_id = item.get("model")
+        if not isinstance(model_id, str) or not model_id:
+            continue
+        efforts = tuple(
+            effort for effort in item.get("supportedEfforts", [])
+            if effort in SUPPORTED_REASONING_EFFORTS
+        )
+        discovered[model_id] = ModelOption(
+            model_id=model_id,
+            label=str(item.get("displayName") or model_id),
+            reasoning_efforts=efforts,
+            supports_fast_mode=item.get("supportsFastMode") is True,
+            default_reasoning_effort=CLAUDE_DEFAULT_EFFORT if CLAUDE_DEFAULT_EFFORT in efforts else None,
+            is_default=item.get("isDefault") is True,
+        )
+    if configured:
+        options = [
+            discovered.get(model_id, ModelOption(model_id, model_id, ()))
+            for model_id in configured
+        ]
+        if not any(option.is_default for option in options):
+            options[0] = replace(options[0], is_default=True)
+        return options
+    if not discovered:
+        return [ModelOption("default", "Claude default", (), is_default=True)]
+    return list(discovered.values())
+
+
+def discover_models(backend: str) -> list[ModelOption]:
+    if backend == "codex":
+        return discover_codex_models()
+    if backend == "claude":
+        return discover_claude_models()
+    return []
+
+
 def configured_reasoning_efforts() -> tuple[str, ...]:
     configured = tuple(
         value.strip().lower()
@@ -476,7 +560,8 @@ def normalize_settings(
 class UserAgentSettingsStore:
     """Persist model choices by Slack user so they follow future requests."""
 
-    def __init__(self, path: Path | None = None) -> None:
+    def __init__(self, path: Path | None = None, *, backend: str = "codex") -> None:
+        self.backend = backend
         self.path = path or Path(
             os.getenv(
                 "OPENTAG_SLACK_SETTINGS_FILE",
@@ -485,9 +570,10 @@ class UserAgentSettingsStore:
         ).expanduser()
         self.lock = threading.Lock()
 
-    @staticmethod
-    def key(team: str, user_id: str) -> str:
-        return f"{team}:{user_id}"
+    def key(self, team: str, user_id: str) -> str:
+        # Codex keeps the original key; other backends keep separate choices.
+        base = f"{team}:{user_id}"
+        return base if self.backend == "codex" else f"{base}:{self.backend}"
 
     def _read(self) -> dict[str, dict[str, str | bool | None]]:
         try:
@@ -922,10 +1008,11 @@ def model_label(model: str | None, models: list[CodexModelOption]) -> str:
 def settings_context(
     settings: AgentSettings,
     models: list[CodexModelOption],
+    backend: str = "codex",
 ) -> str:
     fast_label = "Fast mode on" if settings.fast_mode else "Fast mode off"
     return (
-        f"Codex · {model_label(settings.model, models)} · "
+        f"{backend_display_name(backend)} · {model_label(settings.model, models)} · "
         f"{friendly_effort(settings.reasoning_effort)} · {fast_label}"
     )
 
@@ -1149,12 +1236,13 @@ def settings_modal(
     settings: AgentSettings,
     models: list[CodexModelOption],
     revision: str = "",
+    backend: str = "codex",
 ) -> dict[str, Any]:
     block_suffix = f"_{revision}" if revision else ""
     normalized = normalize_settings(settings, models)
     model_options = [select_option(item.model_id, item.label) for item in models]
     if normalized.model is None and model_options:
-        model_options.insert(0, select_option(DEFAULT_CONFIG_VALUE, "Codex default"))
+        model_options.insert(0, select_option(DEFAULT_CONFIG_VALUE, f"{backend_display_name(backend)} default"))
     if not model_options:
         model_options = [select_option(DEFAULT_CONFIG_VALUE, "No models available")]
     selected_model = normalized.model
@@ -1198,7 +1286,7 @@ def settings_modal(
         "type": "modal",
         "callback_id": SETTINGS_VIEW_ID,
         "private_metadata": json.dumps(metadata, separators=(",", ":")),
-        "title": {"type": "plain_text", "text": "Codex settings"},
+        "title": {"type": "plain_text", "text": f"{backend_display_name(backend)} settings"},
         "submit": {"type": "plain_text", "text": "Save"},
         "close": {"type": "plain_text", "text": "Cancel"},
         "blocks": [
@@ -2307,12 +2395,11 @@ def run_backend(
     ]
     if output_manifest is not None:
         cmd.extend(["--output-manifest", str(output_manifest)])
-    if backend == "codex" and model:
+    if model:
         cmd.extend(["--model", model])
-    if backend == "codex" and reasoning_effort:
+    if reasoning_effort:
         cmd.extend(["--reasoning-effort", reasoning_effort])
-    if backend == "codex":
-        cmd.extend(["--fast-mode", "on" if fast_mode else "off"])
+    cmd.extend(["--fast-mode", "on" if fast_mode else "off"])
     try:
         child_env = backend_environment(
             os.environ,
@@ -2418,12 +2505,11 @@ def run_backend_events(
     ]
     if output_manifest is not None:
         cmd.extend(["--output-manifest", str(output_manifest)])
-    if backend == "codex" and model:
+    if model:
         cmd.extend(["--model", model])
-    if backend == "codex" and reasoning_effort:
+    if reasoning_effort:
         cmd.extend(["--reasoning-effort", reasoning_effort])
-    if backend == "codex":
-        cmd.extend(["--fast-mode", "on" if fast_mode else "off"])
+    cmd.extend(["--fast-mode", "on" if fast_mode else "off"])
     run_id = uuid.uuid4().hex
     with tempfile.NamedTemporaryFile(
         "w", suffix=".control", delete=False, dir=tag_temp_dir()
@@ -2869,6 +2955,7 @@ def approval_button_blocks(
     user_id: str,
     approval_id: str,
     label: str,
+    backend: str = "codex",
 ) -> list[dict[str, Any]]:
     safe_labels = {
         "run a command outside the workspace sandbox",
@@ -2876,6 +2963,7 @@ def approval_button_blocks(
         "use additional filesystem or network access",
         "apply a file change that requires approval",
         "run a command that requires approval",
+        "use a tool that requires approval",
     }
     action = label if label in safe_labels else "perform an action outside its current permissions"
     metadata = json.dumps(
@@ -2894,7 +2982,7 @@ def approval_button_blocks(
             "text": {
                 "type": "mrkdwn",
                 "text": (
-                    f"*Codex needs approval* to {action}. "
+                    f"*{backend_display_name(backend)} needs approval* to {action}. "
                     "Approve only if you expect this request."
                 ),
             },
@@ -3107,7 +3195,7 @@ def is_direct_message_channel(channel: str) -> bool:
     return channel.startswith("D")
 
 
-def post_codex_approval(
+def post_backend_approval(
     client: Any,
     *,
     team: str,
@@ -3115,12 +3203,13 @@ def post_codex_approval(
     thread_ts: str,
     user_id: str,
     approval: dict[str, str],
+    backend: str = "codex",
 ) -> Any:
     """Show an approval only to its requester, except in an already-private DM."""
     message = {
         "channel": channel,
         "thread_ts": thread_ts,
-        "text": "Codex needs your approval to continue.",
+        "text": f"{backend_display_name(backend)} needs your approval to continue.",
         "blocks": approval_button_blocks(
             team=team,
             channel=channel,
@@ -3128,11 +3217,15 @@ def post_codex_approval(
             user_id=user_id,
             approval_id=approval["approval_id"],
             label=approval["label"],
+            backend=backend,
         ),
     }
     if is_direct_message_channel(channel):
         return client.chat_postMessage(**message)
     return client.chat_postEphemeral(user=user_id, **message)
+
+
+post_codex_approval = post_backend_approval
 
 
 def parse_slack_user_ids(value: str) -> frozenset[str]:
@@ -3239,10 +3332,14 @@ def print_live_summary(backend: str, allowed_user_ids: frozenset[str]) -> None:
         for channel_id in slack_channels.parse_channel_ids(channel_ids)
     ) or "(none configured)"
     invoke = {
-        "claude": "claude -p --dangerously-skip-permissions",
+        "claude": (
+            "Claude Agent SDK"
+            if rich_events_selected("claude")
+            else "claude -p --dangerously-skip-permissions"
+        ),
         "codex": (
             "codex app-server --stdio"
-            if os.getenv("OPENTAG_CODEX_TRANSPORT", "app-server").strip().lower() == "app-server"
+            if rich_events_selected("codex")
             else "codex exec --approve-for-me"
         ),
     }[backend]
@@ -3551,8 +3648,8 @@ def create_app(
                     )
                 except OSError as exc:
                     logger.warning("Could not record the orphaned Slack session: %s", exc)
-    settings_store = UserAgentSettingsStore()
-    models = discover_codex_models() if backend == "codex" else []
+    settings_store = UserAgentSettingsStore(backend=backend)
+    models = discover_models(backend)
 
     @app.event("app_home_opened")
     def show_app_home(event: dict[str, Any], client: Any, logger: Any) -> None:
@@ -3573,7 +3670,7 @@ def create_app(
 
     @app.action(APPROVAL_APPROVE_ACTION_ID)
     @app.action(APPROVAL_DENY_ACTION_ID)
-    def resolve_codex_approval(
+    def resolve_backend_approval(
         ack: Any,
         body: dict[str, Any],
         client: Any,
@@ -3633,7 +3730,7 @@ def create_app(
                 )
                 return
             result = "Approved once" if approved else "Denied"
-            text = f"{result}. Codex is continuing."
+            text = f"{result}. {backend_display_name(backend)} is continuing."
             respond(
                 text=text,
                 blocks=[{
@@ -3644,7 +3741,7 @@ def create_app(
                 replace_original=True,
             )
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-            logger.warning("Could not resolve Codex approval from Slack: %s", exc)
+            logger.warning("Could not resolve backend approval from Slack: %s", exc)
 
     @app.action(HOME_CHANNEL_ACTION_ID)
     def select_home_channel(ack: Any, body: dict[str, Any], client: Any, logger: Any) -> None:
@@ -3716,7 +3813,7 @@ def create_app(
             )
             client.views_open(
                 trigger_id=body["trigger_id"],
-                view=settings_modal(metadata=metadata, settings=settings, models=models),
+                view=settings_modal(metadata=metadata, settings=settings, models=models, backend=backend),
             )
         except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
             logger.warning("Could not open Open Tag settings modal: %s", exc)
@@ -3971,6 +4068,7 @@ def create_app(
                     ),
                     models=models,
                     revision=f"model_{time.time_ns()}",
+                    backend=backend,
                 ),
             )
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
@@ -4005,6 +4103,7 @@ def create_app(
                     settings=default_agent_settings(models),
                     models=models,
                     revision=f"reset_{time.time_ns()}",
+                    backend=backend,
                 ),
             )
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
@@ -4068,7 +4167,7 @@ def create_app(
                 channel=metadata["channel"],
                 user=body["user"]["id"],
                 thread_ts=metadata["thread_ts"],
-                text=f"Applied to your future Slack requests: {settings_context(settings, models)}.",
+                text=f"Applied to your future Slack requests: {settings_context(settings, models, backend)}.",
             )
         except Exception as exc:  # noqa: BLE001 - the setting is already durably saved
             logger.warning("Could not post Open Tag settings confirmation: %s", exc)
@@ -4206,10 +4305,7 @@ def create_app(
                     and indicator.native
                     and indicator.message_ts is None
                 )
-                app_server_selected = (
-                    backend == "codex"
-                    and os.getenv("OPENTAG_CODEX_TRANSPORT", "app-server").strip().lower() == "app-server"
-                )
+                app_server_selected = rich_events_selected(backend)
                 if app_server_selected:
                     try:
                         activity_run_id = activity_store.create(
@@ -4245,13 +4341,14 @@ def create_app(
                         reasoning_effort=agent_settings.reasoning_effort,
                         on_answer_start=indicator.answer_started,
                         on_status=indicator.status,
-                        on_approval=lambda approval: post_codex_approval(
+                        on_approval=lambda approval: post_backend_approval(
                             client,
                             team=team,
                             channel=channel,
                             thread_ts=thread_ts,
                             user_id=user_id,
                             approval=approval,
+                            backend=backend,
                         ),
                         fast_mode=agent_settings.fast_mode,
                         output_manifest=output_manifest,
@@ -4315,7 +4412,7 @@ def create_app(
                 indicator.clear()
                 if succeeded:
                     footer_blocks = artifact_button_blocks
-                    if backend == "codex":
+                    if backend in BACKEND_NAMES:
                         footer_blocks = combine_reply_actions(
                             artifact_button_blocks,
                             settings_button_blocks(

@@ -10,8 +10,8 @@ unavailable behavior.
 | Respond to app mentions | Implemented | The caller must be in `SLACK_ALLOWED_USER_IDS`. |
 | Read the current thread | Implemented | Tag fetches one page containing up to 30 messages. |
 | Read supported attachments | Implemented | Includes [forwarded Slack files](../concepts/workspaces-and-tools.md#use-a-forwarded-slack-file). Text content is truncated at 12,000 characters per item; downloaded image or text files are limited to 15 MiB. |
-| Stream answer text | Backend-dependent | Claude streams text deltas; Codex App Server streams final-answer deltas and observed activity. |
-| Watch live activity | Implemented with App Server | Readable tool steps appear in the Slack thread while Codex works. See [Watch Tag work](#watch-tag-work). |
+| Stream answer text | Implemented | Codex App Server and the Claude Agent SDK stream only final-answer text; commentary and reasoning stay private. |
+| Watch live activity | Implemented with App Server or Agent SDK | Readable tool steps appear in the Slack thread while the agent works. See [Watch Tag work](#watch-tag-work). |
 | Continue with thread context | Implemented | A later mention receives the current bounded thread context. |
 | Post a requested top-level message | Implemented | Restricted to the channel that invoked Tag. |
 | Create a requested Slack Canvas | Implemented | Requires the Slack Canvas scope and explicit user intent. |
@@ -24,7 +24,7 @@ unavailable behavior.
 | Capability | Status | Notes |
 | --- | --- | --- |
 | Codex CLI backend | Supported path | Used by the v0.1 launch qualification. |
-| Claude Code backend | Experimental | Requires an authenticated local Claude CLI session. |
+| Claude Code backend | Experimental | Uses the Claude Agent SDK with an authenticated local Claude CLI session; supports the same streaming, activity, approval, Stop, and settings controls as Codex App Server. |
 | Inspect and change workspace files | Implemented | Uses the permissions of the backend process. |
 | Run workspace commands and tests | Implemented | Available when the selected backend can perform them. |
 | Use installed local tools and skills | Available | Each tool uses its own credentials and grants. |
@@ -93,8 +93,9 @@ succeeded; review the final answer and any error message for the outcome.
 Everyone who can see the thread can see these short activity descriptions,
 including file names. Full tool inputs and results are not shown in the thread.
 The separate **Activity** button is currently hidden; a developer view may return
-in a future release. Live tool activity requires Codex App Server; the legacy
-Codex exec and Claude backends do not show these tool rows.
+in a future release. Live tool activity requires Codex App Server or the
+Claude Agent SDK; the legacy Codex exec and Claude print transports do not show
+these tool rows.
 
 For the full end-to-end behavior, see
 [Connected user flows](../user-flows.md). For configuration and exact backend

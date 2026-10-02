@@ -268,7 +268,7 @@ Runtime behavior:
   thread continues with that thread's context.
 - The bridge strips the mention before sending the request to the backend.
 - Slack's native loading indicator is used while work is in progress.
-- Claude can stream answer text. Codex uses App Server by default to stream
+- Codex (App Server) and Claude (Agent SDK) stream
   final-answer deltas and show compact **Agent activity** rows with readable
   command and file descriptions. Repeated steps are grouped, and successful
   tasks finish with a completed card. Shared replies omit
@@ -539,11 +539,12 @@ sequenceDiagram
 Settings are user-specific, so each authorized teammate can choose a model,
 reasoning level, and Fast Mode without changing another teammate's settings.
 Saved choices follow that user across channels and threads and survive bridge
-restarts. Reasoning levels retain the names reported by Codex; Fast Mode is an
-independent latency setting that uses increased usage. “Default” delegates
-model or reasoning selection to the Codex CLI. If a saved choice is no longer
-available, Tag normalizes it back to the applicable default. Claude replies do
-not show this control.
+restarts. Reasoning levels retain the names reported by the selected backend;
+Fast Mode is an independent latency setting that uses increased usage.
+“Default” delegates model or reasoning selection to the backend CLI. If a saved
+choice is no longer available, Tag normalizes it back to the applicable default.
+Codex and Claude choices are saved separately, so switching the backend does
+not discard either set.
 
 ## Flow 8: Denials, failures, and recovery
 
@@ -702,9 +703,9 @@ isolated chat location. Skip an optional step when its dependency is not set up.
 | Image attachment understanding | Implemented bridge path | Images up to 15 MB are downloaded temporarily; successful interpretation still depends on the selected backend/model. |
 | Generated-file delivery | Implemented | Only explicitly declared regular files inside the workspace are uploaded to the invoking thread and returned as private Slack file links; each file is limited to 15 MB. |
 | Generated-image upload to Slack | Implemented bridge path | The backend saves up to 10 final PNG, JPEG, GIF, or WebP files in the invocation's dedicated result directory; the bridge validates files up to 15 MB and uploads them to the requesting thread. |
-| Slack loading state and answers | Implemented | Claude streams text deltas; Codex App Server streams final-answer deltas and observed activity. |
+| Slack loading state and answers | Implemented | Codex App Server and the Claude Agent SDK stream final-answer deltas and observed activity. |
 | Long-answer splitting | Implemented | Results remain in the invoking thread. |
-| Model/reasoning/Fast Mode settings | Implemented for Codex | Requires Slack interactivity and a reinstalled updated manifest; Fast Mode uses increased usage. |
+| Model/reasoning/Fast Mode settings | Implemented for Codex and Claude | Requires Slack interactivity and a reinstalled updated manifest; Fast Mode uses increased usage. |
 | Top-level channel posts | Implemented on explicit request | Restricted to the invoking channel. |
 | Slack Canvas creation | Implemented on explicit request | Restricted to the invoking channel; `canvases:write` required. |
 | Slack MFS search/read | Implemented; live acceptance pending | Setup creates selected-channel scopes; each reply receives only its current channel's Slack scope. ADR 0001 still applies. |

@@ -4,36 +4,46 @@ Tag treats the backend as the Brain: a non-interactive CLI process that can
 read the prompt, use the workspace, call MFS helpers, and return a Slack-ready
 answer. Choose the backend explicitly for each deployment.
 
-## Built-In Backend: Claude Print Mode
+## Built-In Backend: Claude Agent SDK
 
 Use this backend when the operator has a working `claude` CLI session:
 
 ```bash
 python scripts/opentag_agent.py \
   --backend claude \
+  --event-stream \
   --question "Summarize this thread and list the next action." \
   --channel-id "$SLACK_CHANNEL_ID" \
   --thread-file /tmp/thread.txt \
   --workdir /path/to/repo
 ```
 
-The runner invokes:
+The Slack bridge runs one Claude Agent SDK session per request
+(`scripts/claude_agent_backend.py`). It uses the operator's `claude` executable
+when present, `--add-dir` access to the skill and attachment directories, the
+`auto` permission mode, and the workspace `.mcp.json` servers. The session
+emits the same normalized events as Codex App Server: final-answer deltas,
+sanitized activity, Slack approval requests, and terminal status. Slack Stop
+interrupts the session, and per-user model, thinking, and Fast Mode choices
+come from the signed-in account's model catalog. See
+[ADR 0008](../docs/adr/0008-claude-agent-sdk.md).
+
+`OPENTAG_CLAUDE_PERMISSION_MODE` selects `auto` (default), `acceptEdits`,
+`default`, `dontAsk`, or `bypassPermissions`. Anything Claude would ask about is
+sent privately to the requester as a one-time approval.
+
+Set `OPENTAG_CLAUDE_TRANSPORT=print` to roll back to the previous print mode:
 
 ```bash
 claude -p \
   --dangerously-skip-permissions \
   --add-dir <workdir> \
   --add-dir <skill-dir> \
-  --add-dir <memory-root> \
   <prompt>
 ```
 
-Availability depends on the operator's account and local CLI setup.
-
-Unless `OPENTAG_SLACK_STREAMING=0`, the Slack bridge invokes Claude with
-`--output-format stream-json --include-partial-messages`. Tag forwards only
-top-level text deltas and the final result through its normalized event stream;
-thinking blocks, tool events, hook output, and subagent text are not forwarded.
+Print mode forwards top-level text deltas and the final result only; it has no
+activity rows, approvals, Stop confirmation, or settings control.
 
 ## Built-In Backend: Codex Exec
 
@@ -81,8 +91,10 @@ complete response without a fake typewriter animation.
   workspace.
 - Keep the Slack bridge thin: backend-specific behavior belongs in
   `opentag_agent.py`, not in Slack event handling.
-- Keep the normalized event contract limited to `status`, `delta`, `final`, and
-  `error`; chat transports must never parse backend-native event payloads.
+- Keep the normalized event contract backend-neutral (`status`, `delta`,
+  `final`, `error`, plus the richer `message_*`, `activity_*`,
+  `approval_request`, and `turn_complete` events); chat transports must never
+  parse backend-native event payloads.
 
 Generated images use a file handoff rather than a new stream event. For each
 Slack invocation, the prompt names a temporary `results/images` directory. A

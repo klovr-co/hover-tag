@@ -1642,7 +1642,23 @@ def finish_setup(_config_path: Path, values: dict[str, str], _channels: list[sla
                 )
         ui.message("✓ Codex signed in · first task still unverified")
     else:
-        ui.message("✓ Claude executable available · sign-in will be checked by its first task")
+        backend_environment = without_telemetry_environment(os.environ)
+        while subprocess.run(
+            [shutil.which("claude") or "claude", "auth", "status"],
+            capture_output=True,
+            env=backend_environment,
+        ).returncode:
+            ui.message("Claude needs sign-in. Your Slack and memory choices are saved.")
+            action = ui.choose("Sign in to continue", ["Open Claude sign-in", "Check again", "Save and exit"])
+            if action == 2:
+                raise ui.Paused()
+            if action == 0:
+                subprocess.run(
+                    [shutil.which("claude") or "claude", "auth", "login"],
+                    check=False,
+                    env=backend_environment,
+                )
+        ui.message("✓ Claude signed in · first task still unverified")
     print()
     ui.message("✓ Setup complete. No services were started and no history was indexed.")
     if len(set(values.get("SLACK_ALLOWED_USER_IDS", "").split(","))) == 1 and values.get("SLACK_ALLOWED_USER_IDS"):

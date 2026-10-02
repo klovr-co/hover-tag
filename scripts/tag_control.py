@@ -273,7 +273,7 @@ def _settings_menu(home: Path) -> None:
         ("Agent", ("OPENTAG_BACKEND",)),
         ("Advanced", ("OPENTAG_TIMEOUT_SECONDS", "OPENTAG_MAX_TIMEOUT_SECONDS", "OPENTAG_BACKEND_ATTEMPTS", "OPENTAG_SLACK_STREAMING",
                       "OPENTAG_SLACK_DM_ENABLED",
-                      "OPENTAG_CODEX_TRANSPORT")),
+                      "OPENTAG_CODEX_TRANSPORT", "OPENTAG_CLAUDE_TRANSPORT", "OPENTAG_CLAUDE_PERMISSION_MODE")),
     )
     while True:
         tag_id = os.getenv("TAG_ID", "default")

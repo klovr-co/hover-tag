@@ -1009,6 +1009,7 @@ class SlackOutputArtifactTests(unittest.TestCase):
                     "SLACK_BOT_TOKEN": "xoxb-test",
                     "SLACK_CHANNEL_IDS": "C123",
                     "OPENTAG_SLACK_STREAMING": "0",
+                    "OPENTAG_CLAUDE_TRANSPORT": "print",
                 },
                 clear=True,
             ), patch.object(
@@ -1047,8 +1048,10 @@ class SlackOutputArtifactTests(unittest.TestCase):
         posted_blocks = client.chat_postMessage.call_args.kwargs["blocks"]
         actions = [element for block in posted_blocks if block["type"] == "actions"
                    for element in block["elements"]]
-        self.assertEqual(len(actions), 1)
-        self.assertEqual(actions[0]["action_id"], slack_socket_agent.OPEN_LOCAL_ARTIFACT_DIRECTORY_ACTION_ID)
+        self.assertEqual(
+            [action["action_id"] for action in actions],
+            [slack_socket_agent.OPEN_LOCAL_ARTIFACT_DIRECTORY_ACTION_ID, slack_socket_agent.SETTINGS_ACTION_ID],
+        )
         self.assertEqual(actions[0]["text"]["text"], "📁 Open folder")
 
 
@@ -1111,6 +1114,7 @@ class SlackGeneratedImageTests(unittest.TestCase):
                 "SLACK_BOT_TOKEN": "xoxb-test",
                 "SLACK_CHANNEL_IDS": "C123",
                 "OPENTAG_SLACK_STREAMING": "0",
+                "OPENTAG_CLAUDE_TRANSPORT": "print",
             },
             clear=True,
         ), patch.object(
@@ -1127,13 +1131,10 @@ class SlackGeneratedImageTests(unittest.TestCase):
                 MagicMock(),
             )
 
-        client.chat_postMessage.assert_called_once_with(
-            channel="C123",
-            thread_ts="1.23",
-            text="Here is the chart.",
-            mrkdwn=True,
-            blocks=None,
-        )
+        client.chat_postMessage.assert_called_once()
+        posted = client.chat_postMessage.call_args.kwargs
+        self.assertEqual(("C123", "1.23", "Here is the chart."), (posted["channel"], posted["thread_ts"], posted["text"]))
+        self.assertEqual(posted["blocks"][-1]["elements"][0]["action_id"], slack_socket_agent.SETTINGS_ACTION_ID)
         upload = client.files_upload_v2.call_args.kwargs
         self.assertEqual("C123", upload["channel"])
         self.assertEqual("1.23", upload["thread_ts"])
@@ -1883,6 +1884,7 @@ class SlackCrossChannelSearchTests(unittest.TestCase):
                     "slack://tag-t123/channels/old-support__C456"
                 ),
                 "OPENTAG_SLACK_STREAMING": "0",
+                "OPENTAG_CLAUDE_TRANSPORT": "print",
             },
             clear=True,
         ), patch(
@@ -1927,6 +1929,7 @@ class SlackCrossChannelSearchTests(unittest.TestCase):
                     "slack://tag-t123/channels/support__C456"
                 ),
                 "OPENTAG_SLACK_STREAMING": "0",
+                "OPENTAG_CLAUDE_TRANSPORT": "print",
             },
             clear=True,
         ), patch(
@@ -1972,6 +1975,7 @@ class SlackCrossChannelSearchTests(unittest.TestCase):
                 "SLACK_BOT_TOKEN": "xoxb-test",
                 "SLACK_CHANNEL_IDS": "C123,C456",
                 "OPENTAG_SLACK_STREAMING": "0",
+                "OPENTAG_CLAUDE_TRANSPORT": "print",
             },
             clear=True,
         ), patch.object(
@@ -2209,6 +2213,7 @@ class SlackDirectMessageTests(unittest.TestCase):
                 "SLACK_CHANNEL_ID": "C-SANDBOX",
                 "OPENTAG_SLACK_DM_ENABLED": "1",
                 "OPENTAG_SLACK_STREAMING": "0",
+                "OPENTAG_CLAUDE_TRANSPORT": "print",
             },
             clear=True,
         ), patch.object(
@@ -3226,6 +3231,88 @@ class BackendEventRunnerTests(unittest.TestCase):
 
         self.assertFalse(succeeded)
         self.assertIn("did not confirm interruption", answer)
+
+
+class ClaudeBackendParityTests(unittest.TestCase):
+    def test_both_backends_select_rich_events_by_default_with_rollbacks(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertTrue(slack_socket_agent.rich_events_selected("codex"))
+            self.assertTrue(slack_socket_agent.rich_events_selected("claude"))
+        with patch.dict(os.environ, {"OPENTAG_CLAUDE_TRANSPORT": "print",
+                                     "OPENTAG_CODEX_TRANSPORT": "exec"}, clear=True):
+            self.assertFalse(slack_socket_agent.rich_events_selected("claude"))
+            self.assertFalse(slack_socket_agent.rich_events_selected("codex"))
+
+    def test_claude_run_receives_model_effort_and_fast_mode(self) -> None:
+        process = MagicMock()
+        process.stdout = iter([json.dumps({"type": "turn_complete", "status": "completed"}) + "\n"])
+        process.wait.return_value = 0
+        process.poll.return_value = None
+        with tempfile.TemporaryDirectory() as raw_dir, patch.object(
+            slack_socket_agent.subprocess, "Popen", return_value=process
+        ) as popen, patch.object(slack_socket_agent.threading, "Timer"), patch.object(
+            slack_socket_agent, "register_active_run"
+        ):
+            slack_socket_agent.run_backend_events(
+                "claude", "T123", "C123", "1.23", "U123", "question", "thread",
+                Path(raw_dir), 30, MagicMock(), model="opus", reasoning_effort="max", fast_mode=True,
+            )
+        command = popen.call_args.args[0]
+        self.assertEqual("claude", command[command.index("--backend") + 1])
+        self.assertEqual("opus", command[command.index("--model") + 1])
+        self.assertEqual("max", command[command.index("--reasoning-effort") + 1])
+        self.assertEqual("on", command[command.index("--fast-mode") + 1])
+
+    def test_claude_models_come_from_the_signed_in_account(self) -> None:
+        catalog = [
+            {"model": "default", "displayName": "Default (recommended)", "isDefault": True,
+             "supportedEfforts": ["low", "medium", "high", "max"], "supportsFastMode": False},
+            {"model": "opus", "displayName": "Opus", "isDefault": False,
+             "supportedEfforts": ["low", "high", "xhigh"], "supportsFastMode": True},
+            {"model": "haiku", "displayName": "Haiku", "isDefault": False,
+             "supportedEfforts": [], "supportsFastMode": False},
+        ]
+        with patch.dict(os.environ, {}, clear=True), patch.object(
+            slack_socket_agent, "fetch_claude_model_catalog", return_value=catalog
+        ):
+            models = slack_socket_agent.discover_models("claude")
+        self.assertEqual(["default", "opus", "haiku"], [item.model_id for item in models])
+        defaults = slack_socket_agent.default_agent_settings(models)
+        self.assertEqual(("default", "high", False), (defaults.model, defaults.reasoning_effort, defaults.fast_mode))
+        self.assertTrue(slack_socket_agent.fast_mode_available("opus", models))
+        self.assertEqual((), slack_socket_agent.efforts_for_model("haiku", models))
+        modal = slack_socket_agent.settings_modal(
+            metadata={}, settings=slack_socket_agent.AgentSettings(), models=models, backend="claude",
+        )
+        self.assertEqual("Claude settings", modal["title"]["text"])
+
+    def test_unavailable_claude_catalog_still_offers_cli_default(self) -> None:
+        with patch.dict(os.environ, {}, clear=True), patch.object(
+            slack_socket_agent, "fetch_claude_model_catalog", return_value=None
+        ):
+            models = slack_socket_agent.discover_models("claude")
+        self.assertEqual([("default", True)], [(item.model_id, item.is_default) for item in models])
+
+    def test_backend_settings_are_kept_separately_and_codex_keys_are_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            path = Path(raw_dir) / "settings.json"
+            codex = slack_socket_agent.UserAgentSettingsStore(path, backend="codex")
+            claude = slack_socket_agent.UserAgentSettingsStore(path, backend="claude")
+            codex.set("T1", "U1", slack_socket_agent.AgentSettings(model="gpt-5"))
+            claude.set("T1", "U1", slack_socket_agent.AgentSettings(model="opus"))
+            self.assertEqual("gpt-5", codex.get("T1", "U1").model)
+            self.assertEqual("opus", claude.get("T1", "U1").model)
+            self.assertEqual({"T1:U1", "T1:U1:claude"}, set(json.loads(path.read_text())))
+
+    def test_claude_approval_names_the_backend_and_tool_label(self) -> None:
+        blocks = slack_socket_agent.approval_button_blocks(
+            team="T1", channel="C1", thread_ts="1.2", user_id="U1", approval_id="a" * 32,
+            label="use a tool that requires approval", backend="claude",
+        )
+        self.assertEqual(
+            "*Claude needs approval* to use a tool that requires approval. Approve only if you expect this request.",
+            blocks[0]["text"]["text"],
+        )
 
 
 class SlackCancellationTests(unittest.TestCase):

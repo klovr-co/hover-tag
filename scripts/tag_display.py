@@ -287,16 +287,15 @@ def backend_status(backend="codex", *, search_path=None):
     executable = shutil.which(backend, path=search_path)
     if not executable:
         return "Not installed", False
-    if backend == "claude":
-        return "Experimental · sign-in not checked", False
+    command = [executable, "auth", "status"] if backend == "claude" else [executable, "login", "status"]
     try:
-        result = subprocess.run([executable, "login", "status"], capture_output=True,
+        result = subprocess.run(command, capture_output=True,
                                 text=True, timeout=3, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.TimeoutExpired):
         return "Sign-in check unavailable", False
     if result.returncode == 0:
         return "Signed in · task not tested", True
-    return "Sign-in unverified · run codex login status", False
+    return f"Sign-in unverified · run {backend} {' '.join(command[1:])}", False
 
 
 def styled(text, code):
