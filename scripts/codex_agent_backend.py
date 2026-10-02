@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import queue
+import re
 import subprocess
 import threading
 import time
@@ -26,6 +27,7 @@ try:
         activity_label,
     )
     from .tag_activity_details import item_activity_details
+    from .tag_approval_choices import approval_choices, public_approval_choices, auto_review_details
 except ImportError:  # Direct script execution does not create a package context.
     from agent_activity import (
         APPROVAL_POLL_SECONDS,
@@ -35,6 +37,7 @@ except ImportError:  # Direct script execution does not create a package context
         activity_label,
     )
     from tag_activity_details import item_activity_details
+    from tag_approval_choices import approval_choices, public_approval_choices, auto_review_details
 
 
 # Prompts are controlled by Tag, while completed tool and image events may
@@ -44,6 +47,8 @@ MAX_REQUEST_LINE_BYTES = 1024 * 1024
 MAX_RESPONSE_LINE_BYTES = 32 * 1024 * 1024
 MAX_STDERR_BYTES = 64 * 1024
 REQUEST_TIMEOUT_SECONDS = 60.0
+AUTO_REVIEW_RETRY_LABEL = "retry an action denied by automatic review"
+MAX_AUTO_REVIEW_APPROVALS = 10
 
 APPROVAL_REQUEST_LABELS = {
     "item/commandExecution/requestApproval": "run a command outside the workspace sandbox",
@@ -259,6 +264,9 @@ class CodexAppServer:
         self.turn_id: str | None = None
         self.interrupt_sent = False
         self.reader_threads: list[threading.Thread] = []
+        self.auto_review_denials: list[dict[str, Any]] = []
+        self.seen_auto_reviews: set[str] = set()
+        self.held_auto_review_messages: list[dict[str, Any]] = []
 
     def model_catalog(self) -> list[dict[str, Any]]:
         """Read models for the signed-in account without creating a thread or turn."""
@@ -301,7 +309,8 @@ class CodexAppServer:
         try:
             self._request(
                 "initialize",
-                {"clientInfo": {"name": "tag", "title": "Tag", "version": "0.1"}},
+                {"clientInfo": {"name": "tag", "title": "Tag", "version": "0.1"},
+                 "capabilities": {"experimentalApi": True}},
                 mapper,
                 emit,
                 max_deadline,
@@ -447,8 +456,12 @@ class CodexAppServer:
     ) -> bool:
         if "method" in message and "id" in message:
             return self._resolve_server_request(message, emit=emit, deadline=deadline)
+        self._remember_auto_review(message)
         for event in mapper.map(message):
-            emit(event)
+            if self.auto_review_denials and event.get("type", "").startswith("message_"):
+                self.held_auto_review_messages.append(event)
+            else:
+                emit(event)
         return False
 
     def _consume_turn(
@@ -458,6 +471,7 @@ class CodexAppServer:
         idle_deadline: float,
         max_deadline: float,
     ) -> tuple[str, str]:
+        held_messages = self.held_auto_review_messages
         timed_out = False
         timeout_detail = ""
         interrupt_deadline = float("inf")
@@ -482,18 +496,126 @@ class CodexAppServer:
                     return "timeout", f"{timeout_detail}; {suffix}"
                 raise
             if "method" in message and "id" not in message:
+                self._remember_auto_review(message)
                 events = mapper.map(message)
                 if self._is_progress_notification(message) and not timed_out:
                     idle_deadline = time.monotonic() + self.timeout
                 for event in events:
-                    emit(event)
                     if event.get("type") == "turn_complete":
+                        if (not timed_out and not self.interrupt_sent
+                                and event.get("status") == "completed"
+                                and self._approve_auto_review_denials(mapper, emit, max_deadline)):
+                            held_messages.clear()
+                            mapper = CodexEventMapper()
+                            self.turn_id = None
+                            result = self._request("turn/start", {
+                                "threadId": self.thread_id,
+                                "input": [{"type": "text", "text":
+                                    "Retry only the exact denied action explicitly approved through "
+                                    "the preceding approval marker, then continue the original task. "
+                                    "Keep automatic review enabled and respect any further denial."}],
+                            }, mapper, emit, max_deadline)
+                            turn = result.get("turn") if isinstance(result, dict) else None
+                            if not isinstance(turn, dict) or not isinstance(turn.get("id"), str):
+                                raise CodexAppServerError("Codex returned an invalid retry turn")
+                            self.turn_id = turn["id"]
+                            idle_deadline = time.monotonic() + self.timeout
+                            break
+                        for held in held_messages:
+                            emit(held)
+                        held_messages.clear()
+                        emit(event)
                         if timed_out:
                             return "timeout", timeout_detail
+                        if self.interrupt_sent:
+                            return "interrupted", ""
                         return str(event.get("status", "failed")), str(event.get("text", ""))
+                    if self.auto_review_denials and event.get("type", "").startswith("message_"):
+                        held_messages.append(event)
+                    else:
+                        emit(event)
                 continue
             if self._dispatch(message, mapper, emit, max_deadline) and not timed_out:
                 idle_deadline = time.monotonic() + self.timeout
+
+    def _remember_auto_review(self, message: dict[str, Any]) -> None:
+        """Retain exact denials locally; Slack receives only a separate redacted preview."""
+        if message.get("method") != "item/autoApprovalReview/completed" or self.approval_dir is None:
+            return
+        params = message.get("params")
+        if not isinstance(params, dict) or params.get("threadId") != self.thread_id:
+            return
+        if not isinstance(params.get("turnId"), str) or not params["turnId"]:
+            return
+        if self.turn_id is not None and params.get("turnId") != self.turn_id:
+            return
+        review, action = params.get("review"), params.get("action")
+        review_id = params.get("reviewId")
+        if (not isinstance(review, dict) or review.get("status") != "denied"
+                or not isinstance(action, dict) or not isinstance(review_id, str) or not review_id
+                or review_id in self.seen_auto_reviews
+                or len(self.seen_auto_reviews) >= MAX_AUTO_REVIEW_APPROVALS):
+            return
+        # The override takes the core protocol's snake_case action, not the
+        # app-server's camelCase action. Unknown variants fail closed.
+        variants = {
+            "command": ("command", ("command", "cwd", "source")),
+            "execve": ("execve", ("program", "argv", "cwd", "source")),
+            "writeStdin": ("write_stdin", ("approvalId", "processId", "stdin", "cwd")),
+            "applyPatch": ("apply_patch", ("cwd", "files")),
+            "networkAccess": ("network_access", ("target", "host", "protocol", "port")),
+            "mcpToolCall": ("mcp_tool_call", ("server", "toolName")),
+        }
+        action_type = action.get("type")
+        if not isinstance(action_type, str):
+            return
+        variant = variants.get(action_type)
+        if variant is None or any(key not in action for key in variant[1]):
+            return
+        def snake(key: str) -> str:
+            return re.sub(r"(?<!^)(?=[A-Z])", "_", key).lower()
+        core_action = {snake(key): value for key, value in action.items()}
+        core_action["type"] = variant[0]
+        if core_action.get("source") == "unifiedExec":
+            core_action["source"] = "unified_exec"
+        event = {
+            "id": review_id, "turn_id": params.get("turnId"),
+            "target_item_id": params.get("targetItemId"),
+            "started_at_ms": params.get("startedAtMs", 0),
+            "completed_at_ms": params.get("completedAtMs"),
+            "status": "denied", "risk_level": review.get("riskLevel"),
+            "user_authorization": review.get("userAuthorization"),
+            "rationale": review.get("rationale"), "action": core_action,
+        }
+        self.seen_auto_reviews.add(review_id)
+        self.auto_review_denials.append(event)
+
+    def _approve_auto_review_denials(
+        self, mapper: CodexEventMapper, emit: Callable[[dict[str, Any]], None], deadline: float,
+    ) -> bool:
+        denials, self.auto_review_denials = self.auto_review_denials, []
+        approved_any = False
+        for event in denials:
+            self._check_control()
+            if self.interrupt_sent or time.monotonic() >= deadline:
+                break
+            approval_id = uuid.uuid4().hex
+            emit({"type": "approval_request", "approval_id": approval_id,
+                  "label": AUTO_REVIEW_RETRY_LABEL, "review_details": auto_review_details(event)})
+            approved = self._wait_for_approval(
+                approval_id, min(deadline, time.monotonic() + APPROVAL_TIMEOUT_SECONDS),
+            )
+            emit({"type": "approval_expired", "approval_id": approval_id})
+            if approved and not self.interrupt_sent and time.monotonic() < deadline:
+                try:
+                    self._request("thread/approveGuardianDeniedAction", {
+                        "threadId": self.thread_id, "event": event,
+                    }, mapper, emit, deadline)
+                except CodexAppServerError:
+                    # A rejected override grants no retry; preserve the held answer.
+                    continue
+                approved_any = True
+        return approved_any and not self.interrupt_sent and time.monotonic() < deadline
 
     @staticmethod
     def _is_progress_notification(message: dict[str, Any]) -> bool:
@@ -522,23 +644,26 @@ class CodexAppServer:
             and deadline is not None
         ):
             approval_id = uuid.uuid4().hex
-            emit({
-                "type": "approval_request",
-                "approval_id": approval_id,
-                "label": APPROVAL_REQUEST_LABELS[method],
-            })
-            approved = self._wait_for_approval(
-                approval_id,
-                min(deadline, time.monotonic() + APPROVAL_TIMEOUT_SECONDS),
-            )
-            self._send({
-                "id": request_id,
-                "result": self._approval_result(
-                    method,
-                    params if isinstance(params, dict) else {},
-                    approved,
-                ),
-            })
+            request_params = params if isinstance(params, dict) else {}
+            choices = approval_choices(method, request_params)
+            result = self._approval_result(method, request_params, False)
+            if choices:
+                emit({
+                    "type": "approval_request", "approval_id": approval_id,
+                    "label": APPROVAL_REQUEST_LABELS[method],
+                    "choices": public_approval_choices(choices),
+                })
+                try:
+                    selected = self._wait_for_approval_decision(
+                        approval_id, min(deadline, time.monotonic() + APPROVAL_TIMEOUT_SECONDS),
+                    )
+                finally:
+                    emit({"type": "approval_expired", "approval_id": approval_id})
+                choice = next((c for c in choices if c["id"] == selected.get("choice")), None)
+                self._check_control()
+                if choice is not None and not self.interrupt_sent and time.monotonic() < deadline:
+                    result = choice["result"]
+            self._send({"id": request_id, "result": result})
             return True
         responses: dict[str, dict[str, Any]] = {
             "item/commandExecution/requestApproval": {"decision": "decline"},
@@ -559,12 +684,15 @@ class CodexAppServer:
         return False
 
     def _wait_for_approval(self, approval_id: str, deadline: float) -> bool:
+        return self._wait_for_approval_decision(approval_id, deadline).get("decision") == "approve"
+
+    def _wait_for_approval_decision(self, approval_id: str, deadline: float) -> dict[str, Any]:
         assert self.approval_dir is not None
         decision_file = self.approval_dir / f"{approval_id}.json"
         while time.monotonic() < deadline:
             self._check_control()
             if self.interrupt_sent:
-                return False
+                return {}
             try:
                 payload = json.loads(decision_file.read_text(encoding="utf-8"))
             except FileNotFoundError:
@@ -572,10 +700,12 @@ class CodexAppServer:
                 continue
             except (OSError, json.JSONDecodeError):
                 decision_file.unlink(missing_ok=True)
-                return False
+                return {}
             decision_file.unlink(missing_ok=True)
-            return isinstance(payload, dict) and payload.get("decision") == "approve"
-        return False
+            if time.monotonic() >= deadline:
+                return {}
+            return payload if isinstance(payload, dict) else {}
+        return {}
 
     @staticmethod
     def _approval_result(method: str, params: dict[str, Any], approved: bool) -> dict[str, Any]:

@@ -279,7 +279,7 @@ class ServerRequestTests(unittest.TestCase):
             approval_dir = Path(raw_dir)
             approval_id = "a" * 32
             (approval_dir / f"{approval_id}.json").write_text(
-                json.dumps({"decision": "approve"}), encoding="utf-8"
+                json.dumps({"choice": "0"}), encoding="utf-8"
             )
             server = CodexAppServer(
                 ["codex"], cwd=Path(raw_dir), timeout=1, approval_dir=approval_dir
@@ -300,14 +300,11 @@ class ServerRequestTests(unittest.TestCase):
                 )
 
         self.assertTrue(handled)
-        self.assertEqual(
-            [{
-                "type": "approval_request",
-                "approval_id": approval_id,
-                "label": "run a command outside the workspace sandbox",
-            }],
-            emitted,
-        )
+        self.assertEqual("approval_request", emitted[0]["type"])
+        self.assertEqual(approval_id, emitted[0]["approval_id"])
+        self.assertEqual(["Allow once", "Allow for this task", "Deny", "Deny and stop"],
+                         [c["label"] for c in emitted[0]["choices"]])
+        self.assertEqual("approval_expired", emitted[-1]["type"])
         self.assertNotIn("private command", json.dumps(emitted))
         server._send.assert_called_once_with({"id": 8, "result": {"decision": "accept"}})
 
@@ -337,7 +334,7 @@ class ServerRequestTests(unittest.TestCase):
                 ["codex"], cwd=Path(raw_dir), timeout=1, approval_dir=Path(raw_dir)
             )
             server._send = MagicMock()  # type: ignore[method-assign]
-            server._wait_for_approval = MagicMock(return_value=False)  # type: ignore[method-assign]
+            server._wait_for_approval_decision = MagicMock(return_value={})  # type: ignore[method-assign]
 
             for outer_deadline, expected_deadline in [
                 (10_000.0, 100.0 + APPROVAL_TIMEOUT_SECONDS),
@@ -358,7 +355,7 @@ class ServerRequestTests(unittest.TestCase):
 
                 self.assertEqual(
                     expected_deadline,
-                    server._wait_for_approval.call_args.args[1],
+                    server._wait_for_approval_decision.call_args.args[1],
                 )
 
     def test_unknown_server_request_gets_json_rpc_error(self) -> None:
@@ -369,6 +366,164 @@ class ServerRequestTests(unittest.TestCase):
 
         payload = server._send.call_args.args[0]
         self.assertEqual(-32601, payload["error"]["code"])
+
+
+class AutoReviewTests(unittest.TestCase):
+    def denial(self, **overrides):
+        params = {
+            "threadId": "thread-1", "turnId": "turn-1", "reviewId": "review-1",
+            "startedAtMs": 1, "completedAtMs": 2,
+            "review": {"status": "denied", "rationale": "private rationale"},
+            "action": {"type": "mcpToolCall", "server": "chrome",
+                       "toolName": "connect", "connectorId": "private-id"},
+        }
+        params.update(overrides)
+        return {"method": "item/autoApprovalReview/completed", "params": params}
+
+    def server(self, root):
+        server = CodexAppServer(["codex"], cwd=root, timeout=5, approval_dir=root)
+        server.thread_id, server.turn_id = "thread-1", "turn-1"
+        return server
+
+    def test_only_matching_supported_denials_are_retained_once(self):
+        server = self.server(Path("/tmp"))
+        for override in [{"threadId": "other"}, {"turnId": "old"},
+                         {"review": {"status": "approved"}},
+                         {"action": {"type": "futureAction"}},
+                         {"action": {"type": "command"}}]:
+            server._remember_auto_review(self.denial(**override))
+        self.assertEqual([], server.auto_review_denials)
+        server._remember_auto_review(self.denial())
+        server._remember_auto_review(self.denial())
+        self.assertEqual(1, len(server.auto_review_denials))
+        event = server.auto_review_denials[0]
+        self.assertEqual("mcp_tool_call", event["action"]["type"])
+        self.assertEqual("connect", event["action"]["tool_name"])
+        self.assertEqual("private-id", event["action"]["connector_id"])
+
+    def test_early_denial_buffers_answer_and_caps_offers(self):
+        server = self.server(Path("/tmp"))
+        mapper = CodexEventMapper()
+        emitted = []
+        server._dispatch(self.denial(), mapper, emitted.append, time.monotonic() + 5)
+        server._dispatch({"method": "item/completed", "params": {"item": {
+            "id": "answer", "type": "agentMessage", "phase": "final_answer",
+            "text": "blocked answer",
+        }}}, mapper, emitted.append, time.monotonic() + 5)
+        self.assertEqual([], emitted)
+        self.assertEqual("blocked answer", server.held_auto_review_messages[0]["text"])
+        for index in range(20):
+            server._remember_auto_review(self.denial(reviewId=f"extra-{index}"))
+        self.assertEqual(10, len(server.auto_review_denials))
+
+    def test_command_enum_conversion_does_not_rewrite_command_text(self):
+        server = self.server(Path("/tmp"))
+        server._remember_auto_review(self.denial(action={
+            "type": "command", "source": "unifiedExec", "cwd": "/tmp",
+            "command": "echo toolName unifiedExec",
+        }))
+        self.assertEqual({"type": "command", "source": "unified_exec", "cwd": "/tmp",
+                          "command": "echo toolName unifiedExec"},
+                         server.auto_review_denials[0]["action"])
+
+    def test_approval_is_exact_private_and_bounded(self):
+        server = self.server(Path("/tmp"))
+        server._remember_auto_review(self.denial())
+        exact = server.auto_review_denials[0]
+        server._wait_for_approval = MagicMock(return_value=True)
+        server._request = MagicMock(return_value={})
+        events = []
+        deadline = time.monotonic() + 5
+        self.assertTrue(server._approve_auto_review_denials(CodexEventMapper(), events.append, deadline))
+        args = server._request.call_args.args
+        self.assertEqual("thread/approveGuardianDeniedAction", args[0])
+        self.assertEqual({"threadId": "thread-1", "event": exact}, args[1])
+        self.assertLessEqual(server._wait_for_approval.call_args.args[1], deadline)
+        self.assertNotIn("private-id", json.dumps(events))
+        self.assertEqual({"action": "Use connected tool: chrome/connect", "reason": "private rationale"},
+                         events[0]["review_details"])
+        self.assertEqual("approval_expired", events[-1]["type"])
+        self.assertFalse(server._approve_auto_review_denials(CodexEventMapper(), events.append, deadline))
+        server._request.assert_called_once()
+
+    def test_dismiss_expiry_stop_and_unavailable_api_never_retry(self):
+        for mode in ("dismiss", "expired", "stopped", "unsupported"):
+            with self.subTest(mode=mode):
+                server = self.server(Path("/tmp"))
+                server._remember_auto_review(self.denial())
+                server._wait_for_approval = MagicMock(return_value=mode == "unsupported")
+                server._request = MagicMock(side_effect=CodexAppServerError("unsupported"))
+                server.interrupt_sent = mode == "stopped"
+                deadline = time.monotonic() + (-1 if mode == "expired" else 5)
+                self.assertFalse(server._approve_auto_review_denials(CodexEventMapper(), lambda e: None, deadline))
+                if mode == "unsupported":
+                    server._request.assert_called_once()
+                    self.assertEqual("thread/approveGuardianDeniedAction", server._request.call_args.args[0])
+                else:
+                    server._request.assert_not_called()
+
+    def test_wire_retry_preserves_thread_and_emits_only_retry_answer(self):
+        fake = r'''
+import json, sys
+turn = 0
+approved = False
+for line in sys.stdin:
+    m = json.loads(line)
+    method = m.get("method")
+    def send(p): print(json.dumps(p), flush=True)
+    if method == "initialize":
+        assert m["params"]["capabilities"]["experimentalApi"]
+        send({"id":m["id"], "result":{}})
+    elif method == "thread/start":
+        assert m["params"]["approvalsReviewer"] == "auto_review"
+        send({"id":m["id"], "result":{"thread":{"id":"thread-1"}}})
+    elif method == "thread/approveGuardianDeniedAction":
+        assert m["params"]["threadId"] == "thread-1"
+        event = m["params"]["event"]
+        assert event["id"] == "review-1"
+        assert event["action"]["tool_name"] == "connect"
+        if sys.argv[1] == "reject":
+            send({"id":m["id"], "error":{"code":-32601, "message":"unsupported"}})
+        else:
+            approved = True
+            send({"id":m["id"], "result":{}})
+    elif method == "turn/start":
+        turn += 1
+        assert m["params"]["threadId"] == "thread-1"
+        if turn > 1: assert approved
+        tid = "turn-" + str(turn)
+        send({"id":m["id"], "result":{"turn":{"id":tid}}})
+        if turn == 1:
+            send({"method":"item/autoApprovalReview/completed", "params":{
+                "threadId":"thread-1", "turnId":tid, "reviewId":"review-1",
+                "review":{"status":"denied"}, "action":{
+                    "type":"mcpToolCall", "server":"chrome", "toolName":"connect"}}})
+        send({"method":"item/completed", "params":{"item":{
+            "id":"answer-"+tid, "type":"agentMessage", "phase":"final_answer",
+            "text":"Created form" if approved else "Browser denied"}}})
+        send({"method":"turn/completed", "params":{"turn":{"id":tid,"status":"completed"}}})
+'''
+        for approve, reject in ((True, False), (False, False), (True, True)):
+            with self.subTest(approve=approve, reject=reject), tempfile.TemporaryDirectory() as raw:
+                root = Path(raw)
+                script = root / "server.py"
+                script.write_text(fake)
+                server = CodexAppServer([sys.executable, "-u", str(script),
+                                         "reject" if reject else "accept"], cwd=root,
+                                        timeout=5, max_timeout=10, approval_dir=root)
+                events = []
+                def emit(event):
+                    events.append(event)
+                    if event["type"] == "approval_request":
+                        (root / (event["approval_id"] + ".json")).write_text(json.dumps(
+                            {"decision": "approve" if approve else "deny"}))
+                self.assertEqual(("completed", ""), server.run("Create form", model=None,
+                                 reasoning_effort=None, emit=emit))
+                answers = [e["text"] for e in events if e["type"] == "message_complete"]
+                self.assertEqual(["Created form" if approve and not reject else "Browser denied"], answers)
+                self.assertEqual("turn-2" if approve and not reject else "turn-1", server.turn_id)
+                self.assertEqual(1, sum(e["type"] == "turn_complete" for e in events))
+                self.assertIsNotNone(server.process.poll())
 
 
 class AppServerWireTests(unittest.TestCase):
@@ -470,7 +625,8 @@ for raw in sys.stdin:
             server = CodexAppServer(
                 [sys.executable, "-u", str(self.fake_server_path(root))],
                 cwd=root,
-                timeout=5,
+                # Payload-size coverage must not depend on host throughput.
+                timeout=30,
             )
 
             status, detail = server.run(

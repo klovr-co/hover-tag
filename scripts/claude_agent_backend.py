@@ -410,6 +410,8 @@ class ClaudeAgentRun:
             self.stderr.append(line)
             del self.stderr[:-200]
 
+        # This adapter supports one-time SDK decisions only; it exposes no
+        # persistent/session grants or automatic-review denial retry protocol.
         async def can_use_tool(tool_name: str, tool_input: dict[str, Any], _context: Any) -> Any:
             if tool_name in INTERACTIVE_TOOLS:
                 return deny(message="Interactive questions are unavailable in Slack; ask in your final answer instead.")

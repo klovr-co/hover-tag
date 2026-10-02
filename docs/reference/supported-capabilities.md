@@ -25,7 +25,7 @@ unavailable behavior.
 | --- | --- | --- |
 | Codex CLI backend | Supported | Used by the v0.1 launch qualification. |
 | Switch models between backends | Implemented | Configure lists models from every signed-in backend; the chosen model selects Codex or Claude for that user's next request. `OPENTAG_DEFAULT_MODEL` sets the Tag default. |
-| Claude Code backend | Supported | Uses the Claude Agent SDK with an authenticated local Claude CLI session; supports the same streaming, activity, approval, Stop, and settings controls as Codex App Server. |
+| Claude Code backend | Supported | Uses the Claude Agent SDK with an authenticated local Claude CLI session; supports streaming, activity, private one-time approvals, Stop, and model settings; approval scope differences are listed below. |
 | Inspect and change workspace files | Implemented | Uses the permissions of the backend process. |
 | Run workspace commands and tests | Implemented | Available when the selected backend can perform them. |
 | Use installed local tools and skills | Available | Each tool uses its own credentials and grants. |
@@ -52,7 +52,8 @@ unavailable behavior.
 | Explicit channel restriction | Implemented | Configure `SLACK_CHANNEL_IDS`; the bridge fails closed without selected channels. |
 | MFS retrieval roots | Implemented | Configure `MFS_ALLOWED_SCOPES`. |
 | Backend timeout and retry settings | Implemented | Configure the corresponding `OPENTAG_` settings. |
-| Codex action approvals | Implemented fallback | Codex normally reviews sandbox-boundary actions automatically. Supported requests delivered to Tag show private **Approve once** and **Deny** buttons for the initiating user. See [Control your Tag](../concepts/control-your-tag.md#respond-to-a-codex-approval-request). |
+| Codex action approvals | Implemented fallback | Codex normally reviews sandbox-boundary actions automatically. Supported requests show private native choices, including one-time, task-scoped, and proposed persistent-rule decisions. Auto-review denials offer **Approve retry** / **Dismiss**. See [Control your Tag](../concepts/control-your-tag.md#respond-to-a-codex-approval-request). |
+| Claude action approvals | One-time decisions | SDK permission requests offer private Approve / Deny controls. The Claude adapter does not expose task-scoped grants, persistent-rule choices, or automatic-review denial retries; missing approval channels and unanswered requests are denied. |
 | Organization-wide administration and approvals | Not provided | These remain outside the current reference implementation. |
 
 ## Respond to a Codex approval request
