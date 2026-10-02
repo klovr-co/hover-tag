@@ -67,7 +67,7 @@ class ReleaseHelperTests(unittest.TestCase):
         # Run from pwsh (as CI and many users do), Windows PowerShell must not
         # inherit PowerShell 7's module path, or Get-FileHash can't load.
         reset = script.index("$env:PSModulePath")
-        self.assertLess(reset, script.index("Get-FileHash"))
+        self.assertLess(reset, script.index("Get-FileHash -Algorithm"))
         self.assertIn("$PSVersionTable.PSEdition -ne 'Core'", script)
         self.assertIn("Write-TagProgress 'tools'", script)
         self.assertIn("Write-TagProgress 'python'", script)
