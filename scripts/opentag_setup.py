@@ -171,14 +171,14 @@ def choose_backend() -> str:
 
 
 def change_setup_defaults(config_path: Path, values: dict[str, str]) -> dict[str, str]:
-    """Save default changes only when the selected agent is installed."""
+    """Save the history window and switch agents only when installed."""
     days = ("7", "30", "90")
     day = ui.choose("Slack history window", [f"Last {d} days" for d in days], default=days.index(values["MFS_SLACK_HISTORY_DAYS"]))
     agent = ui.choose("Agent", ["Codex", "Claude"], default=int(values["OPENTAG_BACKEND"] == "claude"))
     selected_backend = ("codex", "claude")[agent]
     if not shutil.which(selected_backend):
         ui.message(f"{selected_backend} is not installed. Install it before selecting it as the default agent.")
-        return values
+        return settings.update_config(config_path, {"MFS_SLACK_HISTORY_DAYS": days[day]})
     return settings.update_config(config_path, {"MFS_SLACK_HISTORY_DAYS": days[day], "OPENTAG_BACKEND": selected_backend})
 
 
