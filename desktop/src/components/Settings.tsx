@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // App settings, the one Tag update, and a Tag's recent logs.
 import { useEffect, useState, type ReactNode } from "react";
+import { APPEARANCES, APPEARANCE_LABEL, setAppearance, useAppearance } from "../lib/appearance";
 import type { AppInfo, Bridge } from "../lib/bridge";
-import { aiArgs, parseStatus } from "../lib/ai";
+import { parseConnections } from "../lib/ai";
 import { parseJSON } from "../lib/protocol";
 import type { Tags } from "../lib/tags";
 import {
@@ -12,7 +13,6 @@ import {
 } from "../lib/updates";
 import building from "../assets/art/tag-building.png";
 import puzzled from "../assets/art/tag-puzzled.png";
-import { configuredTags } from "./AISettings";
 import { CommunityLinks } from "./CommunityLinks";
 import { CompactSky, ErrorLine, Icon, Primary, Secondary, Spinner, Switch, tagIcon } from "./ui";
 
@@ -98,13 +98,13 @@ export function ReleaseChannel({ api, appVersion, update, busy, setBusy, switche
       <div className="segc" role="radiogroup" aria-label="Release channel">
         {APP_CHANNELS.map((channel) => (
           <button key={channel} role="radio" aria-checked={shown === channel}
-            disabled={busy || !update} onClick={() => void pick(channel)}>{CHANNEL_LABEL[channel]}</button>
+            disabled={busy} onClick={() => void pick(channel)}>{CHANNEL_LABEL[channel]}</button>
         ))}
       </div>
       {choice && !preview && <span className="caption secondary row gap-6" style={{ flexBasis: "100%" }}><Spinner small />Checking {name}…</span>}
       {choice && preview && (
         <div className="ch-confirm">
-          <span className="sub wrap" style={{ flex: 1, color: "var(--text)" }}>{previewText(name, preview)}</span>
+          <span className="sub wrap" style={{ flex: "1 1 100%", color: "var(--text)" }}>{previewText(name, preview)}</span>
           <button className="p-btn quiet sm" disabled={busy} onClick={() => { setChoice(null); setPreview(null); }}>Cancel</button>
           <button className="p-btn ink sm" disabled={busy} onClick={() => void confirm()}>
             {busy ? "Switching…" : installs ? "Switch and update" : "Switch"}
@@ -130,6 +130,7 @@ interface SettingsProps {
 }
 
 export function Settings({ api, info, tags, close, update, check, runUpdate, switched, openAI }: SettingsProps) {
+  const appearance = useAppearance();
   const [login, setLogin] = useState(false);
   const [keepBusy, setKeepBusy] = useState(false);
   const [tagVersion, setTagVersion] = useState("");
@@ -176,6 +177,13 @@ export function Settings({ api, info, tags, close, update, check, runUpdate, swi
               <Switch on={login} busy={false} label="Open Tag at login"
                 onClick={() => void api.openAtLogin(!login).then(setLogin).catch((e) => setError(String(e)))} />
             </SetRow>
+            <SetRow label="Appearance" detail="Auto follows your Mac's light or dark setting.">
+              <div className="segc" role="radiogroup" aria-label="Appearance">
+                {APPEARANCES.map((a) => (
+                  <button key={a} role="radio" aria-checked={appearance === a} onClick={() => setAppearance(a)}>{APPEARANCE_LABEL[a]}</button>
+                ))}
+              </div>
+            </SetRow>
             <SetRow label="Keep Tags running"
               detail="Start the Tags you switched on after you log in, and restart any that stop. Works even when this app is closed.">
               <Switch on={tags.keepRunning} busy={keepBusy} label="Keep Tags running"
@@ -185,7 +193,7 @@ export function Settings({ api, info, tags, close, update, check, runUpdate, swi
         </div>
         {openAI && (
           <div className="section">
-            <div className="sec-head"><h3>AI &amp; models</h3></div>
+            <div className="sec-head"><h3>AI connections</h3></div>
             <div className="card"><AISummaryRow api={api} tags={tags} open={openAI} /></div>
           </div>
         )}
@@ -218,25 +226,22 @@ export function Settings({ api, info, tags, close, update, check, runUpdate, swi
 
 /** The Settings row that opens AI & models, with a summary for the main Tag. */
 export function AISummaryRow({ api, tags, open }: { api: Bridge; tags: Tags; open: () => void }) {
-  const list = configuredTags(tags.rows);
-  const first = list.find((row) => row.main) ?? list[0];
   const [summary, setSummary] = useState("");
   useEffect(() => {
-    if (!first) { setSummary("Set up a Tag to choose its model."); return; }
     let live = true;
-    void api.tag(aiArgs(first.id, "--json")).then((r) => {
+    void api.tag(["settings", "ai", "connections", "--json"]).then((r) => {
       if (!live || r.code !== 0) return;
-      const report = parseStatus(r.stdout);
-      setSummary(`${report.usable.length} of ${report.connections.length} connected · Default: ${report.default_model.label}`);
+      const report = parseConnections(r.stdout);
+      setSummary(`${report.usable.length} of ${report.connections.length} connected · Shared by all Tags`);
     }).catch(() => {});
     return () => { live = false; };
-  }, [api, first?.id, first]);
+  }, [api, tags.rows]);
   return (
-    <div className="r set click" role="button" tabIndex={0} aria-label="Open AI and models" onClick={open}
+    <div className="r set click" role="button" tabIndex={0} aria-label="Open AI connections" onClick={open}
       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } }}
       style={{ padding: "13px 14px", gap: 16, borderRadius: "inherit" }}>
-      <div className="txt"><span className="label" style={{ fontSize: 14.5 }}>AI &amp; models</span>
-        <span className="sub wrap">{summary || "Connections and each Tag's default model"}</span></div>
+      <div className="txt"><span className="label" style={{ fontSize: 14.5 }}>AI connections</span>
+        <span className="sub wrap">{summary || "Shared accounts for all Tags"}</span></div>
       <span className="chev" aria-hidden="true"><Icon name="right" size={13} /></span>
     </div>
   );

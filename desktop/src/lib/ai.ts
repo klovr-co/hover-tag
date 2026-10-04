@@ -6,6 +6,7 @@
 import { parseJSON } from "./protocol";
 
 export const AI_CAPABILITY = "ai-connections";
+export const SHARED_AI_CAPABILITY = "shared-ai-connections";
 
 export type ConnectionState =
   | "connected" | "signed_out" | "expired" | "limited" | "not_installed" | "unsupported" | string;
@@ -18,11 +19,11 @@ export interface Connection {
   state: ConnectionState;
   installed: boolean;
   version?: string | null;
-  /** codex: the computer's Codex sign-in; chatgpt: a ChatGPT plan for this Tag only. */
+  /** codex: the computer's Codex sign-in; chatgpt: a ChatGPT plan shared by all Tags. */
   method?: "codex" | "chatgpt" | "claude" | string | null;
   account?: string | null;
   detail?: string;
-  /** True when the sign-in belongs to the computer, not just this Tag. */
+  /** True when the sign-in is shared by all Tags. */
   shared: boolean;
   actions: ConnectionAction[];
   install_url: string;
@@ -38,6 +39,15 @@ export interface ModelChoice {
   available: boolean | null;
   chosen?: boolean;
 }
+
+export interface AIConnections {
+  connections: Connection[];
+  usable: string[];
+  running: boolean;
+  scope: "installation";
+}
+
+export const parseConnections = (output: string) => parseJSON<AIConnections>(output);
 
 export interface AIStatus {
   tag: string;
@@ -152,18 +162,15 @@ export function primaryAction(connection: Connection): ConnectionAction | null {
 export const isUrgent = (action: ConnectionAction | null) => action === "sign_in" || action === "reconnect";
 
 export const CODEX_METHODS = [
-  { method: "chatgpt", title: (tag: string) => `ChatGPT account for ${tag} only`,
-    detail: "Recommended. Doesn't change Codex on this Mac." },
+  { method: "chatgpt", title: () => "ChatGPT account for all Tags",
+    detail: "Shared by all Tags. Doesn't change Codex on this Mac." },
   { method: "codex", title: () => "Codex sign-in on this Mac", detail: "Shared with Codex and your other Tags." },
 ] as const;
 
 export const CLAUDE_SHARED_NOTE =
   "Claude's sign-in is shared with Claude Code on this Mac. Signing in with another account changes it there too.";
 
-/** Whether changing this account means stopping a running Tag first. */
-export function needsRestart(connection: Connection, method?: string) {
-  return connection.backend === "codex" && (method === "chatgpt" || connection.method === "chatgpt");
-}
+
 
 export const choiceLabel = (choice: Pick<ModelChoice, "backend_name" | "label">) => `${choice.backend_name} · ${choice.label}`;
 
@@ -185,9 +192,9 @@ export function selectedModel(models: AIModels) {
 /** `tag [TAG] settings ai …`; the main Tag can be named too. */
 export const aiArgs = (tag: string, ...rest: string[]) => [tag, "settings", "ai", ...rest];
 
-export function signInArgs(tag: string, backend: string, options: { method?: string; restart?: boolean; resume?: boolean } = {}) {
+export function signInArgs(backend: string, options: { method?: string; restart?: boolean; resume?: boolean } = {}) {
   return [
-    ...aiArgs(tag, ...(options.resume ? ["resume"] : ["sign-in", backend])),
+    "settings", "ai", ...(options.resume ? ["resume"] : ["sign-in", backend]),
     ...(options.method && !options.resume ? ["--method", options.method] : []),
     ...(options.restart ? ["--restart"] : []),
   ];
@@ -240,7 +247,7 @@ export function signInReducer(state: SignInState, action: SignInAction): SignInS
 
 /** What a finished sign-in says, in a sentence. */
 export function resultLine(result: SignInResult, name: string) {
-  if (result.status === "connected") return `${name} connected.`;
+  if (result.status === "connected") return `${name} connected.${result.error ? ` ${result.error}` : ""}`;
   if (result.status === "cancelled") return "Sign-in cancelled.";
   return `Sign-in didn't finish. ${result.error ?? ""}`.trim();
 }

@@ -1,11 +1,13 @@
 // Add a Tag follows setup's own order: Your Tag, AI, Workspace, Create, Channels.
+import { StrictMode } from "react";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { demoBridge, type Session } from "../lib/bridge";
 import { Connect } from "./Connect";
 import { workspaceIdError } from "./Connect";
 
-afterEach(cleanup);
+vi.mock("@tauri-apps/api/core", () => ({ convertFileSrc: (path: string) => `asset://localhost${encodeURIComponent(path)}` }));
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 const codex = { backend: "codex", name: "Codex", provider: "OpenAI models", state: "connected", installed: true, method: "codex",
   account: "ChatGPT sign-in", detail: "", shared: true, actions: ["change_account"], install_url: "https://learn.chatgpt.com/docs/codex/cli", allowed: true };
@@ -61,6 +63,96 @@ function setup() {
 
 const step = () => document.querySelector(".tstep.now")?.textContent;
 
+it("shows setup workspace and owner pictures, falls back on failure, and retries new sources", async () => {
+  vi.stubGlobal("__TAURI_INTERNALS__", {});
+  const api = demoBridge();
+  let emit!: (line: string) => void;
+  api.setup = async (_args, onLine) => { emit = onLine; return { send: vi.fn(), stop: vi.fn() }; };
+  render(<Connect api={api} args={["add"]} done={vi.fn()} paused={vi.fn()} />);
+  await vi.waitFor(() => expect(emit).toBeTypeOf("function"));
+  const recap = (QUESTIONS.approve_setup as { recap: object }).recap;
+  const ask = (suffix?: string) => act(() => emit(JSON.stringify({ type: "question", ...QUESTIONS.approve_setup,
+    recap: { ...recap,
+      workspace: { id: "T1", name: "Klovr", organization: { id: "E1", name: "Parent org" }, ...(suffix ? { icon: `/team-${suffix}.png` } : {}) },
+      owner: { id: "U1", name: "maya", ...(suffix ? { icon: `/owner-${suffix}.png` } : {}) },
+    },
+  })));
+  ask(); // Older runtimes and first-time connections have no image fields.
+  expect(document.querySelector(".summary .ws")?.textContent).toBe("K");
+  expect(document.querySelector(".summary .you svg")).toBeTruthy();
+  for (const suffix of ["first", "refreshed"]) {
+    ask(suffix);
+    const team = document.querySelector<HTMLImageElement>(".summary img.ws")!;
+    const owner = document.querySelector<HTMLImageElement>(".summary .you img")!;
+    expect(team.getAttribute("src")).toContain(encodeURIComponent(`/team-${suffix}.png`));
+    expect(owner.getAttribute("src")).toContain(encodeURIComponent(`/owner-${suffix}.png`));
+    fireEvent.error(team);
+    fireEvent.error(owner);
+    expect(document.querySelector(".summary .ws")?.textContent).toBe("K");
+    expect(document.querySelector(".summary .you svg")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Create in Slack" }).hasAttribute("disabled")).toBe(false);
+  }
+});
+
+it("saves setup thinking with the model and fits it when switching providers", async () => {
+  const api = demoBridge();
+  let emit!: (line: string) => void;
+  const send = vi.fn();
+  api.setup = async (_args, onLine) => { emit = onLine; return { send, stop: vi.fn() }; };
+  render(<Connect api={api} args={["add"]} done={vi.fn()} paused={vi.fn()} />);
+  await vi.waitFor(() => expect(emit).toBeTypeOf("function"));
+  act(() => emit(JSON.stringify({ type: "question", ...QUESTIONS.default_model, supports_effort: true,
+    default_effort: "high", option_ids: ["codex:gpt-5.5", "claude:opus"],
+    connections: [codex, { ...codex, backend: "claude", name: "Claude" }],
+    groups: [
+      { backend: "codex", name: "Codex", models: [{ value: "codex:gpt-5.5", label: "GPT-5.5", efforts: ["low", "high"], default_effort: "low" }] },
+      { backend: "claude", name: "Claude", models: [{ value: "claude:opus", label: "Opus", efforts: ["low", "max"], default_effort: "max" }] },
+    ],
+  })));
+  expect(screen.getByRole("radio", { name: "High" }).getAttribute("aria-checked")).toBe("true");
+  fireEvent.click(screen.getByRole("button", { name: "Default model" }));
+  fireEvent.click(screen.getByRole("option", { name: "Opus" }));
+  expect(screen.queryByRole("radio", { name: "High" })).toBeNull();
+  expect(screen.getByRole("radio", { name: /Max/ }).getAttribute("aria-checked")).toBe("true");
+  fireEvent.click(screen.getByRole("radio", { name: "Low" }));
+  fireEvent.click(screen.getByRole("button", { name: /Continue/ }));
+  expect(send).toHaveBeenLastCalledWith({ answer: { value: "claude:opus", effort: "low" } });
+});
+
+it("reloads pictures replaced at the same path and keeps the selected picture in Create", async () => {
+  vi.stubGlobal("__TAURI_INTERNALS__", {});
+  const api = demoBridge();
+  let emit!: (line: string) => void;
+  const send = vi.fn();
+  api.setup = async (_args, onLine) => { emit = onLine; return { send, stop: vi.fn() }; };
+  render(<Connect api={api} args={["add"]} done={vi.fn()} paused={vi.fn()} />);
+  await vi.waitFor(() => expect(emit).toBeTypeOf("function"));
+  const path = "/Users/maya/Tag/.tag/assets/tag-profile.png";
+  const ask = (revision: string) => act(() => emit(JSON.stringify({ type: "question", ...QUESTIONS.profile,
+    preview: path, preview_revision: revision, picture_label: "face.png" })));
+  const picture = () => screen.getByAltText("Maya's Tag's picture").getAttribute("src");
+  ask("first");
+  const first = picture();
+  fireEvent.change(screen.getByLabelText("Description"), { target: { value: "My description" } });
+  expect(picture()).toBe(first);
+  for (const revision of ["second", "third"]) {
+    const previous = picture();
+    fireEvent.click(screen.getByRole("button", { name: /Shuffle picture/ }));
+    expect(send).toHaveBeenLastCalledWith({ answer: "shuffle" });
+    expect(screen.getByRole("button", { name: /Shuffle picture/ }).hasAttribute("disabled")).toBe(true);
+    ask(revision);
+    expect(picture()).not.toBe(previous);
+    expect(picture()).toContain(`?v=${revision}`);
+    expect(document.querySelector(".tnode img")?.getAttribute("src")).toBe(picture());
+    expect((screen.getByLabelText("Description") as HTMLTextAreaElement).value).toBe("My description");
+  }
+  const selected = picture();
+  act(() => emit(JSON.stringify({ type: "question", ...QUESTIONS.approve_setup,
+    recap: { ...(QUESTIONS.approve_setup as { recap: object }).recap, picture: path, picture_revision: "third" } })));
+  const pictures = [...document.querySelectorAll("img")].map((img) => img.getAttribute("src"));
+  expect(pictures.filter((src) => src === selected)).toHaveLength(2);
+});
+
 describe("Add a Tag", () => {
   it("asks for the name, picture and description first, then AI, workspace, Create and channels", async () => {
     const answers = setup();
@@ -111,4 +203,92 @@ describe("Add a Tag", () => {
     expect(workspaceIdError("hover-eng.slack.com")).toBe("No workspace ID found. It starts with T.");
     expect(workspaceIdError("https://app.slack.com/client/T0C7R1B44/C1")).toBe("");
   });
+});
+
+it("waits for setup to save before opening Settings and resumes the same new Tag", async () => {
+  const api = demoBridge();
+  let emit: (line: string) => void = () => {};
+  const send = vi.fn();
+  api.setup = async (_args, onLine) => {
+    emit = onLine;
+    setTimeout(() => emit(JSON.stringify({ type: "question", id: "ai_connection", kind: "choose",
+      prompt: "Connect an AI in Settings", options: ["Check connections again"], option_ids: ["check"],
+      connections: [], can_continue: false })), 0);
+    return { send, stop: vi.fn() };
+  };
+  const openAI = vi.fn();
+  render(<Connect api={api} args={["add"]} done={vi.fn()} paused={vi.fn()} openAI={openAI} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Open Settings" }));
+  expect(send).toHaveBeenCalledWith({ answer: null, pause: true });
+  expect(openAI).not.toHaveBeenCalled();
+  act(() => emit(JSON.stringify({ type: "result", status: "paused", tag: "new-tag-2" })));
+  await vi.waitFor(() => expect(openAI).toHaveBeenCalledWith(["new-tag-2", "setup"]));
+});
+
+
+it("starts only one setup process under StrictMode and stops it on unmount", async () => {
+  const api = demoBridge();
+  const stop = vi.fn();
+  api.setup = vi.fn(async () => ({ send: vi.fn(), stop }));
+  const view = render(<StrictMode><Connect api={api} args={["add"]} done={vi.fn()} paused={vi.fn()} /></StrictMode>);
+  expect(step()).toBe("Your Tag");
+  expect(screen.getByRole("status").textContent).toBe("Preparing setup…");
+  await vi.waitFor(() => expect(api.setup).toHaveBeenCalledTimes(1));
+  view.unmount();
+  expect(stop).toHaveBeenCalledTimes(1);
+});
+
+it("shows a whole channel setup status until the next complete update", async () => {
+  const api = demoBridge();
+  let emit!: (line: string) => void;
+  api.setup = vi.fn(async (_args, onLine) => { emit = onLine; return { send: vi.fn(), stop: vi.fn() }; });
+  render(<Connect api={api} args={["add"]} done={vi.fn()} paused={vi.fn()} />);
+  await vi.waitFor(() => expect(api.setup).toHaveBeenCalledTimes(1));
+  act(() => emit(JSON.stringify({ type: "question", ...QUESTIONS.channels })));
+  fireEvent.click(screen.getByRole("button", { name: "Continue with 1 channel" }));
+  const text = "✓ Slack connected\n◌ Preparing Slack memory for the selected channels…";
+  act(() => emit(JSON.stringify({ type: "message", text })));
+  expect(screen.getByRole("status").textContent).toBe(text);
+  act(() => emit(JSON.stringify({ type: "message", text: "Memory ready" })));
+  expect(screen.getByRole("status").textContent).toBe("Memory ready");
+});
+
+it("stops a late setup session after the screen closes", async () => {
+  const api = demoBridge();
+  let finish!: (session: Session) => void;
+  api.setup = vi.fn(() => new Promise<Session>((resolve) => { finish = resolve; }));
+  const view = render(<Connect api={api} args={["add"]} done={vi.fn()} paused={vi.fn()} />);
+  await vi.waitFor(() => expect(api.setup).toHaveBeenCalledTimes(1));
+  view.unmount();
+  const stop = vi.fn();
+  await act(async () => finish({ send: vi.fn(), stop }));
+  expect(stop).toHaveBeenCalledTimes(1);
+});
+
+it("offers retry if the setup process cannot start", async () => {
+  const api = demoBridge();
+  api.setup = vi.fn().mockRejectedValueOnce(new Error("Couldn't start Tag"))
+    .mockResolvedValue({ send: vi.fn(), stop: vi.fn() });
+  render(<Connect api={api} args={["add"]} done={vi.fn()} paused={vi.fn()} />);
+  expect(await screen.findByText("Setup stopped")).toBeTruthy();
+  expect(step()).toBe("Your Tag");
+  fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+  await vi.waitFor(() => expect(api.setup).toHaveBeenCalledTimes(2));
+  expect(screen.queryByText("Setup stopped")).toBeNull();
+});
+
+it("retains the failed step and retries the reported Tag instead of adding another", async () => {
+  const api = demoBridge();
+  let emit!: (line: string) => void;
+  api.setup = vi.fn(async (_args, onLine) => { emit = onLine; return { send: vi.fn(), stop: vi.fn() }; });
+  render(<Connect api={api} args={["add"]} done={vi.fn()} paused={vi.fn()} />);
+  await vi.waitFor(() => expect(api.setup).toHaveBeenCalledTimes(1));
+  act(() => {
+    emit(JSON.stringify({ type: "question", ...QUESTIONS.channels }));
+    emit(JSON.stringify({ type: "result", status: "failed", tag: "new-tag", error: "Connection lost" }));
+  });
+  expect(step()).toBe("Channels");
+  fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+  await vi.waitFor(() => expect(api.setup).toHaveBeenCalledTimes(2));
+  expect(vi.mocked(api.setup).mock.calls[1][0]).toEqual(["new-tag", "setup"]);
 });

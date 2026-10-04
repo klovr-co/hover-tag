@@ -6,7 +6,8 @@
 import { useEffect, useReducer, useRef, useState, type ReactNode } from "react";
 import type { Bridge, Session } from "../lib/bridge";
 import type { AIModels, AIStatus } from "../lib/ai";
-import { findModel, resultLine } from "../lib/ai";
+import { findModel } from "../lib/ai";
+import { fitEffort } from "../lib/model";
 import type { SetupQuestion, SetupReady, SetupWorkspace } from "../lib/protocol";
 import {
   EXISTING_FLOW, EXIT_OPTION, FLOW, heading, initialSetup, setupReducer, trackStep, type SetupState, type SignInStep,
@@ -14,9 +15,9 @@ import {
 import { readActivity } from "../lib/watch";
 import keyArt from "../assets/art/tag-key.png";
 import puzzled from "../assets/art/tag-puzzled.png";
-import { AgentMark, ConnectionRow, ModelMenu, type RowAction } from "./AI";
+import { AgentMark, ModelMenu, ThinkingRow } from "./AI";
 import { SlackSendDemo } from "./Slack";
-import { Back, ErrorLine, Icon, Primary, Quiet, Secondary, Sky, source, Spinner, tagIcon, WorkspaceMark } from "./ui";
+import { Back, ErrorLine, fitText, Icon, OwnerMark, Primary, Quiet, Secondary, Sky, source, Spinner, tagIcon, WorkspaceMark } from "./ui";
 
 interface Props {
   api: Bridge;
@@ -25,6 +26,7 @@ interface Props {
   done: () => void;
   /** Setup was cancelled; its progress is saved. */
   paused: () => void;
+  openAI?: (resume: string[]) => void;
 }
 
 /** What a choose question's answer is: its stable ID when Tag gave them, else its index. */
@@ -33,22 +35,46 @@ const answerFor = (question: SetupQuestion, id: string) => {
   return index >= 0 ? id : (question.options ?? []).indexOf(id);
 };
 
-export function Connect({ api, args, done, paused }: Props) {
+export function Connect({ api, args, done, paused, openAI }: Props) {
   const [state, dispatch] = useReducer(setupReducer, initialSetup);
   const session = useRef<Session | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  const retryTag = useRef("");
+  const openingAI = useRef(false);
   // Answers waiting for a question to come back, such as a workspace picked while an organization was open.
   const pending = useRef<{ id: string; answer: unknown } | null>(null);
   const approve = useRef<SetupQuestion | null>(null);
 
   useEffect(() => {
     let live = true;
-    void api.setup(args,
-      (line) => live && dispatch({ type: "line", line }),
-      (code, stderr) => live && dispatch({ type: "exit", code, stderr }),
-    ).then((s) => { session.current = s; });
-    return () => { live = false; session.current?.stop(); };
-  }, [api, args]);
+    let owned: Session | null = null;
+    // StrictMode replays effects before this microtask. Only the surviving
+    // mount may start a process that creates a Tag on disk.
+    void Promise.resolve().then(async () => {
+      if (!live) return;
+      const next = await api.setup(retryTag.current ? [retryTag.current, "setup"] : args,
+        (line) => live && dispatch({ type: "line", line }),
+        (code, stderr) => live && dispatch({ type: "exit", code, stderr }),
+      );
+      if (!live) { next.stop(); return; }
+      owned = next;
+      session.current = next;
+    }).catch((error) => {
+      if (live) dispatch({ type: "exit", code: -1, stderr: String(error) });
+    });
+    return () => {
+      live = false;
+      owned?.stop();
+      if (session.current === owned) session.current = null;
+    };
+  }, [api, args, attempt]);
 
+  useEffect(() => {
+    if (openingAI.current && state.outcome === "paused") {
+      openingAI.current = false;
+      openAI?.(state.tag ? [state.tag, "setup"] : args);
+    }
+  }, [state.outcome, state.tag, openAI, args]);
   const q = state.question;
   if (q?.id === "approve_setup") approve.current = q;
   useEffect(() => {
@@ -76,14 +102,8 @@ export function Connect({ api, args, done, paused }: Props) {
     session.current?.send({ answer: null, pause: true });
     paused();
   };
-  /** Start an agent sign-in from the AI step; the question stays up to show progress. */
-  const agentSignIn = (backend: string, answer: string) => {
-    dispatch({ type: "agentSignIn", backend });
-    session.current?.send({ answer });
-  };
-
   if (state.outcome === "complete") return <Ready api={api} state={state} done={done} />;
-  const picture = source(state.profile?.preview);
+  const picture = source(state.profile?.preview, state.profile?.revision);
   const body = (): ReactNode => {
     if (state.outcome === "paused") {
       return <FlowBody title="Progress saved" lead="You can finish setting up this Tag from Home at any time."
@@ -92,20 +112,30 @@ export function Connect({ api, args, done, paused }: Props) {
     if (state.outcome === "failed") {
       return (
         <FlowBody title="Setup stopped" lead={undefined} art={puzzled}
-          foot={<><span className="spacer" /><Primary title="Done" onClick={done} autoFocus /></>}>
+          foot={<><Quiet title="Back to Home" onClick={done} /><span className="spacer" />
+            <Primary title="Try again" onClick={() => {
+              retryTag.current = state.tag || retryTag.current;
+              dispatch({ type: "restart" });
+              setAttempt((value) => value + 1);
+            }} autoFocus /></>}>
           <ErrorLine>{state.error || "Something went wrong. Your progress is saved."}</ErrorLine>
         </FlowBody>
       );
     }
     if (state.creating && approve.current) return <Create question={approve.current} state={state} send={send} picture={picture} />;
-    if (!q) return <div className="row gap-10 secondary" style={{ justifyContent: "center", padding: "30px 0" }}><Spinner />{state.status}</div>;
+    if (!q) return <FlowBody title={state.lastQuestion ? "Getting the next step ready" : "Meet your new Tag"}
+      lead={state.lastQuestion ? "Your choices are saved as you go." : "Give it a name, choose its AI, and connect it to Slack."}
+      art={keyArt}>
+      <div className="notice info" role="status"><Spinner /><span style={{ whiteSpace: "pre-line", overflowWrap: "anywhere", minWidth: 0 }}>{state.status}</span></div>
+    </FlowBody>;
     switch (q.id) {
       case "profile": return <Meet key="profile" api={api} question={q} send={send} sendInPlace={sendInPlace}
         existing={() => { dispatch({ type: "existing" }); send("existing"); }} />;
-      case "ai_connection": if (q.connections) return <AIConnect api={api} question={q} state={state} send={send} back={back} startSignIn={agentSignIn}
-        cancelSignIn={() => session.current?.send({ cancel: true })} />; break;
-      case "default_model": if (q.groups) return <ModelStep key={JSON.stringify(q.option_ids)} question={q} state={state} send={send} back={back}
-        startSignIn={agentSignIn} cancelSignIn={() => session.current?.send({ cancel: true })} />; break;
+      case "ai_connection": return <FlowBody title="Connect an AI in Settings" lead="Your AI accounts are shared by all Tags. Connect Codex or Claude, then return to choose this Tag's model."
+        foot={<><BackIf question={q} back={back} /><span className="spacer" />
+          {openAI ? <Primary title="Open Settings" onClick={() => { openingAI.current = true; session.current?.send({ answer: null, pause: true }); }} />
+            : <Primary title="Check connections again" onClick={() => send("check")} />}</>} />;
+      case "default_model": if (q.groups) return <ModelStep key={JSON.stringify(q.option_ids)} question={q} state={state} send={send} back={back} />; break;
       case "workspace": case "org_workspace": case "org_workspace_id":
         if (state.workspaces?.workspaces) return <Workspaces state={state} question={q} send={send} back={back} backThen={backThen}
           signIn={() => { dispatch({ type: "addWorkspace" }); send(answerFor(state.workspaces!, "sign_in")); }} />;
@@ -181,7 +211,7 @@ function Meet({ api, question, send, sendInPlace, existing }: {
   const [description, setDescription] = useState(question.description ?? "");
   const [dragging, setDragging] = useState(false);
   const [busy, setBusy] = useState(false);
-  const preview = source(question.preview);
+  const preview = source(question.preview, question.preview_revision ?? question.picture_label);
   useEffect(() => { setBusy(false); }, [question]);
   useEffect(() => api.onFileDrop((paths) => { if (paths[0]) { setBusy(true); sendInPlace({ picture: paths[0] }); } }, setDragging), [api, sendInPlace]);
   const limit = question.name_limit ?? 35;
@@ -198,7 +228,7 @@ function Meet({ api, question, send, sendInPlace, existing }: {
       </div>
       <div className="card mrow">
         <span className={dragging ? "avw2 dragging" : "avw2"}>
-          <img key={question.preview ?? ""} className="pic fresh" src={preview ?? tagIcon} alt={`${name || "Tag"}'s picture`}
+          <img key={preview ?? ""} className="pic fresh" src={preview ?? tagIcon} alt={`${name || "Tag"}'s picture`}
             style={question.picture === "custom" ? { background: "#fff" } : undefined} />
         </span>
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -211,8 +241,8 @@ function Meet({ api, question, send, sendInPlace, existing }: {
             <span className="slack-hint">in Slack</span>
           </label>
           <div className="desc-wrap">
-            <textarea className="field desc" rows={2} maxLength={max} placeholder="One line on what it does" aria-label="Description"
-              value={description} onChange={(e) => setDescription(e.target.value.replace(/[\r\n]+/g, " "))}
+            <textarea className="field desc" rows={2} maxLength={max} placeholder="One line on what it does" aria-label="Description" ref={fitText}
+              value={description} onChange={(e) => { setDescription(e.target.value.replace(/[\r\n]+/g, " ")); fitText(e.currentTarget); }}
               onKeyDown={(e) => { if (e.key === "Enter") e.preventDefault(); }} />
             {description.length > max - 30 && <span className="desc-count">{max - description.length}</span>}
           </div>
@@ -235,90 +265,38 @@ function Meet({ api, question, send, sendInPlace, existing }: {
 
 // ---- 2 · AI ----------------------------------------------------------------------------
 
-/** Setup lists connections only while nothing usable is connected; Settings manages them otherwise. */
-function AIConnect({ api, question, state, send, back, startSignIn, cancelSignIn }: {
-  api: Bridge; question: SetupQuestion; state: SetupState;
-  send: (a: unknown) => void; back: () => void; startSignIn: (backend: string, answer: string) => void; cancelSignIn: () => void;
-}) {
-  const [opened, setOpened] = useState(new Set<string>());
-  const ids = question.option_ids ?? [];
-  const signingIn = !!state.signIn.step;
-  const tag = question.tag_name || state.profile?.name || "Tag";
-  const act = (action: RowAction) => {
-    if (action.kind === "install" || action.kind === "update") {
-      void api.open(action.url);
-      setOpened((current) => new Set(current).add(action.backend));
-    } else {
-      const id = `${action.kind}:${action.backend}`;
-      if (ids.includes(id)) startSignIn(action.backend, id);
-    }
-  };
-  return (
-    <FlowBody title={`Connect ${tag} to an AI`} lead="Set up Codex or Claude on this Mac to continue."
-      foot={<>{!signingIn && <BackIf question={question} back={back} />}<span className="spacer" />
-        <Primary title="Continue" after="arrow" disabled onClick={() => {}} /></>}>
-      <div className="card">
-        {(question.connections ?? []).filter((c) => c.allowed !== false).map((connection) => (
-          <ConnectionRow key={connection.backend} connection={{ ...connection, actions: connection.actions.filter((a) => a !== "change_account") }}
-            busy={signingIn} signIn={state.signIn.backend === connection.backend ? state.signIn : null} tagName={tag}
-            opened={opened.has(connection.backend)} act={act} cancel={cancelSignIn}
-            check={() => send("check")} open={(url) => void api.open(url)} />
-        ))}
-      </div>
-    </FlowBody>
-  );
-}
-
-const SIGN_IN_WORD: Record<string, string> = { sign_in: "Sign in", reconnect: "Sign in", resume: "Resume" };
-
 /** The Tag's default model, from every connected account; the model picks the agent. */
-function ModelStep({ question, state, send, back, startSignIn, cancelSignIn }: {
+function ModelStep({ question, state, send, back }: {
   question: SetupQuestion; state: SetupState; send: (a: unknown) => void; back: () => void;
-  startSignIn: (backend: string, answer: string) => void; cancelSignIn: () => void;
 }) {
   const ids = question.option_ids ?? [];
   const groups = question.groups ?? [];
   const preset = typeof question.default === "number" ? ids[question.default] : null;
   const [value, setValue] = useState<string | null>(preset);
+  const [effort, setEffort] = useState<string | null>(question.default_effort ?? null);
+  const entry = value ? findModel(groups, value)?.entry ?? null : null;
+  const level = fitEffort(entry, effort);
   const signingIn = !!state.signIn.step;
   const offered = !!value && !!findModel(groups, value);
   const tag = question.tag_name || state.profile?.name || "Tag";
   const connections = question.connections ?? [];
   const models = { groups, default: null, unavailable: [], suggested: null } as unknown as AIModels;
   const report = { connections, default_model: { value: preset ?? "", label: preset?.split(":")[1] ?? "" } } as unknown as AIStatus;
-  // Anything that isn't a model is another agent to sign in to, such as "sign_in:claude".
-  const others = ids.filter((id) => !findModel(groups, id) && /^(sign_in|reconnect|resume):/.test(id)).map((id) => {
-    const [action, backend] = id.split(":");
-    return { id, action, backend, name: connections.find((c) => c.backend === backend)?.name ?? backend };
-  });
   return (
-    <FlowBody title={`Choose ${tag}'s model`} lead="From the AI accounts on this Mac. Change it any time in Settings."
+    <FlowBody title={`Choose ${tag}'s model`} lead="Model and thinking level apply to every request to this Tag. Change them any time in its Details tab."
       foot={<>{!signingIn && <BackIf question={question} back={back} />}<span className="spacer" />
         <Primary title="Continue" after="arrow"
-          disabled={!offered || signingIn} onClick={() => send(value)} /></>}>
+          disabled={!offered || signingIn} onClick={() => send(question.supports_effort ? { value, effort: level ?? "default" } : value)} /></>}>
       <div className="card mcard">
-        <ModelMenu models={models} report={report} value={value} onChange={setValue} />
+        <ModelMenu models={models} report={report} value={value} inline onChange={(next) => {
+          setEffort(fitEffort(findModel(groups, next)?.entry, level));
+          setValue(next);
+        }} />
+        {question.supports_effort && <ThinkingRow entry={entry} value={level} onChange={setEffort} />}
         {value && !offered && (
           <div className="mwarn" role="status"><Icon name="warn" /><span>{value.split(":")[1] ?? value} isn't available from your connected accounts. Pick another.</span></div>
         )}
-        {others.map((other) => {
-          const mine = state.signIn.backend === other.backend;
-          const result = mine ? state.signIn.result : null;
-          if (mine && state.signIn.step) {
-            return <div key={other.id} className="madd busy"><AgentMark backend={other.backend} size={20} /><span className="spin" />
-              <span>{state.signIn.text}</span><button className="link" onClick={cancelSignIn}>Cancel</button></div>;
-          }
-          if (result?.status === "failed") {
-            return <div key={other.id} className="madd bad"><AgentMark backend={other.backend} size={20} /><span>Sign-in didn't finish.</span>
-              <button className="link" disabled={signingIn} onClick={() => startSignIn(other.backend, other.id)}>Try again</button></div>;
-          }
-          return (
-            <div key={other.id} className="madd"><AgentMark backend={other.backend} size={20} />
-              <span>{result?.status === "cancelled" ? `${resultLine(result, other.name)} ` : ""}Use {other.name} models too?</span>
-              <button className="link" disabled={signingIn} onClick={() => startSignIn(other.backend, other.id)}>{SIGN_IN_WORD[other.action] ?? "Sign in"}</button>
-            </div>
-          );
-        })}
+
       </div>
     </FlowBody>
   );
@@ -476,17 +454,17 @@ function Create({ question, state, send, picture }: { question: SetupQuestion; s
         : <>{question.can_go_back && <Back onClick={() => pick("back")} />}<span className="spacer" /><Primary title="Create in Slack" onClick={() => pick("create")} autoFocus /></>}>
       <div className="card">
         <div className="recap-top">
-          <img src={source(recap.picture) ?? picture ?? tagIcon} alt="" />
+          <img src={source(recap.picture, recap.picture_revision ?? state.profile?.revision) ?? picture ?? tagIcon} alt="" />
           <div className="txt"><span className="name"><span className="nm">{recap.name}</span></span>
             <span className="sub wrap">{recap.description || "New Slack app"}</span></div>
           <button className="link" disabled={running} onClick={() => pick("edit")}>Edit</button>
         </div>
         <dl className="summary">
           <dt>Workspace</dt>
-          <dd><WorkspaceMark label={recap.workspace.organization?.name ?? recap.workspace.name} icon={null} />{recap.workspace.name}
+          <dd><WorkspaceMark label={recap.workspace.name} icon={recap.workspace.icon ?? null} />{recap.workspace.name}
             {recap.workspace.organization && <span className="kind">in {recap.workspace.organization.name}</span>}</dd>
           <dt>Owner</dt>
-          <dd><span className="owner"><span className="you"><Icon name="user" /></span>You{recap.owner.name ? ` · @${recap.owner.name}` : ""}</span></dd>
+          <dd><span className="owner"><OwnerMark icon={recap.owner.icon} />You{recap.owner.name ? ` · @${recap.owner.name}` : ""}</span></dd>
           {recap.ai && <><dt>AI</dt><dd><AgentMark backend={recap.ai.backend} size={20} />{recap.ai.backend_name} · {recap.ai.label}
             <button className="link" disabled={running} onClick={() => pick("edit_ai")}>Edit</button></dd></>}
           <dt>Who can ask it</dt>
@@ -678,7 +656,7 @@ function Ready({ api, state, done }: { api: Bridge; state: SetupState; done: () 
   const [error, setError] = useState("");
   const place = places.find((p) => p.id === where) ?? places[0];
   const text = `${place.dm ? "" : `@${name} `}${TRY_PROMPTS[prompt]}`;
-  const picture = source(state.profile?.preview);
+  const picture = source(state.profile?.preview, state.profile?.revision);
   // Ticks only once Tag records a reply after Start; nothing is made up.
   useEffect(() => {
     if (step !== "waiting" || !state.tag) return;

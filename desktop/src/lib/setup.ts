@@ -13,6 +13,8 @@ export const EXISTING_FLOW = ["AI", "Workspace", "Your app", "Channels"];
 
 export interface SetupState {
   question: SetupQuestion | null;
+  /** Last question reached, retained while loading or showing a failure. */
+  lastQuestion: string | null;
   signInStep: SignInStep;
   status: string;
   outcome: Outcome | null;
@@ -29,17 +31,18 @@ export interface SetupState {
   /** The last workspace list, so an organization opens inside it. */
   workspaces: SetupQuestion | null;
   /** The last profile, so later steps show the Tag's name and picture. */
-  profile: { name: string; preview: string | null } | null;
+  profile: { name: string; preview: string | null; revision?: string | null } | null;
   /** Slack sign-in came from "Sign in to another workspace". */
   addingWorkspace: boolean;
 }
 
 export const initialSetup: SetupState = {
-  question: null, signInStep: 0, status: "Starting…", outcome: null, error: "", tag: "", signIn: idleSignIn,
+  question: null, lastQuestion: null, signInStep: 0, status: "Preparing setup…", outcome: null, error: "", tag: "", signIn: idleSignIn,
   creating: null, ready: null, existing: false, workspaces: null, profile: null, addingWorkspace: false,
 };
 
 export type SetupAction =
+  | { type: "restart" }
   | { type: "line"; line: string }
   | { type: "exit"; code: number; stderr: string }
   | { type: "answered" }
@@ -64,6 +67,7 @@ export function explainExit(stderr: string): string {
 
 export function setupReducer(state: SetupState, action: SetupAction): SetupState {
   switch (action.type) {
+    case "restart": return initialSetup;
     case "line": {
       const event = parseSetupLine(action.line);
       if (!event) return state;
@@ -80,8 +84,9 @@ export function setupReducer(state: SetupState, action: SetupAction): SetupState
         const question = event as SetupQuestion;
         const existing = state.existing || EXISTING_QUESTIONS.has(question.id);
         const workspaces = question.id === "workspace" ? question : state.workspaces;
-        const profile = question.id === "profile" ? { name: question.name ?? "", preview: question.preview ?? null } : state.profile;
-        const base = { ...state, existing, workspaces, profile, creating: null };
+        const profile = question.id === "profile" ? { name: question.name ?? "", preview: question.preview ?? null,
+          revision: question.preview_revision ?? question.picture_label } : state.profile;
+        const base = { ...state, lastQuestion: question.id, existing, workspaces, profile, creating: null };
         if (question.kind === "slack_login") {
           // Asked again: Slack refused the code, so stay on the code step.
           const again = state.question?.kind === "slack_login";
@@ -128,18 +133,19 @@ export function setupReducer(state: SetupState, action: SetupAction): SetupState
 
 /** Where the track's marker stands for a question, by flow. */
 export function trackStep(state: SetupState): number {
-  const id = state.question?.id ?? "";
+  const id = state.question?.id ?? state.lastQuestion ?? "";
+  if (state.outcome === "complete") return state.existing ? 4 : 5;
+  if (!id) return 0;
   if (state.existing) {
     if (["ai_connection", "default_model"].includes(id)) return 0;
     if (EXISTING_QUESTIONS.has(id)) return 2;
     if (id === "channels") return 3;
-    return state.outcome === "complete" ? 4 : 1;
+    return 1;
   }
   if (id === "profile") return 0;
   if (["ai_connection", "default_model"].includes(id)) return 1;
   if (id === "approve_setup" || state.creating) return 3;
   if (id === "channels") return 4;
-  if (state.outcome === "complete") return 5;
   return 2;
 }
 

@@ -11,10 +11,11 @@ import type { Tags } from "../lib/tags";
 import type { UpdateState } from "../lib/updates";
 import teamArt from "../assets/art/tag-team.png";
 import fiveTags from "../assets/art/five-tags.png";
+import { useNight } from "../lib/appearance";
 import { Avatar, ErrorLine, Icon, MOON, Primary, Sky, Switch, tagIcon, WorkspaceMark } from "./ui";
 import { UpdateNotice } from "./UpdateNotice";
 
-export const HOW_TAG_WORKS = "https://hover.team/tag/how-tag-works";
+export const HOW_TAG_WORKS = "https://hover.team/tag";
 
 /** The folder people open: the Tag's working folder, which holds its private `.tag` data. */
 export function workingFolder(row: TagRow & { home?: string }) {
@@ -54,7 +55,7 @@ export function Home(props: Props) {
     <>
       <Sky kind="home">
         <div className="sky-row">
-          {rows.length > 0 && (
+          {shown.length > 0 && (
             <span className="roster" aria-hidden="true">
               {shown.map((row) => <Avatar key={row.id} row={row} size={36} badge={false} className="" />)}
               {extra > 0 && <span className="more-n">+{extra}</span>}
@@ -96,6 +97,7 @@ export function Home(props: Props) {
                     <span className="sub"><span className="needs">Not in Slack yet</span>
                       {row.workspace_name && <><span>·</span><span>{row.workspace_name}</span></>}</span>
                   </div>
+                  <button className="link" disabled={tags.busy.has(row.id)} onClick={() => open(row)}>Remove…</button>
                   <button className={`p-btn ${urgent ? "soft" : "ink"} sm`} disabled={tags.busy.has(row.id)} onClick={() => finishSetup(row)}>
                     Continue<Icon name="arrow" />
                   </button>
@@ -141,6 +143,7 @@ export function Home(props: Props) {
 
 /** The one quiet line between the header and the cards. */
 export function Quiet({ line, rows, open, fix }: { line: QuietLine; rows: TagRow[]; open: (row: TagRow) => void; fix: (tag: string) => void }) {
+  const night = useNight();
   if (line.kind === "ai") {
     return (
       <div className="hello warn" role="status">
@@ -162,10 +165,7 @@ export function Quiet({ line, rows, open, fix }: { line: QuietLine; rows: TagRow
   }
   return (
     <div className="hello">
-      <picture>
-        <source srcSet={MOON} media="(prefers-color-scheme: dark)" />
-        <img src={tagIcon} alt="" />
-      </picture>
+      <img src={night ? MOON : tagIcon} alt="" />
       <span><b>{line.hello}{line.name ? `, ${line.name}` : ""}.</b> {line.listening ? "Your Tags are listening in Slack." : "Your Tags are taking a break."}</span>
     </div>
   );

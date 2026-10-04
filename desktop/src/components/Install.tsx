@@ -9,7 +9,23 @@ import welcomeArt from "../assets/art/welcome-maya.png";
 import building from "../assets/art/tag-building.png";
 import celebrate from "../assets/art/tag-celebrate.png";
 import puzzled from "../assets/art/tag-puzzled.png";
-import { Icon, Primary, Quiet, Sky } from "./ui";
+import { ErrorLine, Icon, Primary, Quiet, Sky, Spinner } from "./ui";
+
+/** Keep startup in the same shell as setup, including a recoverable failure. */
+export function Starting({ error, retry }: { error?: string; retry: () => void }) {
+  return <>
+    <Sky kind="hero" stars={50}>
+      <img className="welcome-art" src={welcomeArt} alt="" />
+    </Sky>
+    <div className="body roomy">
+      <div><h2>{error ? "Couldn't open Tag" : "Welcome to Tag"}</h2>
+        <p className="lead">{error ? "Try again to load your Tags." : "Getting your Tags ready."}</p></div>
+      {error ? <><ErrorLine>{error}</ErrorLine><div className="foot"><span className="spacer" />
+        <Primary title="Try again" onClick={retry} /></div></>
+        : <div className="row gap-10 secondary" role="status"><Spinner />Opening Tag…</div>}
+    </div>
+  </>;
+}
 
 export function Welcome({ api, platform, install }: { api: Bridge; platform: string; install: () => void }) {
   const machine = platform === "macos" ? "Mac" : "computer";
@@ -59,10 +75,26 @@ export function Installing({ api, done, retry, cancel }: {
 
   useEffect(() => {
     let live = true;
-    void api.install("", (line) => live && dispatch({ type: "line", line }),
-      (code) => live && dispatch({ type: "exit", code })).then((s) => { session.current = s; });
+    let owned: Session | null = null;
+    void Promise.resolve().then(async () => {
+      if (!live) return;
+      const next = await api.install("", (line) => live && dispatch({ type: "line", line }),
+        (code) => live && dispatch({ type: "exit", code }));
+      if (!live) { next.stop(); return; }
+      owned = next;
+      session.current = next;
+    }).catch((error) => {
+      if (!live) return;
+      dispatch({ type: "line", line: `Installation failed: ${String(error)}` });
+      dispatch({ type: "exit", code: -1 });
+    });
     const timer = setInterval(() => setNow(Date.now()), 250);
-    return () => { live = false; clearInterval(timer); };
+    return () => {
+      live = false;
+      clearInterval(timer);
+      owned?.stop();
+      if (session.current === owned) session.current = null;
+    };
   }, [api]);
   useEffect(() => { stepStart.current = Date.now(); }, [state.current]);
 

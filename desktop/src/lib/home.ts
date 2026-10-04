@@ -8,11 +8,42 @@ import { status, title, type TagRow } from "./protocol";
 
 /** One thing a Tag did, from `tag NAME logs --json` → `activity`. */
 export interface ActivityItem {
+  run_id?: string;
+  reply_preview?: string;
+  reply_summary?: string;
+  reply_summary_status?: "pending" | "ready" | "unavailable";
+  backend?: string;
+  model?: string;
+  model_name?: string;
+  reasoning_effort?: string;
+  duration_seconds?: number;
+  /** Tool steps recorded for the run, including ones omitted from the saved timeline. */
+  step_count?: number;
+  usage?: { input_tokens: number; output_tokens: number; total_tokens: number;
+    cache_read_input_tokens?: number; cache_creation_input_tokens?: number; reasoning_output_tokens?: number };
+  artifacts?: { name: string; kind: "file" | "image"; delivery: "uploaded" | "local" | "upload_failed";
+    url?: string; local_path?: string }[];
+  artifact_thread_url?: string;
+
   at: string;
   kind: "replied" | "failed" | "stopped" | "working" | string;
   channel: string;
   channel_name: string | null;
   dm: boolean;
+}
+
+export interface ActivityDetail {
+  run_id: string;
+  outcome: string;
+  started_at: string;
+  finished_at: string | null;
+  team: string;
+  channel: string;
+  thread_ts: string;
+  events: { label: string; status: string; started_at: string; finished_at: string | null;
+    details: { tool?: string; input?: string; output?: string } }[];
+  omitted: number;
+  error: { reference: string; text: string } | null;
 }
 
 export const EFFORT_LABEL: Record<string, string> = {
@@ -130,10 +161,15 @@ export function summary(rows: TagRow[]) {
   return { text: `${online} of ${live.length} online${setup ? ` · ${setup} to finish` : ""}`, on: online > 0 };
 }
 
-/** Up to four of your Tags for the header, running ones first, then unfinished ones. */
+/** Up to four online Tags for the header; empty when none are online. */
 export function roster(rows: TagRow[]) {
-  const live = liveRows(rows);
-  const shown = [...live].sort((a, b) => Number(b.state === "running") - Number(a.state === "running"))
-    .concat(rows.filter((row) => status(row) === "setup")).slice(0, 4);
-  return { shown, extra: rows.length - shown.length };
+  const online = liveRows(rows).filter((row) => row.state === "running");
+  const shown = online.slice(0, 4);
+  return { shown, extra: online.length - shown.length };
+}
+
+/** Elapsed backend time includes tool work, excludes the separate summary job. */
+export function generationTime(seconds: number): string {
+  const rounded = Math.max(0, Math.round(seconds));
+  return rounded < 60 ? `${rounded}s` : `${Math.floor(rounded / 60)}m ${rounded % 60}s`;
 }

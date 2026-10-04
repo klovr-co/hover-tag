@@ -10,6 +10,8 @@ export const tagIcon = icon;
 
 /** 24-unit icons, drawn with the current text colour. */
 const PATHS: Record<string, ReactNode> = {
+  file: <><path d="M14 3H5v18h14V8zM14 3v5h5M8 13h8M8 17h6" /></>,
+  image: <><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8" cy="8" r="1.5" /><path d="m3 17 5-5 4 4 4-6 5 7" /></>,
   gear: <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></>,
   refresh: <><path d="M21 12a9 9 0 1 1-3-6.7L21 8" /><path d="M21 3v5h-5" /></>,
   plus: <path d="M12 5v14M5 12h14" />,
@@ -162,10 +164,14 @@ export function CompactSky({ title, sub, back, right }: { title: ReactNode; sub?
 const BADGE: Record<Status, string> = { online: "var(--green)", offline: "var(--faint)", setup: "var(--amber)", attention: "var(--red)" };
 
 /** A local picture Tag saved, as something the window can show. */
-export function source(path: string | null | undefined) {
+export function source(path: string | null | undefined, revision?: string | null) {
   if (!path) return null;
   try {
-    return "__TAURI_INTERNALS__" in window ? convertFileSrc(path) : null;
+    if (!("__TAURI_INTERNALS__" in window)) return null;
+    const url = convertFileSrc(path);
+    // Convert only the file path. Tauri ignores the query when opening the file,
+    // while the webview uses it to reload an image overwritten at the same path.
+    return revision ? `${url}?v=${encodeURIComponent(revision)}` : url;
   } catch {
     return null;
   }
@@ -175,13 +181,14 @@ export function source(path: string | null | undefined) {
 export function Avatar({ row, size = 42, badge = true, className = "av" }: {
   row: TagRow | null; size?: number; badge?: boolean; className?: string;
 }) {
-  const [failed, setFailed] = useState(false);
+  const [failedSource, setFailedSource] = useState<string | null>(null);
   const hue = row ? ([...row.id].reduce((sum, c) => sum + c.charCodeAt(0), 0) % 6) * 60 : 0;
-  const picture = !failed ? source(row?.avatar) : null;
+  const avatarSource = source(row?.avatar);
+  const picture = avatarSource !== failedSource ? avatarSource : null;
   const state = row ? status(row) : "offline";
   const img = (
     <img className={`${className}${state === "setup" ? " dim" : ""}`} alt="" width={size} height={size} src={picture ?? tagIcon}
-      onError={() => setFailed(true)}
+      onError={() => setFailedSource(avatarSource)}
       style={{ width: size, height: size, borderRadius: size * 0.26, filter: picture ? undefined : `hue-rotate(${hue}deg)` }} />
   );
   if (!badge || !row) return img;
@@ -198,16 +205,27 @@ export const workspaceColor = (key: string) => WS_COLORS[(key.charCodeAt(0) + ke
 
 /** The Slack workspace's own icon, or its coloured first letter when Slack has none. */
 export function WorkspaceMark({ label, icon: path, big }: { label: string; icon: string | null; big?: boolean }) {
-  const [failed, setFailed] = useState(false);
-  const picture = !failed ? source(path) : null;
+  const [failedSource, setFailedSource] = useState<string | null>(null);
+  const currentSource = source(path);
+  const picture = currentSource !== failedSource ? currentSource : null;
   const cls = big ? "ws big" : "ws";
   return picture ? (
-    <img className={cls} alt="" src={picture} onError={() => setFailed(true)} />
+    <img className={cls} alt="" src={picture} onError={() => setFailedSource(currentSource)} />
   ) : (
     <span className={cls} style={{ background: label ? workspaceColor(label) : "var(--faint)" }} aria-hidden="true">
       {(label || "?")[0].toUpperCase()}
     </span>
   );
+}
+
+/** The setup owner's Slack picture, with a person symbol if unavailable. */
+export function OwnerMark({ icon: path }: { icon?: string | null }) {
+  const [failedSource, setFailedSource] = useState<string | null>(null);
+  const currentSource = source(path);
+  const picture = currentSource !== failedSource ? currentSource : null;
+  return <span className="you">{picture
+    ? <img src={picture} alt="" onError={() => setFailedSource(currentSource)} />
+    : <Icon name="user" />}</span>;
 }
 
 export function Switch({ on, busy, onClick, label }: { on: boolean; busy: boolean; onClick: () => void; label: string }) {
@@ -217,6 +235,13 @@ export function Switch({ on, busy, onClick, label }: { on: boolean; busy: boolea
       <i>{busy && <span className="spin" />}</i>
     </button>
   );
+}
+
+/** Grow a text box to show all of its text; pass as `ref` and call from `onChange`. */
+export function fitText(el: HTMLTextAreaElement | null) {
+  if (!el) return;
+  el.style.height = "auto";
+  el.style.height = `${el.scrollHeight + el.offsetHeight - el.clientHeight}px`;
 }
 
 export function ErrorLine({ children }: { children: ReactNode }) {

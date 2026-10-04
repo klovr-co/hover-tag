@@ -31,6 +31,10 @@
         "enable": true,
         "scope": [
           "$HOME/Tag/**",
+          "$HOME/Tag/*/.tag/state/slack-avatar-*",
+          "$HOME/Tag/*/.tag/state/workspace-icon.*",
+          "$HOME/Tag/*/.tag/state/setup-icon-*",
+          "$HOME/Tag/*/.tag/integrations/slack-cli/assets/tag-profile.*",
           "$HOME/Library/Application Support/Tag/**",
           "$HOME/.local/share/tag/**",
           "$LOCALDATA/Tag/**"

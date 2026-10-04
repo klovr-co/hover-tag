@@ -9,12 +9,12 @@ import { useTags } from "./lib/tags";
 import { useWatch } from "./lib/watch";
 import { Connect } from "./components/Connect";
 import { Home } from "./components/Home";
-import { Installing, Welcome } from "./components/Install";
-import { AI_CAPABILITY } from "./lib/ai";
+import { Installing, Starting, Welcome } from "./components/Install";
+import { AI_CAPABILITY, SHARED_AI_CAPABILITY } from "./lib/ai";
 import { AISettings } from "./components/AISettings";
 import { Settings } from "./components/Settings";
 import { TagDetail } from "./components/TagDetail";
-import { Spinner, Toast } from "./components/ui";
+import { Toast } from "./components/ui";
 
 type Screen =
   | { name: "loading" }
@@ -23,7 +23,7 @@ type Screen =
   | { name: "home" }
   | { name: "connect"; args: string[] }
   | { name: "settings" }
-  | { name: "ai"; tag?: string }
+  | { name: "ai"; resume?: string[] }
   | { name: "tag"; id: string };
 
 /** Capabilities this app needs from the installed Tag. */
@@ -55,6 +55,8 @@ export function App() {
   const [api, setApi] = useState<Bridge | null>(null);
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [screen, setScreen] = useState<Screen>({ name: "loading" });
+  const [bootError, setBootError] = useState("");
+  const [bootAttempt, setBootAttempt] = useState(0);
   const [outdated, setOutdated] = useState(false);
   const [capabilities, setCapabilities] = useState<string[]>([]);
   const [update, dispatchUpdate] = useReducer(updateReducer, initialUpdate);
@@ -68,13 +70,17 @@ export function App() {
   const root = useRef<HTMLElement>(null);
 
   useEffect(() => {
+    let live = true;
+    setBootError("");
     void bridge().then(async (b) => {
       const i = await b.info();
+      if (!live) return;
       setApi(b);
       setInfo(i);
       setScreen(i.cli ? { name: "home" } : { name: "welcome" });
-    });
-  }, []);
+    }).catch((error) => { if (live) setBootError(String(error)); });
+    return () => { live = false; };
+  }, [bootAttempt]);
 
   const say = useCallback((text: string) => {
     setToast(text);
@@ -157,6 +163,8 @@ export function App() {
         if (status(row) === "setup") { setScreen({ name: "connect", args: [row.id, "setup"] }); void api.showWindow(); }
         else void tags.toggle(row);
       }
+      // Removing is confirmed on the Tag's own screen, never straight from the menu.
+      if (action === "remove" && row) { setScreen({ name: "tag", id: row.id }); void api.showWindow(); }
       if (action === "start-all" || action === "stop-all") void tags.all(action === "start-all" ? "start" : "stop");
       if (action === "keep-running") void tags.setAutostart(!tags.keepRunning);
       if (action === "add") setScreen({ name: "connect", args: tags.rows.length ? ["add"] : ["setup"] });
@@ -164,8 +172,14 @@ export function App() {
     });
   }, [api, tags]);
 
+  // Setups that never reached Slack are set aside once the setup flow has ended.
+  useEffect(() => {
+    if (screen.name !== "home" && screen.name !== "tag") return;
+    const timer = setTimeout(() => void tags.discardDrafts(), 2000);
+    return () => clearTimeout(timer);
+  }, [screen.name, tags.rows, tags.discardDrafts]);
   if (!api || !info || screen.name === "loading") {
-    return <main ref={root} className="app" style={{ alignItems: "center", padding: 40 }}><Spinner /></main>;
+    return <main ref={root} className="app"><Starting error={bootError} retry={() => setBootAttempt((value) => value + 1)} /></main>;
   }
   const home = () => { setScreen({ name: "home" }); void tags.refresh(); watch.recheck(); };
   const add = () => setScreen({ name: "connect", args: tags.rows.length ? ["add"] : ["setup"] });
@@ -178,32 +192,34 @@ export function App() {
           cancel={() => setScreen({ name: "welcome" })}
           done={(command) => { setInfo({ ...info, cli: command || info.cli || "tag" }); setScreen({ name: "connect", args: ["setup"] }); }} />
       )}
-      {screen.name === "home" && (
+      {screen.name === "home" && !tags.loaded && <Starting error={tags.error} retry={() => void tags.refresh()} />}
+      {screen.name === "home" && tags.loaded && (
         <Home api={api} tags={tags} reports={watch.reports} problems={watch.problems} activity={watch.activity}
           firstName={info.firstName ?? null} update={update} outdated={outdated} runUpdate={() => void runUpdate()}
           add={add}
           finishSetup={(row) => setScreen({ name: "connect", args: [row.id, "setup"] })}
           open={(row) => setScreen({ name: "tag", id: row.id })}
-          fixAI={(tag) => setScreen({ name: "ai", tag })}
+          fixAI={() => capabilities.includes(SHARED_AI_CAPABILITY) ? setScreen({ name: "ai" }) : say("Update Tag to manage shared AI accounts in Settings.")}
           showSettings={() => setScreen({ name: "settings" })} />
       )}
       {screen.name === "connect" && (
-        <Connect api={api} args={screen.args} done={home}
+        <Connect api={api} args={screen.args} openAI={capabilities.includes(SHARED_AI_CAPABILITY) ? (resume) => setScreen({ name: "ai", resume }) : undefined} done={home}
           paused={() => { home(); say("Progress saved. Finish setup from Home any time."); }} />
       )}
       {screen.name === "settings" && (
         <Settings api={api} info={info} tags={tags} close={home} update={update} check={() => void check()}
           runUpdate={() => void runUpdate()} switched={(done) => dispatchUpdate({ type: "updated", update: done })}
-          openAI={capabilities.includes(AI_CAPABILITY) ? () => setScreen({ name: "ai" }) : undefined} />
+          openAI={capabilities.includes(SHARED_AI_CAPABILITY) ? () => setScreen({ name: "ai" }) : undefined} />
       )}
       {screen.name === "ai" && (
-        <AISettings api={api} tags={tags} initial={screen.tag} add={add} close={() => { watch.recheck(); setScreen({ name: "settings" }); }} />
+        <AISettings api={api} tags={tags} close={() => { watch.recheck(); setScreen(screen.resume ? { name: "connect", args: screen.resume } : { name: "settings" }); }} />
       )}
       {screen.name === "tag" && (
         <TagDetail api={api} tags={tags} initial={screen.id} problems={watch.problems} back={home} add={add}
+          canDescribe={capabilities.includes("describe")}
           showSettings={() => setScreen({ name: "settings" })}
           finishSetup={(row) => setScreen({ name: "connect", args: [row.id, "setup"] })}
-          openAI={(tag) => setScreen({ name: "ai", tag })} say={say} />
+          openAI={() => capabilities.includes(SHARED_AI_CAPABILITY) ? setScreen({ name: "ai" }) : say("Update Tag to manage shared AI accounts in Settings.")} say={say} />
       )}
       <Toast text={toast} />
     </main>

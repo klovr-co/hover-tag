@@ -6,7 +6,7 @@ import saved from "../../../protocol/examples/ai-model.json";
 import signIn from "../../../protocol/examples/ai-sign-in.jsonl?raw";
 import setup from "../../../protocol/examples/setup.jsonl?raw";
 import {
-  choiceLabel, findModel, idleSignIn, needsRestart, parseModels, parseSignInLine, parseStatus, primaryAction,
+  choiceLabel, findModel, idleSignIn, parseModels, parseSignInLine, parseStatus, primaryAction,
   resultLine, selectedModel, signInArgs, signInReducer, statusLine,
 } from "./ai";
 import { initialSetup, setupReducer } from "./setup";
@@ -31,10 +31,6 @@ describe("AI status", () => {
   });
 
   it("knows which account changes stop a running Tag", () => {
-    expect(needsRestart(codex, "chatgpt")).toBe(true);
-    expect(needsRestart(codex, "codex")).toBe(false);
-    expect(needsRestart({ ...codex, method: "chatgpt" }, "codex")).toBe(true);
-    expect(needsRestart(claude)).toBe(false);
   });
 });
 
@@ -76,27 +72,23 @@ describe("sign-in", () => {
   });
 
   it("builds the sign-in command for each method", () => {
-    expect(signInArgs("maya", "codex", { method: "chatgpt", restart: true }))
-      .toEqual(["maya", "settings", "ai", "sign-in", "codex", "--method", "chatgpt", "--restart"]);
-    expect(signInArgs("maya", "codex", { resume: true, restart: true })).toEqual(["maya", "settings", "ai", "resume", "--restart"]);
-    expect(signInArgs("maya", "claude")).toEqual(["maya", "settings", "ai", "sign-in", "claude"]);
+    expect(signInArgs("codex", { method: "chatgpt", restart: true }))
+      .toEqual(["settings", "ai", "sign-in", "codex", "--method", "chatgpt", "--restart"]);
+    expect(signInArgs("codex", { resume: true, restart: true })).toEqual(["settings", "ai", "resume", "--restart"]);
+    expect(signInArgs("claude")).toEqual(["settings", "ai", "sign-in", "claude"]);
   });
 });
 
 describe("setup's AI step", () => {
-  it("keeps setup going through a sign-in inside it", () => {
+  it("offers models from shared connections without a sign-in step", () => {
     const lines = setup.trim().split("\n");
-    const at = lines.findIndex((l) => l.includes('"type": "sign_in"'));
-    const asked = lines.findIndex((l) => l.includes('"default_model"'));
+    const asked = lines.findIndex((line) => line.includes('"default_model"'));
     let state = initialSetup;
     for (const line of lines.slice(0, asked + 1)) state = setupReducer(state, { type: "line", line });
-    // Choosing "Sign in" for Claude keeps the model question up and shows progress.
-    state = setupReducer(state, { type: "agentSignIn", backend: "claude" });
-    for (const line of lines.slice(asked + 1, at + 1)) state = setupReducer(state, { type: "line", line });
-    expect(state.outcome).toBeNull();
     expect(state.question?.id).toBe("default_model");
-    state = setupReducer(state, { type: "line", line: lines[at + 1] });
-    expect(state.question?.id).toBe("default_model");
-    expect(state.signIn.result?.status).toBe("connected");
+    const question = JSON.parse(lines[asked]);
+    expect(question.option_ids).toEqual(["codex", "codex:gpt-5.5", "claude", "claude:claude-opus-5-5"]);
+    expect(question.connections.every((connection: { shared: boolean }) => connection.shared)).toBe(true);
+    expect(lines.some((line) => JSON.parse(line).type === "sign_in")).toBe(false);
   });
 });

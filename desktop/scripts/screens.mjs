@@ -34,12 +34,12 @@ for (const scheme of ["light", "dark"]) {
   await page.getByRole("radiogroup", { name: "Thinking level" }).waitFor({ timeout: 10000 });
   await shot(page, "tag-details" + suffix);
   width = 520;
-  // Settings and AI & models.
+  // Settings and AI connections.
   await button(page, "Back to Your Tags").click();
   await button(page, "Settings").click();
   await page.getByText("Release channel").waitFor();
   await shot(page, "settings" + suffix);
-  await button(page, "Open AI and models").click();
+  await button(page, "Open AI connections").click();
   await page.getByRole("button", { name: "Check connections" }).waitFor();
   await page.waitForTimeout(1500);
   await shot(page, "ai" + suffix);

@@ -43,6 +43,14 @@ describe("one Tag update", () => {
     await expect(installUpdate(api, "0.2.0")).rejects.toThrow("complete Tag update");
     expect(events).toEqual([]);
   });
+  it("keeps both versions installed when the desktop feed cannot be fetched", async () => {
+    const { api, events } = fixture();
+    vi.mocked(api.checkAppUpdate).mockRejectedValue(new Error("Tag.app's alpha update feed is unavailable."));
+    await expect(installUpdate(api, "0.2.0")).rejects.toThrow("alpha update feed is unavailable");
+    expect(events).toEqual([]);
+    expect(api.tag).toHaveBeenCalledTimes(1);
+    expect(api.tag).toHaveBeenCalledWith(["upgrade", "--dry-run", "--json"]);
+  });
   it("retries a desktop failure without repeating the runtime upgrade", async () => {
     const { api, events } = fixture();
     vi.mocked(api.installAppUpdate).mockRejectedValueOnce(new Error("Download failed"));

@@ -23,6 +23,10 @@ export interface TagRow {
   /** Local copy of the Slack workspace's icon; null for Slack's default icon. */
   workspace_icon?: string | null;
   slack_name?: string | null;
+  /** The Slack app Tag created or linked; null before setup reaches that step. */
+  slack_app_id?: string | null;
+  /** False for a setup that never reached Slack: nothing exists there to continue or delete. */
+  has_app?: boolean;
   nickname?: string | null;
   avatar?: string | null;
   keep_running?: boolean;
@@ -40,6 +44,9 @@ export interface TagRow {
   /** The channels the Tag answers in; `name` is null until Tag has recorded it. */
   channels?: { id: string; name: string | null }[];
 }
+
+/** A setup that stopped before any Slack app existed; there is nothing worth resuming. */
+export const isDraft = (row: TagRow) => status(row) === "setup" && row.has_app === false;
 
 export type Status = "online" | "offline" | "setup" | "attention";
 
@@ -138,6 +145,9 @@ export interface SetupQuestion {
   last_result?: import("./ai").SignInResult;
   /** default_model: the connected accounts' models, grouped by agent. */
   groups?: import("./ai").ModelGroup[];
+  /** default_model accepts { value, effort } when the runtime advertises this. */
+  supports_effort?: boolean;
+  default_effort?: string | null;
   // ---- Onboarding v2 (capability setup-v2) ----
   /** profile: the Tag's name, description and the picture Tag will upload. */
   name?: string;
@@ -145,6 +155,8 @@ export interface SetupQuestion {
   description?: string;
   description_limit?: number;
   preview?: string | null;
+  /** Content hash; picture files may be replaced at the same path. */
+  preview_revision?: string | null;
   picture?: "waterdrop" | "custom" | string;
   picture_label?: string;
   error?: string | null;
@@ -175,8 +187,9 @@ export interface SetupRecap {
   name: string;
   description: string;
   picture: string | null;
-  workspace: { id: string; name: string; organization: { id: string; name: string } | null };
-  owner: { id: string; name: string | null };
+  picture_revision?: string | null;
+  workspace: { id: string; name: string; icon?: string | null; organization: { id: string; name: string } | null };
+  owner: { id: string; name: string | null; icon?: string | null };
   ai: { value: string; backend: string; backend_name: string; label: string } | null;
   approval: boolean;
 }

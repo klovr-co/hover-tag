@@ -187,3 +187,15 @@ describe("tag settings ai", () => {
     expect(typeof report.effort_chosen).toBe("boolean");
   });
 });
+
+
+it("keeps setup progress on the last question during transitions and errors", () => {
+  expect(trackStep(initialSetup)).toBe(0);
+  for (const [id, step] of [["profile", 0], ["default_model", 1], ["workspace", 2], ["approve_setup", 3], ["channels", 4]] as const) {
+    let state = setupReducer(initialSetup, { type: "line", line: JSON.stringify({ type: "question", kind: "choose", id, prompt: id }) });
+    state = setupReducer(state, { type: "answered" });
+    expect(trackStep(state)).toBe(step);
+    state = setupReducer(state, { type: "exit", code: 1, stderr: "Interrupted" });
+    expect(trackStep(state)).toBe(step);
+  }
+});

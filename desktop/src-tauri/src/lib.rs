@@ -52,6 +52,20 @@ fn feed_channel(requested: Option<&str>, version: &str) -> Result<&'static str, 
     }
 }
 
+/// Explain missing feeds without mistaking an unsuccessful check for no update.
+fn update_check_error(error: tauri_plugin_updater::Error, channel: &str) -> String {
+    use tauri_plugin_updater::Error;
+    match error {
+        Error::ReleaseNotFound => format!(
+            "Tag.app's {channel} update feed is unavailable. Check again later or choose another release channel."
+        ),
+        Error::TargetNotFound(_) | Error::TargetsNotFound(_) => format!(
+            "A Tag.app update for this computer isn't available on {channel} yet. Check again later or choose another release channel."
+        ),
+        other => format!("Couldn't check for Tag.app updates: {other}"),
+    }
+}
+
 /// Ask the release line's manifest for a newer, signed Tag.app.
 #[tauri::command]
 async fn app_update_check(
@@ -60,15 +74,17 @@ async fn app_update_check(
     channel: Option<String>,
 ) -> Result<Option<AppUpdate>, String> {
     use tauri_plugin_updater::UpdaterExt;
+    *pending.0.lock().unwrap() = None;
     let version = app.package_info().version.to_string();
-    let url = format!("{UPDATE_BASE}/tag-app-{}.json", feed_channel(channel.as_deref(), &version)?);
+    let channel = feed_channel(channel.as_deref(), &version)?;
+    let url = format!("{UPDATE_BASE}/tag-app-{channel}.json");
     let updater = app
         .updater_builder()
         .endpoints(vec![url.parse().map_err(|e| format!("{e}"))?])
         .map_err(|e| e.to_string())?
         .build()
         .map_err(|e| e.to_string())?;
-    let update = updater.check().await.map_err(|e| e.to_string())?;
+    let update = updater.check().await.map_err(|e| update_check_error(e, channel))?;
     let found = update.as_ref().map(|u| AppUpdate { version: u.version.clone(), notes: u.body.clone() });
     *pending.0.lock().unwrap() = update;
     Ok(found)
@@ -334,6 +350,26 @@ mod tests {
     use super::{first_word, gecos_name, parse_defaults_array};
 
     #[test]
+    fn asset_scope_allows_tag_pictures_in_the_hidden_private_home() {
+        let config: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let patterns = config["app"]["security"]["assetProtocol"]["scope"].as_array().unwrap();
+        // These are Tauri's Unix match options; ** does not cross hidden directories.
+        let options = glob::MatchOptions {
+            require_literal_separator: true,
+            require_literal_leading_dot: true,
+            ..Default::default()
+        };
+        let allowed = |path: &str| patterns.iter().any(|pattern| {
+            glob::Pattern::new(pattern.as_str().unwrap()).unwrap().matches_with(path, options)
+        });
+        assert!(allowed("$HOME/Tag/default/.tag/state/slack-avatar-abc.png"));
+        assert!(allowed("$HOME/Tag/default/.tag/state/workspace-icon.png"));
+        assert!(allowed("$HOME/Tag/default/.tag/integrations/slack-cli/assets/tag-profile.png"));
+        assert!(!allowed("$HOME/Tag/default/.tag/config/settings.json"));
+        assert!(!allowed("$HOME/Tag/default/.tag/state/slack-avatar.json"));
+    }
+
+    #[test]
     fn greets_by_the_first_word_of_the_account_name() {
         assert_eq!(first_word("Maya Chen\n").as_deref(), Some("Maya"));
         assert_eq!(first_word("  \n"), None);
@@ -356,6 +392,21 @@ mod tests {
         // Only real feeds: edge has none, and nothing else can reach the URL.
         assert!(super::feed_channel(Some("edge"), "0.3.0").is_err());
         assert!(super::feed_channel(Some("../stable"), "0.3.0").is_err());
+    }
+
+    #[test]
+    fn explains_unavailable_desktop_feeds_and_platforms() {
+        use tauri_plugin_updater::Error;
+        let missing = super::update_check_error(Error::ReleaseNotFound, "alpha");
+        assert!(missing.contains("alpha update feed is unavailable"));
+        assert!(missing.contains("choose another release channel"));
+        for error in [Error::TargetNotFound("darwin-aarch64".into()), Error::TargetsNotFound(vec![])] {
+            let message = super::update_check_error(error, "beta");
+            assert!(message.contains("this computer isn't available on beta"));
+        }
+        let network = super::update_check_error(Error::Network("offline".into()), "stable");
+        assert!(network.contains("Couldn't check"));
+        assert!(network.contains("offline"));
     }
 
     #[test]

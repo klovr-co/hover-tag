@@ -5,7 +5,7 @@ import list from "../../../protocol/examples/list.json";
 import aiStatus from "../../../protocol/examples/ai-status.json";
 import type { AIStatus } from "../lib/ai";
 import { demoBridge } from "../lib/bridge";
-import { aiProblem, quietLine, type ActivityItem } from "../lib/home";
+import { aiProblem, quietLine, roster, type ActivityItem } from "../lib/home";
 import type { TagRow } from "../lib/protocol";
 import type { Tags } from "../lib/tags";
 import { Quiet, TagRowView } from "./Home";
@@ -37,6 +37,15 @@ function quiet(problems: Record<string, string | null>, activity: Record<string,
   render(<Quiet line={quietLine(rows, problems, activity, now, "Maya")} rows={rows} open={open} fix={fix} />);
   return { open, fix };
 }
+
+describe("Home's header roster", () => {
+  it("shows only online Tags, and nothing when none are online", () => {
+    expect(roster(rows).shown.map((row) => row.id)).toEqual([maya.id, "ops"]);
+    expect(roster(rows.map((row) => ({ ...row, state: "stopped" })))).toEqual({ shown: [], extra: 0 });
+    const many = Array.from({ length: 6 }, (_, i) => ({ ...maya, id: `t${i}` }));
+    expect(roster([...many, research])).toMatchObject({ extra: 2 });
+  });
+});
 
 describe("Home's quiet line", () => {
   it("leads with an AI that can't answer, grouped by its cause, and Fix opens AI & models", () => {

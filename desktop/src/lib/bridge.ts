@@ -12,6 +12,8 @@ import setupExample from "../../../protocol/examples/setup.jsonl?raw";
 import aiStatusExample from "../../../protocol/examples/ai-status.json";
 import aiModelsExample from "../../../protocol/examples/ai-models.json";
 import type { AIStatus, Connection } from "./ai";
+import type { ActivityItem } from "./home";
+import { windowFitter } from "./fit";
 
 export interface AppInfo {
   platform: "macos" | "windows" | "linux" | string;
@@ -131,15 +133,7 @@ async function tauriBridge(): Promise<Bridge> {
       if (granted) notification.sendNotification({ title, body });
     },
     showWindow: () => invoke("show_window"),
-    fitWindow: async (width, height) => {
-      const wanted = Math.min(Math.max(height, 300), 860);
-      const window_ = getCurrentWindow();
-      await window_.setSize(new LogicalSize(width, wanted));
-      // With macOS's overlay title bar the size can include the title bar; correct by what the page really got.
-      await new Promise((resolve) => requestAnimationFrame(resolve));
-      const extra = window.innerHeight - wanted;
-      if (Math.abs(extra) > 1) await window_.setSize(new LogicalSize(width, wanted - extra));
-    },
+    fitWindow: windowFitter((width, height) => getCurrentWindow().setSize(new LogicalSize(width, height)), window),
     quit: () => invoke("quit"),
     markMigrated: () => invoke("mark_migrated"),
     checkAppUpdate: (channel) => invoke<AppUpdate | null>("app_update_check", { channel: channel ?? null }),
@@ -165,6 +159,9 @@ async function tauriBridge(): Promise<Bridge> {
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export function demoBridge(options: { installed?: boolean } = {}): Bridge {
+  const sharedAI = structuredClone(aiStatusExample) as AIStatus;
+  const aiDemo = new Map<string, AIStatus>();
+  const aiFor = (tag: string, row?: TagRow) => demoAIFor(aiDemo, sharedAI, tag, row);
   const rows: (TagRow & { home: string })[] = structuredClone(listExample.tags);
   rows.splice(1, 0, {
     ...rows[0], id: "t0klovr1-a0rese02", slack_name: "Research Tag", state: "stopped",
@@ -182,9 +179,9 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
   });
   // Sample data shows only what Tag itself would report: replies come from its activity records.
   const today = (hours: number, minutes: number) => { const d = new Date(); d.setHours(hours, minutes, 0, 0); return d.toISOString(); };
-  const activity: Record<string, { at: string; kind: string; channel: string; channel_name: string | null; dm: boolean }[]> = {
-    [rows[0].id]: [{ at: today(9, 20), kind: "replied", channel: "C0LAUNCH", channel_name: "launch", dm: false }],
-    "t0acme01-a0ops003": [{ at: today(10, 12), kind: "replied", channel: "C0LAUNCHOPS", channel_name: "launch-ops", dm: false }],
+  const activity: Record<string, ActivityItem[]> = {
+    [rows[0].id]: [{ run_id: "a".repeat(32), reply_preview: "I reviewed the launch notes and prepared the following checklist.", reply_summary: "Created a launch checklist with owners and next steps.", artifacts: [{ name: "launch-checklist.md", kind: "file", delivery: "uploaded", url: "https://example.slack.com/files/F123/launch-checklist.md" }], model: "gpt-5.5", model_name: "GPT-5.5", reasoning_effort: "medium", backend: "codex", duration_seconds: 43, step_count: 7, usage: {input_tokens: 11900, output_tokens: 440, total_tokens: 12340, cache_read_input_tokens: 9000, reasoning_output_tokens: 180}, at: today(9, 20), kind: "replied", channel: "C0LAUNCH1", channel_name: "launch", dm: false }],
+    "t0acme01-a0ops003": [{ run_id: "b".repeat(32), at: today(10, 12), kind: "replied", channel: "C0LAUNCHOPS", channel_name: "launch-ops", dm: false }],
   };
   // ?tags=N shows only the first N sample Tags, for checking Home with one or two.
   const shown = typeof location === "undefined" ? null : new URLSearchParams(location.search).get("tags");
@@ -205,10 +202,14 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
     tag: async (args) => {
       await sleep(250);
       const [first, second] = args;
+      if (first === "settings" && second === "ai" && args[2] === "connections") {
+        return json({ connections: sharedAI.connections, usable: sharedAI.connections.filter((c) => c.state === "connected").map((c) => c.backend),
+          running: rows.some((r) => r.state === "running"), scope: "installation" });
+      }
       if (first === "list") return json({ schema_version: 1, tags: rows });
       if (first === "version") {
         return json({ ...versionExample, version: runtimeVersion,
-          capabilities: [...new Set([...versionExample.capabilities, "ai-connections", "logs-activity", "thinking-level"])] });
+          capabilities: [...new Set([...versionExample.capabilities, "ai-connections", "shared-ai-connections", "logs-activity", "thinking-level", "describe"])] });
       }
       if (second === "settings" && args[2] === "ai") {
         const ai = aiFor(first, rows.find((r) => r.id === first));
@@ -260,21 +261,38 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
       }
       const row = rows.find((r) => r.id === first);
       if (row && second === "logs") {
+        if (args.includes("--activity")) {
+          const item = activity[row.id]?.find((item) => item.run_id === args[args.indexOf("--activity") + 1]);
+          return json({ schema_version: 1, ok: !!item, activity: item ? {
+            run_id: item.run_id, outcome: "completed", started_at: item.at, finished_at: item.at,
+            team: row.slack_workspace, channel: item.channel, thread_ts: "1791158400.000001", omitted: 0, error: null,
+            events: [{ label: "Reading a file…", status: "completed", started_at: item.at, finished_at: item.at,
+              details: { tool: "cat launch-plan.md", input: "Read launch-plan.md", output: "Launch checklist reviewed." } }],
+          } : null });
+        }
+        const matches = (activity[row.id] ?? []).filter((item) =>
+          (!args.includes("--activity-channel") || item.channel === args[args.indexOf("--activity-channel") + 1]) &&
+          (!args.includes("--hide-errors") || item.kind !== "failed"))
+          .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
+        const limit = args.includes("--activity-limit") ? Number(args[args.indexOf("--activity-limit") + 1]) : 50;
         return json({ schema_version: 1, tag: row.id, services: {
           slack: ["Open Tag is live as @" + (row.slack_name ?? "Tag")],
-          mfs: ["Memory server ready"] }, activity: activity[row.id] ?? [] });
+          mfs: ["Memory server ready"] }, activity: matches.slice(0, limit), activity_has_more: matches.length > limit });
       }
       if (row && (second === "start" || second === "stop")) {
         row.state = second === "start" ? "running" : "stopped";
         row.keep_running = second === "start";
       }
+      if (row && (second === "abandon" || second === "remove")) rows.splice(rows.indexOf(row), 1);
       if (row && second === "rename") {
         row.slack_name = args[2];
         row.nickname = args[2].toLowerCase().replace(/[^a-z0-9]+/g, "-");
       }
+      if (row && second === "describe") row.description = args[2] || null;
       return { code: 0, stdout: "", stderr: "" };
     },
     setup: async (args, onLine, onExit) => {
+      if (args[0] === "settings" && args[1] === "ai") return demoSignIn(sharedAI, ["", ...args], onLine, onExit);
       if (args[1] === "settings" && args[2] === "ai") return demoSignIn(aiFor(args[0]), args, onLine, onExit);
       const script = setupExample.trim().split("\n");
       let at = 0;
@@ -331,8 +349,7 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
 }
 
 // Sample AI connections, one copy per Tag so changes stick while the demo runs.
-const aiDemo = new Map<string, AIStatus>();
-function aiFor(tag: string, row?: TagRow): AIStatus {
+function demoAIFor(aiDemo: Map<string, AIStatus>, shared: AIStatus, tag: string, row?: TagRow): AIStatus {
   if (!aiDemo.has(tag)) {
     const ai = { ...structuredClone(aiStatusExample) as AIStatus, tag };
     const [backend, model] = (row?.default_model ?? "").split(":");
@@ -343,7 +360,10 @@ function aiFor(tag: string, row?: TagRow): AIStatus {
     }
     aiDemo.set(tag, ai);
   }
-  return aiDemo.get(tag)!;
+  const ai = aiDemo.get(tag)!;
+  ai.connections = shared.connections;
+  ai.usable = shared.connections.filter((c) => c.state === "connected").map((c) => c.backend);
+  return ai;
 }
 
 /** Plays `tag … settings ai sign-in`: progress, then connected unless cancelled. */
@@ -373,7 +393,7 @@ async function demoSignIn(ai: AIStatus, args: string[], onLine: (line: string) =
     const connection: Connection = { ...ai.connections[index], state: "connected", detail: "",
       account: backend === "claude" ? "Claude Max · maya@klovr.co" : args.includes("chatgpt") ? "ChatGPT plan · maya@klovr.co" : "ChatGPT sign-in",
       method: backend === "claude" ? "claude" : args.includes("chatgpt") ? "chatgpt" : "codex",
-      shared: !args.includes("chatgpt"), actions: ["change_account"] };
+      shared: true, actions: ["change_account"] };
     ai.connections[index] = connection;
     ai.usable = ai.connections.filter((c) => c.state === "connected").map((c) => c.backend);
     finish("connected", connection);
@@ -393,6 +413,7 @@ export function bridge(): Promise<Bridge> {
         ? { ...demoBridge(), fitWindow: real.fitWindow, showWindow: real.showWindow, quit: real.quit, onFileDrop: real.onFileDrop }
         : real))
       : Promise.resolve(demoBridge({ installed: params.get("installed") !== "0" }));
+    current = current.catch((error) => { current = null; throw error; });
   }
   return current;
 }

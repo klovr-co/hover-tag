@@ -9,7 +9,7 @@ afterEach(cleanup);
 
 const following: ProductUpdate = { version: "0.3.0", current: "0.3.0", runtime: false, desktop: false, channel: "stable", pinned: false, ahead: false };
 
-function channels(newest: Record<string, string>) {
+function channels(newest: Record<string, string>, update: ProductUpdate | null = following) {
   const api = demoBridge();
   const calls: string[][] = [];
   const json = (value: unknown): RunResult => ({ code: 0, stdout: JSON.stringify(value), stderr: "" });
@@ -28,12 +28,25 @@ function channels(newest: Record<string, string>) {
   api.checkAppUpdate = async (channel) => ({ version: newest[channel ?? "stable"] });
   api.installAppUpdate = vi.fn(async () => {});
   const switched = vi.fn();
-  render(<ReleaseChannel api={api} appVersion="0.3.0" update={following} busy={false} setBusy={() => {}}
+  render(<ReleaseChannel api={api} appVersion="0.3.0" update={update} busy={false} setBusy={() => {}}
     switched={switched} setError={() => {}} />);
   return { calls, switched };
 }
 
 describe("Release channel", () => {
+  it("can preview and confirm another channel after the initial update check failed", async () => {
+    const { calls, switched } = channels({ stable: "0.3.0", beta: "0.4.0-beta.1", alpha: "0.4.0-alpha.1" }, null);
+    const stable = screen.getByRole("radio", { name: "Stable" });
+    expect(stable.hasAttribute("disabled")).toBe(false);
+    expect(stable.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(stable);
+    await screen.findByText("Switch to Stable. You already have its newest release.");
+    expect(calls.every((args) => args.includes("--dry-run"))).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Switch" }));
+    await vi.waitFor(() => expect(switched).toHaveBeenCalled());
+    expect(calls).toContainEqual(["upgrade", "--channel", "stable", "--json"]);
+  });
+
   it("previews a newer channel without changing anything, then switches and updates on confirm", async () => {
     const { calls, switched } = channels({ stable: "0.3.0", beta: "0.4.0-beta.1", alpha: "0.4.0-alpha.1" });
     fireEvent.click(screen.getByRole("radio", { name: "Beta" }));

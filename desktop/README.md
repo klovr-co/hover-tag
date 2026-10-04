@@ -36,6 +36,21 @@ and dark, from `npm run dev`.
 
 ## Build
 
+The desktop icon uses a close crop of the water avatar so its face remains
+readable at Dock and Finder sizes. After `npm install`, regenerate all desktop
+icon formats with `uv run scripts/app-icons.py` (requires
+[uv](https://docs.astral.sh/uv/)). The script preserves the macOS tile padding
+and regenerates PNG, ICNS, and ICO assets from the shared branding artwork.
+The menu bar derives a monochrome avatar from the TUI's pixel map in
+`scripts/tag_mascot.py`, preserving its silhouette, narrow eyes, and tiny smile.
+An outline means no Tags are online; a filled silhouette means at least one is
+online. macOS template tinting adapts it to light, dark, and selected menu bars.
+Regenerate the four tray assets with `node scripts/tray-icons.mjs` (requires
+Python 3). They display at 18 points on macOS with 36px assets for Retina
+displays. The TUI retains its colored pixel map.
+These are bundled visual assets; the CLI and agent backends require no
+corresponding changes or migrations.
+
 ```sh
 npm run tauri -- build        # Tag.app and .dmg, setup.exe, or .deb and .AppImage
 ```
@@ -74,16 +89,23 @@ the installed release until the channel catches up. Tag.app has no `edge` feed,
 so edge stays a terminal-only choice; Settings explains this when the CLI
 follows edge.
 
-**AI & models** in Settings shows each set-up Tag's Codex and Claude
-connections and its default model, using `tag NAME settings ai … --json` (see
-[AI connections](../docs/reference/app-protocol.md#ai-connections)). Sign-ins
-run through the same streaming session as setup, so they report progress and
-can be cancelled; the app never handles credentials. The section appears only
-when the installed Tag reports the `ai-connections` capability. First-run setup
-draws the CLI's `default_model` question as a grouped model picker with a
-sign-in link for an agent that isn't connected, and shows connection cards
-(`ai_connection`) only while nothing is connected. `tag settings` → AI & models offers the same
-choices in a terminal.
+If a desktop feed is unavailable, Settings explains which channel could not
+be checked and leaves the channel picker usable. Each selection still previews
+and validates the complete update before confirmation; a missing desktop build
+never permits a partial upgrade. This recovery is specific to Tag.app because
+the standalone CLI does not consume desktop feeds; both agent backends use the
+same product updater. No stored configuration changes or migrations are needed.
+
+**AI connections** in Settings manages the shared Codex and Claude accounts for
+all Tags, including before the first Tag is set up, using `tag settings ai
+connections --json`. Sign-ins use the same streaming session as setup and can
+be cancelled; the app never handles credentials. Changing an account pauses
+running Tags and restores them afterwards. Tag details and setup offer model
+and thinking choices only. Setup shows thinking below the model, and expands the
+model list inside the card so it stays clear of the window header. Both choices
+apply to every request to that Tag. If setup has no connected provider, it pauses and
+opens global Settings, then resumes when you return. See
+[AI connections](../docs/reference/app-protocol.md#ai-connections).
 
 **Home** reads `tag list --json` every 30 seconds. Each row shows the Tag's
 `default_model_name` and `default_effort` after its name, then its
@@ -100,6 +122,15 @@ from `tag NAME logs --json` every 30 seconds, and the model and thinking level
 from `tag NAME settings ai --json` and `models --json`; saving runs
 `tag NAME settings ai model VALUE --effort LEVEL`, with `--restart` only after
 Save and restart. Copy full log copies the services' recent output.
+Activity opens scrolled to the latest request at the bottom of chronological
+history. Scrolling up loads older requests in batches of 50 and preserves the
+reading position. Show errors is off by default, keeping the choice while
+switching Tags and channels. Each channel opens on an
+Activity tab that combines matching records from the workspace's Tags, with a
+separate Tags in this channel tab for current membership. The CLI applies
+`--activity-channel CHANNEL_ID` and `--hide-errors` before the activity limit.
+`--activity-limit` expands the window and `activity_has_more` indicates more
+retained history; both backends use the same stored records and filtering.
 
 **Add a Tag** draws `tag setup --json` (or `tag add --json`) in setup's own
 order: `profile` (the `profile_picture` kind: name, description, Shuffle,

@@ -7,6 +7,7 @@ import {
   ACTION_LABEL, CLAUDE_SHARED_NOTE, CODEX_METHODS, isUrgent, primaryAction, statusLine,
   findModel, type AIModels, type AIStatus, type Connection, type ModelEntry, type SignInState,
 } from "../lib/ai";
+import { useNight } from "../lib/appearance";
 import { effortLabel } from "../lib/home";
 import { choiceText, type ModelChoice } from "../lib/model";
 import claude from "../assets/agents/claude.png";
@@ -20,13 +21,11 @@ const NAME: Record<string, string> = { codex: "Codex", claude: "Claude" };
 /** The agent's own app icon; it names the agent, so rows don't repeat it. */
 export function AgentMark({ backend, size = 32 }: { backend: string; size?: number }) {
   const name = NAME[backend] ?? backend;
+  const night = useNight();
   const style = { width: size, height: size, borderRadius: size * 0.24, flex: "none" as const, display: "block" };
-  return backend === "codex" ? (
-    <picture title={name}>
-      <source srcSet={codexDark} media="(prefers-color-scheme: dark)" />
-      <img src={codexLight} alt={name} style={style} />
-    </picture>
-  ) : <img src={claude} alt={name} title={name} style={style} />;
+  return backend === "codex"
+    ? <img src={night ? codexDark : codexLight} alt={name} title={name} style={style} />
+    : <img src={claude} alt={name} title={name} style={style} />;
 }
 
 export type RowAction =
@@ -110,6 +109,7 @@ export function ConnectionRow({ connection: c, signIn, opened, busy, quiet, act,
       <AgentMark backend={c.backend} size={34} />
       <div className="txt">
         <span className={`cstat ${tone}`}>{line}</span>
+        {c.state === "expired" && c.detail && <span className="cver">{c.detail}</span>}
         {note && <span className="cver">{note}</span>}
         {running && signIn.url && <span className="cver"><button className="link" style={{ padding: 0 }} onClick={() => open(signIn.url!)}>Open the sign-in page again</button></span>}
       </div>
@@ -118,14 +118,14 @@ export function ConnectionRow({ connection: c, signIn, opened, busy, quiet, act,
   );
 }
 
-/** Codex can use the computer's sign-in or a ChatGPT account for this Tag only; Claude's is always shared. */
-export function ChangeAccount({ connection, tagName, running, choose, cancel }: {
-  connection: Connection; tagName: string; running: boolean;
+/** Both provider connections are shared by every Tag. */
+export function ChangeAccount({ connection, running, choose, cancel }: {
+  connection: Connection; running: boolean;
   choose: (method?: string) => void; cancel: () => void;
 }) {
   const [method, setMethod] = useState<string>("chatgpt");
   const codex = connection.backend === "codex";
-  const stops = running && codex && (method === "chatgpt" || connection.method === "chatgpt");
+  const stops = running;
   const back = codex && method === "codex" && connection.method === "chatgpt";
   useEffect(() => {
     const close = (e: KeyboardEvent) => { if (e.key === "Escape") cancel(); };
@@ -142,12 +142,12 @@ export function ChangeAccount({ connection, tagName, running, choose, cancel }: 
               <button key={option.method} className={method === option.method ? "opt sel" : "opt"} role="radio"
                 aria-checked={method === option.method} onClick={() => setMethod(option.method)}>
                 <span className={method === option.method ? "radio on" : "radio"} style={{ marginLeft: 0 }} />
-                <span className="txt"><span className="label">{option.title(tagName)}</span><span className="sub wrap">{option.detail}</span></span>
+                <span className="txt"><span className="label">{option.title()}</span><span className="sub wrap">{option.detail}</span></span>
               </button>
             ))}
           </div>
         ) : <p>{CLAUDE_SHARED_NOTE}</p>}
-        {stops && <div className="dlg-note"><Icon name="restart" /><span>{tagName} stops while you sign in and starts again afterwards.</span></div>}
+        {stops && <div className="dlg-note"><Icon name="restart" /><span>Running Tags pause while you sign in and start again afterwards.</span></div>}
         <div className="foot">
           <span className="spacer" />
           <button className="p-btn quiet" onClick={cancel}>Cancel</button>
@@ -160,12 +160,10 @@ export function ChangeAccount({ connection, tagName, running, choose, cancel }: 
 
 // ---- The model picker, thinking level and save bar, shared by Tag detail and AI & models ----
 
-const UNLISTED_VERB: Record<string, string> = { not_installed: "Install", expired: "Reconnect", unsupported: "Update" };
-
 /** Every connected account's models, grouped by agent; picking a model picks its agent. */
-export function ModelMenu({ models, report, value, onChange, below, disabled }: {
+export function ModelMenu({ models, report, value, onChange, below, inline, disabled }: {
   models: AIModels | null; report: AIStatus | null; value: string | null; onChange: (value: string) => void;
-  below?: boolean; disabled?: boolean;
+  below?: boolean; inline?: boolean; disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -196,15 +194,14 @@ export function ModelMenu({ models, report, value, onChange, below, disabled }: 
         <span className="caret"><Icon name="updown" /></span>
       </button>
       {open && (
-        <div className={below ? "mmenu below" : "mmenu"} role="listbox" aria-label="Default model">
-          {connections.filter((c) => c.allowed !== false).map((c) => {
+        <div className={inline ? "mmenu inline" : below ? "mmenu below" : "mmenu"} role="listbox" aria-label="Default model">
+          {connections.filter((c) => c.allowed !== false && (models.groups.some((g) => g.backend === c.backend) || (value && !offered && backend === c.backend))).map((c) => {
             const group = models.groups.find((g) => g.backend === c.backend);
             return (
               <div key={c.backend}>
                 <div className="mgroup" role="presentation"><AgentMark backend={c.backend} size={20} />{c.name}
                   {c.state === "limited" && <em>Usage limit reached</em>}</div>
-                {!group ? <div className="mnote">{UNLISTED_VERB[c.state] ?? "Sign in to"} {c.name} to use its models.</div>
-                  : group.models.map((m) => (
+                {group?.models.map((m) => (
                     <button key={m.value} className="mopt" role="option" aria-selected={m.value === value}
                       onClick={() => { onChange(m.value); setOpen(false); }}>
                       <span className="mck">{m.value === value && <Icon name="check" size={12} />}</span>{m.label}
