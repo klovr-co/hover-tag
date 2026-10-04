@@ -3972,7 +3972,7 @@ dependencies = [
 
 [[package]]
 name = "tag-desktop"
-version = "0.3.0-alpha"
+version = "0.3.0-beta.1"
 dependencies = [
  "glob",
  "serde",
