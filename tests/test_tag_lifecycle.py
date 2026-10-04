@@ -331,6 +331,13 @@ class TagLifecycleTests(unittest.TestCase):
             tag_cli.reconcile_invitation_memory(self.home)
         tick.assert_called_once_with()
 
+        # A Tag set up without channels starts and waits for its first invitation.
+        status.write_text(json.dumps({"state": "no_joined_channels"}), encoding="utf-8")
+        with patch.dict(sys.modules, {"slack_invitation_memory": slack_invitation_memory}), patch.object(
+            slack_invitation_memory.InvitationMemory, "tick"
+        ):
+            tag_cli.reconcile_invitation_memory(self.home)
+
         status.write_text(json.dumps({"state": "needs_attention"}), encoding="utf-8")
         with patch.dict(sys.modules, {"slack_invitation_memory": slack_invitation_memory}), patch.object(
             slack_invitation_memory.InvitationMemory, "tick"

@@ -76,6 +76,21 @@ class OpenTagDoctorTests(unittest.TestCase):
         with patch.dict(os.environ, environment, clear=True):
             self.assertFalse(check_offline(root))
 
+    def test_a_tag_following_invitations_may_have_no_memory_sources_yet(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        environment = {
+            "OPENTAG_TRANSPORT": "slack", "OPENTAG_BACKEND": "codex", "OPENTAG_WORKDIR": str(root),
+            "MFS_URL": "http://127.0.0.1:13619", "SLACK_ALLOWED_USER_IDS": "UOWNER",
+        }
+        with patch.dict(os.environ, {**environment, "SLACK_CHANNEL_POLICY": "invited"}, clear=True), patch.object(
+            opentag_doctor, "check_runtime_dependencies", return_value=True
+        ):
+            self.assertTrue(check_offline(root))
+        with patch.dict(os.environ, {**environment, "SLACK_CHANNEL_POLICY": "selected"}, clear=True), patch.object(
+            opentag_doctor, "check_runtime_dependencies", return_value=True
+        ):
+            self.assertFalse(check_offline(root))
+
 class ClaudeTransportDoctorTests(unittest.TestCase):
     def test_sdk_case_and_whitespace_still_check_dependency(self):
         for transport in ("sdk", "SDK", " SDK ", "print"):

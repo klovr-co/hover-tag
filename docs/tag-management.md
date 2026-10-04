@@ -167,7 +167,8 @@ outside the required questions.
 
 ### Choose the Tag's model
 
-After the Tag's name and picture, setup asks for the Tag's **default model**,
+After the Tag's name and picture, and before the Slack workspace, setup asks
+for the Tag's **default model**,
 from the models your Codex and Claude accounts on this computer offer, grouped
 by agent. Choosing a model also chooses its agent (`OPENTAG_BACKEND` follows
 `OPENTAG_DEFAULT_MODEL`). Each group starts with the account's own default. If
@@ -246,53 +247,61 @@ its Slack app data. If deletion fails or its outcome is uncertain, setup does
 not restart; check the app in Slack before running `tag setup`. The backup's
 `app-deletion.json` records the outcome. Missing or ambiguous identity never
 triggers deletion.
-Setup offers **Create a new Tag app**, **Use an existing app**, or
-**Exit · finish setup later**.
-Profile-picture selection and upload require Slack CLI 4.7 or newer.
-Before creating a new app, setup proposes **&lt;your first name&gt;'s Tag** and a
-curated version of Tag's waterdrop. Choose Metal (white), Wood (green), Water
-(the default blue), Fire (red), or Soil (yellow). Backgrounds, highlights, and
-16 subtle signatures provide 960 identities. Tag remembers the assignment and
-avoids known collisions for that workspace on the same installation. Choose an
-element to keep that branded identity, or **Choose my own picture** and drag or paste one
-local PNG, JPEG, or GIF path into the terminal. Images must be 512–2000 pixels
-in each dimension. Before creating anything remotely, Tag reviews the chosen
-name and picture and offers to open the PNG in the system image viewer, change
-either choice, continue, or finish setup later. Tag copies the result into its private
-Slack CLI project and the Slack CLI uploads it during the approved app creation.
-For an existing app, open https://api.slack.com/apps, sign in if asked, and select
-an app you manage for the chosen workspace. In **Basic Information → App Credentials**,
-copy the **App ID** (starting with `A`) and paste it into Tag. This is not a token
-or Client ID. Tag asks before linking and checks the app's configuration afterward.
-No browser-session integration is needed. Saved or archived app identities are
-not presented as a list of your Slack apps.
-When the compatibility check finds missing settings, it shows the full
-checklist. If Agent messaging is missing, setup offers **Enable Agent messaging
-with Slack CLI**. Tag exports the remote manifest, adds only the Agent view while
-preserving unrelated settings, syncs it, and verifies Slack's saved state. A
-legacy Assistant view requires explicit confirmation because Slack does not
-allow that conversion to be reversed. Other missing settings still offer
-**Open app settings**, **Check again**, or **Exit · finish setup later**. Open app settings
-takes you to the selected Slack app; make every listed change there, save it,
-then choose Check again. If bot scopes are listed, reinstall the app in Slack
-afterward so they take effect. Tag never requests a configuration token.
+Setup first shows **Your Tag**: a name (your computer account's first name,
+such as **Maya's Tag**), an optional one-line description of up to 140
+characters, and a picture. The picture starts as one of Tag's waterdrops.
+**Shuffle picture** draws another from any of the five elements (Metal, Wood,
+Water, Fire, Soil); with backgrounds, highlights, and 16 subtle signatures there
+are 960, and Tag avoids ones your other Tags on this computer already use.
+**Choose my own picture** takes a PNG, JPEG, or GIF from 512 to 2000 pixels on
+each side; drag it into the terminal or paste its path. Uploading a picture
+needs Slack CLI 4.7 or newer. The description appears on the app's Slack
+profile and in Slack's agent view. **Use an existing app** skips naming,
+because an existing app keeps its own name and picture.
+
+Next comes the AI, then the Slack workspace. Setup lists the Slack CLI's
+sign-ins on this computer and signs in only when there are none or you choose
+**Sign in to another workspace**. For an organization sign-in, enter the
+workspace's address or `T…` ID (from `app.slack.com/client/T…`); Tag can't list
+an organization's workspaces yet. The person signed in to Slack becomes the
+Tag's owner: Tag reads it from the sign-in, or asks Slack, and stops with
+"Sign in to Slack again" rather than guess. Nothing in Slack changes before
+this step.
+
+**Create** shows one recap: name, description, picture, workspace, owner, and
+AI, plus an Approval line for organizations, whose admins may need to approve.
+**Create in Slack** creates and installs the app; **Edit** and **Edit AI**
+change those choices and return to the recap; **Back** chooses the workspace
+again. Tag copies the picture into its private Slack CLI project, and the Slack
+CLI uploads it while creating the app.
+
+For an existing app, **Your app** lists the apps Tag knows for the workspace:
+apps linked to this Tag, apps the Slack CLI lists, and apps your other Tags use,
+which can't be picked because one app serves one Tag. **Use a different app**
+takes an app address (`api.slack.com/apps/A…`) or App ID; it isn't a token or
+Client ID. Tag links the app and shows its checks. **Update app** adds only
+Tag's missing settings to the app and keeps the rest; Slack then asks you to
+reinstall it. Tag changes the app only after you choose it. **I'll do it
+myself** lists the steps in Slack app settings, then checks again. A legacy
+Assistant view needs your confirmation, because Slack doesn't allow that
+conversion to be reversed. Tag never requests a configuration token.
 If setup pauses or fails, run
 `tag setup` to resume the new answers. Reset requires an interactive terminal.
 The printed backup contains `restore-paths.json`, mapping each saved item to its
 original location. To recover the previous setup, stop Tag and move those items
 back, first keeping a copy of any newer configuration you want to preserve.
 
-The terminal follows four steps: Connect Slack → App → Channels → Finish.
-The AI step runs between App and Channels.
-Finish setup saves configuration. Run `tag start` to initialize shared memory
-and connect Slack. Starting memory for the first time can take a couple of minutes.
-Channels Tag has already joined are included automatically and cannot be
-removed from setup. Use arrow keys and Enter to continue; Space opens an
-optional checklist only after choosing **Add public channels**. Plain terminals
-fall back to numbered input. `q` exits so setup can be finished later. The channel
-summary offers Change channels and Change defaults (history window, AI connection, and default model)
-before approval. Approving Finish setup saves these choices without starting
-services or indexing history.
+The terminal follows five steps: Your Tag → AI → Workspace → Create → Channels.
+With an existing app, Create becomes Your app.
+**Channels** lists the channels Tag is in, already selected, and public channels
+it can join; choosing one adds Tag to it. You can choose none: new Tags follow
+invitations, so `/invite` the app in any channel, private ones too, and Tag
+picks it up about a minute later while it runs. There is no review after
+channels; the Create recap was the approval. Setup saves the configuration
+without starting services or indexing history. Run `tag start` to initialize
+shared memory and connect Slack. Starting memory for the first time can take a
+couple of minutes. Plain terminals fall back to numbered input, and `q` exits so
+setup can be finished later.
 
 After the first successful `tag start`, Tag sends a welcome DM to the single
 account set as its owner, including a first-task suggestion
@@ -472,40 +481,35 @@ setup writes one JSON object per line to stdout and reads each answer from stdin
 
 - `{"type": "message", "text": …}` — progress prose, without color.
 - `{"type": "question", "id": …, "kind": …, "prompt": …}` — setup is waiting.
-  `id` is a stable name such as `workspace`, `history_days`, or
-  `approve_setup`; match answers by `id`, not by prompt wording. `kind` is
-  `choose` (with `options` and `default`), `multi` (channel `options` and
-  `selected`), `text` (with `default`), `secret`, `confirm`, `people`, or
-  `slack_login`.
+  `id` is a stable name such as `profile`, `workspace`, or `approve_setup`;
+  match answers by `id`, not by prompt wording. `kind` is `choose` (with
+  `options` and `default`), `multi` (channel `options` and `selected`), `text`
+  (with `default`), `secret`, `confirm`, `profile_picture`, or `slack_login`.
+  See [Setup](reference/app-protocol.md#setup) for each question, in order.
 - `{"type": "result", "status": "complete" | "paused" | "failed", "tag": …}` —
   the session is over. `paused` means progress was saved and setup can resume.
+  A `complete` result also has `ready`: the Slack workspace, app, channels, and
+  AI, so a client can open the Tag in Slack.
 - `{"type": "progress", …}` and `{"type": "sign_in", …}` — an agent sign-in
-  started from the `ai_connection` question. Send `{"cancel": true}` to cancel
-  it. See [AI connections](reference/app-protocol.md#ai-connections) for the
+  started from the `ai_connection` question (with `backend`), or app creation
+  (`step` `create`, `picture`, `install`, `connect`). Send `{"cancel": true}`
+  to cancel an agent sign-in. See [AI connections](reference/app-protocol.md#ai-connections) for the
   `ai_connection` and `default_model` questions.
 
 Answer with `{"answer": …}`: an option index or its exact label for `choose`, a
 list of them for `multi`, a string for `text` and `secret`, a boolean for
-`confirm`, and an offered member ID (or `"manual"`) for `people`. Choosing the exit option, sending `{"answer": null, "pause": true}`,
+`confirm`, and `"shuffle"`, `"existing"`, or an object for `profile_picture`. Choosing the exit option, sending `{"answer": null, "pause": true}`,
 or closing stdin saves progress and pauses. Questions carry `can_go_back`; when
 it is true, `{"back": true}` returns to the previous question with the earlier
 answer as its default, after clearing only the setting that question saved.
-Back stops at steps that already changed something in Slack (sign-in, creating
-or linking the app, connecting its credentials). With `--step`, use `--back`. Clients should ignore stdout lines
+Back stops at steps that already changed something in Slack (sign-in, creating,
+linking, or updating the app, connecting its credentials). With `--step`, use `--back`. Clients should ignore stdout lines
 that are not JSON objects.
-
-The `people` question includes a `people` array with `id`, `name`, `username`,
-and `image_url` for each active person. Tag.app lets you search names, usernames,
-and member IDs, with profile photos or an initial when no photo loads. The CLI
-provides the same people search with text labels. Selecting a person stores their
-member ID; choosing `manual` opens member-ID entry. If Slack's directory is
-unavailable, setup falls back to manual entry. Existing caller choices are kept.
-This uses the already-required `users:read` scope after the bot is connected.
 
 `slack_login` (id `slack_login`) replaces the terminal's Slack CLI sign-in. Its `sign_in_line` is a
 one-time `/slackauthticket` command for the person to send in Slack; answer with
 the code Slack then shows. Setup never echoes the code. `tag add --json` never asks
-for a name; its result reports the Tag's final name once setup has named it.
+for the Tag's ID; its result reports the ID once setup has named it.
 
 #### One question per command
 

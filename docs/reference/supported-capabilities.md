@@ -50,9 +50,9 @@ unavailable behavior.
 
 | Capability | Status | Notes |
 | --- | --- | --- |
-| Owner access | Supported | Configure the owner's Slack member ID during setup. |
+| Owner access | Supported | Setup makes the person signed in to Slack the owner. |
 | Multi-user access | Coming soon | Additional callers are not part of the supported product flow yet, although the underlying allowlist accepts multiple IDs. |
-| Explicit channel restriction | Implemented | Configure `SLACK_CHANNEL_IDS`; the bridge fails closed without selected channels. |
+| Explicit channel restriction | Implemented | Configure `SLACK_CHANNEL_IDS`; the bridge fails closed without selected channels. A Tag that follows invitations may start with none and picks up channels it's invited to. |
 | MFS retrieval roots | Implemented | Configure `MFS_ALLOWED_SCOPES`. |
 | Backend timeout and retry settings | Implemented | Configure the corresponding `OPENTAG_` settings. |
 | Codex action approvals | Implemented fallback | Codex normally reviews sandbox-boundary actions automatically. Supported requests show private native choices, including one-time, task-scoped, and proposed persistent-rule decisions. Auto-review denials offer **Approve retry** / **Dismiss**. See [Control your Tag](../concepts/control-your-tag.md#respond-to-a-codex-approval-request). |

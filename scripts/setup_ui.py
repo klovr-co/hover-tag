@@ -103,6 +103,16 @@ def commit() -> None:
     _history.clear()
 
 
+def forget_last(qid: str) -> None:
+    """Drop the last answer to ``qid`` from Back's history.
+
+    For answers that only change what a question shows, such as shuffling a
+    picture: replaying them after Back would change the result.
+    """
+    if _history and _history[-1][0] == qid:
+        _history.pop()
+
+
 def going_back_to(qid: str) -> bool:
     """Whether Back is returning to this question, so it must be asked even if already answered."""
     return bool(_target and _target[0] == qid)
@@ -289,15 +299,19 @@ def notice(title: str, body: str, *, code: str = "", footer: str = "") -> None:
         paragraph(footer)
 
 
+# The steps of guided setup, in order, for the terminal's step track.
+SCREEN_STEPS = ("Your Tag", "AI", "Workspace", "Create", "Channels")
+
+
 def screen(step: int, title: str, detail: str = "", *, target: str = "") -> None:
     display.header(
         "Setup",
         target or display.target_detail(os.getenv("TAG_ID", "default")),
     )
-    stages = ("Connect Slack", "App", "Channels", "Finish")
+    stages = SCREEN_STEPS
     print()
     if display.content_width() < 60:
-        display.paragraph(f"STEP {step}/4 · {stages[step - 1]}", "1;" + display.ACCENT)
+        display.paragraph(f"STEP {step}/{len(stages)} · {stages[step - 1]}", "1;" + display.ACCENT)
     else:
         pieces = []
         for index, label in enumerate(stages, 1):
@@ -426,16 +440,21 @@ def choose(title: str, options: list[str], *, default: int = 0, qid: str | None 
     ))
 
 
-def checklist(labels: list[str], selected: set[int], *, qid: str = "channels") -> set[int]:
+def checklist(labels: list[str], selected: set[int], *, qid: str = "channels", prompt: str = "Choose channels",
+              allow_empty: bool = False, **details) -> set[int]:
+    """Ask for several options. ``allow_empty`` lets the person choose none."""
     selected = set(selected)
     if protocol_active():
-        answer = ask_client("multi", "Choose channels", qid=qid, options=labels, selected=sorted(selected))
-        if not isinstance(answer, list) or not answer:
+        extra = {"allow_empty": True, **details} if allow_empty else details
+        answer = ask_client("multi", prompt, qid=qid, options=labels, selected=sorted(selected), **extra)
+        if not isinstance(answer, list) or (not answer and not allow_empty):
             raise RuntimeError("The setup client must choose at least one channel")
         return {_option_index(item, labels) for item in answer}
+    if not labels:
+        return set()
     print()
     if not keyboard_available():
-        print("  Choose channels")
+        print(f"  {prompt}")
         while True:
             for index, label in enumerate(labels):
                 print(f"  {index + 1}. [{'x' if index in selected else ' '}] {label}")
@@ -445,7 +464,7 @@ def checklist(labels: list[str], selected: set[int], *, qid: str = "channels") -
             if answer.lower() == "q":
                 raise Paused()
             if not answer:
-                if selected:
+                if selected or allow_empty:
                     return selected
                 message("Select at least one channel.")
                 continue
@@ -461,9 +480,9 @@ def checklist(labels: list[str], selected: set[int], *, qid: str = "channels") -
         for index, label in enumerate(labels)
     ]
     return set(_ask(questionary.checkbox(
-        "Choose channels",
+        prompt,
         choices=choices,
         instruction=_instructions(multiple=True, setup_incomplete=True),
-        validate=lambda values: bool(values) or "Select at least one channel.",
+        validate=lambda values: bool(values) or allow_empty or "Select at least one channel.",
         **_prompt_options(),
     )))

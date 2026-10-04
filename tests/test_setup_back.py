@@ -117,7 +117,8 @@ class SetupBackTests(unittest.TestCase):
     def test_going_back_clears_only_what_that_question_saved(self):
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "settings.json"
-            tag_config.save_config(config, {"SLACK_TEAM_ID": "T1", "OPENTAG_BOT_NAME": "Maya's Tag"})
+            tag_config.save_config(config, {"SLACK_TEAM_ID": "T1", "SLACK_ENTERPRISE_ID": "E1",
+                                            "SLACK_ALLOWED_USER_IDS": "U1", "OPENTAG_BOT_NAME": "Maya's Tag"})
             calls = []
 
             def guided(path, **_):
@@ -134,6 +135,40 @@ class SetupBackTests(unittest.TestCase):
                 self.assertEqual(opentag_setup.main(), 0)
         self.assertEqual(calls[1], {"OPENTAG_BOT_NAME": "Maya's Tag"})
         self.assertEqual(setup_ui._target, ("workspace", 0))
+
+
+    def test_every_v2_question_that_saves_something_clears_it_on_back(self):
+        clears = opentag_setup.BACK_CLEARS
+        for qid in ("workspace", "org_workspace", "org_workspace_id"):
+            self.assertEqual(set(clears[qid]), {"SLACK_TEAM_ID", "SLACK_ENTERPRISE_ID", "SLACK_ALLOWED_USER_IDS"})
+        self.assertEqual(clears["existing_app"], ("SLACK_APP_ID",))
+        self.assertEqual(clears["app_id"], ("SLACK_APP_ID",))
+        self.assertEqual(clears["channels"], ("SLACK_CHANNEL_IDS",))
+        # The people picker is gone, and so are its entries.
+        self.assertFalse({"allowed_user", "person", "people_search", "member_id"} & set(clears))
+
+    def test_going_back_to_channels_asks_them_again_on_resume(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "settings.json"
+            tag_config.save_config(config, {"SLACK_CHANNEL_POLICY": "invited", "SLACK_CHANNEL_IDS": "C1"})
+            opentag_setup.save_progress(config, channels_done=True, app_path="new")
+            calls = []
+
+            def guided(path, **_):
+                calls.append(opentag_setup.setup_progress(path))
+                if len(calls) == 1:
+                    raise setup_ui.GoBack([], ("channels", ["#general"]))
+                return 0
+
+            with patch.object(sys, "argv", ["opentag_setup.py", "--config", str(config), "--review"]), patch.dict(
+                os.environ, {setup_ui.PROTOCOL_ENV: "jsonl", "TAG_HOME": directory}
+            ), patch.object(opentag_setup, "guided_setup", side_effect=guided), patch.object(
+                opentag_setup.tag_telemetry, "SetupSession"
+            ), patch.object(sys, "stdout", StringIO()):
+                self.assertEqual(opentag_setup.main(), 0)
+            self.assertNotIn("channels_done", calls[1])
+            self.assertEqual(calls[1]["app_path"], "new")  # Paused setups keep their path.
+            self.assertNotIn("SLACK_CHANNEL_IDS", tag_config.load_config(config))
 
 
 class StepSessionBackTests(unittest.TestCase):

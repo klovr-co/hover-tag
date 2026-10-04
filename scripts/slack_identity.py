@@ -9,6 +9,10 @@ class WorkspaceSelection(NamedTuple):
     team_id: str
     name: str
     enterprise_id: str = ""
+    organization_name: str = ""
+    sign_in_id: str = ""  # The Slack CLI sign-in: the workspace, or its organization.
+    user_id: str = ""  # The signed-in member, who becomes the Tag's owner.
+    user_name: str = ""
 
 
 def cli_team(values: dict[str, str]) -> str:

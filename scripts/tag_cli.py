@@ -57,7 +57,7 @@ APP_PROTOCOL = 1
 CAPABILITIES = (
     "list", "setup-jsonl", "setup-back", "rename", "workspace-lifecycle",
     "autostart", "autostart-keep", "logs-json", "upgrade-json", "install-progress",
-    "ai-connections", "thinking-level", "logs-activity",
+    "ai-connections", "thinking-level", "logs-activity", "setup-v2",
 )
 UPDATE_CHECK_INTERVAL_SECONDS = 24 * 60 * 60
 COMMANDS = tuple(sorted(tag_instances.RESERVED_NAMES))
@@ -941,7 +941,7 @@ def reconcile_invitation_memory(home: Path) -> None:
     if status.get("check") == "mfs_slack_connector":
         raise MfsSlackConnectorUnavailable(MFS_SLACK_CONNECTOR_MESSAGE)
     if (
-        status.get("state") != "sync_requested"
+        status.get("state") not in {"sync_requested", "no_joined_channels"}
         and status.get("check") != "index_submission"
     ):
         raise RuntimeError(
@@ -1799,6 +1799,18 @@ def _setup_ui():
     return ui
 
 
+def _setup_ready(home: Path, values: dict[str, str]) -> dict:
+    """What a finished setup made, for the client's Ready screen and its Slack links."""
+    try:
+        import tag_ai
+    except ImportError:
+        from scripts import tag_ai
+    choice = tag_ai.default_choice(home, values)
+    return {"team": values.get("SLACK_TEAM_ID") or None, "app_id": values.get("SLACK_APP_ID") or None,
+            "channels": _channels(values),
+            "ai": {key: choice[key] for key in ("backend", "backend_name", "label")}}
+
+
 def _setup_result(code: int, tag_id: str, protocol: bool) -> int:
     """Close a JSON-lines setup session with the outcome and selected Tag."""
     if protocol:
@@ -1813,13 +1825,17 @@ def _setup_result(code: int, tag_id: str, protocol: bool) -> int:
         except (OSError, ValueError, RuntimeError):
             pass
         status = "complete" if code == 0 and configured else "paused" if code == 0 else "failed"
+        ready = None
         if status == "complete":
             try:
                 context = tag_instances.resolve(tag_home(), tag_id)
-                _refresh_workspace_icon(context.home, read_config(context.home / "config/settings.json"))
+                values = read_config(context.home / "config/settings.json")
+                _refresh_workspace_icon(context.home, values)
+                ready = _setup_ready(context.home, values)
             except (OSError, ValueError, RuntimeError):
                 pass
-        _setup_ui().emit({"type": "result", "status": status, "tag": tag_id, "exit_code": code})
+        _setup_ui().emit({"type": "result", "status": status, "tag": tag_id, "exit_code": code,
+                          **({"ready": ready} if ready else {})})
     return code
 
 
@@ -2063,23 +2079,13 @@ def _run_cli() -> int:
                 file=sys.stderr,
             )
             return 2
-        try:
-            import opentag_setup as setup
-        except ImportError:
-            from scripts import opentag_setup as setup
-        selected = setup.connect_slack_workspace()
-        if not selected:
-            return 1
-        team_id, workspace_name = selected[:2]
-        # Setup renames the Tag after its Slack IDs; nobody invents an alias.
+        # Setup asks for the Tag's name and picture first, then the AI, then the
+        # Slack workspace, and records the workspace name on this Tag. Setup
+        # renames the Tag after its Slack IDs; nobody invents an alias.
         context = tag_instances.create(
             installation_root, tag_instances.suggest_name(installation_root, "new tag"), provisional=True
         )
-        tag_instances.record_workspace_name(context.home, workspace_name)
-        settings.update_config(settings.config_path(context.home), {
-            "SLACK_TEAM_ID": team_id, "SLACK_ENTERPRISE_ID": getattr(selected, "enterprise_id", ""),
-        })
-        display.header("Add", f"New Tag for {workspace_name}")
+        display.header("Add", "New Tag")
         display.info_row("Home", display.short_path(context.home), good=True)
         display.info_row("Command", context.command("setup"), good=True)
         command = [sys.executable, str(ROOT / "scripts/tag_cli.py"), *context.command_arguments("setup")]

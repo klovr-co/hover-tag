@@ -30,8 +30,10 @@ class OrganizationIdentityTests(unittest.TestCase):
     def test_accounts_and_members_keep_workspace_and_organization_distinct(self):
         self.assertEqual(setup.authorized_accounts(LISTING), [("Sandbox", "EORG"), ("Personal", "TOLD")])
         self.assertEqual(setup.authorized_workspaces(LISTING), [("Personal", "TOLD")])
-        self.assertEqual(setup.authorized_members(LISTING, "EORG"), ["WOWNER"])
-        self.assertEqual(setup.authorized_members(LISTING, "TOLD"), ["UOLD"])
+        sign_ins = setup.slack_sign_ins(LISTING)
+        self.assertEqual(setup.signed_in_member("EORG", sign_ins), "WOWNER")
+        self.assertEqual(setup.signed_in_member("TOLD", sign_ins), "UOLD")
+        self.assertEqual([item["kind"] for item in sign_ins], ["organization", "workspace"])
         self.assertIsNotNone(tag_config.validation_error("SLACK_TEAM_ID", "EORG"))
         self.assertIsNone(tag_config.validation_error("SLACK_ENTERPRISE_ID", "EORG"))
 
@@ -124,20 +126,25 @@ class OrganizationSetupTests(unittest.TestCase):
 
     def test_org_picker_persists_both_ids_without_reauthorizing(self):
         with patch.object(setup.tag_dependencies, "ensure_slack", return_value=Path("/bin/slack")), patch.object(
+            setup.tag_dependencies, "activate_slack"
+        ), patch.object(
             setup.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, LISTING, "")
         ), patch.object(setup.ui, "choose", side_effect=[0, 0]), patch.object(
-            setup, "ask_validated", return_value="TSELECTED"
+            setup, "ask", return_value="https://app.slack.com/client/TSELECTED"
         ), patch.object(setup, "run_slack_cli") as login:
             self.assertEqual(setup.connect_slack_cli(config_path=self.config), "TSELECTED")
         login.assert_not_called()
         self.assertEqual(tag_config.load_config(self.config), self.values)
-        self.assertIn("Organization authorization found", self.output.getvalue())
+        self.assertIn("Sandbox is an organization", self.output.getvalue())
 
     def test_pause_at_workspace_selection_does_not_login_or_mutate_config(self):
         with patch.object(setup.tag_dependencies, "ensure_slack", return_value=Path("/bin/slack")), patch.object(
+            setup.tag_dependencies, "activate_slack"
+        ), patch.object(
             setup.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, LISTING, "")
-        ), patch.object(setup.ui, "choose", side_effect=[0, 1]), patch.object(setup, "run_slack_cli") as login:
-            self.assertIsNone(setup.connect_slack_cli(config_path=self.config))
+        ), patch.object(setup.ui, "choose", side_effect=[3]), patch.object(setup, "run_slack_cli") as login:
+            with self.assertRaises(setup.ui.Paused):
+                setup.connect_slack_cli(config_path=self.config)
         login.assert_not_called()
         self.assertEqual(tag_config.load_config(self.config), self.values)
 

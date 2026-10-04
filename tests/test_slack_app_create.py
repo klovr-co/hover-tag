@@ -48,24 +48,45 @@ class SlackAppCreationTests(unittest.TestCase):
         self.assertNotIn("SLACK_APP_ID", setup.settings.load_config(self.config))
 
     def test_new_app_uses_cli_and_saves_id_without_browser_or_manual_id(self):
-        with patch.object(setup.ui, "choose", side_effect=[0, 0]), patch.object(
+        steps = []
+        with patch.object(setup.ui, "choose") as choose, patch.object(
             setup, "run_slack_cli", side_effect=self.save_link
-        ) as run, patch.object(setup, "customize_new_app"), patch.object(
+        ) as run, patch.object(
             creation, "is_installed", return_value=True
         ), patch.object(
             setup, "inspect_slack_app", return_value=True
         ), patch.object(setup.webbrowser, "open") as browser, patch.object(setup, "ask_validated") as ask:
-            self.assertEqual(setup.choose_slack_app(self.home, "TTEST", self.config), "ATEST")
+            self.assertEqual(setup.choose_slack_app(self.home, "TTEST", self.config, progress=steps.append), "ATEST")
         run.assert_called_once_with(
             ["app", "install", "--team", "TTEST", "--environment", "deployed"],
             cwd=self.project, interactive=True,
         )
+        # The Create recap was the approval: no second question.
+        choose.assert_not_called()
+        self.assertEqual(steps, ["create", "picture", "install"])
         browser.assert_not_called()
         ask.assert_not_called()
         values = setup.settings.load_config(self.config)
         self.assertEqual(values["SLACK_APP_ID"], "ATEST")
         self.assertEqual(values["MFS_TOKEN"], "kept")
         self.assertNotIn("kept", self.output.getvalue())
+
+    def test_description_goes_to_the_profile_and_agent_view(self):
+        manifest = creation.prepare_project(self.project, "Maya's Tag", description="Helps with launches")
+        self.assertEqual(manifest["display_information"]["description"], "Helps with launches")
+        self.assertEqual(manifest["features"]["agent_view"]["agent_description"], "Helps with launches")
+        (self.project / "manifest.json").unlink()
+        default = creation.prepare_project(self.project, "Maya's Tag")
+        self.assertEqual(default["display_information"]["description"], "Run approved Codex or Claude tasks from Slack.")
+        self.assertEqual(default["features"]["agent_view"]["agent_description"], "Run approved Codex or Claude tasks from Slack.")
+
+    def test_created_app_uses_the_saved_description(self):
+        setup.settings.update_config(self.config, {"OPENTAG_BOT_DESCRIPTION": "Helps with launches"})
+        with patch.object(creation, "is_installed", return_value=True):
+            creation.create_app(self.project, "TTEST", self.config, Mock(side_effect=self.save_link), approved=True)
+        manifest = creation.read_object(self.project / "manifest.json")
+        self.assertEqual(manifest["display_information"]["description"], "Helps with launches")
+        self.assertEqual(manifest["features"]["agent_view"]["agent_description"], "Helps with launches")
 
     def test_pending_approval_does_not_count_as_installed_and_resumes(self):
         run = Mock(side_effect=self.save_link)

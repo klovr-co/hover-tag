@@ -141,19 +141,18 @@ flowchart LR
    `tag config init --json` and apply targeted `tag config set` operations.
    Timeouts and retry options stay under advanced settings; Tag manages a stable
    workspace in its application home.
-4. `tag setup` reuses Slack CLI authorization (or launches its real login
-   handoff), creates or links the app with explicit approval, and validates the
-   Socket Mode and bot credentials separately. Profile-picture selection and
-   upload require Slack CLI 4.7 or newer. Before creating a new app, the operator
-   can customize its name, choose a five-element waterdrop (Metal, Wood, Water,
-   Fire, or Soil), or drag or paste a local profile-picture path. Water is the
-   default. A review screen can open the selected picture in the
-   system viewer and change either choice before remote creation. Slack CLI can
-   hand credentials off privately after approval; hidden
-   prompts are an explicit fallback.
-5. The operator selects one or more joined channels by name. Setup separately
-   validates the Slack-history credential and asks before writing/indexing an
-   MFS connector limited to those channel IDs and the chosen history window.
+4. `tag setup` starts with the Tag itself: a name, a one-line description, and
+   a picture (shuffle Tag's waterdrops or upload a PNG, JPEG, or GIF; uploads
+   need Slack CLI 4.7 or newer). Then it asks for the default model, then the
+   Slack workspace, reusing Slack CLI sign-ins (or launching its real login
+   handoff). The signed-in member becomes the owner. One recap approves
+   creating the app; an existing app is linked and updated only with approval.
+   Slack CLI hands credentials off privately; hidden prompts are an explicit
+   fallback.
+5. The operator selects channels by name, or none: new Tags follow
+   invitations. Setup validates the Slack-history credential and writes an MFS
+   connector limited to those channel IDs and the history window, without
+   indexing.
 6. `tag doctor --json` diagnoses configuration, backend executable availability,
    MFS access, and Slack API access. A stopped MFS server must be started to pass
    these live checks; `tag start` handles the local server before its preflight.

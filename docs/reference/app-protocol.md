@@ -31,6 +31,7 @@ it shows is listed in `capabilities`; otherwise it offers to upgrade Tag.
 | `ai-connections` | `tag NAME settings ai [models\|sign-in\|resume\|model] --json`; `ai_connection` and `default_model` setup questions |
 | `thinking-level` | `tag NAME settings ai effort LEVEL --json`, `model VALUE --effort LEVEL`; thinking-level fields in `settings ai`, `models`, and `tag list` |
 | `logs-activity` | `activity` in `tag NAME logs --json` |
+| `setup-v2` | Setup order Your Tag → AI → Workspace → Create → Channels; `profile`, `org_workspace`, `existing_app`, and `app_checks` questions; `recap`; creation `progress`; `ready` in the result |
 
 ## Tags
 
@@ -81,7 +82,133 @@ records that it should stay off (see [Keeping Tags running](../tag-management.md
 
 ## Setup
 
-See [Guided setup over JSON lines](../tag-management.md#guided-setup-over-json-lines).
+`tag setup --json` and `tag add --json` run guided setup over JSON lines; see
+[Guided setup over JSON lines](../tag-management.md#guided-setup-over-json-lines)
+for the event types, answers, Back, and `--step`. With `setup-v2`, both the
+terminal and the JSON-lines setup follow the same order and use the same words.
+`protocol/examples/setup.jsonl` is a whole session.
+
+**New app:** Your Tag (`profile`) → AI (`ai_connection` only when nothing is
+connected, then `default_model`) → Workspace (`workspace`, plus `slack_login`
+only when needed or chosen, plus `org_workspace` for an organization) → Create
+(`approve_setup`, then creation `progress`) → Channels (`channels`) → `result`.
+
+**Existing app:** `profile` answered with `"existing"` → AI → Workspace → Your
+app (`existing_app`, `app_checks`) → Channels → `result`.
+
+Nothing changes in Slack before the Workspace step. A paused setup resumes at
+the first step still missing: with no Slack workspace yet it starts at `profile`
+with the saved name, description, and picture; after choosing a workspace it
+continues at `approve_setup` (or `existing_app`). Setups paused in an earlier
+release's order resume without repeating finished steps.
+
+### Your Tag: `profile`
+
+`kind` is `profile_picture`. Fields: `name` (the saved name, or the computer
+account's first name, such as `Maya's Tag`), `name_limit` (35), `description`
+(one line, may be empty), `description_limit` (140), `preview` (absolute path
+of the PNG, JPEG, or GIF Tag will upload), `picture` (`waterdrop` or `custom`),
+`picture_label` (such as `Water · Tag waterdrop #0042`, or the file name),
+`error` (why the last answer didn't work, or `null`), `editing`, and
+`can_use_existing`. Answers:
+
+- `"shuffle"`: a new waterdrop from any of the five elements, differing in
+  element or signature, that no other Tag on this computer uses. The question
+  is asked again with the new `preview`. Shuffles don't count for Back.
+- `{"picture": "/path/to/file"}`: a PNG, JPEG, or GIF from 512 to 2000 pixels on
+  each side (Slack CLI 4.7 or newer). Tag copies it and asks again with the copy
+  as `preview`, or with `error`, such as `This picture is 300×300. Use one
+  between 512×512 and 2000×2000 pixels.` or `Use a PNG, JPEG, or GIF image.`
+- `{"name": "…", "description": "…"}`: saves `OPENTAG_BOT_NAME` and
+  `OPENTAG_BOT_DESCRIPTION` and continues, or asks again with `error`.
+- `"existing"`: use an app you already have (only when `can_use_existing`).
+
+The first picture is seeded by `{tag_id}:{name}`, never by the Slack workspace.
+The description becomes the app's `display_information.description` and
+`agent_view.agent_description` when Tag creates the app; without one, Slack
+shows Tag's default text. Tags created earlier keep their text.
+
+### Workspace: `workspace`, `org_workspace`, `org_workspace_id`
+
+`workspace` is a `choose` question listing the Slack CLI's sign-ins
+(`slack auth list`). `option_ids` are the sign-ins' Team IDs (`T…` for a
+workspace, `E…` for an organization), then `sign_in` and `exit`. `workspaces`
+has `id`, `name`, `kind` (`workspace` or `organization`), `user_id`, and
+`user_name` (the Slack handle when the CLI shows one, otherwise `null`).
+`sign_in` asks `slack_login`, then `workspace` again. With no sign-ins at all,
+setup asks `slack_login` first.
+
+Choosing an organization asks `org_workspace`: `option_ids` are its workspaces'
+`T…` IDs and `manual`, `workspaces` lists `{"id", "name"}`, and `organization`
+is `{"id", "name"}`. `manual` asks `org_workspace_id`, a `text` question for a
+workspace address or ID, which accepts `T…` or an address containing it, such
+as `app.slack.com/client/T…`. Its `error` explains an `E…` organization ID or
+an answer without an ID.
+
+Tag can't list an organization's workspaces yet, so `workspaces` is empty and
+only `manual` is offered. The Slack CLI (4.8) shows that list only inside its
+own prompts while it installs or creates an app, and `slack api auth.teams.list
+--team E…` runs without the sign-in's token. Calling Slack directly would mean
+reading the CLI's private credential file, which Tag doesn't do. Clients should
+show the list whenever it isn't empty.
+
+The owner is always the signed-in member: `user_id` for the chosen sign-in, or
+Slack's `auth.test` through the Slack CLI's own authorization. If neither says
+who it is, setup ends with a `failed` result: "Sign in to Slack again". There is
+no people picker and no member-ID entry; the `people` question kind is gone.
+Owners already saved on a Tag are kept.
+
+### Create: `approve_setup`
+
+A `choose` question, prompt `Ready to create it in WORKSPACE?`, `option_ids`
+`create`, `edit`, `edit_ai`, `back`. `recap` has `name`, `description`,
+`picture`, `workspace` (`id`, `name`, `organization` as `{"id", "name"}` or
+`null`), `owner` (`id`, `name`), `ai` (`value`, `backend`, `backend_name`,
+`label`), and `approval` (true for an organization, whose admin may need to
+approve; setup waits and resumes). `edit` asks `profile` with `editing: true`
+and `can_use_existing: false`, and `edit_ai` asks `default_model`; both return
+here. `back` asks `workspace` again.
+
+`create` makes the app, reported as `{"type": "progress", "step": …, "text": …}`
+events without a `backend`: `create` (Create the Slack app), `picture` (Add the
+picture), `install` (Install in WORKSPACE, or Add it to WORKSPACE for an
+organization), and `connect` (Connect to this Mac).
+
+### Your app: `existing_app`, `app_id`, `app_checks`
+
+`existing_app` is a `choose` question. `apps` lists the apps Tag knows for the
+workspace, each with `id`, `name`, `source` (`linked` to this Tag's Slack CLI
+project, `cli` from `slack app list`, or `tag`), and `used_by`: the name of
+another Tag on this computer that uses it, or `null`. One app serves one Tag,
+so used apps aren't in `options`. `option_ids` are the selectable App IDs, then
+`other` and `exit`. `other` asks `app_id`, a `text` question for an app address
+(`api.slack.com/apps/A…`) or ID; its `error` names the Tag already using a
+pasted app.
+
+Next, `app_checks` shows `checks`, each `{"label", "ok", "detail"}` (such as
+`{"label": "Missing 2 permissions", "ok": false, "detail": "assistant:write,
+channels:join"}`). `option_ids`: `update` (add only Tag's missing settings to
+the app, keeping the rest; Slack asks to reinstall it when Tag connects),
+`manual` (prints the api.slack.com steps, then checks again), `check`, and
+`back`. When everything passes it offers `connect` and `back`. Tag changes the
+app only after `update`.
+
+### Channels: `channels`
+
+A `multi` question, prompt `Where should NAME start?`. `options` are joined
+channels and public channels Tag can join; `selected` starts with the joined
+ones. `channels` has `id`, `name`, `member`, `private`, and `members` (or
+`null`). `allow_empty` is true for Tags that follow invitations
+(`SLACK_CHANNEL_POLICY=invited`, the default for new setups), so `[]` skips the
+step; Tag picks up each channel it's invited to while it runs. Choosing a public
+channel Tag isn't in joins it. Memory setup follows without more questions.
+
+### Result
+
+A complete `result` has `ready`: `team`, `app_id`, `channels` (`id`, `name`),
+and `ai` (`backend`, `backend_name`, `label`), for Slack links such as
+`slack://app?team=T…&id=A…&tab=messages` and `slack://channel?team=T…&id=C…`.
+Setup never starts services.
 
 ## AI connections
 

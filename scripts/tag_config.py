@@ -178,10 +178,18 @@ def validation_error(key: str, value: str) -> str | None:
 
 
 def config_errors(values: dict[str, str]) -> dict[str, str]:
-    errors = {key: "Required" for key in REQUIRED if not values.get(key, "").strip()}
-    if not (values.get("SLACK_CHANNEL_IDS", "").strip() or values.get("SLACK_CHANNEL_ID", "").strip()):
+    # A Tag that follows invitations may start with no channels, and so no
+    # memory sources yet: it picks up each channel it's invited to while it runs.
+    no_channels = not (values.get("SLACK_CHANNEL_IDS", "").strip() or values.get("SLACK_CHANNEL_ID", "").strip())
+    follows_invitations = values.get("SLACK_CHANNEL_POLICY") == "invited"
+    waiting = no_channels and follows_invitations
+    errors = {key: "Required" for key in REQUIRED if not values.get(key, "").strip()
+              and not (waiting and key == "MFS_ALLOWED_SCOPES")}
+    if no_channels and not follows_invitations:
         errors["SLACK_CHANNEL_IDS"] = "Select at least one Slack channel"
     for key, value in values.items():
+        if waiting and key in {"SLACK_CHANNEL_IDS", "MFS_ALLOWED_SCOPES"} and not value.strip():
+            continue
         if key in EDITABLE and (error := validation_error(key, value)):
             errors[key] = error
     return errors
@@ -212,6 +220,9 @@ def update_config(path: Path, changes: dict[str, str], *, only_missing: bool = F
     for key, value in changes.items():
         if key not in EDITABLE:
             raise ValueError("Unsupported setting; run tag config keys for editable settings")
+        if key == "SLACK_CHANNEL_IDS" and not value.strip() and (
+                changes.get("SLACK_CHANNEL_POLICY") or load_config(path).get("SLACK_CHANNEL_POLICY")) == "invited":
+            continue  # A Tag that follows invitations may have no channels yet.
         if error := validation_error(key, value):
             raise ValueError(f"{key}: {error}")
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)

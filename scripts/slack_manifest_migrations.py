@@ -423,3 +423,34 @@ def enable_org_deployment(project: Path, app_id: str, enterprise_id: str) -> Non
             raise RuntimeError("Slack could not enable organization deployment. Ask an organization admin to approve the app, then retry setup.")
     if remote_manifest(slack, project, app_id).get("settings", {}).get("org_deploy_enabled") is not True:
         raise RuntimeError("Organization deployment is not yet enabled; retry setup after Slack approval.")
+
+
+def has_legacy_assistant(project: Path, app_id: str) -> bool:
+    """Whether the app still uses Slack's legacy Assistant messaging experience."""
+    slack = shutil.which("slack") or "slack"
+    features = remote_manifest(slack, project, app_id).get("features")
+    return isinstance(features, dict) and "assistant_view" in features
+
+
+def add_missing_settings(project: Path, app_id: str, team_id: str, *, enterprise: bool = False) -> bool:
+    """Add only Tag's missing settings to an existing app, keeping everything else.
+
+    Setup calls this for an app the person chose to use, and only after they
+    chose Update app. Slack asks to reinstall the app when Tag next connects it,
+    which grants any added permissions. Returns whether anything changed.
+    """
+    slack = shutil.which("slack")
+    if not slack:
+        raise RuntimeError("Slack CLI is required to update the app; install it, then try again")
+    remote = remote_manifest(slack, project, app_id)
+    migrated, changed = migrate_manifest(remote, enterprise=enterprise)
+    if not changed:
+        return False
+    with tempfile.TemporaryDirectory(prefix="tag-slack-update-") as directory:
+        migration_project = _migration_project(project, migrated, team_id, app_id, Path(directory))
+        result = _run(_sync_command(slack, migration_project, app_id, team_id), cwd=migration_project)
+        if result.returncode:
+            raise RuntimeError("Slack couldn't update the app. Check you can manage it, then try again.")
+    if migrate_manifest(remote_manifest(slack, project, app_id), enterprise=enterprise)[1]:
+        raise RuntimeError("Slack didn't save all of the app's new settings. Try again.")
+    return True

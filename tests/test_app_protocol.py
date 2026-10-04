@@ -50,7 +50,7 @@ class ProtocolTests(unittest.TestCase):
         result = self.cli("version", "--json")
         self.assertProvides(result, example("version.json"), "tag version --json")
         self.assertEqual(result["app_protocol"], tag_cli.APP_PROTOCOL)
-        documented = set(re.findall(r"^\| `([a-z-]+)` \|", DOC.read_text(encoding="utf-8"), re.M))
+        documented = set(re.findall(r"^\| `([a-z0-9-]+)` \|", DOC.read_text(encoding="utf-8"), re.M))
         self.assertEqual(documented, set(tag_cli.CAPABILITIES))
 
     def test_list_rows_provide_what_apps_read(self) -> None:
@@ -145,7 +145,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_setup_example_uses_real_question_ids_and_kinds(self) -> None:
         sources = "".join(path.read_text(encoding="utf-8") for path in (ROOT / "scripts").glob("*.py"))
-        kinds = {"choose", "multi", "text", "secret", "confirm", "people", "slack_login"}
+        kinds = {"choose", "multi", "text", "secret", "confirm", "profile_picture", "slack_login"}
         events = [json.loads(line) for line in (EXAMPLES / "setup.jsonl").read_text(encoding="utf-8").splitlines()]
         for event in events:
             if event["type"] == "question":
@@ -154,6 +154,29 @@ class ProtocolTests(unittest.TestCase):
                 self.assertTrue(known, f"unknown setup question {event['id']}")
                 self.assertIn("can_go_back", event)
         self.assertEqual(events[-1]["type"], "result")
+        # The v2 order: Your Tag, AI, Workspace, Create, Channels.
+        asked = [event["id"] for event in events if event["type"] == "question"]
+        self.assertEqual(list(dict.fromkeys(asked)), ["profile", "default_model", "workspace", "approve_setup", "channels"])
+        steps = [event["step"] for event in events if event["type"] == "progress" and "backend" not in event]
+        self.assertEqual(steps, ["create", "picture", "install", "connect"])
+
+    def test_setup_result_reports_what_the_ready_screen_links_to(self) -> None:
+        home = tag_instances.create(self.root, "t1-a1").home
+        tag_config.save_config(home / "config/settings.json", {
+            "OPENTAG_BACKEND": "codex", "OPENTAG_DEFAULT_MODEL": "codex:gpt-5.5", "MFS_URL": "http://127.0.0.1:13619",
+            "MFS_ALLOWED_SCOPES": "slack://tag-t1-a1/channels/general__C0GENERAL", "SLACK_APP_TOKEN": "xapp-1",
+            "SLACK_BOT_TOKEN": "xoxb-1", "SLACK_ALLOWED_USER_IDS": "U1", "SLACK_TEAM_ID": "T1", "SLACK_APP_ID": "A1",
+            "SLACK_CHANNEL_IDS": "C0GENERAL"})
+        raw = io.StringIO()
+        with patch.object(sys, "__stdout__", raw), patch.object(tag_cli, "_refresh_workspace_icon"):
+            self.assertEqual(tag_cli._setup_result(0, "t1-a1", True), 0)
+        result = json.loads(raw.getvalue())
+        promised = [json.loads(line) for line in (EXAMPLES / "setup.jsonl").read_text(encoding="utf-8").splitlines()][-1]
+        self.assertProvides(result, promised, "setup result")
+        self.assertProvides(result["ready"], promised["ready"], "setup result ready")
+        self.assertEqual(result["ready"], {"team": "T1", "app_id": "A1",
+                                           "channels": [{"id": "C0GENERAL", "name": "general"}],
+                                           "ai": {"backend": "codex", "backend_name": "Codex", "label": "gpt-5.5"}})
 
 
 if __name__ == "__main__":

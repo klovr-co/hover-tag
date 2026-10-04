@@ -311,10 +311,11 @@ class TagControlTests(unittest.TestCase):
             opentag_setup.slack_channels, "list_channels",
             return_value=[opentag_setup.slack_channels.SlackChannel("CTEST", "team", False, True)],
         ), patch.object(
-            # Slack's people directory is unavailable here, so setup asks for the member ID.
-            opentag_setup, "slack_people", side_effect=opentag_setup.slack_channels.SlackChannelError("offline")
+            # The owner comes from the Slack sign-in, without a question.
+            opentag_setup, "list_slack_sign_ins", return_value=[
+                {"id": "TTEST", "name": "Test", "kind": "workspace", "user_id": "UOWNER", "user_name": None}]
         ), patch(
-            "builtins.input", side_effect=["UOWNER", "1", "1"]
+            "builtins.input", side_effect=[]
         ), patch.object(
             opentag_setup, "finish_setup", return_value=0
         ), patch.object(
@@ -348,24 +349,31 @@ class TagControlTests(unittest.TestCase):
             opentag_setup, "validate_slack_identity", return_value={"team_id": "TTEST", "app_id": "ATEST"}
         ), patch.object(opentag_setup, "validate_socket_token"
         ), patch.object(
-            opentag_setup.slack_channels, "choose_channels", return_value=selected
+            opentag_setup.slack_channels, "setup_channels", return_value=selected
         ) as picker, patch.object(
             opentag_setup.slack_channels, "slack_api", return_value={"ok": True}
         ), patch.object(opentag_setup, "write_slack_connector", return_value=Path(values["MFS_SLACK_CONNECTOR_CONFIG"])), patch(
-            "builtins.input", side_effect=["1", "1"]
+            "builtins.input", side_effect=[]
         ), patch.object(
             opentag_setup, "finish_setup", return_value=0
         ), redirect_stdout(StringIO()):
             self.assertEqual(opentag_setup.guided_setup(self.path), 0)
 
         self.assertEqual(picker.call_args.args, ("xoxb-fixture", ""))
-        self.assertEqual(picker.call_args.kwargs, {"app_id": "ATEST"})
+        # A Tag with selected-channel memory keeps needing at least one channel.
+        self.assertEqual(picker.call_args.kwargs, {"app_id": "ATEST", "tag_name": "Tag", "allow_empty": False})
         self.assertEqual(tag_config.read_config(self.path)["SLACK_CHANNEL_IDS"], "CTEAM")
 
     def test_interrupted_setup_keeps_completed_answers(self):
+        def workspace(path):
+            tag_config.update_config(path, {"SLACK_TEAM_ID": "TTEST", "SLACK_ALLOWED_USER_IDS": "UOWNER"})
+            return True
+
         with patch.object(opentag_setup, "ensure_agent", side_effect=lambda _path, values, **_: values), patch.object(
-            opentag_setup, "connect_slack_cli", return_value="TTEST"
-        ), patch.object(opentag_setup, "ask_validated", return_value="TTEST"), patch.object(
+            opentag_setup, "choose_profile", return_value="new"
+        ), patch.object(opentag_setup, "choose_workspace", side_effect=workspace), patch.object(
+            opentag_setup, "approve_creation", return_value="create"
+        ), patch.object(opentag_setup, "slack_cli_supports_icon_upload", return_value=True), patch.object(
             opentag_setup, "choose_slack_app", return_value="ATEST"
         ), patch.object(opentag_setup.ui, "choose", return_value=1
         ), patch.object(opentag_setup, "validate_socket_token"), patch.object(
@@ -377,41 +385,15 @@ class TagControlTests(unittest.TestCase):
         self.assertEqual(tag_config.read_config(self.path)["SLACK_APP_TOKEN"], "xapp-fixture")
         self.assertNotIn("SLACK_BOT_TOKEN", tag_config.read_config(self.path))
 
-    def test_setup_defaults_return_to_summary_and_update_connector_window(self):
+    def test_setup_exit_at_channels_does_not_index_or_connect_slack(self):
         values = self.complete()
-        channels = [opentag_setup.slack_channels.SlackChannel("CTEST", "team", False, True)]
-        with patch.object(
-            opentag_setup.shutil, "which", return_value="/test/bin/claude"
-        ), patch.object(opentag_setup, "ensure_agent", side_effect=lambda _path, values, **_: values), patch.object(
-            opentag_setup, "validate_slack_identity", return_value={"team_id": "TTEST", "app_id": "ATEST"}
-        ), patch.object(opentag_setup, "validate_socket_token"), patch.object(
-            opentag_setup.slack_channels, "list_channels", return_value=channels
-        ), patch.object(opentag_setup.slack_channels, "slack_api", return_value={"ok": True}), patch.object(
-            opentag_setup.ui, "choose", side_effect=[2, 0, 0, 0]
-        ), patch.object(
-            # Change defaults reviews the AI step, which picks a Claude model here.
-            opentag_setup.tag_ai, "setup_step",
-            side_effect=lambda _home, path: tag_config.update_config(path, {"OPENTAG_DEFAULT_MODEL": "claude:claude-opus-5-5"}),
-        ), patch.object(opentag_setup, "write_slack_connector", return_value=Path(values["MFS_SLACK_CONNECTOR_CONFIG"])) as connector, patch.object(
-            opentag_setup, "finish_setup", return_value=0
-        ), redirect_stdout(StringIO()):
-            self.assertEqual(opentag_setup.guided_setup(self.path), 0)
-        saved = tag_config.read_config(self.path)
-        self.assertEqual(saved["SLACK_APP_ID"], "ATEST")
-        self.assertEqual(saved["SLACK_CHANNEL_IDS"], "CTEST")
-        self.assertEqual(saved["OPENTAG_BACKEND"], "claude")
-        self.assertEqual(saved["OPENTAG_DEFAULT_MODEL"], "claude:claude-opus-5-5")
-        self.assertEqual(saved["MFS_SLACK_HISTORY_DAYS"], "7")
-        connector.assert_called_once_with("TTEST", channels, "7", home=self.home)
-
-    def test_setup_exit_before_approval_does_not_index_or_connect_slack(self):
-        self.complete()
-        channels = [opentag_setup.slack_channels.SlackChannel("CTEST", "team", False, True)]
+        del values["SLACK_CHANNEL_IDS"]
+        tag_config.save_config(self.path, values)
         with patch.object(opentag_setup, "ensure_agent", side_effect=lambda _path, values, **_: values), patch.object(
             opentag_setup, "validate_slack_identity", return_value={"team_id": "TTEST", "app_id": "ATEST"}
         ), patch.object(opentag_setup, "validate_socket_token"), patch.object(
-            opentag_setup.slack_channels, "list_channels", return_value=channels
-        ), patch.object(opentag_setup.ui, "choose", return_value=3), patch.object(
+            opentag_setup.slack_channels, "setup_channels", side_effect=opentag_setup.ui.Paused
+        ), patch.object(
             opentag_setup, "write_slack_connector"
         ) as connector, patch.object(
             opentag_setup, "finish_setup"

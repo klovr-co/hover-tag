@@ -49,48 +49,25 @@ class SetupProtocolTests(unittest.TestCase):
         self.assertEqual(question["kind"], "choose")
         self.assertEqual(question["options"], ["Create a new Tag app", "Use an existing app", setup_ui.SAVE_AND_EXIT])
 
-    def test_unknown_owner_lists_people_and_returns_member_id(self):
-        person = {"id": "U222", "name": "Jamie", "username": "jamie", "image_url": "https://example.com/avatar.png"}
-        with ProtocolHarness(["U222"]) as client, patch.object(
-            opentag_setup.shutil, "which", return_value=None
-        ), patch.object(opentag_setup, "slack_people", return_value=[person]) as directory:
-            self.assertEqual(opentag_setup.choose_allowed_users("T123", token="private-token"), "U222")
-        directory.assert_called_once_with("private-token", "T123")
-        questions = [event for event in client.events() if event["type"] == "question"]
-        self.assertEqual([q["kind"] for q in questions], ["people"])
-        self.assertEqual(questions[0]["prompt"], "Which one is you?")
-        self.assertEqual(questions[0]["people"], [person])
-        self.assertNotIn("private-token", client.stdout.getvalue())
-
-    def test_people_picker_rejects_unoffered_ids_and_accepts_manual_or_pause(self):
-        people = [{"id": "U222", "name": "Jamie", "username": "jamie", "image_url": ""}]
-        for answer in ("UOTHER", 0, None, True):
-            with self.subTest(answer=answer), ProtocolHarness([answer]):
-                with self.assertRaises(RuntimeError):
-                    opentag_setup.choose_slack_person(people)
-        with ProtocolHarness(["manual"]):
-            self.assertIsNone(opentag_setup.choose_slack_person(people))
-        with ProtocolHarness([]):
-            with self.assertRaises(setup_ui.Paused):
-                opentag_setup.choose_slack_person(people)
-
-    def test_people_directory_failure_and_empty_list_keep_manual_fallback(self):
-        for failure in ([], opentag_setup.slack_channels.SlackChannelError("offline"),
-                        opentag_setup.slack_permissions.MissingScope("users.list", "users:read")):
-            with self.subTest(failure=failure), ProtocolHarness(["U222"]) as client, patch.object(
-                opentag_setup.shutil, "which", return_value=None
-            ), patch.object(opentag_setup, "slack_people", side_effect=[failure]):
-                self.assertEqual(opentag_setup.choose_allowed_users("T123", token="private-token"), "U222")
-            self.assertEqual([e["kind"] for e in client.events() if e["type"] == "question"], ["text"])
-
     def test_signed_in_owner_asks_nothing(self):
         listing = subprocess.CompletedProcess([], 0, "Team (Team ID: T123)\nUser ID: U111\n", "")
         with ProtocolHarness([]) as client, patch.object(opentag_setup.shutil, "which", return_value="/bin/slack"), patch.object(
             opentag_setup.subprocess, "run", return_value=listing
-        ), patch.object(opentag_setup, "slack_people") as directory:
-            self.assertEqual(opentag_setup.choose_allowed_users("T123", token="private-token"), "U111")
-        directory.assert_not_called()
+        ):
+            self.assertEqual(opentag_setup.ensure_owner(Path(self.id() + ".json"), {"SLACK_TEAM_ID": "T123"},
+                                                        sign_ins=opentag_setup.slack_sign_ins(listing.stdout))
+                             ["SLACK_ALLOWED_USER_IDS"], "U111")
+        Path(self.id() + ".json").unlink(missing_ok=True)
         self.assertEqual([e for e in client.events() if e["type"] == "question"], [])
+
+    def test_unknown_owner_stops_without_listing_people(self):
+        not_authed = subprocess.CompletedProcess([], 0, '{"ok":false,"error":"not_authed"}', "")
+        with ProtocolHarness([]) as client, patch.object(opentag_setup.subprocess, "run", return_value=not_authed):
+            with self.assertRaisesRegex(RuntimeError, "Sign in to Slack again"):
+                opentag_setup.ensure_owner(Path("unused.json"), {"SLACK_TEAM_ID": "T123"}, sign_ins=[])
+        self.assertEqual([e for e in client.events() if e["type"] == "question"], [])
+        self.assertFalse(hasattr(opentag_setup, "slack_people"))
+        self.assertFalse(hasattr(opentag_setup, "choose_slack_person"))
 
     def test_save_and_exit_and_closed_input_pause_setup(self):
         with ProtocolHarness([setup_ui.SAVE_AND_EXIT]):
@@ -157,7 +134,7 @@ class SetupProtocolTests(unittest.TestCase):
     def test_workspace_picker_signs_in_through_the_client(self, _ensure_slack):
         listings = [subprocess.CompletedProcess([], 0, "", ""),
                     subprocess.CompletedProcess([], 0, "Example Team (Team ID: T123)\n", "")]
-        with ProtocolHarness(["Connect Slack", "Example Team"]), patch.object(
+        with ProtocolHarness(["Example Team"]), patch.object(
             opentag_setup.shutil, "which", return_value="/bin/slack"
         ), patch.object(opentag_setup.subprocess, "run", side_effect=listings), patch.object(
             opentag_setup, "slack_login_with_client", return_value=True
@@ -192,7 +169,7 @@ class QuestionIdTests(unittest.TestCase):
         prompts = {"choose", "checklist", "text", "confirm", "ask_client", "ask", "ask_validated",
                    "ask_secret", "read_secret", "absolute_directory"}
         wrappers = {"ask", "ask_required", "ask_secret", "read_secret", "confirm", "ask_validated",
-                    "absolute_directory", "choose_slack_person"}
+                    "absolute_directory", "ask_text"}
         missing = []
         for module in self.SETUP_MODULES:
             path = Path(__file__).resolve().parents[1] / "scripts" / f"{module}.py"
