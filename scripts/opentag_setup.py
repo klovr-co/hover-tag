@@ -46,6 +46,7 @@ try:
     import slack_manifest_migrations
     import slack_credentials
     import slack_identity
+    import slack_setup_icons
     import tag_ai
     import tag_instances
     import tag_credentials
@@ -68,6 +69,7 @@ except ImportError:
     from scripts import slack_manifest_migrations
     from scripts import slack_credentials
     from scripts import slack_identity
+    from scripts import slack_setup_icons
     from scripts import tag_ai
     from scripts import tag_instances
     from scripts import tag_credentials
@@ -1095,6 +1097,11 @@ def _save_picture(project: Path, state: dict) -> dict:
     return state
 
 
+def picture_revision(picture: dict | None) -> str | None:
+    """Identify the bytes, since shuffles and uploads reuse tag-profile's path."""
+    return hashlib.sha256(Path(picture["preview"]).read_bytes()).hexdigest() if picture else None
+
+
 def waterdrop_picture(project: Path, seed: str, *, shuffle_from: int | None = None, shuffle: bool = False) -> dict:
     """Render a waterdrop no other Tag on this computer uses, and remember it."""
     occupied = other_tag_waterdrops()
@@ -1155,13 +1162,14 @@ def choose_profile(project: Path, config_path: Path, *, editing: bool = False, t
     values = settings.load_config(config_path)
     name = default_profile_name(values, test_mode=test_mode)
     description = values.get("OPENTAG_BOT_DESCRIPTION", "")
-    picture = profile_picture(project) or waterdrop_picture(project, f"{os.getenv('TAG_ID', 'default')}:{name}")
+    picture = profile_picture(project) or waterdrop_picture(project, "", shuffle=True)
     if ui.protocol_active():
         error = None
         while True:
             answer = ui.ask_client(
                 "profile_picture", "Meet your new Tag", qid="profile", name=name, name_limit=35,
                 description=description, description_limit=140, preview=picture["preview"],
+                preview_revision=picture_revision(picture),
                 picture=picture["picture"], picture_label=picture["label"], error=error,
                 editing=editing, can_use_existing=not editing,
             )
@@ -1816,16 +1824,20 @@ def setup_recap(config_path: Path, project: Path) -> dict:
     enterprise_id = values.get("SLACK_ENTERPRISE_ID", "")
     picture = profile_picture(project)
     choice = tag_ai.default_choice(instance_home(), values)
+    pictures = slack_setup_icons.pictures(tag_home(), instance_home(), values)
     return {
         "name": values.get("OPENTAG_BOT_NAME", ""),
         "description": values.get("OPENTAG_BOT_DESCRIPTION", ""),
         "picture": picture["preview"] if picture else None,
+        "picture_revision": picture_revision(picture),
         "workspace": {
             "id": team_id, "name": progress.get("workspace_name") or team_id,
+            "icon": pictures["workspace"],
             "organization": {"id": enterprise_id, "name": progress.get("organization_name") or enterprise_id}
             if enterprise_id else None,
         },
         "owner": {"id": values.get("SLACK_ALLOWED_USER_IDS", "").split(",")[0] or None,
+                  "icon": pictures["owner"],
                   "name": progress.get("owner_name") or None},
         "ai": {key: choice[key] for key in ("value", "backend", "backend_name", "label")},
         "approval": bool(enterprise_id),

@@ -40,6 +40,34 @@ class ProtocolHarness:
 
 
 class SetupProtocolTests(unittest.TestCase):
+    def test_long_status_is_one_complete_event_at_any_terminal_width(self):
+        text = "No channels yet. Invite Tag with /invite in Slack; it starts there within a minute."
+        for width in (32, 80):
+            with self.subTest(width=width), ProtocolHarness([]) as client, patch.object(
+                setup_ui.shutil, "get_terminal_size", return_value=os.terminal_size((width, 24))
+            ):
+                setup_ui.message(text)
+                self.assertEqual(client.events(), [{"type": "message", "text": text}])
+
+    def test_multiline_status_stays_together_before_the_next_update(self):
+        text = "✓ Slack connected\n◌ Preparing Slack memory…"
+        with ProtocolHarness([]) as client:
+            setup_ui.message(text)
+            setup_ui.message("\x1b[32mMemory ready\x1b[0m")
+            setup_ui.message("")
+        self.assertEqual(client.events(), [
+            {"type": "message", "text": text},
+            {"type": "message", "text": "Memory ready"},
+        ])
+
+    def test_notice_keeps_title_body_and_recovery_in_one_event(self):
+        with ProtocolHarness([]) as client:
+            setup_ui.notice("Slack couldn't connect", "Ask your workspace admin to resolve the limit, then retry.",
+                            code="service_limits_exceeded", footer="Progress saved. Setup is paused.")
+        self.assertEqual(client.events(), [{"type": "message", "text":
+            "Slack couldn't connect\n\nAsk your workspace admin to resolve the limit, then retry."
+            "\n\nCode: service_limits_exceeded\n\nProgress saved. Setup is paused."}])
+
     def test_choose_accepts_label_or_index_and_reports_options(self):
         with ProtocolHarness(["Use an existing app", 0]) as client:
             self.assertEqual(setup_ui.choose("Slack app", ["Create a new Tag app", "Use an existing app", "Save and exit"]), 1)

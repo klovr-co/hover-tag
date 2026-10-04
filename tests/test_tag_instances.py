@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 import os
 from pathlib import Path
@@ -68,6 +69,33 @@ class TagInstanceTests(unittest.TestCase):
         link.symlink_to(self.root.parent)
         with self.assertRaisesRegex(ValueError, "symlink"):
             tag_instances.resolve(self.root, "link")
+
+    def test_concurrent_creation_preserves_winner_on_directory_conflict(self) -> None:
+        for code in (errno.EEXIST, errno.ENOTEMPTY):
+            with self.subTest(errno=code):
+                tag_id = f"race-{code}"
+                destination = self.root / "instances" / tag_id
+
+                def publish_other_tag(source, target):
+                    self.assertEqual(target, destination)
+                    target.mkdir()
+                    (target / "keep.txt").write_text("other creator")
+                    raise OSError(code, "Directory exists", str(target))
+
+                with patch.object(tag_instances.os, "rename", side_effect=publish_other_tag):
+                    with self.assertRaisesRegex(ValueError, "already exists; its configuration was preserved"):
+                        tag_instances.create(self.root, tag_id)
+                self.assertEqual((destination / "keep.txt").read_text(), "other creator")
+                self.assertEqual(list(destination.parent.glob(f".{tag_id}-*")), [])
+
+    def test_creation_keeps_unrelated_io_errors_and_can_retry(self) -> None:
+        with patch.object(tag_instances.os, "rename", side_effect=OSError(errno.EACCES, "Denied")):
+            with self.assertRaises(OSError) as raised:
+                tag_instances.create(self.root, "retry")
+        self.assertEqual(raised.exception.errno, errno.EACCES)
+        self.assertFalse((self.root / "instances/retry").exists())
+        self.assertEqual(list((self.root / "instances").glob(".retry-*")), [])
+        self.assertEqual(tag_instances.create(self.root, "retry").tag_id, "retry")
 
     def test_workspace_alias_suggestion_uses_workspace_name_and_avoids_collisions(self) -> None:
         self.assertEqual(tag_instances.suggest_name(self.root, "Maxine Personal"), "maxine-personal")

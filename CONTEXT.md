@@ -12,8 +12,10 @@ a local coding-agent backend with optional MFS retrieval.
   enforces Slack caller policy, invokes a backend, and renders replies.
 - **Backend** — the local Codex App Server or Claude Agent SDK
   session that performs an agent task. Both emit the same normalized event
-  contract to the Slack bridge. A Tag has a default backend and model; each
-  user's model choice selects the backend for that user's requests.
+  contract to the Slack bridge. Each Tag's configured model selects its backend
+  and applies to all Slack requests to that Tag.
+- **AI connection** — one shared provider account for every Tag in an installation,
+  managed in Settings. Model and thinking choices belong to each Tag.
 - **MFS scope** — an operator-configured URI root used by Tag's helper commands
   to constrain normal list, read, and search operations.
 - **Required service** — local MFS or the Slack bridge. Tag is healthy only when

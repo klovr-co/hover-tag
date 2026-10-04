@@ -257,7 +257,7 @@ sequenceDiagram
     M-->>B: Evidence or task result
     B-->>T: Normalized status/delta/final events
     T->>S: Stream or post formatted threaded answer
-    T->>S: Add Configure controls for Codex run
+    T->>S: Show model, thinking level, and duration
 ```
 
 Runtime behavior:

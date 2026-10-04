@@ -1,13 +1,13 @@
 """Tag-owned ChatGPT plan authorization; never reads or writes Codex credentials.
 
 A host belongs to the installation; registrations and the selected billing mode
-belong to one Tag. All credential mutations use the same OS-backed lock. Browser
+are shared by every Tag in the installation. All credential mutations use the same OS-backed lock. Browser
 consent happens outside that lock and only a validated result can become active.
 """
 from __future__ import annotations
 
 import base64
-from contextlib import contextmanager, nullcontext
+from contextlib import ExitStack, contextmanager, nullcontext
 import hashlib
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
@@ -251,29 +251,108 @@ def token_record(response: dict, previous: dict) -> dict:
     return result
 
 
+def account_homes(extra: Path | None = None) -> list[Path]:
+    try:
+        from .tag_instances import discover
+    except ImportError:
+        from tag_instances import discover
+    homes = {Path(str(row["home"])) for row in discover(tag_home()) if row["valid"]}
+    if extra is not None:
+        homes.add(extra)
+    return sorted(homes)
+
+
+def legacy_accounts(extra: Path | None = None) -> dict:
+    """Preview the v1 migration without writing or selecting conflicting billing identities."""
+    merged = {"schema_version": 1, "mode": "codex", "active": None, "accounts": {}}
+    selected = set()
+    for home in account_homes(extra):
+        path = home / "config/chatgpt/accounts.json"
+        if not path.exists():
+            if (home / "config/settings.json").exists():
+                selected.add("codex")
+            continue
+        record = Store.validate(read_object(path))
+        for key, account in record["accounts"].items():
+            previous = merged["accounts"].get(key)
+            if previous and previous.get("subject") != account.get("subject"):
+                raise ChatGPTError("Conflicting ChatGPT registration identities; restore the account files before upgrading.")
+            if previous is None or account.get("saved_at", 0) > previous.get("saved_at", 0):
+                merged["accounts"][key] = account
+        if record["mode"] == "chatgpt":
+            selected.add(record["active"])
+            merged["mode"] = "chatgpt"
+        elif (home / "config/settings.json").exists():
+            selected.add("codex")
+    if merged["mode"] == "chatgpt":
+        merged["active"] = next(iter(selected)) if len(selected) == 1 and "codex" not in selected else None
+    return merged
+
+
+def migrate_shared_accounts(home: Path | None = None) -> bool:
+    """Version 1: atomically publish and verify shared credentials before startup.
+
+    Legacy files are retained for recovery, but never reread after publication.
+    A separate completion marker is written only after verifying the shared store.
+    """
+    store = Store(home)
+    marker = store.path.parent / "migration-v1.json"
+    if store.path.exists():
+        store.read()
+        if not marker.exists():
+            atomic_write(marker, {"version": 1})
+        return False
+    with store.account_change(require_stopped=False), locked(store.lock_path):
+        if store.path.exists():
+            store.read()
+            atomic_write(marker, {"version": 1})
+            return False
+        with ExitStack() as locks:
+            for old in account_homes(store.home):
+                path = old / "config/chatgpt/accounts.json"
+                if path.exists():
+                    locks.enter_context(locked(path.with_suffix(".lock")))
+            record = legacy_accounts(store.home)
+            if record["mode"] == "chatgpt":
+                store.assert_stopped()
+            atomic_write(store.path, record)
+            if store.read() != record:
+                raise ChatGPTError("Shared AI migration verification failed; retry startup.")
+            atomic_write(marker, {"version": 1})
+    return True
+
+
 class Store:
     def __init__(self, home: Path | None = None):
         self.home = home or instance_home()
-        self.path = self.home / "config/chatgpt/accounts.json"
+        self.path = tag_home() / "shared/ai/chatgpt/accounts.json"
         self.lock_path = self.path.with_suffix(".lock")
 
     @contextmanager
-    def account_change(self):
+    def account_change(self, *, require_stopped: bool = True):
         """Exclude bridge startup and reject changes while its process is live."""
         try:
             from .tag_cli import process_for
         except ImportError:
             from tag_cli import process_for
         try:
-            lock = LifecycleLock(self.home / "state/start.lock").acquire()
+            with ExitStack() as locks:
+                locks.enter_context(LifecycleLock(tag_home() / "state/ai-start.lock"))
+                for home in account_homes(self.home):
+                    locks.enter_context(LifecycleLock(home / "state/start.lock"))
+                    if require_stopped and process_for(home / "state/slack.json"):
+                        raise ChatGPTError("Stop all Tags before changing the shared ChatGPT account, then retry.")
+                yield
         except RuntimeError as exc:
             raise ChatGPTError(str(exc)) from None
+
+    def assert_stopped(self):
         try:
-            if process_for(self.home / "state/slack.json"):
-                raise ChatGPTError("Stop this Tag before changing its ChatGPT account, then retry.")
-            yield
-        finally:
-            lock.release()
+            from .tag_cli import process_for
+        except ImportError:
+            from tag_cli import process_for
+        if any(process_for(home / "state/slack.json") for home in account_homes(self.home)):
+            raise ChatGPTError("Stop all Tags before changing the shared ChatGPT account, then retry.")
 
     def identity(self) -> tuple[str, str | None, str | None]:
         """Identify the billing mode and registration used by one task."""
@@ -288,8 +367,11 @@ class Store:
     def read(self) -> dict:
         record = read_object(self.path)
         if not record and not self.path.exists():
-            # v1 is additive: old installations keep their existing Codex login.
-            return {"schema_version": 1, "mode": "codex", "active": None, "accounts": {}}
+            record = legacy_accounts(self.home)
+        return self.validate(record)
+
+    @staticmethod
+    def validate(record: dict) -> dict:
         if (record.get("schema_version") != 1 or record.get("mode") not in {"codex", "chatgpt"}
                 or not isinstance(record.get("accounts"), dict)):
             raise ChatGPTError("Unsupported ChatGPT account store; upgrade Tag or restore its saved file.")
@@ -326,6 +408,8 @@ class Store:
 
     def lease(self, account_id: str | None = None, *, activate: bool = False,
               expected_identity: tuple | None = None) -> tuple[str, float]:
+        if not self.path.exists():
+            migrate_shared_accounts(self.home)
         with self.account_change() if activate else nullcontext(), locked(self.lock_path):
             record = self.read()
             if expected_identity is not None and self._identity(record) != expected_identity:
@@ -572,9 +656,8 @@ def cli(arguments: list[str], *, json_output: bool = False, dry_run: bool = Fals
             from .tag_cli import process_for
         except ImportError:
             from tag_cli import process_for
-        if process_for(store.home / "state/slack.json"):
-            prefix = "tag " + (os.getenv("TAG_ID", "default") + " " if os.getenv("TAG_ID", "default") != "default" else "")
-            raise ChatGPTError(f"Stop this Tag before changing its ChatGPT account: {prefix}stop. Then repeat the account command and run {prefix}start.")
+        if any(process_for(home / "state/slack.json") for home in account_homes(store.home)):
+            raise ChatGPTError("Stop all Tags before changing the shared ChatGPT account, then retry.")
     message = ""
     if dry_run:
         result = {"schema_version": 1, "dry_run": True, "action": action, "account": account_id}

@@ -552,17 +552,22 @@ class ProfileTests(unittest.TestCase):
             self.addCleanup(item.stop)
 
     def test_profile_question_shuffles_then_saves_name_and_description(self):
-        with Client([answer("shuffle"), answer({"name": "Maya's Tag", "description": "Helps with launches"})]) as client:
+        with patch.object(opentag_setup.random.SystemRandom, "choice", side_effect=lambda candidates: candidates[0]), \
+                Client([answer("shuffle"), answer("shuffle"), answer({"name": "Maya's Tag", "description": "Helps with launches"})]) as client:
             self.assertEqual(opentag_setup.choose_profile(self.project, self.config), "new")
-        first, second = client.questions()
+        first, second, third = client.questions()
         self.assertEqual((first["id"], first["kind"], first["prompt"]), ("profile", "profile_picture", "Meet your new Tag"))
         self.assertEqual((first["name"], first["name_limit"], first["description"], first["description_limit"]),
                          ("Maya's Tag", 35, "", 140))
         self.assertEqual((first["picture"], first["error"], first["editing"], first["can_use_existing"],
                           first["can_go_back"]), ("waterdrop", None, False, True, False))
-        self.assertTrue(first["picture_label"].startswith("Water · Tag waterdrop #"))
+        element = opentag_setup.waterdrop_recipe("", 0)["body"].name.title()
+        self.assertEqual(first["picture_label"], f"{element} · Tag waterdrop #0001")
         self.assertTrue(Path(first["preview"]).is_absolute() and Path(first["preview"]).is_file())
         self.assertNotEqual(first["picture_label"], second["picture_label"])
+        self.assertEqual(first["preview"], second["preview"])
+        self.assertNotEqual(first["preview_revision"], second["preview_revision"])
+        self.assertNotEqual(second["preview_revision"], third["preview_revision"])
         # A shuffle changes only the picture, so Back never replays it.
         self.assertFalse(second["can_go_back"])
         self.assertEqual([], opentag_setup.ui._history[:-1])
@@ -570,7 +575,24 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual((values["OPENTAG_BOT_NAME"], values["OPENTAG_BOT_DESCRIPTION"]),
                          ("Maya's Tag", "Helps with launches"))
         state = opentag_setup.profile_picture(self.project)
-        self.assertEqual(state["label"], second["picture_label"])
+        self.assertEqual(state["label"], third["picture_label"])
+        self.assertEqual(opentag_setup.picture_revision(state), third["preview_revision"])
+
+    def test_replacing_custom_picture_with_same_filename_changes_revision(self):
+        (self.home / "first").mkdir()
+        (self.home / "second").mkdir()
+        first = png(self.home / "first/face.png", 640, 640)
+        second = png(self.home / "second/face.png", 700, 700)
+        with Client([answer({"picture": str(first)}), answer({"picture": str(second)}), answer("existing")]) as client:
+            opentag_setup.choose_profile(self.project, self.config)
+        _, before, after = client.questions()
+        self.assertEqual(before["preview"], after["preview"])
+        self.assertEqual(before["picture_label"], after["picture_label"])
+        self.assertNotEqual(before["preview_revision"], after["preview_revision"])
+        # Older saved profiles need no migration: the revision is computed on read.
+        with Client([answer("existing")]) as client:
+            opentag_setup.choose_profile(self.project, self.config)
+        self.assertEqual(client.questions()[0]["preview_revision"], after["preview_revision"])
 
     def test_shuffle_picks_another_identity_no_other_tag_uses(self):
         current = 2
@@ -582,7 +604,7 @@ class ProfileTests(unittest.TestCase):
             recipe = opentag_setup.waterdrop_recipe("", index)
             self.assertTrue(recipe["body"] != same["body"] or recipe["signature"] != same["signature"])
 
-    def test_first_picture_is_seeded_by_tag_and_name_and_skips_other_tags(self):
+    def test_assigned_picture_is_seeded_by_tag_and_name_and_skips_other_tags(self):
         with patch.object(opentag_setup.hashlib, "sha256") as digest:
             digest.return_value.digest.return_value = b"\x00" * 32
             self.assertEqual(opentag_setup._assigned_waterdrop_index(self.project, "t1:First", occupied=set()), 2)
@@ -590,11 +612,6 @@ class ProfileTests(unittest.TestCase):
             # A remembered identity is kept unless another Tag took it since.
             self.assertEqual(opentag_setup._assigned_waterdrop_index(self.project, "t1:First", occupied=set()), 2)
             self.assertEqual(opentag_setup._assigned_waterdrop_index(self.project, "t1:First", occupied={2}), 7)
-        with Client([answer("existing")]) as client:
-            opentag_setup.choose_profile(self.project, self.config)
-        digest_seed = "t1:Maya's Tag"
-        self.assertIn(digest_seed, json.loads((self.project / "assets/tag-waterdrop-identities.json").read_text(encoding="utf-8")))
-        self.assertEqual(client.questions()[0]["picture"], "waterdrop")
 
     def test_uploaded_picture_is_validated_copied_and_errors_reask(self):
         small = png(self.home / "small.png", 300, 300)
@@ -634,9 +651,9 @@ class ProfileTests(unittest.TestCase):
 
     def test_saved_name_and_picture_come_back_on_resume(self):
         opentag_setup.settings.save_config(self.config, {"OPENTAG_BOT_NAME": "Ops Tag", "OPENTAG_BOT_DESCRIPTION": "Ops"})
-        with Client([answer("shuffle")]) as client, self.assertRaises(opentag_setup.ui.Paused):
+        with Client([]) as client, self.assertRaises(opentag_setup.ui.Paused):
             opentag_setup.choose_profile(self.project, self.config)
-        shuffled = client.questions()[1]["picture_label"]
+        shuffled = client.questions()[0]["picture_label"]
         with Client([]) as client, self.assertRaises(opentag_setup.ui.Paused):
             opentag_setup.choose_profile(self.project, self.config)
         question = client.questions()[0]
@@ -644,10 +661,13 @@ class ProfileTests(unittest.TestCase):
                          ("Ops Tag", "Ops", shuffled))
 
     def test_terminal_asks_name_description_then_picture(self):
-        with patch.object(opentag_setup, "ask", side_effect=["Helper", "Runs launches"]), patch.object(
+        with patch.object(opentag_setup.random.SystemRandom, "choice", side_effect=lambda candidates: candidates[0]), \
+                patch.object(opentag_setup, "ask", side_effect=["Helper", "Runs launches"]), patch.object(
             opentag_setup.ui, "choose", side_effect=[1, 0]
-        ) as choose, redirect_stdout(StringIO()):
+        ) as choose, redirect_stdout(StringIO()) as output:
             self.assertEqual(opentag_setup.choose_profile(self.project, self.config), "new")
+        element = opentag_setup.waterdrop_recipe("", 0)["body"].name.title()
+        self.assertIn(f"{element} · Tag waterdrop #0001", output.getvalue())
         self.assertEqual(choose.call_args.args[:2], ("Profile picture", [
             "Keep this picture", "Shuffle picture", "Choose my own picture", "Open picture preview",
             "Use an existing app", "Save and exit"]))
@@ -964,8 +984,8 @@ class GuidedSetupFlowTests(unittest.TestCase):
         self.assertEqual((approve["prompt"], approve["option_ids"]), ("Ready to create it in Klovr?", ["create", "edit", "edit_ai", "back"]))
         recap = approve["recap"]
         self.assertEqual((recap["name"], recap["description"], recap["owner"], recap["approval"]),
-                         ("Maya's Tag", "Helps with launches", {"id": "U01MAYA", "name": "maya"}, False))
-        self.assertEqual(recap["workspace"], {"id": "T0KLOVR", "name": "Klovr", "organization": None})
+                         ("Maya's Tag", "Helps with launches", {"id": "U01MAYA", "name": "maya", "icon": None}, False))
+        self.assertEqual(recap["workspace"], {"id": "T0KLOVR", "name": "Klovr", "organization": None, "icon": None})
         self.assertEqual((recap["ai"]["value"], recap["ai"]["backend"]), ("codex:gpt-5.5", "codex"))
         self.assertTrue(Path(recap["picture"]).is_file())
         values = opentag_setup.settings.load_config(self.config)

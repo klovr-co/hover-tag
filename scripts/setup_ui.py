@@ -129,6 +129,10 @@ def _previous(kind: str, answer: object, details: dict) -> dict:
     """Offer the earlier answer as the default when a question is asked again."""
     options = details.get("options") or []
     if kind == "choose":
+        if details.get("supports_effort") and isinstance(answer, dict):
+            ids = details.get("option_ids") or []
+            if answer.get("value") in ids:
+                return {"default": ids.index(answer["value"]), "default_effort": answer.get("effort")}
         ids = details.get("option_ids") or []
         index = (options.index(answer) if isinstance(answer, str) and answer in options
                  else ids.index(answer) if isinstance(answer, str) and answer in ids else answer)
@@ -266,6 +270,13 @@ def _setup_label(label: str) -> str:
 
 def message(text: str, *, code: str = "", indent: str = "  ") -> None:
     """Print setup prose in the same gutter as the header and prompts."""
+    if protocol_active():
+        # A client replaces its status per event. Terminal wrapping must not
+        # turn one message into a sequence of incomplete status updates.
+        text = _ANSI.sub("", str(text)).strip()
+        if text:
+            emit({"type": "message", "text": text})
+        return
     # ``display.paragraph`` deliberately owns wrapping, while this helper owns
     # the gutter for every line of a multi-line status returned by a command.
     # Without splitting first, command output could resume at column zero.
@@ -278,6 +289,9 @@ def message(text: str, *, code: str = "", indent: str = "  ") -> None:
 
 def notice(title: str, body: str, *, code: str = "", footer: str = "") -> None:
     """Keep terminal prose readable without relying on color or hard wrapping."""
+    if protocol_active():
+        message("\n\n".join(part for part in (title, body, f"Code: {code}" if code else "", footer) if part))
+        return
     width = max(12, min(72, shutil.get_terminal_size((80, 24)).columns - 4))
 
     def paragraph(text):

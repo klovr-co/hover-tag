@@ -132,7 +132,7 @@ class ConnectionTests(Fixture):
         self.assertEqual(["expired", "expired"], [item["state"] for item in tag_ai.connections(self.home)])
         self.assertEqual(["reconnect"], tag_ai.connection(self.home, "claude")["actions"])
 
-    def test_chatgpt_plan_is_this_tags_own_connection(self) -> None:
+    def test_chatgpt_plan_is_shared_by_all_tags(self) -> None:
         account = {"id": "oaiapp_one", "email": "one@example.test", "signed_in": True, "plan_enabled": True,
                    "usage_paused": False}
         for name, change, state, actions in (
@@ -145,7 +145,7 @@ class ConnectionTests(Fixture):
                 self.machine(codex_status=done(1), store=codex_store(enabled=True, account={**account, **change}))
                 result = tag_ai.connection(self.home, "codex")
                 self.assertEqual((state, actions), (result["state"], result["actions"]))
-                self.assertEqual(("chatgpt", False), (result["method"], result["shared"]))
+                self.assertEqual(("chatgpt", True), (result["method"], result["shared"]))
                 self.assertEqual("ChatGPT plan · one@example.test", result["account"])
                 # The plan connection never consults the computer's Codex sign-in.
                 self.assertNotIn(("login", "status"), [tuple(c.args[0][1:]) for c in tag_ai._run.call_args_list])
@@ -214,15 +214,12 @@ class ModelTests(Fixture):
         self.assertEqual([{"backend": "codex", "name": "Codex", "reason": "not_connected"}], result["unavailable"])
         self.assertEqual("claude:claude-opus-5-5", result["suggested"])
 
-    def test_saving_a_model_picks_its_backend_and_keeps_slack_choices(self) -> None:
-        slack_choices = self.root / "slack-user-settings.json"
-        slack_choices.write_text(json.dumps({"T1:U1": {"model": "codex:gpt-5.5-mini"}}), encoding="utf-8")
+    def test_saving_a_model_picks_its_backend(self) -> None:
         self.catalog({"OPENTAG_BACKEND": "codex"})  # Remembers the offered models.
         choice = tag_ai.save_default_model(self.home, "claude:claude-opus-5-5", ready=["codex", "claude"])
         saved = tag_config.load_config(self.config)
         self.assertEqual(("claude", "claude:claude-opus-5-5"), (saved["OPENTAG_BACKEND"], saved["OPENTAG_DEFAULT_MODEL"]))
         self.assertEqual(("Opus 5.5", "Claude"), (choice["label"], choice["backend_name"]))
-        self.assertEqual({"T1:U1": {"model": "codex:gpt-5.5-mini"}}, json.loads(slack_choices.read_text(encoding="utf-8")))
 
     def test_saving_refuses_unconnected_or_unoffered_models(self) -> None:
         with self.assertRaisesRegex(ValueError, "Connect Claude"):
@@ -370,42 +367,68 @@ class SetupStepTests(Fixture):
         self.assertFalse(any(option.startswith("change_account") for option in question["option_ids"]))
         self.assertEqual(("claude", "claude:claude-opus-5-5"), (values["OPENTAG_BACKEND"], values["OPENTAG_DEFAULT_MODEL"]))
 
-    def test_another_agent_can_be_signed_in_from_the_model_question(self) -> None:
+    def test_model_question_does_not_offer_connection_actions(self) -> None:
         self.signed_out_claude()
+        with ProtocolClient([{"answer": "codex:gpt-5.5"}]) as client, patch.object(tag_ai, "sign_in") as sign_in:
+            tag_ai.setup_step(self.home, self.config)
+        question = client.questions()[0]
+        self.assertEqual(["codex"], [g["backend"] for g in question["groups"]])
+        self.assertFalse(any(value.startswith(("sign_in:", "reconnect:", "resume:")) for value in question["option_ids"]))
+        sign_in.assert_not_called()
 
-        def sign_in(home, backend, **kwargs):
-            kwargs["emit"]({"type": "progress", "backend": backend, "step": "waiting", "text": "Waiting for your browser…"})
-            self.status["claude"] = done(0, json.dumps({"loggedIn": True}))
-            return {"backend": backend, "state": "connected", "account": "Claude Max"}
+    def test_setup_saves_model_and_thinking_for_both_backends(self) -> None:
+        self.machine()
+        for model in ("codex:gpt-5.5", "claude:claude-opus-5-5"):
+            with self.subTest(model=model), ProtocolClient([{"answer": {"value": model, "effort": "high"}}]) as client:
+                saved = tag_ai.setup_step(self.home, self.config)
+                self.assertTrue(client.questions()[0]["supports_effort"])
+                self.assertEqual(model, saved["OPENTAG_DEFAULT_MODEL"])
+                self.assertEqual("high", saved["OPENTAG_DEFAULT_EFFORT"])
+            with ProtocolClient([{"answer": {"value": model, "effort": "default"}}]):
+                saved = tag_ai.setup_step(self.home, self.config)
+                self.assertFalse(saved.get("OPENTAG_DEFAULT_EFFORT"))
 
-        with ProtocolClient([{"answer": "sign_in:claude"}, {"answer": "claude:claude-opus-5-5"}]) as client, \
-                patch.object(tag_ai, "sign_in", side_effect=sign_in):
-            values = tag_ai.setup_step(self.home, self.config)
-        first, second = client.questions()
-        self.assertEqual(["codex"], [group["backend"] for group in first["groups"]])
-        self.assertEqual("sign_in:claude", first["option_ids"][-1])
-        self.assertEqual(len(first["options"]), len(first["option_ids"]))
-        progress = [event for event in client.events() if event["type"] in {"progress", "sign_in", "result"}]
-        # A sign-in's outcome is never a "result": clients read that as the end of setup.
-        self.assertEqual(["progress", "sign_in"], [event["type"] for event in progress])
-        self.assertEqual("connected", second["last_result"]["status"])
-        # A sign-in can't be replayed, so Back stops after it.
-        self.assertFalse(second["can_go_back"])
-        self.assertEqual(["codex", "claude"], [group["backend"] for group in second["groups"]])
-        self.assertNotIn("sign_in:claude", second["option_ids"])
-        self.assertEqual("claude:claude-opus-5-5", values["OPENTAG_DEFAULT_MODEL"])
+    def test_setup_rejects_unsupported_thinking_without_saving(self) -> None:
+        self.machine()
+        before = self.config.read_text()
+        for model in ("codex:gpt-5.5", "claude:claude-opus-5-5"):
+            with self.subTest(model=model), ProtocolClient([{"answer": {"value": model, "effort": "max"}}]):
+                with self.assertRaisesRegex(ValueError, "doesn't offer"):
+                    tag_ai.setup_step(self.home, self.config)
+                self.assertEqual(before, self.config.read_text())
 
-    def test_with_nothing_connected_setup_asks_to_connect_one(self) -> None:
+    def test_cli_setup_offers_thinking_for_both_backends(self) -> None:
+        self.machine()
+        for model in ("codex:gpt-5.5", "claude:claude-opus-5-5"):
+            def choose(_title, _labels, **details):
+                return details["option_ids"].index(model if details["qid"] == "default_model" else "high")
+            with self.subTest(model=model), patch.object(setup_ui, "protocol_active", return_value=False), \
+                    patch.object(setup_ui, "choose", side_effect=choose):
+                saved = tag_ai.setup_step(self.home, self.config)
+                self.assertEqual(model, saved["OPENTAG_DEFAULT_MODEL"])
+                self.assertEqual("high", saved["OPENTAG_DEFAULT_EFFORT"])
+
+    def test_back_restores_combined_model_and_thinking(self) -> None:
+        self.machine()
+        setup_ui.start_replay([], ("default_model", {"value": "claude:claude-opus-5-5", "effort": "high"}))
+        try:
+            with ProtocolClient([{"answer": {"value": "claude:claude-opus-5-5", "effort": "high"}}]) as client:
+                tag_ai.setup_step(self.home, self.config)
+            question = client.questions()[0]
+            self.assertEqual("claude:claude-opus-5-5", question["option_ids"][question["default"]])
+            self.assertEqual("high", question["default_effort"])
+        finally:
+            setup_ui.commit()
+
+    def test_with_nothing_connected_setup_points_to_global_settings(self) -> None:
         self.machine(installed=())
-        with ProtocolClient([{"answer": "install:claude"}, {"answer": "exit"}]) as client:
+        with ProtocolClient([{"answer": "check"}, {"answer": None, "pause": True}]) as client:
             with self.assertRaises(setup_ui.Paused):
                 tag_ai.setup_step(self.home, self.config)
-        first = client.questions()[0]
-        self.assertEqual("ai_connection", first["id"])
-        self.assertFalse(first["can_continue"])
-        self.assertEqual(["install:codex", "install:claude", "check", "exit"], first["option_ids"])
+        self.assertEqual(["ai_connection", "ai_connection"], [q["id"] for q in client.questions()])
+        self.assertEqual(["check"], client.questions()[0]["option_ids"])
         messages = " ".join(event["text"] for event in client.events() if event["type"] == "message")
-        self.assertIn("https://code.claude.com/docs/en/setup", messages)
+        self.assertIn("tag settings ai sign-in codex --restart", messages)
 
     def test_older_clients_answer_by_index_or_label(self) -> None:
         self.machine()
@@ -416,58 +439,12 @@ class SetupStepTests(Fixture):
             values = tag_ai.setup_step(self.home, self.config)
         self.assertEqual(client.questions()[0]["option_ids"][1], values["OPENTAG_DEFAULT_MODEL"])
 
-    def test_client_can_cancel_a_sign_in_and_retry(self) -> None:
+    def test_stale_setup_sign_in_answers_cannot_change_shared_accounts(self) -> None:
         self.signed_out_claude()
-        seen: list[bool] = []
-
-        def sign_in(home, backend, *, cancelled, **_):
-            for _ in range(50):
-                if cancelled():
-                    seen.append(True)
-                    raise tag_ai.SignInCancelled("Sign-in cancelled. Nothing changed.")
-                threading.Event().wait(0.02)
-            raise AssertionError("not cancelled")
-
-        with ProtocolClient([{"answer": "sign_in:claude"}, {"cancel": True}, {"answer": "codex:gpt-5.5"}]) as client, \
-                patch.object(tag_ai, "sign_in", side_effect=sign_in):
-            tag_ai.setup_step(self.home, self.config)
-        self.assertEqual([True], seen)
-        retried = client.questions()[1]
-        self.assertEqual(("cancelled", True), (retried["last_result"]["status"], retried["last_result"]["retry"]))
-        self.assertIn("sign_in:claude", retried["option_ids"])
-
-    def test_an_answer_sent_during_sign_in_is_kept_and_eof_pauses(self) -> None:
-        self.signed_out_claude()
-        with ProtocolClient([{"answer": "sign_in:claude"}, {"answer": "codex:gpt-5.5"}]), \
-                patch.object(tag_ai, "sign_in", return_value={"state": "connected"}):
-            self.assertEqual("codex:gpt-5.5", tag_ai.setup_step(self.home, self.config)["OPENTAG_DEFAULT_MODEL"])
-
-        def closed_during_sign_in(*_args, cancelled, **_kwargs):
-            threading.Event().wait(0.2)
-            if cancelled():
-                raise tag_ai.SignInCancelled("Sign-in cancelled. Nothing changed.")
-            raise AssertionError("closing stdin should cancel")
-
-        # Closing stdin cancels the sign-in, then pauses setup at the next question.
-        with ProtocolClient([{"answer": "sign_in:claude"}]), \
-                patch.object(tag_ai, "sign_in", side_effect=closed_during_sign_in):
-            with self.assertRaises(setup_ui.Paused):
+        with ProtocolClient([{"answer": "sign_in:claude"}]), patch.object(tag_ai, "sign_in") as sign_in:
+            with self.assertRaisesRegex(RuntimeError, "not offered"):
                 tag_ai.setup_step(self.home, self.config)
-
-    def test_pausing_during_sign_in_cancels_it_then_pauses(self) -> None:
-        self.signed_out_claude()
-
-        def waits_for_cancel(*_args, cancelled, **_kwargs):
-            for _ in range(100):
-                if cancelled():
-                    raise tag_ai.SignInCancelled("Sign-in cancelled. Nothing changed.")
-                threading.Event().wait(0.02)
-            raise AssertionError("pause should cancel")
-
-        with ProtocolClient([{"answer": "sign_in:claude"}, {"answer": None, "pause": True}]), \
-                patch.object(tag_ai, "sign_in", side_effect=waits_for_cancel):
-            with self.assertRaises(setup_ui.Paused):
-                tag_ai.setup_step(self.home, self.config)
+        sign_in.assert_not_called()
 
     def test_unavailable_saved_model_is_explained(self) -> None:
         self.machine()

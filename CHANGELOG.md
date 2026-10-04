@@ -6,12 +6,46 @@ All notable changes to Tag are documented here.
 
 ### Fixed
 
+- Tag.app activity shows how many steps each request took (for example
+  "7 steps") next to its time and model, and flags failed requests there. Click
+  it to see the steps, replacing the separate "Request details" link.
+
+- Slack replies no longer include Configure. Every requester uses the Tag's
+  model and thinking level from Tag.app or the CLI; legacy per-user model,
+  thinking, and Fast Mode overrides are archived automatically on startup.
+  Historic buttons and open forms explain where settings moved.
+
+- Tag.app activity now opens saved tool steps and matching error reports, with
+  a link to the Slack thread and a cached AI-written, one-sentence summary of new delivered
+  replies. The same details are available through
+  `tag NAME logs --activity RUN_ID [--json]` for Codex and Claude. Channel names
+  persist independently of memory settings and backfill automatically on startup
+  for existing installations; successful lookups are reused across restarts.
+- Tag.app now uses the connected bot's Slack profile picture, including for
+  existing Tags without a locally saved setup picture. Startup backfills a
+  versioned cache, running Tags refresh it hourly, and `tag list --json`
+  reports the same cached image for both Codex and Claude. Failed downloads
+  preserve the last good picture and retry automatically.
+
 - Tags set up before Tag saved the Slack workspace's name now learn it on
   their next `tag start`, so Tag.app and `tag list` show "Klovr" instead of the
   workspace's Team ID.
 
 ### Added
 
+- Change a Tag's one-line Slack description after setup with
+  `tag NAME describe "…" [--json]` (`""` clears it), or with **Edit** next to the
+  description in Tag.app's Details tab. Slack is changed and verified first, so
+  nothing changes locally if Slack needs a fresh sign-in. Tag details now show
+  the description, and the Details tab is regrouped with Remove at the bottom.
+
+- AI accounts are shared by all Tags and managed only in Settings → AI connections.
+  Tag details and setup keep model choices per Tag. Existing per-Tag ChatGPT
+  credentials migrate automatically; conflicting selections wait for an explicit
+  shared account choice. CLI connection commands now have the same global scope.
+
+- Tag.app has an Appearance setting (Auto, Light or Dark) in Settings. Auto
+  follows the Mac, as before. The terminal has no appearance to set.
 - Setting up a Tag starts with the Tag itself: its name, a one-line
   description, and its picture. Shuffle draws another waterdrop from any of
   the five elements, one your other Tags don't use, or you can upload your own.

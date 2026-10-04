@@ -286,19 +286,15 @@ removes its wait state. `Preparing your answer…` requires an explicit backend
 does not trigger it. Answer streaming and cleanup cancel pending status updates.
 This filtering applies to activity labels, not redaction of the final answer.
 
-For the Codex backend, completed replies include a compact **Configure** button
-beneath the answer. It opens a user-scoped settings modal; saved choices apply
-to that user's future requests across channels and threads and survive bridge
-restarts in `.runtime/`. By default, Tag reads visible models and
-their supported reasoning levels and Fast Mode availability from Codex's local
-model cache. The modal layers Tag's `workspace/.codex/config.toml` model,
-reasoning, and service-tier defaults over the corresponding global Codex
-settings. Restart Tag after editing the local file. Reasoning levels retain
-Codex's native names. Fast Mode is a
-separate On/Off setting and uses increased usage when enabled. Set
-`OPENTAG_CODEX_MODELS` to restrict what Slack users can select.
-The modal's **Reset to default** button restores every control before saving.
-Successful Codex App Server replies also include **Activity** beside **Configure**.
+All requests to a Tag use its configured model and thinking level, selected
+in Tag.app → Details or `tag NAME settings ai`. This applies to Codex and
+Claude. Slack replies have no Configure control or per-user preferences.
+Startup archives legacy preferences before accepting requests; historic
+Configure buttons explain where settings moved and cannot save overrides.
+Backend-supported Fast Mode defaults still apply. Restart Tag after changing
+its local backend configuration; app model changes restart it automatically.
+
+When the diagnostic Activity control is enabled, it opens saved activity.
 Failed and stopped runs show **Activity** alongside their existing actions. The button
 opens a Slack modal only for the original requester, after checking the current
 user allowlist and conversation policy. The first view is a compact timeline of

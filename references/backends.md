@@ -24,7 +24,7 @@ when present, `--add-dir` access to the skill and attachment directories, the
 `auto` permission mode, and the workspace `.mcp.json` servers. The session
 emits the same normalized events as Codex App Server: final-answer deltas,
 sanitized activity, Slack approval requests, and terminal status. Slack Stop
-interrupts the session, and per-user model, thinking, and Fast Mode choices
+interrupts the session, and the Tag's model, thinking, and Fast Mode defaults
 come from the signed-in account's model catalog. See
 [ADR 0008](../docs/adr/0008-claude-agent-sdk.md).
 
@@ -93,7 +93,7 @@ complete response without a fake typewriter animation.
   `opentag_agent.py`, not in Slack event handling.
 - Keep the normalized event contract backend-neutral (`status`, `delta`,
   `final`, `error`, plus the richer `message_*`, `activity_*`,
-  `approval_request`, `run_info`, and `turn_complete` events); chat transports
+  `approval_request`, `run_info`, `usage`, and `turn_complete` events); chat transports
   must never parse backend-native event payloads.
 - Receive the thinking level as the backend-neutral `reasoning_effort`. The
   Tag's default level (`OPENTAG_DEFAULT_EFFORT`) is applied once, in
@@ -103,9 +103,31 @@ complete response without a fake typewriter animation.
 - Emit `run_info` with the concrete model the backend actually used, even when
   Tag requested an alias or the account default. Codex reports it from
   `thread/start`; Claude reports the main thread's assistant model.
+- Emit `usage` with a cumulative `usage` snapshot containing `input_tokens`,
+  `output_tokens`, and `total_tokens`. Input includes cache reads/writes; optional
+  cache and reasoning counts are subsets, never added twice. Codex maps
+  `thread/tokenUsage/updated.tokenUsage.total`; Claude maps the SDK result's
+  `usage`. The runner accumulates reported usage across retry attempts; duplicate
+  snapshots replace earlier snapshots within an attempt. Missing usage is unknown.
 
 Generated images use a file handoff rather than a new stream event. For each
 Slack invocation, the prompt names a temporary `results/images` directory. A
 backend places only final PNG, JPEG, GIF, or WebP files there; after a successful
 run, the Slack bridge validates and uploads them to the originating thread. The
 directory is deleted when that invocation finishes.
+
+
+### Activity reply summaries
+
+After successful Slack delivery, the bridge queues `agent_summary` with the
+completed answer and selected backend, using the reported model when available.
+Normalized `run_info` also saves the request's actual model and display label to
+Activity for both backends. Missing historical model data remains absent. A separate bounded background run
+produces a one-sentence TL;DR; it never resumes or repeats the Slack task. Both
+Codex App Server and Claude Agent SDK run this text-only pass in a temporary
+working directory with tools and user hooks disabled. Existing provider sign-in
+is reused. Only final-answer events from a completed turn become the sanitized
+`reply_summary` cache; commentary, partial turns, and errors never do. Failure
+leaves the locally generated `reply_preview`. CLI JSON and Tag.app read the same
+cache. Existing installations receive this through the runtime manifest without
+new settings or permissions; historical answer text is not available to backfill.

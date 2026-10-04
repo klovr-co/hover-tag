@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import errno
 import json
 import os
 from pathlib import Path
@@ -24,7 +25,7 @@ RESERVED_NAMES = frozenset({
     "add", "list", "memory", "settings", "inspect", "config", "setup",
     "reset", "migrate", "upgrade", "rollback", "version", "paths",
     "doctor", "start", "stop", "restart", "status", "logs", "dev",
-    "telemetry", "rename", "autostart", "chatgpt",
+    "telemetry", "rename", "describe", "autostart", "chatgpt", "abandon", "remove",
 })
 
 
@@ -328,8 +329,12 @@ def _create(installation_root: Path, tag_id: str, *, provisional: bool = False) 
         _write_metadata(path, tag_id, provisional=provisional)
         try:
             os.rename(staging, destination)
-        except FileExistsError:
-            raise ValueError(f"Tag '{tag_id}' already exists; its configuration was preserved") from None
+        except OSError as exc:
+            # macOS/Linux can report ENOTEMPTY instead of EEXIST when another
+            # creator publishes a nonempty home after our existence check.
+            if exc.errno in {errno.EEXIST, errno.ENOTEMPTY}:
+                raise ValueError(f"Tag '{tag_id}' already exists; its configuration was preserved") from None
+            raise
     finally:
         if staging.exists():
             shutil.rmtree(staging)

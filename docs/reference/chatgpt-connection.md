@@ -8,9 +8,7 @@ still determine which requests succeed. See [OpenAI's integration documentation]
 Install Codex, then connect from a local interactive terminal:
 
 ```sh
-tag stop
-tag chatgpt login
-tag start
+tag settings ai sign-in codex --method chatgpt --restart
 ```
 
 New registrations send **Tag** as the display-name hint. The browser displays
@@ -19,15 +17,16 @@ controls this page; its documented dynamic-registration flow has no custom-icon
 parameter. Returning sign-ins reuse the saved registration, so a local name
 change does not rename an existing registration. Tag verifies your identity and the returned grant before making the
 connection active. A connection does not import ChatGPT conversation history.
-You do not need to sign in to Codex separately for this mode. Setup's AI step
-and Settings → AI & models offer **ChatGPT account for this Tag only** under
-Codex's Change account; in a terminal, run
-`tag settings ai sign-in codex --method chatgpt`. Add `--restart` to stop a
-running Tag while you sign in and start it again afterwards.
+You do not need to sign in to Codex separately for this mode. Settings → AI
+connections manages one shared connection per provider for all Tags. Choose a
+model and thinking level in each Tag's Details tab or during setup. In a terminal,
+run `tag settings ai sign-in codex --method chatgpt --restart`. Running Tags pause
+while you sign in and start again afterwards, including if sign-in fails.
 
-Existing installations retain their current Codex sign-in until you explicitly
-connect. Every authorized Slack requester uses the account selected for that
-Tag. Named Tags have independent selections; use `tag NAME chatgpt login`.
+Existing installations using native Codex sign-in retain it until you explicitly
+connect. Every authorized Slack requester uses the installation's selected
+provider account. Account commands are global; `tag NAME chatgpt` and named-Tag
+sign-in commands are rejected.
 
 ## Accounts and usage
 
@@ -45,8 +44,8 @@ Replace `ACCOUNT` with an issued account ID shown by `status`. The ID distinguis
 registrations even when their emails match. `login` without an ID registers a
 new account; with an ID it renews the existing registration. `--consent` explicitly
 asks for plan permission again after a decline. `use` validates or refreshes a
-saved connection before selecting it. Stop the Tag before changing accounts,
-then restart it so its model picker reloads the selected account's catalog.
+saved connection before selecting it. Stop all Tags before using these account commands, then restart the Tags you
+need so their model pickers reload the shared account's catalog.
 
 `logout` defaults to the active account, attempts to revoke its renewable session,
 and clears local tokens while retaining the registration for future sign-in.
@@ -58,9 +57,9 @@ Choose `use-codex` explicitly to restore inherited Codex authentication.
 Review plan usage and app-specific limits at
 [ChatGPT Settings → Usage](https://chatgpt.com/settings/usage). A limit error does
 not necessarily mean your entire subscription is exhausted. Tag pauses new plan
-requests after this error. Once you have reviewed the limit, stop Tag, run
-`tag chatgpt use ACCOUNT` to explicitly resume requests, and start Tag again.
-**Resume** in Settings → AI & models (`tag settings ai resume --restart`) does
+requests after this error. Once you have reviewed the limit, stop all Tags, run
+`tag chatgpt use ACCOUNT` to explicitly resume requests, and start them again.
+**Resume** in Settings → AI connections (`tag settings ai resume --restart`) does
 the same for the selected account.
 
 For automation, `status --json` is read-only and includes no tokens. Mutating
@@ -73,14 +72,22 @@ before tasks.
 
 ## Storage and recovery
 
-Each Tag stores schema-versioned credentials in `.tag/config/chatgpt/accounts.json`
-(or the equivalent private directory under a custom `TAG_HOME`). The installation
+The installation stores schema-versioned credentials in
+`$TAG_HOME/shared/ai/chatgpt/accounts.json`. The installation
 stores its stable host ID in `state/chatgpt-host.json`. Credential writes are
 atomic and private; refresh operations are serialized across processes. A
 failed or interrupted write does not count as a completed update.
 
-Do not share, commit, or include these files in support reports. Copying the Tag
-folder copies its credentials. On a different host, sign in again to bind that
+Upgrade/startup migrates old per-Tag account files automatically before readiness
+checks. Migration version 1 preserves registrations, verifies the shared store
+before recording completion, and can safely retry after interruption. Old files
+remain for recovery and are never imported again after publication. If Tags had
+different selected accounts or billing methods, no account is silently selected:
+choose the shared account in Settings, or stop all Tags and run
+`tag chatgpt use ACCOUNT`. Models and thinking levels remain per Tag.
+
+Do not share, commit, or include these files in support reports. Older Tag folders
+may still contain retained migration credentials. On a different host, sign in again to bind that
 host's ID to the registration; do not copy the installation's host ID to a second
 machine. This remains Tag's [trusted local-account security model](../../SECURITY.md).
 

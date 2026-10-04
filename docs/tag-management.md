@@ -29,6 +29,12 @@ Choose a different nickname with `--nickname`; nicknames never repeat another
 Tag's ID or nickname. If Slack needs a fresh `slack login`, nothing changes
 locally and the error repeats the exact command to retry.
 
+Change the one-line description people see on the Tag's Slack profile with
+`tag NAME describe "Digs through docs to answer research questions"`, up to 140
+characters; `tag NAME describe ""` clears it. Like a rename, Slack is changed and
+verified first, and nothing changes locally if Slack needs a fresh `slack login`.
+In Tag.app, use **Edit** next to the description in the Tag's Details tab.
+
 Tags are grouped by Slack workspace in `tag list`. Start, stop, or restart every
 Tag in one workspace with `tag start --workspace T0ABC123` (a team ID or the
 workspace's name). Each Tag runs its own lifecycle; one failure doesn't stop the
@@ -199,10 +205,15 @@ tag settings ai sign-in codex --method chatgpt --restart
 
 The default model can also be set with
 `tag config set OPENTAG_DEFAULT_MODEL claude:opus` (or `codex:MODEL`, or just
-`codex`/`claude` for that account's own default). In Slack, anyone authorized
-can choose any model from the signed-in backends with **Configure**; their
-choice is kept when the Tag's default changes. `OPENTAG_BACKENDS=codex` limits
-the choices to one backend.
+`codex`/`claude` for that account's own default). All Slack requests use the
+Tag's model and thinking level, selected in Tag.app → Details or the CLI.
+`OPENTAG_BACKENDS=codex` limits the choices to one backend.
+
+The old Slack **Configure** control and per-user overrides are retired for
+both Codex and Claude. Startup automatically archives the old preferences as
+`state/slack-user-settings.json.retired-v1` before accepting requests. A
+versioned completion marker is written after verification; interrupted runs
+retry safely. Old Slack buttons only explain where settings moved.
 
 The Tag's **default thinking level** applies to its default model. It must be
 one the model offers (`tag settings ai models` lists them); a model without

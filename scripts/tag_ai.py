@@ -1,4 +1,4 @@
-"""AI connections for one Tag: which agents can run, the default model, and sign-in.
+"""Shared AI connections and per-Tag model and thinking choices.
 
 Tag.app and the terminal share this module. ``tag [TAG] settings ai --json``
 reports each backend's connection, ``models`` lists the signed-in accounts'
@@ -68,7 +68,7 @@ ACTION_LABELS = {
     "install": "Install {name}", "update": "Update {name}", "change_account": "Use another {name} account",
 }
 CODEX_METHOD_LABELS = {
-    "chatgpt": "ChatGPT account for this Tag only",
+    "chatgpt": "ChatGPT account shared by all Tags",
     "codex": "Codex sign-in on this computer",
 }
 
@@ -125,7 +125,10 @@ def _codex_connection(home: Path, executable: str, version: str | None) -> dict[
             account = store.status()["active_account"]
             email = (account or {}).get("email") or ""
             label = "ChatGPT plan · " + email if email else "ChatGPT plan"
-            plan = {"method": "chatgpt", "account": label, "shared": False}
+            plan = {"method": "chatgpt", "account": label, "shared": True}
+            if not account and store.status().get("accounts"):
+                return _connection(backend, "expired", detail="Choose one shared ChatGPT account in Settings, or run tag chatgpt use ACCOUNT.",
+                                   actions=("reconnect", "change_account"), **plan, **common)
             if not account or not account["signed_in"]:
                 return _connection(backend, "expired", detail="Sign in to ChatGPT again.",
                                    actions=("reconnect", "change_account"), **plan, **common)
@@ -137,7 +140,7 @@ def _codex_connection(home: Path, executable: str, version: str | None) -> dict[
                                    actions=("resume", "change_account"), **plan, **common)
             return _connection(backend, "connected", actions=("change_account",), **plan, **common)
     except (tag_chatgpt.ChatGPTError, OSError, KeyError, TypeError):
-        return _connection(backend, "expired", method="chatgpt", shared=False,
+        return _connection(backend, "expired", method="chatgpt", shared=True,
                            detail="Tag's ChatGPT account file needs attention. Sign in again.",
                            actions=("reconnect", "change_account"), **common)
     result = _run([executable, *backend.status_command])
@@ -517,7 +520,7 @@ def sign_in(home: Path, backend_key: str, *, method: str | None = None, account:
     if backend.key == "codex":
         store = tag_chatgpt.Store(home)
         if method is None and store.enabled():
-            # Signing in again without choosing another account renews the Tag's own one.
+            # Signing in again renews the selected shared account.
             method, account = "chatgpt", account or (store.status()["active_account"] or {}).get("id")
         method = method or "codex"
         if method not in CODEX_METHOD_LABELS:
@@ -592,30 +595,6 @@ class StdinCancel:
 
 # ---- Setup -----------------------------------------------------------------------
 
-def _option(action: str, backend: str, method: str | None = None) -> tuple[str, str]:
-    name = BY_KEY[backend].name
-    if action == "change_account" and method:
-        return f"change_account:{backend}:{method}", f"Change {name} account · {CODEX_METHOD_LABELS[method]}"
-    return f"{action}:{backend}", ACTION_LABELS[action].format(name=name)
-
-
-def connection_options(found: list[dict[str, Any]], values: dict[str, str]) -> list[tuple[str, str]]:
-    ready = usable(found, values)
-    options: list[tuple[str, str]] = []
-    if ready:
-        options.append(("continue", "Continue"))
-    for item in found:
-        if not item.get("allowed", True):
-            continue
-        for action in item["actions"]:
-            if action == "change_account" and item["backend"] == "codex":
-                options += [_option(action, "codex", method) for method in CODEX_METHOD_LABELS]
-            else:
-                options.append(_option(action, item["backend"]))
-    options += [("check", "Check again"), ("exit", "Save and exit")]
-    return options
-
-
 def status_line(item: dict[str, Any]) -> str:
     state = item["state"]
     if state == "connected":
@@ -631,34 +610,15 @@ def show_connections(found: list[dict[str, Any]]) -> None:
         ui.message(f"{mark} {item['name']:<7} {status_line(item)}")
 
 
-def _run_sign_in(home: Path, option: str, emit: Emit, cancelled: Callable[[], bool]) -> dict[str, Any]:
-    """Perform one setup action; return a result event describing what happened."""
-    action, _, rest = option.partition(":")
-    backend, _, method = rest.partition(":")
-    try:
-        if action == "resume":
-            item = resume(home)
-        else:
-            item = sign_in(home, backend, method=method or None, emit=emit, cancelled=cancelled)
-        return {"type": "sign_in", "backend": backend, "status": "connected", "connection": item}
-    except SignInCancelled as exc:
-        return {"type": "sign_in", "backend": backend, "status": "cancelled", "error": str(exc), "retry": True}
-    except SignInError as exc:
-        return {"type": "sign_in", "backend": backend, "status": "failed", "error": str(exc), "retry": True}
-
-
 def setup_step(home: Path, config_path: Path) -> dict[str, str]:
-    """Guided setup's AI step: choose the Tag's default model.
+    """Guided setup's AI step: choose the Tag's model and thinking level.
 
-    Connections are managed in Settings → AI & models. Setup lists them only
-    while nothing usable is connected, because one is required; otherwise it
-    asks for the model straight away and offers signing in to another agent as
-    extra options. Over JSON lines both are ``choose`` questions with extra
+    Connections are shared and managed in Settings → AI connections. Setup waits
+    for a usable connection, then asks for model and thinking. Over JSON lines these are ``choose`` questions with extra
     fields (``connections``, ``groups``, ``option_ids``), so older clients still
     show plain options.
     """
     values = settings.load_config(config_path)
-    last: dict[str, Any] | None = None
     while True:
         found = connections(home)
         permitted = allowed(values)
@@ -666,48 +626,17 @@ def setup_step(home: Path, config_path: Path) -> dict[str, str]:
             item["allowed"] = item["backend"] in permitted
         ready = usable(found, values)
         if ready:
-            picked = _choose_model(home, values, found, ready, last)
-            if picked.startswith(("sign_in:", "reconnect:", "resume:")):
-                last = _sign_in_from_setup(home, picked)
-                continue
-            saved = settings.update_config(config_path, {"OPENTAG_DEFAULT_MODEL": picked})
+            picked, effort = _choose_model(home, values, found, ready)
+            saved = settings.update_config(config_path, {"OPENTAG_DEFAULT_MODEL": picked,
+                                                         "OPENTAG_DEFAULT_EFFORT": effort})
             ui.message("✓ Default model · " + agent_models.describe_model_choice(
                 picked, saved.get("OPENTAG_BACKEND", "codex"),
                 names=agent_models.load_model_names(agent_models.model_names_path(home))))
             return saved
-        options = connection_options(found, values)
-        print()
-        ui.message("Tag works through Codex or Claude on this computer. Connect one to continue.")
-        show_connections(found)
-        ids = [option_id for option_id, _ in options]
-        selected = ids[ui.choose(
-            "Connect an AI", [label for _, label in options], qid="ai_connection",
-            default=0, option_ids=ids, connections=found, can_continue=False,
-            tag_name=values.get("OPENTAG_BOT_NAME") or "Tag",
-            **({"last_result": last} if last else {}),
-        )]
-        last = None
-        if selected == "check":
-            continue
-        if selected.startswith(("install:", "update:")):
-            backend = BY_KEY[selected.split(":", 1)[1]]
-            ui.message(f"Install or update {backend.name}: {backend.install_url}")
-            ui.message("Then choose Check again.")
-            continue
-        last = _sign_in_from_setup(home, selected)
-
-
-def _sign_in_from_setup(home: Path, selected: str) -> dict[str, Any]:
-    if selected == "change_account:claude" and not ui.protocol_active():
-        ui.message(CLAUDE_SHARED)
-    with ui.client_cancellation() as cancelled:
-        result = _run_sign_in(home, selected, ui.emit if ui.protocol_active() else _print_progress, cancelled)
-    # A sign-in can't be replayed: Back stops here rather than opening the browser again.
-    ui.commit()
-    if ui.protocol_active():
-        ui.emit(result)
-    ui.message(f"✓ {BY_KEY[result['backend']].name} connected" if result["status"] == "connected" else result["error"])
-    return result
+        ui.message("Connect an AI in Settings, or run tag settings ai sign-in codex --restart in another terminal.")
+        ui.choose("Connect an AI in Settings", ["Check connections again"], qid="ai_connection",
+                  default=0, option_ids=["check"], connections=found, can_continue=False,
+                  tag_name=values.get("OPENTAG_BOT_NAME") or "Tag")
 
 
 def _print_progress(event: dict[str, Any]) -> None:
@@ -715,9 +644,8 @@ def _print_progress(event: dict[str, Any]) -> None:
         ui.message(event["text"] + (f" {event['url']}" if event.get("url") else ""))
 
 
-def _choose_model(home: Path, values: dict[str, str], found: list[dict[str, Any]], ready: list[str],
-                  last: dict[str, Any] | None) -> str:
-    """Ask for the default model; signing in to another agent is offered after the models."""
+def _choose_model(home: Path, values: dict[str, str], found: list[dict[str, Any]], ready: list[str]) -> tuple[str, str]:
+    """Choose model and effort together; legacy clients can still choose just a model."""
     ui.message("Loading models from your accounts…")
     catalog = models(home, values, ready)
     entries = [(entry["value"], f"{group['name']} · {entry['label']}")
@@ -726,27 +654,53 @@ def _choose_model(home: Path, values: dict[str, str], found: list[dict[str, Any]
         entries = [(backend, f"{agent_models.backend_display_name(backend)} · Account default") for backend in ready]
     if catalog["default"]["chosen"] and not catalog["default"]["available"]:
         ui.message(f"{catalog['default']['label']} isn't available from your connected accounts. Pick another.")
-    more = [_option(action, item["backend"]) for item in found
-            if item.get("allowed", True) and item["backend"] not in ready
-            for action in item["actions"] if action in {"sign_in", "reconnect", "resume"}]
-    ids = [value for value, _ in entries] + [option_id for option_id, _ in more]
+    ids = [value for value, _ in entries]
     suggested = catalog["suggested"]
-    choice = ui.choose(
-        "Default model", [label for _, label in entries + more], qid="default_model",
-        default=ids.index(suggested) if suggested in ids else 0, option_ids=ids,
-        groups=catalog["groups"], connections=found, tag_name=values.get("OPENTAG_BOT_NAME") or "Tag",
-        **({"last_result": last} if last else {}),
-    )
-    if ids[choice] not in {value for value, _ in more}:
-        ui.message("Picking a model also picks its agent. Change it any time in tag settings.")
-    return ids[choice]
+    labels = [label for _, label in entries]
+    default = ids.index(suggested) if suggested in ids else 0
+    effort = values.get("OPENTAG_DEFAULT_EFFORT", "")
+    explicit = False
+    if ui.protocol_active():
+        answer = ui.ask_client("choose", "Default model", qid="default_model", options=labels,
+                               default=default, option_ids=ids, groups=catalog["groups"],
+                               connections=found, tag_name=values.get("OPENTAG_BOT_NAME") or "Tag",
+                               supports_effort=True, default_effort=effort or None)
+        if isinstance(answer, dict):
+            effort = answer.get("effort", "default")
+            if not isinstance(effort, str):
+                raise RuntimeError("The setup client sent an invalid thinking level")
+            explicit = True
+            answer = answer.get("value")
+        choice = ui._option_index(answer, labels, ids)
+    else:
+        choice = ui.choose("Default model", labels, default=default, qid="default_model", option_ids=ids)
+    picked = ids[choice]
+    entry = next((entry for group in catalog["groups"] for entry in group["models"]
+                  if entry["value"] == picked), {})
+    levels = entry.get("efforts", [])
+    if not ui.protocol_active() and levels:
+        effort_ids = ["default", *levels]
+        selected = ui.choose("Thinking level", ["Model default", *[agent_models.effort_label(level) for level in levels]],
+                             default=effort_ids.index(effort) if effort in effort_ids else 0,
+                             qid="default_effort", option_ids=effort_ids)
+        effort = effort_ids[selected]
+        explicit = True
+    if effort == "default":
+        effort = ""
+    elif explicit and effort:
+        _check_effort(effort, levels, entry.get("label", picked))
+    elif effort not in levels:
+        effort = ""
+    ui.message("Picking a model also picks its agent. Change it any time in tag settings.")
+    return picked, effort
 
 
 # ---- Command line: tag [TAG] settings ai … -------------------------------------------
 
-USAGE = ("tag [TAG] settings ai [status | models | sign-in codex|claude [--method chatgpt|codex] "
-         "[--account ID] | resume | model VALUE [--effort LEVEL|default] | effort LEVEL|default] "
-         "[--restart] [--json]")
+USAGE = ("tag settings ai connections | sign-in codex|claude [--method chatgpt|codex] "
+         "[--account ID] | resume [--restart] [--json]; "
+         "tag [TAG] settings ai status | models | model VALUE [--effort LEVEL|default] | "
+         "effort LEVEL|default [--restart] [--json]")
 
 
 @dataclass
@@ -769,6 +723,19 @@ def cli(arguments: list[str], target: Target, *, json_output: bool = False, rest
     values = settings.load_config(settings.config_path(target.home))
     if effort is not None and action != "model":
         raise ValueError("--effort is only for tag settings ai model VALUE")
+    if action == "connections" and len(arguments) == 1:
+        found = connections(target.home)
+        result = {"schema_version": 1, "connections": found,
+                  "usable": [c["backend"] for c in found if c["state"] == "connected"],
+                  "running": target.running(), "scope": "installation"}
+        if json_output:
+            print(json.dumps(result, indent=2))
+        else:
+            ui.display.header("AI connections", "Shared by all Tags")
+            show_connections(found)
+            ui.message("Sign in: tag settings ai sign-in codex|claude --restart")
+            ui.message("Choose a model: tag NAME settings ai model VALUE")
+        return 0
     if action == "status" and len(arguments) <= 1:
         result = report(target.home, values, tag_id=target.tag_id, running=target.running())
         if json_output:
@@ -838,20 +805,35 @@ def _sign_in_command(target: Target, backend: str, action: str, *, json_output: 
         raise ValueError("Choose codex or claude.")
     emit: Emit = (lambda event: print(json.dumps(event), flush=True)) if json_output else _print_progress
     cancelled: Callable[[], bool] = StdinCancel() if json_output else (lambda: False)
+    # Serialize browser flows and prevent new bridges starting during account changes.
+    connection_lock = tag_chatgpt.LifecycleLock(tag_chatgpt.tag_home() / "state/ai-connection.lock").acquire()
+    try:
+        return _change_connection(target, backend, action, emit=emit, cancelled=cancelled,
+                                  json_output=json_output, restart=restart, method=method, account=account,
+                                  connection_lock=connection_lock)
+    finally:
+        if connection_lock.handle is not None:
+            connection_lock.release()
+
+
+def _change_connection(target: Target, backend: str, action: str, *, emit: Emit,
+                       cancelled: Callable[[], bool], json_output: bool, restart: bool,
+                       method: str | None, account: str | None, connection_lock) -> int:
     running = target.running()
-    # A ChatGPT plan belongs to the Tag and is read at start, so it can't change underneath it.
-    needs_stop = backend == "codex" and (action == "resume" or method == "chatgpt" or tag_chatgpt.Store(target.home).enabled())
+    needs_stop = not target.tag_id or (backend == "codex" and (action == "resume" or method == "chatgpt" or tag_chatgpt.Store(target.home).enabled()))
     if running and needs_stop and not restart:
-        raise ValueError(f"Stop {target.name} before changing its Codex account, or add --restart "
+        raise ValueError(f"Stop {target.name} before changing the shared AI account, or add --restart "
                          "to stop it while you sign in and start it again afterwards.")
     stopped = False
     result: dict[str, Any]
     try:
         if running and restart:
             _progress(emit, backend, "stopping", target.name)
+            stopped = True  # Restore even a partially completed stop.
             if target.restart("stop"):
                 raise SignInError(f"Couldn't stop {target.name}. Nothing changed.")
-            stopped = True
+        if not target.tag_id:
+            tag_chatgpt.migrate_shared_accounts(target.home)
         if action == "resume":
             item = resume(target.home)
         else:
@@ -862,9 +844,10 @@ def _sign_in_command(target: Target, backend: str, action: str, *, json_output: 
                   "error": "Sign-in cancelled. Nothing changed.", "retry": True}
     except SignInCancelled as exc:
         result = {"type": "sign_in", "backend": backend, "status": "cancelled", "error": str(exc), "retry": True}
-    except SignInError as exc:
+    except (SignInError, tag_chatgpt.ChatGPTError) as exc:
         result = {"type": "sign_in", "backend": backend, "status": "failed", "error": str(exc), "retry": True}
     finally:
+        connection_lock.release()
         if stopped:
             _progress(emit, backend, "restarting", target.name)
             restarted = target.restart("start") == 0
@@ -898,14 +881,7 @@ def settings_menu(target: Target) -> None:
                    + ("" if choice["available"] is not False else " · not available"))
         ui.message(thinking_text(target.home, values))
         options = [("model", "Change default model"), ("effort", "Change thinking level")]
-        for item in result["connections"]:
-            if not item.get("allowed", True):
-                continue
-            for action in item["actions"]:
-                if action == "change_account" and item["backend"] == "codex":
-                    options += [_option(action, "codex", method) for method in CODEX_METHOD_LABELS]
-                else:
-                    options.append(_option(action, item["backend"]))
+        ui.message("Manage shared accounts with tag settings ai connections or tag settings ai sign-in codex|claude --restart.")
         options += [("check", "Check connections"), ("back", "Back")]
         selected = options[ui.choose("AI & models", [label for _, label in options])][0]
         if selected == "back":
@@ -938,27 +914,6 @@ def settings_menu(target: Target) -> None:
             if _choose_effort(target, values, choice, result["usable"]):
                 _offer_restart(target)
             continue
-        if selected.startswith(("install:", "update:")):
-            backend = BY_KEY[selected.split(":", 1)[1]]
-            ui.message(f"Install or update {backend.name}: {backend.install_url}")
-            continue
-        action, _, rest = selected.partition(":")
-        backend, _, method = rest.partition(":")
-        if backend == "claude" and action == "change_account":
-            ui.message(CLAUDE_SHARED)
-        restart = False
-        if target.running() and backend == "codex" and (method == "chatgpt" or action == "resume"
-                                                        or tag_chatgpt.Store(target.home).enabled()):
-            ui.message(f"{target.name} stops while you sign in and starts again afterwards.")
-            restart = True
-        try:
-            _sign_in_command(target, backend, "resume" if action == "resume" else "sign-in", json_output=False,
-                             restart=restart, method=method or None, account=None)
-        except ValueError as exc:
-            ui.message(str(exc))
-            continue
-        if not restart:
-            _offer_restart(target)
 
 
 def _choose_effort(target: Target, values: dict[str, str], choice: dict[str, Any], ready: list[str]) -> bool:

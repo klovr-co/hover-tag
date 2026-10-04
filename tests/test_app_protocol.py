@@ -17,7 +17,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts import agent_models, tag_activity, tag_autostart, tag_cli, tag_config, tag_install, tag_instances
+from scripts import agent_models, slack_channel_names, tag_activity, tag_autostart, tag_cli, tag_config, tag_install, tag_instances
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = ROOT / "protocol/examples"
@@ -106,6 +106,43 @@ class ProtocolTests(unittest.TestCase):
         self.assertProvides(activity[0], example("logs.json")["activity"][0], "tag logs --json activity")
         self.assertEqual(("replied", "launch", False), (activity[0]["kind"], activity[0]["channel_name"], activity[0]["dm"]))
 
+    def test_activity_filters_apply_before_the_recent_limit_for_both_backends(self) -> None:
+        home = tag_instances.create(self.root, "t1-a1").home
+        store = tag_activity.ActivityStore(home / "state/activity")
+        for backend in ("codex", "claude"):
+            run = store.create(team="T1", channel="C1", thread_ts="1", request_ts="1", requester="U1")
+            store.save_model(run, backend, "model")
+            store.finish(run, "completed")
+        stopped = store.create(team="T1", channel="C1", thread_ts="1", request_ts="1", requester="U1")
+        store.finish(stopped, "interrupted")
+        for index in range(tag_activity.MAX_RECENT + 1):
+            run = store.create(team="T1", channel="C1" if index % 2 else "C2", thread_ts="1", request_ts="1", requester="U1")
+            store.finish(run, "failed")
+        before = {path.name: path.read_bytes() for path in store.root.glob("*.json")}
+        items = self.cli("t1-a1", "logs", "--json", "--activity-channel", "C1", "--hide-errors")["activity"]
+        self.assertEqual(len(items), 3)
+        self.assertEqual({item.get("backend") for item in items}, {"codex", "claude", None})
+        self.assertEqual({item["channel"] for item in items}, {"C1"})
+        self.assertIn("stopped", {item["kind"] for item in items})
+        self.assertEqual([item["at"] for item in items], sorted((item["at"] for item in items), reverse=True))
+        self.assertEqual(before, {path.name: path.read_bytes() for path in store.root.glob("*.json")})
+        self.assertEqual([], self.cli("t1-a1", "logs", "--json", "--activity-channel", "C3")["activity"])
+
+    def test_activity_window_can_expand_to_retained_history(self) -> None:
+        home = tag_instances.create(self.root, "t1-a1").home
+        store = tag_activity.ActivityStore(home / "state/activity")
+        for index in range(55):
+            run = store.create(team="T1", channel="C1", thread_ts="1", request_ts="1", requester="U1")
+            store.save_model(run, "codex" if index % 2 else "claude", "model")
+            store.finish(run, "completed")
+        page = self.cli("t1-a1", "logs", "--json", "--activity-limit", "50", "--hide-errors")
+        self.assertEqual(len(page["activity"]), 50)
+        self.assertTrue(page["activity_has_more"])
+        expanded = self.cli("t1-a1", "logs", "--json", "--activity-limit", "100", "--hide-errors")
+        self.assertEqual(len(expanded["activity"]), 55)
+        self.assertFalse(expanded["activity_has_more"])
+        self.assertTrue({item["run_id"] for item in page["activity"]} <= {item["run_id"] for item in expanded["activity"]})
+
     def test_ai_settings_provide_what_apps_read(self) -> None:
         tag_instances.create(self.root, "t1-a1")
         empty = self.root / "no-agents"
@@ -119,6 +156,35 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual((None, [], False), (result["default_effort"], result["effort_levels"], result["effort_chosen"]))
         self.assertEqual(["not_installed", "not_installed"], [row["state"] for row in result["connections"]])
         self.assertEqual(["install"], result["connections"][0]["actions"])
+
+    def test_cached_channel_names_and_details_work_without_memory_or_slack(self) -> None:
+        home = tag_instances.create(self.root, "t1-a1").home
+        tag_config.save_config(home / "config/settings.json", {"SLACK_TEAM_ID": "T1", "SLACK_CHANNEL_IDS": "C1"})
+        slack_channel_names.remember(home, "T1", {"C1": "launch"})
+        store = tag_activity.ActivityStore(home / "state/activity")
+        run = store.create(team="T1", channel="C1", thread_ts="1.0", request_ts="1.0", requester="U1")
+        store.finish(run, "completed")
+        with patch("scripts.slack_channels.slack_api", side_effect=AssertionError("must stay offline")):
+            self.assertEqual([{"id": "C1", "name": "launch"}], self.cli("list", "--json")["tags"][0]["channels"])
+            item = self.cli("t1-a1", "logs", "--json")["activity"][0]
+            self.assertEqual("launch", item["channel_name"])
+            details = self.cli("t1-a1", "logs", "--activity", item["run_id"], "--json")["activity"]
+            self.assertEqual("completed", details["outcome"])
+            self.assertEqual([], details["events"])
+
+        with patch.object(sys, "argv", ["tag", "t1-a1", "logs", "--activity", run]), redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(tag_cli.main(), 0)
+        self.assertIn(f"Request {run} · completed", output.getvalue())
+        self.assertIn("No tool activity was recorded", output.getvalue())
+
+    def test_activity_details_missing_and_invalid_ids_fail_with_actionable_errors(self) -> None:
+        tag_instances.create(self.root, "t1-a1")
+        for run in ("f" * 32, "../escape"):
+            with self.subTest(run=run), patch.object(sys, "argv", ["tag", "t1-a1", "logs", "--activity", run, "--json"]), redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(tag_cli.main(), 1)
+            result = json.loads(output.getvalue())
+            self.assertFalse(result["ok"])
+            self.assertIn("logs --json", result["error"])
 
     def test_install_progress_lines_match_the_example_format(self) -> None:
         lines = (EXAMPLES / "install-progress.txt").read_text(encoding="utf-8").splitlines()

@@ -17,11 +17,13 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from agent_activity import token_usage
     from tag_paths import codex_workspace_args, tag_temp_dir
     from codex_agent_backend import CodexAppServer, CodexAppServerError
     from claude_agent_backend import ClaudeAgentError, ClaudeAgentRun
     from record_output_artifact import channel_artifact_directory
 except ImportError:
+    from scripts.agent_activity import token_usage
     from scripts.tag_paths import codex_workspace_args, tag_temp_dir
     from scripts.codex_agent_backend import CodexAppServer, CodexAppServerError
     from scripts.claude_agent_backend import ClaudeAgentError, ClaudeAgentRun
@@ -634,14 +636,23 @@ def run_rich_events(
 ) -> int:
     """Run one request-scoped turn per attempt and emit the richer event contract."""
     attempts = max(1, int(os.getenv("OPENTAG_BACKEND_ATTEMPTS", "3")))
+    previous_usage: dict[str, int] = {}
     for attempt in range(1, attempts + 1):
         made_progress = False
+        attempt_usage: dict[str, int] = {}
 
         def forward_event(event: dict[str, Any]) -> None:
-            nonlocal made_progress
+            nonlocal made_progress, attempt_usage
             payload = dict(event)
             event_type = str(payload.pop("type"))
             text = str(payload.pop("text", ""))
+            if event_type == "usage":
+                usage = token_usage(payload.get("usage"))
+                if usage is None:
+                    return
+                attempt_usage = usage
+                payload["usage"] = {key: previous_usage.get(key, 0) + usage.get(key, 0)
+                                    for key in previous_usage.keys() | usage.keys()}
             if event_type in {
                 "approval_request",
                 "activity_start",
@@ -668,6 +679,8 @@ def run_rich_events(
             and retryable_backend_failure(detail)
             and attempt < attempts
         ):
+            previous_usage = {key: previous_usage.get(key, 0) + attempt_usage.get(key, 0)
+                              for key in previous_usage.keys() | attempt_usage.keys()}
             emit_event("status", retry_status(attempt + 1, attempts))
             time.sleep(min(2 * attempt, 8))
             continue

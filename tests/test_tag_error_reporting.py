@@ -49,7 +49,7 @@ class FailureClassificationTests(unittest.TestCase):
         result = classify_failure(detail, "invalid_request_error")
 
         self.assertEqual(FailureCategory.MODEL_UNAVAILABLE, result.category)
-        self.assertIn("Choose another model in Configure", result.explanation)
+        self.assertIn("Choose another model in Tag.app → Details", result.explanation)
         self.assertIn("The 'gpt-6.1-sol' model is not supported", result.explanation)
 
     def test_rejected_model_with_unsafe_name_keeps_generic_cause(self) -> None:

@@ -321,7 +321,7 @@ class ChatGPTTests(unittest.TestCase):
     def test_login_commit_rechecks_bridge_after_browser_consent(self):
         before = self.seed()
         with patch("scripts.tag_cli.process_for", return_value=object()):
-            with self.assertRaisesRegex(auth.ChatGPTError, "Stop this Tag"):
+            with self.assertRaisesRegex(auth.ChatGPTError, "Stop all Tags"):
                 self.browser_login(account="oaiapp_one")
         self.assertEqual(self.store.read(), before)
 
@@ -387,7 +387,7 @@ class ChatGPTTests(unittest.TestCase):
                     with self.assertRaisesRegex(auth.ChatGPTError, "lifecycle operation"):
                         operation()
                 with patch("scripts.tag_cli.process_for", return_value=object()):
-                    with self.assertRaisesRegex(auth.ChatGPTError, "Stop this Tag"):
+                    with self.assertRaisesRegex(auth.ChatGPTError, "Stop all Tags"):
                         operation()
                 self.assertTrue(self.store.enabled())
 
@@ -418,7 +418,7 @@ class ChatGPTTests(unittest.TestCase):
 
     def test_account_changes_are_rejected_while_bridge_is_running(self):
         with patch("scripts.tag_cli.process_for", return_value=object()):
-            with self.assertRaisesRegex(auth.ChatGPTError, "Stop this Tag"):
+            with self.assertRaisesRegex(auth.ChatGPTError, "Stop all Tags"):
                 auth.cli(["use-codex"])
         self.assertFalse(self.store.path.exists())
 
@@ -562,3 +562,86 @@ class ChatGPTTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class SharedAccountMigrationTests(unittest.TestCase):
+    setUp = ChatGPTTests.setUp
+    tokens = ChatGPTTests.tokens
+    seed = ChatGPTTests.seed
+
+    def legacy(self, name, account_id="oaiapp_one", subject="person-one", mode="chatgpt"):
+        home = self.root / "tags" / name
+        path = home / "config/chatgpt/accounts.json"
+        auth.atomic_write(home / "config/settings.json", {"OPENTAG_BACKEND": "codex"})
+        account = auth.token_record(self.tokens(), {"subject": subject, "client_id": account_id,
+            "ext_agent_host_id": auth.host_id()})
+        auth.atomic_write(path, {"schema_version": 1, "mode": mode,
+            "active": account_id if mode == "chatgpt" else None, "accounts": {account_id: account}})
+        return home
+
+    def test_multiple_tags_share_one_store_and_rotation_lock(self):
+        self.seed(expired=True)
+        other = auth.Store(self.root / "tags/other")
+        self.assertEqual(self.store.path, other.path)
+        self.assertEqual(self.store.lock_path, other.lock_path)
+        with patch.object(auth, "request", return_value=self.tokens(access_token="rotated")) as request:
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                self.assertEqual(["rotated", "rotated"], list(pool.map(lambda store: store.access(), [self.store, other])))
+        self.assertEqual(1, request.call_count)
+
+    def test_migration_retains_legacy_and_does_not_reimport_it(self):
+        home = self.legacy("one")
+        self.assertTrue(auth.migrate_shared_accounts(home))
+        self.assertEqual("oaiapp_one", auth.Store(home).read()["active"])
+        self.assertTrue((home / "config/chatgpt/accounts.json").exists())
+        self.legacy("one", "oaiapp_old", "other-person")
+        self.assertFalse(auth.migrate_shared_accounts(home))
+        self.assertEqual(["oaiapp_one"], list(auth.Store(home).read()["accounts"]))
+        self.assertEqual({"version": 1}, auth.read_object(self.store.path.parent / "migration-v1.json"))
+
+    def test_different_accounts_require_explicit_shared_selection(self):
+        first = self.legacy("one")
+        second = self.legacy("two", "oaiapp_two", "person-two")
+        with patch.object(auth, "account_homes", return_value=[first, second]):
+            auth.migrate_shared_accounts(first)
+        record = self.store.read()
+        self.assertEqual("chatgpt", record["mode"])
+        self.assertIsNone(record["active"])
+        self.assertEqual({"oaiapp_one", "oaiapp_two"}, set(record["accounts"]))
+        with self.assertRaises(auth.ChatGPTError):
+            self.store.access()
+
+    def test_native_and_plan_choices_do_not_silently_switch_billing(self):
+        first = self.legacy("one")
+        second = self.legacy("two", mode="codex")
+        with patch.object(auth, "account_homes", return_value=[first, second]):
+            auth.migrate_shared_accounts(first)
+        self.assertIsNone(self.store.read()["active"])
+        self.assertTrue(self.store.enabled())
+
+    def test_invalid_legacy_is_retryable_without_completion(self):
+        home = self.legacy("one")
+        path = home / "config/chatgpt/accounts.json"
+        original = path.read_text(encoding="utf-8")
+        path.write_text("{}", encoding="utf-8")
+        with self.assertRaises(auth.ChatGPTError):
+            auth.migrate_shared_accounts(home)
+        self.assertFalse(self.store.path.exists())
+        self.assertFalse((self.store.path.parent / "migration-v1.json").exists())
+        path.write_text(original, encoding="utf-8")
+        self.assertTrue(auth.migrate_shared_accounts(home))
+
+    def test_interrupted_marker_write_verifies_published_store_on_retry(self):
+        home = self.legacy("one")
+        marker = self.store.path.parent / "migration-v1.json"
+        write = auth.atomic_write
+        def interrupted(path, record):
+            if path == marker:
+                raise OSError("interrupted")
+            write(path, record)
+        with patch.object(auth, "atomic_write", side_effect=interrupted), self.assertRaises(OSError):
+            auth.migrate_shared_accounts(home)
+        self.assertTrue(self.store.path.exists())
+        self.assertFalse(marker.exists())
+        with patch.object(auth, "legacy_accounts", side_effect=AssertionError("must not reimport")):
+            self.assertFalse(auth.migrate_shared_accounts(home))
+        self.assertEqual({"version": 1}, auth.read_object(marker))

@@ -129,3 +129,19 @@ def activity_label(item: dict[str, Any]) -> str | None:
     if item_type == "commandExecution":
         return command_activity_label(item.get("command"))
     return None
+
+
+def token_usage(value: object) -> dict[str, int] | None:
+    """Validate a cumulative usage snapshot; optional counts are subsets of input/output."""
+    if not isinstance(value, dict):
+        return None
+    keys = ("input_tokens", "output_tokens")
+    if any(type(value.get(key)) is not int or value[key] < 0 for key in keys):
+        return None
+    result = {key: value[key] for key in keys}
+    result["total_tokens"] = result["input_tokens"] + result["output_tokens"]
+    for key in ("cache_read_input_tokens", "cache_creation_input_tokens", "reasoning_output_tokens"):
+        count = value.get(key)
+        if type(count) is int and count >= 0:
+            result[key] = count
+    return result

@@ -55,6 +55,7 @@ class ResultMessage:
     terminal_reason: str | None = None
     errors: list[str] | None = None
     api_error_status: int | None = None
+    usage: dict[str, Any] | None = None
 
 
 def stream(message_id: str, *texts: str, stop_reason: str, tool: bool = False) -> list[StreamEvent]:

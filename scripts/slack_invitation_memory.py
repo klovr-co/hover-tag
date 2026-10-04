@@ -8,12 +8,13 @@ import time
 from urllib.parse import urlsplit
 
 try:
-    from . import slack_identity, slack_channels, tag_config, tag_cli
+    from . import slack_identity, slack_channels, slack_channel_names, tag_config, tag_cli
     from .opentag_setup import connector_scope, connector_uri, write_slack_connector
     from . import tag_credentials
 except ImportError:
     import slack_identity
     import slack_channels
+    import slack_channel_names
     import tag_config
     import tag_cli
     from opentag_setup import connector_scope, connector_uri, write_slack_connector
@@ -74,6 +75,10 @@ class InvitationMemory:
                                     app_id=values.get("SLACK_APP_ID", ""), enterprise_id=values.get("SLACK_ENTERPRISE_ID", ""), label="Bot token")
             channels = [c for c in slack_channels.list_channels(values["SLACK_BOT_TOKEN"],
                 **({"team_id": team} if values.get("SLACK_ENTERPRISE_ID") else {})) if c.is_member]
+            try:
+                slack_channel_names.remember(self.home, team, {c.channel_id: c.name for c in channels})
+            except OSError:
+                pass  # Display metadata must not change membership or memory readiness.
             ids = ",".join(c.channel_id for c in channels)
             scopes = [connector_scope(team, c, values.get("SLACK_APP_ID", "")) for c in channels]
             # Remove lost membership from live access before any index operation.

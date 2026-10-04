@@ -20,21 +20,25 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from .opentag_process_env import text_only_environment
     from .agent_activity import (
         APPROVAL_POLL_SECONDS,
         APPROVAL_TIMEOUT_SECONDS,
         INTERRUPT_GRACE_SECONDS,
         MCP_SERVICE_NAMES,
         activity_label,
+        token_usage,
     )
     from .tag_activity_details import item_activity_details, preview
 except ImportError:  # Direct script execution does not create a package context.
+    from opentag_process_env import text_only_environment
     from agent_activity import (
         APPROVAL_POLL_SECONDS,
         APPROVAL_TIMEOUT_SECONDS,
         INTERRUPT_GRACE_SECONDS,
         MCP_SERVICE_NAMES,
         activity_label,
+        token_usage,
     )
     from tag_activity_details import item_activity_details, preview
 
@@ -295,6 +299,15 @@ class ClaudeEventMapper:
             return []
         self.completed = True
         events: list[dict[str, Any]] = []
+        reported = payload.get("usage")
+        if isinstance(reported, dict):
+            # Anthropic reports uncached input separately from cache reads/writes.
+            inputs = [reported.get("input_tokens"), reported.get("cache_read_input_tokens", 0),
+                      reported.get("cache_creation_input_tokens", 0)]
+            if all(type(count) is int and count >= 0 for count in inputs):
+                usage = token_usage({**reported, "input_tokens": sum(inputs)})
+                if usage:
+                    events.append({"type": "usage", "usage": usage})
         for tool_use_id, (label, _item) in list(self.tools.items()):
             events.append({"type": "activity_complete", "activity_id": tool_use_id, "label": label,
                            "status": "interrupted", "details": {}})
@@ -377,6 +390,7 @@ class ClaudeAgentRun:
         control_file: Path | None = None,
         run_id: str | None = None,
         approval_dir: Path | None = None,
+        text_only_instructions: str | None = None,
     ) -> None:
         self.cwd = cwd
         self.add_dirs = add_dirs or []
@@ -385,6 +399,7 @@ class ClaudeAgentRun:
         self.control_file = control_file
         self.run_id = run_id
         self.approval_dir = approval_dir
+        self.text_only_instructions = text_only_instructions
         self.client: Any = None
         self.interrupt_sent = False
         self.pending_approvals = 0
@@ -424,6 +439,8 @@ class ClaudeAgentRun:
         # This adapter supports one-time SDK decisions only; it exposes no
         # persistent/session grants or automatic-review denial retry protocol.
         async def can_use_tool(tool_name: str, tool_input: dict[str, Any], _context: Any) -> Any:
+            if self.text_only_instructions is not None:
+                return deny(message="Tools are disabled for reply summaries.")
             if tool_name in INTERACTIVE_TOOLS:
                 return deny(message="Interactive questions are unavailable in Slack; ask in your final answer instead.")
             if self.approval_dir is None or emit is None:
@@ -463,6 +480,13 @@ class ClaudeAgentRun:
             kwargs["effort"] = reasoning_effort
         if fast_mode:
             kwargs["settings"] = json.dumps({"fastMode": True})
+        if self.text_only_instructions is not None:
+            kwargs.update(tools=[], mcp_servers={}, setting_sources=[], add_dirs=[],
+                          permission_mode="dontAsk", max_turns=1,
+                          system_prompt=self.text_only_instructions,
+                          env=text_only_environment(os.environ),
+                          extra_args={"strict-mcp-config": None, "disable-slash-commands": None},
+                          settings=json.dumps({"disableAllHooks": True}))
         return options_factory(**kwargs)
 
     async def _wait_for_approval(self, approval_id: str, deadline: float) -> bool:

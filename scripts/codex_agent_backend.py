@@ -21,23 +21,27 @@ from typing import Any
 
 try:
     from . import tag_chatgpt
+    from .opentag_process_env import text_only_environment
     from .agent_activity import (
         APPROVAL_POLL_SECONDS,
         APPROVAL_TIMEOUT_SECONDS,
         INTERRUPT_GRACE_SECONDS,
         MCP_SERVICE_NAMES,
         activity_label,
+        token_usage,
     )
     from .tag_activity_details import item_activity_details
     from .tag_approval_choices import approval_choices, public_approval_choices, auto_review_details
 except ImportError:  # Direct script execution does not create a package context.
     import tag_chatgpt
+    from opentag_process_env import text_only_environment
     from agent_activity import (
         APPROVAL_POLL_SECONDS,
         APPROVAL_TIMEOUT_SECONDS,
         INTERRUPT_GRACE_SECONDS,
         MCP_SERVICE_NAMES,
         activity_label,
+        token_usage,
     )
     from tag_activity_details import item_activity_details
     from tag_approval_choices import approval_choices, public_approval_choices, auto_review_details
@@ -113,6 +117,19 @@ class CodexEventMapper:
         params = message.get("params")
         if not isinstance(method, str) or not isinstance(params, dict):
             return []
+        if method == "thread/tokenUsage/updated":
+            reported = params.get("tokenUsage")
+            total = reported.get("total") if isinstance(reported, dict) else None
+            if not isinstance(total, dict):
+                return []
+            usage = token_usage({
+                "input_tokens": total.get("inputTokens"),
+                "output_tokens": total.get("outputTokens"),
+                "cache_read_input_tokens": total.get("cachedInputTokens"),
+                "cache_creation_input_tokens": total.get("cacheWriteInputTokens"),
+                "reasoning_output_tokens": total.get("reasoningOutputTokens"),
+            })
+            return [{"type": "usage", "usage": usage}] if usage else []
         if method == "item/started":
             return self._item_started(params)
         if method == "item/agentMessage/delta":
@@ -262,6 +279,7 @@ class CodexAppServer:
         control_file: Path | None = None,
         run_id: str | None = None,
         approval_dir: Path | None = None,
+        text_only_instructions: str | None = None,
     ) -> None:
         self.command = command
         self.chatgpt_token = ""
@@ -274,6 +292,7 @@ class CodexAppServer:
         self.control_file = control_file
         self.run_id = run_id
         self.approval_dir = approval_dir
+        self.text_only_instructions = text_only_instructions
         self.process: subprocess.Popen[bytes] | None = None
         self.messages: queue.Queue[dict[str, Any] | BaseException] = queue.Queue()
         self.stderr = bytearray()
@@ -346,6 +365,34 @@ class CodexAppServer:
             }
             if model:
                 thread_params["model"] = model
+            if self.text_only_instructions is not None:
+                # Resolve inherited servers before disabling them; an empty map
+                # alone would merge with user config and leave tools enabled.
+                effective = self._request("config/read", {"includeLayers": False}, mapper, emit, max_deadline)
+                config = effective.get("config", {})
+                overrides = {
+                    "features.shell_tool": False, "features.unified_exec": False,
+                    "features.apply_patch_freeform": False, "features.js_repl": False,
+                    "features.multi_agent": False, "features.apps": False,
+                    "features.plugins": False, "features.hooks": False,
+                    "features.codex_hooks": False, "features.view_image": False,
+                    "features.code_mode": False, "features.computer_use": False,
+                    "features.browser_use": False, "features.image_generation": False,
+                    "features.memory_tool": False, "features.tool_search": False,
+                    "features.tool_suggest": False,
+                    "web_search": "disabled", "project_doc_max_bytes": 0,
+                }
+                # App Server splits dotted override keys literally (not as TOML).
+                # Nested tables keep names with dots/quotes intact and merge
+                # into the existing transport definitions.
+                for section in ("mcp_servers", "plugins"):
+                    overrides[section] = {
+                        name: {"enabled": False}
+                        for name in (config.get(section) or {})
+                    }
+                thread_params.update(sandbox="read-only", approvalPolicy="never",
+                    approvalsReviewer="user", baseInstructions=self.text_only_instructions,
+                    developerInstructions="", config=overrides)
             thread_result = self._request("thread/start", thread_params, mapper, emit, max_deadline)
             thread = thread_result.get("thread") if isinstance(thread_result, dict) else None
             if not isinstance(thread, dict) or not isinstance(thread.get("id"), str):
@@ -385,6 +432,8 @@ class CodexAppServer:
                     return status, detail
                 if self._stop_requested():
                     return "interrupted", "Stopped by requester"
+                if self.text_only_instructions is not None:
+                    return "failed", "Summary interrupted for credential renewal"
                 # Resume the same saved history only after acknowledged interruption;
                 # never rerun the original prompt or restart an unacknowledged turn.
                 self.close()
@@ -418,7 +467,7 @@ class CodexAppServer:
                 "version": (Path(__file__).resolve().parents[1] / "VERSION").read_text(encoding="utf-8").strip()}
 
     def _start(self) -> None:
-        environment = None
+        environment = text_only_environment(os.environ) if self.text_only_instructions is not None else None
         command = self.command
         store = tag_chatgpt.Store()
         try:
@@ -435,7 +484,7 @@ class CodexAppServer:
                 self.token_renewal_deadline = time.monotonic() + max(0, expiry - time.time() - 90)
             except tag_chatgpt.ChatGPTError as exc:
                 raise CodexAppServerError(str(exc)) from None
-            environment = dict(os.environ)
+            environment = dict(environment if environment is not None else os.environ)
             environment[tag_chatgpt.TOKEN_ENV] = self.chatgpt_token
             command = [part for part in command if part != "--stdio"]
             command += ["--listen", "stdio://", *tag_chatgpt.provider_options()]

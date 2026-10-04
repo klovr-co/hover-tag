@@ -85,3 +85,15 @@ disconnected accounts. If the saved default's account is disconnected, the
 remaining connected account supplies the catalog default without rewriting
 stored preferences. Reopen settings to rediscover accounts; restart the Slack
 bridge to refresh its startup catalog.
+
+
+## Tag-wide model settings (2026-10-05)
+
+This supersedes the per-user choices in model-driven backend selection above.
+Model and thinking selections in Tag.app Details or `tag NAME settings ai`
+apply to every request to that Tag. Slack replies no longer offer Configure,
+and historic buttons or open forms cannot write preferences. Both Codex and
+Claude use the Tag's defaults, including backend-supported Fast Mode defaults.
+Startup retires old per-user preferences with a versioned, retryable archive
+migration before the Slack bridge accepts requests. Provider accounts remain
+installation-wide in Settings → AI connections.

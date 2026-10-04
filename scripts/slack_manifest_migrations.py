@@ -10,6 +10,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import time
 import sys
 import tempfile
 import urllib.error
@@ -288,6 +289,30 @@ def enable_agent_view(
     return True
 
 
+# Slack can report the previous app settings for a few seconds after a change.
+VERIFY_DELAYS = (1.0, 2.0, 4.0)
+
+
+def _saved(check: Callable[[], bool]) -> bool:
+    """Whether Slack reports the change, asking again while it catches up."""
+    for delay in (0.0, *VERIFY_DELAYS):
+        time.sleep(delay)
+        if check():
+            return True
+    return False
+
+
+def _described(manifest: dict, description: str) -> tuple[dict, bool]:
+    described = json.loads(json.dumps(manifest))
+    information = described.setdefault("display_information", {})
+    changed = (information.get("description") or "") != description
+    if description:
+        information["description"] = description
+    else:
+        information.pop("description", None)
+    return described, changed
+
+
 def _named(manifest: dict, name: str) -> tuple[dict, bool]:
     renamed = json.loads(json.dumps(manifest))
     information = renamed.setdefault("display_information", {})
@@ -319,8 +344,35 @@ def set_display_name(home: Path, values: dict[str, str], name: str, *, retry: st
         result = _run(_sync_command(slack, migration_project, app_id, team_id), cwd=migration_project)
         if result.returncode:
             raise RuntimeError(f"Slack could not rename the app; run `slack login`, then retry `{retry}`")
-    if _named(remote_manifest(slack, project, app_id), name)[1]:
+    if not _saved(lambda: not _named(remote_manifest(slack, project, app_id), name)[1]):
         raise RuntimeError(f"Slack did not save the new name; retry `{retry}`")
+    return True
+
+
+def set_description(home: Path, values: dict[str, str], description: str, *, retry: str) -> bool:
+    """Change the Tag's Slack app description, then verify Slack kept it.
+
+    An empty description clears it. Uses existing Slack CLI authorization
+    without prompts. ``retry`` is the command to repeat after the operator
+    resolves a Slack requirement.
+    """
+    team_id, app_id = values.get("SLACK_TEAM_ID", ""), values.get("SLACK_APP_ID", "")
+    if not team_id or not app_id:
+        raise RuntimeError("This Tag has no Slack app yet; finish its setup first")
+    slack = shutil.which("slack")
+    if not slack:
+        raise RuntimeError(f"Slack CLI is required to change the description; install it, then retry `{retry}`")
+    project = home / "integrations/slack-cli"
+    described, changed = _described(remote_manifest(slack, project, app_id), description)
+    if not changed:
+        return False
+    with tempfile.TemporaryDirectory(prefix="tag-slack-describe-") as directory:
+        migration_project = _migration_project(project, described, team_id, app_id, Path(directory))
+        result = _run(_sync_command(slack, migration_project, app_id, team_id), cwd=migration_project)
+        if result.returncode:
+            raise RuntimeError(f"Slack could not change the description; run `slack login`, then retry `{retry}`")
+    if not _saved(lambda: not _described(remote_manifest(slack, project, app_id), description)[1]):
+        raise RuntimeError(f"Slack did not save the new description; retry `{retry}`")
     return True
 
 

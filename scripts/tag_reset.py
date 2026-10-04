@@ -60,7 +60,7 @@ def check_app_link(project: Path, app: dict) -> None:
         raise RuntimeError("Saved settings and Slack app links do not identify the same single app. Nothing was reset or deleted.")
 
 
-def delete_slack_app(home: Path, backup: Path, app: dict, executable: str) -> bool:
+def delete_slack_app(home: Path, backup: Path, app: dict, executable: str, *, source: Path | None = None) -> bool:
     """Delete only the confirmed ID, retaining the original backup metadata."""
     record = dict(app, status="attempting")
     journal = backup / "app-deletion.json"
@@ -68,7 +68,7 @@ def delete_slack_app(home: Path, backup: Path, app: dict, executable: str) -> bo
     try:
         with tempfile.TemporaryDirectory(prefix="delete-app-", dir=home / "tmp") as temporary:
             project = Path(temporary) / "slack-cli"
-            shutil.copytree(backup / "slack-cli", project)
+            shutil.copytree(source or backup / "slack-cli", project)
             check_app_link(project, app)
             result = subprocess.run(
                 [executable, "app", "delete", "--app", app["app_id"], "--team", app["team_id"],

@@ -13,6 +13,46 @@ from scripts.tag_activity_details import MAX_DETAIL_CHARS, command_identity, ite
 
 
 class ActivityStoreTests(unittest.TestCase):
+    def test_reply_preview_is_bounded_plain_text_and_redacted(self) -> None:
+        self.assertEqual("Created launch.md. Owners assigned.", tag_activity.reply_preview(
+            "**Created [launch.md](https://example.com/file?token=private).**\n\n- Owners assigned."))
+        self.assertEqual("Ready.", tag_activity.reply_preview("```sh\ncat secrets\n```\nReady."))
+        self.assertNotIn("private-value", tag_activity.reply_preview("Saved password=private-value successfully."))
+        self.assertNotIn("private-value", tag_activity.reply_preview("Saved password&#61;private-value successfully."))
+        self.assertLessEqual(len(tag_activity.reply_preview("A long answer " * 100)), tag_activity.MAX_REPLY_PREVIEW)
+        self.assertTrue(tag_activity.reply_preview("A long answer " * 100).endswith("…"))
+
+    def test_reply_preview_survives_reopen_without_rewriting_older_records(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            store = ActivityStore(Path(raw))
+            run = store.create(team="T1", channel="C1", thread_ts="1.0", request_ts="1.0", requester="U1")
+            store.save_reply(run, "Partial answer")
+            self.assertNotIn("reply_preview", store.get(run))
+            store.finish(run, "completed")
+            before = (store.root / f"{run}.json").read_bytes()
+            self.assertNotIn("reply_preview", tag_activity.recent_activity(store.root)[0])
+            self.assertEqual(before, (store.root / f"{run}.json").read_bytes())
+            store.save_reply(run, "Created the launch checklist.")
+            self.assertEqual("Created the launch checklist.", tag_activity.recent_activity(store.root)[0]["reply_preview"])
+            self.assertEqual("Created the launch checklist.", ActivityStore(store.root).get(run)["reply_preview"])
+
+    def test_model_metadata_survives_reopen_for_both_backends(self):
+        for backend, model in (("codex", "gpt-test"), ("claude", "claude-test")):
+            with self.subTest(backend=backend), tempfile.TemporaryDirectory() as raw:
+                store = ActivityStore(Path(raw))
+                run = store.create(team="T", channel="C", thread_ts="1", request_ts="1", requester="U")
+                self.assertNotIn("model", tag_activity.recent_activity(store.root)[0])
+                store.save_model(run, backend, model, "Readable model")
+                store.finish(run, "completed")
+                item = tag_activity.recent_activity(store.root)[0]
+                self.assertEqual((backend, model, "Readable model"),
+                                 (item["backend"], item["model"], item["model_name"]))
+                store.summary_status(run, "pending")
+                record = store.get(run)
+                record["reply_summary_updated_at"] = "2000-01-01T00:00:00+00:00"
+                store._write(record)
+                self.assertEqual("unavailable", tag_activity.recent_activity(store.root)[0]["reply_summary_status"])
+
     def test_short_command_names_keep_code_arguments_and_directories_private(self) -> None:
         cases = {
             "/bin/zsh -lc 'cd /private/work && python scripts/build.py --token secret-value'": "python build.py",
@@ -164,18 +204,28 @@ class RecentActivityTests(unittest.TestCase):
         self.record("D0MAYA", "interrupted", "2026-10-02T09:00:00+00:00", "2026-10-02T09:00:30+00:00")
         self.record("C0UNKNOWN", "running", "2026-10-04T10:00:00+00:00")
         items = tag_activity.recent_activity(self.root, self.SCOPES)
+        self.assertTrue(all(tag_activity.RUN_ID_RE.fullmatch(item.pop("run_id")) for item in items))
         self.assertEqual([
             {"at": "2026-10-04T10:00:00+00:00", "kind": "working", "channel": "C0UNKNOWN",
              "channel_name": None, "dm": False},
             {"at": "2026-10-04T09:01:00+00:00", "kind": "replied", "channel": "C0LAUNCH",
-             "channel_name": "launch", "dm": False},
+             "channel_name": "launch", "dm": False, "duration_seconds": 60.0},
             {"at": "2026-10-03T09:02:00+00:00", "kind": "failed", "channel": "G0DESIGN",
-             "channel_name": "design-review", "dm": False},
+             "channel_name": "design-review", "dm": False, "duration_seconds": 120.0},
             {"at": "2026-10-02T09:00:30+00:00", "kind": "stopped", "channel": "D0MAYA",
-             "channel_name": None, "dm": True},
+             "channel_name": None, "dm": True, "duration_seconds": 30.0},
         ], items)
         # Prompts, requesters, and tool steps never leave the store.
         self.assertNotIn("U0PRIVATE", json.dumps(items))
+
+    def test_step_count_includes_omitted_steps(self) -> None:
+        run_id = self.record("C0LAUNCH", "completed", "2026-10-04T09:00:00+00:00", "2026-10-04T09:01:00+00:00")
+        path = self.root / f"{run_id}.json"
+        record = json.loads(path.read_text(encoding="utf-8"))
+        record.update(events=[{"id": "a" * 64, "label": "Browsing connected knowledge…", "status": "completed",
+                               "started_at": record["started_at"], "finished_at": record["started_at"]}], omitted=2)
+        path.write_text(json.dumps(record), encoding="utf-8")
+        self.assertEqual(3, tag_activity.recent_activity(self.root, "")[0]["step_count"])
 
     def test_invalid_records_are_skipped_and_reading_changes_nothing(self) -> None:
         valid = self.record("C0LAUNCH", "completed", "2026-10-04T09:00:00+00:00", "2026-10-04T09:01:00+00:00")
