@@ -284,7 +284,8 @@ class ServerRequestTests(unittest.TestCase):
                 "type": "approval_request",
                 "approval_id": approval_id,
                 "label": "run a command outside the workspace sandbox",
-            }],
+                "details": {"action": "Run a command", "command": "Command name and arguments withheld"},
+            }, {"type": "approval_expired", "approval_id": approval_id}],
             emitted,
         )
         self.assertNotIn("private command", json.dumps(emitted))

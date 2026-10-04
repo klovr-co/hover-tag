@@ -50,7 +50,7 @@ unavailable behavior.
 | Explicit channel restriction | Implemented | Configure `SLACK_CHANNEL_IDS`; the bridge fails closed without selected channels. |
 | MFS retrieval roots | Implemented | Configure `MFS_ALLOWED_SCOPES`. |
 | Backend timeout and retry settings | Implemented | Configure the corresponding `OPENTAG_` settings. |
-| Codex action approvals | Implemented fallback | Codex normally reviews sandbox-boundary actions automatically. Any supported approval request delivered to Tag is routed to private, one-time Approve and Deny buttons for the initiating user. |
+| Codex action approvals | Implemented fallback | Supported requests delivered to Tag show bounded action context and a requester-only Details view, with one-time Approve and Deny. Missing fields are identified. Command arguments and file contents are withheld. See [Control your Tag](../concepts/control-your-tag.md). |
 | Organization-wide administration and approvals | Not provided | These remain outside the current reference implementation. |
 
 ## Review task activity

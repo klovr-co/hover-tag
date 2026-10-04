@@ -1456,7 +1456,7 @@ class SlackApprovalTests(unittest.TestCase):
         )
 
         buttons = blocks[1]["elements"]
-        self.assertEqual(["Approve once", "Deny"], [button["text"]["text"] for button in buttons])
+        self.assertEqual(["Details", "Approve once", "Deny"], [button["text"]["text"] for button in buttons])
         self.assertEqual(
             {
                 "team": "T1",
@@ -1468,6 +1468,36 @@ class SlackApprovalTests(unittest.TestCase):
             json.loads(buttons[0]["value"]),
         )
         self.assertNotIn("command", buttons[0]["value"])
+
+    def test_approval_prompt_shows_context_without_button_payload(self) -> None:
+        blocks = slack_socket_agent.approval_button_blocks(
+            team="T1", channel="C1", thread_ts="1.0", user_id="U1",
+            approval_id="a" * 32,
+            label="use additional filesystem or network access",
+            details={"filesystem_write": "/shared/Finance",
+                     "reason": "Outside permitted write locations"},
+        )
+        self.assertIn("/shared/Finance", blocks[0]["text"]["text"])
+        self.assertIn("Outside permitted write locations", blocks[0]["text"]["text"])
+        self.assertNotIn("/shared/Finance", blocks[1]["elements"][0]["value"])
+        modal = slack_socket_agent.approval_details_modal({
+            "action": "Use additional permissions", "filesystem_write": "/shared/Finance",
+        })
+        self.assertIn("/shared/Finance", str(modal))
+        self.assertIn("did not provide a reason", str(modal))
+
+    def test_expired_approval_cannot_be_inspected_or_decided(self) -> None:
+        process = MagicMock()
+        process.poll.return_value = None
+        with tempfile.TemporaryDirectory() as raw_dir:
+            run = slack_socket_agent.ActiveBackendRun(
+                process, Path(raw_dir) / "control", "run-1", Path(raw_dir)
+            )
+            approval_id = "e" * 32
+            self.assertTrue(run.register_approval(approval_id, {"files": "budget.xlsx"}))
+            run.expire_approval(approval_id)
+            self.assertIsNone(run.get_approval_details(approval_id))
+            self.assertFalse(run.resolve_approval(approval_id, approved=True))
 
     def test_approval_prompt_is_visible_only_to_requesting_user(self) -> None:
         client = MagicMock()
@@ -1487,6 +1517,48 @@ class SlackApprovalTests(unittest.TestCase):
         client.chat_postEphemeral.assert_called_once()
         self.assertEqual("UOWNER", client.chat_postEphemeral.call_args.kwargs["user"])
         client.chat_postMessage.assert_not_called()
+
+    def test_details_only_open_for_active_original_requester(self) -> None:
+        fake_app = FakeApp()
+        client = MagicMock()
+        approval_id = "d" * 32
+        metadata = {"team": "T1", "channel": "C1", "thread_ts": "1.0",
+                    "user": "UOWNER", "approval_id": approval_id}
+        with tempfile.TemporaryDirectory() as raw_dir, patch.object(
+            slack_socket_agent, "App", return_value=fake_app
+        ), patch.dict(os.environ, {
+            "SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_IDS": "C1",
+        }, clear=True), patch.object(
+            slack_socket_agent, "discover_codex_models", return_value=[]
+        ):
+            slack_socket_agent.create_app("codex", 30, frozenset({"UOWNER", "UOTHER"}))
+            process = MagicMock()
+            process.poll.return_value = None
+            run = slack_socket_agent.ActiveBackendRun(
+                process, Path(raw_dir) / "control", "run-1", Path(raw_dir)
+            )
+            self.assertTrue(run.register_approval(approval_id, {
+                "action": "Change files", "files": "/shared/Finance/budget.xlsx",
+            }))
+            slack_socket_agent.register_active_run(
+                slack_socket_agent.RunKey("T1", "C1", "1.0"), run
+            )
+            body = {
+                "team": {"id": "T1"}, "channel": {"id": "C1"},
+                "user": {"id": "UOTHER"}, "trigger_id": "trigger",
+                "actions": [{"value": json.dumps(metadata)}],
+            }
+            action = fake_app.actions[slack_socket_agent.APPROVAL_DETAILS_ACTION_ID]
+            action(MagicMock(), body, client, MagicMock())
+            client.views_open.assert_not_called()
+            body["user"]["id"] = "UOWNER"
+            action(MagicMock(), body, client, MagicMock())
+            self.assertIn("budget.xlsx", str(client.views_open.call_args.kwargs["view"]))
+            client.views_open.reset_mock()
+            self.assertTrue(run.resolve_approval(approval_id, approved=False))
+            action(MagicMock(), body, client, MagicMock())
+            client.views_open.assert_not_called()
+            client.chat_postEphemeral.assert_called_once()
 
     def test_initiating_user_can_approve_active_request_once(self) -> None:
         fake_app = FakeApp()

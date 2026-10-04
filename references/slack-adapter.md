@@ -265,6 +265,15 @@ already gone, the bridge treats it as an orphaned stop: it closes the Slack
 session immediately instead of waiting for a nonexistent run to confirm
 interruption. Failed orphan cleanup is added to the same recovery journal.
 
+Codex App Server approval requests use an allowlist of documented command,
+file-change, and permission fields. The bridge redacts and bounds those fields
+before posting a requester-only approval prompt. **Details** opens a private
+modal only while the matching run and request are active and the original
+requester still has access. Button values hold request identity only. Command
+arguments and file contents are withheld; missing targets and reasons are
+shown as missing rather than inferred. A decision or backend timeout removes
+the private details. See [Control your Tag](../docs/concepts/control-your-tag.md).
+
 Activity copy uses a fixed public vocabulary. Recognized MCP services and tool
 names produce natural copy (for example, `Searching GitHub issues…`); unrecognized
 names fall back to a service-only or generic label. Extend `MCP_SERVICE_NAMES`

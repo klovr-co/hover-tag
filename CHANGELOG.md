@@ -6,6 +6,9 @@ All notable changes to Tag are documented here.
 
 ### Added
 
+- Show bounded context and private Details for Codex approval requests, while
+  keeping one-request Approve once and Deny controls. Command arguments and
+  file contents remain withheld; absent backend details are identified.
 - Keep normal-install agent workspaces in the visible `~/Tag/NAME` user
   directory while retaining configuration, credentials, and runtime state in
   platform application data.

@@ -53,8 +53,10 @@ starts, the stream owns the processing state until finalization.
   `agent_session_stopped` before the native Stop control is available.
 - Streaming delivery failures use the buffered answer from the same run; Tag
   never reruns a task merely to repair Slack delivery.
-- Approval controls carry only request identity and a fixed action category;
-  raw commands, paths, and permission payloads are not copied into Slack.
+- Approval button values carry only request identity. Bounded, redacted fields
+  from documented approval parameters appear in a requester-only prompt and
+  private Details modal. Raw commands, arguments, file contents, and permission
+  payloads are not copied into Slack. Details live only with the active run.
 - Persistent Codex threads and cross-request App Server reuse are deferred until
   their isolation and history semantics are designed explicitly.
 

@@ -21,8 +21,10 @@ from typing import Any
 
 try:
     from .tag_activity_details import item_activity_details
+    from .tag_approval_details import approval_details
 except ImportError:  # Direct script execution does not create a package context.
     from tag_activity_details import item_activity_details
+    from tag_approval_details import approval_details
 
 
 # Prompts are controlled by Tag, while completed tool and image events may
@@ -605,11 +607,13 @@ class CodexAppServer:
                 "type": "approval_request",
                 "approval_id": approval_id,
                 "label": APPROVAL_REQUEST_LABELS[method],
+                "details": approval_details(method, params),
             })
             approved = self._wait_for_approval(
                 approval_id,
                 min(deadline, time.monotonic() + APPROVAL_TIMEOUT_SECONDS),
             )
+            emit({"type": "approval_expired", "approval_id": approval_id})
             self._send({
                 "id": request_id,
                 "result": self._approval_result(

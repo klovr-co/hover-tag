@@ -62,6 +62,10 @@ By default, only you can ask your Tag to work. Your teammates can bring their ow
 with their own setup. You share the conversation and the results; each assistant
 stays personal. See [Your own Tag](concepts/access.md) for access details.
 
+When Codex asks for extra access, you can inspect the request and decide it
+privately in Slack. See [Control your Tag](concepts/control-your-tag.md) for the
+approval walkthrough and the controls for stopping a task.
+
 We don’t host your conversations or working files. Codex and connected services
 still process the information needed for your requests, under their own data policies.
 Tag’s optional CLI telemetry has a separate, privacy-bounded collection policy;
