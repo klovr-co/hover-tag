@@ -22,7 +22,7 @@ class OpenTagAgentPromptTests(unittest.TestCase):
             attachments_dir=None,
             allowed_scopes="slack://tag-t1/channels/general__C123",
         )
-        self.assertIn("/tmp/open-tag/references/runtime-agent.md", prompt)
+        self.assertIn(str(Path("/tmp/open-tag/references/runtime-agent.md")), prompt)
         self.assertNotIn("/tmp/open-tag/SKILL.md", prompt)
         self.assertIn("search general workspace all", prompt)
         self.assertIn("ask a short scope", prompt)
@@ -33,7 +33,7 @@ class OpenTagAgentPromptTests(unittest.TestCase):
             root = Path(temp)
             script = root / "node_modules/@openai/codex/bin/codex.js"
             script.parent.mkdir(parents=True)
-            script.write_text("// fixture")
+            script.write_text("// fixture", encoding="utf-8")
             shim = root / "codex.cmd"
             with patch.object(opentag_agent, "os", SimpleNamespace(name="nt")), patch(
                 "scripts.opentag_agent.shutil.which", side_effect=[str(shim), "node.exe"]
@@ -131,10 +131,10 @@ class OpenTagAgentPromptTests(unittest.TestCase):
             allowed_scopes="file://local/tmp/workspace",
         )
 
-        self.assertIn("/tmp/invocation/results/images", prompt)
+        self.assertIn(str(Path("/tmp/invocation/results/images")), prompt)
         self.assertIn("Slack bridge uploads supported files", prompt)
         self.assertIn("Do not call Slack's API to upload them", prompt)
-        self.assertIn("/tmp/invocation/results/artifacts", prompt)
+        self.assertIn(str(Path("/tmp/invocation/results/artifacts")), prompt)
         self.assertIn("including generated HTML", prompt)
 
     @patch("scripts.opentag_agent.backend_command", return_value=["codex"])
@@ -163,6 +163,17 @@ class OpenTagAgentPromptTests(unittest.TestCase):
 
 
 class BackendStreamEventTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # On Windows, Tag resolves codex's npm shim on PATH; these tests don't install Codex.
+        resolve = patch.object(opentag_agent, "backend_command", side_effect=lambda name: [name])
+        resolve.start()
+        self.addCleanup(resolve.stop)
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        usage_home = patch("scripts.agent_usage.instance_home", return_value=Path(temporary.name))
+        usage_home.start()
+        self.addCleanup(usage_home.stop)
+
     def test_backend_progress_requires_a_recognized_lifecycle_event(self) -> None:
         self.assertTrue(opentag_agent.backend_made_progress({"type": "item.started"}))
         self.assertTrue(opentag_agent.backend_made_progress({"type": "stream_event"}))
@@ -251,6 +262,54 @@ class BackendStreamEventTests(unittest.TestCase):
         self.assertEqual(1, result)
         server_class.assert_called_once()
         self.assertNotIn("status", [item.args[0] for item in emit.call_args_list])
+
+    def test_claude_event_transport_defaults_to_sdk_and_keeps_print_rollback(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual("sdk", opentag_agent.claude_event_transport())
+        with patch.dict(os.environ, {"OPENTAG_CLAUDE_TRANSPORT": "print"}, clear=True):
+            self.assertEqual("print", opentag_agent.claude_event_transport())
+        with patch.dict(os.environ, {"OPENTAG_CLAUDE_TRANSPORT": "socket"}, clear=True):
+            with self.assertRaisesRegex(ValueError, "print or sdk"):
+                opentag_agent.claude_event_transport()
+
+    def test_claude_sdk_run_uses_shared_retry_and_exit_codes(self) -> None:
+        run = MagicMock()
+        run.run.side_effect = [("failed", "API Error: 529 overloaded"), ("interrupted", "")]
+        with patch.dict(os.environ, {"OPENTAG_BACKEND_ATTEMPTS": "3"}, clear=False), patch.object(
+            opentag_agent, "ClaudeAgentRun", return_value=run
+        ) as run_class, patch.object(opentag_agent, "emit_event") as emit, patch.object(
+            opentag_agent.time, "sleep"
+        ):
+            result = opentag_agent.run_claude_sdk_events(
+                "prompt", skill_dir=Path("/skill"), workdir=Path("/work"),
+                attachments_dir=Path("/attachments"), timeout=30, model="opus",
+                reasoning_effort="high", fast_mode=True,
+            )
+
+        self.assertEqual(130, result)
+        self.assertEqual(2, run_class.call_count)
+        self.assertEqual([Path("/skill"), Path("/attachments")], run_class.call_args.kwargs["add_dirs"])
+        self.assertEqual(
+            {"model": "opus", "reasoning_effort": "high", "fast_mode": True},
+            {key: run.run.call_args.kwargs[key] for key in ("model", "reasoning_effort", "fast_mode")},
+        )
+        self.assertIn(call("status", "Backend busy — retrying (2/3)…"), emit.call_args_list)
+
+    def test_claude_sdk_timeout_and_failure_are_reported(self) -> None:
+        run = MagicMock()
+        run.run.side_effect = [("timeout", "no backend activity for 30s"),
+                               opentag_agent.ClaudeAgentError("Claude Agent SDK failed: auth")]
+        with patch.object(opentag_agent, "ClaudeAgentRun", return_value=run), patch.object(
+            opentag_agent, "emit_event"
+        ) as emit:
+            kwargs = {"skill_dir": Path("/s"), "workdir": Path("/w"), "attachments_dir": None, "timeout": 30}
+            self.assertEqual(124, opentag_agent.run_claude_sdk_events("p", **kwargs))
+            self.assertEqual(1, opentag_agent.run_claude_sdk_events("p", **kwargs))
+        self.assertEqual(
+            [call("error", "Tag backend timed out: no backend activity for 30s"),
+             call("error", "Claude Agent SDK failed: auth")],
+            emit.call_args_list,
+        )
 
     def test_codex_event_transport_defaults_to_app_server_and_keeps_exec_rollback(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
@@ -393,7 +452,7 @@ class ChannelArtifactRoutingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             legacy = root / 'existing.md'
-            legacy.write_text('existing')
+            legacy.write_text('existing', encoding="utf-8")
             def backend(prompt, **kwargs):
                 self.assertEqual(kwargs['workdir'], root)
                 self.assertTrue((root / 'artifacts/C123').is_dir())
@@ -401,7 +460,7 @@ class ChannelArtifactRoutingTests(unittest.TestCase):
                 self.assertIn('--channel-id C123', prompt)
                 self.assertIn('edit existing', prompt)
                 self.assertIn('workspace root for older files', prompt)
-                self.assertEqual(legacy.read_text(), 'existing')
+                self.assertEqual(legacy.read_text(encoding="utf-8"), 'existing')
                 return 0
             with patch.dict(os.environ, {}, clear=True), patch.object(sys, 'argv', [
                 'opentag_agent', '--backend', 'claude', '--channel-id', 'C123',
@@ -410,3 +469,20 @@ class ChannelArtifactRoutingTests(unittest.TestCase):
                 '--output-manifest', str(root / 'manifest.json'),
             ]), patch.object(opentag_agent, 'run_claude', side_effect=backend):
                 self.assertEqual(opentag_agent.main(), 0)
+
+class ClaudePrintModelTests(unittest.TestCase):
+    def test_both_print_paths_forward_only_explicit_models(self):
+        for model in (None, "default", "opus"):
+            with self.subTest(model=model), patch.object(
+                opentag_agent, "stream_command", return_value=(0, "ok", True, False)
+            ) as stream, patch.object(opentag_agent.subprocess, "run") as run, \
+                    patch.object(opentag_agent, "backend_command", side_effect=lambda name: [name]):
+                run.return_value = SimpleNamespace(stdout="", returncode=0)
+                kwargs = dict(skill_dir=Path('/skill'), workdir=Path('/work'),
+                              attachments_dir=None, timeout=30, model=model)
+                opentag_agent.run_claude_events("prompt", **kwargs)
+                opentag_agent.run_claude("prompt", **kwargs)
+                for command in (stream.call_args.args[0], run.call_args.args[0]):
+                    self.assertEqual(model == "opus", "--model" in command)
+                    if model == "opus":
+                        self.assertEqual("opus", command[command.index("--model") + 1])

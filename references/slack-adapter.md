@@ -56,20 +56,21 @@ connector configuration; `tag start` registers it after starting MFS:
 ## End-To-End Checklist
 
 1. Pick one or more isolated Slack channels for the first run and invite the bot.
-2. Run `tag setup`. Let it reuse Slack CLI authorization or start `slack auth
-   login` when the workspace is absent.
-3. Approve either manifest-based app creation or linking an existing App ID.
-   Review/repair missing settings in Slack; setup never changes an existing
-   app's permissions silently.
-4. Enter Socket Mode and bot tokens in the hidden prompts. Setup validates them
-   independently and checks workspace/app identity.
-5. Select one or more joined channels and the owner member ID.
-6. Choose/reuse the history credential and approve the exact channel list and
-   history window before connector creation or indexing.
-7. Choose Codex (default) or experimental Claude, then run `tag start`.
-8. Mention the bot in each selected test channel and record an observed reply;
+2. Run `tag setup`. Name the Tag, describe it in one line, and pick its
+   picture; then choose its default model.
+3. Pick the workspace from the Slack CLI's sign-ins, or sign in with `slack
+   auth login` when it's absent. The signed-in member becomes the owner.
+4. Approve the Create recap, or pick an existing app and approve **Update app**
+   for missing settings; setup never changes an existing app silently.
+   Slack CLI hands the Socket Mode and bot tokens over privately; hidden
+   prompts are a fallback. Setup checks workspace and app identity.
+5. Select joined or public channels, or none: new Tags follow invitations.
+   Setup validates the history credential before writing a connector limited
+   to those channels; it never indexes during setup.
+6. Run `tag start`.
+7. Mention the bot in each selected test channel and record an observed reply;
    service readiness alone is not an end-to-end pass.
-9. Send Tag (or the customized app name) a direct message and confirm an
+8. Send Tag (or the customized app name) a direct message and confirm an
    authorized caller receives a threaded reply without an `@mention`.
 
 If the workspace blocks app creation or install approval, the user must ask a
@@ -87,8 +88,9 @@ Profile-picture selection and upload require Slack CLI 4.7 or newer.
 
 1. Go to <https://api.slack.com/apps>.
 2. Create a new app from scratch in the target workspace. The default name is
-   the authenticated operator's first name plus **Tag** and uses a uniquely
-   curated Tag waterdrop identity; setup can customize both before creation.
+   the computer account's first name plus **Tag** and uses a Tag waterdrop no
+   other Tag on the computer uses; setup can change both, and add a one-line
+   description, before creation.
    The name is cosmetic—Tag strips the mention before invoking the configured
    backend.
 3. Open **Socket Mode**, enable it, and create an app-level token with:
@@ -102,6 +104,7 @@ Profile-picture selection and upload require Slack CLI 4.7 or newer.
    - `channels:read` + `channels:history` — read threads in public channels.
    - `groups:read` + `groups:history` — read threads in private channels.
    - `im:history` — read direct-message threads when DM invocation is enabled.
+   - `team:read` (optional) — read the workspace icon that Tag.app shows beside the workspace name. Without it, Tag still starts and Tag.app shows just the workspace name.
    - `users:read` — verify app identity and caller visibility for cross-channel search.
 5. Open **Event Subscriptions** and subscribe to Bot Events:
    - `app_mention`
@@ -190,10 +193,10 @@ export SLACK_ALLOWED_USER_IDS="<owner-member-id>"
 export OPENTAG_SLACK_DM_ENABLED=1
 ```
 
-`SLACK_ALLOWED_USER_IDS` is required and fails closed when empty. In Slack, open
-your profile, choose **More**, then **Copy member ID**. Setup writes that one ID
-as the owner-only default; append comma-separated member IDs only when the owner
-intentionally shares access. Unauthorized mentions receive a denial without
+`SLACK_ALLOWED_USER_IDS` is required and fails closed when empty. Setup writes
+the member ID of the person signed in to Slack as the owner-only default; append
+comma-separated member IDs (in Slack: your profile → **More** → **Copy member
+ID**) only when the owner intentionally shares access. Unauthorized mentions receive a denial without
 reading the thread or invoking the backend. Existing installations must add this
 setting before restarting Tag.
 
@@ -268,7 +271,7 @@ interruption. Failed orphan cleanup is added to the same recovery journal.
 Activity copy uses a fixed public vocabulary. Recognized MCP services and tool
 names produce natural copy (for example, `Searching GitHub issues…`); unrecognized
 names fall back to a service-only or generic label. Extend `MCP_SERVICE_NAMES`
-and `MCP_TOOL_NAMES` in `scripts/codex_app_server.py` to approve more display
+and `MCP_TOOL_NAMES` in `scripts/agent_activity.py` to approve more display
 names. Arguments, results, URLs, and private server identifiers are not used in
 activity labels. Helper commands are classified by simple invocation, never by
 a filename mentioned somewhere in a command. Compound or ambiguous commands
@@ -283,19 +286,15 @@ removes its wait state. `Preparing your answer…` requires an explicit backend
 does not trigger it. Answer streaming and cleanup cancel pending status updates.
 This filtering applies to activity labels, not redaction of the final answer.
 
-For the Codex backend, completed replies include a compact **Configure** button
-beneath the answer. It opens a user-scoped settings modal; saved choices apply
-to that user's future requests across channels and threads and survive bridge
-restarts in `.runtime/`. By default, Tag reads visible models and
-their supported reasoning levels and Fast Mode availability from Codex's local
-model cache. The modal layers Tag's `workspace/.codex/config.toml` model,
-reasoning, and service-tier defaults over the corresponding global Codex
-settings. Restart Tag after editing the local file. Reasoning levels retain
-Codex's native names. Fast Mode is a
-separate On/Off setting and uses increased usage when enabled. Set
-`OPENTAG_CODEX_MODELS` to restrict what Slack users can select.
-The modal's **Reset to default** button restores every control before saving.
-Successful Codex App Server replies also include **Activity** beside **Configure**.
+All requests to a Tag use its configured model and thinking level, selected
+in Tag.app → Details or `tag NAME settings ai`. This applies to Codex and
+Claude. Slack replies have no Configure control or per-user preferences.
+Startup archives legacy preferences before accepting requests; historic
+Configure buttons explain where settings moved and cannot save overrides.
+Backend-supported Fast Mode defaults still apply. Restart Tag after changing
+its local backend configuration; app model changes restart it automatically.
+
+When the diagnostic Activity control is enabled, it opens saved activity.
 Failed and stopped runs show **Activity** alongside their existing actions. The button
 opens a Slack modal only for the original requester, after checking the current
 user allowlist and conversation policy. The first view is a compact timeline of

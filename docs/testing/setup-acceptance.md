@@ -89,7 +89,7 @@ Live variant: exit the process, relaunch `tag setup`, and verify durable resume.
 ```gherkin
 Given I selected an app and channel
 When I change the history window to 7 days and choose Claude
-Then Claude is identified as experimental
+Then Claude is shown as the default agent without an experimental label
 And the app, channel and owner-only access remain unchanged
 And reopening defaults and continuing setup preserves those choices
 ```

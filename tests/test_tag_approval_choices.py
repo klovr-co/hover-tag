@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from scripts.codex_app_server import CodexAppServer
+from scripts.codex_agent_backend import CodexAppServer
 from scripts.tag_approval_choices import approval_choices, public_approval_choices
 
 COMMAND = "item/commandExecution/requestApproval"
@@ -82,7 +82,7 @@ class NativeApprovalChoiceTests(unittest.TestCase):
                 def emit(event):
                     events.append(event)
                     if event["type"] == "approval_request":
-                        (root / (event["approval_id"] + ".json")).write_text(json.dumps({"choice": str(index)}))
+                        (root / (event["approval_id"] + ".json")).write_text(json.dumps({"choice": str(index)}), encoding="utf-8")
                 server._resolve_server_request({"id": 8, "method": COMMAND, "params": {
                     "availableDecisions": decisions}}, emit=emit, deadline=time.monotonic() + 5)
                 server._send.assert_called_once_with({"id": 8, "result": {"decision": expected}})

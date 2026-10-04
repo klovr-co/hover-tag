@@ -20,6 +20,8 @@ RUNTIME_DEPENDENCIES = ("mfs_server", "psutil", "slack_bolt")
 
 
 def recovery_hint(label: str) -> str:
+    if label == "backend API configuration":
+        return "Open tag settings → API connections and complete the selected provider configuration"
     if label == "Slack search users:read permission":
         return "Add users:read under OAuth & Permissions > Bot Token Scopes, reinstall the Slack app, and update Tag's bot token if Slack replaces it"
     if label == "Slack search user lookup":
@@ -31,7 +33,8 @@ def recovery_hint(label: str) -> str:
     if label.startswith("Slack") or label.startswith("SLACK_"):
         return "Check Slack tokens, allowed member IDs, channel membership, and app scopes in tag setup or tag config"
     if label.startswith("backend") or label == "OPENTAG_BACKEND":
-        return "Install and sign in with the selected CLI; change it with tag config set OPENTAG_BACKEND codex|claude"
+        return ("Install and sign in to Codex (https://learn.chatgpt.com/docs/codex/cli) or Claude Code "
+                "(https://code.claude.com/docs/en/setup); choose it with tag config set OPENTAG_BACKEND codex|claude")
     return "Review tag inspect --json and tag config show; rerun the installer for missing runtime files"
 
 
@@ -44,15 +47,15 @@ def token_from_env() -> str | None:
         return env("MFS_TOKEN")
     token_file = Path.home() / ".mfs" / "server.token"
     if token_file.exists():
-        return token_file.read_text().strip()
+        return token_file.read_text(encoding="utf-8").strip()
     return None
 
 
-def print_check(ok: bool, label: str, detail: str = "") -> None:
+def print_check(ok: bool, label: str, detail: str = "", *, next_action: str | None = None) -> None:
     if CHECK_RESULTS is not None:
         # Remote error bodies and credential values never enter machine output.
         CHECK_RESULTS.append({"check": label, "ok": bool(ok),
-                              "next_action": None if ok else recovery_hint(label)})
+                              "next_action": None if ok else (next_action or recovery_hint(label))})
     status = "ok" if ok else "fail"
     suffix = f" - {detail}" if detail else ""
     print(f"[{status}] {label}{suffix}")
@@ -106,6 +109,8 @@ def check_env() -> bool:
         "MFS_ALLOWED_SCOPES",
         "OPENTAG_BACKEND",
     ]
+    if env("SLACK_CHANNEL_POLICY") == "invited" and not env("MFS_ALLOWED_SCOPES"):
+        required.remove("MFS_ALLOWED_SCOPES")  # No channel yet: no memory sources.
     required.extend(["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_ALLOWED_USER_IDS"])
     all_ok = True
     for name in required:
@@ -219,6 +224,19 @@ def check_slack(channel_id: str | None) -> bool:
 
 def check_backend() -> bool:
     backend = env("OPENTAG_BACKEND")
+    try:
+        from . import agent_connection
+    except ImportError:
+        import agent_connection
+    try:
+        agent_connection.validate(backend)
+    except ValueError as exc:
+        # The validator emits fixed recovery text with setting names only.
+        # Never copy arbitrary provider responses into this structured field.
+        print_check(False, "backend API configuration", str(exc), next_action=str(exc))
+        return False
+    if agent_connection.active(backend):
+        print_check(True, "backend API configuration", "configured; credentials and inference not verified")
     if backend == "claude":
         ok = shutil.which("claude") is not None
         print_check(
@@ -226,6 +244,14 @@ def check_backend() -> bool:
             "backend claude",
             "claude executable found" if ok else "claude executable missing",
         )
+        if (env("OPENTAG_CLAUDE_TRANSPORT").lower() or "sdk") == "sdk":
+            sdk_ok = importlib.util.find_spec("claude_agent_sdk") is not None
+            print_check(
+                sdk_ok,
+                "Claude Agent SDK",
+                "installed" if sdk_ok else "missing; run tag upgrade to reinstall the runtime",
+            )
+            ok = ok and sdk_ok
         return ok
     if backend == "codex":
         ok = shutil.which("codex") is not None
@@ -250,7 +276,8 @@ def check_offline(root: Path) -> bool:
         "supported backend": backend in {"codex", "claude"},
         "agent workspace": workspace.is_dir(),
         "MFS URL": env("MFS_URL").startswith(("http://", "https://")),
-        "MFS allowed scopes": bool(scopes),
+        # A Tag following invitations has no sources until it's in a channel.
+        "MFS allowed scopes": bool(scopes) or env("SLACK_CHANNEL_POLICY") == "invited",
         "Slack allowed users": bool(
             [value for value in env("SLACK_ALLOWED_USER_IDS").split(",") if value.strip()]
         ),
@@ -287,7 +314,7 @@ def run_checks(offline: bool, channel_ids: list[str] | None) -> int:
     checks = [
         check_runtime_dependencies(),
         check_env(),
-        check_mfs(scopes) if scopes else False,
+        check_mfs(scopes) if scopes or env("SLACK_CHANNEL_POLICY") == "invited" else False,
         check_backend(),
     ]
     configured = channel_ids or []

@@ -14,6 +14,8 @@ import re
 import shutil
 import sys
 import textwrap
+import threading
+from contextlib import contextmanager
 
 try:
     import tag_display as display
@@ -101,6 +103,16 @@ def commit() -> None:
     _history.clear()
 
 
+def forget_last(qid: str) -> None:
+    """Drop the last answer to ``qid`` from Back's history.
+
+    For answers that only change what a question shows, such as shuffling a
+    picture: replaying them after Back would change the result.
+    """
+    if _history and _history[-1][0] == qid:
+        _history.pop()
+
+
 def going_back_to(qid: str) -> bool:
     """Whether Back is returning to this question, so it must be asked even if already answered."""
     return bool(_target and _target[0] == qid)
@@ -117,7 +129,13 @@ def _previous(kind: str, answer: object, details: dict) -> dict:
     """Offer the earlier answer as the default when a question is asked again."""
     options = details.get("options") or []
     if kind == "choose":
-        index = options.index(answer) if isinstance(answer, str) and answer in options else answer
+        if details.get("supports_effort") and isinstance(answer, dict):
+            ids = details.get("option_ids") or []
+            if answer.get("value") in ids:
+                return {"default": ids.index(answer["value"]), "default_effort": answer.get("effort")}
+        ids = details.get("option_ids") or []
+        index = (options.index(answer) if isinstance(answer, str) and answer in options
+                 else ids.index(answer) if isinstance(answer, str) and answer in ids else answer)
         return {"default": index} if isinstance(index, int) and not isinstance(index, bool) else {}
     if kind == "multi" and isinstance(answer, list):
         return {"selected": sorted(options.index(item) if isinstance(item, str) and item in options else item
@@ -149,7 +167,7 @@ def ask_client(kind: str, prompt: str, *, qid: str | None = None, **details):
     while True:
         emit({"type": "question", "id": qid, "kind": kind, "prompt": prompt, **details,
               "can_go_back": bool(_history)})
-        line = sys.stdin.readline()
+        line = _readline()
         if not line:
             raise Paused()
         try:
@@ -170,12 +188,63 @@ def ask_client(kind: str, prompt: str, *, qid: str | None = None, **details):
         return reply["answer"]
 
 
-def _option_index(answer, labels: list[str]) -> int:
+def _option_index(answer, labels: list[str], ids: list[str] | None = None) -> int:
     if isinstance(answer, int) and not isinstance(answer, bool) and 0 <= answer < len(labels):
         return answer
     if isinstance(answer, str) and answer in labels:
         return labels.index(answer)
+    if isinstance(answer, str) and ids and answer in ids:
+        return ids.index(answer)
     raise RuntimeError("The setup client chose an option that was not offered")
+
+
+# A line a cancellation watcher read but didn't need, for the next question.
+_unread: list[tuple[threading.Thread, list[str]]] = []
+
+
+def _readline() -> str:
+    if _unread:
+        reader, line = _unread.pop()
+        reader.join()
+        return line[0] if line else ""
+    return sys.stdin.readline()
+
+
+@contextmanager
+def client_cancellation():
+    """While a long action runs, let a client cancel it with ``{"cancel": true}``.
+
+    Closing stdin also cancels, and pauses at the next question. In a terminal
+    Ctrl-C does the same. Yields a callable that reports whether to stop.
+    """
+    if not protocol_active():
+        yield lambda: False
+        return
+    cancelled = threading.Event()
+    kept: list[str] = []
+
+    def watch() -> None:
+        line = _readline()
+        try:
+            message = json.loads(line) if line else None
+        except ValueError:
+            message = None
+        if not line or (isinstance(message, dict) and message.get("cancel")):
+            cancelled.set()
+            if not line:
+                kept.append("")  # EOF stays EOF for the next question.
+        else:
+            if isinstance(message, dict) and message.get("pause"):
+                cancelled.set()  # Pausing setup stops the sign-in too.
+            kept.append(line)  # An early answer belongs to the next question.
+
+    reader = threading.Thread(target=watch, daemon=True)
+    reader.start()
+    try:
+        yield cancelled.is_set
+    finally:
+        if reader.is_alive() or kept:
+            _unread.append((reader, kept))
 
 
 def text(prompt: str, default: str | None = None, *, secret: bool = False, qid: str | None = None) -> str:
@@ -201,6 +270,13 @@ def _setup_label(label: str) -> str:
 
 def message(text: str, *, code: str = "", indent: str = "  ") -> None:
     """Print setup prose in the same gutter as the header and prompts."""
+    if protocol_active():
+        # A client replaces its status per event. Terminal wrapping must not
+        # turn one message into a sequence of incomplete status updates.
+        text = _ANSI.sub("", str(text)).strip()
+        if text:
+            emit({"type": "message", "text": text})
+        return
     # ``display.paragraph`` deliberately owns wrapping, while this helper owns
     # the gutter for every line of a multi-line status returned by a command.
     # Without splitting first, command output could resume at column zero.
@@ -213,6 +289,9 @@ def message(text: str, *, code: str = "", indent: str = "  ") -> None:
 
 def notice(title: str, body: str, *, code: str = "", footer: str = "") -> None:
     """Keep terminal prose readable without relying on color or hard wrapping."""
+    if protocol_active():
+        message("\n\n".join(part for part in (title, body, f"Code: {code}" if code else "", footer) if part))
+        return
     width = max(12, min(72, shutil.get_terminal_size((80, 24)).columns - 4))
 
     def paragraph(text):
@@ -234,15 +313,19 @@ def notice(title: str, body: str, *, code: str = "", footer: str = "") -> None:
         paragraph(footer)
 
 
+# The steps of guided setup, in order, for the terminal's step track.
+SCREEN_STEPS = ("Your Tag", "AI", "Workspace", "Create", "Channels")
+
+
 def screen(step: int, title: str, detail: str = "", *, target: str = "") -> None:
     display.header(
         "Setup",
         target or display.target_detail(os.getenv("TAG_ID", "default")),
     )
-    stages = ("Connect Slack", "App", "Channels", "Finish")
+    stages = SCREEN_STEPS
     print()
     if display.content_width() < 60:
-        display.paragraph(f"STEP {step}/4 · {stages[step - 1]}", "1;" + display.ACCENT)
+        display.paragraph(f"STEP {step}/{len(stages)} · {stages[step - 1]}", "1;" + display.ACCENT)
     else:
         pieces = []
         for index, label in enumerate(stages, 1):
@@ -257,7 +340,7 @@ def screen(step: int, title: str, detail: str = "", *, target: str = "") -> None
 
 
 def keyboard_available() -> bool:
-    return sys.stdin.isatty() and sys.stdout.isatty() and os.getenv("TERM") != "dumb"
+    return display.stdin_is_terminal() and sys.stdout.isatty() and os.getenv("TERM") != "dumb"
 
 
 def _instructions(*, multiple: bool = False, setup_incomplete: bool = False) -> str:
@@ -325,11 +408,17 @@ def _ask(question):
     return answer
 
 
-def choose(title: str, options: list[str], *, default: int = 0, qid: str | None = None) -> int:
+def choose(title: str, options: list[str], *, default: int = 0, qid: str | None = None,
+           option_ids: list[str] | None = None, **details) -> int:
+    """Ask for one option. Over JSON lines, ``option_ids`` give clients stable
+    answers and ``details`` carry extra fields for richer clients; older clients
+    still see ordinary options."""
     setup_incomplete = "Save and exit" in options
     labels = [_setup_label(label) for label in options]
     if protocol_active():
-        index = _option_index(ask_client("choose", title, qid=qid, options=labels, default=default), labels)
+        extra = {"option_ids": option_ids, **details} if option_ids else details
+        index = _option_index(ask_client("choose", title, qid=qid, options=labels, default=default, **extra),
+                              labels, option_ids)
         if options[index] == "Save and exit":
             raise Paused()
         return index
@@ -365,16 +454,21 @@ def choose(title: str, options: list[str], *, default: int = 0, qid: str | None 
     ))
 
 
-def checklist(labels: list[str], selected: set[int], *, qid: str = "channels") -> set[int]:
+def checklist(labels: list[str], selected: set[int], *, qid: str = "channels", prompt: str = "Choose channels",
+              allow_empty: bool = False, **details) -> set[int]:
+    """Ask for several options. ``allow_empty`` lets the person choose none."""
     selected = set(selected)
     if protocol_active():
-        answer = ask_client("multi", "Choose channels", qid=qid, options=labels, selected=sorted(selected))
-        if not isinstance(answer, list) or not answer:
+        extra = {"allow_empty": True, **details} if allow_empty else details
+        answer = ask_client("multi", prompt, qid=qid, options=labels, selected=sorted(selected), **extra)
+        if not isinstance(answer, list) or (not answer and not allow_empty):
             raise RuntimeError("The setup client must choose at least one channel")
         return {_option_index(item, labels) for item in answer}
+    if not labels:
+        return set()
     print()
     if not keyboard_available():
-        print("  Choose channels")
+        print(f"  {prompt}")
         while True:
             for index, label in enumerate(labels):
                 print(f"  {index + 1}. [{'x' if index in selected else ' '}] {label}")
@@ -384,7 +478,7 @@ def checklist(labels: list[str], selected: set[int], *, qid: str = "channels") -
             if answer.lower() == "q":
                 raise Paused()
             if not answer:
-                if selected:
+                if selected or allow_empty:
                     return selected
                 message("Select at least one channel.")
                 continue
@@ -400,9 +494,9 @@ def checklist(labels: list[str], selected: set[int], *, qid: str = "channels") -
         for index, label in enumerate(labels)
     ]
     return set(_ask(questionary.checkbox(
-        "Choose channels",
+        prompt,
         choices=choices,
         instruction=_instructions(multiple=True, setup_incomplete=True),
-        validate=lambda values: bool(values) or "Select at least one channel.",
+        validate=lambda values: bool(values) or allow_empty or "Select at least one channel.",
         **_prompt_options(),
     )))

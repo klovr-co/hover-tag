@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 import os
 from pathlib import Path
@@ -23,6 +24,20 @@ class TagInstanceTests(unittest.TestCase):
         self.root = Path(temporary.name) / "Tag"
         self.root.mkdir()
 
+    def test_legacy_usage_alias_remains_discoverable_and_addressable(self):
+        with patch.object(tag_instances, 'RESERVED_NAMES', tag_instances.RESERVED_NAMES - {'usage'}):
+            home = tag_instances.create(self.root, 'usage').home
+        with self.assertRaises(ValueError):
+            tag_instances.create(self.root, 'usage')
+        for _ in range(2):
+            self.assertEqual(tag_instances.resolve(self.root, 'usage').home, home)
+            self.assertTrue(any(item['id'] == 'usage' for item in tag_instances.discover(self.root)))
+        with patch.dict(os.environ, {'TAG_HOME': str(self.root)}), \
+                patch.object(sys, 'argv', ['tag', 'usage', 'stop']), \
+                patch.object(tag_cli, 'stop_process') as stop, redirect_stdout(StringIO()):
+            self.assertEqual(tag_cli.main(), 0)
+        stop.assert_called_once_with(home, 'slack')
+
     def test_default_and_named_instances_use_the_same_isolated_layout(self) -> None:
         default = tag_instances.ensure_default(self.root)
         personal = tag_instances.create(self.root, "personal")
@@ -33,12 +48,12 @@ class TagInstanceTests(unittest.TestCase):
             self.assertTrue((context.home / "workspace/.codex/config.toml").is_file())
             self.assertFalse((context.home / "releases").exists())
             self.assertEqual(
-                json.loads((context.home / "instance.json").read_text())["id"],
+                json.loads((context.home / "instance.json").read_text(encoding="utf-8"))["id"],
                 context.tag_id,
             )
         self.assertFalse((self.root / "config").exists())
         self.assertFalse((self.root / "workspace").exists())
-        self.assertEqual(json.loads((personal.home / "instance.json").read_text())["id"], "personal")
+        self.assertEqual(json.loads((personal.home / "instance.json").read_text(encoding="utf-8"))["id"], "personal")
 
     def test_native_install_creates_editable_workspace_in_user_directory(self) -> None:
         user_home = self.root.parent / "person"
@@ -68,6 +83,33 @@ class TagInstanceTests(unittest.TestCase):
         link.symlink_to(self.root.parent)
         with self.assertRaisesRegex(ValueError, "symlink"):
             tag_instances.resolve(self.root, "link")
+
+    def test_concurrent_creation_preserves_winner_on_directory_conflict(self) -> None:
+        for code in (errno.EEXIST, errno.ENOTEMPTY):
+            with self.subTest(errno=code):
+                tag_id = f"race-{code}"
+                destination = self.root / "instances" / tag_id
+
+                def publish_other_tag(source, target):
+                    self.assertEqual(target, destination)
+                    target.mkdir()
+                    (target / "keep.txt").write_text("other creator", encoding="utf-8")
+                    raise OSError(code, "Directory exists", str(target))
+
+                with patch.object(tag_instances.os, "rename", side_effect=publish_other_tag):
+                    with self.assertRaisesRegex(ValueError, "already exists; its configuration was preserved"):
+                        tag_instances.create(self.root, tag_id)
+                self.assertEqual((destination / "keep.txt").read_text(encoding="utf-8"), "other creator")
+                self.assertEqual(list(destination.parent.glob(f".{tag_id}-*")), [])
+
+    def test_creation_keeps_unrelated_io_errors_and_can_retry(self) -> None:
+        with patch.object(tag_instances.os, "rename", side_effect=OSError(errno.EACCES, "Denied")):
+            with self.assertRaises(OSError) as raised:
+                tag_instances.create(self.root, "retry")
+        self.assertEqual(raised.exception.errno, errno.EACCES)
+        self.assertFalse((self.root / "instances/retry").exists())
+        self.assertEqual(list((self.root / "instances").glob(".retry-*")), [])
+        self.assertEqual(tag_instances.create(self.root, "retry").tag_id, "retry")
 
     def test_workspace_alias_suggestion_uses_workspace_name_and_avoids_collisions(self) -> None:
         self.assertEqual(tag_instances.suggest_name(self.root, "Maxine Personal"), "maxine-personal")
@@ -147,7 +189,7 @@ class TagInstanceTests(unittest.TestCase):
             "30", home=home, app_id="A456", credential=credential,
         )
         content = connector.read_text(encoding="utf-8")
-        self.assertIn(f'token = "file:{credential}"', content)
+        self.assertIn(f"token = {json.dumps('file:' + str(credential))}", content)
         self.assertNotIn("xoxb-secret", content)
         self.assertEqual(connector.name, "tag-t123-a456.toml")
         if os.name != "nt":
@@ -159,17 +201,16 @@ class TagInstanceTests(unittest.TestCase):
         ), patch.object(
             sys.stdin, "isatty", return_value=True
         ), patch.object(
-            opentag_setup, "connect_slack_workspace", return_value=("T123", "Personal")
-        ), patch.object(tag_cli.subprocess, "call", return_value=0) as call, redirect_stdout(StringIO()):
+            opentag_setup, "connect_slack_workspace"
+        ) as connect, patch.object(tag_cli.subprocess, "call", return_value=0) as call, redirect_stdout(StringIO()):
             self.assertEqual(tag_cli.main(), 0)
         # A provisional name until setup creates the Slack app and Tag renames it.
         self.assertEqual(call.call_args.args[0][-2:], ["new-tag", "setup"])
         self.assertEqual(call.call_args.kwargs["env"]["TAG_INSTANCE_HOME"],
                          str(self.root / "instances/new-tag"))
-        self.assertEqual(
-            json.loads((self.root / "instances/new-tag/config/settings.json").read_text())["SLACK_TEAM_ID"],
-            "T123",
-        )
+        # Setup names the Tag before it asks for a Slack workspace.
+        connect.assert_not_called()
+        self.assertFalse((self.root / "instances/new-tag/config/settings.json").exists())
 
         with patch.dict(os.environ, {"TAG_HOME": str(self.root)}, clear=False), patch.object(
             sys, "argv", ["tag", "missing", "status"]
@@ -195,8 +236,8 @@ class TagInstanceTests(unittest.TestCase):
         ), patch.object(sys.stdin, "isatty", return_value=False), patch.object(
             sys, "__stdout__", raw
         ), patch.object(sys, "stdout", sys.stdout), patch.object(
-            opentag_setup, "connect_slack_workspace", return_value=("T123", "Acme Inc")
-        ), patch.object(opentag_setup, "ask") as ask, patch.object(
+            opentag_setup, "connect_slack_workspace"
+        ) as connect, patch.object(opentag_setup, "ask") as ask, patch.object(
             tag_cli.subprocess, "call", return_value=0
         ) as call:
             self.assertEqual(tag_cli.main(), 0)
@@ -205,7 +246,7 @@ class TagInstanceTests(unittest.TestCase):
         self.assertEqual(call.call_args.args[0][-2:], ["new-tag", "setup"])
         self.assertEqual(call.call_args.kwargs["env"]["TAG_SETUP_PROTOCOL"], "jsonl")
         self.assertEqual(call.call_args.kwargs["env"]["TAG_DEFER_RENAME"], "1")
-        self.assertEqual(tag_instances.workspace_name(self.root / "instances/new-tag"), "Acme Inc")
+        connect.assert_not_called()  # Setup itself asks for the workspace, after the name and AI.
         events = [json.loads(line) for line in raw.getvalue().splitlines()]
         self.assertTrue(all(event["type"] in {"message", "result"} for event in events))
         # Setup was mocked, so the new Tag has no app yet: it keeps its
@@ -266,7 +307,7 @@ class NativeTagFolderTests(unittest.TestCase):
                 self.assertTrue((default.home / 'instance.json').exists())
                 self.assertTrue((default.workspace / '.codex/config.toml').exists())
                 self.assertFalse((root / 'instances/default').exists())
-                (work.home / 'config/settings.json').write_text('{"SLACK_TEAM_ID":"TWORK"}')
+                (work.home / 'config/settings.json').write_text('{"SLACK_TEAM_ID":"TWORK"}', encoding="utf-8")
                 # A replacement installation discovers the folders without an
                 # installation-local registry or setup.
                 if root.exists():

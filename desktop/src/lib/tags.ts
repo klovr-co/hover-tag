@@ -3,12 +3,22 @@
 // The list of Tags on this computer, kept current for the window and the tray.
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Bridge, RunResult } from "./bridge";
-import { groups, parseJSON, parseList, status, title, type TagRow } from "./protocol";
+import { groups, isDraft, parseJSON, parseList, status, title, type TagRow } from "./protocol";
 
 export const REFRESH_SECONDS = 30;
 
 /** The last line Tag printed is the one that says what went wrong. */
 export function failureLine(result: RunResult, fallback: string) {
+  // JSON commands report a failure as {"ok": false, "error": "…"}; say just the message.
+  const start = result.stdout.indexOf("{");
+  if (start >= 0) {
+    try {
+      const reported = JSON.parse(result.stdout.slice(start)) as { error?: unknown };
+      if (typeof reported.error === "string" && reported.error) return reported.error;
+    } catch {
+      // Not one JSON object; fall back to the last line.
+    }
+  }
   const lines = (result.stderr || result.stdout).trim().split("\n").filter(Boolean);
   return (lines.pop() ?? fallback).replace("tag_cli.py: error: ", "").replace(/^Error: /, "");
 }
@@ -27,6 +37,7 @@ export function useTags(api: Bridge | null, enabled: boolean) {
   const [keepRunning, setKeepRunning] = useState(false);
   const previous = useRef<TagRow[]>([]);
   const stopping = useRef(new Set<string>());
+  const drafts = useRef<string[]>([]);
 
   const mark = (key: string, on: boolean) =>
     setBusy((current) => {
@@ -40,7 +51,10 @@ export function useTags(api: Bridge | null, enabled: boolean) {
     try {
       const result = await api.tag(["list", "--json"]);
       if (result.code !== 0) throw new Error();
-      const next = parseList(result.stdout);
+      const all = parseList(result.stdout);
+      // Setups that never reached Slack aren't shown; they are set aside once nothing is setting them up.
+      drafts.current = all.filter(isDraft).map((row) => row.id);
+      const next = all.filter((row) => !isDraft(row));
       for (const row of droppedTags(previous.current, next, stopping.current)) {
         void api.notify(`${title(row)} went offline`, "Open Tag to see what happened, or start it again.");
       }
@@ -119,6 +133,23 @@ export function useTags(api: Bridge | null, enabled: boolean) {
   const rename = useCallback((row: TagRow, name: string) =>
     run(row.id, [row.id, "rename", name.trim(), "--json"], "Rename failed."), [run]);
 
+  /** Change the Tag's one-line Slack description; an empty one clears it. */
+  const describe = useCallback((row: TagRow, description: string) =>
+    run(row.id, [row.id, "describe", description.trim(), "--json"], "Couldn't change the description."), [run]);
+
+  /** Set aside setups that never reached Slack. Call only when no setup is running. */
+  const discardDrafts = useCallback(async () => {
+    if (!api || !drafts.current.length) return;
+    const ids = drafts.current;
+    drafts.current = [];
+    for (const id of ids) await api.tag([id, "abandon", "--json"]);
+  }, [api]);
+
+  /** Stop a Tag and set its files aside. Pass its App ID to delete its Slack app too (irreversible). */
+  const remove = useCallback((row: TagRow, deleteAppId?: string) =>
+    run(row.id, [row.id, "remove", "--json", ...(deleteAppId ? ["--delete-app", "--confirm-app", deleteAppId] : [])],
+      `Couldn't remove ${title(row)}.`), [run]);
+
   const setAutostart = useCallback(async (on: boolean) => {
     const ok = await run("autostart", ["autostart", on ? "on" : "off", "--json"], "Couldn't change Keep Tags running.");
     if (ok) setKeepRunning(on);
@@ -127,7 +158,7 @@ export function useTags(api: Bridge | null, enabled: boolean) {
 
   return {
     rows, loaded, busy, error, setError, keepRunning,
-    refresh, refreshAutostart, toggle, workspace, all, rename, setAutostart,
+    refresh, refreshAutostart, toggle, workspace, all, rename, describe, discardDrafts, remove, setAutostart,
   };
 }
 

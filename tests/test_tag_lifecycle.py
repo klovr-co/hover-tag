@@ -125,7 +125,7 @@ class TagLifecycleTests(unittest.TestCase):
 
     def test_memory_start_uses_saved_mfs_settings_before_onboarding_completes(self) -> None:
         config = self.home / "config/settings.json"
-        config.write_text('{"MFS_URL":"http://localhost:13619"}')
+        config.write_text('{"MFS_URL":"http://localhost:13619"}', encoding="utf-8")
 
         with patch.dict(os.environ, {"TAG_HOME": str(self.root)}, clear=False), patch.object(
             sys, "argv", ["tag", "memory", "start"]
@@ -157,6 +157,7 @@ class TagLifecycleTests(unittest.TestCase):
         self.assertEqual(start.call_args.kwargs["state_dir"], context.shared_mfs_home)
         self.assertEqual(start.call_args.kwargs["cwd"], context.workspace)
 
+    @unittest.skipIf(os.name == "nt", "Tag finds the listener with lsof only on macOS and Linux")
     def test_local_mfs_listener_matches_the_resolved_configured_address(self) -> None:
         expected = MagicMock(pid=22)
         expected.cmdline.return_value = ["python", "-m", "mfs_server", "run"]
@@ -191,6 +192,7 @@ class TagLifecycleTests(unittest.TestCase):
         )
         process.assert_called_once_with(22)
 
+    @unittest.skipIf(os.name == "nt", "Tag finds the listener with lsof only on macOS and Linux")
     def test_local_mfs_listener_rejects_multiple_matching_processes(self) -> None:
         first = MagicMock(pid=11)
         first.cmdline.return_value = ["mfs-server", "run"]
@@ -328,6 +330,13 @@ class TagLifecycleTests(unittest.TestCase):
         ) as tick:
             tag_cli.reconcile_invitation_memory(self.home)
         tick.assert_called_once_with()
+
+        # A Tag set up without channels starts and waits for its first invitation.
+        status.write_text(json.dumps({"state": "no_joined_channels"}), encoding="utf-8")
+        with patch.dict(sys.modules, {"slack_invitation_memory": slack_invitation_memory}), patch.object(
+            slack_invitation_memory.InvitationMemory, "tick"
+        ):
+            tag_cli.reconcile_invitation_memory(self.home)
 
         status.write_text(json.dumps({"state": "needs_attention"}), encoding="utf-8")
         with patch.dict(sys.modules, {"slack_invitation_memory": slack_invitation_memory}), patch.object(
@@ -567,7 +576,7 @@ class TagLifecycleTests(unittest.TestCase):
 
     def test_token_comes_from_mfs_home_when_set(self) -> None:
         (self.home / "mfs").mkdir()
-        (self.home / "mfs/server.token").write_text("from-home\n")
+        (self.home / "mfs/server.token").write_text("from-home\n", encoding="utf-8")
         self.assertEqual(tag_cli.mfs_token({"MFS_HOME": str(self.home / "mfs")}), "from-home")
         self.assertEqual(tag_cli.mfs_token({"MFS_TOKEN": "explicit", "MFS_HOME": str(self.home / "mfs")}), "explicit")
 

@@ -42,7 +42,7 @@ def check_memory_server(python: Path, directory: Path) -> None:
             if process.poll() is not None or time.monotonic() > deadline:
                 log.flush()
                 raise RuntimeError("mfs-server did not become healthy:\n"
-                                   + (directory / "mfs-server.log").read_text(errors="replace")[-3000:])
+                                   + (directory / "mfs-server.log").read_text(encoding="utf-8", errors="replace")[-3000:])
             time.sleep(1)
         token = (home / "server.token").read_text(encoding="utf-8").strip()
         request = urllib.request.Request(
@@ -117,7 +117,7 @@ with tempfile.TemporaryDirectory(prefix="Tag smoke ") as temporary:
             check=True,
         )
     subprocess.run([str(command), "doctor", "--offline"], cwd=directory, env=env, check=True)
-    current = json.loads((directory / "home/current.json").read_text())
+    current = json.loads((directory / "home/current.json").read_text(encoding="utf-8"))
     subprocess.run([current["python"], "-c", "import slack_bolt, psutil, mfs_server"], check=True)
     assert current.get("dependency_schema") == 1, current
     # Tag runs on its own Python, never the one that started this script.

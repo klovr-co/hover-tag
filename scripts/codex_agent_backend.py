@@ -8,9 +8,9 @@ NOTICE for attribution.
 from __future__ import annotations
 
 import json
+import os
 import queue
 import re
-import shlex
 import subprocess
 import threading
 import time
@@ -20,9 +20,30 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from . import tag_chatgpt, agent_connection, agent_usage, agent_gateway
+    from .opentag_process_env import text_only_environment
+    from .agent_activity import (
+        APPROVAL_POLL_SECONDS,
+        APPROVAL_TIMEOUT_SECONDS,
+        INTERRUPT_GRACE_SECONDS,
+        MCP_SERVICE_NAMES,
+        activity_label,
+        token_usage,
+    )
     from .tag_activity_details import item_activity_details
     from .tag_approval_choices import approval_choices, public_approval_choices, auto_review_details
 except ImportError:  # Direct script execution does not create a package context.
+    import tag_chatgpt
+    from opentag_process_env import text_only_environment
+    import agent_connection, agent_usage, agent_gateway
+    from agent_activity import (
+        APPROVAL_POLL_SECONDS,
+        APPROVAL_TIMEOUT_SECONDS,
+        INTERRUPT_GRACE_SECONDS,
+        MCP_SERVICE_NAMES,
+        activity_label,
+        token_usage,
+    )
     from tag_activity_details import item_activity_details
     from tag_approval_choices import approval_choices, public_approval_choices, auto_review_details
 
@@ -34,12 +55,8 @@ MAX_REQUEST_LINE_BYTES = 1024 * 1024
 MAX_RESPONSE_LINE_BYTES = 32 * 1024 * 1024
 MAX_STDERR_BYTES = 64 * 1024
 REQUEST_TIMEOUT_SECONDS = 60.0
-INTERRUPT_GRACE_SECONDS = 5.0
 AUTO_REVIEW_RETRY_LABEL = "retry an action denied by automatic review"
 MAX_AUTO_REVIEW_APPROVALS = 10
-
-APPROVAL_POLL_SECONDS = 0.1
-APPROVAL_TIMEOUT_SECONDS = 600.0
 
 APPROVAL_REQUEST_LABELS = {
     "item/commandExecution/requestApproval": "run a command outside the workspace sandbox",
@@ -48,101 +65,6 @@ APPROVAL_REQUEST_LABELS = {
     "applyPatchApproval": "apply a file change that requires approval",
     "execCommandApproval": "run a command that requires approval",
 }
-
-# Public display vocabulary, never populated from tool arguments or results.
-MCP_SERVICE_NAMES = {
-    "github": "GitHub", "slack": "Slack", "linear": "Linear",
-    "notion": "Notion", "datadog": "Datadog", "mfs": "connected knowledge",
-    "playwright": "Playwright", "context7": "Context7",
-}
-MCP_TOOL_NAMES = frozenset({
-    "search", "fetch", "read_resource", "list_resources", "search_issues",
-    "get_issue", "list_issues", "create_issue", "update_issue",
-    "search_code", "get_file_contents", "list_pull_requests", "pull_request_read",
-    "create_pull_request", "query_metrics", "search_logs", "list_dashboards",
-    "get_document", "search_pages", "fetch_documentation", "resolve_library_id",
-    "resolve-library-id", "query-docs", "browser_navigate", "browser_snapshot",
-    "browser_click", "browser_take_screenshot",
-})
-COMMAND_LABELS = {
-    "mfs_search.py": "Searching connected knowledge…",
-    "mfs_cat.py": "Reading connected knowledge…",
-    "mfs_ls.py": "Browsing connected knowledge…",
-    "slack_canvas.py": "Creating a Slack canvas…",
-    "slack_post_message.py": "Posting to Slack…",
-}
-DOCUMENT_HELPER_RE = re.compile(
-    r"(?:create|generate|render|build|export)[-_].*(?:docx|document|pdf|pptx|xlsx)"
-    r"|(?:docx|document|pdf|pptx|xlsx)[-_].*(?:create|generate|render|build|export)",
-    re.IGNORECASE,
-)
-FILE_READ_COMMANDS = frozenset({"cat", "head", "tail"})
-FILE_WRITE_COMMANDS = frozenset({"cp", "install", "mkdir", "mv", "tee", "touch"})
-TEST_COMMANDS = frozenset({
-    "cargo", "go", "jest", "mocha", "npm", "pnpm", "pytest", "swift", "vitest", "yarn",
-})
-
-
-def command_activity_label(command: Any, depth: int = 0) -> str:
-    """Recognize a simple invocation, not a helper name mentioned in arguments.
-
-    This is conservative classification, not a shell interpreter or a claim
-    that the operation succeeded. Compound commands retain a generic label.
-    """
-    fallback = "Running a command…"
-    if not isinstance(command, str) or len(command) > 8192 or depth > 1:
-        return fallback
-    try:
-        argv = shlex.split(command)
-    except ValueError:
-        return fallback
-    if not argv:
-        return fallback
-    executable = argv[0].replace("\\", "/").rsplit("/", 1)[-1]
-    if executable in {"sh", "bash", "zsh"} and len(argv) == 3 and argv[1] in {"-c", "-lc"}:
-        return command_activity_label(argv[2], depth + 1)
-    if any(char in command for char in "\n\r;&|<>`$"):
-        return fallback
-    if re.fullmatch(r"python(?:3(?:\.\d+)?)?(?:\.exe)?", executable):
-        if len(argv) >= 3 and argv[1] == "-m" and argv[2] in {"pytest", "unittest"}:
-            return "Running tests…"
-        if len(argv) < 2 or argv[1].startswith("-"):
-            return fallback
-        executable = argv[1].replace("\\", "/").rsplit("/", 1)[-1]
-    if executable in COMMAND_LABELS:
-        return COMMAND_LABELS[executable]
-    if DOCUMENT_HELPER_RE.search(executable):
-        return "Creating a document…"
-    if executable in FILE_READ_COMMANDS:
-        return "Reading files…"
-    if executable in FILE_WRITE_COMMANDS:
-        return "Writing files…"
-    if executable in TEST_COMMANDS:
-        if executable in {"cargo", "go", "npm", "pnpm", "swift", "yarn"}:
-            if len(argv) < 2 or argv[1] not in {"test", "t"}:
-                return fallback
-        return "Running tests…"
-    return fallback
-
-
-def mcp_activity_label(item: dict[str, Any]) -> str:
-    """Expose only explicitly approved service/tool names, with safe fallbacks."""
-    server, tool = item.get("server"), item.get("tool")
-    service = MCP_SERVICE_NAMES.get(server.lower()) if isinstance(server, str) else None
-    name = tool if isinstance(tool, str) and tool in MCP_TOOL_NAMES else None
-    if name:
-        words = name.replace("-", "_").split("_")
-        verb = {"search": "Searching", "fetch": "Fetching", "get": "Reading",
-                "read": "Reading", "list": "Listing", "create": "Creating",
-                "update": "Updating", "query": "Querying", "resolve": "Looking up"}.get(words[0])
-        if verb:
-            subject = " ".join(words[1:])
-            target = " ".join(part for part in (service, subject) if part)
-            return f"{verb} {target or 'with a connected tool'}…"
-    if service:
-        return f"Using {service}…"
-    return "Using a connected tool…"
-
 
 class CodexAppServerError(RuntimeError):
     """A bounded, user-safe App Server transport failure."""
@@ -156,16 +78,20 @@ class JsonLineDecoder:
         self.buffer = bytearray()
 
     def feed(self, chunk: bytes) -> list[bytes]:
+        # The previous partial buffer contains no newline. Scan only new bytes
+        # so a large image event delivered in small chunks remains linear-time.
+        scan_from = len(self.buffer)
         self.buffer.extend(chunk)
-        if len(self.buffer) > self.max_line_bytes and b"\n" not in self.buffer:
-            raise CodexAppServerError("Codex App Server emitted an oversized JSONL line")
         lines: list[bytes] = []
         while True:
-            newline = self.buffer.find(b"\n")
+            newline = self.buffer.find(b"\n", scan_from)
             if newline < 0:
+                if len(self.buffer) > self.max_line_bytes:
+                    raise CodexAppServerError("Codex App Server emitted an oversized JSONL line")
                 break
             line = bytes(self.buffer[:newline]).strip()
             del self.buffer[: newline + 1]
+            scan_from = 0
             if len(line) > self.max_line_bytes:
                 raise CodexAppServerError("Codex App Server emitted an oversized JSONL line")
             if line:
@@ -177,26 +103,6 @@ class JsonLineDecoder:
             raise CodexAppServerError("Codex App Server exited with a truncated JSONL line")
 
 
-def activity_label(item: dict[str, Any]) -> str | None:
-    """Return a truthful, sanitized label derived from an identifiable action."""
-    item_type = item.get("type")
-    if item_type == "webSearch":
-        return "Searching the web…"
-    if item_type == "fileChange":
-        return "Updating files…"
-    if item_type == "imageView":
-        return "Inspecting an image…"
-    if item_type == "imageGeneration":
-        return "Creating an image…"
-    if item_type == "dynamicToolCall":
-        return "Using agent tools…"
-    if item_type == "mcpToolCall":
-        return mcp_activity_label(item)
-    if item_type == "commandExecution":
-        return command_activity_label(item.get("command"))
-    return None
-
-
 class CodexEventMapper:
     """Map native lifecycle notifications to Tag's Slack-safe event contract."""
 
@@ -205,12 +111,15 @@ class CodexEventMapper:
         self.pending_deltas: dict[str, list[str]] = {}
         self.completed_messages: list[tuple[str, str | None, str]] = []
         self.emitted_final_ids: set[str] = set()
+        self.failure_detail = ""
 
     def map(self, message: dict[str, Any]) -> list[dict[str, Any]]:
         method = message.get("method")
         params = message.get("params")
         if not isinstance(method, str) or not isinstance(params, dict):
             return []
+        if method == "thread/tokenUsage/updated":
+            return agent_usage.codex_event(params)
         if method == "item/started":
             return self._item_started(params)
         if method == "item/agentMessage/delta":
@@ -223,7 +132,10 @@ class CodexEventMapper:
             error = params.get("error")
             text = error.get("message") if isinstance(error, dict) else None
             if isinstance(text, str) and text and not params.get("willRetry"):
-                return [{"type": "error", "text": text}]
+                code = error.get("code")
+                prefix = f"{code}: " if isinstance(code, str) and code in tag_chatgpt.PLAN_ERRORS else ""
+                self.failure_detail = prefix + text
+                return [{"type": "error", "text": self.failure_detail}]
         return []
 
     def _item_started(self, params: dict[str, Any]) -> list[dict[str, Any]]:
@@ -335,7 +247,11 @@ class CodexEventMapper:
         terminal = {"type": "turn_complete", "status": status or "failed"}
         error = turn.get("error")
         if isinstance(error, dict) and isinstance(error.get("message"), str):
-            terminal["text"] = error["message"]
+            code = error.get("code")
+            prefix = f"{code}: " if isinstance(code, str) and code in tag_chatgpt.PLAN_ERRORS else ""
+            terminal["text"] = prefix + error["message"]
+        elif status == "failed" and self.failure_detail:
+            terminal["text"] = self.failure_detail
         events.append(terminal)
         return events
 
@@ -353,14 +269,21 @@ class CodexAppServer:
         control_file: Path | None = None,
         run_id: str | None = None,
         approval_dir: Path | None = None,
+        text_only_instructions: str | None = None,
     ) -> None:
         self.command = command
+        self.chatgpt_token = ""
+        self.gateway_proxy: agent_gateway.GatewayProxy | None = None
+        self.auth_identity: tuple | None = None
+        self.token_renewal_deadline = float("inf")
+        self.renewing_token = False
         self.cwd = cwd
         self.timeout = timeout
         self.max_timeout = max_timeout if max_timeout is not None else timeout
         self.control_file = control_file
         self.run_id = run_id
         self.approval_dir = approval_dir
+        self.text_only_instructions = text_only_instructions
         self.process: subprocess.Popen[bytes] | None = None
         self.messages: queue.Queue[dict[str, Any] | BaseException] = queue.Queue()
         self.stderr = bytearray()
@@ -376,11 +299,13 @@ class CodexAppServer:
 
     def model_catalog(self) -> list[dict[str, Any]]:
         """Read models for the signed-in account without creating a thread or turn."""
+        if tag_chatgpt.enabled() and not agent_connection.active("codex"):
+            return tag_chatgpt.models()
         mapper = CodexEventMapper()
         deadline = time.monotonic() + self.timeout
         try:
             self._start()
-            self._request("initialize", {"clientInfo": {"name": "tag", "version": "0.1"}},
+            self._request("initialize", {"clientInfo": self._client_info()},
                           mapper, lambda event: None, deadline)
             self._notify("initialized", {})
             models: list[dict[str, Any]] = []
@@ -415,7 +340,7 @@ class CodexAppServer:
         try:
             self._request(
                 "initialize",
-                {"clientInfo": {"name": "tag", "title": "Tag", "version": "0.1"},
+                {"clientInfo": self._client_info(),
                  "capabilities": {"experimentalApi": True}},
                 mapper,
                 emit,
@@ -426,16 +351,51 @@ class CodexAppServer:
                 "cwd": str(self.cwd),
                 "sandbox": "workspace-write",
                 "approvalsReviewer": "auto_review",
-                "ephemeral": True,
+                "ephemeral": not bool(self.chatgpt_token),
                 "serviceName": "tag_slack_bridge",
             }
             if model:
                 thread_params["model"] = model
+            if self.text_only_instructions is not None:
+                # Resolve inherited servers before disabling them; an empty map
+                # alone would merge with user config and leave tools enabled.
+                effective = self._request("config/read", {"includeLayers": False}, mapper, emit, max_deadline)
+                config = effective.get("config", {})
+                overrides = {
+                    "features.shell_tool": False, "features.unified_exec": False,
+                    "features.apply_patch_freeform": False, "features.js_repl": False,
+                    "features.multi_agent": False, "features.apps": False,
+                    "features.plugins": False, "features.hooks": False,
+                    "features.codex_hooks": False, "features.view_image": False,
+                    "features.code_mode": False, "features.computer_use": False,
+                    "features.browser_use": False, "features.image_generation": False,
+                    "features.memory_tool": False, "features.tool_search": False,
+                    "features.tool_suggest": False,
+                    "web_search": "disabled", "project_doc_max_bytes": 0,
+                }
+                # App Server splits dotted override keys literally (not as TOML).
+                # Nested tables keep names with dots/quotes intact and merge
+                # into the existing transport definitions.
+                for section in ("mcp_servers", "plugins"):
+                    overrides[section] = {
+                        name: {"enabled": False}
+                        for name in (config.get(section) or {})
+                    }
+                thread_params.update(sandbox="read-only", approvalPolicy="never",
+                    approvalsReviewer="user", baseInstructions=self.text_only_instructions,
+                    developerInstructions="", config=overrides)
             thread_result = self._request("thread/start", thread_params, mapper, emit, max_deadline)
             thread = thread_result.get("thread") if isinstance(thread_result, dict) else None
             if not isinstance(thread, dict) or not isinstance(thread.get("id"), str):
                 raise CodexAppServerError("Codex returned an invalid thread/start response")
             self.thread_id = thread["id"]
+            resolved_model = thread_result.get("model") or thread.get("model")
+            if isinstance(resolved_model, str) and resolved_model:
+                info: dict[str, Any] = {"type": "run_info", "model": resolved_model}
+                resolved_effort = reasoning_effort or thread_result.get("reasoningEffort")
+                if isinstance(resolved_effort, str) and resolved_effort:
+                    info["reasoning_effort"] = resolved_effort
+                emit(info)
             turn_params: dict[str, Any] = {
                 "threadId": self.thread_id,
                 "input": [{"type": "text", "text": prompt}],
@@ -444,24 +404,106 @@ class CodexAppServer:
                 turn_params["model"] = model
             if reasoning_effort:
                 turn_params["effort"] = reasoning_effort
-            turn_result = self._request("turn/start", turn_params, mapper, emit, max_deadline)
-            turn = turn_result.get("turn") if isinstance(turn_result, dict) else None
-            if not isinstance(turn, dict) or not isinstance(turn.get("id"), str):
-                raise CodexAppServerError("Codex returned an invalid turn/start response")
-            self.turn_id = turn["id"]
-            return self._consume_turn(
-                mapper,
-                emit,
-                idle_deadline=time.monotonic() + self.timeout,
-                max_deadline=max_deadline,
-            )
+            while True:
+                turn_result = self._request("turn/start", turn_params, mapper, emit, max_deadline)
+                turn = turn_result.get("turn") if isinstance(turn_result, dict) else None
+                if not isinstance(turn, dict) or not isinstance(turn.get("id"), str):
+                    raise CodexAppServerError("Codex returned an invalid turn/start response")
+                self.turn_id = turn["id"]
+                status, detail = self._consume_turn(
+                    mapper, emit, idle_deadline=time.monotonic() + self.timeout,
+                    max_deadline=max_deadline,
+                )
+                if status != "renew_token":
+                    if self.chatgpt_token and "subscription_sharing_usage_limit_exceeded" in detail:
+                        try:
+                            tag_chatgpt.Store().pause_usage(expected_identity=self.auth_identity)
+                        except tag_chatgpt.ChatGPTError as exc:
+                            raise CodexAppServerError(str(exc)) from None
+                    return status, detail
+                if self._stop_requested():
+                    return "interrupted", "Stopped by requester"
+                if self.text_only_instructions is not None:
+                    return "failed", "Summary interrupted for credential renewal"
+                # Resume the same saved history only after acknowledged interruption;
+                # never rerun the original prompt or restart an unacknowledged turn.
+                self.close()
+                self.process = None
+                self.messages = queue.Queue()
+                self.stderr.clear()
+                self.reader_threads = []
+                self.interrupt_sent = False
+                self.renewing_token = False
+                self.turn_id = None
+                self._start()
+                self._request("initialize", {"clientInfo": self._client_info(),
+                    "capabilities": {"experimentalApi": True}}, mapper, emit, max_deadline)
+                self._notify("initialized", {})
+                resumed = self._request("thread/resume", {"threadId": self.thread_id,
+                    "cwd": str(self.cwd), "sandbox": "workspace-write", "approvalsReviewer": "auto_review"},
+                    mapper, emit, max_deadline)
+                resumed_thread = resumed.get("thread") if isinstance(resumed, dict) else None
+                if not isinstance(resumed_thread, dict) or resumed_thread.get("id") != self.thread_id:
+                    raise CodexAppServerError("Codex could not resume the task after ChatGPT token renewal")
+                turn_params["input"] = [{"type": "text", "text":
+                    "Continue the interrupted task from the saved history. Authentication was renewed. "
+                    "Check the outcome of interrupted tools before proceeding; do not repeat completed actions."}]
+                emit({"type": "status", "text": "ChatGPT connection renewed; continuing the task."})
         finally:
             self.close()
 
+    @staticmethod
+    def _client_info() -> dict[str, str]:
+        return {"name": tag_chatgpt.APP_NAME, "title": "Tag",
+                "version": (Path(__file__).resolve().parents[1] / "VERSION").read_text(encoding="utf-8").strip()}
+
     def _start(self) -> None:
+        environment = text_only_environment(os.environ) if self.text_only_instructions is not None else None
+        command = self.command
+        store = tag_chatgpt.Store()
+        try:
+            agent_connection.routing("codex")
+            identity = ("api",) if agent_connection.active("codex") else store.identity()
+            if self.auth_identity is None:
+                self.auth_identity = identity
+            elif self.auth_identity != identity:
+                raise tag_chatgpt.ChatGPTError("ChatGPT account changed during the task; restart the task with the intended account.")
+        except (tag_chatgpt.ChatGPTError, ValueError) as exc:
+            raise CodexAppServerError(str(exc)) from None
+        if self.auth_identity[0] == "chatgpt":
+            try:
+                self.chatgpt_token, expiry = store.lease(expected_identity=self.auth_identity)
+                self.token_renewal_deadline = time.monotonic() + max(0, expiry - time.time() - 90)
+            except tag_chatgpt.ChatGPTError as exc:
+                raise CodexAppServerError(str(exc)) from None
+            environment = dict(environment if environment is not None else os.environ)
+            environment[tag_chatgpt.TOKEN_ENV] = self.chatgpt_token
+            command = [part for part in command if part != "--stdio"]
+            command += ["--listen", "stdio://", *tag_chatgpt.provider_options()]
+        if agent_connection.active("codex"):
+            try:
+                agent_connection.validate("codex")
+                route = agent_connection.routing("codex")
+                if route:
+                    self.gateway_proxy = agent_gateway.GatewayProxy(
+                        os.environ["OPENTAG_CODEX_BASE_URL"], os.environ["OPENTAG_CODEX_API_KEY"],
+                        route, timeout=self.max_timeout,
+                        disable_tools=os.getenv("OPENTAG_CODEX_GATEWAY_DISABLE_TOOLS") == "1")
+                    environment = dict(os.environ)
+                    environment.pop("OPENTAG_CODEX_API_KEY", None)
+                    environment["TAG_GATEWAY_PROXY_TOKEN"] = self.gateway_proxy.token
+                command = [part for part in command if part != "--stdio"]
+                command += ["--listen", "stdio://", *agent_connection.codex_options(
+                    proxy_url=self.gateway_proxy.base_url if self.gateway_proxy else None)]
+            except (ValueError, OSError) as exc:
+                if self.gateway_proxy:
+                    self.gateway_proxy.close()
+                    self.gateway_proxy = None
+                raise CodexAppServerError(str(exc)) from None
         try:
             self.process = subprocess.Popen(
-                self.command,
+                command,
+                env=environment,
                 cwd=self.cwd,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
@@ -469,6 +511,9 @@ class CodexAppServer:
                 bufsize=0,
             )
         except OSError as exc:
+            if self.gateway_proxy:
+                self.gateway_proxy.close()
+                self.gateway_proxy = None
             raise CodexAppServerError(f"Could not start Codex App Server: {exc}") from exc
         self.reader_threads = [
             threading.Thread(target=self._read_stdout, daemon=True),
@@ -484,7 +529,8 @@ class CodexAppServer:
             while chunk := self.process.stdout.read(4096):
                 for raw_line in decoder.feed(chunk):
                     try:
-                        payload = json.loads(raw_line)
+                        payload = json.loads(raw_line.replace(self.chatgpt_token.encode(), b"<redacted>")
+                                             if self.chatgpt_token else raw_line)
                     except (UnicodeDecodeError, json.JSONDecodeError):
                         continue
                     if isinstance(payload, dict):
@@ -583,11 +629,13 @@ class CodexAppServer:
         interrupt_deadline = float("inf")
         while True:
             try:
-                deadline = min(idle_deadline, max_deadline) if not timed_out else interrupt_deadline
+                deadline = min(idle_deadline, max_deadline, self.token_renewal_deadline) if not timed_out else interrupt_deadline
                 message = self._next_message(deadline)
             except CodexAppServerError as exc:
                 now = time.monotonic()
                 if not timed_out and now >= deadline:
+                    self.renewing_token = (self.chatgpt_token != "" and not self.interrupt_sent
+                                           and self.token_renewal_deadline < min(idle_deadline, max_deadline))
                     timed_out = True
                     timeout_detail = (
                         f"maximum runtime of {self.max_timeout}s exceeded"
@@ -608,6 +656,8 @@ class CodexAppServer:
                     idle_deadline = time.monotonic() + self.timeout
                 for event in events:
                     if event.get("type") == "turn_complete":
+                        if self.renewing_token and event.get("status") == "interrupted":
+                            return "renew_token", ""
                         if (not timed_out and not self.interrupt_sent
                                 and event.get("status") == "completed"
                                 and self._approve_auto_review_denials(mapper, emit, max_deadline)):
@@ -631,6 +681,9 @@ class CodexAppServer:
                             emit(held)
                         held_messages.clear()
                         emit(event)
+                        if self.renewing_token:
+                            # The task can finish while renewal interruption is in flight.
+                            return str(event.get("status", "failed")), str(event.get("text", ""))
                         if timed_out:
                             return "timeout", timeout_detail
                         if self.interrupt_sent:
@@ -833,6 +886,14 @@ class CodexAppServer:
             return {"decision": decision}
         return {}
 
+    def _stop_requested(self) -> bool:
+        if not self.control_file or not self.run_id:
+            return False
+        try:
+            return self.control_file.read_text(encoding="utf-8").strip() == self.run_id
+        except OSError:
+            return False
+
     def _check_control(self) -> None:
         if self.interrupt_sent or not self.control_file or not self.run_id:
             return
@@ -856,6 +917,9 @@ class CodexAppServer:
         })
 
     def close(self) -> None:
+        if self.gateway_proxy:
+            self.gateway_proxy.close()
+            self.gateway_proxy = None
         process = self.process
         if process is None:
             return
@@ -886,6 +950,8 @@ class CodexAppServer:
     def _exit_message(self) -> str:
         assert self.process is not None
         detail = bytes(self.stderr).decode("utf-8", errors="replace").strip()
+        if self.chatgpt_token:
+            detail = detail.replace(self.chatgpt_token, "<redacted>")
         suffix = f": {detail[-4000:]}" if detail else ""
         return f"Codex App Server exited with code {self.process.returncode}{suffix}"
 

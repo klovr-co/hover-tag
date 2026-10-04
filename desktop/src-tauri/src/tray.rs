@@ -28,7 +28,7 @@ struct TrayEvent {
 pub const TRAY_ID: &str = "tag";
 
 fn icon<R: Runtime>(app: &AppHandle<R>, online: bool) -> Option<Image<'static>> {
-    // macOS draws template images in the menu bar's colour; elsewhere use white on dark panels.
+    // macOS recolors the monochrome template; other platforms use white tray assets.
     let name = match (cfg!(target_os = "macos"), online) {
         (true, false) => "tray.png",
         (true, true) => "tray-online.png",
@@ -91,6 +91,8 @@ fn build_menu(app: &AppHandle, tags: &[TrayTag], keep_running: bool) -> tauri::R
         if tag.needs_setup {
             let label = format!("{} — finish setup…", tag.title);
             items.push(Box::new(MenuItem::with_id(app, format!("toggle:{}", tag.id), label, true, None::<&str>)?));
+            let remove = format!("{} — remove…", tag.title);
+            items.push(Box::new(MenuItem::with_id(app, format!("remove:{}", tag.id), remove, true, None::<&str>)?));
         } else {
             items.push(Box::new(CheckMenuItem::with_id(
                 app, format!("toggle:{}", tag.id), &tag.title, true, tag.running, None::<&str>,

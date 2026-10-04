@@ -122,7 +122,7 @@ flowchart LR
     Slack["Connect Slack<br/>Create or approve app"]
     Connected["App connected<br/>Tag + workspace"]
     Channel["Choose destination<br/>Visual channel picker"]
-    Agent["Review settings<br/>Codex default, Claude experimental"]
+    Agent["Review settings<br/>Default agent and model"]
     Guardrails["Set boundaries<br/>Users, workspace, MFS roots"]
     Doctor{"Run doctor<br/>Checks pass?"}
     Start["Start services<br/>MFS + Slack bridge"]
@@ -135,26 +135,24 @@ flowchart LR
 
 ### Level 2 · Task flow
 
-1. Install Python 3.10+, `uv`, and an authenticated Codex or experimental Claude
-   Code CLI. Run `./install.sh` (or `./install.ps1` on Windows) for Tag's runtime.
+1. Install Python 3.10+, `uv`, and an authenticated Codex or Claude Code CLI. Run `./install.sh` (or `./install.ps1` on Windows) for Tag's runtime.
 2. Open `tag` for the menu or ask the admin skill to inspect with `tag inspect --json`.
 3. Use `tag setup` to resume missing answers, or let the skill seed defaults with
    `tag config init --json` and apply targeted `tag config set` operations.
    Timeouts and retry options stay under advanced settings; Tag manages a stable
    workspace in its application home.
-4. `tag setup` reuses Slack CLI authorization (or launches its real login
-   handoff), creates or links the app with explicit approval, and validates the
-   Socket Mode and bot credentials separately. Profile-picture selection and
-   upload require Slack CLI 4.7 or newer. Before creating a new app, the operator
-   can customize its name, choose a five-element waterdrop (Metal, Wood, Water,
-   Fire, or Soil), or drag or paste a local profile-picture path. Water is the
-   default. A review screen can open the selected picture in the
-   system viewer and change either choice before remote creation. Slack CLI can
-   hand credentials off privately after approval; hidden
-   prompts are an explicit fallback.
-5. The operator selects one or more joined channels by name. Setup separately
-   validates the Slack-history credential and asks before writing/indexing an
-   MFS connector limited to those channel IDs and the chosen history window.
+4. `tag setup` starts with the Tag itself: a name, a one-line description, and
+   a picture (shuffle Tag's waterdrops or upload a PNG, JPEG, or GIF; uploads
+   need Slack CLI 4.7 or newer). Then it asks for the default model, then the
+   Slack workspace, reusing Slack CLI sign-ins (or launching its real login
+   handoff). The signed-in member becomes the owner. One recap approves
+   creating the app; an existing app is linked and updated only with approval.
+   Slack CLI hands credentials off privately; hidden prompts are an explicit
+   fallback.
+5. The operator selects channels by name, or none: new Tags follow
+   invitations. Setup validates the Slack-history credential and writes an MFS
+   connector limited to those channel IDs and the history window, without
+   indexing.
 6. `tag doctor --json` diagnoses configuration, backend executable availability,
    MFS access, and Slack API access. A stopped MFS server must be started to pass
    these live checks; `tag start` handles the local server before its preflight.
@@ -259,7 +257,7 @@ sequenceDiagram
     M-->>B: Evidence or task result
     B-->>T: Normalized status/delta/final events
     T->>S: Stream or post formatted threaded answer
-    T->>S: Add Configure controls for Codex run
+    T->>S: Show model, thinking level, and duration
 ```
 
 Runtime behavior:
@@ -268,7 +266,7 @@ Runtime behavior:
   thread continues with that thread's context.
 - The bridge strips the mention before sending the request to the backend.
 - Slack's native loading indicator is used while work is in progress.
-- Claude can stream answer text. Codex uses App Server by default to stream
+- Codex (App Server) and Claude (Agent SDK) stream
   final-answer deltas and show compact **Agent activity** rows with readable
   command and file descriptions. Repeated steps are grouped, and successful
   tasks finish with a completed card. Shared replies omit
@@ -539,11 +537,17 @@ sequenceDiagram
 Settings are user-specific, so each authorized teammate can choose a model,
 reasoning level, and Fast Mode without changing another teammate's settings.
 Saved choices follow that user across channels and threads and survive bridge
-restarts. Reasoning levels retain the names reported by Codex; Fast Mode is an
-independent latency setting that uses increased usage. “Default” delegates
-model or reasoning selection to the Codex CLI. If a saved choice is no longer
-available, Tag normalizes it back to the applicable default. Claude replies do
-not show this control.
+restarts. Reasoning levels retain the names reported by the selected backend;
+Fast Mode is an independent latency setting that uses increased usage.
+“Default” delegates model or reasoning selection to the backend CLI. If a saved
+choice is no longer available, Tag normalizes it back to the applicable default.
+When both Codex and Claude are allowed, installed, and signed in, the picker groups
+their models and the chosen model decides which backend runs that user's next
+request. Switching mid-thread is safe: every request is a fresh run that
+receives the Slack thread (up to 30 messages, including Tag's replies), so the
+new model continues from what is visible in Slack. It does not inherit the
+previous model's private reasoning or tool output; files it saved remain in
+the workspace. A running task keeps its model until it finishes or is stopped.
 
 ## Flow 8: Denials, failures, and recovery
 
@@ -702,9 +706,9 @@ isolated chat location. Skip an optional step when its dependency is not set up.
 | Image attachment understanding | Implemented bridge path | Images up to 15 MB are downloaded temporarily; successful interpretation still depends on the selected backend/model. |
 | Generated-file delivery | Implemented | Only explicitly declared regular files inside the workspace are uploaded to the invoking thread and returned as private Slack file links; each file is limited to 15 MB. |
 | Generated-image upload to Slack | Implemented bridge path | The backend saves up to 10 final PNG, JPEG, GIF, or WebP files in the invocation's dedicated result directory; the bridge validates files up to 15 MB and uploads them to the requesting thread. |
-| Slack loading state and answers | Implemented | Claude streams text deltas; Codex App Server streams final-answer deltas and observed activity. |
+| Slack loading state and answers | Implemented | Codex App Server and the Claude Agent SDK stream final-answer deltas and observed activity. |
 | Long-answer splitting | Implemented | Results remain in the invoking thread. |
-| Model/reasoning/Fast Mode settings | Implemented for Codex | Requires Slack interactivity and a reinstalled updated manifest; Fast Mode uses increased usage. |
+| Model/reasoning/Fast Mode settings | Implemented for Codex and Claude | Requires Slack interactivity and a reinstalled updated manifest; Fast Mode uses increased usage. |
 | Top-level channel posts | Implemented on explicit request | Restricted to the invoking channel. |
 | Slack Canvas creation | Implemented on explicit request | Restricted to the invoking channel; `canvases:write` required. |
 | Slack MFS search/read | Implemented; live acceptance pending | Setup creates selected-channel scopes; each reply receives only its current channel's Slack scope. ADR 0001 still applies. |

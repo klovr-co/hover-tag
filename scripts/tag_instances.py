@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import errno
 import json
 import os
 from pathlib import Path
@@ -24,7 +25,7 @@ RESERVED_NAMES = frozenset({
     "add", "list", "memory", "settings", "inspect", "config", "setup",
     "reset", "migrate", "upgrade", "rollback", "version", "paths",
     "doctor", "start", "stop", "restart", "status", "logs", "dev",
-    "telemetry", "rename", "autostart",
+    "telemetry", "rename", "describe", "autostart", "chatgpt", "usage", "abandon", "remove",
 })
 
 
@@ -66,14 +67,14 @@ class InstanceContext:
         return [action] if self.is_main else [self.tag_id, action]
 
 
-def validate_name(name: str, *, allow_default: bool = True) -> str:
+def validate_name(name: str, *, allow_default: bool = True, existing: bool = False) -> str:
     if not isinstance(name, str) or not NAME_PATTERN.fullmatch(name):
         raise ValueError(
             "Workspace aliases must be 1-32 lowercase letters, digits, or hyphens"
         )
     if name == DEFAULT_TAG and not allow_default:
         raise ValueError("The alias 'default' is reserved for the built-in Tag")
-    if name in RESERVED_NAMES:
+    if name in RESERVED_NAMES and not (existing and name == "usage"):
         raise ValueError(f"The alias '{name}' is reserved for a Tag command")
     return name
 
@@ -232,7 +233,7 @@ def suggest_name(installation_root: Path, workspace_name: str) -> str:
 
 
 def instance_path(installation_root: Path, tag_id: str) -> Path:
-    validate_name(tag_id)
+    validate_name(tag_id, existing=True)
     root = installation_root.expanduser().absolute()
     legacy = root / "instances" / tag_id
     candidate = data_home(root, tag_id)
@@ -328,8 +329,12 @@ def _create(installation_root: Path, tag_id: str, *, provisional: bool = False) 
         _write_metadata(path, tag_id, provisional=provisional)
         try:
             os.rename(staging, destination)
-        except FileExistsError:
-            raise ValueError(f"Tag '{tag_id}' already exists; its configuration was preserved") from None
+        except OSError as exc:
+            # macOS/Linux can report ENOTEMPTY instead of EEXIST when another
+            # creator publishes a nonempty home after our existence check.
+            if exc.errno in {errno.EEXIST, errno.ENOTEMPTY}:
+                raise ValueError(f"Tag '{tag_id}' already exists; its configuration was preserved") from None
+            raise
     finally:
         if staging.exists():
             shutil.rmtree(staging)
@@ -385,7 +390,7 @@ def discover(installation_root: Path) -> list[dict[str, object]]:
             "error": None,
         }
         try:
-            validate_name(entry.name)
+            validate_name(entry.name, existing=True)
             context = resolve(root, entry.name)
             item.update(home=str(context.home), valid=True)
         except (OSError, ValueError) as exc:

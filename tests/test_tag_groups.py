@@ -59,6 +59,40 @@ class TagGroupTests(unittest.TestCase):
         self.assertEqual(tag_config.load_config(home / "config/settings.json")["OPENTAG_BOT_NAME"], "Tag")
         self.assertIsNone(tag_instances.nickname(home))
 
+    def test_describe_changes_slack_first_then_saves_the_description(self) -> None:
+        home = self.add("t1-a1", "T1")
+        with patch.object(slack_manifest_migrations, "set_description", return_value=True) as slack:
+            code, output = self.cli("t1-a1", "describe", "  Answers launch questions ", "--json")
+        self.assertEqual(code, 0)
+        self.assertEqual(slack.call_args.args[2], "Answers launch questions")
+        self.assertEqual(slack.call_args.kwargs["retry"], 'tag t1-a1 describe "Answers launch questions"')
+        self.assertEqual(json.loads(output), {"schema_version": 1, "tag": "t1-a1",
+                                              "description": "Answers launch questions", "slack_changed": True})
+        self.assertEqual(tag_config.load_config(home / "config/settings.json")["OPENTAG_BOT_DESCRIPTION"], "Answers launch questions")
+
+    def test_describe_with_an_empty_description_clears_it(self) -> None:
+        home = self.add("t1-a1", "T1")
+        tag_config.update_config(home / "config/settings.json", {"OPENTAG_BOT_DESCRIPTION": "Old"})
+        with patch.object(slack_manifest_migrations, "set_description", return_value=True) as slack:
+            code, output = self.cli("t1-a1", "describe", "", "--json")
+        self.assertEqual(code, 0)
+        self.assertEqual(slack.call_args.args[2], "")
+        self.assertIsNone(json.loads(output)["description"])
+        self.assertEqual(tag_config.load_config(home / "config/settings.json").get("OPENTAG_BOT_DESCRIPTION", ""), "")
+
+    def test_describe_rejects_long_descriptions_before_touching_slack(self) -> None:
+        self.add("t1-a1", "T1")
+        with patch.object(slack_manifest_migrations, "set_description") as slack, self.assertRaisesRegex(ValueError, "140"):
+            self.cli("t1-a1", "describe", "x" * 141)
+        slack.assert_not_called()
+
+    def test_failed_slack_describe_changes_nothing_locally(self) -> None:
+        home = self.add("t1-a1", "T1")
+        with patch.object(slack_manifest_migrations, "set_description",
+                          side_effect=RuntimeError("run `slack login`")), self.assertRaises(RuntimeError):
+            self.cli("t1-a1", "describe", "New")
+        self.assertNotIn("OPENTAG_BOT_DESCRIPTION", tag_config.load_config(home / "config/settings.json"))
+
     def test_nicknames_never_collide_with_other_tags(self) -> None:
         self.add("t1-a1", "T1")
         self.add("t2-a2", "T2")
@@ -124,6 +158,24 @@ class TagGroupTests(unittest.TestCase):
 
 
 class SlackDisplayNameTests(unittest.TestCase):
+    def setUp(self) -> None:
+        delays = patch.object(slack_manifest_migrations, "VERIFY_DELAYS", (0.0, 0.0))
+        delays.start()
+        self.addCleanup(delays.stop)
+
+    def test_waits_for_slack_to_report_the_new_name(self) -> None:
+        before = {"display_information": {"name": "Tag"}, "features": {"bot_user": {"display_name": "Tag"}}}
+        after = {"display_information": {"name": "Research"}, "features": {"bot_user": {"display_name": "Research"}}}
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            slack_manifest_migrations.shutil, "which", return_value="/bin/slack"
+        ), patch.object(slack_manifest_migrations, "remote_manifest", side_effect=[before, before, after]), patch.object(
+            slack_manifest_migrations, "_migration_project", return_value=Path(directory)
+        ), patch.object(slack_manifest_migrations, "_sync_command", return_value=["sync"]), patch.object(
+            slack_manifest_migrations, "_run", return_value=subprocess.CompletedProcess([], 0)
+        ):
+            self.assertTrue(slack_manifest_migrations.set_display_name(
+                Path(directory), {"SLACK_TEAM_ID": "T1", "SLACK_APP_ID": "A1"}, "Research", retry="r"))
+
     def test_renames_app_and_bot_user_then_verifies(self) -> None:
         before = {"display_information": {"name": "Tag"}, "features": {"bot_user": {"display_name": "Tag"}}}
         after = {"display_information": {"name": "Research"}, "features": {"bot_user": {"display_name": "Research"}}}
@@ -152,6 +204,61 @@ class SlackDisplayNameTests(unittest.TestCase):
             slack_manifest_migrations.set_display_name(
                 Path(directory), {"SLACK_TEAM_ID": "T1", "SLACK_APP_ID": "A1"}, "Research", retry="tag x rename"
             )
+
+
+
+class SlackDescriptionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        delays = patch.object(slack_manifest_migrations, "VERIFY_DELAYS", (0.0, 0.0))
+        delays.start()
+        self.addCleanup(delays.stop)
+
+    def patched(self, directory: str, manifests: list[dict]):
+        from contextlib import ExitStack
+        stack = ExitStack()
+        stack.enter_context(patch.object(slack_manifest_migrations.shutil, "which", return_value="/bin/slack"))
+        stack.enter_context(patch.object(slack_manifest_migrations, "remote_manifest", side_effect=manifests))
+        project = stack.enter_context(patch.object(slack_manifest_migrations, "_migration_project", return_value=Path(directory)))
+        stack.enter_context(patch.object(slack_manifest_migrations, "_sync_command", return_value=["sync"]))
+        stack.enter_context(patch.object(slack_manifest_migrations, "_run", return_value=subprocess.CompletedProcess([], 0)))
+        return stack, project
+
+    def test_changes_the_app_description_then_verifies(self) -> None:
+        before = {"display_information": {"name": "Tag", "description": "Old"}}
+        after = {"display_information": {"name": "Tag", "description": "New"}}
+        with tempfile.TemporaryDirectory() as directory:
+            stack, project = self.patched(directory, [before, after])
+            with stack:
+                self.assertTrue(slack_manifest_migrations.set_description(
+                    Path(directory), {"SLACK_TEAM_ID": "T1", "SLACK_APP_ID": "A1"}, "New", retry="r"))
+        self.assertEqual(project.call_args.args[1]["display_information"], {"name": "Tag", "description": "New"})
+
+    def test_clearing_removes_the_description(self) -> None:
+        before = {"display_information": {"name": "Tag", "description": "Old"}}
+        after = {"display_information": {"name": "Tag"}}
+        with tempfile.TemporaryDirectory() as directory:
+            stack, project = self.patched(directory, [before, after])
+            with stack:
+                self.assertTrue(slack_manifest_migrations.set_description(
+                    Path(directory), {"SLACK_TEAM_ID": "T1", "SLACK_APP_ID": "A1"}, "", retry="r"))
+        self.assertEqual(project.call_args.args[1]["display_information"], {"name": "Tag"})
+
+    def test_an_unchanged_description_skips_slack(self) -> None:
+        same = {"display_information": {"description": "Same"}}
+        with tempfile.TemporaryDirectory() as directory:
+            stack, project = self.patched(directory, [same])
+            with stack:
+                self.assertFalse(slack_manifest_migrations.set_description(
+                    Path(directory), {"SLACK_TEAM_ID": "T1", "SLACK_APP_ID": "A1"}, "Same", retry="r"))
+        project.assert_not_called()
+
+    def test_unsaved_description_is_reported_with_the_retry_command(self) -> None:
+        unchanged = {"display_information": {"description": "Old"}}
+        with tempfile.TemporaryDirectory() as directory:
+            stack, _ = self.patched(directory, [unchanged] * 4)
+            with stack, self.assertRaisesRegex(RuntimeError, "retry `tag x describe`"):
+                slack_manifest_migrations.set_description(
+                    Path(directory), {"SLACK_TEAM_ID": "T1", "SLACK_APP_ID": "A1"}, "New", retry="tag x describe")
 
 
 if __name__ == "__main__":

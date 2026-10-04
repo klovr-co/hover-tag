@@ -2,17 +2,21 @@
 // which tests/test_app_protocol.py checks real CLI output against.
 import { describe, expect, it } from "vitest";
 import list from "../../../protocol/examples/list.json";
+import logs from "../../../protocol/examples/logs.json";
+import aiStatus from "../../../protocol/examples/ai-status.json";
 import version from "../../../protocol/examples/version.json";
 import progress from "../../../protocol/examples/install-progress.txt?raw";
 import setup from "../../../protocol/examples/setup.jsonl?raw";
 import { fraction, initialInstall, installReducer } from "./install";
 import {
-  compatibility, groups, INSTALL_STEPS, parseList, parseProgressLine, parseSetupLine, personMatches, status, title,
+  compatibility, groups, INSTALL_STEPS, parseList, parseProgressLine, parseSetupLine, status, title,
   type VersionInfo,
 } from "./protocol";
-import { explainExit, initialSetup, setupReducer } from "./setup";
+import { explainExit, initialSetup, setupReducer, trackStep } from "./setup";
 import { droppedTags, failureLine } from "./tags";
 import { workingFolder } from "../components/Home";
+import { modelText, quietLine, rowLine, type ActivityItem } from "./home";
+import { parseStatus } from "./ai";
 
 describe("tag list", () => {
   it("reads the example, even after warnings", () => {
@@ -25,6 +29,20 @@ describe("tag list", () => {
     const rows = parseList(JSON.stringify(list));
     expect(groups(rows).map((g) => g.label)).toEqual(["Klovr", "Acme Inc"]);
     expect(groups([{ id: "x", valid: true }])[0].label).toBe("Not connected yet");
+  });
+
+  it("uses the Slack workspace icon when Tag has saved one", () => {
+    const rows = parseList(JSON.stringify(list));
+    expect(groups(rows).map((g) => g.icon)).toEqual(["/Users/maya/Tag/t0klovr1-a0maya01/.tag/state/workspace-icon.png", null]);
+    expect(groups([{ id: "a", valid: true, slack_workspace: "T1" }, { id: "b", valid: true, slack_workspace: "T1", workspace_icon: "/b.png" }])[0].icon).toBe("/b.png");
+  });
+
+  it("reads each Tag's description, model and thinking level for Home's rows", () => {
+    const [maya, unfinished] = parseList(JSON.stringify(list));
+    expect(modelText(maya)).toEqual({ text: "GPT-5.5 · med", model: "GPT-5.5", effort: "medium" });
+    expect(rowLine(maya, null, "")).toEqual({ kind: "description", text: "I'm Maya's personal assistant. I help with launch work." });
+    expect(unfinished.description).toBeNull();
+    expect(unfinished.default_effort).toBeNull();
   });
 
   it("treats unknown states as needing attention", () => {
@@ -55,18 +73,36 @@ describe("setup", () => {
     expect(parseSetupLine("{not json")).toBeNull();
   });
 
-  it("walks the example conversation to a finished Tag", () => {
+  it("walks the example conversation to a finished Tag, in onboarding order", () => {
     let state = initialSetup;
-    for (const line of lines) state = setupReducer(state, { type: "line", line });
-    expect(state).toMatchObject({ outcome: "complete", tag: "t0klovr1-a0maya01", question: null });
+    const asked: string[] = [];
+    const steps: number[] = [];
+    for (const line of lines) {
+      state = setupReducer(state, { type: "line", line });
+      if (state.question && asked.at(-1) !== state.question.id) { asked.push(state.question.id); steps.push(trackStep(state)); }
+    }
+    expect(asked).toEqual(["profile", "default_model", "workspace", "approve_setup", "channels"]);
+    expect(steps).toEqual([0, 1, 2, 3, 4]);
+    expect(asked).not.toContain("person");
+    expect(state).toMatchObject({ outcome: "complete", tag: "t0bnd7v5j2w-a0maya01", question: null,
+      ready: { team: "T0BND7V5J2W", app_id: "A0MAYA01" }, profile: { name: "Maya's Tag" } });
+  });
+
+  it("shows creating the Slack app as its own steps, apart from agent sign-in", () => {
+    let state = initialSetup;
+    for (const line of lines.filter((l) => l.includes('"progress"'))) state = setupReducer(state, { type: "line", line });
+    expect(state.creating?.map((s) => s.step)).toEqual(["create", "picture", "install", "connect"]);
+    expect(state.signIn.backend).toBeNull();
   });
 
   it("stays on the code step when Slack refuses a code", () => {
-    let state = setupReducer(initialSetup, { type: "line", line: lines[1] });
+    const login = JSON.stringify({ type: "question", id: "slack_login", kind: "slack_login", prompt: "Sign in to Slack",
+      sign_in_line: "/slackauthticket ABC123", can_go_back: false });
+    let state = setupReducer(initialSetup, { type: "line", line: login });
     state = setupReducer(state, { type: "signIn", step: 2 });
     state = setupReducer(state, { type: "answered" });
     expect(state.question?.kind).toBe("slack_login");
-    state = setupReducer(state, { type: "line", line: lines[1] });
+    state = setupReducer(state, { type: "line", line: login });
     expect(state.signInStep).toBe(2);
     expect(state.error).toMatch(/didn't accept/);
   });
@@ -78,12 +114,6 @@ describe("setup", () => {
     state = setupReducer(initialSetup, { type: "line", line: lines.at(-1)! });
     expect(setupReducer(state, { type: "exit", code: 0, stderr: "" }).outcome).toBe("complete");
     expect(explainExit("")).toMatch(/terminal/);
-  });
-
-  it("searches people by name, username, or ID", () => {
-    const person = { id: "U123", name: "Jamie Chen", username: "jchen" };
-    expect(["  JAMIE ", "jchen", "u123", ""].every((q) => personMatches(person, q))).toBe(true);
-    expect(personMatches(person, "missing")).toBe(false);
   });
 });
 
@@ -137,4 +167,35 @@ describe("tags", () => {
     expect(failureLine({ code: 1, stdout: "", stderr: "Traceback\nError: Slack refused\n" }, "x")).toBe("Slack refused");
     expect(failureLine({ code: 1, stdout: "", stderr: "" }, "fallback")).toBe("fallback");
   });
+});
+
+describe("tag logs activity", () => {
+  it("finds the latest reply for Home's quiet line", () => {
+    const rows = parseList(JSON.stringify(list));
+    const activity = { [rows[0].id]: logs.activity as ActivityItem[] };
+    const latest = new Date(logs.activity[0].at);
+    const line = quietLine([...rows, rows[0], rows[0]], {}, activity, latest, "Maya");
+    expect(line).toMatchObject({ kind: "reply", name: "Maya's Tag", today: true, place: "#launch" });
+  });
+});
+
+describe("tag settings ai", () => {
+  it("reads the thinking level beside the default model", () => {
+    const report = parseStatus(JSON.stringify(aiStatus));
+    expect(report.default_effort).toBe("medium");
+    expect(report.effort_levels).toContain("high");
+    expect(typeof report.effort_chosen).toBe("boolean");
+  });
+});
+
+
+it("keeps setup progress on the last question during transitions and errors", () => {
+  expect(trackStep(initialSetup)).toBe(0);
+  for (const [id, step] of [["profile", 0], ["default_model", 1], ["workspace", 2], ["approve_setup", 3], ["channels", 4]] as const) {
+    let state = setupReducer(initialSetup, { type: "line", line: JSON.stringify({ type: "question", kind: "choose", id, prompt: id }) });
+    state = setupReducer(state, { type: "answered" });
+    expect(trackStep(state)).toBe(step);
+    state = setupReducer(state, { type: "exit", code: 1, stderr: "Interrupted" });
+    expect(trackStep(state)).toBe(step);
+  }
 });

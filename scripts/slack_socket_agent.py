@@ -19,7 +19,7 @@ import urllib.error
 import urllib.request
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +31,18 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 try:
     from . import slack_identity
+    from .agent_models import (
+        BACKEND_NAMES,
+        DEFAULT_REASONING_EFFORTS,
+        SUPPORTED_REASONING_EFFORTS,
+        CodexModelOption,
+        ModelOption,
+        backend_display_name,
+        discover_tag_models,
+        model_names_path,
+        remember_model_names,
+        rich_events_selected,
+    )
     from .opentag_process_env import backend_environment
     from .tag_error_reporting import (
         COMMUNITY_INVITE_URL,
@@ -49,6 +61,7 @@ try:
     from .slack_mrkdwn import to_mrkdwn
     from .slack_search_scope import ScopePlan, SearchIntent, plan_search_scopes
     from .tag_activity import ACTIVITY_DETAIL_ACTION_ID, PUBLIC_LABELS, ActivityStore, activity_detail_modal, activity_modal
+    from .agent_summary import queue_reply_summary
     from .tag_activity_details import sanitize_activity_details
     from .tag_approval_choices import sanitize_review_details
     from .tag_activity_labels import activity_title_for_status, readable_activity_title
@@ -56,6 +69,18 @@ try:
     from . import slack_channels
 except ImportError:  # Direct script execution does not create a package context.
     import slack_identity
+    from agent_models import (
+        BACKEND_NAMES,
+        DEFAULT_REASONING_EFFORTS,
+        SUPPORTED_REASONING_EFFORTS,
+        CodexModelOption,
+        ModelOption,
+        backend_display_name,
+        discover_tag_models,
+        model_names_path,
+        remember_model_names,
+        rich_events_selected,
+    )
     from opentag_process_env import backend_environment
     from tag_error_reporting import (
         COMMUNITY_INVITE_URL,
@@ -74,6 +99,7 @@ except ImportError:  # Direct script execution does not create a package context
     from slack_mrkdwn import to_mrkdwn
     from slack_search_scope import ScopePlan, SearchIntent, plan_search_scopes
     from tag_activity import ACTIVITY_DETAIL_ACTION_ID, PUBLIC_LABELS, ActivityStore, activity_detail_modal, activity_modal
+    from agent_summary import queue_reply_summary
     from tag_activity_details import sanitize_activity_details
     from tag_approval_choices import sanitize_review_details
     from tag_activity_labels import activity_title_for_status, readable_activity_title
@@ -102,9 +128,6 @@ ACTIVITY_WAIT_SECONDS = 12.0
 CANCEL_GRACE_SECONDS = 6.0
 STATUS_REFRESH_SECONDS = 90
 STATUS_CLEANUP_RETRY_DELAYS = (2, 5, 15, 30, 60, 90, 90, 90)
-SUPPORTED_REASONING_EFFORTS = ("minimal", "low", "medium", "high", "xhigh", "max", "ultra")
-DEFAULT_REASONING_EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultra")
-DEFAULT_CONFIG_VALUE = "__opentag_default__"
 ACTIVITY_ACTION_ID = "opentag_view_activity"
 SHOW_ACTIVITY_DETAILS = False
 SETTINGS_ACTION_ID = "opentag_change_agent_settings"
@@ -212,190 +235,11 @@ GENERATED_IMAGE_MIME_TYPES = {
 
 
 @dataclass(frozen=True)
-class CodexModelOption:
-    model_id: str
-    label: str
-    reasoning_efforts: tuple[str, ...]
-    supports_fast_mode: bool = False
-    default_reasoning_effort: str | None = None
-    is_default: bool = False
-    default_fast_mode: bool = False
-
-
-@dataclass(frozen=True)
 class AgentSettings:
     model: str | None = None
     reasoning_effort: str | None = None
     fast_mode: bool | None = None
-
-
-def codex_models_cache_path() -> Path:
-    codex_home = Path(os.getenv("CODEX_HOME", str(Path.home() / ".codex"))).expanduser()
-    return codex_home / "models_cache.json"
-
-
-def tag_codex_config_path() -> Path:
-    """Return the project-local Codex configuration owned by Tag."""
-    workdir = Path(os.getenv("OPENTAG_WORKDIR", str(Path.cwd()))).expanduser()
-    return workdir / ".codex" / "config.toml"
-
-
-def read_codex_config(path: Path) -> dict[str, Any]:
-    try:
-        try:
-            import tomllib
-        except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 runtime
-            import tomli as tomllib
-        with path.open("rb") as handle:
-            config = tomllib.load(handle)
-        return config if isinstance(config, dict) else {}
-    except (OSError, TypeError, ValueError):
-        return {}
-
-
-def configured_codex_defaults() -> tuple[str | None, str | None, bool]:
-    """Layer Tag's model defaults over the user's global Codex defaults."""
-    global_config = read_codex_config(codex_models_cache_path().with_name("config.toml"))
-    tag_config = read_codex_config(tag_codex_config_path())
-
-    def layered_value(key: str, validator: Callable[[Any], bool]) -> Any:
-        local = tag_config.get(key)
-        if validator(local):
-            return local
-        global_value = global_config.get(key)
-        return global_value if validator(global_value) else None
-
-    model = layered_value("model", lambda value: isinstance(value, str) and bool(value))
-    effort = layered_value(
-        "model_reasoning_effort",
-        lambda value: isinstance(value, str) and value in SUPPORTED_REASONING_EFFORTS,
-    )
-    service_tier = layered_value(
-        "service_tier",
-        lambda value: isinstance(value, str)
-        and value in {"default", "fast", "priority"},
-    )
-    return (
-        model,
-        effort,
-        service_tier in {"fast", "priority"},
-    )
-
-
-def fetch_codex_model_catalog() -> list[dict[str, Any]] | None:
-    """Use the installed Codex account's catalog, not another client's shared cache."""
-    try:
-        from .codex_app_server import CodexAppServer, CodexAppServerError
-    except ImportError:
-        from codex_app_server import CodexAppServer, CodexAppServerError
-    try:
-        return CodexAppServer(["codex", "app-server"], cwd=default_workdir(), timeout=10).model_catalog()
-    except (CodexAppServerError, OSError, ValueError):
-        return None
-
-
-def discover_codex_models() -> list[CodexModelOption]:
-    """Prefer live account metadata; cached ordering never establishes a default."""
-    configured = [
-        value.strip()
-        for value in os.getenv("OPENTAG_CODEX_MODELS", "").split(",")
-        if value.strip()
-    ]
-    configured_model, configured_effort, configured_fast_mode = configured_codex_defaults()
-    discovered: dict[str, CodexModelOption] = {}
-    live_models = fetch_codex_model_catalog()
-    try:
-        if live_models is not None:
-            payload = {"models": [{
-                "slug": item.get("model"), "display_name": item.get("displayName"),
-                "visibility": "hide" if item.get("hidden") else "list",
-                "is_default": item.get("isDefault") is True,
-                "default_reasoning_level": item.get("defaultReasoningEffort"),
-                "additional_speed_tiers": item.get("additionalSpeedTiers", []),
-                "supported_reasoning_levels": [
-                    {"effort": level.get("reasoningEffort")}
-                    for level in (item.get("supportedReasoningEfforts")
-                                  if isinstance(item.get("supportedReasoningEfforts"), list) else [])
-                    if isinstance(level, dict)
-                ],
-            } for item in live_models]}
-        else:
-            payload = json.loads(codex_models_cache_path().read_text(encoding="utf-8"))
-        if not isinstance(payload, dict):
-            payload = {}
-        raw_models = [
-            raw_model
-            for raw_model in payload.get("models", [])
-            if isinstance(raw_model, dict)
-            and raw_model.get("visibility") != "hide"
-            and isinstance(raw_model.get("slug"), str)
-            and raw_model.get("slug")
-        ]
-        fallback_default = next((item["slug"] for item in raw_models
-                                 if live_models is not None and item.get("is_default")), None)
-        default_model = configured_model or fallback_default
-        for raw_model in raw_models:
-            if not isinstance(raw_model, dict) or raw_model.get("visibility") == "hide":
-                continue
-            model_id = raw_model.get("slug")
-            if not isinstance(model_id, str) or not model_id:
-                continue
-            efforts = tuple(
-                item["effort"]
-                for item in raw_model.get("supported_reasoning_levels", [])
-                if isinstance(item, dict) and isinstance(item.get("effort"), str)
-            )
-            speed_tiers = raw_model.get("additional_speed_tiers", [])
-            if not isinstance(speed_tiers, list):
-                speed_tiers = []
-            catalog_effort = raw_model.get("default_reasoning_level")
-            is_default = model_id == default_model
-            default_effort = configured_effort if is_default and configured_effort else catalog_effort
-            discovered[model_id] = CodexModelOption(
-                model_id=model_id,
-                label=str(raw_model.get("display_name") or model_id),
-                reasoning_efforts=efforts or DEFAULT_REASONING_EFFORTS,
-                supports_fast_mode="fast" in speed_tiers,
-                default_reasoning_effort=(
-                    default_effort
-                    if isinstance(default_effort, str)
-                    and default_effort in SUPPORTED_REASONING_EFFORTS
-                    else None
-                ),
-                is_default=is_default,
-                default_fast_mode=configured_fast_mode,
-            )
-    except (OSError, ValueError, TypeError):
-        pass
-
-    if configured_model and configured_model not in discovered:
-        discovered[configured_model] = CodexModelOption(
-            configured_model, configured_model, DEFAULT_REASONING_EFFORTS,
-            default_reasoning_effort=configured_effort, is_default=True,
-            default_fast_mode=configured_fast_mode,
-        )
-
-    if configured:
-        options = [
-            discovered.get(
-                model_id,
-                CodexModelOption(
-                    model_id,
-                    model_id,
-                    DEFAULT_REASONING_EFFORTS,
-                    default_reasoning_effort=(
-                        configured_effort if model_id == configured_model else None
-                    ),
-                    is_default=model_id == configured_model,
-                    default_fast_mode=configured_fast_mode,
-                ),
-            )
-            for model_id in configured
-        ]
-        if not any(option.is_default for option in options):
-            options[0] = replace(options[0], is_default=True)
-        return options
-    return list(discovered.values())
+    backend: str | None = None
 
 
 def configured_reasoning_efforts() -> tuple[str, ...]:
@@ -407,124 +251,154 @@ def configured_reasoning_efforts() -> tuple[str, ...]:
     return configured or DEFAULT_REASONING_EFFORTS
 
 
-def efforts_for_model(model: str | None, models: list[CodexModelOption]) -> tuple[str, ...]:
-    allowed = set(configured_reasoning_efforts())
+def find_model(
+    model: str | None,
+    models: list[ModelOption],
+    backend: str | None = None,
+) -> ModelOption | None:
+    if model is None:
+        return None
+    return next(
+        (item for item in models if item.model_id == model and backend in {None, item.backend}),
+        None,
+    )
+
+
+def efforts_for_model(
+    model: str | None,
+    models: list[ModelOption],
+    backend: str | None = None,
+) -> tuple[str, ...]:
+    available = configured_reasoning_efforts() if backend in {None, "codex"} else SUPPORTED_REASONING_EFFORTS
+    allowed = set(available)
     if model:
-        selected = next((item for item in models if item.model_id == model), None)
+        selected = find_model(model, models, backend)
         if selected:
             return tuple(effort for effort in selected.reasoning_efforts if effort in allowed)
-    discovered = {effort for item in models for effort in item.reasoning_efforts}
-    return tuple(effort for effort in configured_reasoning_efforts() if not discovered or effort in discovered)
+    scoped = [item for item in models if backend in {None, item.backend}]
+    discovered = {effort for item in scoped for effort in item.reasoning_efforts}
+    return tuple(effort for effort in available if not discovered or effort in discovered)
 
 
-def fast_mode_available(model: str | None, models: list[CodexModelOption]) -> bool:
-    """Let Codex validate its configured default; validate explicit models locally."""
+def fast_mode_available(
+    model: str | None,
+    models: list[ModelOption],
+    backend: str | None = None,
+) -> bool:
+    """Let the backend validate its configured default; validate explicit models locally."""
     if model is None:
         return True
-    selected = next((item for item in models if item.model_id == model), None)
+    selected = find_model(model, models, backend)
     return bool(selected and selected.supports_fast_mode)
 
 
-def default_agent_settings(models: list[CodexModelOption]) -> AgentSettings:
+def model_default_effort(selected: ModelOption, efforts: tuple[str, ...]) -> str | None:
+    """The Tag's level for its default model, or the model's own when operators don't offer it."""
+    effort = selected.default_reasoning_effort
+    if effort not in efforts and selected.tag_effort_applied:
+        return selected.model_reasoning_effort
+    return effort
+
+
+def default_agent_settings(models: list[ModelOption]) -> AgentSettings:
     if not models:
         return AgentSettings()
     selected = next((item for item in models if item.is_default), None)
     if selected is None:
-        return AgentSettings()
-    efforts = efforts_for_model(selected.model_id, models)
-    effort = selected.default_reasoning_effort
+        return AgentSettings(backend=models[0].backend)
+    efforts = efforts_for_model(selected.model_id, models, selected.backend)
+    effort = model_default_effort(selected, efforts)
     if effort not in efforts:
         effort = efforts[0] if efforts else None
     return AgentSettings(
         model=selected.model_id,
         reasoning_effort=effort,
         fast_mode=selected.default_fast_mode and selected.supports_fast_mode,
+        backend=selected.backend,
     )
 
 
 def default_effort_for_model(
     model: str | None,
-    models: list[CodexModelOption],
+    models: list[ModelOption],
+    backend: str | None = None,
 ) -> str | None:
-    selected = next((item for item in models if item.model_id == model), None)
-    efforts = efforts_for_model(model, models)
-    if selected and selected.default_reasoning_effort in efforts:
-        return selected.default_reasoning_effort
+    selected = find_model(model, models, backend)
+    efforts = efforts_for_model(model, models, backend)
+    if selected and model_default_effort(selected, efforts) in efforts:
+        return model_default_effort(selected, efforts)
     return efforts[0] if efforts else None
 
 
 def normalize_settings(
     settings: AgentSettings,
-    models: list[CodexModelOption],
+    models: list[ModelOption],
 ) -> AgentSettings:
-    known_models = {item.model_id for item in models}
     defaults = default_agent_settings(models)
-    model_is_valid = settings.model is None or settings.model in known_models
-    model = settings.model if settings.model in known_models else defaults.model
-    efforts = efforts_for_model(model, models)
+    selected = find_model(settings.model, models, settings.backend)
+    backend_known = settings.backend is None or any(item.backend == settings.backend for item in models)
+    model_is_valid = (settings.model is None and backend_known) or selected is not None
+    if selected is not None:
+        model, backend = selected.model_id, selected.backend
+    else:
+        model, backend = defaults.model, defaults.backend
+    efforts = efforts_for_model(model, models, backend)
     effort = (
         settings.reasoning_effort
         if settings.reasoning_effort in efforts
-        else default_effort_for_model(model, models)
+        else default_effort_for_model(model, models, backend)
     )
     requested_fast_mode = defaults.fast_mode if settings.fast_mode is None else settings.fast_mode
     fast_mode = bool(
         requested_fast_mode
         and model_is_valid
-        and fast_mode_available(model, models)
+        and fast_mode_available(model, models, backend)
     )
-    return AgentSettings(model=model, reasoning_effort=effort, fast_mode=fast_mode)
+    return AgentSettings(model=model, reasoning_effort=effort, fast_mode=fast_mode, backend=backend)
 
 
-class UserAgentSettingsStore:
-    """Persist model choices by Slack user so they follow future requests."""
+def retire_slack_settings(path: Path | None = None) -> None:
+    """Migration v1: archive per-user overrides before accepting Slack requests."""
+    try:
+        from .tag_locks import LifecycleLock
+        from .tag_config import save_config
+    except ImportError:
+        from tag_locks import LifecycleLock
+        from tag_config import save_config
+    path = path or Path(os.getenv(
+        "OPENTAG_SLACK_SETTINGS_FILE",
+        str(skill_dir() / ".runtime" / "slack-user-settings.json"),
+    )).expanduser()
+    backup = path.with_name(path.name + ".retired-v1")
+    marker = path.with_name(path.name + ".retired-v1.complete.json")
+    if not path.exists() and not backup.exists():
+        return
+    with LifecycleLock(path.with_name(path.name + ".migration.lock")):
+        if path.exists():
+            original = path.read_bytes()
+            if backup.exists():
+                if backup.read_bytes() != original:
+                    raise RuntimeError("Slack settings retirement found conflicting backups; preserve both files before retrying.")
+                path.unlink()
+            else:
+                path.replace(backup)
+            if path.exists() or backup.read_bytes() != original:
+                raise RuntimeError("Slack settings retirement verification failed; retry startup.")
+        if not marker.exists():
+            save_config(marker, {"version": "1"})
 
-    def __init__(self, path: Path | None = None) -> None:
-        self.path = path or Path(
-            os.getenv(
-                "OPENTAG_SLACK_SETTINGS_FILE",
-                str(skill_dir() / ".runtime" / "slack-user-settings.json"),
-            )
-        ).expanduser()
-        self.lock = threading.Lock()
 
-    @staticmethod
-    def key(team: str, user_id: str) -> str:
-        return f"{team}:{user_id}"
+def retired_settings_modal() -> dict[str, Any]:
+    return {
+        "type": "modal",
+        "title": {"type": "plain_text", "text": "Model settings moved"},
+        "close": {"type": "plain_text", "text": "Close"},
+        "blocks": [{"type": "section", "text": {
+            "type": "mrkdwn",
+            "text": "Choose this Tag's model and thinking level in Tag.app → Details, or with `tag NAME settings ai`. All Slack requests use those settings.",
+        }}],
+    }
 
-    def _read(self) -> dict[str, dict[str, str | bool | None]]:
-        try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
-            return payload if isinstance(payload, dict) else {}
-        except (OSError, ValueError, TypeError):
-            return {}
-
-    def get(self, team: str, user_id: str) -> AgentSettings:
-        with self.lock:
-            raw = self._read().get(self.key(team, user_id), {})
-        if not isinstance(raw, dict):
-            raw = {}
-        model = raw.get("model")
-        effort = raw.get("reasoning_effort")
-        fast_mode = raw.get("fast_mode")
-        return AgentSettings(
-            model=model if isinstance(model, str) else None,
-            reasoning_effort=effort if isinstance(effort, str) else None,
-            fast_mode=fast_mode if isinstance(fast_mode, bool) else None,
-        )
-
-    def set(self, team: str, user_id: str, settings: AgentSettings) -> None:
-        with self.lock:
-            payload = self._read()
-            payload[self.key(team, user_id)] = {
-                "model": settings.model,
-                "reasoning_effort": settings.reasoning_effort,
-                "fast_mode": settings.fast_mode,
-            }
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            temporary = self.path.with_suffix(self.path.suffix + ".tmp")
-            temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-            os.replace(temporary, self.path)
 
 def attachment_text(value: Any) -> str:
     """Normalize a legacy Slack attachment value without letting it dominate a prompt."""
@@ -841,21 +715,41 @@ def upload_generated_images(
     channel: str,
     thread_ts: str,
     results_dir: Path,
+    *,
+    artifacts: list[dict[str, str]] | None = None,
 ) -> list[str]:
     """Upload validated backend image results into the originating Slack thread."""
     images, errors = collect_generated_images(results_dir)
     for path in images:
+        artifact = {"name": path.name, "kind": "image", "delivery": "upload_failed"}
+        if artifacts is not None:
+            artifacts.append(artifact)
         try:
-            client.files_upload_v2(
+            response = client.files_upload_v2(
                 channel=channel,
                 thread_ts=thread_ts,
                 file=str(path),
                 filename=path.name,
                 title=path.stem,
             )
+            artifact["delivery"] = "uploaded"
+            if url := uploaded_file_permalink(response):
+                artifact["url"] = url
         except Exception as exc:  # noqa: BLE001 - upload failures must not hide the text answer
             errors.append(f"{path.name}: {exc}")
     return errors
+
+
+def uploaded_file_permalink(response: Any) -> str | None:
+    """Use the provider's file link, never a temporary authenticated download URL."""
+    if not hasattr(response, "get"):
+        return None
+    files = response.get("files")
+    files = list(files) if isinstance(files, list) else []
+    if isinstance(response.get("file"), dict):
+        files.append(response.get("file"))
+    return next((item["permalink"] for item in files if isinstance(item, dict)
+                 and isinstance(item.get("permalink"), str) and item["permalink"]), None)
 
 
 def select_request_files(
@@ -992,72 +886,76 @@ def friendly_effort(effort: str | None) -> str:
     return effort or "Default thinking"
 
 
-def model_label(model: str | None, models: list[CodexModelOption]) -> str:
+def model_label(model: str | None, models: list[ModelOption], backend: str | None = None) -> str:
     if model is None:
         return "Default model"
-    option = next((item for item in models if item.model_id == model), None)
+    option = find_model(model, models, backend)
     return option.label if option else model
 
 
-def settings_context(
+def format_duration(seconds: float) -> str:
+    seconds = max(0, int(round(seconds)))
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, seconds = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m {seconds}s" if seconds else f"{minutes}m"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h {minutes}m" if minutes else f"{hours}h"
+
+
+def reported_model_option(model: str, models: list[ModelOption], backend: str) -> ModelOption | None:
+    """Find the backend-reported model, preferring a catalog name over an alias entry."""
+    matches = [
+        item for item in models
+        if item.backend == backend and model in {item.model_id, item.resolved_model}
+    ]
+    exact = next((item for item in matches if item.model_id == model), None)
+    named = next((item for item in matches if item.model_id != "default"), None)
+    return exact or named
+
+
+def reported_model_label(model: str, models: list[ModelOption], backend: str) -> str:
+    option = reported_model_option(model, models, backend)
+    return option.label if option else model
+
+
+def run_summary_blocks(
     settings: AgentSettings,
-    models: list[CodexModelOption],
-) -> str:
-    fast_label = "Fast mode on" if settings.fast_mode else "Fast mode off"
-    return (
-        f"Codex · {model_label(settings.model, models)} · "
-        f"{friendly_effort(settings.reasoning_effort)} · {fast_label}"
-    )
-
-
-def settings_button_blocks(
+    models: list[ModelOption],
+    backend: str,
+    seconds: float,
     *,
-    team: str,
-    channel: str,
-    thread_ts: str,
-    direct_message: bool = False,
-    activity_run_id: str | None = None,
+    outcome: str = "completed",
+    reported_model: str | None = None,
+    reported_effort: str | None = None,
 ) -> list[dict[str, Any]]:
-    metadata = {"team": team, "channel": channel, "thread_ts": thread_ts}
-    if direct_message:
-        metadata["direct_message"] = True
-    value = json.dumps(metadata, separators=(",", ":"))
-    elements = [
-        {
-            "type": "button",
-            "action_id": SETTINGS_ACTION_ID,
-            "text": {"type": "plain_text", "text": "Configure"},
-            "value": value,
-        }
-    ]
-    if SHOW_ACTIVITY_DETAILS and activity_run_id:
-        elements.append({
-            "type": "button",
-            "action_id": ACTIVITY_ACTION_ID,
-            "text": {"type": "plain_text", "text": "Activity"},
-            "value": json.dumps({**metadata, "run_id": activity_run_id}, separators=(",", ":")),
-        })
-    return [
-        {
-            "type": "actions",
-            "block_id": f"opentag_settings_{thread_ts}",
-            "elements": elements,
-        },
-    ]
-
-
-def combine_reply_actions(
-    artifact_blocks: list[dict[str, Any]],
-    settings_blocks: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Place Configure beside file actions when one Slack actions block has room."""
-    if (
-        artifact_blocks
-        and len(artifact_blocks[-1]["elements"]) + len(settings_blocks[0]["elements"]) <= 25
-    ):
-        artifact_blocks[-1]["elements"].extend(settings_blocks[0]["elements"])
-        return artifact_blocks
-    return artifact_blocks + settings_blocks
+    """Show which model answered, its thinking level, and how long the request took."""
+    model = settings.model
+    reported_option = reported_model_option(reported_model, models, backend) if reported_model else None
+    option = reported_option or (find_model(model, models, backend) if model else None)
+    if reported_model:
+        label = reported_option.label if reported_option else reported_model
+    elif model in {None, "default"}:
+        label = "default model"
+    else:
+        label = model_label(model, models, backend)
+    parts = [backend_display_name(backend), label]
+    effort = (
+        settings.reasoning_effort
+        or reported_effort
+        or (option.default_reasoning_effort if option else None)
+    )
+    if effort:
+        parts.append(f"{effort} thinking")
+    elif option is None or option.reasoning_efforts:
+        # Models known to have no thinking levels, such as Haiku, show none.
+        parts.append("default thinking")
+    if settings.fast_mode:
+        parts.append("Fast mode")
+    timing = format_duration(seconds)
+    parts.append({"stopped": f"stopped after {timing}", "failed": f"failed after {timing}"}.get(outcome, timing))
+    return [{"type": "context", "elements": [{"type": "mrkdwn", "text": " · ".join(parts)}]}]
 
 
 def activity_button_blocks(
@@ -1211,155 +1109,6 @@ def settings_action_value(action: dict[str, Any]) -> str:
     if isinstance(value, str):
         return value
     raise ValueError("Settings action has no value")
-
-
-def select_option(value: str, text: str, description: str | None = None) -> dict[str, Any]:
-    option: dict[str, Any] = {
-        "text": {"type": "plain_text", "text": text[:75]},
-        "value": value,
-    }
-    if description:
-        option["description"] = {"type": "plain_text", "text": description[:75]}
-    return option
-
-
-def settings_modal(
-    *,
-    metadata: dict[str, Any],
-    settings: AgentSettings,
-    models: list[CodexModelOption],
-    revision: str = "",
-) -> dict[str, Any]:
-    block_suffix = f"_{revision}" if revision else ""
-    normalized = normalize_settings(settings, models)
-    model_options = [select_option(item.model_id, item.label) for item in models]
-    if normalized.model is None and model_options:
-        model_options.insert(0, select_option(DEFAULT_CONFIG_VALUE, "Codex default"))
-    if not model_options:
-        model_options = [select_option(DEFAULT_CONFIG_VALUE, "No models available")]
-    selected_model = normalized.model
-    efforts = efforts_for_model(selected_model, models)
-    effort_options = [select_option(effort, friendly_effort(effort)) for effort in efforts]
-    if not effort_options:
-        effort_options = [select_option(DEFAULT_CONFIG_VALUE, "No thinking levels available")]
-    selected_effort = normalized.reasoning_effort
-    fast_available = fast_mode_available(selected_model, models)
-    fast_option = select_option(
-        "on",
-        "Enable Fast mode",
-        "Faster responses with increased usage",
-    )
-    fast_element: dict[str, Any] = {
-        "type": "checkboxes",
-        "action_id": SETTINGS_FAST_ACTION_ID,
-        "options": [fast_option],
-    }
-    if normalized.fast_mode and fast_available:
-        fast_element["initial_options"] = [fast_option]
-    fast_block: dict[str, Any]
-    if fast_available:
-        fast_block = {
-            "type": "section",
-            "block_id": f"fast_mode{block_suffix}",
-            "text": {"type": "mrkdwn", "text": "*Speed*"},
-            "accessory": fast_element,
-        }
-    else:
-        fast_block = {
-            "type": "context",
-            "elements": [
-                {
-                    "type": "mrkdwn",
-                    "text": "Fast mode is unavailable for this model.",
-                }
-            ],
-        }
-    return {
-        "type": "modal",
-        "callback_id": SETTINGS_VIEW_ID,
-        "private_metadata": json.dumps(metadata, separators=(",", ":")),
-        "title": {"type": "plain_text", "text": "Codex settings"},
-        "submit": {"type": "plain_text", "text": "Save"},
-        "close": {"type": "plain_text", "text": "Cancel"},
-        "blocks": [
-            {
-                "type": "input",
-                "block_id": f"model{block_suffix}",
-                "dispatch_action": True,
-                "label": {"type": "plain_text", "text": "Model"},
-                "element": {
-                    "type": "static_select",
-                    "action_id": SETTINGS_MODEL_ACTION_ID,
-                    "options": model_options,
-                    "initial_option": next(
-                        option
-                        for option in model_options
-                        if option["value"] == (selected_model or DEFAULT_CONFIG_VALUE)
-                    ),
-                },
-            },
-            {
-                "type": "input",
-                "block_id": f"reasoning_effort{block_suffix}",
-                "label": {"type": "plain_text", "text": "Thinking"},
-                "element": {
-                    "type": "static_select",
-                    "action_id": SETTINGS_EFFORT_ACTION_ID,
-                    "options": effort_options,
-                    "initial_option": next(
-                        option
-                        for option in effort_options
-                        if option["value"] == (selected_effort or DEFAULT_CONFIG_VALUE)
-                    ),
-                },
-            },
-            fast_block,
-            {
-                "type": "section",
-                "block_id": "reset_settings",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": "_Applies to your future Slack requests._",
-                },
-                "accessory": {
-                    "type": "button",
-                    "action_id": SETTINGS_RESET_ACTION_ID,
-                    "text": {"type": "plain_text", "text": "Reset to default"},
-                    "value": "reset",
-                },
-            },
-        ],
-    }
-
-
-def setting_state(view: dict[str, Any], action_id: str) -> tuple[str, dict[str, Any]]:
-    """Find a modal control even when a refresh gave its block a fresh ID."""
-    values = view.get("state", {}).get("values", {})
-    if not isinstance(values, dict):
-        return "", {}
-    for block_id, actions in values.items():
-        if not isinstance(block_id, str) or not isinstance(actions, dict):
-            continue
-        state = actions.get(action_id)
-        if isinstance(state, dict):
-            return block_id, state
-    return "", {}
-
-
-def selected_setting(view: dict[str, Any], action_id: str) -> str | None:
-    _, action = setting_state(view, action_id)
-    selected = action.get("selected_option")
-    value = selected.get("value") if isinstance(selected, dict) else None
-    return None if value == DEFAULT_CONFIG_VALUE else value
-
-
-def selected_fast_mode(view: dict[str, Any]) -> bool:
-    _, action = setting_state(view, SETTINGS_FAST_ACTION_ID)
-    selected = action.get("selected_options", [])
-    return any(
-        isinstance(option, dict) and option.get("value") == "on"
-        for option in selected
-    )
 
 
 def clear_slack_session(
@@ -2415,12 +2164,11 @@ def run_backend(
     ]
     if output_manifest is not None:
         cmd.extend(["--output-manifest", str(output_manifest)])
-    if backend == "codex" and model:
+    if model:
         cmd.extend(["--model", model])
-    if backend == "codex" and reasoning_effort:
+    if reasoning_effort:
         cmd.extend(["--reasoning-effort", reasoning_effort])
-    if backend == "codex":
-        cmd.extend(["--fast-mode", "on" if fast_mode else "off"])
+    cmd.extend(["--fast-mode", "on" if fast_mode else "off"])
     try:
         child_env = backend_environment(
             os.environ,
@@ -2491,6 +2239,7 @@ def run_backend_events(
     slack_search_grant: ScopePlan | None = None,
     on_error: Callable[[str | None, str], None] | None = None,
     on_trace_event: Callable[[dict[str, Any]], None] | None = None,
+    on_run_info: Callable[[dict[str, str]], None] | None = None,
 ) -> tuple[str, bool]:
     """Consume normalized lifecycle events and forward only final-answer text."""
     if max_timeout is None:
@@ -2526,12 +2275,11 @@ def run_backend_events(
     ]
     if output_manifest is not None:
         cmd.extend(["--output-manifest", str(output_manifest)])
-    if backend == "codex" and model:
+    if model:
         cmd.extend(["--model", model])
-    if backend == "codex" and reasoning_effort:
+    if reasoning_effort:
         cmd.extend(["--reasoning-effort", reasoning_effort])
-    if backend == "codex":
-        cmd.extend(["--fast-mode", "on" if fast_mode else "off"])
+    cmd.extend(["--fast-mode", "on" if fast_mode else "off"])
     run_id = uuid.uuid4().hex
     with tempfile.NamedTemporaryFile(
         "w", suffix=".control", delete=False, dir=tag_temp_dir()
@@ -2627,6 +2375,16 @@ def run_backend_events(
                 error_code = candidate_code if isinstance(candidate_code, str) else error_code
                 if on_error:
                     on_error(error_code, text)
+            elif event_type == "usage" and on_trace_event:
+                on_trace_event(event)
+            elif event_type == "run_info":
+                reported_model = event.get("model")
+                reported_effort = event.get("reasoning_effort")
+                if isinstance(reported_model, str) and reported_model and on_run_info:
+                    info = {"model": reported_model[:120]}
+                    if isinstance(reported_effort, str) and reported_effort in SUPPORTED_REASONING_EFFORTS:
+                        info["reasoning_effort"] = reported_effort
+                    on_run_info(info)
             elif event_type == "status" and isinstance(text, str) and on_status:
                 on_status(text)
             elif event_type == "approval_expired":
@@ -2870,12 +2628,17 @@ def deliver_output_artifacts(
     logger: Any,
     on_upload_start: Callable[[], None] | None = None,
     uploaded_paths: set[Path] | None = None,
+    artifacts: list[dict[str, str]] | None = None,
 ) -> list[str]:
     """Attach validated outputs to the authorized originating Slack thread."""
     entries, messages = load_output_artifact_entries(manifest, workdir)
     if on_upload_start is not None and any(attach for _path, attach in entries):
         on_upload_start()
     for path, attach in entries:
+        artifact = {"name": path.name, "kind": "image" if (mimetypes.guess_type(path.name)[0] or "").startswith("image/") else "file", "local_path": str(path),
+                    "delivery": "upload_failed" if attach else "local"}
+        if artifacts is not None:
+            artifacts.append(artifact)
         if not attach:
             continue
         try:
@@ -2935,6 +2698,9 @@ def deliver_output_artifacts(
                         )
             if uploaded_paths is not None:
                 uploaded_paths.add(path)
+            artifact["delivery"] = "uploaded"
+            if permalink:
+                artifact["url"] = permalink
             if permalink:
                 messages.append(f"Download [{path.name}]({permalink}).")
             else:
@@ -2988,6 +2754,7 @@ def approval_button_blocks(
     user_id: str,
     approval_id: str,
     label: str,
+    backend: str = "codex",
     choices: list[dict[str, Any]] | None = None,
     review_details: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
@@ -2999,6 +2766,7 @@ def approval_button_blocks(
         "use additional filesystem or network access",
         "apply a file change that requires approval",
         "run a command that requires approval",
+        "use a tool that requires approval",
     }
     action = label if label in safe_labels else "perform an action outside its current permissions"
     metadata = json.dumps(
@@ -3013,7 +2781,7 @@ def approval_button_blocks(
     )
     if choices is not None and not retry:
         blocks = [{"type": "section", "text": {"type": "plain_text", "text":
-            f"Codex needs approval to {action}. Choose the scope you want to allow."}}]
+            f"{backend_display_name(backend)} needs approval to {action}. Choose the scope you want to allow."}}]
         for choice in choices:
             detail = choice.get("detail", "")
             if detail:
@@ -3029,7 +2797,7 @@ def approval_button_blocks(
             }
             if choice.get("persistent"):
                 button["confirm"] = {
-                    "title": {"type": "plain_text", "text": "Save Codex rule?"},
+                    "title": {"type": "plain_text", "text": f"Save {backend_display_name(backend)} rule?"},
                     "text": {"type": "plain_text", "text": detail},
                     "confirm": {"type": "plain_text", "text": "Save rule"},
                     "deny": {"type": "plain_text", "text": "Back"},
@@ -3046,7 +2814,7 @@ def approval_button_blocks(
                 {"type": "text", "text": details["action"]},
             ]}]},
             {"type": "rich_text", "elements": [{"type": "rich_text_section", "elements": [
-                {"type": "text", "text": "Why Codex blocked it\n", "style": {"bold": True}},
+                {"type": "text", "text": f"Why {backend_display_name(backend)} blocked it\n", "style": {"bold": True}},
                 {"type": "text", "text": details["reason"]},
             ]}]},
             {"type": "context", "elements": [{"type": "plain_text", "text":
@@ -3054,7 +2822,7 @@ def approval_button_blocks(
         ]
     else:
         intro = [{"type": "section", "text": {"type": "mrkdwn", "text":
-            f"*Codex needs approval* to {action}. Approve only if you expect this request."}}]
+            f"*{backend_display_name(backend)} needs approval* to {action}. Approve only if you expect this request."}}]
     return intro + [
         {
             "type": "actions",
@@ -3086,7 +2854,6 @@ def failure_action_blocks(
     request_ts: str,
     error_reference: str,
     direct_message: bool = False,
-    configure: bool = False,
 ) -> list[dict[str, Any]]:
     """Render recovery actions without putting diagnostic content in Slack metadata."""
     retry = retry_button_blocks(
@@ -3116,11 +2883,6 @@ def failure_action_blocks(
             },
         ],
     }]
-    if configure:
-        blocks[0]["elements"].extend(settings_button_blocks(
-            team=team, channel=channel, thread_ts=thread_ts,
-            direct_message=direct_message,
-        )[0]["elements"])
     return blocks
 
 
@@ -3264,7 +3026,7 @@ def is_direct_message_channel(channel: str) -> bool:
     return channel.startswith("D")
 
 
-def post_codex_approval(
+def post_backend_approval(
     client: Any,
     *,
     team: str,
@@ -3272,12 +3034,13 @@ def post_codex_approval(
     thread_ts: str,
     user_id: str,
     approval: dict[str, Any],
+    backend: str = "codex",
 ) -> Any:
     """Show an approval only to its requester, except in an already-private DM."""
     message = {
         "channel": channel,
         "thread_ts": thread_ts,
-        "text": "Codex needs your approval to continue.",
+        "text": f"{backend_display_name(backend)} needs your approval to continue.",
         "blocks": approval_button_blocks(
             team=team,
             channel=channel,
@@ -3285,6 +3048,7 @@ def post_codex_approval(
             user_id=user_id,
             approval_id=approval["approval_id"],
             label=approval["label"],
+            backend=backend,
             choices=approval.get("choices"),
             review_details=approval.get("review_details"),
         ),
@@ -3292,6 +3056,9 @@ def post_codex_approval(
     if is_direct_message_channel(channel):
         return client.chat_postMessage(**message)
     return client.chat_postEphemeral(user=user_id, **message)
+
+
+post_codex_approval = post_backend_approval
 
 
 def parse_slack_user_ids(value: str) -> frozenset[str]:
@@ -3398,10 +3165,14 @@ def print_live_summary(backend: str, allowed_user_ids: frozenset[str]) -> None:
         for channel_id in slack_channels.parse_channel_ids(channel_ids)
     ) or "(none configured)"
     invoke = {
-        "claude": "claude -p --dangerously-skip-permissions",
+        "claude": (
+            "Claude Agent SDK"
+            if rich_events_selected("claude")
+            else "claude -p --dangerously-skip-permissions"
+        ),
         "codex": (
             "codex app-server --stdio"
-            if os.getenv("OPENTAG_CODEX_TRANSPORT", "app-server").strip().lower() == "app-server"
+            if rich_events_selected("codex")
             else "codex exec --approve-for-me"
         ),
     }[backend]
@@ -3435,6 +3206,7 @@ def create_app(
     report_store: ErrorReportStore | None = None,
     activity_store: ActivityStore | None = None,
 ) -> App:
+    retire_slack_settings()
     if max_timeout is None:
         max_timeout = int(os.getenv("OPENTAG_MAX_TIMEOUT_SECONDS", "3600"))
     selected_team = os.getenv("SLACK_TEAM_ID", "").strip()
@@ -3710,8 +3482,10 @@ def create_app(
                     )
                 except OSError as exc:
                     logger.warning("Could not record the orphaned Slack session: %s", exc)
-    settings_store = UserAgentSettingsStore()
-    models = discover_codex_models() if backend == "codex" else []
+    models = discover_tag_models(backend)
+    if os.getenv("TAG_INSTANCE_HOME"):
+        remember_model_names(models, model_names_path(os.environ["TAG_INSTANCE_HOME"]))
+    default_settings = default_agent_settings(models)
 
     @app.event("app_home_opened")
     def show_app_home(event: dict[str, Any], client: Any, logger: Any) -> None:
@@ -3733,7 +3507,7 @@ def create_app(
     @app.action(re.compile(r"^" + APPROVAL_CHOICE_ACTION_PREFIX + r"[0-9]{1,2}$"))
     @app.action(APPROVAL_APPROVE_ACTION_ID)
     @app.action(APPROVAL_DENY_ACTION_ID)
-    def resolve_codex_approval(
+    def resolve_backend_approval(
         ack: Any,
         body: dict[str, Any],
         client: Any,
@@ -3804,8 +3578,8 @@ def create_app(
                 )
                 return
             result = "Approved once" if approved else "Denied"
-            text = ("Your choice was sent to Codex." if choice is not None
-                    else f"{result}. Codex is continuing.")
+            text = ("Your choice was sent to Tag." if choice is not None
+                    else f"{result}. Tag is continuing.")
             respond(
                 text=text,
                 blocks=[{
@@ -3816,7 +3590,7 @@ def create_app(
                 replace_original=True,
             )
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-            logger.warning("Could not resolve Codex approval from Slack: %s", exc)
+            logger.warning("Could not resolve backend approval from Slack: %s", exc)
 
     @app.action(HOME_CHANNEL_ACTION_ID)
     def select_home_channel(ack: Any, body: dict[str, Any], client: Any, logger: Any) -> None:
@@ -3879,17 +3653,7 @@ def create_app(
                     text=UNAUTHORIZED_USER_MESSAGE,
                 )
                 return
-            settings = normalize_settings(
-                settings_store.get(
-                    metadata.get("team", ""),
-                    user_id,
-                ),
-                models,
-            )
-            client.views_open(
-                trigger_id=body["trigger_id"],
-                view=settings_modal(metadata=metadata, settings=settings, models=models),
-            )
+            client.views_open(trigger_id=body["trigger_id"], view=retired_settings_modal())
         except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
             logger.warning("Could not open Open Tag settings modal: %s", exc)
 
@@ -4112,138 +3876,17 @@ def create_app(
                     ),
                 )
 
+    # Old messages and already-open modals must never restore retired overrides.
     @app.action(SETTINGS_MODEL_ACTION_ID)
-    def refresh_reasoning_options(
-        ack: Any,
-        body: dict[str, Any],
-        client: Any,
-        logger: Any,
-    ) -> None:
-        ack()
-        if not slack_user_allowed(body.get("user", {}).get("id", ""), allowed_user_ids):
-            return
-        try:
-            view = body["view"]
-            metadata = json.loads(view["private_metadata"])
-            selected = body["actions"][0]["selected_option"]["value"]
-            model = None if selected == DEFAULT_CONFIG_VALUE else selected
-            effort = selected_setting(view, SETTINGS_EFFORT_ACTION_ID)
-            if effort not in efforts_for_model(model, models):
-                effort = default_effort_for_model(model, models)
-            fast_mode = selected_fast_mode(view) and fast_mode_available(model, models)
-            client.views_update(
-                view_id=view["id"],
-                hash=view.get("hash"),
-                view=settings_modal(
-                    metadata=metadata,
-                    settings=AgentSettings(
-                        model=model,
-                        reasoning_effort=effort,
-                        fast_mode=fast_mode,
-                    ),
-                    models=models,
-                    revision=f"model_{time.time_ns()}",
-                ),
-            )
-        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-            logger.warning("Could not refresh Open Tag reasoning options: %s", exc)
-
     @app.action(SETTINGS_EFFORT_ACTION_ID)
-    def acknowledge_reasoning_choice(ack: Any) -> None:
-        ack()
-
     @app.action(SETTINGS_FAST_ACTION_ID)
-    def acknowledge_fast_mode_choice(ack: Any) -> None:
-        ack()
-
     @app.action(SETTINGS_RESET_ACTION_ID)
-    def reset_agent_settings_form(
-        ack: Any,
-        body: dict[str, Any],
-        client: Any,
-        logger: Any,
-    ) -> None:
+    def acknowledge_retired_settings(ack: Any) -> None:
         ack()
-        if not slack_user_allowed(body.get("user", {}).get("id", ""), allowed_user_ids):
-            return
-        try:
-            view = body["view"]
-            metadata = json.loads(view["private_metadata"])
-            client.views_update(
-                view_id=view["id"],
-                hash=view.get("hash"),
-                view=settings_modal(
-                    metadata=metadata,
-                    settings=default_agent_settings(models),
-                    models=models,
-                    revision=f"reset_{time.time_ns()}",
-                ),
-            )
-        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-            logger.warning("Could not reset Open Tag settings form: %s", exc)
 
     @app.view(SETTINGS_VIEW_ID)
-    def save_agent_settings(ack: Any, body: dict[str, Any], client: Any, logger: Any) -> None:
-        if not slack_user_allowed(body.get("user", {}).get("id", ""), allowed_user_ids):
-            ack(response_action="errors", errors={"model": UNAUTHORIZED_USER_MESSAGE})
-            return
-        try:
-            view = body["view"]
-            metadata = json.loads(view["private_metadata"])
-            model_block_id, _ = setting_state(view, SETTINGS_MODEL_ACTION_ID)
-            effort_block_id, _ = setting_state(view, SETTINGS_EFFORT_ACTION_ID)
-            fast_block_id, _ = setting_state(view, SETTINGS_FAST_ACTION_ID)
-            model = selected_setting(view, SETTINGS_MODEL_ACTION_ID)
-            effort = selected_setting(view, SETTINGS_EFFORT_ACTION_ID)
-            fast_mode = selected_fast_mode(view)
-            errors: dict[str, str] = {}
-            if model and model not in {item.model_id for item in models}:
-                errors[model_block_id or "model"] = "Choose an available model."
-            if effort and effort not in efforts_for_model(model, models):
-                errors[effort_block_id or "reasoning_effort"] = (
-                    "Choose a thinking level supported by this model."
-                )
-            if fast_mode and not fast_mode_available(model, models):
-                errors[fast_block_id or "fast_mode"] = (
-                    "Fast mode is not supported by this model."
-                )
-            if errors:
-                ack(response_action="errors", errors=errors)
-                return
-            if not slack_conversation_allowed(
-                metadata["channel"],
-                direct_message=metadata.get("direct_message") is True,
-            ):
-                ack(
-                    response_action="errors",
-                    errors={model_block_id or "model": "This channel is not allowed."},
-                )
-                return
-            settings = AgentSettings(
-                model=model,
-                reasoning_effort=effort,
-                fast_mode=fast_mode,
-            )
-            settings_store.set(
-                metadata.get("team", ""),
-                body["user"]["id"],
-                settings,
-            )
-        except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
-            logger.warning("Could not save Open Tag user settings: %s", exc)
-            ack(response_action="errors", errors={"model": "Could not save these settings."})
-            return
-
-        ack()
-        try:
-            client.chat_postEphemeral(
-                channel=metadata["channel"],
-                user=body["user"]["id"],
-                thread_ts=metadata["thread_ts"],
-                text=f"Applied to your future Slack requests: {settings_context(settings, models)}.",
-            )
-        except Exception as exc:  # noqa: BLE001 - the setting is already durably saved
-            logger.warning("Could not post Open Tag settings confirmation: %s", exc)
+    def dismiss_retired_settings(ack: Any) -> None:
+        ack(response_action="update", view=retired_settings_modal())
 
     def handle_invocation(
         event: dict[str, Any],
@@ -4297,10 +3940,11 @@ def create_app(
             client=client,
             intent=SearchIntent("current"),
         )
-        agent_settings = normalize_settings(
-            settings_store.get(team, user_id),
-            models,
-        )
+        agent_settings = default_settings
+        # Every requester uses this Tag's configured model and thinking level.
+        request_backend = agent_settings.backend or backend
+        request_started = time.monotonic()
+        reported_runs: list[dict[str, str]] = []
         indicator = WorkingIndicator(
             client,
             channel,
@@ -4337,6 +3981,17 @@ def create_app(
             if answer_stream is not None:
                 answer_stream.activity(trace_event)
 
+        def capture_run_info(info: dict[str, str]) -> None:
+            reported_runs.append(info)
+            if activity_run_id is not None:
+                option = reported_model_option(info["model"], models, request_backend)
+                try:
+                    activity_store.save_model(activity_run_id, request_backend, info["model"],
+                                              option.label if option else info["model"],
+                                              reasoning_effort=info.get("reasoning_effort"))
+                except OSError:
+                    logger.warning("Could not save the activity model")
+
         def finish_activity(outcome: str) -> None:
             nonlocal activity_run_id
             if activity_run_id is None:
@@ -4358,6 +4013,13 @@ def create_app(
                 event = "Observed a backend failure event."
             if event not in backend_error_events:
                 backend_error_events.append(event)
+
+        def attach_activity_error(reference: str) -> None:
+            if activity_run_id is not None:
+                try:
+                    activity_store.attach_error(activity_run_id, reference)
+                except OSError:
+                    logger.warning("Could not link the error report to Tag activity")
         output_manifest = (
             default_workdir() / f"{OUTPUT_ARTIFACT_MANIFEST_PREFIX}{uuid.uuid4().hex}.json"
         )
@@ -4378,15 +4040,13 @@ def create_app(
                     and indicator.native
                     and indicator.message_ts is None
                 )
-                app_server_selected = (
-                    backend == "codex"
-                    and os.getenv("OPENTAG_CODEX_TRANSPORT", "app-server").strip().lower() == "app-server"
-                )
+                app_server_selected = rich_events_selected(request_backend)
                 if app_server_selected:
                     try:
                         activity_run_id = activity_store.create(
                             team=team, channel=channel, thread_ts=thread_ts,
                             request_ts=event["ts"], requester=user_id,
+                            reasoning_effort=agent_settings.reasoning_effort,
                         )
                     except OSError as exc:
                         logger.warning("Could not start Tag activity record: %s", exc)
@@ -4402,7 +4062,7 @@ def create_app(
                     )
                 if stream_available or app_server_selected:
                     answer, succeeded = run_backend_events(
-                        backend,
+                        request_backend,
                         team,
                         channel,
                         thread_ts,
@@ -4417,13 +4077,14 @@ def create_app(
                         reasoning_effort=agent_settings.reasoning_effort,
                         on_answer_start=indicator.answer_started,
                         on_status=indicator.status,
-                        on_approval=lambda approval: post_codex_approval(
+                        on_approval=lambda approval: post_backend_approval(
                             client,
                             team=team,
                             channel=channel,
                             thread_ts=thread_ts,
                             user_id=user_id,
                             approval=approval,
+                            backend=request_backend,
                         ),
                         fast_mode=agent_settings.fast_mode,
                         output_manifest=output_manifest,
@@ -4432,10 +4093,11 @@ def create_app(
                         slack_search_grant=slack_search_grant,
                         on_error=capture_backend_error,
                         on_trace_event=trace_activity if app_server_selected else None,
+                        on_run_info=capture_run_info,
                     )
                 else:
                     answer, succeeded = run_backend(
-                        backend,
+                        request_backend,
                         channel,
                         user_id,
                         question,
@@ -4456,6 +4118,7 @@ def create_app(
                     "interrupted" if answer.startswith(("Stopped.", "Stop requested")) else "failed"
                 )
                 artifact_button_blocks: list[dict[str, Any]] = []
+                delivered_artifacts: list[dict[str, str]] = []
                 if succeeded:
                     artifact_paths, _artifact_errors = load_output_artifacts(
                         output_manifest,
@@ -4470,12 +4133,18 @@ def create_app(
                         default_workdir(),
                         logger,
                         uploaded_paths=uploaded_paths,
+                        artifacts=delivered_artifacts,
                         on_upload_start=lambda: indicator.status(
                             "Uploading the result…"
                         ),
                     )
                     if delivery_messages:
                         answer = f"{answer.rstrip()}\n\n" + "\n".join(delivery_messages)
+                    if activity_run_id is not None and delivered_artifacts:
+                        try:
+                            activity_store.save_artifacts(activity_run_id, delivered_artifacts)
+                        except OSError:
+                            logger.warning("Could not save output artifacts to Tag activity")
                     artifact_button_blocks = output_artifact_button_blocks(
                         artifact_paths,
                         default_workdir(),
@@ -4485,29 +4154,26 @@ def create_app(
                         thread_ts=thread_ts,
                     )
                 indicator.clear()
+                stopped = answer.startswith(("Stopped.", "Stop requested"))
+                summary_blocks = run_summary_blocks(
+                    agent_settings, models, request_backend, time.monotonic() - request_started,
+                    outcome="completed" if succeeded else "stopped" if stopped else "failed",
+                    reported_model=reported_runs[-1]["model"] if reported_runs else None,
+                    reported_effort=reported_runs[-1].get("reasoning_effort") if reported_runs else None,
+                )
                 if succeeded:
-                    footer_blocks = artifact_button_blocks
-                    if backend == "codex":
-                        footer_blocks = combine_reply_actions(
-                            artifact_button_blocks,
-                            settings_button_blocks(
-                                team=team,
-                                channel=channel,
-                                thread_ts=thread_ts,
-                                direct_message=direct_message,
-                            ),
-                        )
-                    footer_blocks = footer_blocks or None
-                elif answer.startswith("Stopped.") or answer.startswith("Stop requested"):
-                    footer_blocks = None
+                    footer_blocks = summary_blocks + (artifact_button_blocks or [])
+                elif stopped:
+                    footer_blocks = summary_blocks
                 else:
                     error_reference = new_error_reference()
+                    attach_activity_error(error_reference)
                     logger.error("Tag backend failure [%s]: %s", error_reference, answer)
                     failure_at = utc_timestamp()
                     report = make_error_report(
                         error_reference,
                         answer,
-                        backend=backend,
+                        backend=request_backend,
                         backend_code=backend_error_code,
                         failed_stage=failure_stage,
                         related_reference=prior_error_reference,
@@ -4534,14 +4200,13 @@ def create_app(
                         max_timeout,
                         backend_error_code,
                     )
-                    footer_blocks = failure_action_blocks(
+                    footer_blocks = summary_blocks + failure_action_blocks(
                         team=team,
                         channel=channel,
                         thread_ts=thread_ts,
                         request_ts=event["ts"],
                         error_reference=error_reference,
                         direct_message=direct_message,
-                        configure=report.classification.category == "model_unavailable",
                     )
                 streamed = (
                     answer_stream is not None
@@ -4564,7 +4229,20 @@ def create_app(
                         channel,
                         thread_ts,
                         image_results_dir,
+                        artifacts=delivered_artifacts,
                     )
+                    if activity_run_id is not None:
+                        try:
+                            activity_store.save_artifacts(activity_run_id, delivered_artifacts)
+                            activity_store.save_reply(activity_run_id, answer)
+                            summary_answer = answer
+                            if upload_errors:
+                                summary_answer += "\n\nSome generated images could not be attached to Slack."
+                            queue_reply_summary(activity_store, activity_run_id, summary_answer,
+                                                request_backend,
+                                                reported_runs[-1]["model"] if reported_runs else agent_settings.model)
+                        except OSError:
+                            logger.warning("Could not save the reply preview to Tag activity")
                     if upload_errors:
                         logger.warning(
                             "Generated-image upload failed: %s",
@@ -4595,6 +4273,7 @@ def create_app(
         except Exception as exc:
             finish_activity("failed")
             error_reference = new_error_reference()
+            attach_activity_error(error_reference)
             logger.exception("Open Tag failed [%s]", error_reference)
             indicator.clear()
             if answer_stream is not None:
@@ -4603,7 +4282,7 @@ def create_app(
             report = make_error_report(
                 error_reference,
                 f"{type(exc).__name__}: {exc}",
-                backend=backend,
+                backend=request_backend,
                 backend_code=backend_error_code,
                 failed_stage=failure_stage,
                 related_reference=prior_error_reference,
@@ -4637,7 +4316,6 @@ def create_app(
                 request_ts=event["ts"],
                 error_reference=error_reference,
                 direct_message=direct_message,
-                configure=report.classification.category == "model_unavailable",
             )
             post_private_failure(
                 client,
@@ -4801,6 +4479,18 @@ def main() -> None:
     session_journal.reconcile(app.client, app.logger)
     shutdown_requested = threading.Event()
     install_shutdown_handlers(shutdown_requested)
+    # Cosmetic profile refresh must never block Socket Mode heartbeats or tasks.
+    try:
+        from .slack_profile_icon import watch as watch_avatar
+        from .tag_paths import instance_home
+    except ImportError:
+        from slack_profile_icon import watch as watch_avatar
+        from tag_paths import instance_home
+    avatar_worker = None
+    if os.getenv("SLACK_BOT_TOKEN"):
+        avatar_worker = threading.Thread(target=watch_avatar, args=(instance_home(), shutdown_requested),
+                                         name="slack-avatar", daemon=True)
+        avatar_worker.start()
     invitation_memory = None
     if os.getenv("SLACK_CHANNEL_POLICY") == "invited":
         try:
@@ -4833,6 +4523,9 @@ def main() -> None:
                     args.ready_file.unlink(missing_ok=True)
             time.sleep(1)
     finally:
+        shutdown_requested.set()
+        if avatar_worker:
+            avatar_worker.join(timeout=1)
         if invitation_memory:
             invitation_memory.stop()
         if args.ready_file:

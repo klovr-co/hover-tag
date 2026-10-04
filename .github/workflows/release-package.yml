@@ -2,11 +2,22 @@ name: Release package
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published immutable release tag to package
+        required: true
+        type: string
 permissions:
   contents: write
+concurrency:
+  group: release-package-${{ inputs.tag || github.event.release.tag_name }}
+  cancel-in-progress: false
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
 jobs:
   package:
-    if: startsWith(github.event.release.tag_name, 'v')
+    if: startsWith(inputs.tag || github.event.release.tag_name, 'v')
     runs-on: ubuntu-latest
     outputs:
       docs_tag: ${{ steps.archive.outputs.docs_tag }}
@@ -20,9 +31,8 @@ jobs:
         with:
           python-version: '3.12'
       - name: Validate release tag belongs to main
-        env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)(\.[0-9]+)?)?$ ]]
           git fetch origin main "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
           git merge-base --is-ancestor "$RELEASE_TAG^{commit}" origin/main
           git checkout --detach "$RELEASE_TAG^{commit}"
@@ -30,7 +40,6 @@ jobs:
         id: archive
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
           TAG_POSTHOG_PROJECT_TOKEN: ${{ secrets.TAG_POSTHOG_PROJECT_TOKEN }}
           TAG_TELEMETRY_RELEASE_APPROVED: ${{ vars.TAG_TELEMETRY_RELEASE_APPROVED }}
         run: |
@@ -43,7 +52,9 @@ jobs:
             *-alpha*|*-beta*) expected_prerelease=true ;;
             *) expected_prerelease=false ;;
           esac
-          test "$expected_prerelease" = "${{ github.event.release.prerelease }}" || {
+          release=$(gh release view "$RELEASE_TAG" --json isDraft,isPrerelease)
+          test "$(jq -r .isDraft <<<"$release")" = false
+          test "$expected_prerelease" = "$(jq -r .isPrerelease <<<"$release")" || {
             echo 'Release prerelease setting does not match VERSION.' >&2
             exit 1
           }
@@ -95,7 +106,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ inputs.tag || github.event.release.tag_name }}
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 22
@@ -113,7 +124,6 @@ jobs:
       - name: Build Tag.app
         working-directory: desktop
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
           # Signing and notarization happen only when these secrets are configured.
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -126,7 +136,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           npm ci
-          npm version --no-git-tag-version --allow-same-version "${RELEASE_TAG#v}"
+          node scripts/sync-version.mjs
           # Signed update bundles need the updater key; without it, ship unsigned downloads only.
           if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
             updates='{"bundle":{"createUpdaterArtifacts":true}}'
@@ -135,14 +145,13 @@ jobs:
             updates='{}'
           fi
           if [ "${{ matrix.name }}" = macos ]; then
-            npx tauri build --target universal-apple-darwin --bundles app,dmg --config "$updates"
+            npm run tauri -- build --target universal-apple-darwin --bundles app,dmg --config "$updates"
           else
-            npx tauri build --config "$updates"
+            npm run tauri -- build --config "$updates"
           fi
       - name: Attach to the release
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           version=${RELEASE_TAG#v}
           mkdir -p out
@@ -173,8 +182,8 @@ jobs:
           gh release upload "$RELEASE_TAG" * --clobber
   desktop-updates:
     # Point each release line's Tag.app at this release once its builds are attached.
-    needs: desktop
-    if: ${{ !cancelled() }}
+    needs: [package, desktop]
+    if: ${{ !cancelled() && needs.package.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:
@@ -182,7 +191,6 @@ jobs:
       cancel-in-progress: false
     env:
       GH_TOKEN: ${{ github.token }}
-      RELEASE_TAG: ${{ github.event.release.tag_name }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:

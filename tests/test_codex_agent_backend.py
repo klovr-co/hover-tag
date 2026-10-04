@@ -8,13 +8,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from scripts.codex_app_server import (
-    APPROVAL_TIMEOUT_SECONDS,
+from scripts.agent_activity import APPROVAL_TIMEOUT_SECONDS, activity_label
+from scripts.codex_agent_backend import (
     CodexAppServer,
     CodexAppServerError,
     CodexEventMapper,
     JsonLineDecoder,
-    activity_label,
 )
 
 
@@ -41,6 +40,12 @@ class JsonLineDecoderTests(unittest.TestCase):
 
 
 class ModelCatalogTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # These fixtures exercise inherited Codex sign-in, independent of local accounts.
+        auth = patch("scripts.tag_chatgpt.enabled", return_value=False)
+        auth.start()
+        self.addCleanup(auth.stop)
+
     def test_catalog_reads_all_pages_without_starting_an_agent_task(self) -> None:
         server = CodexAppServer(["codex", "app-server"], cwd=Path.cwd(), timeout=10)
         with patch.object(server, "_start"), patch.object(server, "_notify"), patch.object(server, "close") as close, patch.object(
@@ -288,7 +293,7 @@ class ServerRequestTests(unittest.TestCase):
             server._send = MagicMock()  # type: ignore[method-assign]
             emitted: list[dict[str, object]] = []
 
-            with patch("scripts.codex_app_server.uuid.uuid4") as make_id:
+            with patch("scripts.codex_agent_backend.uuid.uuid4") as make_id:
                 make_id.return_value.hex = approval_id
                 handled = server._resolve_server_request(
                     {
@@ -342,7 +347,7 @@ class ServerRequestTests(unittest.TestCase):
                 (500.0, 500.0),
             ]:
                 with self.subTest(outer_deadline=outer_deadline), patch(
-                    "scripts.codex_app_server.time.monotonic", return_value=100.0
+                    "scripts.codex_agent_backend.time.monotonic", return_value=100.0
                 ):
                     server._resolve_server_request(
                         {
@@ -508,7 +513,7 @@ for line in sys.stdin:
             with self.subTest(approve=approve, reject=reject), tempfile.TemporaryDirectory() as raw:
                 root = Path(raw)
                 script = root / "server.py"
-                script.write_text(fake)
+                script.write_text(fake, encoding="utf-8")
                 server = CodexAppServer([sys.executable, "-u", str(script),
                                          "reject" if reject else "accept"], cwd=root,
                                         timeout=5, max_timeout=10, approval_dir=root)
@@ -517,7 +522,7 @@ for line in sys.stdin:
                     events.append(event)
                     if event["type"] == "approval_request":
                         (root / (event["approval_id"] + ".json")).write_text(json.dumps(
-                            {"decision": "approve" if approve else "deny"}))
+                            {"decision": "approve" if approve else "deny"}), encoding="utf-8")
                 self.assertEqual(("completed", ""), server.run("Create form", model=None,
                                  reasoning_effort=None, emit=emit))
                 answers = [e["text"] for e in events if e["type"] == "message_complete"]
@@ -541,7 +546,7 @@ for raw in sys.stdin:
     method = message.get("method")
     if message.get("id") == 900 and method is None:
         assert message["result"]["decision"] == "decline"
-        send({"id": pending_thread_start["id"], "result": {"thread": {"id": "thread-1"}}})
+        send({"id": pending_thread_start["id"], "result": {"thread": {"id": "thread-1"}, "model": "gpt-resolved"}})
     elif method == "initialize":
         send({"id": message["id"], "result": {"userAgent": "fake"}})
     elif method == "initialized":
@@ -614,6 +619,7 @@ for raw in sys.stdin:
             )
 
         self.assertEqual(("completed", ""), (status, detail))
+        self.assertEqual({"type": "run_info", "model": "gpt-resolved", "reasoning_effort": "high"}, events[0])
         self.assertEqual("Hello", next(
             event["text"] for event in events if event["type"] == "message_delta"
         ))
@@ -689,6 +695,49 @@ for raw in sys.stdin:
                 server.run(
                     "exit-after-start", model=None, reasoning_effort=None, emit=lambda _event: None
                 )
+
+
+class TagThinkingLevelTests(unittest.TestCase):
+    FAKE = r'''
+import json, sys
+record = open(sys.argv[1], "w")
+def send(payload):
+    print(json.dumps(payload), flush=True)
+for raw in sys.stdin:
+    m = json.loads(raw)
+    method = m.get("method")
+    if method == "initialize":
+        send({"id": m["id"], "result": {}})
+    elif method == "thread/start":
+        send({"id": m["id"], "result": {"thread": {"id": "thread-1"}, "model": "gpt-5.5"}})
+    elif method == "turn/start":
+        record.write(json.dumps(m["params"])); record.close()
+        send({"id": m["id"], "result": {"turn": {"id": "turn-1"}}})
+        send({"method": "item/completed", "params": {"item": {
+            "id": "answer", "type": "agentMessage", "phase": "final_answer", "text": "Done"}}})
+        send({"method": "turn/completed", "params": {"turn": {"id": "turn-1", "status": "completed"}}})
+'''
+
+    def test_tag_thinking_level_reaches_the_turn_effort(self) -> None:
+        from scripts import agent_models, slack_socket_agent
+
+        catalog = [agent_models.ModelOption("gpt-5.5", "GPT-5.5", ("low", "medium", "high", "xhigh"),
+                                            default_reasoning_effort="medium", is_default=True)]
+        with patch.dict("os.environ", {"OPENTAG_DEFAULT_MODEL": "codex:gpt-5.5", "OPENTAG_DEFAULT_EFFORT": "xhigh"}), \
+                patch.object(agent_models, "discover_models", return_value=catalog), \
+                patch.object(agent_models, "backend_signed_in", side_effect=lambda name: name == "codex"):
+            settings = slack_socket_agent.default_agent_settings(agent_models.discover_tag_models("codex"))
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            (root / "server.py").write_text(self.FAKE, encoding="utf-8")
+            server = CodexAppServer([sys.executable, "-u", str(root / "server.py"), str(root / "turn.json")],
+                                    cwd=root, timeout=5)
+            events: list[dict] = []
+            self.assertEqual(("completed", ""), server.run(
+                "task", model=settings.model, reasoning_effort=settings.reasoning_effort, emit=events.append))
+            params = json.loads((root / "turn.json").read_text(encoding="utf-8"))
+        self.assertEqual(("gpt-5.5", "xhigh"), (params["model"], params["effort"]))
+        self.assertEqual("xhigh", events[0]["reasoning_effort"])
 
 
 if __name__ == "__main__":

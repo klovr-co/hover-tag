@@ -29,7 +29,7 @@ class RecordOutputArtifactTests(unittest.TestCase):
             with self.subTest(mode=mode, flags=flags), tempfile.TemporaryDirectory() as raw:
                 root = Path(raw)
                 artifact = root / "report.txt"
-                artifact.write_text("report")
+                artifact.write_text("report", encoding="utf-8")
                 manifest = root / "manifest.json"
                 env = {} if mode is None else {"OPENTAG_FILE_DELIVERY": mode}
                 with patch.dict(os.environ, env, clear=True), patch.object(sys, "argv", [
@@ -38,7 +38,7 @@ class RecordOutputArtifactTests(unittest.TestCase):
                 ]), redirect_stdout(StringIO()):
                     self.assertEqual(record_output_artifact.main(), 0)
                     self.assertEqual(record_output_artifact.main(), 0)
-                self.assertEqual(json.loads(manifest.read_text()),
+                self.assertEqual(json.loads(manifest.read_text(encoding="utf-8")),
                                  [{"path": str(artifact.resolve()), "attach": expected}])
 
     def test_serializes_concurrent_manifest_updates(self) -> None:
@@ -129,11 +129,11 @@ class RecordOutputArtifactTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw_dir:
             root = Path(raw_dir)
             artifact = root / "private.txt"
-            artifact.write_text("local")
+            artifact.write_text("local", encoding="utf-8")
             manifest = root / "manifest.json"
             record_output_artifact.record_artifact(manifest, artifact, attach=True)
             record_output_artifact.record_artifact(manifest, artifact, attach=False)
-            self.assertFalse(json.loads(manifest.read_text())[0]["attach"])
+            self.assertFalse(json.loads(manifest.read_text(encoding="utf-8"))[0]["attach"])
 
     def test_rejects_files_outside_the_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir, tempfile.TemporaryDirectory() as outside_dir:
@@ -163,7 +163,7 @@ class ChannelArtifactTests(unittest.TestCase):
             for channel in ('C123', 'C456'):
                 output_dir = record_output_artifact.channel_artifact_directory(root, channel, create=True)
                 output = output_dir / 'report.md'
-                output.write_text(channel)
+                output.write_text(channel, encoding="utf-8")
                 manifest = root / f'{channel}.json'
                 with patch.object(sys, 'argv', ['record_output_artifact', '--manifest', str(manifest),
                     '--workdir', str(root), '--channel-id', channel, '--file', 'report.md']), redirect_stdout(StringIO()):
@@ -172,19 +172,19 @@ class ChannelArtifactTests(unittest.TestCase):
                 self.assertEqual(errors, [])
                 self.assertEqual(entries, [(output, True)])
                 self.assertEqual(slack_socket_agent.resolve_local_artifact(f'artifacts/{channel}/report.md', root), output)
-                self.assertEqual(output.read_text(), channel)
+                self.assertEqual(output.read_text(encoding="utf-8"), channel)
 
     def test_directory_initialization_is_retryable_and_preserves_older_files(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             old = root / 'report.md'
-            old.write_text('legacy')
+            old.write_text('legacy', encoding="utf-8")
             output = record_output_artifact.channel_artifact_directory(root, 'C123', create=True)
             current = output / 'report.md'
-            current.write_text('current')
+            current.write_text('current', encoding="utf-8")
             self.assertEqual(record_output_artifact.channel_artifact_directory(root, 'C123', create=True), output)
-            self.assertEqual(old.read_text(), 'legacy')
-            self.assertEqual(current.read_text(), 'current')
+            self.assertEqual(old.read_text(encoding="utf-8"), 'legacy')
+            self.assertEqual(current.read_text(encoding="utf-8"), 'current')
             self.assertEqual(record_output_artifact.validated_output_path(old, root), old.resolve())
 
     def test_invalid_ids_and_symlinked_or_conflicting_directories_are_rejected(self):
@@ -194,7 +194,7 @@ class ChannelArtifactTests(unittest.TestCase):
                 with self.subTest(channel=channel), self.assertRaises(ValueError):
                     record_output_artifact.channel_artifact_directory(root, channel, create=True)
             artifacts = root / 'artifacts'
-            artifacts.write_text('existing file')
+            artifacts.write_text('existing file', encoding="utf-8")
             with self.assertRaisesRegex(ValueError, 'conflicts'):
                 record_output_artifact.channel_artifact_directory(root, 'C123', create=True)
             artifacts.unlink()

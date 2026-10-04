@@ -39,11 +39,11 @@ class WelcomeTests(unittest.TestCase):
         self.assertIn(f"<{tag_welcome.COMMUNITY_INVITE_URL}|Join the Hover Community>", blocks[-1]["text"]["text"])
         self.assertTrue(all(block["type"] == "section" for block in blocks))
         self.assertIn("Help me plan my week", blocks[1]["text"]["text"])
-        receipt = json.loads(self.path.read_text())
+        receipt = json.loads(self.path.read_text(encoding="utf-8"))
         self.assertEqual(receipt["status"], "sent")
         self.assertEqual(receipt["channel"], "DPRIVATE")
         self.assertEqual(receipt["ts"], "123.456")
-        self.assertNotIn("xoxb-fixture", self.path.read_text())
+        self.assertNotIn("xoxb-fixture", self.path.read_text(encoding="utf-8"))
 
     def test_failure_remains_pending_and_retries_with_same_message_id(self):
         self.api.side_effect = [
@@ -52,7 +52,7 @@ class WelcomeTests(unittest.TestCase):
         ]
         with self.assertRaises(tag_welcome.slack_channels.SlackChannelError):
             tag_welcome.send_once(self.home, self.values)
-        self.assertEqual(json.loads(self.path.read_text())["status"], "pending")
+        self.assertEqual(json.loads(self.path.read_text(encoding="utf-8"))["status"], "pending")
         tag_welcome.send_once(self.home, self.values)
         tag_welcome.send_once(self.home, self.values)
         self.assertEqual(self.api.call_count, 2)
@@ -71,7 +71,7 @@ class WelcomeTests(unittest.TestCase):
                 self.api.return_value = response
                 with self.assertRaises(ValueError):
                     tag_welcome.send_once(self.home, self.values)
-                self.assertEqual(json.loads(self.path.read_text())["status"], "pending")
+                self.assertEqual(json.loads(self.path.read_text(encoding="utf-8"))["status"], "pending")
 
     def test_interruption_after_slack_success_reuses_pending_id(self):
         save = tag_welcome.tag_config.save_config
@@ -85,7 +85,7 @@ class WelcomeTests(unittest.TestCase):
         with patch.object(tag_welcome.tag_config, "save_config", side_effect=fail_receipt):
             with self.assertRaises(OSError):
                 tag_welcome.send_once(self.home, self.values)
-        self.assertEqual(json.loads(self.path.read_text())["status"], "pending")
+        self.assertEqual(json.loads(self.path.read_text(encoding="utf-8"))["status"], "pending")
         tag_welcome.send_once(self.home, self.values)
         self.assertEqual(
             self.api.call_args_list[0].args[2]["client_msg_id"],
@@ -112,7 +112,7 @@ class WelcomeTests(unittest.TestCase):
             tag_welcome.send_once(self.home, {**self.values, "SLACK_ALLOWED_USER_IDS": "CPUBLIC"})
         self.path.parent.mkdir(parents=True)
         for content in ("{broken", "[]", '{"status":"sent"}'):
-            self.path.write_text(content)
+            self.path.write_text(content, encoding="utf-8")
             with self.assertRaises(ValueError):
                 tag_welcome.send_once(self.home, self.values)
         self.api.assert_not_called()

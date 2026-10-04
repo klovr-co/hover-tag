@@ -2,8 +2,15 @@
  "tags": [
   {"id": "t0klovr1-a0maya01", "home": "/Users/maya/Tag/t0klovr1-a0maya01/.tag", "valid": true,
    "state": "running", "slack_workspace": "T0KLOVR1", "workspace_name": "Klovr",
-   "slack_name": "Maya's Tag", "nickname": null, "avatar": null, "keep_running": true, "main": true},
+   "workspace_icon": "/Users/maya/Tag/t0klovr1-a0maya01/.tag/state/workspace-icon.png",
+   "slack_name": "Maya's Tag", "slack_app_id": "A0KLOVR1", "has_app": true, "nickname": null, "avatar": null, "keep_running": true, "main": true,
+   "description": "I'm Maya's personal assistant. I help with launch work.",
+   "default_model": "codex:gpt-5.5", "default_model_label": "Codex · GPT-5.5",
+   "default_model_name": "GPT-5.5", "default_effort": "medium",
+   "channels": [{"id": "C0GENERAL", "name": "general"}, {"id": "C0LAUNCH1", "name": "launch"}]},
   {"id": "new-tag", "home": "/Users/maya/Tag/new-tag/.tag", "valid": true,
-   "state": "setup_incomplete", "slack_workspace": "T0ACME01", "workspace_name": "Acme Inc",
-   "slack_name": null, "nickname": null, "avatar": null, "keep_running": false, "main": false}
+   "state": "setup_incomplete", "slack_workspace": "T0ACME01", "workspace_name": "Acme Inc", "workspace_icon": null,
+   "slack_name": null, "slack_app_id": "A0ACME01", "has_app": true, "nickname": null, "avatar": null, "keep_running": false, "main": false,
+   "description": null, "default_model": "codex", "default_model_label": "Codex · account default",
+   "default_model_name": "Account default", "default_effort": null, "channels": []}
  ]}

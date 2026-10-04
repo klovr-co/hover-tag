@@ -4,5 +4,10 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import "./styles.css";
+import { applyAppearance, savedAppearance } from "./lib/appearance";
+import { installOverlayScrollbars } from "./lib/scrollbars";
+
+applyAppearance(savedAppearance());
+installOverlayScrollbars();
 
 createRoot(document.getElementById("root")!).render(<StrictMode><App /></StrictMode>);

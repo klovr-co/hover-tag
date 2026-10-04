@@ -18,9 +18,8 @@ class LifecycleLock:
         try:
             if os.name == "nt":
                 import msvcrt
-                if guard.stat().st_size == 0:
-                    self.handle.write(b"0")
-                    self.handle.flush()
+                # Windows can lock a byte beyond EOF. Take the lock before
+                # writing: another caller may already own even an empty guard.
                 self.handle.seek(0)
                 msvcrt.locking(self.handle.fileno(), msvcrt.LK_NBLCK, 1)
             else:

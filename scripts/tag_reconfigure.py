@@ -167,7 +167,7 @@ def edit(home: Path, kind: str) -> None:
     resumable = None
     if pointer.is_file():
         try:
-            pending = json.loads(pointer.read_text())
+            pending = json.loads(pointer.read_text(encoding="utf-8"))
             draft = Path(pending["path"])
             if (pending.get("kind") == kind and draft.parent.resolve() == root.resolve()
                     and not draft.is_symlink() and draft.is_dir()
@@ -269,7 +269,7 @@ def run_draft(home: Path, draft: Path, kind: str, original: dict[str, str]) -> N
         return
     commit(home, draft, original)
     pointer = home / "state/settings-draft.json"
-    if pointer.is_file() and json.loads(pointer.read_text()).get("path") == str(draft):
+    if pointer.is_file() and json.loads(pointer.read_text(encoding="utf-8")).get("path") == str(draft):
         pointer.unlink()
     ui.message(f"Changes saved. Previous settings and app links are kept in: {draft}")
     tag_id = os.getenv("TAG_ID", "default")

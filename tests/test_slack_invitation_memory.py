@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts import slack_invitation_memory as memory, tag_config
+from scripts import slack_invitation_memory as memory, slack_channel_names, tag_config
 from scripts.slack_channels import SlackChannel
 from scripts.opentag_process_env import backend_environment
 
@@ -43,7 +43,7 @@ class InvitationMemoryTests(unittest.TestCase):
         self.assertEqual(saved["MFS_TOKEN"], "fixture-server")
         self.assertIn("file://local/keep", saved["MFS_ALLOWED_SCOPES"])
         self.assertNotIn("COLD", saved["MFS_ALLOWED_SCOPES"])
-        text = Path(saved["MFS_SLACK_CONNECTOR_CONFIG"]).read_text()
+        text = Path(saved["MFS_SLACK_CONNECTOR_CONFIG"]).read_text(encoding="utf-8")
         self.assertIn('channel_ids = ["CNEW", "GPRIVATE"]', text)
         self.assertNotIn("COTHER", text)
         self.assertEqual(self.history.call_args_list[0].args[0], "xoxp-history")
@@ -77,7 +77,7 @@ class InvitationMemoryTests(unittest.TestCase):
         self.assertFalse(self.worker.ready_for_requests())
         self.assertEqual(self.env["SLACK_CHANNEL_IDS"], "")
         self.sync.assert_not_called()
-        self.assertNotIn("sensitive-detail", (self.home / "state/slack-memory.json").read_text())
+        self.assertNotIn("sensitive-detail", (self.home / "state/slack-memory.json").read_text(encoding="utf-8"))
         self.assertEqual(tag_config.load_config(self.path), self.values)
 
     def test_history_failure_is_not_marked_synced_and_retries(self):
@@ -85,6 +85,7 @@ class InvitationMemoryTests(unittest.TestCase):
         self.history.side_effect = RuntimeError("history not authorized")
         self.worker.tick()
         self.sync.assert_not_called()
+        self.assertEqual({"CONE": "one"}, slack_channel_names.read(self.home, "TTEST"))
         self.assertEqual(self.env["SLACK_CHANNEL_IDS"], "")
         self.history.side_effect = None
         self.worker.tick()

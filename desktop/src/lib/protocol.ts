@@ -20,13 +20,33 @@ export interface TagRow {
   state?: string | null;
   slack_workspace?: string | null;
   workspace_name?: string | null;
+  /** Local copy of the Slack workspace's icon; null for Slack's default icon. */
+  workspace_icon?: string | null;
   slack_name?: string | null;
+  /** The Slack app Tag created or linked; null before setup reaches that step. */
+  slack_app_id?: string | null;
+  /** False for a setup that never reached Slack: nothing exists there to continue or delete. */
+  has_app?: boolean;
   nickname?: string | null;
   avatar?: string | null;
   keep_running?: boolean;
   main?: boolean;
   error?: string;
+  /** The one-line description people gave the Tag (its Slack app description). */
+  description?: string | null;
+  /** The Tag's default model, such as "codex:gpt-5.5", and how people read it. */
+  default_model?: string | null;
+  default_model_label?: string | null;
+  /** Just the model, such as "GPT-5.5". */
+  default_model_name?: string | null;
+  /** The thinking level the default model uses; null for models without levels. */
+  default_effort?: string | null;
+  /** The channels the Tag answers in; `name` is null until Tag has recorded it. */
+  channels?: { id: string; name: string | null }[];
 }
+
+/** A setup that stopped before any Slack app existed; there is nothing worth resuming. */
+export const isDraft = (row: TagRow) => status(row) === "setup" && row.has_app === false;
 
 export type Status = "online" | "offline" | "setup" | "attention";
 
@@ -52,12 +72,20 @@ export const STATUS_LABEL: Record<Status, string> = {
   attention: "Needs attention",
 };
 
+/** What went wrong with a Tag that needs attention, in its own words when Tag gave one. */
+export function problemText(row: TagRow) {
+  if (row.error) return row.error;
+  return row.state === "invalid_configuration" ? "Its settings can't be read"
+    : row.state === "invalid_tag" ? "This Tag's folder is damaged" : "Needs attention";
+}
+
 /** People see the Tag's Slack name and workspace; the ID is only for commands. */
 export const title = (row: TagRow) => row.slack_name || "New Tag";
 
 export interface Group {
   key: string;
   label: string;
+  icon: string | null;
   rows: TagRow[];
 }
 
@@ -71,6 +99,7 @@ export function groups(rows: TagRow[]): Group[] {
   return [...byKey].map(([key, members]) => ({
     key,
     label: members[0].workspace_name || key || "Not connected yet",
+    icon: members.find((row) => row.workspace_icon)?.workspace_icon ?? null,
     rows: members,
   }));
 }
@@ -97,30 +126,105 @@ export function compatibility(info: VersionInfo, needed: string[]) {
 
 // ---- Setup over JSON lines ---------------------------------------------------
 
-export interface SlackPerson {
-  id: string;
-  name: string;
-  username: string;
-  image_url?: string | null;
-}
-
 export interface SetupQuestion {
   type: "question";
   id: string;
-  kind: "choose" | "multi" | "text" | "secret" | "confirm" | "people" | "slack_login" | string;
+  kind: "choose" | "multi" | "text" | "secret" | "confirm" | "profile_picture" | "slack_login" | string;
   prompt: string;
   options?: string[];
   default?: number | string | boolean | null;
   selected?: number[];
   sign_in_line?: string;
-  people?: SlackPerson[];
   can_go_back?: boolean;
+  /** Stable answers for `choose` options, such as "sign_in:claude" (ai_connection) or model values. */
+  option_ids?: string[];
+  /** ai_connection: each agent's connection, as `tag settings ai --json` reports it. */
+  connections?: import("./ai").Connection[];
+  can_continue?: boolean;
+  tag_name?: string;
+  last_result?: import("./ai").SignInResult;
+  /** default_model: the connected accounts' models, grouped by agent. */
+  groups?: import("./ai").ModelGroup[];
+  /** default_model accepts { value, effort } when the runtime advertises this. */
+  supports_effort?: boolean;
+  default_effort?: string | null;
+  // ---- Onboarding v2 (capability setup-v2) ----
+  /** profile: the Tag's name, description and the picture Tag will upload. */
+  name?: string;
+  name_limit?: number;
+  description?: string;
+  description_limit?: number;
+  preview?: string | null;
+  /** Content hash; picture files may be replaced at the same path. */
+  preview_revision?: string | null;
+  picture?: "waterdrop" | "custom" | string;
+  picture_label?: string;
+  error?: string | null;
+  editing?: boolean;
+  can_use_existing?: boolean;
+  /** workspace / org_workspace: the Slack CLI's sign-ins, or an organization's workspaces. */
+  workspaces?: SetupWorkspace[];
+  organization?: { id: string; name: string } | null;
+  /** approve_setup: everything Create will use. */
+  recap?: SetupRecap;
+  /** existing_app: Slack apps Tag knows; app_checks: what the chosen app is missing. */
+  apps?: SetupApp[];
+  checks?: { label: string; ok: boolean; detail: string | null }[];
+  /** channels: every channel Slack lists to the new app; [] is allowed. */
+  channels?: SetupChannel[];
+  allow_empty?: boolean;
+}
+
+export interface SetupWorkspace {
+  id: string;
+  name: string;
+  kind?: "workspace" | "organization" | string;
+  user_id?: string | null;
+  user_name?: string | null;
+}
+
+export interface SetupRecap {
+  name: string;
+  description: string;
+  picture: string | null;
+  picture_revision?: string | null;
+  workspace: { id: string; name: string; icon?: string | null; organization: { id: string; name: string } | null };
+  owner: { id: string; name: string | null; icon?: string | null };
+  ai: { value: string; backend: string; backend_name: string; label: string } | null;
+  approval: boolean;
+}
+
+export interface SetupApp {
+  id: string;
+  name: string;
+  source: "linked" | "cli" | "tag" | string;
+  used_by: string | null;
+}
+
+export interface SetupChannel {
+  id: string;
+  name: string;
+  member: boolean;
+  private: boolean;
+  members?: number | null;
+}
+
+/** What the Ready screen needs once setup completes. */
+export interface SetupReady {
+  team: string;
+  app_id: string;
+  channels: { id: string; name: string }[];
+  ai: { backend: string; backend_name: string; label: string } | null;
 }
 
 export type SetupEvent =
   | { type: "message"; text: string }
   | SetupQuestion
-  | { type: "result"; status: "complete" | "paused" | "failed" | string; tag?: string; error?: string };
+  | { type: "result"; status: "complete" | "paused" | "failed" | string; tag?: string; error?: string; ready?: SetupReady }
+  /** A step of creating the Slack app, from Create in Slack. */
+  | { type: "progress"; step: string; text: string; backend?: undefined }
+  /** An agent sign-in started from the AI step; never the end of setup. */
+  | import("./ai").SignInEvent;
 
 /** One stdout line from setup; anything that isn't a JSON event is ignored. */
 export function parseSetupLine(line: string): SetupEvent | null {
@@ -134,11 +238,6 @@ export function parseSetupLine(line: string): SetupEvent | null {
   }
 }
 
-export function personMatches(person: SlackPerson, query: string) {
-  const q = query.trim().toLocaleLowerCase();
-  return !q || [person.name, person.username, person.id].some((v) => v.toLocaleLowerCase().includes(q));
-}
-
 // ---- Installer progress ------------------------------------------------------
 
 export const INSTALL_STEPS = [
@@ -146,7 +245,7 @@ export const INSTALL_STEPS = [
   { step: "python", title: "Preparing Python", detail: "A private copy, so your system stays untouched", weight: 0.15 },
   { step: "download", title: "Downloading Tag", detail: "The latest release, checked before it's used", weight: 0.1 },
   { step: "components", title: "Installing components", detail: "Slack connection and local search", weight: 0.3 },
-  { step: "memory", title: "Preparing local memory", detail: "Downloads a search model — the longest step", weight: 0.3 },
+  { step: "memory", title: "Preparing local memory", detail: "Downloads a search model, the longest step", weight: 0.3 },
   { step: "command", title: "Finishing up", detail: "Adding the tag command", weight: 0.05 },
 ] as const;
 

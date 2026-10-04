@@ -4,36 +4,46 @@ Tag treats the backend as the Brain: a non-interactive CLI process that can
 read the prompt, use the workspace, call MFS helpers, and return a Slack-ready
 answer. Choose the backend explicitly for each deployment.
 
-## Built-In Backend: Claude Print Mode
+## Built-In Backend: Claude Agent SDK
 
 Use this backend when the operator has a working `claude` CLI session:
 
 ```bash
 python scripts/opentag_agent.py \
   --backend claude \
+  --event-stream \
   --question "Summarize this thread and list the next action." \
   --channel-id "$SLACK_CHANNEL_ID" \
   --thread-file /tmp/thread.txt \
   --workdir /path/to/repo
 ```
 
-The runner invokes:
+The Slack bridge runs one Claude Agent SDK session per request
+(`scripts/claude_agent_backend.py`). It uses the operator's `claude` executable
+when present, `--add-dir` access to the skill and attachment directories, the
+`auto` permission mode, and the workspace `.mcp.json` servers. The session
+emits the same normalized events as Codex App Server: final-answer deltas,
+sanitized activity, Slack approval requests, and terminal status. Slack Stop
+interrupts the session, and the Tag's model, thinking, and Fast Mode defaults
+come from the signed-in account's model catalog. See
+[ADR 0008](../docs/adr/0008-claude-agent-sdk.md).
+
+`OPENTAG_CLAUDE_PERMISSION_MODE` selects `auto` (default), `acceptEdits`,
+`default`, `dontAsk`, or `bypassPermissions`. Anything Claude would ask about is
+sent privately to the requester as a one-time approval.
+
+Set `OPENTAG_CLAUDE_TRANSPORT=print` to roll back to the previous print mode:
 
 ```bash
 claude -p \
   --dangerously-skip-permissions \
   --add-dir <workdir> \
   --add-dir <skill-dir> \
-  --add-dir <memory-root> \
   <prompt>
 ```
 
-Availability depends on the operator's account and local CLI setup.
-
-Unless `OPENTAG_SLACK_STREAMING=0`, the Slack bridge invokes Claude with
-`--output-format stream-json --include-partial-messages`. Tag forwards only
-top-level text deltas and the final result through its normalized event stream;
-thinking blocks, tool events, hook output, and subagent text are not forwarded.
+Print mode forwards top-level text deltas and the final result only; it has no
+activity rows, approvals, Stop confirmation, or settings control.
 
 ## Built-In Backend: Codex Exec
 
@@ -81,11 +91,59 @@ complete response without a fake typewriter animation.
   workspace.
 - Keep the Slack bridge thin: backend-specific behavior belongs in
   `opentag_agent.py`, not in Slack event handling.
-- Keep the normalized event contract limited to `status`, `delta`, `final`, and
-  `error`; chat transports must never parse backend-native event payloads.
+- Keep the normalized event contract backend-neutral (`status`, `delta`,
+  `final`, `error`, plus the richer `message_*`, `activity_*`,
+  `approval_request`, `run_info`, `usage`, and `turn_complete` events); chat transports
+  must never parse backend-native event payloads.
+- Receive the thinking level as the backend-neutral `reasoning_effort`. The
+  Tag's default level (`OPENTAG_DEFAULT_EFFORT`) is applied once, in
+  `agent_models.discover_tag_models`, to the default model's default level, so
+  Codex gets it as the App Server turn `effort` and Claude as the Agent SDK
+  `effort` option without either adapter knowing about it.
+- Emit `run_info` with the concrete model the backend actually used, even when
+  Tag requested an alias or the account default. Codex reports it from
+  `thread/start`; Claude reports the main thread's assistant model.
+- Emit `usage` with a cumulative `usage` snapshot containing `input_tokens`,
+  `output_tokens`, and `total_tokens`. Input includes cache reads/writes; optional
+  cache and reasoning counts are subsets, never added twice. Codex maps
+  `thread/tokenUsage/updated.tokenUsage.total`; Claude maps the SDK result's
+  `usage`. The runner accumulates reported usage across retry attempts; duplicate
+  snapshots replace earlier snapshots within an attempt. Missing usage is unknown.
 
 Generated images use a file handoff rather than a new stream event. For each
 Slack invocation, the prompt names a temporary `results/images` directory. A
 backend places only final PNG, JPEG, GIF, or WebP files there; after a successful
 run, the Slack bridge validates and uploads them to the originating thread. The
 directory is deleted when that invocation finishes.
+
+
+### Activity reply summaries
+
+After successful Slack delivery, the bridge queues `agent_summary` with the
+completed answer and selected backend, using the reported model when available.
+Normalized `run_info` also saves the request's actual model and display label to
+Activity for both backends. Missing historical model data remains absent. A separate bounded background run
+produces a one-sentence TL;DR; it never resumes or repeats the Slack task. Both
+Codex App Server and Claude Agent SDK run this text-only pass in a temporary
+working directory with tools and user hooks disabled. Existing provider sign-in
+is reused. Only final-answer events from a completed turn become the sanitized
+`reply_summary` cache; commentary, partial turns, and errors never do. Failure
+leaves the locally generated `reply_preview`. CLI JSON and Tag.app read the same
+cache. Existing installations receive this through the runtime manifest without
+new settings or permissions; historical answer text is not available to backfill.
+## API connections and local usage
+
+Both rich transports accept explicit per-Tag API keys and base URLs. Codex also
+supports Azure Responses deployments. See [API connections](../docs/reference/api-connections.md)
+for settings, authentication precedence, model catalogs and limitations.
+
+Adapters normalize provider usage as `usage` events with cumulative per-scope
+`input_tokens`, `output_tokens`, `cached_input_tokens`, `cache_creation_tokens`,
+and `reasoning_output_tokens` where available. Input includes cache reads and
+writes; reasoning is included in output. Unknown counts remain null. Claude may
+also provide `cost_usd`, an estimate. `scope_id` identifies a cumulative SDK
+session or Codex thread; repeated snapshots replace prior totals for that scope.
+The runner consumes these events into the private ledger before the Slack bridge,
+so the bridge never parses native usage or branches on the provider. Interrupted
+runs with no provider usage remain unknown. `tag usage` reports monthly totals
+and an advisory budget; no hard spending enforcement is implemented.

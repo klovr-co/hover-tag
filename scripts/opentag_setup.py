@@ -9,6 +9,7 @@ import getpass
 import hashlib
 import json
 import os
+import random
 import re
 import shlex
 import shutil
@@ -36,6 +37,7 @@ try:
         tag_home,
         workspace_home,
     )
+    import agent_models
     import tag_config as settings
     import slack_channels
     import setup_ui as ui
@@ -44,10 +46,12 @@ try:
     import slack_manifest_migrations
     import slack_credentials
     import slack_identity
+    import slack_setup_icons
+    import tag_ai
+    import tag_instances
     import tag_credentials
     import tag_telemetry
     import tag_cli as lifecycle
-    from opentag_process_env import without_telemetry_environment
     from tag_mascot import PALETTE as MASCOT_PALETTE, PIXELS as MASCOT_PIXELS
 except ImportError:
     from scripts.tag_paths import (
@@ -57,6 +61,7 @@ except ImportError:
         tag_home,
         workspace_home,
     )
+    from scripts import agent_models
     from scripts import slack_channels, tag_config as settings
     from scripts import setup_ui as ui
     from scripts import slack_permissions
@@ -64,35 +69,13 @@ except ImportError:
     from scripts import slack_manifest_migrations
     from scripts import slack_credentials
     from scripts import slack_identity
+    from scripts import slack_setup_icons
+    from scripts import tag_ai
+    from scripts import tag_instances
     from scripts import tag_credentials
     from scripts import tag_telemetry
     from scripts import tag_cli as lifecycle
-    from scripts.opentag_process_env import without_telemetry_environment
     from scripts.tag_mascot import PALETTE as MASCOT_PALETTE, PIXELS as MASCOT_PIXELS
-
-
-@dataclass(frozen=True)
-class BackendOption:
-    key: str
-    name: str
-    note: str
-    install_url: str
-
-
-BACKEND_OPTIONS = (
-    BackendOption(
-        key="codex",
-        name="Codex",
-        note="Recommended and supported",
-        install_url="https://learn.chatgpt.com/docs/codex/cli",
-    ),
-    BackendOption(
-        key="claude",
-        name="Claude Code",
-        note="Experimental",
-        install_url="https://code.claude.com/docs/en/setup",
-    ),
-)
 
 
 REQUIRED_APP_SETTINGS = {
@@ -102,7 +85,7 @@ REQUIRED_APP_SETTINGS = {
     "agent stop event": "agent_session_stopped",
     "Home tab enabled": "home_tab_enabled: true",
     "Messages tab enabled": "messages_tab_enabled: true",
-    "Agent view enabled": "agent_view",
+    "Agent view enabled": "agent_view:",
     "Interactive controls enabled": "is_enabled: true",
     "mention scope": "app_mentions:read",
     "assistant status scope": "assistant:write",
@@ -146,39 +129,19 @@ def ask_required(prompt: str) -> str:
         ui.message("A value is required.")
 
 
-def choose_backend() -> str:
-    ui.message("Choose the local agent that will run Tag tasks:")
-    print()
-    for index, option in enumerate(BACKEND_OPTIONS, start=1):
-        availability = "installed" if shutil.which(option.key) else "not found"
-        ui.message(f"{index}. {option.name:<12} {option.note:<27} {availability}")
+def ensure_agent(config_path: Path, values: dict[str, str], *, review: bool = False) -> dict[str, str]:
+    """The AI step: connect Codex or Claude and choose the Tag's default model.
 
-    aliases = {
-        "1": "codex",
-        "codex": "codex",
-        "2": "claude",
-        "claude": "claude",
-        "claude code": "claude",
-    }
-    while True:
-        print()
-        answer = ask("Agent", "1", qid="backend").lower()
-        backend = aliases.get(answer)
-        if backend:
-            return backend
-        ui.message("Choose 1 for Codex or 2 for Claude Code.")
-
-
-def selected_backend_available(backend: str) -> bool:
-    option = next(option for option in BACKEND_OPTIONS if option.key == backend)
-    if shutil.which(option.key):
-        return True
-
-    print()
-    ui.message(f"{option.name} was selected, but `{option.key}` is not available on PATH.")
-    ui.message(f"Install and sign in first: {option.install_url}")
-    ui.message("Then run ./tag setup again.")
-    return False
+    A saved default whose agent is still connected is kept without asking
+    again, unless the person is reviewing setup or went Back to this step.
+    """
+    saved = values.get("OPENTAG_DEFAULT_MODEL", "")
+    returning = ui.going_back_to("ai_connection") or ui.going_back_to("default_model")
+    if saved and not review and not returning:
+        backend, _ = agent_models.parse_model_choice(saved, values.get("OPENTAG_BACKEND") or "codex")
+        if tag_ai.connection(instance_home(), backend)["state"] == "connected":
+            return values
+    return tag_ai.setup_step(instance_home(), config_path)
 
 
 def ask_secret(prompt: str, prefix: str, *, qid: str | None = None) -> str:
@@ -232,27 +195,106 @@ def run_slack_cli(arguments: list[str], *, cwd: Path | None = None, interactive:
     return completed.returncode
 
 
-def inspect_slack_app(project: Path, app_id: str, *, issues: list[str] | None = None) -> bool:
-    """Inspect remote settings without changing them; fall back to guided review."""
-    if issues is not None:
-        issues.clear()
+def remote_app_settings(project: Path, app_id: str) -> tuple[bool, str]:
+    """The app's remote manifest as text, or why Slack CLI couldn't read it."""
     command = [
         shutil.which("slack") or "slack", "manifest", "info", "--source", "remote",
         "--app", app_id, "--skip-update", "--no-color",
     ]
-    completed = subprocess.run(command, cwd=project, check=False, text=True, capture_output=True)
+    try:
+        completed = subprocess.run(command, cwd=project, check=False, text=True, capture_output=True,
+                                   stdin=subprocess.DEVNULL, timeout=120)
+    except (OSError, subprocess.TimeoutExpired):
+        return False, "Slack CLI did not respond."
     output = safe_cli_output(completed.stdout or "")
-    normalized = output.replace('"', "").replace("'", "")
-    required = REQUIRED_APP_SETTINGS
     if completed.returncode == 0 and output:
-        missing = [
-            label
-            for label, marker in required.items()
-            if not re.search(
-                rf"(?<![A-Za-z0-9_:]){re.escape(marker)}(?![A-Za-z0-9_:])",
-                normalized,
-            )
-        ]
+        return True, output
+    return False, safe_cli_output((completed.stderr or completed.stdout or "").strip())
+
+
+def missing_app_settings(manifest: str, *, enterprise: bool = False) -> list[str]:
+    """Labels of Tag's required settings the manifest text doesn't have."""
+    normalized = manifest.replace('"', "").replace("'", "")
+    required = dict(REQUIRED_APP_SETTINGS)
+    if enterprise:
+        required["Organization deployment"] = "org_deploy_enabled: true"
+    return [
+        label for label, marker in required.items()
+        if not re.search(rf"(?<![A-Za-z0-9_:]){re.escape(marker)}(?![A-Za-z0-9_:])", normalized)
+    ]
+
+
+EVENT_SETTINGS = ("app mentions", "App Home event (app_home_opened)", "agent stop event", "direct-message event")
+APP_HOME_SETTINGS = ("Home tab enabled", "Messages tab enabled")
+
+
+def is_scope_setting(label: str) -> bool:
+    return bool(re.fullmatch(r"[a-z_]+:[a-z_.]+", REQUIRED_APP_SETTINGS.get(label, "")))
+
+
+def app_check_rows(missing: list[str], *, enterprise: bool = False) -> list[dict[str, object]]:
+    """Tag's requirements as ticks, naming what's missing."""
+    def row(label: str, labels: tuple[str, ...], detail) -> dict[str, object]:
+        absent = [item for item in labels if item in missing]
+        return {"label": label, "ok": not absent, "detail": detail(absent) if absent else None}
+
+    markers = lambda absent: ", ".join(REQUIRED_APP_SETTINGS[item] for item in absent)  # noqa: E731
+    rows = [
+        row("Socket Mode", ("Socket Mode",), lambda _: "Turn on Socket Mode"),
+        row("Events", EVENT_SETTINGS, markers),
+        row("App Home", APP_HOME_SETTINGS,
+            lambda absent: ", ".join("Home tab" if item.startswith("Home") else "Messages tab" for item in absent)),
+        row("Agent messaging", ("Agent view enabled",), lambda _: "Turn on Agents & AI Apps"),
+        row("Interactivity", ("Interactive controls enabled",), lambda _: "Turn on Interactivity"),
+    ]
+    scopes = [REQUIRED_APP_SETTINGS[label] for label in missing if is_scope_setting(label)]
+    rows.append({"label": f"Missing {len(scopes)} permission{'s' if len(scopes) != 1 else ''}" if scopes
+                 else "Permissions", "ok": not scopes, "detail": ", ".join(scopes) or None})
+    if enterprise:
+        rows.append(row("Organization deployment", ("Organization deployment",),
+                        lambda _: "Turn on organization-wide deployment"))
+    return rows
+
+
+def print_manual_steps(missing: list[str]) -> None:
+    """The api.slack.com steps for settings Tag's app still needs."""
+    ui.message("In Slack app settings:")
+    if any(label in missing for label in EVENT_SETTINGS):
+        ui.message("Event Subscriptions → Subscribe to bot events:", indent="    ")
+        if "app mentions" in missing:
+            ui.message("Add app_mention to receive mentions.", indent="      ")
+        if "App Home event (app_home_opened)" in missing:
+            ui.message("Add app_home_opened to show Tag's Home tab controls.", indent="      ")
+        if "agent stop event" in missing:
+            ui.message("Add agent_session_stopped to enable the native Stop button.", indent="      ")
+        if "direct-message event" in missing:
+            ui.message("Add message.im to receive direct messages.", indent="      ")
+    if "Home tab enabled" in missing:
+        ui.message("App Home → Show Tabs → enable Home Tab.", indent="    ")
+    if "Messages tab enabled" in missing:
+        ui.message("App Home → Show Tabs → enable Messages Tab.", indent="    ")
+    if "Agent view enabled" in missing:
+        ui.message("Agents & AI Apps → turn on the agent experience.", indent="    ")
+    if "Interactive controls enabled" in missing:
+        ui.message("Interactivity & Shortcuts → enable Interactivity.", indent="    ")
+    if "Socket Mode" in missing:
+        ui.message("Socket Mode → enable Socket Mode.", indent="    ")
+    if "Organization deployment" in missing:
+        ui.message("Org Level Apps → opt in to organization-wide deployment.", indent="    ")
+    scopes = [REQUIRED_APP_SETTINGS[label] for label in missing if is_scope_setting(label)]
+    if scopes:
+        ui.message("OAuth & Permissions → add bot scopes: " + ", ".join(scopes), indent="    ")
+        ui.message("Reinstall the app after adding scopes; Slack may require administrator approval.", indent="    ")
+    ui.message("Keep existing settings, then save your changes.")
+
+
+def inspect_slack_app(project: Path, app_id: str, *, issues: list[str] | None = None) -> bool:
+    """Inspect remote settings without changing them; fall back to guided review."""
+    if issues is not None:
+        issues.clear()
+    readable, output = remote_app_settings(project, app_id)
+    if readable:
+        missing = missing_app_settings(output)
         if not missing:
             ui.message("✓ Existing app has Tag's required Socket Mode, events, and bot scopes")
             return True
@@ -263,239 +305,219 @@ def inspect_slack_app(project: Path, app_id: str, *, issues: list[str] | None = 
             ui.message("App configuration needs attention: " + ", ".join(manual_missing))
             ui.message("Open app settings, make the other listed changes, then choose Check again.")
             print()
-            ui.message("In Slack app settings:")
-        if any(label in manual_missing for label in (
-            "app mentions", "App Home event (app_home_opened)", "agent stop event", "direct-message event"
-        )):
-            ui.message("Event Subscriptions → Subscribe to bot events:", indent="    ")
-            if "app mentions" in manual_missing:
-                ui.message("Add app_mention to receive mentions.", indent="      ")
-            if "App Home event (app_home_opened)" in manual_missing:
-                ui.message("Add app_home_opened to show Tag's Home tab controls.", indent="      ")
-            if "agent stop event" in manual_missing:
-                ui.message("Add agent_session_stopped to enable the native Stop button.", indent="      ")
-            if "direct-message event" in manual_missing:
-                ui.message("Add message.im to receive direct messages.", indent="      ")
-        if "Home tab enabled" in manual_missing:
-            ui.message("App Home → Show Tabs → enable Home Tab.", indent="    ")
-        if "Messages tab enabled" in manual_missing:
-            ui.message("App Home → Show Tabs → enable Messages Tab.", indent="    ")
-        if "Interactive controls enabled" in manual_missing:
-            ui.message("Interactivity & Shortcuts → enable Interactivity.", indent="    ")
-        if "Socket Mode" in manual_missing:
-            ui.message("Socket Mode → enable Socket Mode.", indent="    ")
-        scopes = [
-            required[label]
-            for label in manual_missing
-            if ":" in required[label] and " " not in required[label]
-        ]
-        if scopes:
-            ui.message("OAuth & Permissions → add bot scopes: " + ", ".join(scopes), indent="    ")
-            ui.message("Reinstall the app after adding scopes; Slack may require administrator approval.", indent="    ")
-        if manual_missing:
-            ui.message("Keep existing settings, then save your changes.")
+            print_manual_steps(manual_missing)
         return False
-    detail = safe_cli_output((completed.stderr or completed.stdout).strip())
-    if detail:
-        ui.message(detail)
+    if output:
+        ui.message(output)
     ui.message("Slack CLI could not inspect the remote manifest with this authorization.")
     return confirm("Have you manually compared the app with Tag's manifest?", default=False, qid="manifest_compared")
 
 
-def authorized_accounts(output: str) -> list[tuple[str, str]]:
-    """Parse the CLI's text account listing without reading its credential files."""
-    output = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", output)
-    workspaces: dict[str, str] = {}
+_ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+SIGN_IN_AGAIN = "Sign in to Slack again. Tag couldn't confirm which Slack account is setting it up."
+ORG_ID_ERROR = "That's the organization ID. Use the workspace's, which starts with T."
+NO_WORKSPACE_ID_ERROR = "No workspace ID found. It starts with T."
+
+
+def slack_sign_ins(output: str) -> list[dict[str, str | None]]:
+    """Parse `slack auth list` without reading the CLI's credential files.
+
+    Each sign-in has its Team ID (T… for a workspace, E… for an organization),
+    name, and the signed-in member's User ID and handle when the CLI shows them.
+    """
+    output = _ANSI_RE.sub("", output)
+    found: dict[str, dict[str, str | None]] = {}
+    current: dict[str, str | None] | None = None
     for line in output.splitlines():
-        match = re.fullmatch(r"\s*(.+?)\s+\(Team ID:\s*([TE][A-Z0-9]+)\)\s*", line)
-        if match:
-            name, team_id = match.groups()
-            workspaces.setdefault(team_id, name.strip())
-    return [(name, team_id) for team_id, name in workspaces.items()]
+        if "Team ID:" in line:
+            match = re.fullmatch(r"\s*(.+?)\s+\(Team ID:\s*([TE][A-Z0-9]+)\)\s*", line)
+            current = found.setdefault(match.group(2), {
+                "id": match.group(2), "name": match.group(1).strip(),
+                "kind": "organization" if match.group(2).startswith("E") else "workspace",
+                "user_id": None, "user_name": None,
+            }) if match else None
+            continue
+        if current is None:
+            continue
+        if match := re.fullmatch(r"\s*User ID:\s*([UW][A-Z0-9]+)\s*", line):
+            current["user_id"] = current["user_id"] or match.group(1)
+        elif match := re.fullmatch(r"\s*(?:User ?name|User Name|Handle):\s*@?(\S(?:.*\S)?)\s*", line, re.IGNORECASE):
+            current["user_name"] = current["user_name"] or match.group(1)
+    return list(found.values())
+
+
+def authorized_accounts(output: str) -> list[tuple[str, str]]:
+    return [(str(item["name"]), str(item["id"])) for item in slack_sign_ins(output)]
 
 
 def authorized_workspaces(output: str) -> list[tuple[str, str]]:
     return [(name, identity) for name, identity in authorized_accounts(output) if identity.startswith("T")]
 
 
-def authorized_members(output: str, team_id: str) -> list[str]:
-    """Read member IDs only from account blocks for the selected workspace."""
-    output = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", output)
-    selected = False
-    members: list[str] = []
-    for line in output.splitlines():
-        if "Team ID:" in line:
-            match = re.fullmatch(r"\s*.+?\s+\(Team ID:\s*([TE][A-Z0-9]+)\)\s*", line)
-            selected = bool(match and match.group(1) == team_id)
-        elif selected:
-            match = re.fullmatch(r"\s*User ID:\s*([UW][A-Z0-9]+)\s*", line)
-            if match and match.group(1) not in members:
-                members.append(match.group(1))
-    return members
+def list_slack_sign_ins() -> list[dict[str, str | None]]:
+    """The Slack CLI's sign-ins on this computer; empty when none can be listed."""
+    try:
+        result = subprocess.run(
+            [shutil.which("slack") or "slack", "auth", "list", "--skip-update", "--no-color"],
+            check=False, text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    return slack_sign_ins(result.stdout + "\n" + result.stderr) if result.returncode == 0 else []
 
 
-def slack_people(token: str, team_id: str) -> list[dict[str, str]]:
-    """Read only picker fields, across every page of the workspace directory."""
-    people: dict[str, dict[str, str]] = {}
-    cursor = ""
-    seen: set[str] = set()
-    while True:
-        payload = slack_channels.slack_api(token, "users.list", {
-            "team_id": team_id, "limit": "200", "cursor": cursor,
-        })
-        members = payload.get("members")
-        if not isinstance(members, list):
-            raise slack_channels.SlackChannelError("Slack returned an unreadable people list")
-        for member in members:
-            if not isinstance(member, dict):
-                continue
-            uid = member.get("id", "")
-            if (not isinstance(uid, str) or not re.fullmatch(r"[UW][A-Z0-9]+", uid)
-                    or member.get("deleted") or member.get("is_bot") or member.get("is_app_user")
-                    or member.get("is_invited_user")
-                    or member.get("team_id", team_id) != team_id):
-                continue
-            profile = member.get("profile") or {}
-            if not isinstance(profile, dict):
-                profile = {}
-            def clean(value):
-                return " ".join(value.split()) if isinstance(value, str) else ""
-            username = clean(member.get("name"))
-            name = clean(profile.get("display_name")) or clean(profile.get("real_name")) or clean(member.get("real_name")) or username or uid
-            photo = profile.get("image_48", "")
-            if not isinstance(photo, str) or not photo.startswith("https://"):
-                photo = ""
-            people[uid] = {"id": uid, "name": name, "username": username, "image_url": photo}
-        metadata = payload.get("response_metadata") or {}
-        cursor = metadata.get("next_cursor", "") if isinstance(metadata, dict) else ""
-        if not cursor:
-            break
-        if not isinstance(cursor, str) or cursor in seen:
-            raise slack_channels.SlackChannelError("Slack returned an unreadable people list")
-        seen.add(cursor)
-    return sorted(people.values(), key=lambda person: (person["name"].casefold(), person["id"]))
+def auth_test_member(team_id: str) -> str:
+    """Ask Slack who is signed in, through the Slack CLI's own authorization."""
+    try:
+        result = subprocess.run(
+            [shutil.which("slack") or "slack", "api", "auth.test", "--team", team_id,
+             "--skip-update", "--no-color"],
+            check=False, text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=15,
+        )
+        output = result.stdout + "\n" + result.stderr
+        start, end = output.find("{"), output.rfind("}")
+        payload = json.loads(output[start:end + 1]) if start >= 0 and end > start else {}
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
+        return ""
+    if (result.returncode or not isinstance(payload, dict) or not payload.get("ok") or payload.get("bot_id")
+            or team_id not in {payload.get("team_id"), payload.get("enterprise_id")}):
+        return ""
+    user = payload.get("user_id")
+    return user if isinstance(user, str) and re.fullmatch(r"[UW][A-Z0-9]+", user) else ""
 
 
-def choose_slack_person(people: list[dict[str, str]]) -> str | None:
-    """Select an offered identity, or explicitly fall back to member-ID entry."""
+def signed_in_member(sign_in_id: str, sign_ins: list[dict[str, str | None]] | None = None) -> str:
+    """The owner is always the signed-in account; Tag never guesses or offers a list."""
+    for item in list_slack_sign_ins() if sign_ins is None else sign_ins:
+        if item["id"] == sign_in_id and item["user_id"]:
+            return str(item["user_id"])
+    if member := auth_test_member(sign_in_id):
+        return member
+    raise RuntimeError(SIGN_IN_AGAIN)
+
+
+def ensure_owner(config_path: Path, values: dict[str, str], *, sign_in_id: str = "",
+                 sign_ins: list[dict[str, str | None]] | None = None) -> dict[str, str]:
+    """Make the person setting up Tag its owner. Saved owners are kept as they are."""
+    if not settings.validation_error("SLACK_ALLOWED_USER_IDS", values.get("SLACK_ALLOWED_USER_IDS", "")):
+        return values
+    owner = signed_in_member(sign_in_id or slack_identity.cli_team(values), sign_ins)
+    ui.message(f"Owner: your Slack account ({owner}). Only you can ask this Tag to work.")
+    return settings.update_config(config_path, {"SLACK_ALLOWED_USER_IDS": owner})
+
+
+def parse_workspace_id(value: str) -> tuple[str, str | None]:
+    """A workspace ID from a T… ID or an address such as app.slack.com/client/T…."""
+    text = value.strip()
+    if match := re.search(r"(?<![A-Za-z0-9])(T[A-Z0-9]{2,})(?![A-Za-z0-9])", text):
+        return match.group(1), None
+    if re.search(r"(?<![A-Za-z0-9])E[A-Z0-9]{2,}(?![A-Za-z0-9])", text):
+        return "", ORG_ID_ERROR
+    return "", NO_WORKSPACE_ID_ERROR
+
+
+def ask_text(prompt: str, *, qid: str, default: str = "", error: str | None = None, **details) -> str:
+    """A text question that can show why the last answer didn't work."""
     if ui.protocol_active():
-        answer = ui.ask_client("people", "Which one is you?", people=people, qid="person")
-        if answer == "manual":
-            return None
-        if not isinstance(answer, str) or answer not in {person["id"] for person in people}:
-            raise RuntimeError("The setup client chose a person that was not offered")
-        return answer
+        answer = ui.ask_client("text", prompt, qid=qid, default=default, error=error, **details)
+        if not isinstance(answer, str):
+            raise RuntimeError("The setup client sent a non-text answer")
+        return answer.strip()
+    if error:
+        ui.message(error)
+    return ask(prompt, default or None, qid=qid).strip()
+
+
+def organization_workspaces(enterprise_id: str) -> list[dict[str, str]]:
+    """Workspaces in an organization that Tag can offer to pick from.
+
+    Spike result (Slack CLI 4.8): the CLI lists an organization's workspaces
+    only inside its own prompts while installing or creating an app, and
+    `slack api auth.teams.list --team E…` runs without the sign-in's token
+    (`not_authed`). Calling Slack directly would mean reading the CLI's private
+    credential file, which Tag doesn't do. So there is no safe list yet, and
+    setup offers only "Workspace not listed?". Swap this function when the CLI
+    can print the list on its own.
+    """
+    return []
+
+
+def choose_org_workspace(organization: dict[str, str | None]) -> slack_identity.WorkspaceSelection:
+    enterprise_id, org_name = str(organization["id"]), str(organization["name"])
+    workspaces = organization_workspaces(enterprise_id)
+    if not ui.protocol_active():
+        ui.message(f"{org_name} is an organization. Pick the one workspace this Tag works in.")
+        ui.message("To find its ID, open the workspace in Slack in a browser: the address has app.slack.com/client/T….")
+        ui.message("An organization admin may need to approve the app. Setup waits and resumes.")
+    options = [item["name"] for item in workspaces] + ["Workspace not listed?"]
+    ids = [item["id"] for item in workspaces] + ["manual"]
+    index = ui.choose(f"Which workspace in {org_name}?", options, qid="org_workspace", option_ids=ids,
+                      workspaces=workspaces, organization={"id": enterprise_id, "name": org_name})
+    if index < len(workspaces):
+        chosen = workspaces[index]
+        return slack_identity.WorkspaceSelection(chosen["id"], chosen["name"], enterprise_id, org_name)
+    error = None
     while True:
-        query = ask("Find yourself (name, username, or member ID; Enter for all)", qid="people_search").casefold()
-        matches = [person for person in people if any(query in person[key].casefold() for key in ("name", "username", "id"))]
-        labels = [person["name"] + (f" · @{person['username']}" if person["username"] else "") for person in matches]
-        choice = ui.choose("Which one is you?", labels + ["Search again", "Enter a member ID", "Save and exit"],
-                           qid="person_terminal")
-        if choice < len(matches):
-            return matches[choice]["id"]
-        if choice == len(matches) + 1:
-            return None
-        if choice == len(matches) + 2:
-            raise ui.Paused()
+        team_id, error = parse_workspace_id(ask_text("Workspace address or ID (T…)", qid="org_workspace_id",
+                                                     error=error))
+        if team_id and not (error := settings.validation_error("SLACK_TEAM_ID", team_id)):
+            return slack_identity.WorkspaceSelection(team_id, team_id, enterprise_id, org_name)
 
 
-def needs_backend_choice(values: dict[str, str]) -> bool:
-    """Ask for the agent when none is valid, or when Back returns to that question
-    (the default would otherwise fill it in and skip it)."""
-    return bool(settings.validation_error("OPENTAG_BACKEND", values.get("OPENTAG_BACKEND", ""))) \
-        or ui.going_back_to("backend")
-
-
-def choose_allowed_users(team_id: str, current: str = "", *, token: str = "", workspace_id: str = "") -> str:
-    """Make the person setting up Tag its owner; only they can use it by default."""
-    if not settings.validation_error("SLACK_ALLOWED_USER_IDS", current):
-        return current
-    slack = shutil.which("slack")
-    if slack and re.fullmatch(r"[TE][A-Z0-9]+", team_id):
-        try:
-            result = subprocess.run(
-                [slack, "auth", "list", "--skip-update", "--no-color"],
-                check=False, text=True, capture_output=True, timeout=15,
-            )
-            if result.returncode == 0:
-                if members := authorized_members(result.stdout + "\n" + result.stderr, team_id):
-                    ui.message(f"Owner: your Slack account ({members[0]}). Only you can use this Tag.")
-                    return members[0]
-        except (OSError, subprocess.TimeoutExpired):
-            pass
-    # The signed-in account is unknown, so ask who is setting Tag up.
-    if token:
-        ui.message("Loading people from Slack…")
-        try:
-            people = slack_people(token, workspace_id or team_id)
-        except slack_permissions.MissingScope:
-            ui.message("Slack needs users:read to list people. You can enter your member ID instead.")
-        except slack_channels.SlackChannelError:
-            ui.message("Could not load people from Slack. You can enter your member ID instead.")
-        else:
-            if people:
-                if selected := choose_slack_person(people):
-                    return selected
-            else:
-                ui.message("No active people were found. You can enter your member ID instead.")
-    return ask_validated(
-        "Your Slack member ID (profile > More > Copy member ID)", "SLACK_ALLOWED_USER_IDS", qid="member_id"
-    )
+def slack_sign_in() -> bool:
+    """Sign in to Slack through the Slack CLI: the ticket question, or its own prompts in a terminal."""
+    if ui.protocol_active():
+        return slack_login_with_client()
+    if run_slack_cli(["auth", "login"], interactive=True):
+        ui.message("Slack CLI authorization was not completed. Run tag setup to try again.")
+        return False
+    return True
 
 
 def connect_slack_workspace(current: str = "") -> slack_identity.WorkspaceSelection | None:
-    try:
-        from tag_paths import tag_home
-    except ImportError:
-        from scripts.tag_paths import tag_home
+    """Pick a workspace from the Slack CLI's sign-ins; sign in only when needed or asked."""
     tag_dependencies.activate_slack(tag_dependencies.ensure_slack(tag_home()))
     while True:
-        result = subprocess.run(
-            [shutil.which("slack") or "slack", "auth", "list", "--skip-update", "--no-color"],
-            check=False, text=True, capture_output=True,
-        )
-        accounts = authorized_accounts(result.stdout + "\n" + result.stderr) if result.returncode == 0 else []
-        if not accounts:
-            ui.message("No authorized workspaces could be listed. Connect through Slack CLI to continue.")
-        options = [name + (" (organization)" if team_id.startswith("E") else "")
-                   + (" (saved)" if team_id == current else "") for name, team_id in accounts]
-        options += ["Connect another workspace" if accounts else "Connect Slack", "Save and exit"]
-        index = ui.choose("Choose a workspace", options, qid="workspace")
-        if index < len(accounts):
-            name, team_id = accounts[index]
-            ui.message(f"✓ {name}")
-            if team_id.startswith("E"):
-                enterprise_id = team_id
-                ui.message(f"Organization authorization found: {name} ({enterprise_id}).")
-                ui.message("Choose the one workspace this Tag should use. Open that workspace in Slack's browser app;")
-                ui.message("copy its T… ID from app.slack.com/client/T… in the address bar.")
-                ui.message("Slack will verify access during installation. An organization admin may need to approve it.")
-                if ui.choose("Connect a workspace in this organization", ["Enter workspace ID", "Save and exit"],
-                             qid="org_workspace") == 1:
-                    return None
-                team_id = ask_validated("Workspace Team ID (T…)", "SLACK_TEAM_ID", qid="org_workspace_id")
-                return slack_identity.WorkspaceSelection(team_id, team_id, enterprise_id)
-            return slack_identity.WorkspaceSelection(team_id, name)
-        if index == len(accounts) + 1:
-            return None
-        if ui.protocol_active():
-            if not slack_login_with_client():
-                ui.message("Slack authorization was not completed. Try connecting again.")
+        sign_ins = list_slack_sign_ins()
+        if not sign_ins:
+            ui.message("Sign in to Slack to choose a workspace.")
+            if not slack_sign_in():
+                ui.message("Slack sign-in was not completed. Try again.")
                 return None
+            sign_ins = list_slack_sign_ins()
+            if not sign_ins:
+                ui.message("No Slack sign-ins could be listed. Check the Slack CLI, then run tag setup again.")
+                return None
+        options = [str(item["name"]) + (" (organization)" if item["kind"] == "organization" else "")
+                   for item in sign_ins] + ["Sign in to another workspace", "Save and exit"]
+        ids = [str(item["id"]) for item in sign_ins] + ["sign_in", "exit"]
+        default = ids.index(current) if current in ids[:len(sign_ins)] else 0
+        index = ui.choose("Which workspace?", options, qid="workspace", option_ids=ids, default=default,
+                          workspaces=sign_ins)
+        if ids[index] == "exit":
+            raise ui.Paused()
+        if index == len(sign_ins):
+            if not slack_sign_in():
+                ui.message("Slack sign-in was not completed. Choose a workspace or try again.")
             continue
-        if run_slack_cli(["auth", "login"], interactive=True):
-            ui.message("Slack CLI authorization was not completed. Run tag setup to try again.")
-            return None
+        chosen = sign_ins[index]
+        user = {"user_id": str(chosen["user_id"] or ""), "user_name": str(chosen["user_name"] or "")}
+        if chosen["kind"] == "organization":
+            selection = choose_org_workspace(chosen)
+            return selection._replace(sign_in_id=str(chosen["id"]), **user)
+        ui.message(f"✓ {chosen['name']}")
+        return slack_identity.WorkspaceSelection(str(chosen["id"]), str(chosen["name"]),
+                                                 sign_in_id=str(chosen["id"]), **user)
 
 
 # Settings a question saves, cleared when the operator goes back to change it.
+OWNER_AND_WORKSPACE = ("SLACK_TEAM_ID", "SLACK_ENTERPRISE_ID", "SLACK_ALLOWED_USER_IDS")
 BACK_CLEARS: dict[str, tuple[str, ...]] = {
-    "workspace": ("SLACK_TEAM_ID", "SLACK_ENTERPRISE_ID"),
-    "org_workspace_id": ("SLACK_TEAM_ID", "SLACK_ENTERPRISE_ID"),
-    "allowed_user": ("SLACK_ALLOWED_USER_IDS",),
-    "person": ("SLACK_ALLOWED_USER_IDS",),
-    "people_search": ("SLACK_ALLOWED_USER_IDS",),
-    "member_id": ("SLACK_ALLOWED_USER_IDS",),
+    "workspace": OWNER_AND_WORKSPACE,
+    "org_workspace": OWNER_AND_WORKSPACE,
+    "org_workspace_id": OWNER_AND_WORKSPACE,
+    "existing_app": ("SLACK_APP_ID",),
+    "app_id": ("SLACK_APP_ID",),
     "channels": ("SLACK_CHANNEL_IDS",),
 }
 
@@ -560,12 +582,12 @@ def slack_project(home: Path) -> Path:
     (project / ".slack").mkdir(parents=True, exist_ok=True, mode=0o700)
     config = project / ".slack/config.json"
     if not config.exists():
-        config.write_text(json.dumps({"manifest": {"source": "remote"}}, indent=2) + "\n")
+        config.write_text(json.dumps({"manifest": {"source": "remote"}}, indent=2) + "\n", encoding="utf-8")
     # Remote-manifest management needs project metadata but no SDK run hooks:
     # Tag supervises its own bridge rather than using `slack run`.
     hooks = project / ".slack/hooks.json"
     if not hooks.exists():
-        hooks.write_text(json.dumps({"hooks": {}}, indent=2) + "\n")
+        hooks.write_text(json.dumps({"hooks": {}}, indent=2) + "\n", encoding="utf-8")
     return project
 
 
@@ -649,33 +671,14 @@ def slack_cli_supports_icon_upload() -> bool:
     return result.returncode == 0 and bool(match) and tuple(map(int, match.groups())) >= (4, 7)
 
 
-def slack_user_first_name(team_id: str) -> str:
-    """Best-effort name for the Slack CLI authorization selected in setup."""
-    if team_id:
-        try:
-            result = subprocess.run(
-                [shutil.which("slack") or "slack", "api", "auth.test", "--team", team_id,
-                 "--skip-update", "--no-color"],
-                check=False, text=True, capture_output=True, timeout=15,
-            )
-            output = result.stdout + "\n" + result.stderr
-            start, end = output.find("{"), output.rfind("}")
-            payload = json.loads(output[start:end + 1]) if start >= 0 and end > start else {}
-            candidate = payload.get("user") if result.returncode == 0 and payload.get("ok") else ""
-            if payload.get("team_id") != team_id or payload.get("bot_id"):
-                candidate = ""
-        except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
-            candidate = ""
-        if isinstance(candidate, str) and candidate.strip():
-            first = re.split(r"[\s._-]+", candidate.strip(), maxsplit=1)[0]
-            if first:
-                return first[:1].upper() + first[1:]
+def local_first_name() -> str:
+    """This computer's account first name: Slack isn't connected when setup names the Tag."""
     local = re.split(r"[\s._-]+", getpass.getuser().strip(), maxsplit=1)[0]
     return local[:1].upper() + local[1:] if local else ""
 
 
-def suggested_assistant_name(team_id: str) -> str:
-    first_name = slack_user_first_name(team_id)
+def suggested_assistant_name() -> str:
+    first_name = local_first_name()
     suggestion = f"{first_name}'s Tag" if first_name else settings.DEFAULTS["OPENTAG_BOT_NAME"]
     return suggestion if len(suggestion) <= 35 else settings.DEFAULTS["OPENTAG_BOT_NAME"]
 
@@ -701,13 +704,6 @@ WATERDROP_BODIES = (
     WaterdropBody("water", .57),
     WaterdropBody("fire", .01, .92),
     WaterdropBody("soil", .13, .92),
-)
-WATERDROP_ELEMENTS = (
-    ("Metal · white", "metal"),
-    ("Wood · green", "wood"),
-    ("Water · blue (default)", "water"),
-    ("Fire · red", "fire"),
-    ("Soil · yellow", "soil"),
 )
 DEFAULT_WATERDROP_ELEMENT = "water"
 WATERDROP_BACKGROUNDS = (
@@ -760,7 +756,7 @@ def _waterdrop_assignments(project: Path) -> tuple[Path, dict[str, object]]:
     assets.mkdir(parents=True, exist_ok=True, mode=0o700)
     assignments_path = assets / "tag-waterdrop-identities.json"
     try:
-        assignments = json.loads(assignments_path.read_text())
+        assignments = json.loads(assignments_path.read_text(encoding="utf-8"))
         if not isinstance(assignments, dict):
             assignments = {}
     except (OSError, json.JSONDecodeError):
@@ -771,12 +767,11 @@ def _waterdrop_assignments(project: Path) -> tuple[Path, dict[str, object]]:
 def _remember_waterdrop_index(project: Path, seed: str, identity_index: int) -> None:
     assignments_path, assignments = _waterdrop_assignments(project)
     assignments[seed] = {
-        "team_id": seed.partition(":")[0],
         "index": identity_index % WATERDROP_RECIPE_COUNT,
         "element": waterdrop_recipe(seed, identity_index)["body"].name,
     }
     temporary = assignments_path.with_suffix(".json.tmp")
-    temporary.write_text(json.dumps(assignments, indent=2, sort_keys=True) + "\n")
+    temporary.write_text(json.dumps(assignments, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     os.replace(temporary, assignments_path)
     if os.name != "nt":
         assignments_path.chmod(0o600)
@@ -802,23 +797,50 @@ def _element_identity_index(element: str, variation_index: int) -> int:
     return base_index + WATERDROP_BASE_COUNT * signature_index
 
 
+def other_tag_waterdrops() -> set[int]:
+    """Waterdrop identities other Tags on this computer already use."""
+    used: set[int] = set()
+    try:
+        own = instance_home().resolve()
+        homes = [Path(str(item["home"])) for item in tag_instances.discover(tag_home()) if item.get("valid")]
+    except (OSError, ValueError, RuntimeError):
+        return used
+    for home in homes:
+        try:
+            if home.resolve() == own:
+                continue
+        except OSError:
+            continue
+        assets = home / "integrations/slack-cli/assets"
+        state = _read_json(assets / PICTURE_STATE)
+        if state.get("picture") == "waterdrop" and isinstance(state.get("index"), int):
+            used.add(state["index"] % WATERDROP_RECIPE_COUNT)
+        # Tags set up before the picture record keep their identities here.
+        for item in _read_json(assets / "tag-waterdrop-identities.json").values():
+            if isinstance(item, dict) and isinstance(item.get("index"), int):
+                used.add(item["index"] % WATERDROP_RECIPE_COUNT)
+    return used
+
+
+def _read_json(path: Path) -> dict:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
 def _assigned_waterdrop_index(
-    project: Path, seed: str, element: str = DEFAULT_WATERDROP_ELEMENT
+    project: Path, seed: str, element: str = DEFAULT_WATERDROP_ELEMENT, *, occupied: set[int] | None = None
 ) -> int:
-    """Keep an identity stable and avoid known local collisions per workspace."""
+    """Keep an identity stable for its seed and avoid ones other Tags use."""
+    occupied = other_tag_waterdrops() if occupied is None else occupied
     _, assignments = _waterdrop_assignments(project)
     saved = assignments.get(seed)
     if isinstance(saved, dict) and isinstance(saved.get("index"), int):
         saved_index = saved["index"] % WATERDROP_RECIPE_COUNT
-        if waterdrop_recipe(seed, saved_index)["body"].name == element:
+        if waterdrop_recipe(seed, saved_index)["body"].name == element and saved_index not in occupied:
             return saved_index
-    team_id = seed.partition(":")[0]
-    occupied = {
-        item["index"] % WATERDROP_RECIPE_COUNT
-        for item in assignments.values()
-        if isinstance(item, dict) and item.get("team_id") == team_id
-        and isinstance(item.get("index"), int)
-    }
     variation_index = int.from_bytes(
         hashlib.sha256(seed.encode("utf-8")).digest()[:8], "big"
     ) % WATERDROP_ELEMENT_RECIPE_COUNT
@@ -829,6 +851,21 @@ def _assigned_waterdrop_index(
         variation_index = (variation_index + 1) % WATERDROP_ELEMENT_RECIPE_COUNT
     _remember_waterdrop_index(project, seed, identity_index)
     return identity_index
+
+
+def shuffled_waterdrop_index(current: int | None, occupied: set[int]) -> int:
+    """Any element: a different element or signature from the current picture."""
+    now = waterdrop_recipe("", current) if current is not None else None
+
+    def differs(index: int) -> bool:
+        recipe = waterdrop_recipe("", index)
+        return not now or recipe["body"] != now["body"] or recipe["signature"] != now["signature"]
+
+    candidates = [index for index in range(WATERDROP_RECIPE_COUNT)
+                  if index != current and index not in occupied and differs(index)]
+    if not candidates:  # Every identity is taken: any other picture will do.
+        candidates = [index for index in range(WATERDROP_RECIPE_COUNT) if index != current and differs(index)]
+    return random.SystemRandom().choice(candidates)
 
 
 def _rgb_bytes(hue: float, saturation: float, value: float) -> bytes:
@@ -1013,11 +1050,11 @@ def validate_profile_icon(path: Path) -> str | None:
     except OSError:
         dimensions = None
     if dimensions is None:
-        return "That file is not a readable PNG, JPEG, or GIF image."
+        return "Use a PNG, JPEG, or GIF image."
     width, height = dimensions
     if not (MIN_ICON_DIMENSION <= width <= MAX_ICON_DIMENSION
             and MIN_ICON_DIMENSION <= height <= MAX_ICON_DIMENSION):
-        return "Use an image between 512×512 and 2000×2000 pixels."
+        return f"This picture is {width}×{height}. Use one between 512×512 and 2000×2000 pixels."
     return None
 
 
@@ -1040,113 +1077,185 @@ def save_profile_icon(project: Path, source: Path) -> Path:
     return destination
 
 
-def customize_new_app(
-    project: Path, config_path: Path, team_id: str = "", *, test_mode: bool = False
-) -> None:
-    """Collect the Slack identity before its creation transaction begins."""
-    values = settings.load_config(config_path)
-    current_name = values.get("OPENTAG_BOT_NAME", settings.DEFAULTS["OPENTAG_BOT_NAME"])
-    if current_name == settings.DEFAULTS["OPENTAG_BOT_NAME"]:
-        current_name = suggested_assistant_name(team_id)
-        if test_mode:
-            current_name = f"TEST · {current_name}"
-            if len(current_name) > 35:
-                current_name = "TEST · Tag"
+# The picture Tag will upload: kind, label, and the waterdrop identity. Not
+# named tag-profile.*, which Slack CLI would take for the picture itself.
+PICTURE_STATE = "tag-picture.json"
 
-    def choose_name(default: str) -> str:
+
+def profile_picture(project: Path) -> dict | None:
+    """The saved picture, when its file is still there."""
+    state = _read_json(project / "assets" / PICTURE_STATE)
+    preview = Path(str(state.get("preview", "")))
+    if state.get("picture") not in {"waterdrop", "custom"} or not preview.is_file() \
+            or preview.parent.resolve() != (project / "assets").resolve():
+        return None
+    return state
+
+
+def _save_picture(project: Path, state: dict) -> dict:
+    settings.save_config(project / "assets" / PICTURE_STATE, state)
+    return state
+
+
+def picture_revision(picture: dict | None) -> str | None:
+    """Identify the bytes, since shuffles and uploads reuse tag-profile's path."""
+    return hashlib.sha256(Path(picture["preview"]).read_bytes()).hexdigest() if picture else None
+
+
+def waterdrop_picture(project: Path, seed: str, *, shuffle_from: int | None = None, shuffle: bool = False) -> dict:
+    """Render a waterdrop no other Tag on this computer uses, and remember it."""
+    occupied = other_tag_waterdrops()
+    index = (shuffled_waterdrop_index(shuffle_from, occupied) if shuffle
+             else _assigned_waterdrop_index(project, seed, occupied=occupied))
+    path = branded_profile_icon(project, seed, recipe_index=index)
+    element = waterdrop_recipe(seed, index)["body"].name
+    return _save_picture(project, {
+        "picture": "waterdrop", "index": index, "element": element,
+        "label": f"{element.title()} · Tag waterdrop #{index + 1:04d}", "preview": str(path.resolve()),
+    })
+
+
+def custom_picture(project: Path, source: Path) -> tuple[dict | None, str | None]:
+    """Validate and copy a chosen picture; the error says what to change."""
+    if error := validate_profile_icon(source):
+        return None, error
+    if slack_cli_too_old():
+        return None, "Your own picture needs Slack CLI 4.7 or newer. Update Slack CLI, then try again."
+    saved = save_profile_icon(project, source)
+    return _save_picture(project, {"picture": "custom", "label": source.name,
+                                   "preview": str(saved.resolve())}), None
+
+
+def slack_cli_too_old() -> bool:
+    """True only for an installed Slack CLI older than 4.7; setup installs it later otherwise."""
+    return bool(shutil.which("slack")) and not slack_cli_supports_icon_upload()
+
+
+def default_profile_name(values: dict[str, str], *, test_mode: bool = False) -> str:
+    name = values.get("OPENTAG_BOT_NAME", settings.DEFAULTS["OPENTAG_BOT_NAME"])
+    if name == settings.DEFAULTS["OPENTAG_BOT_NAME"]:
+        name = suggested_assistant_name()
+        if test_mode:
+            name = f"TEST · {name}"
+            if len(name) > 35:
+                name = "TEST · Tag"
+    return name
+
+
+def save_profile(config_path: Path, name: str, description: str) -> str | None:
+    """Validate and save the name and description; the error says what to change."""
+    if error := settings.validation_error("OPENTAG_BOT_NAME", name):
+        return error
+    if error := settings.validation_error("OPENTAG_BOT_DESCRIPTION", description):
+        return error
+    settings.update_config(config_path, {"OPENTAG_BOT_NAME": name, "OPENTAG_BOT_DESCRIPTION": description})
+    return None
+
+
+def choose_profile(project: Path, config_path: Path, *, editing: bool = False, test_mode: bool = False) -> str:
+    """Your Tag: name, one-line description, and picture. Returns ``new`` or ``existing``.
+
+    Nothing touches Slack here. ``existing`` (not offered while editing) means
+    the person will use an app they already have, which keeps its own name and
+    picture.
+    """
+    values = settings.load_config(config_path)
+    name = default_profile_name(values, test_mode=test_mode)
+    description = values.get("OPENTAG_BOT_DESCRIPTION", "")
+    picture = profile_picture(project) or waterdrop_picture(project, "", shuffle=True)
+    if ui.protocol_active():
+        error = None
         while True:
-            candidate = ask("Assistant name", default, qid="assistant_name").strip()
-            if error := settings.validation_error("OPENTAG_BOT_NAME", candidate):
-                ui.message(error)
+            answer = ui.ask_client(
+                "profile_picture", "Meet your new Tag", qid="profile", name=name, name_limit=35,
+                description=description, description_limit=140, preview=picture["preview"],
+                preview_revision=picture_revision(picture),
+                picture=picture["picture"], picture_label=picture["label"], error=error,
+                editing=editing, can_use_existing=not editing,
+            )
+            error = None
+            if answer == "shuffle":
+                ui.forget_last("profile")  # Replaying a shuffle after Back would change the picture.
+                picture = waterdrop_picture(project, "", shuffle=True, shuffle_from=picture.get("index"))
                 continue
-            settings.update_config(config_path, {"OPENTAG_BOT_NAME": candidate})
-            return candidate
+            if answer == "existing" and not editing:
+                return "existing"
+            if not isinstance(answer, dict):
+                raise RuntimeError("The setup client sent an unreadable profile answer")
+            if "picture" in answer:
+                source = answer["picture"]
+                if not isinstance(source, str) or not source.strip():
+                    error = "Choose an existing image file."
+                else:
+                    chosen, error = custom_picture(project, Path(source.strip()).expanduser())
+                    picture = chosen or picture
+                if "name" not in answer or error:
+                    ui.forget_last("profile")
+                    continue
+            if "name" not in answer:
+                raise RuntimeError("The setup client sent an unreadable profile answer")
+            name, description = answer.get("name"), answer.get("description", "")
+            if not isinstance(name, str) or not isinstance(description, str):
+                raise RuntimeError("The setup client sent an unreadable profile answer")
+            name, description = name.strip(), description.strip()
+            if not (error := save_profile(config_path, name, description)):
+                return "new"
 
     print()
-    ui.message("Make this Slack assistant yours.")
+    ui.message("Meet your new Tag. Nothing is created in Slack until you approve it.")
     if test_mode:
         ui.message("TEST MODE · This name will identify a real Slack test app.", code=ui.display.WARNING)
-    name = choose_name(current_name)
-    saved: Path | None = None
-    picture_kind = ""
-    picture_label = ""
-    identity_index: int | None = None
-
     while True:
-        if saved is None:
-            element_default = next(
-                index for index, (_, element) in enumerate(WATERDROP_ELEMENTS)
-                if element == DEFAULT_WATERDROP_ELEMENT
-            )
-            action = ui.choose(
-                "Profile picture",
-                [label for label, _ in WATERDROP_ELEMENTS]
-                + ["Choose my own picture", "Save and exit"],
-                default=element_default,
-                qid="profile_picture",
-            )
-            if action == len(WATERDROP_ELEMENTS) + 1:
-                raise ui.Paused()
-            if not slack_cli_supports_icon_upload():
-                ui.message("Profile-picture upload requires Slack CLI 4.7 or newer.")
-                ui.message("Upgrade Slack CLI, then run tag setup again. Your assistant name is saved.")
-                raise ui.Paused()
-            if action < len(WATERDROP_ELEMENTS):
-                element = WATERDROP_ELEMENTS[action][1]
-                seed = f"{team_id}:{name}"
-                identity_index = _assigned_waterdrop_index(project, seed, element)
-                saved = branded_profile_icon(
-                    project, seed, recipe_index=identity_index, element=element
-                )
-                picture_kind = "waterdrop"
-                picture_label = f"{element.title()} · Tag waterdrop #{identity_index + 1:04d}"
-                ui.message(f"✓ {picture_label} is ready")
-            else:
-                ui.message("Drag a picture here, or paste its local path.")
-                ui.message("PNG, JPEG, or GIF · 512–2000 px in each dimension")
-                while True:
-                    source = parse_local_path(ask("Picture path", qid="picture_path"))
-                    error = "Enter one local image path." if source is None else validate_profile_icon(source)
-                    if error:
-                        ui.message(error)
-                        continue
-                    saved = save_profile_icon(project, source)
-                    picture_kind = "custom"
-                    picture_label = source.name
-                    identity_index = None
-                    ui.message(f"✓ Profile picture ready: {saved.name}")
-                    break
-
+        candidate = ask("Name", name, qid="assistant_name").strip()
+        if error := settings.validation_error("OPENTAG_BOT_NAME", candidate):
+            ui.message(error)
+            continue
+        name = candidate
+        break
+    while True:
+        candidate = ask("One-line description (optional)", description or None,
+                        qid="assistant_description").strip()
+        if error := settings.validation_error("OPENTAG_BOT_DESCRIPTION", candidate):
+            ui.message(error)
+            continue
+        description = candidate
+        break
+    settings.update_config(config_path, {"OPENTAG_BOT_NAME": name, "OPENTAG_BOT_DESCRIPTION": description})
+    options = ["Keep this picture", "Shuffle picture", "Choose my own picture", "Open picture preview"]
+    options += [] if editing else ["Use an existing app"]
+    options += ["Save and exit"]
+    while True:
         print()
-        ui.display.section("Your Tag")
-        ui.display.info_row("Name", name)
-        ui.display.info_row("Picture", picture_label)
-        if test_mode:
-            ui.message("TEST MODE · Continuing creates a real Slack app.", code=ui.display.WARNING)
-        ui.message("Nothing is created in Slack until you continue.", code=ui.display.MUTED)
-        review = ui.choose("Ready?", [
-            "Create this Tag", "Change name", "Change picture",
-            "Open picture preview", "Save and exit",
-        ], qid="app_review")
-        if review == 0:
-            return
-        if review == 1:
-            name = choose_name(name)
-            if picture_kind == "waterdrop" and identity_index is not None:
-                _remember_waterdrop_index(project, f"{team_id}:{name}", identity_index)
-            continue
-        if review == 2:
-            saved = None
-            continue
-        if review == 3:
+        ui.display.info_row("Picture", picture["label"])
+        action = options[ui.choose("Profile picture", options, qid="profile_picture")]
+        if action == "Keep this picture":
+            return "new"
+        if action == "Use an existing app":
+            return "existing"
+        if action == "Shuffle picture":
+            picture = waterdrop_picture(project, "", shuffle=True, shuffle_from=picture.get("index"))
+        elif action == "Choose my own picture":
+            ui.message("Drag a picture here, or paste its local path. Enter goes back.")
+            ui.message("PNG, JPEG, or GIF · 512–2000 px in each dimension")
+            while True:
+                raw = ask("Picture path", qid="picture_path")
+                if not raw:
+                    break
+                source = parse_local_path(raw)
+                chosen, error = (None, "Enter one local image path.") if source is None else custom_picture(project, source)
+                if error:
+                    ui.message(error)
+                    continue
+                picture = chosen
+                ui.message(f"✓ Profile picture ready: {source.name}")
+                break
+        elif action == "Open picture preview":
             try:
-                opened = webbrowser.open(saved.resolve().as_uri())
+                opened = webbrowser.open(Path(picture["preview"]).resolve().as_uri())
             except (OSError, ValueError):
                 opened = False
             if not opened:
-                ui.message(f"Could not open the image viewer. Preview: {saved}")
-            continue
-        raise ui.Paused()
+                ui.message(f"Could not open the image viewer. Preview: {picture['preview']}")
 
 
 def saved_slack_app(project: Path, team_id: str, app_id: str) -> bool:
@@ -1161,48 +1270,27 @@ def saved_slack_app(project: Path, team_id: str, app_id: str) -> bool:
 
 
 def choose_slack_app(
-    home: Path, team_id: str, config_path: Path | None = None, *, test_mode: bool = False
+    home: Path, team_id: str, config_path: Path | None = None, *, test_mode: bool = False, progress=None,
 ) -> str:
+    """The new-app path after the Create recap: create the app (or resume its
+    creation), then link it and check its settings. A saved App ID from an
+    earlier setup is linked and checked the same way."""
     config_path = config_path or settings.config_path(home)
     values = settings.load_config(config_path)
     app_id = values.get("SLACK_APP_ID", "")
     team_id = slack_identity.cli_team(values) or team_id
-    ui.screen(
-        2,
-        "Which app should Tag use?",
-        target=ui.display.target_detail(os.getenv("TAG_ID", "default"), team_id),
-    )
     project = slack_project(home)
     creation = project / "tag-create.json"
     if creation.exists():
         state = slack_app_create.read_object(creation)
         # An explicitly supplied ID can recover an uncertain creation via normal linking.
         if not app_id or state.get("app_id") == app_id:
-            app_id = slack_app_create.create_app(project, team_id, config_path, run_slack_cli)
+            app_id = slack_app_create.create_app(project, team_id, config_path, run_slack_cli,
+                                                 approved=True, progress=progress)
     if not app_id:
-        ui.message(f"Workspace: {team_id}")
-        action = ui.choose("Slack app", [
-            "Create a new TEST Tag app" if test_mode else "Create a new Tag app",
-            "Use an existing app", "Save and exit",
-        ], qid="slack_app")
-        if action == 2:
-            raise ui.Paused()
-        if action == 0:
-            if test_mode:
-                customize_new_app(project, config_path, team_id, test_mode=True)
-            else:
-                customize_new_app(project, config_path, team_id)
-            app_id = slack_app_create.create_app(project, team_id, config_path, run_slack_cli)
-        else:
-            print()
-            ui.message("Find your App ID:")
-            ui.message("1. Open https://api.slack.com/apps (sign in if asked).")
-            ui.message(f"2. Select an app you manage for workspace {team_id}.")
-            ui.message("3. Go to Basic Information → App Credentials → App ID.")
-            ui.message("4. Copy the ID starting with A and paste it below.")
-            ui.message("This is not a token or Client ID. Ctrl+C exits without saving an ID.")
-            app_id = ask_validated("App ID", "SLACK_APP_ID", qid="app_id")
-            settings.update_config(config_path, {"SLACK_APP_ID": app_id})
+        # The Create recap was the approval.
+        app_id = slack_app_create.create_app(project, team_id, config_path, run_slack_cli,
+                                             approved=True, progress=progress)
     ui.message(f"Selected app: {app_id}")
     # Keep link progress separately from credential validation, including across exits.
     marker = project / "tag-linked.json"
@@ -1279,6 +1367,253 @@ def choose_slack_app(
             else:
                 raise ui.Paused()
     return app_id
+
+
+APP_ID_RE = re.compile(r"(?<![A-Za-z0-9])(A[A-Z0-9]{2,})(?![A-Za-z0-9])")
+
+
+def other_tag_apps() -> dict[str, dict[str, str]]:
+    """Apps other Tags on this computer use (``SLACK_APP_ID``).
+
+    One app serves one Tag: two Tags on one app would share its Socket Mode events.
+    """
+    apps: dict[str, dict[str, str]] = {}
+    try:
+        own = instance_home().resolve()
+        items = tag_instances.discover(tag_home())
+    except (OSError, ValueError, RuntimeError):
+        return apps
+    for item in items:
+        home = Path(str(item.get("home", "")))
+        try:
+            if not item.get("valid") or home.resolve() == own:
+                continue
+            values = settings.load_config(home / "config/settings.json")
+        except (OSError, ValueError):
+            continue
+        app_id = values.get("SLACK_APP_ID", "")
+        if re.fullmatch(r"A[A-Z0-9]+", app_id):
+            name = values.get("OPENTAG_BOT_NAME") or app_id
+            apps[app_id] = {"name": name, "tag": tag_instances.nickname(home) or name,
+                            "team": slack_identity.cli_team(values), "workspace": values.get("SLACK_TEAM_ID", "")}
+    return apps
+
+
+def slack_cli_apps(project: Path, team_id: str) -> dict[str, str]:
+    """Apps the Slack CLI lists for Tag's own project (`slack app list`), with names when it shows them."""
+    if not any((project / ".slack" / name).is_file() for name in ("apps.json", "apps.dev.json")):
+        return {}
+    try:
+        result = subprocess.run(
+            [shutil.which("slack") or "slack", "app", "list", "--team", team_id, "--skip-update", "--no-color"],
+            cwd=project, check=False, text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    if result.returncode:
+        return {}
+    apps: dict[str, str] = {}
+    name = ""
+    for line in _ANSI_RE.sub("", result.stdout).splitlines():
+        if match := re.fullmatch(r"\s*(?:App Name|Name):\s*(\S.*?)\s*", line):
+            name = match.group(1)
+        elif match := re.fullmatch(r"\s*(\S.*?)\s+\(App ID:\s*(A[A-Z0-9]+)\)\s*", line):
+            apps[match.group(2)] = match.group(1)
+            name = ""
+        elif match := re.fullmatch(r"\s*App ID:\s*(A[A-Z0-9]+)\s*", line):
+            apps[match.group(1)] = name or match.group(1)
+            name = ""
+    return apps
+
+
+def known_apps(home: Path, team_id: str, workspace_id: str = "") -> list[dict[str, str | None]]:
+    """Apps Tag already knows for this workspace: linked here, listed by the Slack CLI, or used by other Tags."""
+    project = slack_project(home)
+    used = other_tag_apps()
+    apps: dict[str, dict[str, str | None]] = {}
+    try:
+        linked = slack_app_create.saved_app_ids(project, team_id)
+    except RuntimeError:
+        linked = set()
+    for app_id in sorted(linked):
+        apps[app_id] = {"id": app_id, "name": app_id, "source": "linked", "used_by": None}
+    for app_id, name in slack_cli_apps(project, team_id).items():
+        entry = apps.setdefault(app_id, {"id": app_id, "name": name, "source": "cli", "used_by": None})
+        if entry["name"] == app_id:
+            entry["name"] = name
+    for app_id, other in used.items():
+        if other["team"] in {team_id, workspace_id} or other["workspace"] == workspace_id or app_id in apps:
+            entry = apps.setdefault(app_id, {"id": app_id, "name": other["name"], "source": "tag", "used_by": None})
+            entry["used_by"] = other["tag"]
+            if entry["name"] == app_id:
+                entry["name"] = other["name"]
+    return list(apps.values())
+
+
+def used_by_message(tag_name: str) -> str:
+    return f"Your Tag “{tag_name}” already uses this app. Pick another one."
+
+
+def ask_app_id(team_id: str) -> str:
+    """An app link or ID, for an app Tag doesn't know yet."""
+    if not ui.protocol_active():
+        print()
+        ui.message("Find your app's ID:")
+        ui.message("1. Open https://api.slack.com/apps (sign in if asked).")
+        ui.message(f"2. Select an app you manage for workspace {team_id}.")
+        ui.message("3. Copy its address, or Basic Information → App Credentials → App ID.")
+        ui.message("This is not a token or Client ID.")
+    used = other_tag_apps()
+    error = None
+    while True:
+        value = ask_text("App link or ID (A…)", qid="app_id", error=error)
+        match = APP_ID_RE.search(value)
+        if not match:
+            error = "No App ID found. It starts with A."
+        elif match.group(1) in used:
+            error = used_by_message(used[match.group(1)]["tag"])
+        else:
+            return match.group(1)
+
+
+def unlink_local(project: Path, team_id: str, app_id: str) -> None:
+    """Undo a link setup made in Tag's own Slack CLI project. The app itself is untouched."""
+    path = project / ".slack/apps.dev.json"
+    try:
+        records = slack_app_create.read_object(path) if path.exists() else {}
+    except RuntimeError:
+        return
+    record = records.get(team_id)
+    if isinstance(record, dict) and record.get("app_id") == app_id:
+        del records[team_id]
+        settings.save_config(path, records)
+    marker = project / "tag-linked.json"
+    if marker.exists() and _read_json(marker).get("app_id") == app_id:
+        marker.unlink()
+
+
+def link_app(home: Path, config_path: Path, team_id: str, app_id: str) -> None:
+    """Link the app to Tag's Slack CLI project. Linking changes nothing in the app."""
+    project = slack_project(home)
+    progress = setup_progress(config_path)
+    previous = progress.get("linked_by_setup")
+    if previous and previous != app_id:
+        unlink_local(project, team_id, previous)
+        save_progress(config_path, linked_by_setup=None)
+    while not saved_slack_app(project, team_id, app_id):
+        save_progress(config_path, linked_by_setup=app_id)
+        result = run_slack_cli(
+            ["app", "link", "--team", team_id, "--app", app_id, "--environment", "local"], cwd=project, quiet=True,
+        )
+        if saved_slack_app(project, team_id, app_id):
+            break
+        if result == 0:
+            ui.message("Slack returned success, but the app link could not be confirmed locally.")
+        if ui.choose("App linking needs attention", ["Check again", "Save and exit"], qid="link_app_retry") == 1:
+            raise ui.Paused()
+    settings.save_config(project / "tag-linked.json", {"app_id": app_id, "team_id": team_id})
+
+
+def update_app_settings(home: Path, team_id: str, app_id: str, enterprise: bool) -> None:
+    """Add Tag's missing settings to the app, after the person chose Update app."""
+    project = slack_project(home)
+    if slack_manifest_migrations.has_legacy_assistant(project, app_id):
+        def approve_legacy() -> bool:
+            ui.notice("This app uses Slack's legacy Assistant messaging",
+                      "Switching it to Agent messaging can't be undone.")
+            return confirm("Switch permanently to Agent messaging?", default=False, qid="agent_messaging_switch")
+
+        if not slack_manifest_migrations.enable_agent_view(project, app_id, team_id, approve_legacy=approve_legacy):
+            raise RuntimeError("The app still uses legacy Assistant messaging, so it wasn't updated.")
+    ui.commit()  # The app in Slack changed: Back can't undo that.
+    if slack_manifest_migrations.add_missing_settings(project, app_id, team_id, enterprise=enterprise):
+        ui.message("✓ App updated. Slack asks you to reinstall it when Tag connects.")
+
+
+def check_existing_app(home: Path, config_path: Path, team_id: str, app_id: str, *, enterprise: bool) -> bool:
+    """Show the app's checks. True to connect it, False to pick another app."""
+    project = slack_project(home)
+    while True:
+        readable, output = remote_app_settings(project, app_id)
+        missing = missing_app_settings(output, enterprise=enterprise) if readable else None
+        if missing is None:
+            checks = [{"label": "Read app settings", "ok": False,
+                       "detail": "Slack CLI couldn't read this app's settings with your sign-in."}]
+            entries = [("manual", "I'll do it myself"), ("check", "Check again"), ("back", "Back")]
+        elif missing:
+            checks = app_check_rows(missing, enterprise=enterprise)
+            entries = [("update", "Update app"), ("manual", "I'll do it myself"),
+                       ("check", "Check again"), ("back", "Back")]
+        else:
+            checks = app_check_rows([], enterprise=enterprise)
+            entries = [("connect", "Connect"), ("back", "Back")]
+        if not ui.protocol_active():
+            print()
+            for row in checks:
+                ui.message(("✓ " if row["ok"] else "✗ ") + str(row["label"])
+                           + (f" · {row['detail']}" if row["detail"] else ""))
+            if missing:
+                ui.message("Update app adds only Tag's missing settings and keeps the rest. Slack asks to reinstall.")
+        ids = [option_id for option_id, _ in entries]
+        prompt = "Ready to connect this app" if missing == [] else "This app needs a few changes"
+        action = ids[ui.choose(prompt, [label for _, label in entries], qid="app_checks",
+                               option_ids=ids, checks=checks, app_id=app_id)]
+        if action == "connect":
+            return True
+        if action == "back":
+            return False
+        if action == "update":
+            try:
+                update_app_settings(home, team_id, app_id, enterprise)
+            except RuntimeError as error:
+                ui.message(str(error))
+        elif action == "manual":
+            ui.message(f"Open https://api.slack.com/apps/{app_id} and make these changes:")
+            print_manual_steps(missing or [])
+            if missing is None and confirm("Have you manually compared the app with Tag's manifest?",
+                                           default=False, qid="manifest_compared"):
+                return True
+
+
+def choose_existing_app(home: Path, config_path: Path) -> str:
+    """Your app: pick an app Tag knows, or paste a link or ID; then check it."""
+    values = settings.load_config(config_path)
+    team_id, workspace_id = slack_identity.cli_team(values), values.get("SLACK_TEAM_ID", "")
+    enterprise = bool(values.get("SLACK_ENTERPRISE_ID"))
+    project = slack_project(home)
+    while True:
+        apps = known_apps(home, team_id, workspace_id)
+        free = [app for app in apps if not app["used_by"]]
+        if not ui.protocol_active():
+            for app in apps:
+                if app["used_by"]:
+                    ui.message(f"{app['name']} · already used by your Tag “{app['used_by']}”", code=ui.display.MUTED)
+        ids = [str(app["id"]) for app in free] + ["other", "exit"]
+        index = ui.choose("Which app?", [str(app["name"]) for app in free] + ["Use a different app", "Save and exit"],
+                          qid="existing_app", option_ids=ids, apps=apps)
+        if ids[index] == "exit":
+            raise ui.Paused()
+        app_id = ids[index] if index < len(free) else ask_app_id(workspace_id or team_id)
+        ui.message(f"Selected app: {app_id}")
+        link_app(home, config_path, team_id, app_id)
+        if check_existing_app(home, config_path, team_id, app_id, enterprise=enterprise):
+            settings.update_config(config_path, {"SLACK_APP_ID": app_id})
+            ui.commit()  # The app is linked and chosen: Back stops here.
+            return app_id
+        if setup_progress(config_path).get("linked_by_setup") == app_id:
+            unlink_local(project, team_id, app_id)
+            save_progress(config_path, linked_by_setup=None)
+
+
+def setup_progress(config_path: Path) -> dict:
+    """Setup's own progress record: which path was chosen and what Slack showed."""
+    return _read_json(config_path.with_name("setup-progress.json"))
+
+
+def save_progress(config_path: Path, **changes) -> None:
+    path = config_path.with_name("setup-progress.json")
+    state = {**_read_json(path), **changes}
+    settings.save_config(path, {key: value for key, value in state.items() if value is not None})
 
 
 def validate_slack_identity(token: str, *, team_id: str = "", app_id: str = "", enterprise_id: str = "", label: str) -> dict[str, object]:
@@ -1461,11 +1796,118 @@ def write_config(path: Path, values: dict[str, str]) -> None:
     ui.message(f"Wrote private configuration: {path}")
 
 
+def creation_progress(config_path: Path):
+    """Report app creation as progress lines: create, picture, install, connect."""
+    progress = setup_progress(config_path)
+    workspace = progress.get("workspace_name") or settings.load_config(config_path).get("SLACK_TEAM_ID", "")
+    texts = {
+        "create": "Create the Slack app",
+        "picture": "Add the picture",
+        "install": f"Add it to {workspace}" if progress.get("organization_name") else f"Install in {workspace}",
+        "connect": "Connect to this Mac" if sys.platform == "darwin" else "Connect to this computer",
+    }
+
+    def report(step: str) -> None:
+        if ui.protocol_active():
+            ui.emit({"type": "progress", "step": step, "text": texts[step]})
+        else:
+            ui.message(f"◌ {texts[step]}")
+
+    return report
+
+
+def setup_recap(config_path: Path, project: Path) -> dict:
+    """What Create in Slack will make, for the recap."""
+    values = settings.load_config(config_path)
+    progress = setup_progress(config_path)
+    team_id = values.get("SLACK_TEAM_ID", "")
+    enterprise_id = values.get("SLACK_ENTERPRISE_ID", "")
+    picture = profile_picture(project)
+    choice = tag_ai.default_choice(instance_home(), values)
+    pictures = slack_setup_icons.pictures(tag_home(), instance_home(), values)
+    return {
+        "name": values.get("OPENTAG_BOT_NAME", ""),
+        "description": values.get("OPENTAG_BOT_DESCRIPTION", ""),
+        "picture": picture["preview"] if picture else None,
+        "picture_revision": picture_revision(picture),
+        "workspace": {
+            "id": team_id, "name": progress.get("workspace_name") or team_id,
+            "icon": pictures["workspace"],
+            "organization": {"id": enterprise_id, "name": progress.get("organization_name") or enterprise_id}
+            if enterprise_id else None,
+        },
+        "owner": {"id": values.get("SLACK_ALLOWED_USER_IDS", "").split(",")[0] or None,
+                  "icon": pictures["owner"],
+                  "name": progress.get("owner_name") or None},
+        "ai": {key: choice[key] for key in ("value", "backend", "backend_name", "label")},
+        "approval": bool(enterprise_id),
+    }
+
+
+def approve_creation(config_path: Path, project: Path, *, test_mode: bool = False) -> str:
+    """The Create recap: one approval for the new app. Returns ``create`` or ``back``."""
+    while True:
+        recap = setup_recap(config_path, project)
+        workspace = recap["workspace"]
+        place = workspace["name"]
+        if not ui.protocol_active():
+            print()
+            ui.display.section("Your Tag")
+            ui.display.info_row("Name", recap["name"])
+            if recap["description"]:
+                ui.display.info_row("Description", recap["description"])
+            picture = profile_picture(project)
+            ui.display.info_row("Picture", picture["label"] if picture else "None")
+            organization = workspace["organization"]
+            ui.display.info_row("Workspace", f"{place} in {organization['name']}" if organization else place)
+            owner = recap["owner"]
+            ui.display.info_row("Owner", "You" + (f" · @{owner['name']}" if owner["name"] else f" · {owner['id']}"))
+            ui.display.info_row("AI", f"{recap['ai']['backend_name']} · {recap['ai']['label']}")
+            if recap["approval"]:
+                ui.display.info_row("Approval", "An org admin may need to approve. Setup waits and resumes.")
+            ui.message("Only you can ask it to work; people in the channel see its replies.", code=ui.display.MUTED)
+            if test_mode:
+                ui.message("TEST MODE · Continuing creates a real Slack app.", code=ui.display.WARNING)
+        ids = ["create", "edit", "edit_ai", "back"]
+        action = ids[ui.choose(f"Ready to create it in {place}?", ["Create in Slack", "Edit", "Edit AI", "Back"],
+                               qid="approve_setup", option_ids=ids, recap=recap)]
+        if action == "edit":
+            choose_profile(project, config_path, editing=True, test_mode=test_mode)
+        elif action == "edit_ai":
+            tag_ai.setup_step(instance_home(), config_path)
+        else:
+            return action
+
+
+def choose_workspace(config_path: Path) -> bool:
+    """The Workspace step: save the workspace and make the signed-in account the owner."""
+    selection = connect_slack_workspace()
+    if not selection:
+        return False
+    owner = selection.user_id or signed_in_member(selection.sign_in_id or selection.enterprise_id
+                                                  or selection.team_id, [])
+    values = settings.update_config(config_path, {"SLACK_TEAM_ID": selection.team_id,
+                                                  "SLACK_ENTERPRISE_ID": selection.enterprise_id})
+    if settings.validation_error("SLACK_ALLOWED_USER_IDS", values.get("SLACK_ALLOWED_USER_IDS", "")):
+        settings.update_config(config_path, {"SLACK_ALLOWED_USER_IDS": owner})
+        ui.message(f"Owner: your Slack account ({owner}). Only you can ask this Tag to work.")
+    save_progress(config_path, workspace_name=selection.name, organization_name=selection.organization_name or None,
+                  owner_name=selection.user_name or None)
+    if (instance_home() / "instance.json").is_file() and selection.name != selection.team_id:
+        tag_instances.record_workspace_name(instance_home(), selection.name)
+    return True
+
+
 def guided_setup(
     config_path: Path, *, start_services: bool = True,
     review_channels: bool = False, test_mode: bool = False,
     telemetry_session: tag_telemetry.SetupSession | None = None,
 ) -> int:
+    """Your Tag → AI → Workspace → Create (or Your app) → Channels → memory.
+
+    Each step saves its answers, so a paused setup resumes at the first step
+    still missing. Nothing touches Slack before the Workspace step.
+    """
     values = settings.load_config(config_path)
     channel_policy = values.get("SLACK_CHANNEL_POLICY", "selected" if values.get("MFS_SLACK_CONNECTOR_CONFIG") else "invited")
     home = instance_home()
@@ -1481,42 +1923,77 @@ def guided_setup(
     initialize_workspace(workspace)
     if telemetry_session:
         telemetry_session.enter("slack")
-    ui.screen(
-        1,
-        "Let’s connect Tag to Slack.",
-        "Your progress is saved. Ctrl-C pauses setup.",
-        target=ui.display.target_detail(
-            os.getenv("TAG_ID", "default"),
-            values.get("SLACK_TEAM_ID", ""),
-            values.get("SLACK_APP_ID", ""),
-            values.get("OPENTAG_BOT_NAME", ""),
-        ),
-    )
+
+    def show(step: int, title: str, detail: str = "") -> None:
+        current = settings.load_config(config_path)
+        ui.screen(step, title, detail, target=ui.display.target_detail(
+            os.getenv("TAG_ID", "default"), current.get("SLACK_TEAM_ID", ""),
+            current.get("SLACK_APP_ID", ""), current.get("OPENTAG_BOT_NAME", ""),
+        ))
 
     # Defaults are not repeatedly prompted and never replace saved choices.
     defaults = {key: value for key, value in settings.DEFAULTS.items() if key not in values}
     if defaults:
         values = settings.update_config(config_path, defaults, only_missing=True)
-    if needs_backend_choice(values):
-        values = settings.update_config(config_path, {"OPENTAG_BACKEND": choose_backend()})
-    backend = values["OPENTAG_BACKEND"]
-    if not selected_backend_available(backend):
-        return 1
     needs_slack_connection = any(
         settings.validation_error(key, values.get(key, ""))
         for key in ("SLACK_APP_TOKEN", "SLACK_BOT_TOKEN")
     )
     if needs_slack_connection:
-        ui.message("Authorize access in Slack. Private credentials stay in this terminal.")
-        team_id = values.get("SLACK_TEAM_ID", "") or connect_slack_cli(config_path=config_path)
-        if not team_id:
-            ui.message("Slack authorization is required; run tag setup again when ready.")
-            return 1
-        values = settings.update_config(config_path, {"SLACK_TEAM_ID": team_id})
-        if telemetry_session:
-            telemetry_session.enter("app")
-        app_id = choose_slack_app(home, team_id, config_path, test_mode=test_mode)
+        project = slack_project(home)
+        profile_done = False
+        while True:
+            values = settings.load_config(config_path)
+            app_path = setup_progress(config_path).get("app_path")
+            has_app = bool(values.get("SLACK_APP_ID")) or (project / "tag-create.json").exists()
+            # Until Slack is connected, a resumed setup starts at Your Tag with
+            # its saved answers. Setups from before this order, paused after
+            # choosing a workspace, start there too when the Tag isn't named yet.
+            if not has_app and (ui.going_back_to("profile") or (
+                    not profile_done and (not values.get("SLACK_TEAM_ID") or not app_path))):
+                show(1, "Meet your new Tag", "Your progress is saved. Ctrl-C pauses setup.")
+                app_path = choose_profile(project, config_path, test_mode=test_mode)
+                save_progress(config_path, app_path=app_path)
+                profile_done = True
+            if telemetry_session:
+                telemetry_session.enter("app")
+            if not values.get("SLACK_TEAM_ID"):
+                show(2, "Choose the AI")
+            values = ensure_agent(config_path, settings.load_config(config_path), review=review_channels)
+            if not values.get("SLACK_TEAM_ID"):
+                show(3, "Which workspace?", "Tag uses your Slack sign-ins on this computer.")
+                if not choose_workspace(config_path):
+                    ui.message("Slack authorization is required; run tag setup again when ready.")
+                    return 1
+                values = settings.load_config(config_path)
+            values = ensure_owner(config_path, values)
+            if has_app:
+                break
+            if app_path == "existing":
+                show(4, "Your app")
+                choose_existing_app(home, config_path)
+                break
+            show(4, "Create your Tag", "Nothing is created in Slack until you approve it.")
+            if approve_creation(config_path, project, test_mode=test_mode) == "create":
+                break
+            # Back from the recap: choose the workspace again.
+            settings.save_config(config_path, {key: value for key, value in settings.load_config(config_path).items()
+                                               if key not in OWNER_AND_WORKSPACE})
+        values = settings.load_config(config_path)
+        team_id = values["SLACK_TEAM_ID"]
+        report = creation_progress(config_path)
+        if setup_progress(config_path).get("app_path") == "existing" and values.get("SLACK_APP_ID"):
+            app_id = values["SLACK_APP_ID"]
+            link_app(home, config_path, slack_identity.cli_team(values), app_id)
+        else:
+            if not values.get("SLACK_APP_ID") and not slack_cli_supports_icon_upload():
+                ui.message("Creating the app with its picture needs Slack CLI 4.7 or newer.")
+                ui.message("Update Slack CLI, then run tag setup again. Your choices are saved.")
+                raise ui.Paused()
+            app_id = choose_slack_app(home, team_id, config_path, test_mode=test_mode, progress=report)
         values = settings.update_config(config_path, {"SLACK_APP_ID": app_id})
+        if any(settings.validation_error(key, values.get(key, "")) for key in ("SLACK_APP_TOKEN", "SLACK_BOT_TOKEN")):
+            report("connect")
         values = connect_app_credentials(home, config_path, team_id, app_id)
         if any(settings.validation_error(key, values.get(key, "")) for key in ("SLACK_APP_TOKEN", "SLACK_BOT_TOKEN")):
             print()
@@ -1548,6 +2025,9 @@ def guided_setup(
                 continue
             values = settings.update_config(config_path, {"SLACK_BOT_TOKEN": bot_token})
             break
+    else:
+        # Already connected: review the AI step only when asked to.
+        values = ensure_agent(config_path, values, review=review_channels)
 
     if telemetry_session:
         telemetry_session.enter("app")
@@ -1566,48 +2046,44 @@ def guided_setup(
         inferred["SLACK_APP_ID"] = str(bot_identity["app_id"])
     if inferred:
         values = settings.update_config(config_path, inferred)
+    # Setups from before the owner came from the sign-in may not have one yet.
+    values = ensure_owner(config_path, values)
 
     if telemetry_session:
         telemetry_session.enter("channels")
-    ui.screen(
-        3,
-        "Where should Tag respond?",
-        "Slack connected",
-        target=ui.display.target_detail(
-            os.getenv("TAG_ID", "default"),
-            values.get("SLACK_TEAM_ID", ""),
-            values.get("SLACK_APP_ID", ""),
-            values.get("OPENTAG_BOT_NAME", ""),
-        ),
-    )
-    if settings.validation_error("SLACK_ALLOWED_USER_IDS", values.get("SLACK_ALLOWED_USER_IDS", "")):
-        # Slack CLI accounts are keyed by the organization in Enterprise Grid;
-        # the people directory is the workspace's own.
-        owner_id = choose_allowed_users(slack_identity.cli_team(values), token=values["SLACK_BOT_TOKEN"],
-                                        workspace_id=values.get("SLACK_TEAM_ID", ""))
-        values = settings.update_config(config_path, {"SLACK_ALLOWED_USER_IDS": owner_id})
-
+    tag_name = values.get("OPENTAG_BOT_NAME") or "Tag"
+    show(5, f"Where should {tag_name} start?", "Slack connected")
     if not values.get("SLACK_CHANNEL_IDS") and values.get("SLACK_CHANNEL_ID"):
         values = settings.update_config(
             config_path, {"SLACK_CHANNEL_IDS": values["SLACK_CHANNEL_ID"]}
         )
+    follows_invitations = channel_policy == "invited"
     selected_channels: list[slack_channels.SlackChannel] = []
+
     def choose_setup_channels():
         return slack_permissions.recover(
-            lambda: slack_channels.choose_channels(values["SLACK_BOT_TOKEN"], values.get("SLACK_CHANNEL_IDS", ""),
-                                                  app_id=values.get("SLACK_APP_ID", ""),
-                                                  **({"team_id": values["SLACK_TEAM_ID"]} if values.get("SLACK_ENTERPRISE_ID") else {})),
+            lambda: slack_channels.setup_channels(
+                values["SLACK_BOT_TOKEN"], values.get("SLACK_CHANNEL_IDS", ""), tag_name=tag_name,
+                allow_empty=follows_invitations, app_id=values.get("SLACK_APP_ID", ""),
+                **({"team_id": values["SLACK_TEAM_ID"]} if values.get("SLACK_ENTERPRISE_ID") else {})),
             values.get("SLACK_APP_ID", ""),
         )
 
-    if review_channels or settings.validation_error("SLACK_CHANNEL_IDS", values.get("SLACK_CHANNEL_IDS", "")):
-        selected_channels = choose_setup_channels()
-        values = settings.update_config(
-            config_path,
-            {"SLACK_CHANNEL_IDS": ",".join(channel.channel_id for channel in selected_channels)},
-        )
+    def save_channels(channels: list[slack_channels.SlackChannel]) -> dict[str, str]:
+        changes = {"SLACK_CHANNEL_IDS": ",".join(channel.channel_id for channel in channels)}
+        if follows_invitations:
+            # New setups follow invitations: channels Tag is invited to later are picked up.
+            changes["SLACK_CHANNEL_POLICY"] = "invited"
+        saved = settings.update_config(config_path, changes)
+        save_progress(config_path, channels_done=True)
+        return saved
 
-    if not selected_channels:
+    chosen_before = ((follows_invitations and setup_progress(config_path).get("channels_done") is True)
+                     or not settings.validation_error("SLACK_CHANNEL_IDS", values.get("SLACK_CHANNEL_IDS", "")))
+    if review_channels or not chosen_before:
+        selected_channels = choose_setup_channels()
+        values = save_channels(selected_channels)
+    elif values.get("SLACK_CHANNEL_IDS"):
         available = slack_permissions.recover(
             lambda: slack_channels.list_channels(values["SLACK_BOT_TOKEN"],
                 **({"team_id": values["SLACK_TEAM_ID"]} if values.get("SLACK_ENTERPRISE_ID") else {})), values.get("SLACK_APP_ID", ""),
@@ -1618,56 +2094,20 @@ def guided_setup(
             for channel_id in slack_channels.parse_channel_ids(values["SLACK_CHANNEL_IDS"])
             if channel_id in visible and visible[channel_id].is_member
         ]
-    expected = set(slack_channels.parse_channel_ids(values["SLACK_CHANNEL_IDS"]))
-    if {channel.channel_id for channel in selected_channels} != expected:
-        ui.message("A saved channel is no longer available. Choose joined channels to continue.")
-        selected_channels = choose_setup_channels()
-        values = settings.update_config(config_path, {"SLACK_CHANNEL_IDS": ",".join(c.channel_id for c in selected_channels)})
-    while True:
-        print()
-        ui.message("Selected: " + ", ".join(f"#{c.name}" for c in selected_channels))
-        memory_label = "invited channels" if channel_policy == "invited" else "selected channels only"
-        ui.message(f"Slack memory · last {values['MFS_SLACK_HISTORY_DAYS']} days · {memory_label}")
-        if channel_policy == "invited":
-            ui.message("Automatic memory: all channels Tag has joined, including future invitations.")
-            ui.message("Anyone who can invite this app can enable that channel's history indexing.")
-            ui.message("Membership is checked about every minute while Tag runs. Leaving stops future retrieval, not stored-data retention.")
-        ui.message("Replies use the current channel’s memory only.")
-        ui.message("Allowed callers: " + values["SLACK_ALLOWED_USER_IDS"] + " · channel members can see replies")
-        ui.message("Agent: " + ("Codex" if values["OPENTAG_BACKEND"] == "codex" else "Claude · experimental"))
-        choice = ui.choose("Ready to continue?", [
-            f"Use {len(selected_channels)} channel(s) and finish setup",
-            "Change channels", "Change defaults", "Save and exit",
-        ], qid="ready")
-        if choice == 3:
-            raise ui.Paused()
-        if choice == 1:
+        if {channel.channel_id for channel in selected_channels} != set(
+                slack_channels.parse_channel_ids(values["SLACK_CHANNEL_IDS"])):
+            ui.message("A saved channel is no longer available. Choose channels again.")
             selected_channels = choose_setup_channels()
-            values = settings.update_config(config_path, {"SLACK_CHANNEL_IDS": ",".join(c.channel_id for c in selected_channels)})
-        elif choice == 2:
-            days = ("7", "30", "90")
-            day = ui.choose("Slack history window", [f"Last {d} days" for d in days], default=days.index(values["MFS_SLACK_HISTORY_DAYS"]), qid="history_days")
-            agent = ui.choose("Agent", ["Codex · recommended", "Claude · experimental"], default=int(values["OPENTAG_BACKEND"] == "claude"), qid="agent")
-            values = settings.update_config(config_path, {"MFS_SLACK_HISTORY_DAYS": days[day], "OPENTAG_BACKEND": ("codex", "claude")[agent]})
-        else:
-            ui.message("Continue saves these choices only. No services or indexing will start.")
-            if ui.choose("Approve setup", ["Continue", "Back"], default=1, qid="approve_setup") == 0:
-                if channel_policy == "invited":
-                    values = settings.update_config(config_path, {"SLACK_CHANNEL_POLICY": channel_policy})
-                break
+            values = save_channels(selected_channels)
+    elif follows_invitations and values.get("SLACK_CHANNEL_POLICY") != "invited":
+        values = settings.update_config(config_path, {"SLACK_CHANNEL_POLICY": "invited"})
+    if selected_channels:
+        ui.message("Channels: " + ", ".join(f"#{c.name}" for c in selected_channels))
+    elif follows_invitations:
+        ui.message(f"No channels yet. Invite {tag_name} with /invite in Slack; it starts there within a minute.")
+
     if telemetry_session:
         telemetry_session.enter("finish")
-    ui.screen(
-        4,
-        "Finishing setup",
-        "Your Slack app and channel choices are saved.",
-        target=ui.display.target_detail(
-            os.getenv("TAG_ID", "default"),
-            values.get("SLACK_TEAM_ID", ""),
-            values.get("SLACK_APP_ID", ""),
-            values.get("OPENTAG_BOT_NAME", ""),
-        ),
-    )
     ui.message("✓ Slack connected\n◌ Preparing Slack memory…")
     uri = connector_uri(values["SLACK_TEAM_ID"], values.get("SLACK_APP_ID", ""))
     required_scopes = [connector_scope(values["SLACK_TEAM_ID"], channel,
@@ -1686,14 +2126,21 @@ def guided_setup(
         render_slack_connector(values["SLACK_TEAM_ID"], selected_channels,
                                values["MFS_SLACK_HISTORY_DAYS"]),
     }
-    memory_incomplete = (
-        not values.get("MFS_SLACK_TOKEN")
-        or values.get("MFS_SLACK_CONNECTOR_URI") not in {uri, legacy_uri}
-        or not saved_connector.is_file()
-        or not (set(required_scopes).issubset(saved_scopes)
-                or set(legacy_scopes).issubset(saved_scopes))
-        or saved_connector.read_text() not in expected_connectors
-    )
+    if selected_channels:
+        memory_incomplete = (
+            not values.get("MFS_SLACK_TOKEN")
+            or values.get("MFS_SLACK_CONNECTOR_URI") not in {uri, legacy_uri}
+            or not saved_connector.is_file()
+            or not (set(required_scopes).issubset(saved_scopes)
+                    or set(legacy_scopes).issubset(saved_scopes))
+            or saved_connector.read_text(encoding="utf-8") not in expected_connectors
+        )
+    else:
+        # No channels yet: keep the history credential ready. Following
+        # invitations writes the connector once Tag is in a channel, and an
+        # empty channel list is never sent to memory.
+        memory_incomplete = (not values.get("MFS_SLACK_TOKEN")
+                             or values.get("MFS_SLACK_CONNECTOR_URI") not in {uri, legacy_uri})
     if memory_incomplete:
         history_token = values.get("MFS_SLACK_TOKEN") or values["SLACK_BOT_TOKEN"]
         while True:
@@ -1719,20 +2166,16 @@ def guided_setup(
                 "a local Tag credential file cannot be used remotely."
             )
         tag_credentials.write_slack_history(home, history_token)
-        connector = write_slack_connector(
-            values["SLACK_TEAM_ID"], selected_channels, values["MFS_SLACK_HISTORY_DAYS"], home=home
-        )
-        scopes = ",".join(dict.fromkeys([*saved_scopes, *required_scopes]))
-        values = settings.update_config(
-            config_path,
-            {
-                "MFS_SLACK_TOKEN": history_token,
-                "MFS_ALLOWED_SCOPES": scopes,
-                "MFS_SLACK_CONNECTOR_URI": uri,
-                "MFS_SLACK_CONNECTOR_CONFIG": str(connector),
-            },
-        )
-        ui.message(f"Configured selected-channel Slack memory: {connector}")
+        changes = {"MFS_SLACK_TOKEN": history_token, "MFS_SLACK_CONNECTOR_URI": uri}
+        if selected_channels:
+            connector = write_slack_connector(
+                values["SLACK_TEAM_ID"], selected_channels, values["MFS_SLACK_HISTORY_DAYS"], home=home
+            )
+            changes.update(MFS_ALLOWED_SCOPES=",".join(dict.fromkeys([*saved_scopes, *required_scopes])),
+                           MFS_SLACK_CONNECTOR_CONFIG=str(connector))
+        values = settings.update_config(config_path, changes)
+        if selected_channels:
+            ui.message(f"Configured selected-channel Slack memory: {changes['MFS_SLACK_CONNECTOR_CONFIG']}")
     errors = settings.config_errors(values)
     if errors:
         print()
@@ -1748,44 +2191,33 @@ def guided_setup(
     return finish_setup(config_path, values, selected_channels)
 
 
-def finish_setup(_config_path: Path, values: dict[str, str], _channels: list[slack_channels.SlackChannel]) -> int:
+def finish_setup(config_path: Path, values: dict[str, str], _channels: list[slack_channels.SlackChannel]) -> int:
     """Finish configuration without starting services or indexing history."""
     ui.message("✓ Slack memory configured")
-    backend = values["OPENTAG_BACKEND"]
-    while not selected_backend_available(backend):
-        if ui.choose("Agent needs installation", ["Check again", "Save and exit"], qid="agent_install") == 1:
-            raise ui.Paused()
-    if backend == "codex":
-        backend_environment = without_telemetry_environment(os.environ)
-        transport = "exec" if values.get("OPENTAG_CODEX_TRANSPORT") == "exec" else "app-server"
-        try:
-            compatible = subprocess.run(
-                [shutil.which("codex") or "codex", transport, "--help"],
-                capture_output=True, env=backend_environment, timeout=20, check=False,
-            ).returncode == 0
-        except (OSError, subprocess.TimeoutExpired):
-            compatible = False
-        if not compatible:
-            ui.message(f"This Codex CLI does not support the required {transport} command. Update your existing Codex installation, then run tag setup again.")
-            return 1
-        while subprocess.run(
-            [shutil.which("codex") or "codex", "login", "status"],
-            capture_output=True,
-            env=backend_environment,
-        ).returncode:
-            ui.message("Codex needs sign-in. Your Slack and memory choices are saved.")
-            action = ui.choose("Sign in to continue", ["Open Codex sign-in", "Check again", "Save and exit"], qid="agent_sign_in")
-            if action == 2:
-                raise ui.Paused()
-            if action == 0:
-                subprocess.run(
-                    [shutil.which("codex") or "codex", "login"],
-                    check=False,
-                    env=backend_environment,
-                )
-        ui.message("✓ Codex signed in · first task still unverified")
+    backend, _ = agent_models.parse_model_choice(
+        values.get("OPENTAG_DEFAULT_MODEL") or values["OPENTAG_BACKEND"], values["OPENTAG_BACKEND"])
+    try:
+        from . import agent_connection
+    except ImportError:
+        import agent_connection
+    try:
+        agent_connection.validate(backend, values)
+    except ValueError as exc:
+        ui.message(str(exc))
+        return 1
+    if agent_connection.active(backend, values):
+        ui.message(f"✓ {backend.title()} API connection configured · first task still unverified")
     else:
-        ui.message("✓ Claude executable available · sign-in will be checked by its first task")
+        # Sign-ins can lapse while setup waits; check the default agent once more.
+        while True:
+            backend, _ = agent_models.parse_model_choice(
+                values.get("OPENTAG_DEFAULT_MODEL") or values["OPENTAG_BACKEND"], values["OPENTAG_BACKEND"])
+            agent = tag_ai.connection(instance_home(), backend)
+            if agent["state"] == "connected":
+                break
+            ui.message(f"{agent['name']} isn't ready: {tag_ai.status_line(agent)}. Your Slack and memory choices are saved.")
+            values = tag_ai.setup_step(instance_home(), config_path)
+        ui.message(f"✓ {agent['name']} connected · {agent['account'] or 'signed in'}")
     print()
     ui.message("✓ Setup complete. No services were started and no history was indexed.")
     if len(set(values.get("SLACK_ALLOWED_USER_IDS", "").split(","))) == 1 and values.get("SLACK_ALLOWED_USER_IDS"):
@@ -1808,9 +2240,11 @@ def completed_setup_status(config_path: Path) -> int | None:
         if state.get("completed") is not True:
             return None
     values = settings.load_config(config_path)
-    if (settings.config_errors(values) or not values.get("SLACK_CHANNEL_IDS")
-            or not values.get("MFS_SLACK_TOKEN")
-            or not Path(values.get("MFS_SLACK_CONNECTOR_CONFIG", "")).is_file()):
+    # A Tag that follows invitations may have no channels, and no connector, yet.
+    no_channels_yet = values.get("SLACK_CHANNEL_POLICY") == "invited" and not values.get("SLACK_CHANNEL_IDS")
+    if (settings.config_errors(values) or not values.get("MFS_SLACK_TOKEN")
+            or not (no_channels_yet or (values.get("SLACK_CHANNEL_IDS")
+                                        and Path(values.get("MFS_SLACK_CONNECTOR_CONFIG", "")).is_file()))):
         return None
     try:
         from . import tag_control, tag_cli
@@ -1834,7 +2268,7 @@ def main() -> int:
     args = parser.parse_args()
     config_path = args.config.expanduser().resolve()
     ui.enter_protocol()
-    if not sys.stdin.isatty() and not ui.protocol_active():
+    if not ui.display.stdin_is_terminal() and not ui.protocol_active():
         print("Use a terminal for setup, or tag inspect --json and tag config set for automation.", file=sys.stderr)
         return 2
     telemetry_session: tag_telemetry.SetupSession | None = None
@@ -1845,7 +2279,8 @@ def main() -> int:
             if completed is not None:
                 return completed
         progress = config_path.with_name("setup-progress.json")
-        settings.save_config(progress, {"completed": False})
+        # Keep the steps an earlier, paused setup recorded (such as which app path).
+        settings.save_config(progress, {**_read_json(progress), "completed": False})
         setup_options = {
             # This selects the full readiness path; finish_setup deliberately
             # leaves service startup to the separate `tag start` command.
@@ -1869,6 +2304,8 @@ def main() -> int:
                 if cleared:
                     values = settings.load_config(config_path)
                     settings.save_config(config_path, {k: v for k, v in values.items() if k not in cleared})
+                if back.target[0] == "channels":
+                    save_progress(config_path, channels_done=None)
                 ui.start_replay(back.replay, back.target)
         if result == 0:
             backend = settings.load_config(config_path).get("OPENTAG_BACKEND", "")
@@ -1876,7 +2313,7 @@ def main() -> int:
         else:
             telemetry_session.abandon()
         if result == 0:
-            settings.save_config(progress, {"completed": True, "services_requested": False})
+            settings.save_config(progress, {**_read_json(progress), "completed": True, "services_requested": False})
         if result == 0 and args.completion_file:
             settings.save_config(args.completion_file, {"approved": True})
         return result

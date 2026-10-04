@@ -11,13 +11,14 @@ import time
 from pathlib import Path
 
 try:
+    import agent_models
     import tag_config as settings
     import slack_channels
     import setup_ui as ui
     import tag_slack_backoff
     from tag_paths import default_workspace, tag_home
 except ImportError:
-    from scripts import slack_channels, tag_config as settings, setup_ui as ui
+    from scripts import agent_models, slack_channels, tag_config as settings, setup_ui as ui
     from scripts import tag_slack_backoff
     from scripts.tag_paths import default_workspace, tag_home
 
@@ -79,7 +80,7 @@ def inspect(home: Path, lifecycle, *, offline: bool = False, tag_id: str = "defa
     memory_sync = {"policy": values.get("SLACK_CHANNEL_POLICY", "selected"), "state": "not_checked"}
     if memory_sync["policy"] == "invited":
         try:
-            sync = json.loads((home / "state/slack-memory.json").read_text())
+            sync = json.loads((home / "state/slack-memory.json").read_text(encoding="utf-8"))
             allowed = {"syncing", "sync_requested", "no_joined_channels", "settings_changed", "needs_attention"}
             memory_sync["state"] = sync["state"] if sync["state"] in allowed and 0 <= time.time() - sync["checked_at"] < 600 else "stale"
             if sync.get("check") in {"membership", "history_access", "index_submission", "mfs_slack_connector"}:
@@ -101,9 +102,12 @@ def inspect(home: Path, lifecycle, *, offline: bool = False, tag_id: str = "defa
         "configuration": {"path": str(path), "exists": path.exists(), "error": error,
                           "complete": not error and not errors, "fields": errors},
         "workspace": str(default_workspace(home)),
+        "home": str(home),
         "backend": {"selected": backend if backend in {"codex", "claude"} else None,
-                    "experimental": backend == "claude", "executable_found": installed,
-                    "authentication": "not_checked", "task_execution": "not_checked"},
+                    "executable_found": installed,
+                    "authentication": "not_checked", "task_execution": "not_checked",
+                    "default_model": values.get("OPENTAG_DEFAULT_MODEL") or backend,
+                    "offered": agent_models.allowed_backends(backend)},
         "services": services, "managed_process_running": managed,
         "runtime": {"mfs_executable_found": mfs_installed, "error": dependency_error},
         "first_reply": "not_verified",
@@ -117,10 +121,21 @@ def inspect(home: Path, lifecycle, *, offline: bool = False, tag_id: str = "defa
 def status_report(home: Path, lifecycle, *, tag_id: str = "default") -> dict:
     report = inspect(home, lifecycle, tag_id=tag_id)
     if report["configuration"]["exists"]:
+        try:
+            values = settings.load_config(settings.config_path(home))
+        except (OSError, ValueError):
+            values = {}
+        api = agent_models.agent_connection.active(report["backend"]["selected"], values)
+        extra = {"values": values} if api else {}
         message, ready = ui.display.backend_status(report["backend"]["selected"],
-            search_path=str(home / "integrations/bin") + os.pathsep + os.environ.get("PATH", ""))
+            search_path=str(home / "integrations/bin") + os.pathsep + os.environ.get("PATH", ""), **extra)
         report["backend"].update(status=message, ready=ready,
-                                 authentication="signed_in" if ready else "unverified")
+                                 authentication="configured_unverified" if api and ready else "signed_in" if ready else "unverified")
+        search_path = str(home / "integrations/bin") + os.pathsep + os.environ.get("PATH", "")
+        report["backend"]["others"] = {
+            name: dict(zip(("status", "ready"), ui.display.backend_status(name, search_path=search_path, **({"values": values} if agent_models.agent_connection.active(name, values) else {}))))
+            for name in report["backend"]["offered"] if name != report["backend"]["selected"]
+        }
         if not ready and report["state"] == "running":
             report.update(state="needs_attention", next_command=tag_command(tag_id, "doctor"))
     return report
@@ -132,7 +147,14 @@ def show_status(report: dict) -> None:
     ui.display.summary(report["state"], report["next_command"],
                        slack=services.get("slack"), memory=services.get("mfs"),
                        backend=backend["selected"] if report["configuration"]["exists"] else None,
-                       agent=(backend["status"], backend["ready"]) if "status" in backend else None)
+                       agent=(backend["status"], backend["ready"]) if "status" in backend else None,
+                       model=agent_models.describe_model_choice(
+                           backend["default_model"], backend["selected"],
+                           names=agent_models.load_model_names(agent_models.model_names_path(report["home"]))
+                           if report.get("home") else None,
+                       )
+                       if report["configuration"]["exists"] and backend["selected"] else None,
+                       others={name: item["ready"] for name, item in backend.get("others", {}).items()})
     print("  Target: " + ui.display.target_detail(
         report.get("tag", "default"),
         report.get("slack_workspace") or "",
@@ -257,23 +279,67 @@ def run_command(lifecycle, *words: str) -> int:
     return subprocess.call([sys.executable, str(lifecycle.ROOT / "scripts/tag_cli.py"), *words])
 
 
-def settings_menu(home: Path) -> None:
+def settings_menu(home: Path, *, ai=None) -> None:
+    """``ai`` is a ``tag_ai.Target``; with it, AI & models offers connections too."""
     try:
-        _settings_menu(home)
+        _settings_menu(home, ai)
     except (ui.Paused, KeyboardInterrupt, EOFError):
         print()
         ui.message("Settings closed. Saved changes are kept.")
         print()
 
 
-def _settings_menu(home: Path) -> None:
+def choose_default_model(home: Path, values: dict[str, str]) -> str | None:
+    """Pick the Tag's default model from the signed-in accounts' live catalogs."""
+    ui.message("Checking the models available to your connected agents…")
+    keys = ("OPENTAG_WORKDIR", "OPENTAG_BACKENDS", "OPENTAG_DEFAULT_MODEL", "OPENTAG_CODEX_MODELS",
+            "OPENTAG_CLAUDE_MODELS", "OPENTAG_CLAUDE_TRANSPORT", "OPENTAG_CODEX_TRANSPORT",
+            "OPENTAG_CODEX_AUTH", "OPENTAG_CODEX_BASE_URL", "OPENTAG_CODEX_API_KEY", "OPENTAG_CODEX_API_VERSION",
+            "OPENTAG_CODEX_GATEWAY_FORMAT", "OPENTAG_CODEX_GATEWAY_PROVIDER",
+            "OPENTAG_CODEX_GATEWAY_DISABLE_TOOLS",
+            "OPENTAG_CLAUDE_AUTH", "OPENTAG_CLAUDE_BASE_URL", "OPENTAG_CLAUDE_API_KEY")
+    previous = {key: os.environ.get(key) for key in keys}
+    for key in keys:
+        if key in values:
+            os.environ[key] = values[key]
+        else:
+            os.environ.pop(key, None)
+    os.environ.setdefault("OPENTAG_WORKDIR", str(default_workspace(home)))
+    try:
+        models = agent_models.discover_tag_models(values.get("OPENTAG_BACKEND", "codex"))
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+    agent_models.remember_model_names(models, agent_models.model_names_path(home))
+    choices = agent_models.default_model_choices(models)
+    if not choices:
+        ui.message("No signed-in agent reported its models. Sign in to Codex or Claude, then try again.")
+        return None
+    current = values.get("OPENTAG_DEFAULT_MODEL") or values.get("OPENTAG_BACKEND", "codex")
+    values_only = [value for value, _ in choices]
+    default = values_only.index(current) if current in values_only else 0
+    choice = ui.choose("Default model for this Tag", [label for _, label in choices] + ["Cancel"], default=default)
+    return values_only[choice] if choice < len(choices) else None
+
+
+def _settings_menu(home: Path, ai=None) -> None:
     groups = (
-        ("Slack connection and access", ("SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_ALLOWED_USER_IDS", "SLACK_CHANNEL_IDS", "OPENTAG_BOT_NAME", "SLACK_CHANNEL_POLICY", "change_app", "reconnect")),
+        ("Slack connection and access", ("SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_ALLOWED_USER_IDS", "SLACK_CHANNEL_IDS", "OPENTAG_BOT_NAME", "OPENTAG_BOT_DESCRIPTION", "SLACK_CHANNEL_POLICY", "change_app", "reconnect")),
         ("Workspace and memory", ("MFS_SLACK_HISTORY_DAYS", "MFS_ALLOWED_SCOPES", "MFS_URL", "MFS_TOKEN")),
-        ("Agent", ("OPENTAG_BACKEND",)),
+        ("AI & models", ("OPENTAG_DEFAULT_MODEL",)),
         ("Advanced", ("OPENTAG_TIMEOUT_SECONDS", "OPENTAG_MAX_TIMEOUT_SECONDS", "OPENTAG_BACKEND_ATTEMPTS", "OPENTAG_SLACK_STREAMING",
                       "OPENTAG_SLACK_DM_ENABLED",
-                      "OPENTAG_CODEX_TRANSPORT")),
+                      "OPENTAG_CODEX_TRANSPORT", "OPENTAG_CLAUDE_TRANSPORT", "OPENTAG_CLAUDE_PERMISSION_MODE")),
+        ("API connections", ("OPENTAG_CODEX_API_KEY", "OPENTAG_CODEX_BASE_URL", "OPENTAG_CODEX_API_VERSION",
+                             "OPENTAG_CODEX_GATEWAY_FORMAT", "OPENTAG_CODEX_GATEWAY_PROVIDER",
+                             "OPENTAG_CODEX_GATEWAY_DISABLE_TOOLS",
+                             "OPENTAG_CODEX_MODELS", "OPENTAG_CODEX_AUTH", "OPENTAG_CLAUDE_API_KEY",
+                             "OPENTAG_CLAUDE_BASE_URL", "OPENTAG_CLAUDE_MODELS", "OPENTAG_CLAUDE_AUTH")),
+        ("Usage and budget", ("OPENTAG_MONTHLY_BUDGET_USD", "OPENTAG_CODEX_INPUT_USD_PER_MILLION",
+                              "OPENTAG_CODEX_OUTPUT_USD_PER_MILLION", "OPENTAG_CODEX_CACHE_WRITE_USD_PER_MILLION", "OPENTAG_CODEX_CACHED_INPUT_USD_PER_MILLION")),
     )
     while True:
         tag_id = os.getenv("TAG_ID", "default")
@@ -295,7 +361,7 @@ def _settings_menu(home: Path) -> None:
             selection = input("Choose: ").strip()
         if selection in {"0", "", "back"}:
             return
-        if selection not in {"1", "2", "3", "4"}:
+        if not selection.isdigit() or not 1 <= int(selection) <= len(groups):
             continue
         name, keys = groups[int(selection) - 1]
         raw_values = settings.load_config(settings.config_path(home))
@@ -309,8 +375,20 @@ def _settings_menu(home: Path) -> None:
         if selection == "2":
             ui.message(f"Workspace: {home / 'workspace'} (managed by Tag)")
             ui.message("Memory uses sources already indexed in MFS; changing scopes does not index a source.")
+        if selection == "3" and ai is not None:
+            try:
+                import tag_ai
+            except ImportError:
+                from scripts import tag_ai
+            tag_ai.settings_menu(ai)
+            continue
         if selection == "3":
-            ui.message("codex: recommended. claude: experimental. Sign in with the chosen CLI first.")
+            ui.message("Choose a model from your connected Codex and Claude accounts.")
+            value = choose_default_model(home, raw_values)
+            if value is not None:
+                settings.update_config(settings.config_path(home), {"OPENTAG_DEFAULT_MODEL": value})
+                ui.message("Saved. Restart Tag to apply the default model.")
+            continue
         actions = {"change_app": "Change Slack app or workspace", "reconnect": "Reconnect credentials with Slack CLI"}
         labels = [actions.get(key, f"{settings.LABELS.get(key, key)}: {values.get(key, 'not set')}") for key in keys]
         if ui.keyboard_available():
@@ -333,12 +411,6 @@ def _settings_menu(home: Path) -> None:
                         "MFS_SLACK_HISTORY_DAYS": "history", "SLACK_CHANNEL_POLICY": "policy"}[key]
                 tag_reconfigure.edit(home, kind)
                 continue
-            elif key == "OPENTAG_BACKEND" and ui.keyboard_available():
-                choice = ui.choose("Choose your agent", ["Codex · recommended", "Claude · experimental", "Cancel"],
-                                   default=int(raw_values.get(key) == "claude"))
-                if choice == 2:
-                    continue
-                value = ("codex", "claude")[choice]
             else:
                 reader = input if key in settings.PUBLIC else getpass.getpass
                 value = reader("New value (Enter to cancel; /clear to empty an optional setting): ").strip()
@@ -346,8 +418,9 @@ def _settings_menu(home: Path) -> None:
                     continue
             settings.update_config(settings.config_path(home), {key: "" if value == "/clear" else value})
             ui.message("Saved. Changes apply on next start; restart Tag if it is running.")
-            if key == "OPENTAG_BACKEND":
-                message, _ = ui.display.backend_status(value)
-                ui.message(f"{value.capitalize()}: {message}")
+            if key in {"OPENTAG_BACKEND", "OPENTAG_DEFAULT_MODEL"} and value != "/clear":
+                selected = settings.load_config(settings.config_path(home)).get("OPENTAG_BACKEND", "codex")
+                message, _ = ui.display.backend_status(selected)
+                ui.message(f"{agent_models.backend_display_name(selected)}: {message}")
         except (ValueError, RuntimeError, slack_channels.SlackChannelError) as exc:
             ui.message(str(exc))

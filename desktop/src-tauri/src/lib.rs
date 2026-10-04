@@ -40,19 +40,51 @@ struct AppUpdate {
     notes: Option<String>,
 }
 
+/// The Tag.app feed to check: the channel the person chose in Settings (saved by
+/// `tag upgrade --channel`), or this build's own line when Tag follows none.
+fn feed_channel(requested: Option<&str>, version: &str) -> Result<&'static str, String> {
+    match requested {
+        None => Ok(update_channel(version)),
+        Some("stable") => Ok("stable"),
+        Some("beta") => Ok("beta"),
+        Some("alpha") => Ok("alpha"),
+        Some(other) => Err(format!("Tag.app has no update feed for the {other} channel.")),
+    }
+}
+
+/// Explain missing feeds without mistaking an unsuccessful check for no update.
+fn update_check_error(error: tauri_plugin_updater::Error, channel: &str) -> String {
+    use tauri_plugin_updater::Error;
+    match error {
+        Error::ReleaseNotFound => format!(
+            "Tag.app's {channel} update feed is unavailable. Check again later or choose another release channel."
+        ),
+        Error::TargetNotFound(_) | Error::TargetsNotFound(_) => format!(
+            "A Tag.app update for this computer isn't available on {channel} yet. Check again later or choose another release channel."
+        ),
+        other => format!("Couldn't check for Tag.app updates: {other}"),
+    }
+}
+
 /// Ask the release line's manifest for a newer, signed Tag.app.
 #[tauri::command]
-async fn app_update_check(app: AppHandle, pending: State<'_, PendingUpdate>) -> Result<Option<AppUpdate>, String> {
+async fn app_update_check(
+    app: AppHandle,
+    pending: State<'_, PendingUpdate>,
+    channel: Option<String>,
+) -> Result<Option<AppUpdate>, String> {
     use tauri_plugin_updater::UpdaterExt;
+    *pending.0.lock().unwrap() = None;
     let version = app.package_info().version.to_string();
-    let url = format!("{UPDATE_BASE}/tag-app-{}.json", update_channel(&version));
+    let channel = feed_channel(channel.as_deref(), &version)?;
+    let url = format!("{UPDATE_BASE}/tag-app-{channel}.json");
     let updater = app
         .updater_builder()
         .endpoints(vec![url.parse().map_err(|e| format!("{e}"))?])
         .map_err(|e| e.to_string())?
         .build()
         .map_err(|e| e.to_string())?;
-    let update = updater.check().await.map_err(|e| e.to_string())?;
+    let update = updater.check().await.map_err(|e| update_check_error(e, channel))?;
     let found = update.as_ref().map(|u| AppUpdate { version: u.version.clone(), notes: u.body.clone() });
     *pending.0.lock().unwrap() = update;
     Ok(found)
@@ -60,8 +92,11 @@ async fn app_update_check(app: AppHandle, pending: State<'_, PendingUpdate>) -> 
 
 /// Download, verify the signature, install, and restart into the new version.
 #[tauri::command]
-async fn app_update_install(app: AppHandle, pending: State<'_, PendingUpdate>) -> Result<(), String> {
+async fn app_update_install(app: AppHandle, pending: State<'_, PendingUpdate>, version: String) -> Result<(), String> {
     let update = pending.0.lock().unwrap().take().ok_or("No update is ready; check again.")?;
+    if update.version != version {
+        return Err("The update changed. Check again to finish updating Tag.".into());
+    }
     update.download_and_install(|_, _| {}, || {}).await.map_err(|e| e.to_string())?;
     app.state::<Arc<Sessions>>().stop_all();
     app.restart();
@@ -79,6 +114,33 @@ struct AppInfo {
     version: String,
     launched_at_login: bool,
     legacy_wanted_tags: Option<Vec<String>>,
+    first_name: Option<String>,
+}
+
+/// The first word of the account's full name, for Home's greeting. Windows
+/// keeps only a login name, so Home greets without a name there.
+fn first_name() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    let full = Command::new("id").arg("-F").output().ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
+    #[cfg(target_os = "linux")]
+    let full = std::env::var("USER").ok().and_then(|user| Command::new("getent").args(["passwd", &user]).output().ok())
+        .filter(|o| o.status.success())
+        .and_then(|o| gecos_name(&String::from_utf8_lossy(&o.stdout)));
+    #[cfg(windows)]
+    let full: Option<String> = None;
+    full.as_deref().and_then(first_word)
+}
+
+/// The full name in a passwd line's comment field, before any extra comma fields.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn gecos_name(line: &str) -> Option<String> {
+    line.trim().split(':').nth(4).map(|g| g.split(',').next().unwrap_or("").to_string())
+}
+
+fn first_word(full: &str) -> Option<String> {
+    full.split_whitespace().next().map(str::to_string)
 }
 
 #[derive(Serialize)]
@@ -141,6 +203,7 @@ fn app_info(app: AppHandle) -> AppInfo {
         version: app.package_info().version.to_string(),
         launched_at_login: std::env::args().any(|a| a == AUTOSTART_FLAG),
         legacy_wanted_tags: if migrated { None } else { legacy_wanted_tags() },
+        first_name: first_name(),
     }
 }
 
@@ -284,13 +347,66 @@ pub(crate) fn quit_now(app: &AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_defaults_array;
+    use super::{first_word, gecos_name, parse_defaults_array};
+
+    #[test]
+    fn asset_scope_allows_tag_pictures_in_the_hidden_private_home() {
+        let config: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let patterns = config["app"]["security"]["assetProtocol"]["scope"].as_array().unwrap();
+        // These are Tauri's Unix match options; ** does not cross hidden directories.
+        let options = glob::MatchOptions {
+            require_literal_separator: true,
+            require_literal_leading_dot: true,
+            ..Default::default()
+        };
+        let allowed = |path: &str| patterns.iter().any(|pattern| {
+            glob::Pattern::new(pattern.as_str().unwrap()).unwrap().matches_with(path, options)
+        });
+        assert!(allowed("$HOME/Tag/default/.tag/state/slack-avatar-abc.png"));
+        assert!(allowed("$HOME/Tag/default/.tag/state/workspace-icon.png"));
+        assert!(allowed("$HOME/Tag/default/.tag/integrations/slack-cli/assets/tag-profile.png"));
+        assert!(!allowed("$HOME/Tag/default/.tag/config/settings.json"));
+        assert!(!allowed("$HOME/Tag/default/.tag/state/slack-avatar.json"));
+    }
+
+    #[test]
+    fn greets_by_the_first_word_of_the_account_name() {
+        assert_eq!(first_word("Maya Chen\n").as_deref(), Some("Maya"));
+        assert_eq!(first_word("  \n"), None);
+        assert_eq!(gecos_name("maya:x:1000:1000:Maya Chen,,,:/home/maya:/bin/bash").as_deref(), Some("Maya Chen"));
+        assert_eq!(gecos_name("maya:x:1000:1000::/home/maya:/bin/bash").as_deref(), Some(""));
+    }
 
     #[test]
     fn each_build_follows_its_own_release_line() {
         assert_eq!(super::update_channel("0.3.0-alpha.2"), "alpha");
         assert_eq!(super::update_channel("0.3.0-beta.1"), "beta");
         assert_eq!(super::update_channel("0.3.0"), "stable");
+    }
+
+    #[test]
+    fn follows_the_channel_chosen_in_settings() {
+        assert_eq!(super::feed_channel(None, "0.3.0-alpha.2"), Ok("alpha"));
+        assert_eq!(super::feed_channel(Some("stable"), "0.3.0-alpha.2"), Ok("stable"));
+        assert_eq!(super::feed_channel(Some("beta"), "0.3.0"), Ok("beta"));
+        // Only real feeds: edge has none, and nothing else can reach the URL.
+        assert!(super::feed_channel(Some("edge"), "0.3.0").is_err());
+        assert!(super::feed_channel(Some("../stable"), "0.3.0").is_err());
+    }
+
+    #[test]
+    fn explains_unavailable_desktop_feeds_and_platforms() {
+        use tauri_plugin_updater::Error;
+        let missing = super::update_check_error(Error::ReleaseNotFound, "alpha");
+        assert!(missing.contains("alpha update feed is unavailable"));
+        assert!(missing.contains("choose another release channel"));
+        for error in [Error::TargetNotFound("darwin-aarch64".into()), Error::TargetsNotFound(vec![])] {
+            let message = super::update_check_error(error, "beta");
+            assert!(message.contains("this computer isn't available on beta"));
+        }
+        let network = super::update_check_error(Error::Network("offline".into()), "stable");
+        assert!(network.contains("Couldn't check"));
+        assert!(network.contains("offline"));
     }
 
     #[test]
@@ -310,6 +426,7 @@ pub fn run() {
             Some(vec![AUTOSTART_FLAG]),
         ))
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
