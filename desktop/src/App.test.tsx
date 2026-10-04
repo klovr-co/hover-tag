@@ -25,3 +25,26 @@ it("shows a styled startup and recovers when reading app information fails", asy
   expect(await screen.findByRole("button", { name: "Install Tag" })).toBeTruthy();
   expect(screen.queryByText("Couldn't open Tag")).toBeNull();
 });
+
+it("asks about usage data before Home, then records only after the choice", async () => {
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  const api = demoBridge();
+  const demo = api.tag;
+  let saved = "not_set";
+  api.tag = vi.fn(async (args: string[]) => {
+    if (args[0] !== "telemetry" || args[1] === "record") return demo(args);
+    if (args[1] === "on" || args[1] === "off") saved = args[1];
+    return { code: 0, stderr: "", stdout: JSON.stringify({ schema_version: 1, enabled: saved === "on", available: true,
+      saved_preference: saved, process_override: null, privacy_notice: "https://example.invalid/privacy" }) };
+  });
+  vi.mocked(bridge).mockResolvedValue(api);
+  render(<StrictMode><App /></StrictMode>);
+  expect(await screen.findByText("Help support Tag's development")).toBeTruthy();
+  const records = () => vi.mocked(api.tag).mock.calls.map(([args]) => args).filter((args) => args[1] === "record");
+  expect(records()).toEqual([]);
+  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  await vi.waitFor(() => expect(records().map((args) => args[2])).toEqual(expect.arrayContaining(["app_opened", "app_screen_viewed"])));
+  expect(api.tag).toHaveBeenCalledWith(["telemetry", "on", "--json"]);
+  expect(screen.queryByText("Help support Tag's development")).toBeNull();
+  expect(records().filter((args) => args[2] === "app_opened")).toHaveLength(1);
+});

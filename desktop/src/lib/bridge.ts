@@ -193,6 +193,8 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
   const targetVersion = new URLSearchParams(location.search).get("update") ? "0.4.0-alpha.1" : runtimeVersion;
   let keepRunning = false;
   let loginItem = false;
+  // ?telemetry=ask shows the first-run usage data notice.
+  let telemetry = new URLSearchParams(location.search).get("telemetry") === "ask" ? "not_set" : "on";
   const json = (value: unknown): RunResult => ({ code: 0, stdout: JSON.stringify(value), stderr: "" });
   return {
     info: async () => ({
@@ -207,9 +209,15 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
           running: rows.some((r) => r.state === "running"), scope: "installation" });
       }
       if (first === "list") return json({ schema_version: 1, tags: rows });
+      if (first === "telemetry") {
+        if (second === "record") return json({ schema_version: 1, ok: true });
+        if (second === "on" || second === "off") telemetry = second;
+        return json({ schema_version: 1, enabled: telemetry === "on", available: true, saved_preference: telemetry,
+          process_override: null, privacy_notice: "https://github.com/klovr-co/hover-tag/blob/main/docs/reference/telemetry.md" });
+      }
       if (first === "version") {
         return json({ ...versionExample, version: runtimeVersion,
-          capabilities: [...new Set([...versionExample.capabilities, "ai-connections", "shared-ai-connections", "logs-activity", "thinking-level", "describe"])] });
+          capabilities: [...new Set([...versionExample.capabilities, "ai-connections", "shared-ai-connections", "logs-activity", "thinking-level", "describe", "telemetry-events"])] });
       }
       if (second === "settings" && args[2] === "ai") {
         const ai = aiFor(first, rows.find((r) => r.id === first));

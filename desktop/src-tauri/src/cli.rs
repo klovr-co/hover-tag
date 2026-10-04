@@ -81,6 +81,7 @@ pub fn windows_launcher(cli: &Path) -> Option<(PathBuf, PathBuf)> {
 }
 
 /// A Command for `tag ARGS`, with plain output and no console window on Windows.
+/// The CLI skips its own usage telemetry for these runs; the app records its own events.
 pub fn command(cli: &Path, args: &[String]) -> Command {
     let is_script = cli.extension().is_some_and(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat"));
     let mut command = match windows_launcher(cli).filter(|_| cfg!(windows) && is_script) {
@@ -99,6 +100,7 @@ pub fn command(cli: &Path, args: &[String]) -> Command {
         .env("TERM", "dumb")
         .env("PYTHONIOENCODING", "utf-8")
         .env("PYTHONUTF8", "1")
+        .env("TAG_TELEMETRY_SOURCE", "app")
         .stdin(Stdio::null());
     #[cfg(windows)]
     command.creation_flags(CREATE_NO_WINDOW);
@@ -143,6 +145,13 @@ mod tests {
         std::fs::write(&cmd, "@echo off\nsomething else\n").unwrap();
         assert!(windows_launcher(&cmd).is_none());
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn marks_tag_runs_as_coming_from_the_app() {
+        let command = command(Path::new("/tmp/tag"), &["list".to_string()]);
+        let source = command.get_envs().find(|(key, _)| *key == "TAG_TELEMETRY_SOURCE").and_then(|(_, value)| value);
+        assert_eq!(source, Some(std::ffi::OsStr::new("app")));
     }
 
     #[test]

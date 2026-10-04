@@ -7,6 +7,7 @@ import type { AppInfo, Bridge } from "../lib/bridge";
 import { parseConnections } from "../lib/ai";
 import { parseJSON } from "../lib/protocol";
 import type { Tags } from "../lib/tags";
+import { USAGE_DATA_NEVER, useTrack, type Telemetry } from "../lib/telemetry";
 import {
   APP_CHANNELS, checkUpdate, installUpdate, isAppChannel, targetVersion,
   type Channel, type ProductUpdate, type UpdateState,
@@ -58,6 +59,7 @@ export function ReleaseChannel({ api, appVersion, update, busy, setBusy, switche
 }) {
   const [choice, setChoice] = useState<Channel | null>(null);
   const [preview, setPreview] = useState<ProductUpdate | null>(null);
+  const track = useTrack();
   const following = update?.pinned ? null : update?.channel ?? null;
 
   const pick = async (channel: Channel) => {
@@ -77,6 +79,7 @@ export function ReleaseChannel({ api, appVersion, update, busy, setBusy, switche
     try {
       // Installing a new Tag.app restarts it; otherwise refresh what Settings shows.
       switched(await installUpdate(api, appVersion, choice), !!preview?.desktop);
+      track("app_channel_switched", { channel: choice });
       setChoice(null);
       setPreview(null);
     } catch (error) { setError(error instanceof Error ? error.message : String(error)); }
@@ -119,6 +122,7 @@ interface SettingsProps {
   api: Bridge;
   info: AppInfo;
   tags: Tags;
+  telemetry: Telemetry;
   close: () => void;
   update: UpdateState;
   check: () => void;
@@ -129,7 +133,7 @@ interface SettingsProps {
   openAI?: () => void;
 }
 
-export function Settings({ api, info, tags, close, update, check, runUpdate, switched, openAI }: SettingsProps) {
+export function Settings({ api, info, tags, telemetry, close, update, check, runUpdate, switched, openAI }: SettingsProps) {
   const appearance = useAppearance();
   const [login, setLogin] = useState(false);
   const [keepBusy, setKeepBusy] = useState(false);
@@ -213,6 +217,10 @@ export function Settings({ api, info, tags, close, update, check, runUpdate, swi
           </div>
         </div>
         <div className="section">
+          <div className="sec-head"><h3>Privacy</h3></div>
+          <div className="card"><UsageDataRow api={api} telemetry={telemetry} setError={setError} /></div>
+        </div>
+        <div className="section">
           <div className="sec-head"><h3>About</h3></div>
           <div className="card" style={{ padding: "12px 14px", display: "flex", alignItems: "center", gap: 12 }}>
             <div className="txt"><span className="label" style={{ fontSize: 14.5 }}>Enjoying Tag?</span><CommunityLinks api={api} /></div>
@@ -221,6 +229,30 @@ export function Settings({ api, info, tags, close, update, check, runUpdate, swi
         {(error || update.error || tags.error) && <ErrorLine>{error || update.error || tags.error}</ErrorLine>}
       </div>
     </>
+  );
+}
+
+/** The installation-wide usage data choice, shared with `tag telemetry`. */
+export function UsageDataRow({ api, telemetry, setError }: { api: Bridge; telemetry: Telemetry; setError: (message: string) => void }) {
+  const [busy, setBusy] = useState(false);
+  const { status } = telemetry;
+  const notice = status?.privacy_notice;
+  const detail = !status ? "Update Tag to manage usage data here."
+    : status.process_override ? "Off for this app because TAG_TELEMETRY=off is set."
+    : status.available === false || !notice ? "This build of Tag doesn't collect usage data."
+    : <>Anonymous usage data helps improve setup and reliability. {USAGE_DATA_NEVER} Also applies to the tag command.{" "}
+      <button className="link" style={{ padding: 0 }} onClick={() => void api.open(notice)}>Privacy notice</button></>;
+  const changeable = !!status && !status.process_override && status.available !== false && !!notice;
+  return (
+    <SetRow label="Share usage data" detail={detail}>
+      {changeable && <Switch on={status.enabled} busy={busy} label="Share usage data" onClick={async () => {
+        setBusy(true);
+        setError("");
+        try { await telemetry.choose(!status.enabled); }
+        catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+        finally { setBusy(false); }
+      }} />}
+    </SetRow>
   );
 }
 

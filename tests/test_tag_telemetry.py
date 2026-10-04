@@ -6,7 +6,7 @@ from pathlib import Path
 import tempfile
 import time
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from unittest.mock import patch
 
@@ -300,6 +300,121 @@ class TagTelemetryTests(unittest.TestCase):
         self.assertEqual(exit_status.exception.code, 2)
         self.assertEqual(failed.call_args.args[2], "validation")
         self.assertEqual(completed.call_args.args[2], "failed")
+
+    def test_app_events_have_only_their_allow_listed_schema(self) -> None:
+        self.enable_without_event()
+        calls = {
+            "app_opened": {"app_version": "0.3.0-alpha.2"},
+            "app_screen_viewed": {"screen": "settings"},
+            "app_setup_started": {"entry_point": "first_tag"},
+            "app_setup_step_completed": {"step": "workspace", "elapsed_seconds": "31"},
+            "app_setup_abandoned": {"last_step": "create", "reason": "cancelled", "elapsed_seconds": "200"},
+            "app_setup_completed": {"entry_point": "add_tag", "elapsed_seconds": "3"},
+            "app_update_finished": {"outcome": "succeeded"},
+            "app_channel_switched": {"channel": "beta"},
+        }
+        with patch.object(telemetry, "_launch_flush_worker"):
+            for event, fields in calls.items():
+                self.assertTrue(telemetry.record_app_event(self.home, event, fields))
+
+        schemas = {
+            "app_opened": {"app_version", "tag_version", "os_family", "cpu_architecture"},
+            "app_screen_viewed": {"screen"},
+            "app_setup_started": {"entry_point"},
+            "app_setup_step_completed": {"step", "elapsed_time"},
+            "app_setup_abandoned": {"last_step", "reason", "elapsed_time"},
+            "app_setup_completed": {"entry_point", "elapsed_time"},
+            "app_update_finished": {"outcome"},
+            "app_channel_switched": {"channel"},
+        }
+        payloads = self.queued_payloads()
+        self.assertEqual({str(item["event"]) for item in payloads}, set(schemas))
+        for payload in payloads:
+            self.assertEqual(set(payload["properties"]), schemas[str(payload["event"])])
+        abandoned = next(item for item in payloads if item["event"] == "app_setup_abandoned")
+        self.assertEqual(abandoned["properties"]["elapsed_time"], ">120s")
+
+    def test_app_events_reject_unknown_fields_and_drop_unrecognized_values(self) -> None:
+        self.enable_without_event()
+        with patch.object(telemetry, "_launch_flush_worker"):
+            self.assertFalse(telemetry.record_app_event(self.home, "app_custom", {}))
+            self.assertFalse(telemetry.record_app_event(self.home, "app_screen_viewed", {}))
+            self.assertFalse(telemetry.record_app_event(
+                self.home, "app_screen_viewed", {"screen": "home", "tag": "Maya's Tag"}
+            ))
+            self.assertFalse(telemetry.record_app_event(
+                self.home, "app_setup_step_completed", {"step": "ai", "elapsed_seconds": "soon"}
+            ))
+            self.assertFalse(telemetry.record_app_event(
+                self.home, "app_setup_step_completed", {"step": "ai", "elapsed_seconds": "-1"}
+            ))
+            self.assertFalse(telemetry.record_app_event(self.home, "tui_started", {}))
+            # Known fields with values outside their closed sets are accepted but never queued.
+            self.assertTrue(telemetry.record_app_event(self.home, "app_screen_viewed", {"screen": "/Users/person/private"}))
+            self.assertTrue(telemetry.record_app_event(self.home, "app_opened", {"app_version": "user@example.com"}))
+            self.assertTrue(telemetry.record_app_event(self.home, "app_channel_switched", {"channel": "edge"}))
+
+        self.assertEqual(self.queued_payloads(), [])
+
+    def test_app_events_respect_the_saved_preference(self) -> None:
+        with patch.object(telemetry, "_launch_flush_worker"):
+            telemetry.record_app_event(self.home, "app_screen_viewed", {"screen": "home"})
+            self.assertTrue(telemetry.disable(self.home))
+            telemetry.record_app_event(self.home, "app_screen_viewed", {"screen": "home"})
+        self.assertFalse(telemetry.queue_path(self.home).exists())
+        self.assertFalse(telemetry.identifier_path(self.home).exists())
+
+    def test_cli_runs_from_the_app_record_only_app_and_preference_events(self) -> None:
+        with patch.dict(os.environ, {"TAG_TELEMETRY_SOURCE": "app"}), patch.object(
+            telemetry, "_launch_flush_worker"
+        ):
+            self.assertTrue(telemetry.enable(self.home))
+            telemetry.tui_started(self.home, "non_interactive")
+            telemetry.command_completed(self.home, "diagnostics", "succeeded", 1)
+            session = telemetry.SetupSession(self.home, "setup")
+            session.start()
+            session.enter("slack")
+            session.complete("codex")
+            telemetry.record_app_event(self.home, "app_screen_viewed", {"screen": "home"})
+
+        self.assertEqual(
+            [item["event"] for item in self.queued_payloads()],
+            ["telemetry_preference_changed", "app_screen_viewed"],
+        )
+
+    def test_status_reports_whether_this_build_can_collect(self) -> None:
+        self.assertIs(telemetry.status(self.home)["available"], True)
+        with patch.object(telemetry.build_config, "POSTHOG_PROJECT_TOKEN", ""):
+            self.assertIs(telemetry.status(self.home)["available"], False)
+
+    def test_cli_record_command_and_json_controls_for_apps(self) -> None:
+        environment = dict(os.environ, TAG_HOME=str(self.home), TAG_TELEMETRY_SOURCE="app")
+
+        def run(*arguments: str) -> tuple[int, str]:
+            output = StringIO()
+            with patch.dict(os.environ, environment, clear=True), patch.object(
+                os.sys, "argv", ["tag", *arguments]
+            ), patch.object(telemetry, "_launch_flush_worker"), redirect_stdout(output):
+                try:
+                    code = tag_cli.main()
+                except SystemExit as exc:
+                    code = exc.code
+            return code, output.getvalue()
+
+        code, output = run("telemetry", "on", "--json")
+        self.assertEqual(code, 0)
+        # The app shows its own notice, so the JSON is the whole output.
+        self.assertTrue(json.loads(output)["enabled"])
+        code, output = run("telemetry", "record", "app_screen_viewed", "screen=tag", "--json")
+        self.assertEqual((code, json.loads(output)), (0, {"schema_version": 1, "ok": True}))
+        with redirect_stderr(StringIO()):
+            self.assertEqual(run("telemetry", "record", "app_screen_viewed", "screen=tag", "name=Maya")[0], 2)
+            self.assertEqual(run("telemetry", "record")[0], 2)
+        self.assertEqual(
+            [item["event"] for item in self.queued_payloads()],
+            ["telemetry_preference_changed", "app_screen_viewed"],
+        )
+        self.assertIn("telemetry-events", tag_cli.CAPABILITIES)
 
 if __name__ == "__main__":
     unittest.main()

@@ -59,7 +59,7 @@ CAPABILITIES = (
     "list", "setup-jsonl", "setup-back", "rename", "workspace-lifecycle",
     "autostart", "autostart-keep", "logs-json", "upgrade-json", "install-progress",
     "ai-connections", "shared-ai-connections", "thinking-level", "logs-activity", "activity-details", "setup-v2", "abandon-setup", "remove-tag",
-    "describe",
+    "describe", "telemetry-events",
 )
 UPDATE_CHECK_INTERVAL_SECONDS = 24 * 60 * 60
 COMMANDS = tuple(sorted(tag_instances.RESERVED_NAMES))
@@ -2293,9 +2293,19 @@ def _run_cli() -> int:
     except ImportError:
         from scripts import tag_control as control, tag_config as settings
     if args.command == "telemetry":
-        if len(args.arguments) != 1 or args.arguments[0] not in {"status", "on", "off"}:
+        action = args.arguments[0] if args.arguments else ""
+        if action == "record":
+            # Tag.app's fixed events, recorded only when the saved preference allows it.
+            fields = dict(item.partition("=")[::2] for item in args.arguments[2:])
+            if len(args.arguments) < 2 or not tag_telemetry.record_app_event(
+                installation_root, args.arguments[1], fields
+            ):
+                parser.error("telemetry record requires a known app event and its fields")
+            if args.json_output:
+                print(json.dumps({"schema_version": 1, "ok": True}))
+            return 0
+        if len(args.arguments) != 1 or action not in {"status", "on", "off"}:
             parser.error("telemetry requires status, on, or off")
-        action = args.arguments[0]
         if action == "on":
             if tag_telemetry.hard_disabled():
                 raise RuntimeError(
@@ -2305,7 +2315,9 @@ def _run_cli() -> int:
                 raise RuntimeError(
                     "This Tag build has no approved telemetry destination; no preference was changed"
                 )
-            _show_telemetry_scope(installation_root)
+            # Apps show the same notice themselves before turning telemetry on.
+            if not args.json_output:
+                _show_telemetry_scope(installation_root)
             tag_telemetry.enable(installation_root)
         elif action == "off":
             if not tag_telemetry.disable(installation_root):

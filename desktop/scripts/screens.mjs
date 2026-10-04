@@ -24,6 +24,10 @@ for (const scheme of ["light", "dark"]) {
   await page.goto(base + "/?tags=0");
   await page.getByText("Bring your first Tag to Slack").waitFor();
   await shot(page, "home-empty" + suffix);
+  // The first-run usage data notice.
+  await page.goto(base + "/?telemetry=ask");
+  await page.getByText("Help support Tag's development").waitFor();
+  await shot(page, "usage-data" + suffix);
   // Tag detail is the wide screen.
   await page.goto(base);
   await button(page, "Open Maya's Tag").click();

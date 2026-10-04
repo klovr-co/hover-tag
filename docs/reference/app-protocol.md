@@ -36,6 +36,7 @@ it shows is listed in `capabilities`; otherwise it offers to upgrade Tag.
 | `thinking-level` | `tag NAME settings ai effort LEVEL --json`, `model VALUE --effort LEVEL`; thinking-level fields in `settings ai`, `models`, and `tag list` |
 | `logs-activity` | `activity` in `tag NAME logs --json` |
 | `activity-details` | `tag NAME logs --activity RUN_ID --json` |
+| `telemetry-events` | `tag telemetry record EVENT FIELD=VALUE...`, `available` in `tag telemetry status\|on\|off --json`; see [Usage data](#usage-data) |
 | `setup-v2` | Setup order Your Tag → AI → Workspace → Create → Channels; `profile`, `org_workspace`, `existing_app`, and `app_checks` questions; `recap`; creation `progress`; `ready` in the result |
 
 ## Tags
@@ -415,6 +416,28 @@ just the model, keeping a compatible saved level. When nothing usable is connect
 terminal. The app pauses setup, opens Settings, and resumes setup when you return.
 Setup questions cannot sign in or change accounts. Answer with an option ID,
 index, or label.
+
+## Usage data
+
+`tag telemetry status --json` reports `enabled`, `available` (whether this
+build can collect), `saved_preference` (`on`, `off`, or `not_set`),
+`process_override` (`off` when `TAG_TELEMETRY=off` is set), and
+`privacy_notice`. `tag telemetry on --json` and `tag telemetry off --json`
+save the installation-wide choice and print the same object. With `--json`,
+`on` doesn't print the terminal notice, so a client must show the notice from
+[telemetry](telemetry.md) itself before turning collection on. Show it while
+`saved_preference` is `not_set`, `available` is true, `privacy_notice` is set,
+and `process_override` is `null`.
+
+With `telemetry-events`, `tag telemetry record EVENT FIELD=VALUE... --json`
+queues one of the fixed `app_` events listed in [telemetry](telemetry.md) when
+the saved preference is on, and does nothing otherwise. Every field named for
+the event is required and no others are accepted; durations are
+`elapsed_seconds` as whole seconds. An unknown event or field exits 2. Values
+outside an event's closed lists are dropped without an error.
+
+A client sets `TAG_TELEMETRY_SOURCE=app` when it runs `tag`, so Tag doesn't
+record that run as command or setup usage of its own.
 
 ## Installing
 

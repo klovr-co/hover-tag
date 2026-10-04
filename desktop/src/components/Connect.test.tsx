@@ -3,6 +3,7 @@ import { StrictMode } from "react";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { demoBridge, type Session } from "../lib/bridge";
+import { TrackContext, type Track } from "../lib/telemetry";
 import { Connect } from "./Connect";
 import { workspaceIdError } from "./Connect";
 
@@ -28,7 +29,7 @@ const QUESTIONS: Record<string, object> = {
 };
 const ORDER = ["profile", "default_model", "workspace", "approve_setup", "channels"];
 
-function setup() {
+function setup(track: Track = () => {}) {
   const api = demoBridge();
   const answers: unknown[] = [];
   let emit: (line: string) => void = () => {};
@@ -57,7 +58,9 @@ function setup() {
     };
     return session;
   };
-  render(<Connect api={api} args={["setup"]} done={vi.fn()} paused={vi.fn()} />);
+  render(<StrictMode><TrackContext.Provider value={track}>
+    <Connect api={api} args={["setup"]} done={vi.fn()} paused={vi.fn()} />
+  </TrackContext.Provider></StrictMode>);
   return answers;
 }
 
@@ -155,7 +158,8 @@ it("reloads pictures replaced at the same path and keeps the selected picture in
 
 describe("Add a Tag", () => {
   it("asks for the name, picture and description first, then AI, workspace, Create and channels", async () => {
-    const answers = setup();
+    const track = vi.fn();
+    const answers = setup(track);
     expect(await screen.findByText("Meet your new Tag")).toBeTruthy();
     expect(step()).toBe("Your Tag");
     // Shuffle answers in place; the screen stays.
@@ -192,6 +196,13 @@ describe("Add a Tag", () => {
     expect(await screen.findByText("Say hi to Maya's Tag")).toBeTruthy();
     expect(screen.getByText("Codex connected")).toBeTruthy();
     expect(screen.queryByText(/replied/)).toBeNull();
+
+    // Usage data follows the step track once, even under StrictMode, and never carries answers.
+    expect(track.mock.calls.map(([event, fields]) => event === "app_setup_step_completed" ? fields.step : event)).toEqual([
+      "app_setup_started", "tag", "ai", "workspace", "create", "channels", "app_setup_completed",
+    ]);
+    expect(track).toHaveBeenCalledWith("app_setup_completed", { entry_point: "first_tag", elapsed_seconds: expect.any(Number) });
+    expect(JSON.stringify(track.mock.calls)).not.toMatch(/Maya|Klovr|Launch help|T0KLOVR1/);
   });
 
   it("never asks which person you are", () => {

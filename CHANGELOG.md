@@ -33,6 +33,14 @@ All notable changes to Tag are documented here.
 
 ### Added
 
+- Tag.app shares the CLI's optional, privacy-bounded usage data. It shows the
+  same notice before recording anything, and **Settings → Privacy → Share usage
+  data** changes the one installation-wide choice that `tag telemetry` also
+  controls. The app records a fixed set of events through
+  `tag telemetry record`: opening, screens, setup steps, updates, and release
+  channel switches. Background calls the app makes to the CLI no longer count as
+  terminal use. See [telemetry](docs/reference/telemetry.md).
+
 - Change a Tag's one-line Slack description after setup with
   `tag NAME describe "…" [--json]` (`""` clears it), or with **Edit** next to the
   description in Tag.app's Details tab. Slack is changed and verified first, so

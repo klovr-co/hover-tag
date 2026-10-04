@@ -12,6 +12,7 @@ import type { SetupQuestion, SetupReady, SetupWorkspace } from "../lib/protocol"
 import {
   EXISTING_FLOW, EXIT_OPTION, FLOW, heading, initialSetup, setupReducer, trackStep, type SetupState, type SignInStep,
 } from "../lib/setup";
+import { SetupTracker, setupEntry, useTrack } from "../lib/telemetry";
 import { readActivity } from "../lib/watch";
 import keyArt from "../assets/art/tag-key.png";
 import puzzled from "../assets/art/tag-puzzled.png";
@@ -44,6 +45,18 @@ export function Connect({ api, args, done, paused, openAI }: Props) {
   // Answers waiting for a question to come back, such as a workspace picked while an organization was open.
   const pending = useRef<{ id: string; answer: unknown } | null>(null);
   const approve = useRef<SetupQuestion | null>(null);
+  // Usage data reads only where the step track stands, never the answers.
+  const track = useTrack();
+  const latestTrack = useRef(track);
+  latestTrack.current = track;
+  const tracker = useRef<{ attempt: number; setup: SetupTracker } | null>(null);
+  useEffect(() => {
+    if (tracker.current?.attempt === attempt) return;
+    const setup = new SetupTracker((event, fields) => latestTrack.current(event, fields), setupEntry(args));
+    tracker.current = { attempt, setup };
+    setup.start();
+  }, [args, attempt]);
+  useEffect(() => { tracker.current?.setup.observe(state); }, [state]);
 
   useEffect(() => {
     let live = true;
@@ -98,6 +111,7 @@ export function Connect({ api, args, done, paused, openAI }: Props) {
   };
   const backThen = (id: string, answer: unknown) => { pending.current = { id, answer }; back(); };
   const cancel = () => {
+    tracker.current?.setup.abandon("cancelled");
     if (state.signIn.step) session.current?.send({ cancel: true });
     session.current?.send({ answer: null, pause: true });
     paused();
@@ -133,7 +147,7 @@ export function Connect({ api, args, done, paused, openAI }: Props) {
         existing={() => { dispatch({ type: "existing" }); send("existing"); }} />;
       case "ai_connection": return <FlowBody title="Connect an AI in Settings" lead="Your AI accounts are shared by all Tags. Connect Codex or Claude, then return to choose this Tag's model."
         foot={<><BackIf question={q} back={back} /><span className="spacer" />
-          {openAI ? <Primary title="Open Settings" onClick={() => { openingAI.current = true; session.current?.send({ answer: null, pause: true }); }} />
+          {openAI ? <Primary title="Open Settings" onClick={() => { openingAI.current = true; tracker.current?.setup.abandon("ai_settings"); session.current?.send({ answer: null, pause: true }); }} />
             : <Primary title="Check connections again" onClick={() => send("check")} />}</>} />;
       case "default_model": if (q.groups) return <ModelStep key={JSON.stringify(q.option_ids)} question={q} state={state} send={send} back={back} />; break;
       case "workspace": case "org_workspace": case "org_workspace_id":

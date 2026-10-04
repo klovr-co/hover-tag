@@ -3,7 +3,8 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { demoBridge, type RunResult } from "../lib/bridge";
 import type { ProductUpdate } from "../lib/updates";
-import { ReleaseChannel } from "./Settings";
+import type { Telemetry, TelemetryStatus } from "../lib/telemetry";
+import { ReleaseChannel, UsageDataRow } from "./Settings";
 
 afterEach(cleanup);
 
@@ -71,5 +72,37 @@ describe("Release channel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(screen.getByRole("radio", { name: "Stable" }).getAttribute("aria-checked")).toBe("true");
     expect(calls.filter((args) => args[0] === "upgrade" && !args.includes("--dry-run"))).toEqual([]);
+  });
+});
+
+describe("Usage data", () => {
+  const status = (overrides: Partial<TelemetryStatus> = {}): TelemetryStatus => ({
+    enabled: true, available: true, saved_preference: "on", process_override: null, privacy_notice: "https://example.invalid/privacy", ...overrides,
+  });
+  const telemetry = (value: TelemetryStatus | null): Telemetry => ({
+    status: value, loaded: true, asking: false, recording: false, choose: vi.fn(async () => {}), dismiss: vi.fn(), reload: vi.fn(), track: vi.fn(),
+  });
+
+  it("turns the installation-wide choice off and on, and links the privacy notice", async () => {
+    const api = demoBridge();
+    api.open = vi.fn(async () => {});
+    const current = telemetry(status());
+    render(<UsageDataRow api={api} telemetry={current} setError={() => {}} />);
+    fireEvent.click(screen.getByRole("switch", { name: "Share usage data" }));
+    await vi.waitFor(() => expect(current.choose).toHaveBeenCalledWith(false));
+    fireEvent.click(screen.getByRole("button", { name: "Privacy notice" }));
+    expect(api.open).toHaveBeenCalledWith("https://example.invalid/privacy");
+  });
+
+  it("explains why it can't be changed instead of offering a switch", () => {
+    const api = demoBridge();
+    const { rerender } = render(<UsageDataRow api={api} telemetry={telemetry(status({ enabled: false, process_override: "off" }))} setError={() => {}} />);
+    expect(screen.getByText("Off for this app because TAG_TELEMETRY=off is set.")).toBeTruthy();
+    expect(screen.queryByRole("switch")).toBeNull();
+    rerender(<UsageDataRow api={api} telemetry={telemetry(status({ enabled: false, available: false, privacy_notice: null }))} setError={() => {}} />);
+    expect(screen.getByText("This build of Tag doesn't collect usage data.")).toBeTruthy();
+    rerender(<UsageDataRow api={api} telemetry={telemetry(null)} setError={() => {}} />);
+    expect(screen.getByText("Update Tag to manage usage data here.")).toBeTruthy();
+    expect(screen.queryByRole("switch")).toBeNull();
   });
 });

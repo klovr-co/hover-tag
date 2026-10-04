@@ -119,11 +119,12 @@ sandbox. Connected services process requests under their own data policies.
 Read the [security model](docs/adr/0001-credential-boundary.md) before connecting
 sensitive accounts or files.
 
-Tag includes privacy-bounded CLI telemetry for setup and reliability. It never
-collects prompts, Slack messages, agent output, workspace paths, files, source
-code, logs, credentials, configuration values, or command arguments. Use
-`tag telemetry status`, `tag telemetry on`, or `tag telemetry off` to manage it,
-or set `TAG_TELEMETRY=off` for an immediate process-level stop. Read the full
+Tag includes privacy-bounded telemetry for setup and reliability in the CLI and
+Tag.app. It never collects prompts, Slack messages, agent output, workspace
+paths, files, source code, logs, credentials, configuration values, or command
+arguments. Use **Settings → Privacy** in Tag.app, or `tag telemetry status`,
+`tag telemetry on`, or `tag telemetry off`, to manage it, or set
+`TAG_TELEMETRY=off` for an immediate process-level stop. Read the full
 [telemetry and privacy reference](docs/reference/telemetry.md).
 
 [Documentation](https://www.hover.team/tag/) ·
