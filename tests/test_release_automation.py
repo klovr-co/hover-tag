@@ -706,6 +706,31 @@ class ReleasePreflightTests(unittest.TestCase):
             self.assertIn("docs/reference/telemetry.md", workflow)
             self.assertIn('--posthog-project-token "$TAG_POSTHOG_PROJECT_TOKEN"', workflow)
 
+    def test_automatic_prereleases_explicitly_dispatch_desktop_packaging(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        edge = (root / ".github/workflows/edge-build.yml").read_text(encoding="utf-8")
+        package = (root / ".github/workflows/release-package.yml").read_text(encoding="utf-8")
+        # GITHUB_TOKEN publication does not fire release:published. Only expose
+        # the tag after verifying its uploaded CLI archive, then dispatch it.
+        self.assertLess(edge.index('--directory published --version'), edge.index('echo "release_tag=$tag"'))
+        dispatch = edge.split("  package-desktop:\n", 1)[1].split("  notify-site-docs:\n", 1)[0]
+        self.assertIn("needs: publish-edge", dispatch)
+        self.assertIn("if: needs.publish-edge.outputs.release_tag != ''", dispatch)
+        self.assertIn("actions: write", dispatch)
+        self.assertIn("RELEASE_TAG: ${{ needs.publish-edge.outputs.release_tag }}", dispatch)
+        self.assertIn('gh workflow run release-package.yml --repo "$GITHUB_REPOSITORY" --ref main -f tag="$RELEASE_TAG"', dispatch)
+        self.assertIn("workflow_dispatch:", package)
+        self.assertIn("RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}", package)
+        self.assertIn("ref: ${{ inputs.tag || github.event.release.tag_name }}", package)
+        # Dispatch has no release event object: validate the actual published
+        # release and don't let a failed validation publish a manifest anyway.
+        self.assertIn('--json isDraft,isPrerelease', package)
+        self.assertIn('test "$(jq -r .isDraft <<<"$release")" = false', package)
+        self.assertIn('test "$expected_prerelease" = "$(jq -r .isPrerelease <<<"$release")"', package)
+        manifests = package.split("  desktop-updates:\n", 1)[1]
+        self.assertIn("needs: [package, desktop]", manifests)
+        self.assertIn("needs.package.result == 'success'", manifests)
+
     def test_prepare_workflow_uses_candidate_preflight(self) -> None:
         workflow = (
             Path(__file__).resolve().parents[1]

@@ -130,6 +130,14 @@ Windows, and Linux and attaches `Tag-VERSION-macos.dmg` (universal),
 `DESKTOP-SHA256SUMS-PLATFORM`. These are separate from the CLI archive and its
 `SHA256SUMS`, which the installer verifies.
 
+Automatic prereleases explicitly dispatch **Release package** with the verified
+published tag. Releases created with `GITHUB_TOKEN` do not trigger the
+`release: published` event, so this handoff is required to build the desktop
+assets and publish their update feeds. Platform builds run separately from the
+edge publication queue. The packaging workflow validates that the tag belongs
+to `main`, the release is published, and its prerelease flag matches its version.
+It can also be dispatched with a published tag to recover missing packaging.
+
 ### Signing
 
 To set the Apple secrets, run `desktop/scripts/set-apple-secrets.sh` on a Mac
