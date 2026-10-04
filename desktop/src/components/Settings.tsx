@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { AppInfo, Bridge } from "../lib/bridge";
 import { parseJSON, title, type TagRow } from "../lib/protocol";
 import { failureLine, type Tags } from "../lib/tags";
-import { checkUpdate, installUpdate, type ProductUpdate } from "../lib/updates";
+import { APP_CHANNELS, checkUpdate, installUpdate, isAppChannel, type Channel, type ProductUpdate } from "../lib/updates";
 import { CommunityLinks } from "./CommunityLinks";
 import { Back, ErrorLine, Heading, Icon, Primary, Secondary, Spinner, Switch } from "./ui";
 
@@ -19,6 +19,81 @@ function Toggle({ label, detail, on, busy, onChange }: {
         <span className="caption secondary">{detail}</span>
       </span>
       <Switch on={on} busy={!!busy} label={label} onClick={() => onChange(!on)} />
+    </div>
+  );
+}
+
+const CHANNEL_LABEL: Record<Channel, string> = { stable: "Stable", beta: "Beta", alpha: "Alpha" };
+const CHANNEL_DETAIL: Record<Channel, string> = {
+  stable: "Tested releases. Recommended for most people.",
+  beta: "New features a little earlier, once they're mostly finished.",
+  alpha: "The newest changes as soon as they're released. Things may break.",
+};
+
+/** Choose the release channel the app and your Tags follow, after confirming what changes. */
+function ReleaseChannel({ api, appVersion, update, busy, setBusy, switched, setError }: {
+  api: Bridge; appVersion: string; update: ProductUpdate | null; busy: boolean;
+  setBusy: (on: boolean) => void; switched: (done: ProductUpdate, restarting: boolean) => void; setError: (message: string) => void;
+}) {
+  const [choice, setChoice] = useState<Channel | null>(null);
+  const [preview, setPreview] = useState<ProductUpdate | null>(null);
+  const following = update?.pinned ? null : update?.channel ?? null;
+
+  const pick = async (channel: Channel) => {
+    if (channel === following) return;
+    setChoice(channel);
+    setPreview(null);
+    setError("");
+    setBusy(true);
+    try { setPreview(await checkUpdate(api, appVersion, channel)); }
+    catch (error) { setChoice(null); setError(String(error)); }
+    finally { setBusy(false); }
+  };
+  const confirm = async () => {
+    if (!choice) return;
+    setBusy(true);
+    setError("");
+    try {
+      // Installing a new Tag.app restarts it; otherwise refresh what Settings shows.
+      switched(await installUpdate(api, appVersion, choice), !!preview?.desktop);
+      setChoice(null);
+      setPreview(null);
+    } catch (error) { setError(String(error)); }
+    finally { setBusy(false); }
+  };
+  const name = choice ? CHANNEL_LABEL[choice] : "";
+  const installs = preview && (preview.runtime || preview.desktop);
+  return (
+    <div className="list-item stack gap-10" style={{ alignItems: "stretch" }}>
+      <div className="row gap-12">
+        <span className="stack gap-4" style={{ flex: 1 }}>
+          <span style={{ fontWeight: 500 }}>Release channel</span>
+          <span className="caption secondary">
+            {update?.pinned ? `Pinned to Tag ${update.current}. Choose a channel to follow one again.`
+              : following === "edge" ? "Following edge, chosen in the terminal. Tag.app doesn't follow edge; choose a channel to update the app too."
+              : isAppChannel(choice ?? following) ? CHANNEL_DETAIL[(choice ?? following) as Channel]
+              : "The app and your Tags follow the same channel."}
+          </span>
+        </span>
+        <div className="segmented" role="radiogroup" aria-label="Release channel">
+          {APP_CHANNELS.map((channel) => (
+            <button key={channel} role="radio" aria-checked={(choice ?? following) === channel}
+              disabled={busy || !update} onClick={() => void pick(channel)}>{CHANNEL_LABEL[channel]}</button>
+          ))}
+        </div>
+      </div>
+      {choice && !preview && <span className="caption secondary row gap-6"><Spinner small />Checking {name}…</span>}
+      {choice && preview && (
+        <div className="well row gap-10">
+          <span className="caption" style={{ flex: 1 }}>
+            {installs ? `Switch to ${name} and update to Tag ${preview.version}. The app and your Tags update together, and your settings are kept.`
+              : preview.ahead ? `${name}'s newest release is older than Tag ${preview.current}. Tag keeps ${preview.current} and follows ${name} from its next release.`
+              : `Switch to ${name}. You already have its newest release.`}
+          </span>
+          <Secondary title="Cancel" disabled={busy} onClick={() => { setChoice(null); setPreview(null); }} />
+          <Primary title={busy ? "Switching…" : installs ? "Switch and update" : "Switch"} disabled={busy} onClick={() => void confirm()} />
+        </div>
+      )}
     </div>
   );
 }
@@ -37,6 +112,7 @@ export function Settings({ api, info, tags, close }: SettingsProps) {
   const [update, setUpdate] = useState<ProductUpdate | null>(null);
   const [checking, setChecking] = useState(false);
   const [upgrading, setUpgrading] = useState(false);
+  const [switching, setSwitching] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -91,7 +167,8 @@ export function Settings({ api, info, tags, close }: SettingsProps) {
       </div>
       <div className="stack gap-8">
         <div className="headline" style={{ padding: "0 4px" }}>Updates</div>
-        <div className="card list-item" style={{ gap: 12 }}>
+        <div className="card">
+        <div className="list-item" style={{ gap: 12 }}>
           <span className="stack gap-4" style={{ flex: 1 }}>
             <span style={{ fontWeight: 500 }}>
               {available ? `Tag ${update.version} is available` : `Tag ${tagVersion || info.version}`}
@@ -103,7 +180,11 @@ export function Settings({ api, info, tags, close }: SettingsProps) {
           </span>
           {upgrading ? <><Spinner small /><span className="caption secondary">Updating…</span></>
             : available ? <Primary title="Update Tag" onClick={() => void upgrade()} />
-            : <Secondary title={checking ? "Checking…" : "Check for updates"} disabled={checking} onClick={() => void check()} />}
+            : <Secondary title={checking ? "Checking…" : "Check for updates"} disabled={checking || switching} onClick={() => void check()} />}
+        </div>
+        <ReleaseChannel api={api} appVersion={info.version} update={update} busy={switching || upgrading || checking}
+          setBusy={setSwitching} setError={setError}
+          switched={(done, restarting) => { setTagVersion(done.version); setUpdate(done); void tags.refresh(); if (!restarting) void check(); }} />
         </div>
       </div>
       {(error || tags.error) && <ErrorLine>{error || tags.error}</ErrorLine>}

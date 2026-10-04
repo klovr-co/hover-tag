@@ -73,7 +73,9 @@ in the security model; they are not hardened tenants from one another.
 
 For automation, `tag list --json` returns `schema_version`, the installation
 root, and one independently readable record per Tag, including `main`, the
-Slack display name `slack_name`, `nickname`, `workspace_name` when known, and
+Slack display name `slack_name`, `nickname`, `workspace_name` when known,
+`workspace_icon`, the path of a local copy of the Slack workspace's icon (`null`
+for Slack's default icon or before Tag has saved one), and
 `avatar`, the path of the Tag's Slack profile picture when setup created one. Existing inspect/status
 objects retain their fields and add `tag` plus nullable `slack_workspace`;
 their `next_command` starts with `tag NAME` for named Tags. A malformed Tag is
@@ -322,6 +324,10 @@ refresh the installation,
 and save replacement credentials privately. This works without an interactive
 terminal and preserves unrelated app settings. The migration is marked complete
 only after remote settings and the replacement token's required grants are verified.
+Optional permissions are requested the same way but never stop a start. Today
+the only one is `team:read`, which shows the workspace icon. If Slack or a
+workspace admin hasn't granted it, the receipt records it as pending, `tag
+start` says what to approve, and Tag asks again at most once a day.
 An existing legacy Assistant view requires explicit approval through
 `tag setup --review` before the irreversible Agent conversion. If Slack requires
 workspace approval or renewed CLI sign-in, startup stops with recovery guidance;

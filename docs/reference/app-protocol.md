@@ -32,11 +32,17 @@ it shows is listed in `capabilities`; otherwise it offers to upgrade Tag.
 ## Tags
 
 `tag list --json` returns `tags`, one object per Tag with `id`, `valid`,
-`state`, `slack_workspace`, `workspace_name`, `slack_name`, `nickname`,
-`avatar`, `keep_running`, and `main`. `state` is `running`, `stopped`,
-`not_configured`, `setup_incomplete`, `needs_attention`,
+`state`, `slack_workspace`, `workspace_name`, `workspace_icon`, `slack_name`,
+`nickname`, `avatar`, `keep_running`, and `main`. `state` is `running`,
+`stopped`, `not_configured`, `setup_incomplete`, `needs_attention`,
 `invalid_configuration`, or `invalid_tag`; treat unknown states as needing
 attention.
+
+`workspace_icon` is the path to a local copy of the Slack workspace's icon, or
+`null` when the workspace uses Slack's default icon or Tag hasn't saved one
+yet. Tag refreshes it when setup finishes and on each `tag start`. Show the
+workspace name on its own, or a placeholder, when it is `null` or the file
+can't be read.
 
 Start or stop one Tag with `tag NAME start` or `tag NAME stop`; the exit code
 is the result. Starting records that the Tag should keep running; stopping
@@ -68,4 +74,8 @@ afterwards rather than relying on `PATH`.
 `tag upgrade --dry-run --json` checks for an update without changing
 anything; `status` is `current`, `available`, `pinned`, or `ahead`.
 `tag upgrade --json` installs it and restarts running Tags; `status` is
-`upgraded` when it did.
+`upgraded` when it did. Add `--channel stable|beta|alpha|edge` to either command to preview or
+switch the release channel; `current.channel` and `target.channel` report the
+saved and requested channels. Switching to a channel whose newest release is
+older than the installed one saves the channel and keeps the installed
+release (`status` `channel-updated`) until that channel catches up.

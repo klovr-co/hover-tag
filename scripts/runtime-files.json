@@ -61,6 +61,7 @@
     "scripts/slack_post_message.py",
     "scripts/slack_search_scope.py",
     "scripts/slack_socket_agent.py",
+    "scripts/slack_workspace_icon.py",
     "scripts/tag_activity.py",
     "scripts/tag_activity_details.py",
     "scripts/tag_activity_labels.py",

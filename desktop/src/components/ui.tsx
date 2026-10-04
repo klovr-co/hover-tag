@@ -100,6 +100,16 @@ export function Avatar({ row, size = 38 }: { row: TagRow | null; size?: number }
   );
 }
 
+/** The Slack workspace's icon beside its name; nothing when Slack has none for it. */
+export function WorkspaceIcon({ path, size = 16 }: { path: string | null; size?: number }) {
+  const [failed, setFailed] = useState(false);
+  const picture = path && !failed ? source(path) : null;
+  return picture ? (
+    <img className="workspace-icon" alt="" width={size} height={size} src={picture}
+      onError={() => setFailed(true)} style={{ borderRadius: size * 0.22 }} />
+  ) : null;
+}
+
 function source(path: string) {
   try {
     return "__TAURI_INTERNALS__" in window ? convertFileSrc(path) : null;

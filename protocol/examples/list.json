@@ -2,8 +2,9 @@
  "tags": [
   {"id": "t0klovr1-a0maya01", "home": "/Users/maya/Tag/t0klovr1-a0maya01/.tag", "valid": true,
    "state": "running", "slack_workspace": "T0KLOVR1", "workspace_name": "Klovr",
+   "workspace_icon": "/Users/maya/Tag/t0klovr1-a0maya01/.tag/state/workspace-icon.png",
    "slack_name": "Maya's Tag", "nickname": null, "avatar": null, "keep_running": true, "main": true},
   {"id": "new-tag", "home": "/Users/maya/Tag/new-tag/.tag", "valid": true,
-   "state": "setup_incomplete", "slack_workspace": "T0ACME01", "workspace_name": "Acme Inc",
+   "state": "setup_incomplete", "slack_workspace": "T0ACME01", "workspace_name": "Acme Inc", "workspace_icon": null,
    "slack_name": null, "nickname": null, "avatar": null, "keep_running": false, "main": false}
  ]}

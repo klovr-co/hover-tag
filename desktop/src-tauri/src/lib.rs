@@ -40,12 +40,28 @@ struct AppUpdate {
     notes: Option<String>,
 }
 
+/// The Tag.app feed to check: the channel the person chose in Settings (saved by
+/// `tag upgrade --channel`), or this build's own line when Tag follows none.
+fn feed_channel(requested: Option<&str>, version: &str) -> Result<&'static str, String> {
+    match requested {
+        None => Ok(update_channel(version)),
+        Some("stable") => Ok("stable"),
+        Some("beta") => Ok("beta"),
+        Some("alpha") => Ok("alpha"),
+        Some(other) => Err(format!("Tag.app has no update feed for the {other} channel.")),
+    }
+}
+
 /// Ask the release line's manifest for a newer, signed Tag.app.
 #[tauri::command]
-async fn app_update_check(app: AppHandle, pending: State<'_, PendingUpdate>) -> Result<Option<AppUpdate>, String> {
+async fn app_update_check(
+    app: AppHandle,
+    pending: State<'_, PendingUpdate>,
+    channel: Option<String>,
+) -> Result<Option<AppUpdate>, String> {
     use tauri_plugin_updater::UpdaterExt;
     let version = app.package_info().version.to_string();
-    let url = format!("{UPDATE_BASE}/tag-app-{}.json", update_channel(&version));
+    let url = format!("{UPDATE_BASE}/tag-app-{}.json", feed_channel(channel.as_deref(), &version)?);
     let updater = app
         .updater_builder()
         .endpoints(vec![url.parse().map_err(|e| format!("{e}"))?])
@@ -294,6 +310,16 @@ mod tests {
         assert_eq!(super::update_channel("0.3.0-alpha.2"), "alpha");
         assert_eq!(super::update_channel("0.3.0-beta.1"), "beta");
         assert_eq!(super::update_channel("0.3.0"), "stable");
+    }
+
+    #[test]
+    fn follows_the_channel_chosen_in_settings() {
+        assert_eq!(super::feed_channel(None, "0.3.0-alpha.2"), Ok("alpha"));
+        assert_eq!(super::feed_channel(Some("stable"), "0.3.0-alpha.2"), Ok("stable"));
+        assert_eq!(super::feed_channel(Some("beta"), "0.3.0"), Ok("beta"));
+        // Only real feeds: edge has none, and nothing else can reach the URL.
+        assert!(super::feed_channel(Some("edge"), "0.3.0").is_err());
+        assert!(super::feed_channel(Some("../stable"), "0.3.0").is_err());
     }
 
     #[test]

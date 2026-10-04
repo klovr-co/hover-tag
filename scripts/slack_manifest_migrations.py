@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 import yaml
 import os
 from pathlib import Path
@@ -26,15 +27,23 @@ except ImportError:
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MIGRATION_VERSION = 3
+# 4: team:read, so Tag.app can show the Slack workspace icon.
+MIGRATION_VERSION = 4
 DM_SCOPE = "im:history"
 REQUIRED_MANIFEST = yaml.safe_load((ROOT / "slack-app-manifest.yaml").read_text(encoding="utf-8"))
 REQUIRED_BOT_SCOPES = tuple(REQUIRED_MANIFEST["oauth_config"]["scopes"]["bot"])
+# Requested like the others, but never worth stopping a start for: team:read only
+# shows the workspace icon. If Slack (or an admin) hasn't granted it yet, Tag starts
+# anyway and asks again at most once a day.
+OPTIONAL_BOT_SCOPES = frozenset({"team:read"})
+NEEDED_BOT_SCOPES = tuple(scope for scope in REQUIRED_BOT_SCOPES if scope not in OPTIONAL_BOT_SCOPES)
+OPTIONAL_RETRY = timedelta(hours=24)
+OPTIONAL_KEYS = {"optional_pending", "optional_checked_at", "optional_error"}
 DM_EVENT = "message.im"
 AGENT_DESCRIPTION = "Run approved Codex or Claude tasks from Slack."
 
 
-def migrate_manifest(remote: dict, *, enterprise: bool = False) -> tuple[dict, bool]:
+def migrate_manifest(remote: dict, *, enterprise: bool = False, include_optional: bool = True) -> tuple[dict, bool]:
     """Reconcile the release manifest without replacing operator-owned values."""
     migrated = json.loads(json.dumps(remote))
     try:
@@ -49,7 +58,7 @@ def migrate_manifest(remote: dict, *, enterprise: bool = False) -> tuple[dict, b
     app_home["messages_tab_enabled"] = True
     app_home["messages_tab_read_only_enabled"] = False
     for scope in REQUIRED_BOT_SCOPES:
-        if scope not in scopes:
+        if scope not in scopes and (include_optional or scope not in OPTIONAL_BOT_SCOPES):
             scopes.append(scope)
     for event in REQUIRED_MANIFEST["settings"]["event_subscriptions"]["bot_events"]:
         if event not in events:
@@ -194,15 +203,51 @@ def _migration_project(project: Path, manifest: dict, team_id: str, app_id: str,
     return temporary
 
 
-def _marker_matches(marker: Path, team_id: str, app_id: str, enterprise_id: str = "") -> bool:
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _marker_state(marker: Path, receipt: dict) -> dict | None:
+    """The saved receipt when it matches this release and app; None when the migration must run."""
     try:
         value = json.loads(marker.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(value, dict) or {k: v for k, v in value.items() if k not in OPTIONAL_KEYS} != receipt:
+        return None
+    return value
+
+
+def _optional_due(state: dict) -> bool:
+    if not state.get("optional_pending"):
         return False
-    expected = {"version": MIGRATION_VERSION, "team_id": team_id, "app_id": app_id}
-    if enterprise_id:
-        expected.update(enterprise_id=enterprise_id, organization_version=1)
-    return value == expected
+    try:
+        checked = datetime.fromisoformat(str(state.get("optional_checked_at")))
+    except ValueError:
+        return True
+    return _now() - checked >= OPTIONAL_RETRY
+
+
+def _save_receipt(marker: Path, receipt: dict, pending: set[str] | frozenset[str] = frozenset(), error: str = "") -> None:
+    value = dict(receipt)
+    if pending:
+        value.update(optional_pending=sorted(pending), optional_checked_at=_now().isoformat(),
+                     **({"optional_error": error} if error else {}))
+    settings.save_config(marker, value)
+
+
+def optional_pending(home: Path) -> list[str]:
+    """Optional permissions Slack hasn't granted yet, for status lines."""
+    try:
+        value = json.loads((home / "state/slack-manifest-migrations.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    pending = value.get("optional_pending") if isinstance(value, dict) else None
+    return [str(scope) for scope in pending] if isinstance(pending, list) else []
+
+
+class _RequiredMissing(RuntimeError):
+    """A required permission is still missing after a reinstall; this always stops the start."""
 
 
 def enable_agent_view(
@@ -280,16 +325,40 @@ def set_display_name(home: Path, values: dict[str, str], name: str, *, retry: st
 
 
 def reconcile(home: Path, config_path: Path, values: dict[str, str]) -> bool:
-    """Apply release requirements using existing CLI authorization, without prompts."""
+    """Apply release requirements using existing CLI authorization, without prompts.
+
+    Returns True when credentials were refreshed. Required changes are verified
+    before the receipt is saved and stop the start until they succeed. Optional
+    permissions (OPTIONAL_BOT_SCOPES) are requested too, but when only they are
+    missing the receipt records them as pending and the start continues; Tag asks
+    again at most once every OPTIONAL_RETRY.
+    """
     team_id, app_id = values["SLACK_TEAM_ID"], values["SLACK_APP_ID"]
     enterprise_id = values.get("SLACK_ENTERPRISE_ID", "")
-    authorization_id = enterprise_id or team_id
     receipt = {"version": MIGRATION_VERSION, "team_id": team_id, "app_id": app_id}
     if enterprise_id:
         receipt.update(enterprise_id=enterprise_id, organization_version=1)
     marker = home / "state/slack-manifest-migrations.json"
-    if _marker_matches(marker, team_id, app_id, enterprise_id):
+    state = _marker_state(marker, receipt)
+    if state is not None and not _optional_due(state):
         return False
+    # optional_only: every required change is already done, so failures only defer optional ones.
+    progress = {"optional_only": state is not None, "refreshed": False, "granted": set()}
+    try:
+        return _reconcile(home, config_path, values, receipt, marker, progress)
+    except _RequiredMissing:
+        raise
+    except RuntimeError as exc:
+        if not progress["optional_only"]:
+            raise
+        _save_receipt(marker, receipt, OPTIONAL_BOT_SCOPES - progress["granted"], str(exc))
+        return progress["refreshed"]
+
+
+def _reconcile(home: Path, config_path: Path, values: dict[str, str], receipt: dict, marker: Path, progress: dict) -> bool:
+    team_id, app_id = values["SLACK_TEAM_ID"], values["SLACK_APP_ID"]
+    enterprise_id = values.get("SLACK_ENTERPRISE_ID", "")
+    authorization_id = enterprise_id or team_id
     slack = shutil.which("slack")
     if not slack:
         raise RuntimeError("Slack CLI is required to migrate app settings; install it, then retry `tag start`")
@@ -301,8 +370,12 @@ def reconcile(home: Path, config_path: Path, values: dict[str, str]) -> bool:
         slack_identity.validate(values["SLACK_BOT_TOKEN"], team_id=team_id, app_id=app_id,
                                 enterprise_id=enterprise_id, label="Bot token", api=slack_channels.slack_api)
     if not changed and set(REQUIRED_BOT_SCOPES).issubset(scopes):
-        settings.save_config(marker, receipt)
+        _save_receipt(marker, receipt)
         return False
+    if not migrate_manifest(remote, enterprise=bool(enterprise_id), include_optional=False)[1] \
+            and set(NEEDED_BOT_SCOPES).issubset(scopes):
+        progress["optional_only"] = True
+        progress["granted"] = scopes
     with tempfile.TemporaryDirectory(prefix="tag-slack-migration-") as directory:
         migration_project = _migration_project(project, migrated, authorization_id, app_id, Path(directory))
         if changed:
@@ -320,13 +393,18 @@ def reconcile(home: Path, config_path: Path, values: dict[str, str]) -> bool:
         slack_identity.validate(credentials["SLACK_BOT_TOKEN"], team_id=team_id, app_id=app_id,
                                 enterprise_id=enterprise_id, label="Bot token", api=slack_channels.slack_api)
     settings.update_config(config_path, credentials)
-    missing = set(REQUIRED_BOT_SCOPES) - granted_bot_scopes(credentials["SLACK_BOT_TOKEN"])
+    progress["refreshed"] = True
+    granted = granted_bot_scopes(credentials["SLACK_BOT_TOKEN"])
+    progress["granted"] = granted
+    missing = set(NEEDED_BOT_SCOPES) - granted
     if missing:
-        raise RuntimeError(
+        raise _RequiredMissing(
             "Slack reinstalled the app without " + ", ".join(sorted(missing))
             + "; approve those permissions in Slack and retry `tag start`"
         )
-    settings.save_config(marker, receipt)
+    pending = OPTIONAL_BOT_SCOPES - granted
+    _save_receipt(marker, receipt, pending,
+                  ("Slack reinstalled the app without " + ", ".join(sorted(pending))) if pending else "")
     return True
 
 

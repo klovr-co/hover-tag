@@ -20,6 +20,8 @@ export interface TagRow {
   state?: string | null;
   slack_workspace?: string | null;
   workspace_name?: string | null;
+  /** Local copy of the Slack workspace's icon; null for Slack's default icon. */
+  workspace_icon?: string | null;
   slack_name?: string | null;
   nickname?: string | null;
   avatar?: string | null;
@@ -58,6 +60,7 @@ export const title = (row: TagRow) => row.slack_name || "New Tag";
 export interface Group {
   key: string;
   label: string;
+  icon: string | null;
   rows: TagRow[];
 }
 
@@ -71,6 +74,7 @@ export function groups(rows: TagRow[]): Group[] {
   return [...byKey].map(([key, members]) => ({
     key,
     label: members[0].workspace_name || key || "Not connected yet",
+    icon: members.find((row) => row.workspace_icon)?.workspace_icon ?? null,
     rows: members,
   }));
 }

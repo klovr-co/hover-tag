@@ -5,7 +5,7 @@ import { useState } from "react";
 import type { Bridge } from "../lib/bridge";
 import { groups, status, STATUS_LABEL, title, type Group, type TagRow } from "../lib/protocol";
 import type { Tags } from "../lib/tags";
-import { Avatar, ErrorLine, Icon, MoreMenu, Primary, Secondary, Switch, tagIcon } from "./ui";
+import { Avatar, ErrorLine, Icon, MoreMenu, Primary, Secondary, Switch, tagIcon, WorkspaceIcon } from "./ui";
 
 const DOT = { online: "var(--green)", offline: "var(--secondary)", setup: "var(--orange)", attention: "var(--red)" };
 
@@ -76,6 +76,7 @@ function WorkspaceHeader({ group, tags }: { group: Group; tags: Tags }) {
   const all = running >= startable;
   return (
     <div className="row gap-8" style={{ padding: "0 4px" }}>
+      <WorkspaceIcon path={group.icon} />
       <span className="headline" style={{ fontSize: 12 }}>{group.label}</span>
       <span className="count">{running}/{group.rows.length}</span>
       <div className="spacer" />

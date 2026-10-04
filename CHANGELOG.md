@@ -6,6 +6,21 @@ All notable changes to Tag are documented here.
 
 ### Added
 
+- Choose the release channel in Tag.app: Settings now has **Release channel**
+  (Stable, Beta, or Alpha). It shows what switching will do before anything
+  changes, then moves the app and your Tags to that channel together and saves
+  the choice for `tag upgrade` too. Switching to a channel that's behind your
+  installed release keeps what you have until the channel catches up.
+
+- Tag.app shows each Slack workspace's icon beside its name. Tag saves a local
+  copy when setup finishes and on each `tag start`, and `tag list --json`
+  reports it as `workspace_icon`. This uses Slack's `team:read` permission,
+  which existing Tags request automatically on their next `tag start`. It's
+  optional: if the workspace needs an admin to approve it, the Tag still
+  starts, `tag start` says what to approve, and Tag asks again at most once a
+  day. Until it's granted, and for workspaces without a custom icon, Tag.app
+  shows just the workspace name.
+
 - Install on Windows without Python. `install.ps1` now prepares Tag's own
   pinned Python with a checksum-verified uv, like `install.sh`, and installs
   the Slack CLI for Windows. Existing Windows installations move to the private

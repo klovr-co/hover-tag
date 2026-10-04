@@ -81,3 +81,76 @@ describe("one Tag update", () => {
   });
 });
 
+// A runtime that follows a saved channel, like `tag upgrade --channel`.
+function channels(installed: string, saved: string, newest: Record<string, string>) {
+  const api = demoBridge();
+  const events: string[] = [];
+  const rank = (v: string) => v.split(/[.-]/).map((part) => Number(part) || 0);
+  const older = (a: string, b: string) => rank(a) < rank(b) || (a.includes("-") && !b.includes("-") && a.split("-")[0] === b);
+  api.checkAppUpdate = vi.fn(async (channel?: string) => ({ version: newest[channel ?? "stable"] }));
+  api.installAppUpdate = vi.fn(async (version: string) => { events.push(`desktop ${version}`); });
+  api.tag = vi.fn(async (args: string[]) => {
+    if (args[0] === "version") return { code: 0, stderr: "", stdout: JSON.stringify({ version: installed }) };
+    const channel = args.includes("--channel") ? args[args.indexOf("--channel") + 1] : saved;
+    const target = newest[channel];
+    const dry = args.includes("--dry-run");
+    const before = installed;
+    let status = target === installed ? "current" : older(target, installed) ? "ahead" : "available";
+    if (!dry) {
+      if (status === "available") { installed = target; status = "upgraded"; events.push(`runtime ${target}`); }
+      else if (channel !== saved) status = status === "ahead" ? "channel-updated" : "policy-updated";
+      saved = channel;
+    }
+    return { code: 0, stderr: "", stdout: JSON.stringify({ ok: true, status,
+      current: { version: before, channel: saved, selection: "channel" }, target: { version: target, channel } }) };
+  });
+  return { api, events, saved: () => saved };
+}
+
+describe("release channels", () => {
+  const newest = { stable: "0.3.0", beta: "0.4.0-beta.1", alpha: "0.4.0-alpha.3" };
+
+  it("checks Tag.app's feed for the channel the runtime follows", async () => {
+    const { api } = channels("0.3.0", "beta", newest);
+    expect(await checkUpdate(api, "0.3.0")).toMatchObject({ version: "0.4.0-beta.1", channel: "beta", desktop: true });
+    expect(api.checkAppUpdate).toHaveBeenCalledWith("beta");
+  });
+
+  it("previews a switch without saving it", async () => {
+    const { api, events, saved } = channels("0.3.0", "stable", newest);
+    expect(await checkUpdate(api, "0.3.0", "alpha")).toMatchObject({ version: "0.4.0-alpha.3", channel: "alpha", runtime: true });
+    expect(saved()).toBe("stable");
+    expect(events).toEqual([]);
+  });
+
+  it("switches channel and updates the app and runtime to the same release", async () => {
+    const { api, events, saved } = channels("0.3.0", "stable", newest);
+    expect(await installUpdate(api, "0.3.0", "beta")).toMatchObject({ current: "0.4.0-beta.1", channel: "beta" });
+    expect(api.tag).toHaveBeenCalledWith(["upgrade", "--channel", "beta", "--json"]);
+    expect(events).toEqual(["runtime 0.4.0-beta.1", "desktop 0.4.0-beta.1"]);
+    expect(saved()).toBe("beta");
+  });
+
+  it("saves a switch to an older channel and keeps the newer release until it catches up", async () => {
+    const { api, events, saved } = channels("0.4.0-alpha.3", "alpha", newest);
+    expect(await checkUpdate(api, "0.4.0-alpha.3", "stable")).toMatchObject({ ahead: true, runtime: false, desktop: false });
+    await installUpdate(api, "0.4.0-alpha.3", "stable");
+    expect(events).toEqual([]);
+    expect(saved()).toBe("stable");
+  });
+
+  it("explains that Tag.app can't follow edge", async () => {
+    const { api } = channels("0.3.0", "edge", { ...newest, edge: "0.4.0-alpha.4" });
+    await expect(checkUpdate(api, "0.3.0")).rejects.toThrow("doesn't follow the edge channel");
+    expect(api.checkAppUpdate).not.toHaveBeenCalled();
+  });
+
+  it("follows no channel while pinned until one is chosen", async () => {
+    const { api } = channels("0.3.0", "stable", newest);
+    const tag = api.tag;
+    api.tag = vi.fn(async (args) => args.includes("--channel") || args[0] === "version" ? tag(args)
+      : { code: 0, stderr: "", stdout: JSON.stringify({ ok: true, status: "pinned", current: { version: "0.3.0", channel: "stable", selection: "version" } }) });
+    expect(await checkUpdate(api, "0.3.0")).toMatchObject({ pinned: true, channel: null });
+    expect(await installUpdate(api, "0.3.0", "beta")).toMatchObject({ pinned: false, channel: "beta" });
+  });
+});

@@ -27,6 +27,12 @@ describe("tag list", () => {
     expect(groups([{ id: "x", valid: true }])[0].label).toBe("Not connected yet");
   });
 
+  it("uses the Slack workspace icon when Tag has saved one", () => {
+    const rows = parseList(JSON.stringify(list));
+    expect(groups(rows).map((g) => g.icon)).toEqual(["/Users/maya/Tag/t0klovr1-a0maya01/.tag/state/workspace-icon.png", null]);
+    expect(groups([{ id: "a", valid: true, slack_workspace: "T1" }, { id: "b", valid: true, slack_workspace: "T1", workspace_icon: "/b.png" }])[0].icon).toBe("/b.png");
+  });
+
   it("treats unknown states as needing attention", () => {
     expect(status({ id: "x", valid: true, state: "something_new" })).toBe("attention");
   });

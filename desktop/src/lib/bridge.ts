@@ -58,8 +58,8 @@ export interface Bridge {
   quit(): Promise<void>;
   /** Record that the Swift app's login behaviour was carried over. */
   markMigrated(): Promise<void>;
-  /** A newer signed Tag.app on this build's release line, if any. */
-  checkAppUpdate(): Promise<AppUpdate | null>;
+  /** A newer signed Tag.app on `channel` (stable, beta, or alpha); otherwise on this build's own release line. */
+  checkAppUpdate(channel?: string): Promise<AppUpdate | null>;
   /** Install the update found by checkAppUpdate and restart into it. */
   installAppUpdate(version: string): Promise<void>;
 }
@@ -124,7 +124,7 @@ async function tauriBridge(): Promise<Bridge> {
     fitWindow: (height) => getCurrentWindow().setSize(new LogicalSize(520, Math.min(Math.max(height, 300), 860))),
     quit: () => invoke("quit"),
     markMigrated: () => invoke("mark_migrated"),
-    checkAppUpdate: () => invoke<AppUpdate | null>("app_update_check"),
+    checkAppUpdate: (channel) => invoke<AppUpdate | null>("app_update_check", { channel: channel ?? null }),
     installAppUpdate: (version) => invoke("app_update_install", { version }),
   };
 }
@@ -146,6 +146,7 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
   let installed = options.installed ?? true;
   let runtimeVersion = productVersion.trim();
   let desktopVersion = runtimeVersion;
+  let savedChannel = runtimeVersion.includes("-alpha") ? "alpha" : runtimeVersion.includes("-beta") ? "beta" : "stable";
   const targetVersion = new URLSearchParams(location.search).get("update") ? "0.4.0-alpha.1" : runtimeVersion;
   let keepRunning = false;
   let loginItem = false;
@@ -168,10 +169,12 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
       if (first === "upgrade") {
         const current = runtimeVersion;
         const dry = args.includes("--dry-run");
-        if (!dry) runtimeVersion = targetVersion;
+        const channel = args.includes("--channel") ? args[args.indexOf("--channel") + 1] : savedChannel;
+        if (!dry) { runtimeVersion = targetVersion; savedChannel = channel; }
         return json({ schema_version: 1, ok: true,
           status: dry ? (current === targetVersion ? "current" : "available") : "upgraded",
-          current: { version: current }, target: { version: targetVersion } });
+          current: { version: current, channel: savedChannel, selection: "channel" },
+          target: { version: targetVersion, channel } });
       }
       if ((first === "start" || first === "stop") && args.includes("--workspace")) {
         const team = args[args.indexOf("--workspace") + 1];
@@ -247,6 +250,7 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
     installAppUpdate: async () => { desktopVersion = targetVersion; await sleep(1500); },
   };
 }
+
 
 let current: Promise<Bridge> | null = null;
 

@@ -102,6 +102,7 @@ Profile-picture selection and upload require Slack CLI 4.7 or newer.
    - `channels:read` + `channels:history` — read threads in public channels.
    - `groups:read` + `groups:history` — read threads in private channels.
    - `im:history` — read direct-message threads when DM invocation is enabled.
+   - `team:read` (optional) — read the workspace icon that Tag.app shows beside the workspace name. Without it, Tag still starts and Tag.app shows just the workspace name.
    - `users:read` — verify app identity and caller visibility for cross-channel search.
 5. Open **Event Subscriptions** and subscribe to Bot Events:
    - `app_mention`

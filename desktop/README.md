@@ -64,6 +64,16 @@ settings and update policy are preserved. Missing desktop artifacts never
 produce a false “up to date” result. Checks run every six hours; installation
 always waits for a click.
 
+**Release channel** in Settings switches between Stable, Beta, and Alpha. It
+previews the switch with `tag upgrade --channel CHANNEL --dry-run --json`, says
+what will happen, and on confirmation runs `tag upgrade --channel CHANNEL
+--json`, which saves the choice for the CLI too. The desktop app then checks
+that channel's `tag-app-CHANNEL.json` feed, so the app and runtime always land
+on the same release. Switching to a channel whose newest release is older keeps
+the installed release until the channel catches up. Tag.app has no `edge` feed,
+so edge stays a terminal-only choice; Settings explains this when the CLI
+follows edge.
+
 **AI & models** in Settings shows each set-up Tag's Codex and Claude
 connections and its default model, using `tag NAME settings ai … --json` (see
 [AI connections](../docs/reference/app-protocol.md#ai-connections)). Sign-ins

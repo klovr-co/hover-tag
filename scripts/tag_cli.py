@@ -1737,6 +1737,31 @@ def _avatar(home: Path) -> str | None:
     return str(icons[0]) if icons else None
 
 
+def _workspace_icon(home: Path) -> str | None:
+    """The saved Slack workspace icon, for apps that show it beside the workspace name."""
+    try:
+        import slack_workspace_icon
+    except ImportError:
+        from scripts import slack_workspace_icon
+    icon = slack_workspace_icon.path(home)
+    return str(icon) if icon else None
+
+
+def _refresh_workspace_icon(home: Path, values: dict[str, str]) -> str:
+    """Best effort: a missing icon must never stop setup or a start."""
+    try:
+        import slack_workspace_icon
+    except ImportError:
+        from scripts import slack_workspace_icon
+    token, team = values.get("SLACK_BOT_TOKEN", ""), values.get("SLACK_TEAM_ID", "")
+    if not token:
+        return "skipped"
+    try:
+        return slack_workspace_icon.refresh(home, token, team)
+    except (OSError, RuntimeError) as exc:
+        return f"unavailable: {exc}"
+
+
 def _slack_name(home: Path) -> str | None:
     """The Tag's display name in Slack, for lists that show people names, not IDs."""
     path = home / "config/settings.json"
@@ -1775,6 +1800,12 @@ def _setup_result(code: int, tag_id: str, protocol: bool) -> int:
         except (OSError, ValueError, RuntimeError):
             pass
         status = "complete" if code == 0 and configured else "paused" if code == 0 else "failed"
+        if status == "complete":
+            try:
+                context = tag_instances.resolve(tag_home(), tag_id)
+                _refresh_workspace_icon(context.home, read_config(context.home / "config/settings.json"))
+            except (OSError, ValueError, RuntimeError):
+                pass
         _setup_ui().emit({"type": "result", "status": status, "tag": tag_id, "exit_code": code})
     return code
 
@@ -2019,6 +2050,7 @@ def _run_cli() -> int:
                                   slack_name=_slack_name(context.home),
                                   nickname=tag_instances.nickname(context.home),
                                   avatar=_avatar(context.home),
+                                  workspace_icon=_workspace_icon(context.home),
                                   keep_running=autostart.wanted(context.home) is True,
                                   main=context.tag_id == tag_id,
                                   default_model=report["backend"]["default_model"],
@@ -2486,6 +2518,16 @@ def _run_cli() -> int:
                 "Permissions migrated" if manifest_changed else "Permissions current",
                 good=True,
             )
+            icon = _refresh_workspace_icon(home, values)
+            if icon != "skipped":
+                # team:read is optional: without it the workspace shows as a letter, and the start continues.
+                pending = slack_manifest_migrations.optional_pending(home)
+                display.info_row("Workspace", {
+                    "saved": "Icon updated", "current": "Icon current", "default": "Slack's default icon",
+                    "needs_permission": "Icon waits for team:read · approve Tag's app update in Slack"
+                    + ("; Tag asks again within a day" if pending else ""),
+                }.get(icon, "Icon not updated · " + icon.removeprefix("unavailable: ")),
+                    good=icon in {"saved", "current", "default"})
             ensure_connector_credential(home, values)
             display.pending_row("Memory", "Waiting for the service to become healthy…")
             ensure_shared_memory(context, os.environ.copy())
