@@ -94,6 +94,13 @@ latest reply). Both need the `ai-connections` and `logs-activity`
 capabilities; without them Home shows the greeting. Nothing is invented: a
 reply appears only once Tag recorded one.
 
+**Tag detail** opens from a Home row at 800 px wide (`fitWindow` sets the
+width too). It reads `channels` from `tag list --json`, the Tag's `activity`
+from `tag NAME logs --json` every 30 seconds, and the model and thinking level
+from `tag NAME settings ai --json` and `models --json`; saving runs
+`tag NAME settings ai model VALUE --effort LEVEL`, with `--restart` only after
+Save and restart. Copy full log copies the services' recent output.
+
 **Look.** The window uses the Hover style from hover.team: its sky, frosted
 panel and navy button. Source Sans 3 is bundled in `src/assets/fonts`
 (SIL Open Font License), and the pixel art in `src/assets/art` comes from the

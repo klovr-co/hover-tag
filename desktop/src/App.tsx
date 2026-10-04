@@ -3,7 +3,7 @@
 // Tag.app: installs Tag on first run, then lists, starts and adds Tags.
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
 import { bridge, type AppInfo, type Bridge } from "./lib/bridge";
-import { compatibility, parseJSON, status, type TagRow, type VersionInfo } from "./lib/protocol";
+import { compatibility, parseJSON, status, type VersionInfo } from "./lib/protocol";
 import { checkUpdate, initialUpdate, installUpdate, updateReducer } from "./lib/updates";
 import { useTags } from "./lib/tags";
 import { useWatch } from "./lib/watch";
@@ -12,7 +12,8 @@ import { Home } from "./components/Home";
 import { Installing, Welcome } from "./components/Install";
 import { AI_CAPABILITY } from "./lib/ai";
 import { AISettings } from "./components/AISettings";
-import { Logs, Settings } from "./components/Settings";
+import { Settings } from "./components/Settings";
+import { TagDetail } from "./components/TagDetail";
 import { Spinner, Toast } from "./components/ui";
 
 type Screen =
@@ -23,7 +24,7 @@ type Screen =
   | { name: "connect"; args: string[] }
   | { name: "settings" }
   | { name: "ai"; tag?: string }
-  | { name: "logs"; row: TagRow };
+  | { name: "tag"; id: string };
 
 /** Capabilities this app needs from the installed Tag. */
 const NEEDED = ["list", "setup-jsonl"];
@@ -139,7 +140,7 @@ export function App() {
   }, [api, info, tags]);
 
   // The window always fits its content, and Tag detail is wider.
-  const width = WIDTH;
+  const width = screen.name === "tag" ? WIDE : WIDTH;
   useLayoutEffect(() => {
     if (!api || !root.current) return;
     const observer = new ResizeObserver(([entry]) => void api.fitWindow(width, Math.ceil(entry.target.getBoundingClientRect().height)));
@@ -169,7 +170,7 @@ export function App() {
   const home = () => { setScreen({ name: "home" }); void tags.refresh(); watch.recheck(); };
   const add = () => setScreen({ name: "connect", args: tags.rows.length ? ["add"] : ["setup"] });
   return (
-    <main ref={root} className={`app${info.platform === "macos" ? " overlay" : ""}${screen.name === "home" ? " home" : ""}`}>
+    <main ref={root} className={`app${info.platform === "macos" ? " overlay" : ""}${screen.name === "home" ? " home" : ""}${screen.name === "tag" ? " wide" : ""}`}>
       {screen.name === "welcome" && <Welcome api={api} platform={info.platform} install={() => setScreen({ name: "installing", attempt: 0 })} />}
       {screen.name === "installing" && (
         <Installing key={screen.attempt} api={api}
@@ -182,7 +183,7 @@ export function App() {
           firstName={info.firstName ?? null} update={update} outdated={outdated} runUpdate={() => void runUpdate()}
           add={add}
           finishSetup={(row) => setScreen({ name: "connect", args: [row.id, "setup"] })}
-          open={(row) => setScreen({ name: "logs", row })}
+          open={(row) => setScreen({ name: "tag", id: row.id })}
           fixAI={(tag) => setScreen({ name: "ai", tag })}
           showSettings={() => setScreen({ name: "settings" })} />
       )}
@@ -198,7 +199,12 @@ export function App() {
       {screen.name === "ai" && (
         <AISettings api={api} tags={tags} initial={screen.tag} close={() => { watch.recheck(); setScreen({ name: "settings" }); }} />
       )}
-      {screen.name === "logs" && <Logs api={api} row={screen.row} close={home} />}
+      {screen.name === "tag" && (
+        <TagDetail api={api} tags={tags} initial={screen.id} problems={watch.problems} back={home} add={add}
+          showSettings={() => setScreen({ name: "settings" })}
+          finishSetup={(row) => setScreen({ name: "connect", args: [row.id, "setup"] })}
+          openAI={(tag) => setScreen({ name: "ai", tag })} say={say} />
+      )}
       <Toast text={toast} />
     </main>
   );

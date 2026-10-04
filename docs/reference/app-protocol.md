@@ -37,7 +37,7 @@ it shows is listed in `capabilities`; otherwise it offers to upgrade Tag.
 `tag list --json` returns `tags`, one object per Tag with `id`, `valid`,
 `state`, `slack_workspace`, `workspace_name`, `workspace_icon`, `slack_name`,
 `nickname`, `avatar`, `keep_running`, `main`, `description`, `default_model`,
-`default_model_label`, `default_model_name`, and `default_effort`. `state` is
+`default_model_label`, `default_model_name`, `default_effort`, and `channels`. `state` is
 `running`, `stopped`, `not_configured`, `setup_incomplete`, `needs_attention`,
 `invalid_configuration`, or `invalid_tag`; treat unknown states as needing
 attention.
@@ -52,6 +52,12 @@ choice (such as `codex:gpt-5.5`, or `codex` for the account's own default),
 levels or Tag hasn't seen its account's catalog yet. These fields come from
 saved settings and the last model catalog Tag loaded, so `tag list` never
 starts an agent.
+
+`channels` lists the Slack channels the Tag answers and remembers in, each as
+`{"id": "C…", "name": "launch"}`, sorted by name. It includes channels the Tag
+joined by invitation once Tag has picked them up. `name` comes from the Tag's
+saved channel sources and is `null` when Tag hasn't recorded one; apps then show
+the ID. Private channels are included once the Tag is invited.
 
 `workspace_icon` is the path to a local copy of the Slack workspace's icon, or
 `null` when the workspace uses Slack's default icon or Tag hasn't saved one

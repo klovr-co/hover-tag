@@ -1763,6 +1763,18 @@ def _refresh_workspace_icon(home: Path, values: dict[str, str]) -> str:
         return f"unavailable: {exc}"
 
 
+def _channels(values: dict[str, str]) -> list[dict[str, str | None]]:
+    """The channels a Tag answers in, named from its saved Slack history sources."""
+    try:
+        import tag_activity
+    except ImportError:
+        from scripts import tag_activity
+    names = tag_activity.channel_names(values.get("MFS_ALLOWED_SCOPES", ""))
+    ids = [part.strip() for part in values.get("SLACK_CHANNEL_IDS", "").split(",") if part.strip()]
+    rows = [{"id": channel, "name": names.get(channel)} for channel in dict.fromkeys(ids)]
+    return sorted(rows, key=lambda row: (row["name"] is None, (row["name"] or row["id"]).casefold()))
+
+
 def _slack_name(home: Path) -> str | None:
     """The Tag's display name in Slack, for lists that show people names, not IDs."""
     path = home / "config/settings.json"
@@ -2107,7 +2119,8 @@ def _run_cli() -> int:
                                       report["backend"]["default_model"], default_backend, names=names,
                                   ),
                                   default_effort=agent_models.effective_effort(context.home, values),
-                                  description=values.get("OPENTAG_BOT_DESCRIPTION") or None)
+                                  description=values.get("OPENTAG_BOT_DESCRIPTION") or None,
+                                  channels=_channels(values))
                 except (OSError, ValueError, RuntimeError) as exc:
                     record.update(valid=False, state="invalid_configuration", error=str(exc))
             else:

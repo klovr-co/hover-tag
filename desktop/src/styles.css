@@ -443,6 +443,66 @@ button.hello:hover b { text-decoration: underline; text-underline-offset: 2px; }
 .menu .mck { width: 14px; display: grid; place-items: center; color: var(--blue); }
 .menu button:hover .mws, .menu button:hover .mck { color: #fff; }
 
+/* ── Tag detail: a workspace rail, a sidebar of Tags and channels, and a main pane, like Slack ── */
+.sl-top { position: relative; height: 64px; background: linear-gradient(180deg, var(--sky-top), var(--sky-bottom)); overflow: hidden; display: flex; align-items: center; gap: 10px; padding: 0 14px 0 86px; color: #fff; flex: none; }
+.app:not(.overlay) .sl-top { padding-left: 14px; }
+.sl-search { flex: 1; height: 32px; border-radius: 8px; background: rgba(255, 255, 255, .2); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .28); display: flex; align-items: center; gap: 8px; padding: 0 10px; color: rgba(255, 255, 255, .88); font-size: 13.5px; position: relative; z-index: 2; }
+.sl-search input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; color: #fff; font-size: 13.5px; }
+.sl-search input::placeholder { color: rgba(255, 255, 255, .88); }
+.sl-top .sky-btn, .sl-top .add { position: relative; z-index: 2; }
+.sl-grid { display: grid; grid-template-columns: 64px 224px 1fr; height: 520px; background: var(--paper); }
+@media (prefers-color-scheme: dark) { .sl-grid { --paper: #0e1d2c; --canvas: #112334; --paper-2: #15283b; } }
+@media (prefers-color-scheme: light) { .sl-grid { --canvas: #f2f8fd; } }
+.sl-rail { background: color-mix(in srgb, var(--canvas) 70%, var(--sky-soft)); border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 14px 0; }
+.sl-ws { width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; color: #fff; font-weight: 700; font-size: 16px; position: relative; transition: transform .12s; }
+.sl-ws:hover { transform: translateY(-1px); }
+.sl-ws.on { box-shadow: 0 0 0 2px var(--paper), 0 0 0 4px var(--primary-bg); }
+.sl-ws img { width: 100%; height: 100%; border-radius: 10px; display: block; object-fit: cover; }
+.sl-ws .dotn { position: absolute; right: -5px; top: -5px; min-width: 16px; height: 16px; border-radius: 8px; background: var(--amber); color: #fff; font-size: 10.5px; display: grid; place-items: center; padding: 0 4px; border: 2px solid var(--paper); }
+.sl-ws.plus { background: var(--fill); color: var(--muted); }
+.sl-side { background: var(--canvas); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+.sl-wshead { padding: 14px 14px 10px; border-bottom: 1px solid var(--line); }
+.sl-wshead b { display: block; font-size: 16.5px; color: var(--ink); }
+.sl-list { flex: 1; overflow: auto; padding: 8px 8px 12px; }
+.sl-sec { font-size: 12.5px; font-weight: 700; color: var(--muted); padding: 12px 8px 4px; display: flex; align-items: center; gap: 6px; }
+.sl-item { display: flex; align-items: center; gap: 8px; width: 100%; padding: 5px 8px; border-radius: 7px; text-align: left; color: var(--text); font-size: 14.5px; }
+.sl-item:hover { background: var(--fill); }
+.sl-item.on { background: var(--primary-bg); color: var(--primary-fg); }
+.sl-item.on .sl-meta { color: inherit; opacity: .75; }
+.sl-item img { width: 22px; height: 22px; border-radius: 6px; image-rendering: pixelated; object-fit: cover; }
+.sl-item .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sl-item .pd { width: 8px; height: 8px; border-radius: 50%; flex: none; margin-left: auto; }
+.sl-item .hs { width: 22px; text-align: center; font-weight: 700; color: var(--muted); }
+.sl-item.on .hs { color: inherit; }
+.sl-meta { font-size: 12.5px; color: var(--muted); }
+.sl-foot { padding: 10px 14px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 8px; }
+.sl-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.sl-mhead { display: flex; align-items: center; gap: 12px; padding: 14px 16px 10px; }
+.sl-tabs { display: flex; gap: 18px; padding: 0 16px; border-bottom: 1px solid var(--line); }
+.sl-tabs button { padding: 8px 0 9px; font-size: 14px; font-weight: 600; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.sl-tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--primary-bg); }
+@media (prefers-color-scheme: dark) { .sl-tabs button[aria-selected="true"] { border-bottom-color: #f8fcff; } }
+.sl-body { flex: 1; overflow: auto; padding: 12px 16px 16px; display: flex; flex-direction: column; gap: 4px; }
+.sl-day { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12.5px; font-weight: 600; margin: 6px 0; }
+.sl-day::before, .sl-day::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.sl-day span { border: 1px solid var(--line); border-radius: 999px; padding: 1px 10px; background: var(--paper); }
+.sl-msg { display: flex; gap: 10px; padding: 6px 4px; border-radius: 8px; }
+.sl-msg:hover { background: var(--canvas); }
+.sl-msg img { width: 34px; height: 34px; border-radius: 8px; image-rendering: pixelated; flex: none; object-fit: cover; }
+.sl-msg .who { font-weight: 700; color: var(--ink); font-size: 14.5px; }
+.sl-msg .who span { font-weight: 400; color: var(--muted); font-size: 12px; margin-left: 6px; }
+.sl-msg p { margin: 1px 0 0; font-size: 14.5px; }
+.sl-chan { color: var(--link); font-weight: 600; }
+.sl-compose { margin: 0 16px 14px; border: 1px solid var(--line-strong); border-radius: 10px; padding: 8px 8px 8px 12px; display: flex; align-items: center; gap: 8px; background: var(--paper-2); }
+.sl-compose .ph { flex: 1; color: var(--muted); font-size: 14px; }
+.sl-kv { display: grid; grid-template-columns: 120px 1fr; row-gap: 10px; font-size: 14.5px; padding: 6px 4px; margin: 0; }
+.sl-kv dt { color: var(--muted); }
+.sl-kv dd { margin: 0; color: var(--ink); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; min-width: 0; }
+.sl-kv dd.mdd { display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
+.sl-kv dd.mdd .mpick-wrap { max-width: 360px; }
+.sl-kv dd.mdd .mcap { margin: 0; font-size: 13px; } .sl-kv dd.mdd .mcap .link { padding: 0; }
+.sl-empty { margin: auto; text-align: center; color: var(--muted); max-width: 320px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+
 /* Helpers kept for screens that still use them */
 .stack { display: flex; flex-direction: column; }
 .row { display: flex; align-items: center; }

@@ -146,12 +146,14 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
     nickname: "research", main: false, keep_running: false,
     description: "Digs through docs and old threads to answer research questions.",
     default_model: "claude:claude-opus-5-5", default_model_label: "Claude · Opus 5.5", default_model_name: "Opus 5.5", default_effort: "max",
+    channels: [{ id: "C0RESEARCH", name: "research" }],
   });
   rows.splice(2, 0, {
     ...rows[0], id: "t0acme01-a0ops003", slack_name: "Ops Tag", slack_workspace: "T0ACME01",
     workspace_name: "Acme Inc", workspace_icon: null, main: false,
     description: "Keeps on-call notes and launch checklists up to date.",
     default_model: "codex:gpt-5.5-mini", default_model_label: "Codex · GPT-5.5 mini", default_model_name: "GPT-5.5 mini", default_effort: "medium",
+    channels: [{ id: "C0GENERAL2", name: "general" }, { id: "C0LAUNCHOPS", name: "launch-ops" }],
   });
   // Sample data shows only what Tag itself would report: replies come from its activity records.
   const today = (hours: number, minutes: number) => { const d = new Date(); d.setHours(hours, minutes, 0, 0); return d.toISOString(); };
@@ -198,9 +200,15 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
           if (!entry) return { code: 1, stdout: JSON.stringify({ schema_version: 1, ok: false, error: `${value} isn't available` }), stderr: "" };
           ai.default_model = { value, backend: entry.group.backend, model: entry.model, label: entry.label,
             backend_name: entry.group.name, available: true };
-          const running = rows.find((r) => r.id === first)?.state === "running";
+          const asked = args.includes("--effort") ? args[args.indexOf("--effort") + 1] : null;
+          const levels: string[] = entry.efforts ?? [];
+          const effort = asked && asked !== "default" && levels.includes(asked) ? asked : entry.default_effort ?? null;
+          Object.assign(ai, { default_effort: effort, effort_levels: levels, effort_chosen: !!asked && asked !== "default" });
+          const row = rows.find((r) => r.id === first);
+          if (row) Object.assign(row, { default_model: value, default_model_name: entry.label, default_effort: effort });
+          const running = row?.state === "running";
           const restart = args.includes("--restart") && running;
-          return json({ schema_version: 1, ok: true, default_model: ai.default_model,
+          return json({ schema_version: 1, ok: true, default_model: ai.default_model, default_effort: effort,
             restart_required: running && !restart, restarted: restart });
         }
       }
@@ -304,6 +312,7 @@ function aiFor(tag: string, row?: TagRow): AIStatus {
     if (backend && model) {
       ai.default_model = { ...ai.default_model, value: row!.default_model!, backend, model, label: row?.default_model_name ?? model,
         backend_name: backend === "claude" ? "Claude" : "Codex" };
+      ai.default_effort = row?.default_effort ?? null;
     }
     aiDemo.set(tag, ai);
   }

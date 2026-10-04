@@ -2,15 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 // AI connections, shared by setup's AI step and Settings → AI & models. Tag
 // checks and signs in; these only draw what it reports.
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ACTION_LABEL, CLAUDE_SHARED_NOTE, CODEX_METHODS, isUrgent, primaryAction, resultLine, statusLine,
-  type Connection, type ModelGroup, type SignInResult, type SignInState,
+  findModel, type AIModels, type AIStatus, type Connection, type ModelEntry, type ModelGroup, type SignInResult, type SignInState,
 } from "../lib/ai";
+import { effortLabel } from "../lib/home";
+import { choiceText, type ModelChoice } from "../lib/model";
 import claude from "../assets/agents/claude.png";
 import codexDark from "../assets/agents/codex-dark.png";
 import codexLight from "../assets/agents/codex.png";
-import { Primary, Secondary, Spinner } from "./ui";
+import { Icon, Primary, Secondary, Spinner } from "./ui";
 
 const TONE = { good: "var(--green)", muted: "var(--secondary)", warn: "var(--orange)", bad: "var(--red)", busy: "var(--accent)" };
 
@@ -170,3 +172,119 @@ export function LoadingLine({ text }: { text: string }) {
   return <div className="row gap-8 secondary callout" style={{ padding: "4px 2px" }}><Spinner small />{text}</div>;
 }
 
+
+// ---- The model picker, thinking level and save bar, shared by Tag detail and AI & models ----
+
+const UNLISTED_VERB: Record<string, string> = { not_installed: "Install", expired: "Reconnect", unsupported: "Update" };
+
+/** Every connected account's models, grouped by agent; picking a model picks its agent. */
+export function ModelMenu({ models, report, value, onChange, below, disabled }: {
+  models: AIModels | null; report: AIStatus | null; value: string | null; onChange: (value: string) => void;
+  below?: boolean; disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: Event) => {
+      if (e instanceof KeyboardEvent ? e.key === "Escape" : !ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    window.addEventListener("mousedown", close);
+    window.addEventListener("keydown", close);
+    return () => { window.removeEventListener("mousedown", close); window.removeEventListener("keydown", close); };
+  }, [open]);
+  if (!models) {
+    return <div className="mpick loading" aria-busy="true"><span className="spin" />Loading models from your accounts…</div>;
+  }
+  const hit = value ? findModel(models.groups, value) : null;
+  const saved = report?.default_model;
+  const label = hit?.entry.label ?? (saved && saved.value === value ? saved.label : value ?? "");
+  const backend = hit?.group.backend ?? (value ?? "").split(":")[0];
+  const offered = !!hit;
+  const connections = report?.connections ?? [];
+  return (
+    <div className="mpick-wrap" ref={ref}>
+      <button className={value && !offered ? "mpick bad" : "mpick"} aria-haspopup="listbox" aria-expanded={open}
+        aria-label="Default model" disabled={disabled} onClick={() => setOpen(!open)}>
+        {value ? <><AgentMark backend={backend} size={20} /><span className="mv">{label}</span>
+          {!offered && <span className="mna">Not available</span>}</> : <span className="mb">Choose a model</span>}
+        <span className="caret"><Icon name="updown" /></span>
+      </button>
+      {open && (
+        <div className={below ? "mmenu below" : "mmenu"} role="listbox" aria-label="Default model">
+          {connections.filter((c) => c.allowed !== false).map((c) => {
+            const group = models.groups.find((g) => g.backend === c.backend);
+            return (
+              <div key={c.backend}>
+                <div className="mgroup" role="presentation"><AgentMark backend={c.backend} size={20} />{c.name}
+                  {c.state === "limited" && <em>Usage limit reached</em>}</div>
+                {!group ? <div className="mnote">{UNLISTED_VERB[c.state] ?? "Sign in to"} {c.name} to use its models.</div>
+                  : group.models.map((m) => (
+                    <button key={m.value} className="mopt" role="option" aria-selected={m.value === value}
+                      onClick={() => { onChange(m.value); setOpen(false); }}>
+                      <span className="mck">{m.value === value && <Icon name="check" size={12} />}</span>{m.label}
+                      {m.default && <span className="mdef">Default</span>}
+                    </button>
+                  ))}
+                {value && !offered && backend === c.backend && (
+                  <button className="mopt" role="option" aria-selected="true" disabled>
+                    <span className="mck"><Icon name="check" size={12} /></span><s>{label}</s><span className="mdef">No longer offered</span>
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** "{Model} isn't available from your connected accounts." when the saved model is gone. */
+export function ModelWarning({ models, value, label, tail }: { models: AIModels | null; value: string | null; label: string; tail: string }) {
+  if (!models || !value || findModel(models.groups, value)) return null;
+  return <div className="mwarn" role="status"><Icon name="warn" /><span>{label} isn't available from your connected accounts. {tail}</span></div>;
+}
+
+/** The model's own thinking levels; the dot marks its default. */
+export function ThinkingRow({ entry, value, onChange, disabled }: {
+  entry: ModelEntry | null; value: string | null; onChange: (effort: string) => void; disabled?: boolean;
+}) {
+  if (!entry) return null;
+  const levels = entry.efforts ?? [];
+  if (!levels.length) {
+    return <div className="think"><span className="tlab">Thinking</span><span className="meta">{entry.label} doesn't have thinking levels.</span></div>;
+  }
+  return (
+    <div className="think">
+      <span className="tlab">Thinking</span>
+      <div className="segc" role="radiogroup" aria-label="Thinking level">
+        {levels.map((level) => (
+          <button key={level} role="radio" aria-checked={value === level} disabled={disabled} onClick={() => onChange(level)}
+            title={level === entry.default_effort ? `${entry.label}'s default` : undefined}>
+            {effortLabel(level)}{level === entry.default_effort && <i className="tdef" aria-label="default" />}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Changing a default asks before restarting a running Tag. */
+export function SaveBar({ choice, tagName, running }: { choice: ModelChoice; tagName: string; running: boolean }) {
+  if (choice.save === "restarting") {
+    return <div className="savebar busy" role="status"><span className="t"><span className="spin" />Restarting {tagName}…</span></div>;
+  }
+  if (choice.save === "saved") {
+    return <div className="savebar ok" role="status"><span className="t"><Icon name="check" size={12} />Saved. {tagName} uses it next time it starts.</span></div>;
+  }
+  if (!choice.dirty || !choice.entry) return null;
+  const busy = choice.save === "saving";
+  return (
+    <div className="savebar">
+      <span className="t">{running ? `Restart ${tagName} to use ${choiceText(choice.entry.label, choice.level)}.` : `${tagName} isn't running, so nothing restarts.`}</span>
+      <button className="p-btn quiet sm" disabled={busy} onClick={choice.discard}>Cancel</button>
+      <button className="p-btn ink sm" disabled={busy} onClick={() => void choice.commit(running)}>{running ? "Save and restart" : "Save"}</button>
+    </div>
+  );
+}

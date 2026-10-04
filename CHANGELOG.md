@@ -17,6 +17,14 @@ All notable changes to Tag are documented here.
   there, and offer Try again if one stops halfway. Settings is grouped into
   General, AI & models, Updates and About.
 
+- Click a Tag on Home to open it, laid out like Slack: your workspaces in a
+  rail, that workspace's Tags and channels in a sidebar, and the Tag's
+  Activity (its recorded replies in each channel), Channels (with Open in
+  Slack), and Details: its model and thinking level, which ask before
+  restarting a running Tag, its mention, terminal command, working folder,
+  Rename, and whether it's the main Tag. This replaces Logs and Home's ···
+  menu. `tag list --json` adds each Tag's `channels`.
+
 - Choose a Tag's default thinking level. `tag settings ai effort high` (or
   Settings → **AI & models** → **Change thinking level** in `tag settings`)
   saves it for the Tag's default model, and

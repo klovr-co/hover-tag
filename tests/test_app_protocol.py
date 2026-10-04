@@ -68,8 +68,18 @@ class ProtocolTests(unittest.TestCase):
         agent_models.remember_model_names([agent_models.ModelOption(
             "gpt-5.5", "GPT-5.5", ("low", "medium", "high"), default_reasoning_effort="medium")],
             agent_models.model_names_path(home))
+        tag_config.save_config(home / "config/settings.json", {
+            **tag_config.load_config(home / "config/settings.json"),
+            "SLACK_CHANNEL_IDS": "C0LAUNCH1,C0GENERAL",
+            "MFS_ALLOWED_SCOPES": "slack://tag-t1-a1/channels/launch__C0LAUNCH1,slack://tag-t1-a1/channels/general__C0GENERAL"})
         row = self.cli("list", "--json")["tags"][0]
         promised = example("list.json")["tags"][0]
+        self.assertEqual(promised["channels"], row["channels"])
+        # A channel Tag hasn't named yet keeps its ID, after the named ones.
+        tag_config.save_config(home / "config/settings.json", {
+            **tag_config.load_config(home / "config/settings.json"), "SLACK_CHANNEL_IDS": "C0PRIVATE,C0LAUNCH1,C0LAUNCH1"})
+        self.assertEqual([{"id": "C0LAUNCH1", "name": "launch"}, {"id": "C0PRIVATE", "name": None}],
+                         self.cli("list", "--json")["tags"][0]["channels"])
         self.assertEqual({key: promised[key] for key in ("description", "default_model", "default_model_label",
                                                          "default_model_name", "default_effort")},
                          {key: row[key] for key in ("description", "default_model", "default_model_label",

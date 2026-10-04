@@ -37,6 +37,8 @@ export interface TagRow {
   default_model_name?: string | null;
   /** The thinking level the default model uses; null for models without levels. */
   default_effort?: string | null;
+  /** The channels the Tag answers in; `name` is null until Tag has recorded it. */
+  channels?: { id: string; name: string | null }[];
 }
 
 export type Status = "online" | "offline" | "setup" | "attention";

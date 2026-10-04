@@ -1,11 +1,11 @@
 // Copyright 2026 klovr.co
 // SPDX-License-Identifier: Apache-2.0
 // App settings, the one Tag update, and a Tag's recent logs.
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { AppInfo, Bridge } from "../lib/bridge";
 import { aiArgs, parseStatus } from "../lib/ai";
-import { parseJSON, title, type TagRow } from "../lib/protocol";
-import { failureLine, type Tags } from "../lib/tags";
+import { parseJSON } from "../lib/protocol";
+import type { Tags } from "../lib/tags";
 import {
   APP_CHANNELS, checkUpdate, installUpdate, isAppChannel, targetVersion,
   type Channel, type ProductUpdate, type UpdateState,
@@ -239,28 +239,5 @@ export function AISummaryRow({ api, tags, open }: { api: Bridge; tags: Tags; ope
         <span className="sub wrap">{summary || "Connections and each Tag's default model"}</span></div>
       <span className="chev" aria-hidden="true"><Icon name="right" size={13} /></span>
     </div>
-  );
-}
-
-export function Logs({ api, row, close }: { api: Bridge; row: TagRow; close: () => void }) {
-  const [logs, setLogs] = useState<Record<string, string[]> | null>(null);
-  const [error, setError] = useState("");
-  const load = useCallback(async () => {
-    const result = await api.tag([row.id, "logs", "--json", "--limit", "200"]);
-    if (result.code === 0) { setLogs(parseJSON<{ services: Record<string, string[]> }>(result.stdout).services); setError(""); }
-    else setError(failureLine(result, "Couldn't read this Tag's logs."));
-  }, [api, row.id]);
-  useEffect(() => { void load(); }, [load]);
-  const text = Object.entries(logs ?? {}).map(([name, lines]) => `── ${name} ──\n${lines.join("\n") || "No recent entries"}`).join("\n\n");
-  return (
-    <>
-      <CompactSky title={title(row)} sub="Recent output from this Tag's services. Tokens are hidden." back={close}
-        right={<button className="sky-btn" title="Refresh" aria-label="Refresh logs" onClick={() => void load()}><Icon name="refresh" /></button>} />
-      <div className="body">
-        {logs === null && !error ? <Spinner /> : <pre className="logbox selectable" style={{ maxHeight: 340 }}>{text || "No logs yet."}</pre>}
-        {error && <ErrorLine>{error}</ErrorLine>}
-        <div className="foot"><span className="spacer" /><Secondary title="Copy" icon="copy" onClick={() => void api.copy(text)} /></div>
-      </div>
-    </>
   );
 }
