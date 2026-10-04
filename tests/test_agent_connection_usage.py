@@ -139,7 +139,8 @@ class ConnectionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings.json"
             tag_config.update_config(path, values)
-            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            if os.name != "nt":
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
         with patch.dict(os.environ, values, clear=True), contextlib.redirect_stdout(io.StringIO()) as out:
             emit_event("error", "failed test-private-credential", nested={"text": "test-private-credential"})
         self.assertNotIn("test-private-credential", out.getvalue())
@@ -204,7 +205,8 @@ class UsageTests(unittest.TestCase):
             self.assertEqual(report["unfinished_attempts"], 2)
             self.assertTrue(report["recorded_cost_over_budget"])
             self.assertEqual(report["enforcement"], "advisory")
-            self.assertEqual((home / "state/usage.sqlite3").stat().st_mode & 0o777, 0o600)
+            if os.name != "nt":
+                self.assertEqual((home / "state/usage.sqlite3").stat().st_mode & 0o777, 0o600)
 
     def test_month_boundary_and_read_only_empty_report(self):
         with tempfile.TemporaryDirectory() as tmp:
