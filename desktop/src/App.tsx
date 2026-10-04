@@ -114,7 +114,7 @@ export function App() {
     if (!api || !info) return;
     dispatchUpdate({ type: "checking" });
     try { dispatchUpdate({ type: "checked", update: await checkUpdate(api, info.version) }); }
-    catch (error) { dispatchUpdate({ type: "failed", error: String(error) }); }
+    catch (error) { dispatchUpdate({ type: "checkFailed", error: error instanceof Error ? error.message : String(error) }); }
   }, [api, info]);
 
   useEffect(() => {
@@ -133,7 +133,7 @@ export function App() {
       setOutdated(false);
       setTimeout(() => dispatchUpdate({ type: "settled" }), 3200);
     } catch (error) {
-      dispatchUpdate({ type: "failed", error: String(error) });
+      dispatchUpdate({ type: "failed", error: error instanceof Error ? error.message : String(error) });
     } finally {
       void tags.refresh();
     }

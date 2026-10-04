@@ -154,3 +154,22 @@ describe("release channels", () => {
     expect(await installUpdate(api, "0.3.0", "beta")).toMatchObject({ pinned: false, channel: "beta" });
   });
 });
+
+describe("update state", () => {
+  it("never reports a failed check as an unfinished update, even when two checks overlap", async () => {
+    const { updateReducer, initialUpdate } = await import("./updates");
+    let state = updateReducer(initialUpdate, { type: "checking" });
+    state = updateReducer(state, { type: "checking" });
+    state = updateReducer(state, { type: "checkFailed", error: "Tag is not managed by the installer." });
+    state = updateReducer(state, { type: "checkFailed", error: "Tag is not managed by the installer." });
+    expect(state).toMatchObject({ status: "idle", error: "Tag is not managed by the installer." });
+    expect(updateReducer({ ...state, status: "updating" }, { type: "failed", error: "Download failed" }).status).toBe("failed");
+  });
+
+  it("says a JSON command's error, not its JSON", async () => {
+    const { failureLine } = await import("./tags");
+    const stdout = '{"schema_version": 1, "ok": false, "error": "Tag is not managed by the installer. Install it once before using tag upgrade."}';
+    expect(failureLine({ code: 1, stdout, stderr: "" }, "x")).toBe("Tag is not managed by the installer. Install it once before using tag upgrade.");
+    expect(failureLine({ code: 1, stdout: "", stderr: "tag_cli.py: error: bad\n" }, "x")).toBe("bad");
+  });
+});

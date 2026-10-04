@@ -9,6 +9,16 @@ export const REFRESH_SECONDS = 30;
 
 /** The last line Tag printed is the one that says what went wrong. */
 export function failureLine(result: RunResult, fallback: string) {
+  // JSON commands report a failure as {"ok": false, "error": "…"}; say just the message.
+  const start = result.stdout.indexOf("{");
+  if (start >= 0) {
+    try {
+      const reported = JSON.parse(result.stdout.slice(start)) as { error?: unknown };
+      if (typeof reported.error === "string" && reported.error) return reported.error;
+    } catch {
+      // Not one JSON object; fall back to the last line.
+    }
+  }
   const lines = (result.stderr || result.stdout).trim().split("\n").filter(Boolean);
   return (lines.pop() ?? fallback).replace("tag_cli.py: error: ", "").replace(/^Error: /, "");
 }

@@ -103,6 +103,9 @@ export type UpdateAction =
   | { type: "updating" }
   | { type: "phase"; phase: UpdatePhase }
   | { type: "updated"; update: ProductUpdate }
+  /** Checking didn't work, for example on a Tag the installer doesn't manage; nothing was changed. */
+  | { type: "checkFailed"; error: string }
+  /** An update that started didn't finish. */
   | { type: "failed"; error: string }
   | { type: "settled" };
 
@@ -122,8 +125,11 @@ export function updateReducer(state: UpdateState, action: UpdateAction): UpdateS
       return { ...state, phase: action.phase };
     case "updated":
       return { status: "done", update: action.update, phase: null, error: "" };
+    case "checkFailed":
+      // Only an update that started can be unfinished; a check never is.
+      return state.status === "checking" ? { ...state, status: "idle", error: action.error } : state;
     case "failed":
-      return { ...state, status: state.status === "checking" ? "idle" : "failed", phase: null, error: action.error };
+      return { ...state, status: "failed", phase: null, error: action.error };
     case "settled":
       return state.status === "done" ? { ...state, status: "current" } : state;
   }

@@ -67,7 +67,7 @@ export function ReleaseChannel({ api, appVersion, update, busy, setBusy, switche
     setError("");
     setBusy(true);
     try { setPreview(await checkUpdate(api, appVersion, channel)); }
-    catch (error) { setChoice(null); setError(String(error)); }
+    catch (error) { setChoice(null); setError(error instanceof Error ? error.message : String(error)); }
     finally { setBusy(false); }
   };
   const confirm = async () => {
@@ -79,7 +79,7 @@ export function ReleaseChannel({ api, appVersion, update, busy, setBusy, switche
       switched(await installUpdate(api, appVersion, choice), !!preview?.desktop);
       setChoice(null);
       setPreview(null);
-    } catch (error) { setError(String(error)); }
+    } catch (error) { setError(error instanceof Error ? error.message : String(error)); }
     finally { setBusy(false); }
   };
   const name = choice ? CHANNEL_LABEL[choice] : "";
