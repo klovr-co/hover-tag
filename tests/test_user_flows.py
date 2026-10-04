@@ -197,7 +197,7 @@ class FlowTests(unittest.TestCase):
     def test_settings_channels_use_plural_guided_flow(self):
         self.seed()
         with patch.object(tag_control.ui, "keyboard_available", return_value=True), patch.object(
-            tag_control.ui, "choose", side_effect=[0, 3, 4]
+            tag_control.ui, "choose", side_effect=[0, 3, 6]
         ), patch.object(tag_reconfigure, "edit") as edit, redirect_stdout(StringIO()):
             tag_control.settings_menu(self.home)
         edit.assert_called_once_with(self.home, "channels")

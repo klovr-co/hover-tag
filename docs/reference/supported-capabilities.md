@@ -107,3 +107,24 @@ For the full end-to-end behavior, see
 [Connected user flows](../user-flows.md). For configuration and exact backend
 commands, use the [Slack adapter](../../references/slack-adapter.md) and
 [backend reference](../../references/backends.md).
+
+## API connections and usage
+
+| Capability | Codex | Claude |
+| --- | --- | --- |
+| Explicit per-Tag API key and base URL | Responses-compatible providers | Anthropic-compatible providers via Agent SDK |
+| Temporary gateway chat-only mode | Opt-in `OPENTAG_CODEX_GATEWAY_DISABLE_TOOLS=1`; requires provider routing; all tools unavailable | Unsupported; setting is rejected |
+| Optional gateway provider pinning | `provider.only` through a task-scoped adapter in API mode; requires explicit base URL | Unsupported; routing settings are rejected |
+| Azure OpenAI resource key | Responses endpoint and deployment name | Not supported by this connection mode |
+| Custom model list | Operator-declared deployment/model IDs | Operator-declared model IDs |
+| Provider-hosted web search through custom endpoints | Disabled for custom API URLs and Azure; local coding tools remain available | SDK tools follow Anthropic gateway support; no Responses configuration applies |
+| Hosted image generation and multi-agent tool namespaces through custom endpoints | Disabled for custom API URLs and Azure for function/custom-only gateway compatibility | SDK tools follow Anthropic gateway support; no Responses configuration applies |
+| MCP tools through custom endpoints | Code Mode exposes MCP/app tools via custom `exec` and function `wait` tools instead of Responses namespaces; requires Code Mode support | Native SDK MCP transport; no Codex Code Mode configuration applies |
+| Local token accounting | Cumulative App Server thread usage | Final SDK result usage |
+| Cost estimate | Operator-provided deployment rates | SDK-reported estimate; custom gateway pricing may differ |
+| Monthly budget per Tag | Advisory, shared across both backends | Advisory, shared across both backends |
+| Hard budget enforcement | Not implemented | Not implemented |
+
+Usage may be incomplete after interruption. API keys and entitlement are not
+verified by catalog or readiness checks. Live Azure and Anthropic inference still
+require provider qualification. See [configuration and usage details](api-connections.md).

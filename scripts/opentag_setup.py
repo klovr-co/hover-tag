@@ -2194,16 +2194,30 @@ def guided_setup(
 def finish_setup(config_path: Path, values: dict[str, str], _channels: list[slack_channels.SlackChannel]) -> int:
     """Finish configuration without starting services or indexing history."""
     ui.message("✓ Slack memory configured")
-    # Sign-ins can lapse while setup waits; check the default agent once more.
-    while True:
-        backend, _ = agent_models.parse_model_choice(
-            values.get("OPENTAG_DEFAULT_MODEL") or values["OPENTAG_BACKEND"], values["OPENTAG_BACKEND"])
-        agent = tag_ai.connection(instance_home(), backend)
-        if agent["state"] == "connected":
-            break
-        ui.message(f"{agent['name']} isn't ready: {tag_ai.status_line(agent)}. Your Slack and memory choices are saved.")
-        values = tag_ai.setup_step(instance_home(), config_path)
-    ui.message(f"✓ {agent['name']} connected · {agent['account'] or 'signed in'}")
+    backend, _ = agent_models.parse_model_choice(
+        values.get("OPENTAG_DEFAULT_MODEL") or values["OPENTAG_BACKEND"], values["OPENTAG_BACKEND"])
+    try:
+        from . import agent_connection
+    except ImportError:
+        import agent_connection
+    try:
+        agent_connection.validate(backend, values)
+    except ValueError as exc:
+        ui.message(str(exc))
+        return 1
+    if agent_connection.active(backend, values):
+        ui.message(f"✓ {backend.title()} API connection configured · first task still unverified")
+    else:
+        # Sign-ins can lapse while setup waits; check the default agent once more.
+        while True:
+            backend, _ = agent_models.parse_model_choice(
+                values.get("OPENTAG_DEFAULT_MODEL") or values["OPENTAG_BACKEND"], values["OPENTAG_BACKEND"])
+            agent = tag_ai.connection(instance_home(), backend)
+            if agent["state"] == "connected":
+                break
+            ui.message(f"{agent['name']} isn't ready: {tag_ai.status_line(agent)}. Your Slack and memory choices are saved.")
+            values = tag_ai.setup_step(instance_home(), config_path)
+        ui.message(f"✓ {agent['name']} connected · {agent['account'] or 'signed in'}")
     print()
     ui.message("✓ Setup complete. No services were started and no history was indexed.")
     if len(set(values.get("SLACK_ALLOWED_USER_IDS", "").split(","))) == 1 and values.get("SLACK_ALLOWED_USER_IDS"):

@@ -48,7 +48,7 @@ class TagControlTests(unittest.TestCase):
         self.complete()
         before = tag_config.read_config(self.path)
         with patch.object(tag_control.ui, "keyboard_available", return_value=True), patch.object(
-            tag_control.ui, "choose", side_effect=[2, 4]
+            tag_control.ui, "choose", side_effect=[2, 6]
         ) as choose, patch.object(tag_control, "choose_default_model", return_value=None), redirect_stdout(StringIO()):
             tag_control.settings_menu(self.home)
         self.assertEqual(before, tag_config.read_config(self.path))
@@ -71,7 +71,7 @@ class TagControlTests(unittest.TestCase):
         with patch.object(tag_control.ui, "keyboard_available", return_value=True), patch.object(
             tag_control.agent_models, "discover_tag_models", side_effect=discover
         ), patch.object(tag_control.ui.display, "backend_status", return_value=("Signed in", True)), patch.object(
-            tag_control.ui, "choose", side_effect=[2, 3, 4]
+            tag_control.ui, "choose", side_effect=[2, 3, 6]
         ) as choose, redirect_stdout(StringIO()):
             tag_control.settings_menu(self.home)
 

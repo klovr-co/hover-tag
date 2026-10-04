@@ -10,6 +10,35 @@ from scripts.opentag_doctor import check_offline
 
 
 class OpenTagDoctorTests(unittest.TestCase):
+    def test_api_configuration_reports_exact_missing_key_for_both_backends(self):
+        for backend in ("codex", "claude"):
+            with self.subTest(backend=backend):
+                prefix = f"OPENTAG_{backend.upper()}_"
+                environment = {"OPENTAG_BACKEND": backend, prefix + "AUTH": "api",
+                               prefix + "MODELS": "test-model", prefix + "BASE_URL": "http://localhost:8000/v1"}
+                checks = []
+                with patch.dict(os.environ, environment, clear=True), patch.object(opentag_doctor, "CHECK_RESULTS", checks):
+                    self.assertFalse(opentag_doctor.check_backend())
+                self.assertIn(f"tag config set {prefix}API_KEY --stdin", checks[0]["next_action"])
+                self.assertNotIn("sign in", checks[0]["next_action"])
+
+    def test_api_configuration_recovery_never_exposes_key_or_invalid_url(self):
+        checks = []
+        environment = {"OPENTAG_BACKEND": "codex", "OPENTAG_CODEX_AUTH": "api",
+                       "OPENTAG_CODEX_API_KEY": "private-test-key", "OPENTAG_CODEX_MODELS": "test-model",
+                       "OPENTAG_CODEX_BASE_URL": "https://user:private-url-password@example.com/v1"}
+        with patch.dict(os.environ, environment, clear=True), patch.object(opentag_doctor, "CHECK_RESULTS", checks):
+            self.assertFalse(opentag_doctor.check_backend())
+        self.assertIn("HTTPS base URL", checks[0]["next_action"])
+        self.assertNotIn("private-test-key", str(checks))
+        self.assertNotIn("private-url-password", str(checks))
+
+    def test_raw_remote_error_details_stay_out_of_structured_checks(self):
+        checks = []
+        with patch.object(opentag_doctor, "CHECK_RESULTS", checks):
+            opentag_doctor.print_check(False, "Slack connection", "remote-secret-text")
+        self.assertNotIn("remote-secret-text", str(checks))
+
     def test_slack_diagnosis_detects_missing_search_permission(self) -> None:
         checks = []
         with patch.object(opentag_doctor, "CHECK_RESULTS", checks), patch.object(

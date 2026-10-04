@@ -309,12 +309,22 @@ def doctor_summary(report, *, title="Doctor"):
         completion("All checks passed", "Tag is ready to start or continue running.")
 
 
-def backend_status(backend="codex", *, search_path=None):
+def backend_status(backend="codex", *, search_path=None, values=None):
     if backend not in {"codex", "claude"}:
         return "Unknown agent", False
     executable = shutil.which(backend, path=search_path)
     if not executable:
         return "Not installed", False
+    try:
+        from . import agent_connection
+    except ImportError:
+        import agent_connection
+    if agent_connection.active(backend, values):
+        try:
+            agent_connection.validate(backend, values)
+        except ValueError as exc:
+            return str(exc), False
+        return "API configured · authentication and task not tested", True
     command = [executable, "auth", "status"] if backend == "claude" else [executable, "login", "status"]
     try:
         from . import tag_chatgpt

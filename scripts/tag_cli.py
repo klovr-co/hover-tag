@@ -2152,7 +2152,7 @@ def _run_cli() -> int:
     parser.add_argument("command", nargs="?", choices=COMMANDS)
     parser.add_argument("arguments", nargs="*", help="memory: start | status | stop; config: init | show | keys | set KEY VALUE; chatgpt: status | login [ACCOUNT] | use ACCOUNT | logout [ACCOUNT] | use-codex; settings: ai [status | models | sign-in codex|claude | resume | model VALUE | effort LEVEL|default]")
     parser.add_argument("--offline", action="store_true")
-    parser.add_argument("--json", action="store_true", dest="json_output", help="structured output for inspect, status, doctor, config, paths, upgrade, and chatgpt")
+    parser.add_argument("--json", action="store_true", dest="json_output", help="structured output for inspect, status, doctor, config, paths, upgrade, usage, and chatgpt")
     parser.add_argument("--consent", action="store_true", help="chatgpt login: request plan permission again")
     parser.add_argument("--method", choices=("chatgpt", "codex"), help="settings ai sign-in codex: a shared ChatGPT account, or the Codex sign-in on this computer")
     parser.add_argument("--account", help="settings ai sign-in codex --method chatgpt: renew this saved account")
@@ -2188,7 +2188,9 @@ def _run_cli() -> int:
     explicit_tag = bool(
         raw_arguments
         and not raw_arguments[0].startswith("-")
-        and raw_arguments[0] not in COMMANDS
+        and (raw_arguments[0] not in COMMANDS or (
+            raw_arguments[0] == "usage" and len(raw_arguments) > 1 and raw_arguments[1] in COMMANDS
+        ))
     )
     tag_id = raw_arguments.pop(0) if explicit_tag else "default"
     args = parser.parse_args(raw_arguments)
@@ -2207,8 +2209,8 @@ def _run_cli() -> int:
         parser.error("settings accepts only ai, for example tag settings ai --json")
     if (args.method or args.account or args.restart or args.effort is not None) and not settings_ai:
         parser.error("--method, --account, --effort and --restart are only for tag settings ai")
-    if args.json_output and args.command not in {"list", "memory", "inspect", "status", "doctor", "config", "paths", "upgrade", "telemetry", "setup", "add", "rename", "describe", "abandon", "remove", "start", "stop", "restart", "autostart", "version", "logs", "chatgpt"} and not settings_ai:
-        parser.error("--json supports list, memory, inspect, status, doctor, config, paths, upgrade, telemetry, chatgpt, settings ai, autostart, version, logs, setup, add, rename, describe, and start/stop/restart with --workspace")
+    if args.json_output and args.command not in {"list", "memory", "inspect", "status", "doctor", "config", "paths", "upgrade", "telemetry", "setup", "add", "rename", "describe", "abandon", "remove", "start", "stop", "restart", "autostart", "version", "logs", "chatgpt", "usage"} and not settings_ai:
+        parser.error("--json supports list, memory, inspect, status, doctor, config, paths, upgrade, telemetry, usage, chatgpt, settings ai, autostart, version, logs, setup, add, rename, describe, and start/stop/restart with --workspace")
     if args.json_output and args.follow:
         parser.error("--json cannot be combined with --follow")
     if args.json_output and args.command in {"start", "stop", "restart"} and not args.workspace:
@@ -2281,7 +2283,7 @@ def _run_cli() -> int:
     if explicit_tag:
         # A nickname from `tag rename` works anywhere a Tag's ID does.
         tag_id = tag_instances.resolve_reference(installation_root, tag_id)
-    tag_instances.validate_name(tag_id)
+    tag_instances.validate_name(tag_id, existing=True)
     if tag_id == tag_instances.DEFAULT_TAG:
         # Plain commands and the legacy `tag default …` both mean the main Tag.
         tag_id = tag_instances.select_unnamed(installation_root)
@@ -2486,6 +2488,26 @@ def _run_cli() -> int:
     }
     os.environ.clear()
     os.environ.update(environment)
+    if args.command == "usage":
+        try:
+            from . import agent_usage
+        except ImportError:
+            import agent_usage
+        values = settings.load_config(settings.config_path(home))
+        usage = agent_usage.report(home, values)
+        if args.json_output:
+            print(json.dumps(usage, indent=2))
+        else:
+            print(f"Usage · {usage['month_utc']} UTC · {usage['attempts']} attempts")
+            print(f"Tokens: {usage['input_tokens']} input, {usage['output_tokens']} output, {usage['cached_input_tokens']} cached input")
+            print(f"Recorded estimated cost: ${usage['estimated_cost_usd']:.4f}")
+            if usage['monthly_budget_usd'] is not None:
+                print(f"Monthly advisory budget: ${usage['monthly_budget_usd']:.2f}")
+                if usage['recorded_cost_over_budget']:
+                    print("Recorded estimated cost has reached the budget.")
+            print(f"Missing usage: {usage['attempts_without_usage']} attempts; missing cost: {usage['attempts_without_cost']}; unfinished: {usage['unfinished_attempts']}")
+            print(usage['coverage'])
+        return 0
     if args.command == "memory":
         action = args.arguments[0] if len(args.arguments) == 1 else "status" if not args.arguments else ""
         if action not in {"start", "status", "stop"}:
@@ -2749,10 +2771,13 @@ def _run_cli() -> int:
             from . import tag_chatgpt
         except ImportError:
             import tag_chatgpt
-        if tag_chatgpt.enabled():
+        if tag_chatgpt.enabled() and not agent_models.agent_connection.active("codex"):
             if os.getenv("OPENTAG_CODEX_TRANSPORT", "app-server") != "app-server":
                 raise RuntimeError("ChatGPT plan usage requires app-server. Run tag config set OPENTAG_CODEX_TRANSPORT app-server.")
             tag_chatgpt.Store().access()  # Refresh before starting dependent services.
+    if args.command in {"start", "dev"}:
+        for backend in agent_models.allowed_backends(os.getenv("OPENTAG_BACKEND", "codex")):
+            agent_models.agent_connection.validate(backend)
     # A TAG installation always has one stable integration workspace.
     os.environ["OPENTAG_WORKDIR"] = str(context.workspace)
     if args.command == "doctor":

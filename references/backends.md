@@ -131,3 +131,19 @@ is reused. Only final-answer events from a completed turn become the sanitized
 leaves the locally generated `reply_preview`. CLI JSON and Tag.app read the same
 cache. Existing installations receive this through the runtime manifest without
 new settings or permissions; historical answer text is not available to backfill.
+## API connections and local usage
+
+Both rich transports accept explicit per-Tag API keys and base URLs. Codex also
+supports Azure Responses deployments. See [API connections](../docs/reference/api-connections.md)
+for settings, authentication precedence, model catalogs and limitations.
+
+Adapters normalize provider usage as `usage` events with cumulative per-scope
+`input_tokens`, `output_tokens`, `cached_input_tokens`, `cache_creation_tokens`,
+and `reasoning_output_tokens` where available. Input includes cache reads and
+writes; reasoning is included in output. Unknown counts remain null. Claude may
+also provide `cost_usd`, an estimate. `scope_id` identifies a cumulative SDK
+session or Codex thread; repeated snapshots replace prior totals for that scope.
+The runner consumes these events into the private ledger before the Slack bridge,
+so the bridge never parses native usage or branches on the provider. Interrupted
+runs with no provider usage remain unknown. `tag usage` reports monthly totals
+and an advisory budget; no hard spending enforcement is implemented.

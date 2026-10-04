@@ -168,6 +168,11 @@ class BackendStreamEventTests(unittest.TestCase):
         resolve = patch.object(opentag_agent, "backend_command", side_effect=lambda name: [name])
         resolve.start()
         self.addCleanup(resolve.stop)
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        usage_home = patch("scripts.agent_usage.instance_home", return_value=Path(temporary.name))
+        usage_home.start()
+        self.addCleanup(usage_home.stop)
 
     def test_backend_progress_requires_a_recognized_lifecycle_event(self) -> None:
         self.assertTrue(opentag_agent.backend_made_progress({"type": "item.started"}))

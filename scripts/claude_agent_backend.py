@@ -21,6 +21,7 @@ from typing import Any
 
 try:
     from .opentag_process_env import text_only_environment
+    from . import agent_connection, agent_usage
     from .agent_activity import (
         APPROVAL_POLL_SECONDS,
         APPROVAL_TIMEOUT_SECONDS,
@@ -32,6 +33,7 @@ try:
     from .tag_activity_details import item_activity_details, preview
 except ImportError:  # Direct script execution does not create a package context.
     from opentag_process_env import text_only_environment
+    import agent_connection, agent_usage
     from agent_activity import (
         APPROVAL_POLL_SECONDS,
         APPROVAL_TIMEOUT_SECONDS,
@@ -298,16 +300,7 @@ class ClaudeEventMapper:
         if self.completed:
             return []
         self.completed = True
-        events: list[dict[str, Any]] = []
-        reported = payload.get("usage")
-        if isinstance(reported, dict):
-            # Anthropic reports uncached input separately from cache reads/writes.
-            inputs = [reported.get("input_tokens"), reported.get("cache_read_input_tokens", 0),
-                      reported.get("cache_creation_input_tokens", 0)]
-            if all(type(count) is int and count >= 0 for count in inputs):
-                usage = token_usage({**reported, "input_tokens": sum(inputs)})
-                if usage:
-                    events.append({"type": "usage", "usage": usage})
+        events: list[dict[str, Any]] = agent_usage.claude_event(payload)
         for tool_use_id, (label, _item) in list(self.tools.items()):
             events.append({"type": "activity_complete", "activity_id": tool_use_id, "label": label,
                            "status": "interrupted", "details": {}})
@@ -468,6 +461,16 @@ class ClaudeAgentRun:
             "can_use_tool": can_use_tool,
             "stderr": capture_stderr,
         }
+        try:
+            agent_connection.routing("claude")
+        except ValueError as exc:
+            raise ClaudeAgentError(str(exc)) from None
+        if agent_connection.active("claude"):
+            try:
+                kwargs["env"] = agent_connection.claude_environment()
+            except ValueError as exc:
+                raise ClaudeAgentError(str(exc)) from None
+            kwargs["model"] = model or agent_connection.models("claude")[0]
         cli_path = claude_cli_path()
         if cli_path:
             kwargs["cli_path"] = cli_path
@@ -522,6 +525,16 @@ class ClaudeAgentRun:
     async def _model_catalog(self) -> list[dict[str, Any]]:
         client_factory, options_factory, _allow, _deny = self._sdk()
         kwargs: dict[str, Any] = {"cwd": str(self.cwd), "setting_sources": ["user", "project", "local"]}
+        try:
+            agent_connection.routing("claude")
+        except ValueError as exc:
+            raise ClaudeAgentError(str(exc)) from None
+        if agent_connection.active("claude"):
+            try:
+                kwargs["env"] = agent_connection.claude_environment()
+            except ValueError as exc:
+                raise ClaudeAgentError(str(exc)) from None
+            kwargs["model"] = agent_connection.models("claude")[0]
         cli_path = claude_cli_path()
         if cli_path:
             kwargs["cli_path"] = cli_path

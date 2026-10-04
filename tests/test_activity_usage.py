@@ -32,8 +32,8 @@ class UsageTests(unittest.TestCase):
             "tokenUsage": {"total": {"inputTokens": 1000, "cachedInputTokens": 800,
                 "outputTokens": 200, "reasoningOutputTokens": 100, "totalTokens": 1200},
                 "last": {"inputTokens": 10, "outputTokens": 2}}}})[0]
-        self.assertEqual(event['usage']['total_tokens'], 1200)
-        self.assertEqual(event['usage']['cache_read_input_tokens'], 800)
+        self.assertEqual((event['input_tokens'], event['output_tokens']), (1000, 200))
+        self.assertEqual(event['cached_input_tokens'], 800)
 
     def test_claude_sdk_result_includes_cache_usage_once_even_on_failure(self):
         for failed in (False, True):
@@ -43,8 +43,8 @@ class UsageTests(unittest.TestCase):
                 'cache_read_input_tokens': 800, 'cache_creation_input_tokens': 100}))
             events = mapper.map(payload)
             self.assertEqual(events[0]['type'], 'usage')
-            self.assertEqual(events[0]['usage']['input_tokens'], 1000)
-            self.assertEqual(events[0]['usage']['total_tokens'], 1200)
+            self.assertEqual(events[0]['input_tokens'], 1000)
+            self.assertEqual(events[0]['output_tokens'], 200)
             self.assertEqual(mapper.map(payload), [])
 
     def test_retry_usage_accumulates_attempts_without_adding_duplicate_snapshots(self):
@@ -52,11 +52,13 @@ class UsageTests(unittest.TestCase):
         def start(emit):
             nonlocal attempt
             attempt += 1
-            usage = {"type": "usage", "usage": {"input_tokens": 100, "output_tokens": 10}}
+            usage = {"type": "usage", "input_tokens": 100, "output_tokens": 10}
             emit(usage)
             emit(usage)
             return ("failed", "rate limit") if attempt == 1 else ("completed", "")
-        with patch.object(opentag_agent, "emit_event") as output, \
+        with tempfile.TemporaryDirectory() as home, \
+             patch("scripts.agent_usage.instance_home", return_value=Path(home)), \
+             patch.object(opentag_agent, "emit_event") as output, \
              patch.object(opentag_agent, "retryable_backend_failure", return_value=True), \
              patch.object(opentag_agent.time, "sleep"), \
              patch.dict(opentag_agent.os.environ, {"OPENTAG_BACKEND_ATTEMPTS": "2"}):

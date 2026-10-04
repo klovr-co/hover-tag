@@ -18,6 +18,12 @@ from pathlib import Path
 from typing import Any
 
 
+try:
+    from . import agent_connection
+except ImportError:
+    import agent_connection
+
+
 SUPPORTED_REASONING_EFFORTS = ("minimal", "low", "medium", "high", "xhigh", "max", "ultra")
 DEFAULT_REASONING_EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultra")
 EFFORT_LABELS = {"minimal": "Minimal", "low": "Low", "medium": "Medium", "high": "High",
@@ -334,6 +340,10 @@ def discover_claude_models() -> list[ModelOption]:
 
 
 def discover_models(backend: str) -> list[ModelOption]:
+    if agent_connection.active(backend):
+        agent_connection.validate(backend)
+        return [ModelOption(name, name, (), is_default=index == 0, backend=backend)
+                for index, name in enumerate(agent_connection.models(backend))]
     if backend == "codex":
         return discover_codex_models()
     if backend == "claude":
@@ -346,6 +356,15 @@ def backend_signed_in(backend: str) -> bool:
     executable = shutil.which(backend)
     if not executable:
         return False
+    if agent_connection.active(backend):
+        try:
+            agent_connection.validate(backend)
+        except ValueError:
+            return False
+        if backend == "claude":
+            import importlib.util
+            return importlib.util.find_spec("claude_agent_sdk") is not None
+        return True
     if backend == "codex":
         try:
             from . import tag_chatgpt
@@ -422,8 +441,11 @@ def discover_tag_models(default_backend: str) -> list[ModelOption]:
             options = [replace(item, is_default=False) for item in options]
         elif default_model:
             if not any(item.model_id == default_model for item in options):
-                efforts = () if name == "claude" else DEFAULT_REASONING_EFFORTS
-                options.append(ModelOption(default_model, default_model, efforts, backend=name))
+                if agent_connection.active(name):
+                    default_model = options[0].model_id if options else None
+                else:
+                    efforts = () if name == "claude" else DEFAULT_REASONING_EFFORTS
+                    options.append(ModelOption(default_model, default_model, efforts, backend=name))
             options = [replace(item, is_default=item.model_id == default_model) for item in options]
         models.extend(options)
     return apply_tag_effort(models, tag_default_effort())

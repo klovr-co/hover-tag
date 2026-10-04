@@ -20,6 +20,8 @@ RUNTIME_DEPENDENCIES = ("mfs_server", "psutil", "slack_bolt")
 
 
 def recovery_hint(label: str) -> str:
+    if label == "backend API configuration":
+        return "Open tag settings → API connections and complete the selected provider configuration"
     if label == "Slack search users:read permission":
         return "Add users:read under OAuth & Permissions > Bot Token Scopes, reinstall the Slack app, and update Tag's bot token if Slack replaces it"
     if label == "Slack search user lookup":
@@ -49,11 +51,11 @@ def token_from_env() -> str | None:
     return None
 
 
-def print_check(ok: bool, label: str, detail: str = "") -> None:
+def print_check(ok: bool, label: str, detail: str = "", *, next_action: str | None = None) -> None:
     if CHECK_RESULTS is not None:
         # Remote error bodies and credential values never enter machine output.
         CHECK_RESULTS.append({"check": label, "ok": bool(ok),
-                              "next_action": None if ok else recovery_hint(label)})
+                              "next_action": None if ok else (next_action or recovery_hint(label))})
     status = "ok" if ok else "fail"
     suffix = f" - {detail}" if detail else ""
     print(f"[{status}] {label}{suffix}")
@@ -222,6 +224,19 @@ def check_slack(channel_id: str | None) -> bool:
 
 def check_backend() -> bool:
     backend = env("OPENTAG_BACKEND")
+    try:
+        from . import agent_connection
+    except ImportError:
+        import agent_connection
+    try:
+        agent_connection.validate(backend)
+    except ValueError as exc:
+        # The validator emits fixed recovery text with setting names only.
+        # Never copy arbitrary provider responses into this structured field.
+        print_check(False, "backend API configuration", str(exc), next_action=str(exc))
+        return False
+    if agent_connection.active(backend):
+        print_check(True, "backend API configuration", "configured; credentials and inference not verified")
     if backend == "claude":
         ok = shutil.which("claude") is not None
         print_check(
