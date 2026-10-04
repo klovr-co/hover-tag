@@ -219,6 +219,16 @@ SIGN_IN_COMMANDS = {
 
 def backend_signed_in(executable: str, backend: str) -> bool:
     try:
+        from . import agent_connection
+    except ImportError:
+        import agent_connection
+    if agent_connection.active(backend):
+        try:
+            agent_connection.validate(backend)
+            return True
+        except ValueError:
+            return False
+    try:
         return subprocess.run(
             [executable, *SIGN_IN_COMMANDS[backend][0]], capture_output=True, timeout=20,
             env=without_telemetry_environment(os.environ), check=False,
@@ -1686,8 +1696,19 @@ def finish_setup(config_path: Path, values: dict[str, str], _channels: list[slac
         raise ui.Paused()
     values = agent_values
     backend = values["OPENTAG_BACKEND"]
-    if backend == "codex":
-        backend_environment = without_telemetry_environment(os.environ)
+    try:
+        from . import agent_connection
+    except ImportError:
+        import agent_connection
+    try:
+        agent_connection.validate(backend, values)
+    except ValueError as exc:
+        ui.message(str(exc))
+        return 1
+    if agent_connection.active(backend, values):
+        ui.message(f"✓ {backend.title()} API connection configured · first task still unverified")
+    elif backend == "codex":
+        backend_environment = without_telemetry_environment({**os.environ, **values})
         transport = "exec" if values.get("OPENTAG_CODEX_TRANSPORT") == "exec" else "app-server"
         try:
             compatible = subprocess.run(
@@ -1740,7 +1761,7 @@ def finish_setup(config_path: Path, values: dict[str, str], _channels: list[slac
                     )
             ui.message("✓ Agent connected · first task still unverified")
     else:
-        backend_environment = without_telemetry_environment(os.environ)
+        backend_environment = without_telemetry_environment({**os.environ, **values})
         while subprocess.run(
             [shutil.which("claude") or "claude", "auth", "status"],
             capture_output=True,

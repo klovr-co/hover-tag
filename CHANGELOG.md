@@ -4,7 +4,30 @@ All notable changes to Tag are documented here.
 
 ## Unreleased
 
+### Fixed
+
+- Preserve existing Tags named `usage` while reserving the alias for new Tags.
+- Report invalid API setup settings without a traceback or environment mutation.
+- Redact Basic authorization credentials in backend failure messages and omit
+  the upstream API key from the gateway's Codex child environment.
+- Record Codex cache-write tokens and price them separately when a cache-write
+  rate is configured; otherwise report the estimate as unknown.
+
+- Show bounded, redacted backend error messages when a failure does not match
+  a known category, instead of “Cause not identified.” Extract messages from
+  JSON errors without copying unrelated fields, and explicitly report when the
+  backend provides no error message. This applies to both Codex and Claude.
+
 ### Added
+
+- Optionally pin a Codex gateway provider with `provider.only` routing. A
+  task-scoped authenticated loopback adapter adds the provider field while
+  preserving streamed responses and upstream errors. Direct connections are
+  unchanged when routing is unset; Claude and Azure routing are unsupported.
+
+- Configure private API keys and custom base URLs for Codex and Claude, including
+  Azure OpenAI Responses deployments for Codex. Record local token usage and
+  estimated costs with `tag usage`, plus advisory monthly budgets per Tag.
 
 - Connect a ChatGPT plan directly to each Tag with `tag chatgpt login`, including
   account selection, automatic token renewal, sign-out, and account-specific

@@ -24,7 +24,7 @@ RESERVED_NAMES = frozenset({
     "add", "list", "memory", "settings", "inspect", "config", "setup",
     "reset", "migrate", "upgrade", "rollback", "version", "paths",
     "doctor", "start", "stop", "restart", "status", "logs", "dev",
-    "telemetry", "chatgpt",
+    "telemetry", "chatgpt", "usage",
 })
 
 
@@ -54,14 +54,14 @@ class InstanceContext:
         return [action] if self.is_default else [self.tag_id, action]
 
 
-def validate_name(name: str, *, allow_default: bool = True) -> str:
+def validate_name(name: str, *, allow_default: bool = True, existing: bool = False) -> str:
     if not isinstance(name, str) or not NAME_PATTERN.fullmatch(name):
         raise ValueError(
             "Workspace aliases must be 1-32 lowercase letters, digits, or hyphens"
         )
     if name == DEFAULT_TAG and not allow_default:
         raise ValueError("The alias 'default' is reserved for the built-in Tag")
-    if name in RESERVED_NAMES:
+    if name in RESERVED_NAMES and not (existing and name == "usage"):
         raise ValueError(f"The alias '{name}' is reserved for a Tag command")
     return name
 
@@ -82,7 +82,7 @@ def suggest_name(installation_root: Path, workspace_name: str) -> str:
 
 
 def instance_path(installation_root: Path, tag_id: str) -> Path:
-    validate_name(tag_id)
+    validate_name(tag_id, existing=True)
     root = installation_root.expanduser().absolute()
     legacy = root / "instances" / tag_id
     candidate = data_home(root, tag_id)
@@ -232,7 +232,7 @@ def discover(installation_root: Path) -> list[dict[str, object]]:
             "error": None,
         }
         try:
-            validate_name(entry.name)
+            validate_name(entry.name, existing=True)
             context = resolve(root, entry.name)
             item.update(home=str(context.home), valid=True)
         except (OSError, ValueError) as exc:

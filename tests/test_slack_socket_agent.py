@@ -1293,6 +1293,13 @@ class SlackReplyChunkingTests(unittest.TestCase):
 
 
 class SlackFailureReplyTests(unittest.TestCase):
+    def test_basic_authorization_is_redacted_in_slack_reply(self) -> None:
+        for detail in ('Gateway rejected Authorization: Basic dXNlcjpwYXNz',
+                       '{"error":{"message":"Gateway rejected Authorization: bAsIc dXNlcjpwYXNz"}}'):
+            reply = slack_socket_agent.user_facing_failure(detail, 420, 'ABC12345')
+            self.assertNotIn('dXNlcjpwYXNz', reply)
+            self.assertIn('redacted', reply)
+
     def test_private_failure_removes_public_progress_placeholder(self) -> None:
         client = MagicMock()
         slack_socket_agent.post_private_failure(
@@ -1316,12 +1323,13 @@ class SlackFailureReplyTests(unittest.TestCase):
         self.assertIn("maximum runtime", maximum)
         self.assertIn("3600", maximum)
 
-    def test_failure_copy_does_not_expose_backend_diagnostics(self) -> None:
+    def test_failure_copy_shows_redacted_backend_error(self) -> None:
         reply = slack_socket_agent.user_facing_failure(
-            "RuntimeError: secret backend detail", 420, "ABC12345"
+            "RuntimeError: unsupported deployment token=secret", 420, "ABC12345"
         )
 
-        self.assertNotIn("secret backend detail", reply)
+        self.assertIn("The backend reported: RuntimeError: unsupported deployment", reply)
+        self.assertNotIn("token=secret", reply)
         self.assertIn("ABC12345", reply)
         self.assertIn("Please retry", reply)
 
@@ -3830,6 +3838,9 @@ class SlackCancellationTests(unittest.TestCase):
 
 class SlackAgentSettingsTests(unittest.TestCase):
     def setUp(self) -> None:
+        plan = patch("scripts.tag_chatgpt.enabled", return_value=False)
+        plan.start()
+        self.addCleanup(plan.stop)
         connected = patch.object(agent_models, "backend_signed_in", side_effect=lambda name: name == "codex")
         connected.start()
         self.addCleanup(connected.stop)

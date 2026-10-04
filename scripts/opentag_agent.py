@@ -7,6 +7,7 @@ import json
 import os
 import shlex
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -17,11 +18,13 @@ from pathlib import Path
 from typing import Any
 
 try:
+    import agent_connection, agent_usage
     from tag_paths import codex_workspace_args, tag_temp_dir
     from codex_agent_backend import CodexAppServer, CodexAppServerError
     from claude_agent_backend import ClaudeAgentError, ClaudeAgentRun
     from record_output_artifact import channel_artifact_directory
 except ImportError:
+    from scripts import agent_connection, agent_usage
     from scripts.tag_paths import codex_workspace_args, tag_temp_dir
     from scripts.codex_agent_backend import CodexAppServer, CodexAppServerError
     from scripts.claude_agent_backend import ClaudeAgentError, ClaudeAgentRun
@@ -318,7 +321,19 @@ def retry_status(next_attempt: int, attempts: int) -> str:
 
 def emit_event(event_type: str, text: str = "", **fields: Any) -> None:
     """Write one backend-neutral event for a parent transport to consume."""
-    print(json.dumps({"type": event_type, "text": text, **fields}), flush=True)
+    payload = {"type": event_type, "text": text, **fields}
+    def scrub(value: Any) -> Any:
+        if isinstance(value, str):
+            for name in ("OPENTAG_CODEX_API_KEY", "OPENTAG_CLAUDE_API_KEY"):
+                secret = os.getenv(name, "")
+                if secret:
+                    value = value.replace(secret, "<redacted>")
+        elif isinstance(value, dict):
+            return {key: scrub(item) for key, item in value.items()}
+        elif isinstance(value, list):
+            return [scrub(item) for item in value]
+        return value
+    print(json.dumps(scrub(payload)), flush=True)
 
 
 def parse_codex_stream_event(payload: dict[str, Any]) -> tuple[str, str] | None:
@@ -636,9 +651,22 @@ def run_rich_events(
     attempts = max(1, int(os.getenv("OPENTAG_BACKEND_ATTEMPTS", "3")))
     for attempt in range(1, attempts + 1):
         made_progress = False
+        recorder = None
+        try:
+            recorder = agent_usage.Recorder(backend_name.lower())
+        except (OSError, sqlite3.Error, ValueError):
+            emit_event("status", "Usage recording unavailable; task will continue.")
 
         def forward_event(event: dict[str, Any]) -> None:
-            nonlocal made_progress
+            nonlocal made_progress, recorder
+            if event.get("type") == "usage":
+                if recorder is not None:
+                    try:
+                        recorder.observe(event)
+                    except (OSError, sqlite3.Error, ValueError):
+                        recorder = None
+                        emit_event("status", "Usage recording unavailable; totals may be incomplete.")
+                return
             payload = dict(event)
             event_type = str(payload.pop("type"))
             text = str(payload.pop("text", ""))
@@ -656,6 +684,11 @@ def run_rich_events(
             status, detail = start(forward_event)
         except errors as exc:
             status, detail = "failed", str(exc)
+        if recorder is not None:
+            try:
+                recorder.save(status)
+            except (OSError, sqlite3.Error, ValueError):
+                emit_event("status", "Usage recording unavailable; totals may be incomplete.")
         if status == "completed":
             return 0
         if status == "interrupted":
@@ -960,7 +993,15 @@ def main() -> int:
     except ImportError:
         import tag_chatgpt
     try:
-        if args.backend == "codex" and tag_chatgpt.enabled() and (
+        if agent_connection.active(args.backend):
+            agent_connection.validate(args.backend)
+            if not args.event_stream:
+                raise ValueError("API connections require the event-stream transport")
+            names = agent_connection.models(args.backend)
+            if args.model and args.model not in names:
+                raise ValueError("Selected model is unavailable on this API connection; choose a configured model")
+            args.model = args.model or names[0]
+        if args.backend == "codex" and not agent_connection.active("codex") and tag_chatgpt.enabled() and (
             not args.event_stream or codex_event_transport() != "app-server"
         ):
             raise tag_chatgpt.ChatGPTError("ChatGPT plan usage requires the app-server event transport; run tag config set OPENTAG_CODEX_TRANSPORT app-server.")
@@ -1033,7 +1074,7 @@ def main() -> int:
             timeout=args.timeout,
             model=args.model,
         )
-    except tag_chatgpt.ChatGPTError as exc:
+    except (tag_chatgpt.ChatGPTError, ValueError) as exc:
         if args.event_stream:
             emit_event("error", str(exc))
         else:

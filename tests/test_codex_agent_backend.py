@@ -40,6 +40,12 @@ class JsonLineDecoderTests(unittest.TestCase):
 
 
 class ModelCatalogTests(unittest.TestCase):
+    def setUp(self):
+        # Unit tests must not consult the developer's real account.
+        connection = patch("scripts.tag_chatgpt.enabled", return_value=False)
+        connection.start()
+        self.addCleanup(connection.stop)
+
     def test_catalog_reads_all_pages_without_starting_an_agent_task(self) -> None:
         server = CodexAppServer(["codex", "app-server"], cwd=Path.cwd(), timeout=10)
         with patch.object(server, "_start"), patch.object(server, "_notify"), patch.object(server, "close") as close, patch.object(

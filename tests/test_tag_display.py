@@ -7,6 +7,12 @@ from scripts import tag_display
 
 
 class DisplayTests(unittest.TestCase):
+    def setUp(self):
+        # Unit tests must not consult the developer's real account.
+        connection = patch("scripts.tag_chatgpt.Store.enabled", return_value=False)
+        connection.start()
+        self.addCleanup(connection.stop)
+
     def test_banner_fits_narrow_terminal_and_is_omitted_without_color(self):
         with patch.object(tag_display.shutil, "get_terminal_size", return_value=os.terminal_size((48, 24))), patch.object(
             tag_display, "color_available", return_value=True

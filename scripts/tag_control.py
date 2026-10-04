@@ -121,13 +121,19 @@ def inspect(home: Path, lifecycle, *, offline: bool = False, tag_id: str = "defa
 def status_report(home: Path, lifecycle, *, tag_id: str = "default") -> dict:
     report = inspect(home, lifecycle, tag_id=tag_id)
     if report["configuration"]["exists"]:
+        try:
+            values = settings.load_config(settings.config_path(home))
+        except (OSError, ValueError):
+            values = {}
+        api = agent_models.agent_connection.active(report["backend"]["selected"], values)
+        extra = {"values": values} if api else {}
         message, ready = ui.display.backend_status(report["backend"]["selected"],
-            search_path=str(home / "integrations/bin") + os.pathsep + os.environ.get("PATH", ""))
+            search_path=str(home / "integrations/bin") + os.pathsep + os.environ.get("PATH", ""), **extra)
         report["backend"].update(status=message, ready=ready,
-                                 authentication="signed_in" if ready else "unverified")
+                                 authentication="configured_unverified" if api and ready else "signed_in" if ready else "unverified")
         search_path = str(home / "integrations/bin") + os.pathsep + os.environ.get("PATH", "")
         report["backend"]["others"] = {
-            name: dict(zip(("status", "ready"), ui.display.backend_status(name, search_path=search_path)))
+            name: dict(zip(("status", "ready"), ui.display.backend_status(name, search_path=search_path, **({"values": values} if agent_models.agent_connection.active(name, values) else {}))))
             for name in report["backend"]["offered"] if name != report["backend"]["selected"]
         }
         if not ready and report["state"] == "running":
@@ -284,11 +290,19 @@ def settings_menu(home: Path) -> None:
 
 def choose_default_model(home: Path, values: dict[str, str]) -> str | None:
     """Pick the Tag's default model from the signed-in accounts' live catalogs."""
-    ui.message("Checking the models available to your signed-in agents…")
+    ui.message("Checking the models available to your connected agents…")
     keys = ("OPENTAG_WORKDIR", "OPENTAG_BACKENDS", "OPENTAG_DEFAULT_MODEL", "OPENTAG_CODEX_MODELS",
-            "OPENTAG_CLAUDE_MODELS", "OPENTAG_CLAUDE_TRANSPORT")
+            "OPENTAG_CLAUDE_MODELS", "OPENTAG_CLAUDE_TRANSPORT", "OPENTAG_CODEX_TRANSPORT",
+            "OPENTAG_CODEX_AUTH", "OPENTAG_CODEX_BASE_URL", "OPENTAG_CODEX_API_KEY", "OPENTAG_CODEX_API_VERSION",
+            "OPENTAG_CODEX_GATEWAY_FORMAT", "OPENTAG_CODEX_GATEWAY_PROVIDER",
+            "OPENTAG_CODEX_GATEWAY_DISABLE_TOOLS",
+            "OPENTAG_CLAUDE_AUTH", "OPENTAG_CLAUDE_BASE_URL", "OPENTAG_CLAUDE_API_KEY")
     previous = {key: os.environ.get(key) for key in keys}
-    os.environ.update({key: values[key] for key in keys if values.get(key)})
+    for key in keys:
+        if key in values:
+            os.environ[key] = values[key]
+        else:
+            os.environ.pop(key, None)
     os.environ.setdefault("OPENTAG_WORKDIR", str(default_workspace(home)))
     try:
         models = agent_models.discover_tag_models(values.get("OPENTAG_BACKEND", "codex"))
@@ -318,6 +332,13 @@ def _settings_menu(home: Path) -> None:
         ("Advanced", ("OPENTAG_TIMEOUT_SECONDS", "OPENTAG_MAX_TIMEOUT_SECONDS", "OPENTAG_BACKEND_ATTEMPTS", "OPENTAG_SLACK_STREAMING",
                       "OPENTAG_SLACK_DM_ENABLED",
                       "OPENTAG_CODEX_TRANSPORT", "OPENTAG_CLAUDE_TRANSPORT", "OPENTAG_CLAUDE_PERMISSION_MODE")),
+        ("API connections", ("OPENTAG_CODEX_API_KEY", "OPENTAG_CODEX_BASE_URL", "OPENTAG_CODEX_API_VERSION",
+                             "OPENTAG_CODEX_GATEWAY_FORMAT", "OPENTAG_CODEX_GATEWAY_PROVIDER",
+                             "OPENTAG_CODEX_GATEWAY_DISABLE_TOOLS",
+                             "OPENTAG_CODEX_MODELS", "OPENTAG_CODEX_AUTH", "OPENTAG_CLAUDE_API_KEY",
+                             "OPENTAG_CLAUDE_BASE_URL", "OPENTAG_CLAUDE_MODELS", "OPENTAG_CLAUDE_AUTH")),
+        ("Usage and budget", ("OPENTAG_MONTHLY_BUDGET_USD", "OPENTAG_CODEX_INPUT_USD_PER_MILLION",
+                              "OPENTAG_CODEX_OUTPUT_USD_PER_MILLION", "OPENTAG_CODEX_CACHE_WRITE_USD_PER_MILLION", "OPENTAG_CODEX_CACHED_INPUT_USD_PER_MILLION")),
     )
     while True:
         tag_id = os.getenv("TAG_ID", "default")
@@ -339,7 +360,7 @@ def _settings_menu(home: Path) -> None:
             selection = input("Choose: ").strip()
         if selection in {"0", "", "back"}:
             return
-        if selection not in {"1", "2", "3", "4"}:
+        if not selection.isdigit() or not 1 <= int(selection) <= len(groups):
             continue
         name, keys = groups[int(selection) - 1]
         raw_values = settings.load_config(settings.config_path(home))
