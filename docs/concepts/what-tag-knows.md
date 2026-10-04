@@ -31,21 +31,45 @@ The same applies to other indexed sources, such as project documents and
 issues. A source may be missing or its index may be out of date. If Tag cannot
 find something, that alone does not mean the discussion never happened.
 
-## Ask Tag to remember a decision
+## Ask Tag to remember something
 
-> @Rowan's Tag save our Friday report deadline in reporting-notes.md.
+> @Rowan's Tag remember that our weekly report is due Friday.
 >
-> **Rowan's Tag:** Saved in reporting-notes.md: Our weekly report is due Friday.
+> **Rowan's Tag:** I'll keep that in mind for this channel.
+>
+> Memory saved for this channel: `report-deadline`: Our weekly report is due Friday.
 
-Tag does not provide a dedicated saved-note command or local memory store.
-For a decision you need later, ask Tag to write it to a specific workspace
-file. To make that file searchable through MFS, the operator must include it
-in an indexed, permitted source. Saving a file and indexing it are separate
-steps; ask Tag to confirm what it actually completed.
+Tag remembers only what someone explicitly asks it to remember. It saves the
+fact for the current channel and loads it before every later request there,
+in any thread, including after a restart. The last line comes from Tag's
+memory store, not from the agent's answer, so it appears only when the save
+actually succeeded.
 
-Tag does not automatically save a note after every conversation. Files it
-writes in the workspace remain available while they are kept there, and
-indexed conversations can be searched without turning each one into a note.
+Say "for all channels" when a fact applies everywhere this Tag works:
+
+> @Rowan's Tag for all channels, write replies in British English.
+
+A channel's own memory replaces an all-channels entry with the same name in
+that channel. Other channels cannot read it.
+
+You can also ask Tag:
+
+- "What do you remember?" to list what this channel can use.
+- "Change the deadline to Thursday." Tag keeps the old value in its history
+  so the change can be undone. Say the old value was wrong or sensitive, and
+  Tag does not keep it.
+- "Forget the report deadline." Tag can no longer reach the entry, including
+  its history. The original Slack messages are not changed.
+
+Anyone who can use Tag can save, change, or forget memory, and each reply says
+exactly what changed. Short facts are loaded with every request; longer
+details are kept as notes that Tag reads when it needs them. Tag refuses a
+save that would make the always-loaded memory too large rather than dropping
+something silently.
+
+Tag does not save a note after every conversation. For a longer document, ask
+Tag to write it to a workspace file. To make that file searchable through MFS,
+the operator must include it in an indexed, permitted source.
 
 ## Use the tools already available to the agent
 

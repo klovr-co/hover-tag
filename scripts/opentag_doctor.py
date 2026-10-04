@@ -28,6 +28,8 @@ def recovery_hint(label: str) -> str:
         return "Check the Slack bot token and users.info access; Slack search must verify caller identity"
     if label == "Tag runtime dependencies":
         return "Re-run the Tag installer; for a source checkout, run ./install.sh --dependencies-only"
+    if label == "Tag memory":
+        return "Move the damaged file named in the detail out of Tag's state/memory folder; Tag recreates empty memory"
     if label.startswith("MFS"):
         return "Check tag config show, start MFS, and index the configured sources before retrying"
     if label.startswith("Slack") or label.startswith("SLACK_"):
@@ -222,6 +224,36 @@ def check_slack(channel_id: str | None) -> bool:
     return all_ok
 
 
+def check_memory() -> bool:
+    """Report Tag memory health; provider-native memory is always disabled at launch."""
+    try:
+        from tag_memory import GLOBAL, default_root, read_document, scope_path
+    except ImportError:  # Imported as scripts.opentag_doctor by tests.
+        from scripts.tag_memory import GLOBAL, default_root, read_document, scope_path
+    root = default_root()
+    paths = [scope_path(root, GLOBAL), *sorted((root / "channels").glob("*.json"))]
+    counts = {"core": 0, "note": 0}
+    scopes = 0
+    for path in paths:
+        if not path.exists():
+            continue
+        try:
+            entries = read_document(path)["entries"]
+        except Exception as exc:  # noqa: BLE001 - doctor reports, never raises
+            print_check(False, "Tag memory", f"cannot read {path}: {type(exc).__name__}")
+            return False
+        scopes += 1
+        for entry in entries.values():
+            counts[entry.get("kind", "core")] = counts.get(entry.get("kind", "core"), 0) + 1
+    print_check(
+        True,
+        "Tag memory",
+        f"{counts['core']} always-loaded entries and {counts['note']} notes in {scopes} scope(s); "
+        "Claude auto memory and Codex memories are turned off for Tag runs",
+    )
+    return True
+
+
 def check_backend() -> bool:
     backend = env("OPENTAG_BACKEND")
     try:
@@ -271,6 +303,7 @@ def check_offline(root: Path) -> bool:
     workspace = Path(env("OPENTAG_WORKDIR")).expanduser()
     scopes = [scope.strip() for scope in env("MFS_ALLOWED_SCOPES").split(",") if scope.strip()]
     runtime_ok = check_runtime_dependencies()
+    memory_ok = check_memory()
     checks = {
         "supported transport": (env("OPENTAG_TRANSPORT") or "slack") == "slack",
         "supported backend": backend in {"codex", "claude"},
@@ -301,7 +334,7 @@ def check_offline(root: Path) -> bool:
     print_check(metadata_ok, "release metadata")
     for error in metadata_errors:
         print(f"       {error}")
-    return runtime_ok and all(checks.values()) and metadata_ok
+    return runtime_ok and memory_ok and all(checks.values()) and metadata_ok
 
 
 def run_checks(offline: bool, channel_ids: list[str] | None) -> int:
@@ -316,6 +349,7 @@ def run_checks(offline: bool, channel_ids: list[str] | None) -> int:
         check_env(),
         check_mfs(scopes) if scopes or env("SLACK_CHANNEL_POLICY") == "invited" else False,
         check_backend(),
+        check_memory(),
     ]
     configured = channel_ids or []
     checks.extend(check_slack(channel_id) for channel_id in configured)

@@ -31,6 +31,8 @@ class SummaryTests(unittest.TestCase):
                 self.assertEqual(agent_summary.summarize_reply(answer, backend, "selected-model"),
                                  "Launch remains blocked by missing approval.")
                 options = factory.call_args.kwargs
+                if backend == "codex":
+                    self.assertIn("features.memories=false", factory.call_args.args[0])
                 self.assertEqual(options["text_only_instructions"], agent_summary.INSTRUCTIONS)
                 self.assertEqual(options["max_timeout"], agent_summary.SUMMARY_TIMEOUT)
                 self.assertFalse(options["cwd"].exists())

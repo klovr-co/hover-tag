@@ -44,8 +44,10 @@ unavailable behavior.
 | Reopen precise MFS records | Implemented | Read and list helpers enforce the configured roots. |
 | Use indexed Slack channel history | Implemented | Requires a configured MFS Slack connector and an allowed `slack://` root. |
 | Use repositories, documents, issues, databases, and object stores | Connector-dependent | The source must already be indexed by MFS and permitted to Tag. |
-| Automatically remember every conversation | Not provided | Continuity comes from Slack threads, workspace state, and approved indexed sources. |
-| Dedicated local memory-note store | Not provided | Durable retrieval uses indexed, permitted MFS sources. |
+| Remember facts on request | Implemented | Explicit save, change, and forget for the current channel or, when asked, all channels. Saved facts load before every request in that channel. Codex and Claude use the same store and helper. |
+| Report memory changes | Implemented | Verified saves, changes, and forgets are added to the Slack reply from the store's receipts, including when the run fails. |
+| Provider-native memory | Disabled | Tag turns off Claude auto memory and Codex memories so that every remembered fact can be listed, corrected, and forgotten through Tag. |
+| Automatically remember every conversation | Not provided | Continuity comes from Slack threads, workspace state, saved memory, and approved indexed sources. |
 
 ## Operator controls
 

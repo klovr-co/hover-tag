@@ -53,6 +53,12 @@ All notable changes to Tag are documented here.
 
 ### Added
 
+- Ask Tag to remember, change, or forget facts for the current channel or for
+  all channels. Saved facts load before every request in that channel, work
+  the same with Codex and Claude, and each reply states exactly what changed.
+  Tag now turns off Claude auto memory and Codex memories for its runs so that
+  everything it remembers can be listed, corrected, and forgotten.
+
 - Optionally pin a Codex gateway provider with `provider.only` routing. A
   task-scoped authenticated loopback adapter adds the provider field while
   preserving streamed responses and upstream errors. Direct connections are

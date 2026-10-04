@@ -91,6 +91,7 @@
     "scripts/tag_layout.py",
     "scripts/tag_locks.py",
     "scripts/tag_mascot.py",
+    "scripts/tag_memory.py",
     "scripts/tag_mfs_runtime.py",
     "scripts/tag_mfs_server.py",
     "scripts/tag_migrate.py",

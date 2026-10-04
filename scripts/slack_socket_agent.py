@@ -67,6 +67,7 @@ try:
     from .tag_activity_labels import activity_title_for_status, readable_activity_title
     from .tag_paths import tag_temp_dir
     from . import slack_channels
+    from . import tag_memory
 except ImportError:  # Direct script execution does not create a package context.
     import slack_identity
     from agent_models import (
@@ -105,6 +106,7 @@ except ImportError:  # Direct script execution does not create a package context
     from tag_activity_labels import activity_title_for_status, readable_activity_title
     from tag_paths import tag_temp_dir
     import slack_channels
+    import tag_memory
 
 
 MENTION_RE = re.compile(r"<@[^>]+>")
@@ -2131,6 +2133,7 @@ def run_backend(
     scope_plan: ScopePlan | None = None,
     slack_search_grant: ScopePlan | None = None,
     on_error: Callable[[str | None, str], None] | None = None,
+    memory_receipts: Path | None = None,
 ) -> tuple[str, bool]:
     if max_timeout is None:
         max_timeout = int(os.getenv("OPENTAG_MAX_TIMEOUT_SECONDS", "3600"))
@@ -2186,6 +2189,7 @@ def run_backend(
                 if slack_search_grant and slack_search_grant.mode == "all"
                 else None
             ),
+            memory_receipts=str(memory_receipts) if memory_receipts else None,
         )
         result = subprocess.run(
             cmd,
@@ -2240,6 +2244,7 @@ def run_backend_events(
     on_error: Callable[[str | None, str], None] | None = None,
     on_trace_event: Callable[[dict[str, Any]], None] | None = None,
     on_run_info: Callable[[dict[str, str]], None] | None = None,
+    memory_receipts: Path | None = None,
 ) -> tuple[str, bool]:
     """Consume normalized lifecycle events and forward only final-answer text."""
     if max_timeout is None:
@@ -2310,6 +2315,7 @@ def run_backend_events(
             if slack_search_grant and slack_search_grant.mode == "all"
             else None
         ),
+        memory_receipts=str(memory_receipts) if memory_receipts else None,
     )
     try:
         process = subprocess.Popen(
@@ -4023,6 +4029,7 @@ def create_app(
         output_manifest = (
             default_workdir() / f"{OUTPUT_ARTIFACT_MANIFEST_PREFIX}{uuid.uuid4().hex}.json"
         )
+        memory_receipts = tag_temp_dir() / f"memory-receipts-{uuid.uuid4().hex}.jsonl"
 
         try:
             with tempfile.TemporaryDirectory(
@@ -4094,6 +4101,7 @@ def create_app(
                         on_error=capture_backend_error,
                         on_trace_event=trace_activity if app_server_selected else None,
                         on_run_info=capture_run_info,
+                        memory_receipts=memory_receipts,
                     )
                 else:
                     answer, succeeded = run_backend(
@@ -4112,6 +4120,7 @@ def create_app(
                         scope_plan=scope_plan,
                         slack_search_grant=slack_search_grant,
                         on_error=capture_backend_error,
+                        memory_receipts=memory_receipts,
                     )
                 finish_activity(
                     "completed" if succeeded else
@@ -4153,6 +4162,9 @@ def create_app(
                         channel=channel,
                         thread_ts=thread_ts,
                     )
+                memory_changes = tag_memory.receipt_lines(memory_receipts)
+                if succeeded and memory_changes:
+                    answer = f"{answer.rstrip()}\n\n" + "\n".join(memory_changes)
                 indicator.clear()
                 stopped = answer.startswith(("Stopped.", "Stop requested"))
                 summary_blocks = run_summary_blocks(
@@ -4223,6 +4235,10 @@ def create_app(
                         post_private_failure(
                             client, channel, thread_ts, user_id, answer, indicator.message_ts, footer_blocks
                         )
+                if memory_changes and not succeeded:
+                    client.chat_postMessage(
+                        channel=channel, thread_ts=thread_ts, text="\n".join(memory_changes)
+                    )
                 if succeeded:
                     upload_errors = upload_generated_images(
                         client,
@@ -4328,6 +4344,7 @@ def create_app(
             )
         finally:
             output_manifest.unlink(missing_ok=True)
+            memory_receipts.unlink(missing_ok=True)
 
     @app.action(RETRY_ACTION_ID)
     def retry_request(ack: Any, body: dict[str, Any], client: Any, logger: Any) -> None:

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import io
 import os
+import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -119,6 +122,25 @@ class OpenTagDoctorTests(unittest.TestCase):
             opentag_doctor, "check_runtime_dependencies", return_value=True
         ):
             self.assertFalse(check_offline(root))
+
+    def test_memory_check_counts_entries_and_reports_damaged_files(self) -> None:
+        from scripts.tag_memory import MemoryStore
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            MemoryStore(root, "C1", "U1").save("deadline", "Due Friday.")
+            MemoryStore(root, "C1", "U1").save("detail", "Long detail.", kind="note")
+            output = io.StringIO()
+            with patch.dict(os.environ, {"OPENTAG_MEMORY_ROOT": temp}), redirect_stdout(output):
+                self.assertTrue(opentag_doctor.check_memory())
+            self.assertIn("1 always-loaded entries and 1 notes in 1 scope(s)", output.getvalue())
+            self.assertIn("Codex memories are turned off", output.getvalue())
+
+            (root / "global.json").write_text("{broken", encoding="utf-8")
+            output = io.StringIO()
+            with patch.dict(os.environ, {"OPENTAG_MEMORY_ROOT": temp}), redirect_stdout(output):
+                self.assertFalse(opentag_doctor.check_memory())
+            self.assertIn("[fail] Tag memory - cannot read", output.getvalue())
 
 class ClaudeTransportDoctorTests(unittest.TestCase):
     def test_sdk_case_and_whitespace_still_check_dependency(self):

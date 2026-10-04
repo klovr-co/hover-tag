@@ -75,6 +75,7 @@ def backend_environment(
     authorized_scopes: str | None = None,
     channel_labels: str | None = None,
     slack_search_grant: str | None = None,
+    memory_receipts: str | None = None,
 ) -> dict[str, str]:
     clean = without_telemetry_environment(
         isolated_environment(source, transport=transport)
@@ -99,4 +100,8 @@ def backend_environment(
         clean["OPENTAG_SLACK_SEARCH_GRANT"] = slack_search_grant
     else:
         clean.pop("OPENTAG_SLACK_SEARCH_GRANT", None)
+    if memory_receipts:
+        clean["OPENTAG_MEMORY_RECEIPTS"] = memory_receipts
+    else:
+        clean.pop("OPENTAG_MEMORY_RECEIPTS", None)
     return clean

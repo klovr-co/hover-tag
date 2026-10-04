@@ -293,6 +293,13 @@ class ClaudeAgentRunTests(unittest.TestCase):
         self.run_agent(script, model=settings.model, reasoning_effort=settings.reasoning_effort)
         self.assertEqual(("opus", "max"), (FakeClient.instances[0].options.model, FakeClient.instances[0].options.effort))
 
+    def test_claude_auto_memory_is_disabled_for_tag_runs(self) -> None:
+        async def script(_client):
+            yield ResultMessage(result="ok")
+
+        self.run_agent(script)
+        self.assertEqual({"CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"}, FakeClient.instances[0].options.env)
+
     def test_default_model_alias_lets_claude_choose(self) -> None:
         async def script(_client):
             yield ResultMessage(result="ok")

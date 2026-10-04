@@ -1283,6 +1283,63 @@ class SlackGeneratedImageTests(unittest.TestCase):
         self.assertEqual("actions", private["blocks"][-1]["type"])
 
 
+    def run_mention_writing_memory(self, succeeded: bool) -> tuple[MagicMock, list[Path]]:
+        fake_app = FakeApp()
+        client = MagicMock()
+        receipt_paths: list[Path] = []
+
+        def backend_result(*args: object, **kwargs: object) -> tuple[str, bool]:
+            receipts = kwargs["memory_receipts"]
+            assert isinstance(receipts, Path)
+            receipt_paths.append(receipts)
+            receipts.write_text(json.dumps({
+                "action": "saved", "scope": "C123", "key": "deadline", "text": "Reports are due Friday.",
+            }) + "\n", encoding="utf-8")
+            return ("Noted." if succeeded else "Backend failed"), succeeded
+
+        with tempfile.TemporaryDirectory() as raw_home, patch.object(
+            slack_socket_agent, "App", return_value=fake_app
+        ), patch.dict(
+            os.environ,
+            {
+                "TAG_HOME": raw_home,
+                "SLACK_BOT_TOKEN": "xoxb-test",
+                "SLACK_CHANNEL_IDS": "C123",
+                "OPENTAG_SLACK_STREAMING": "0",
+                "OPENTAG_CLAUDE_TRANSPORT": "print",
+            },
+            clear=True,
+        ), patch.object(
+            slack_socket_agent, "build_thread_text", return_value="UOWNER: remember this",
+        ), patch.object(slack_socket_agent, "run_backend", side_effect=backend_result):
+            slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+            fake_app.events["app_mention"](
+                {"channel": "C123", "ts": "1.23", "user": "UOWNER", "text": "<@BOT> remember"},
+                {"team_id": "T123"},
+                client,
+                MagicMock(),
+            )
+        return client, receipt_paths
+
+    def test_verified_memory_changes_are_added_to_the_reply(self) -> None:
+        client, receipts = self.run_mention_writing_memory(succeeded=True)
+
+        posted = client.chat_postMessage.call_args.kwargs
+        self.assertEqual(
+            "Noted.\n\nMemory saved for this channel: `deadline`: Reports are due Friday.",
+            posted["text"],
+        )
+        self.assertFalse(receipts[0].exists())
+
+    def test_memory_changes_are_reported_publicly_when_the_run_fails(self) -> None:
+        client, receipts = self.run_mention_writing_memory(succeeded=False)
+
+        self.assertIn("Tag couldn't complete this request", client.chat_postEphemeral.call_args.kwargs["text"])
+        public = client.chat_postMessage.call_args.kwargs
+        self.assertEqual(("C123", "1.23"), (public["channel"], public["thread_ts"]))
+        self.assertEqual("Memory saved for this channel: `deadline`: Reports are due Friday.", public["text"])
+        self.assertFalse(receipts[0].exists())
+
 class SlackReplyChunkingTests(unittest.TestCase):
     def test_splits_at_paragraph_boundaries(self) -> None:
         text = "First paragraph.\n\nSecond paragraph.\n\nThird paragraph."
