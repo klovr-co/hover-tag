@@ -454,6 +454,7 @@ class CodexAppServer:
                         route, timeout=self.max_timeout,
                         disable_tools=os.getenv("OPENTAG_CODEX_GATEWAY_DISABLE_TOOLS") == "1")
                     environment = dict(os.environ)
+                    environment.pop("OPENTAG_CODEX_API_KEY", None)
                     environment["TAG_GATEWAY_PROXY_TOKEN"] = self.gateway_proxy.token
                 command = [part for part in command if part != "--stdio"]
                 command += ["--listen", "stdio://", *agent_connection.codex_options(

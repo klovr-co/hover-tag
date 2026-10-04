@@ -22,6 +22,20 @@ class TagInstanceTests(unittest.TestCase):
         self.root = Path(temporary.name) / "Tag"
         self.root.mkdir()
 
+    def test_legacy_usage_alias_remains_discoverable_and_addressable(self):
+        with patch.object(tag_instances, 'RESERVED_NAMES', tag_instances.RESERVED_NAMES - {'usage'}):
+            home = tag_instances.create(self.root, 'usage').home
+        with self.assertRaises(ValueError):
+            tag_instances.create(self.root, 'usage')
+        for _ in range(2):
+            self.assertEqual(tag_instances.resolve(self.root, 'usage').home, home)
+            self.assertTrue(any(item['id'] == 'usage' for item in tag_instances.discover(self.root)))
+        with patch.dict(os.environ, {'TAG_HOME': str(self.root)}), \
+                patch.object(sys, 'argv', ['tag', 'usage', 'stop']), \
+                patch.object(tag_cli, 'stop_process') as stop, redirect_stdout(StringIO()):
+            self.assertEqual(tag_cli.main(), 0)
+        stop.assert_called_once_with(home, 'slack')
+
     def test_default_and_named_instances_use_the_same_isolated_layout(self) -> None:
         default = tag_instances.ensure_default(self.root)
         personal = tag_instances.create(self.root, "personal")

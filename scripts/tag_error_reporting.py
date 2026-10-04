@@ -422,7 +422,7 @@ _SECRET_PATTERNS = (
     re.compile(r"\bxapp-[A-Za-z0-9-]+\b", re.IGNORECASE),
     re.compile(r"\bxox[a-z]-[A-Za-z0-9-]+\b", re.IGNORECASE),
     re.compile(r"\b(?:sk|rk)-[A-Za-z0-9_-]+\b", re.IGNORECASE),
-    re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+"),
+    re.compile(r"(?i)((?:bearer|basic)\s+)[A-Za-z0-9._~+/=-]+"),
     re.compile(r"(?i)(\b(?:token|secret|password|api[_ -]?key)\s*[:=]\s*)[^\s,;]+"),
 )
 

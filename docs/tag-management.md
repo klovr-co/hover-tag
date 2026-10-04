@@ -407,3 +407,7 @@ to the existing Codex sign-in. Stop the Tag before changing accounts. See
 Use [API connections and monthly usage](reference/api-connections.md) to configure
 Codex/Azure or Claude API keys, endpoints, model lists, and advisory budgets.
 `tag usage` and `tag NAME usage --json` report the current UTC month.
+
+Existing Tags named `usage` remain addressable after upgrading: use
+`tag usage status` or `tag usage usage --json`. Bare `tag usage` reports usage
+for the default Tag. The alias is reserved for newly created Tags.

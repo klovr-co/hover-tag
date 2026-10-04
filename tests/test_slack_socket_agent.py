@@ -1293,6 +1293,13 @@ class SlackReplyChunkingTests(unittest.TestCase):
 
 
 class SlackFailureReplyTests(unittest.TestCase):
+    def test_basic_authorization_is_redacted_in_slack_reply(self) -> None:
+        for detail in ('Gateway rejected Authorization: Basic dXNlcjpwYXNz',
+                       '{"error":{"message":"Gateway rejected Authorization: bAsIc dXNlcjpwYXNz"}}'):
+            reply = slack_socket_agent.user_facing_failure(detail, 420, 'ABC12345')
+            self.assertNotIn('dXNlcjpwYXNz', reply)
+            self.assertIn('redacted', reply)
+
     def test_private_failure_removes_public_progress_placeholder(self) -> None:
         client = MagicMock()
         slack_socket_agent.post_private_failure(

@@ -38,7 +38,7 @@ def codex_event(params: dict[str, Any]) -> list[dict[str, Any]]:
         return []
     event = {"type": "usage", "scope_id": params.get("threadId"), "input_tokens": count(total.get("inputTokens")),
              "output_tokens": count(total.get("outputTokens")), "cached_input_tokens": count(total.get("cachedInputTokens")),
-             "reasoning_output_tokens": count(total.get("reasoningOutputTokens")), "cache_creation_tokens": 0}
+             "reasoning_output_tokens": count(total.get("reasoningOutputTokens")), "cache_creation_tokens": count(total.get("cacheWriteInputTokens", 0))}
     return [event] if event["input_tokens"] is not None and event["output_tokens"] is not None else []
 
 
@@ -81,13 +81,14 @@ def estimated_cost(backend: str, event: dict[str, Any]) -> float | None:
     if backend == "claude":
         return money(event.get("cost_usd"))
     prefix = f"OPENTAG_{backend.upper()}_"
-    rates = [money(os.getenv(prefix + key)) for key in ("INPUT_USD_PER_MILLION", "OUTPUT_USD_PER_MILLION", "CACHED_INPUT_USD_PER_MILLION")]
+    rates = [money(os.getenv(prefix + key)) for key in ("INPUT_USD_PER_MILLION", "OUTPUT_USD_PER_MILLION", "CACHED_INPUT_USD_PER_MILLION", "CACHE_WRITE_USD_PER_MILLION")]
     inp, out, cached = (event.get(key) for key in ("input_tokens", "output_tokens", "cached_input_tokens"))
-    if any(count(value) is None for value in (inp, out, cached)) or cached > inp:
+    created = event.get("cache_creation_tokens", 0)
+    if any(count(value) is None for value in (inp, out, cached, created)) or cached + created > inp:
         return None
-    if rates[0] is None or rates[1] is None or (cached and rates[2] is None):
+    if rates[0] is None or rates[1] is None or (cached and rates[2] is None) or (created and rates[3] is None):
         return None
-    return ((inp - cached) * rates[0] + out * rates[1] + cached * (rates[2] or 0)) / 1_000_000
+    return ((inp - cached - created) * rates[0] + out * rates[1] + cached * (rates[2] or 0) + created * (rates[3] or 0)) / 1_000_000
 
 
 class Recorder:

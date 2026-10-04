@@ -1700,12 +1700,15 @@ def finish_setup(config_path: Path, values: dict[str, str], _channels: list[slac
         from . import agent_connection
     except ImportError:
         import agent_connection
-    os.environ.update(values)
-    agent_connection.validate(backend, values)
+    try:
+        agent_connection.validate(backend, values)
+    except ValueError as exc:
+        ui.message(str(exc))
+        return 1
     if agent_connection.active(backend, values):
         ui.message(f"✓ {backend.title()} API connection configured · first task still unverified")
     elif backend == "codex":
-        backend_environment = without_telemetry_environment(os.environ)
+        backend_environment = without_telemetry_environment({**os.environ, **values})
         transport = "exec" if values.get("OPENTAG_CODEX_TRANSPORT") == "exec" else "app-server"
         try:
             compatible = subprocess.run(
@@ -1758,7 +1761,7 @@ def finish_setup(config_path: Path, values: dict[str, str], _channels: list[slac
                     )
             ui.message("✓ Agent connected · first task still unverified")
     else:
-        backend_environment = without_telemetry_environment(os.environ)
+        backend_environment = without_telemetry_environment({**os.environ, **values})
         while subprocess.run(
             [shutil.which("claude") or "claude", "auth", "status"],
             capture_output=True,

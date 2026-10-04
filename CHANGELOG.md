@@ -6,6 +6,13 @@ All notable changes to Tag are documented here.
 
 ### Fixed
 
+- Preserve existing Tags named `usage` while reserving the alias for new Tags.
+- Report invalid API setup settings without a traceback or environment mutation.
+- Redact Basic authorization credentials in backend failure messages and omit
+  the upstream API key from the gateway's Codex child environment.
+- Record Codex cache-write tokens and price them separately when a cache-write
+  rate is configured; otherwise report the estimate as unknown.
+
 - Show bounded, redacted backend error messages when a failure does not match
   a known category, instead of “Cause not identified.” Extract messages from
   JSON errors without copying unrelated fields, and explicitly report when the

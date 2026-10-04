@@ -338,7 +338,7 @@ def _settings_menu(home: Path) -> None:
                              "OPENTAG_CODEX_MODELS", "OPENTAG_CODEX_AUTH", "OPENTAG_CLAUDE_API_KEY",
                              "OPENTAG_CLAUDE_BASE_URL", "OPENTAG_CLAUDE_MODELS", "OPENTAG_CLAUDE_AUTH")),
         ("Usage and budget", ("OPENTAG_MONTHLY_BUDGET_USD", "OPENTAG_CODEX_INPUT_USD_PER_MILLION",
-                              "OPENTAG_CODEX_OUTPUT_USD_PER_MILLION", "OPENTAG_CODEX_CACHED_INPUT_USD_PER_MILLION")),
+                              "OPENTAG_CODEX_OUTPUT_USD_PER_MILLION", "OPENTAG_CODEX_CACHE_WRITE_USD_PER_MILLION", "OPENTAG_CODEX_CACHED_INPUT_USD_PER_MILLION")),
     )
     while True:
         tag_id = os.getenv("TAG_ID", "default")

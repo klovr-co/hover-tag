@@ -56,6 +56,19 @@ class OpenTagSetupTests(unittest.TestCase):
         self.assertEqual("", output.getvalue())
         run.assert_not_called()
 
+    def test_invalid_api_setup_reports_error_without_mutating_environment(self):
+        for backend in ('codex', 'claude'):
+            values = {'OPENTAG_BACKEND': backend, f'OPENTAG_{backend.upper()}_AUTH': 'api'}
+            with patch.dict(os.environ, {'TEST_SENTINEL': 'unchanged'}, clear=True), \
+                    patch.object(opentag_setup, 'ensure_agent', return_value=values), \
+                    patch.object(opentag_setup.lifecycle, 'mfs_client_executable', return_value='/mfs'), \
+                    patch.object(opentag_setup.subprocess, 'run') as run, redirect_stdout(StringIO()) as output:
+                before = dict(os.environ)
+                self.assertEqual(opentag_setup.finish_setup(Path('unused.json'), values, []), 1)
+                self.assertEqual(dict(os.environ), before)
+                self.assertIn('API key', output.getvalue())
+                run.assert_not_called()
+
     def test_finish_setup_leaves_start_as_a_separate_command(self):
         channel = opentag_setup.slack_channels.SlackChannel(
             "C123", "general", False, True

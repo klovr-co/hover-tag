@@ -55,6 +55,15 @@ class FailureClassificationTests(unittest.TestCase):
             self.assertIn("The backend reported: This deployment does not support streaming.", report.report_text())
             self.assertNotIn("private request", report.report_text())
 
+    def test_basic_credentials_are_redacted_for_both_backends(self):
+        for backend in ('codex', 'claude'):
+            for scheme in ('Basic', 'bAsIc', 'Bearer'):
+                report = make_error_report('ABC12345',
+                    f'Gateway rejected header Authorization: {scheme} dXNlcjpwYXNz', backend=backend)
+                self.assertNotIn('dXNlcjpwYXNz', report.report_text())
+                self.assertNotIn('dXNlcjpwYXNz', classify_failure(
+                    f'Gateway rejected Authorization: {scheme} dXNlcjpwYXNz').explanation)
+
     def test_unknown_message_is_bounded_redacted_and_cannot_mention_slack_users(self):
         with patch.dict("os.environ", {"OPENTAG_CODEX_API_KEY": "provider-private-key"}):
             result = classify_failure("Rejected provider-private-key token=secret <!channel> " + "x" * 1000)

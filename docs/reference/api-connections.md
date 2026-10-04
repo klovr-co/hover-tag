@@ -120,7 +120,7 @@ clients' tasks are not recorded. Months use UTC and each attempt belongs to the
 month in which it started. Retries are distinct attempts; repeated cumulative
 notifications replace a snapshot rather than adding it again.
 
-Input totals include cached input. Claude cache creation is included in input;
+Input totals include cached input and reported cache writes for both backends;
 Codex reasoning tokens are a subset of output. Do not add these subsets again.
 Claude supplies a final usage/cost estimate; interruption before its result may
 leave usage unknown. Codex reports cumulative thread usage as it runs. A forced
@@ -131,14 +131,17 @@ that your provider account has never incurred charges.
 Claude's reported cost is an SDK estimate. To estimate Codex/Azure costs, configure
 your deployment's prices in USD per million tokens:
 
-- `OPENTAG_CODEX_INPUT_USD_PER_MILLION`: uncached input.
+- `OPENTAG_CODEX_INPUT_USD_PER_MILLION`: ordinary input, excluding cache reads and writes.
 - `OPENTAG_CODEX_OUTPUT_USD_PER_MILLION`: output, including reasoning tokens.
-- `OPENTAG_CODEX_CACHED_INPUT_USD_PER_MILLION`: cached input.
+- `OPENTAG_CODEX_CACHED_INPUT_USD_PER_MILLION`: cached input reads.
+- `OPENTAG_CODEX_CACHE_WRITE_USD_PER_MILLION`: cache writes. Required for an
+  estimate when Codex reports a nonzero `cacheWriteInputTokens` count.
 
 No prices are assumed. Missing applicable prices make cost unknown. These rates
 apply to **all Codex models for this Tag**; use separate Tags when deployments
 have different prices. Each snapshot saves its estimate using the prices active
 for that process; subsequent price changes do not reprice historical usage.
+Earlier snapshots that omitted cache-write counts cannot be reconstructed.
 Tool charges, hosting, discounts, tax and other provider charges are not included.
 Custom Claude gateway prices may differ from SDK estimates.
 
@@ -179,8 +182,10 @@ explicitly unsupported. Clear both settings and restart to disable routing.
 
 When configured, each Codex App Server process gets an authenticated, random-port
 loopback adapter. Its token is passed through the child environment, not command
-arguments. The upstream API key is used only for the configured upstream request
-and remains subject to Tag's trusted-sandbox credential boundary. The adapter
+arguments. The adapter removes `OPENTAG_CODEX_API_KEY` from the child environment;
+it retains that key for upstream requests. This does not isolate credentials on
+disk or remove other inherited credentials; Tag retains its trusted-sandbox
+credential boundary. The adapter
 replaces any competing provider selection, forwards streamed bytes and upstream
 error statuses, and performs no retries, redirects, or provider fallback of its
 own. Codex's normal retry policy still applies. Request compression is disabled

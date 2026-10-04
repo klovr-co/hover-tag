@@ -153,6 +153,22 @@ class ConnectionTests(unittest.TestCase):
 
 
 class UsageTests(unittest.TestCase):
+    def test_codex_cache_writes_are_counted_and_priced_separately(self):
+        event = agent_usage.codex_event({'tokenUsage': {'total': {
+            'inputTokens': 100, 'outputTokens': 20, 'cachedInputTokens': 30,
+            'cacheWriteInputTokens': 10}}})[0]
+        self.assertEqual(event['cache_creation_tokens'], 10)
+        rates = {'OPENTAG_CODEX_INPUT_USD_PER_MILLION': '2',
+                 'OPENTAG_CODEX_OUTPUT_USD_PER_MILLION': '10',
+                 'OPENTAG_CODEX_CACHED_INPUT_USD_PER_MILLION': '1'}
+        with patch.dict(os.environ, rates, clear=True):
+            self.assertIsNone(agent_usage.estimated_cost('codex', event))
+            os.environ['OPENTAG_CODEX_CACHE_WRITE_USD_PER_MILLION'] = '4'
+            self.assertAlmostEqual(agent_usage.estimated_cost('codex', event), .00039)
+            for invalid in (-1, None, True, 80):
+                self.assertIsNone(agent_usage.estimated_cost('codex', dict(event, cache_creation_tokens=invalid)))
+            self.assertEqual(agent_usage.estimated_cost('claude', dict(event, cost_usd=.5)), .5)
+
     def test_backend_normalization_and_missing_usage(self):
         codex = CodexEventMapper().map({"method": "thread/tokenUsage/updated", "params": {
             "threadId": "one", "tokenUsage": {"total": {"inputTokens": 100, "outputTokens": 20,

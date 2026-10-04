@@ -1575,7 +1575,9 @@ def _run_cli() -> int:
     explicit_tag = bool(
         raw_arguments
         and not raw_arguments[0].startswith("-")
-        and raw_arguments[0] not in COMMANDS
+        and (raw_arguments[0] not in COMMANDS or (
+            raw_arguments[0] == "usage" and len(raw_arguments) > 1 and raw_arguments[1] in COMMANDS
+        ))
     )
     tag_id = raw_arguments.pop(0) if explicit_tag else "default"
     args = parser.parse_args(raw_arguments)
@@ -1602,7 +1604,7 @@ def _run_cli() -> int:
     if args.limit is not None and args.limit < 1:
         parser.error("--limit must be at least 1")
     installation_root = tag_home()
-    tag_instances.validate_name(tag_id)
+    tag_instances.validate_name(tag_id, existing=True)
     if args.command in {"version", "upgrade", "rollback", "migrate", "list", "add", "memory", "telemetry"} and explicit_tag:
         parser.error(f"Tag selection is not supported for installation-wide command '{args.command}'")
     try:

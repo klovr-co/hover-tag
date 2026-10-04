@@ -195,6 +195,8 @@ class RoutingConfigTests(unittest.TestCase):
             args = popen.call_args.args[0]
             env = popen.call_args.kwargs['env']
             self.assertNotIn('secret', str(args))
+            self.assertNotIn('OPENTAG_CODEX_API_KEY', env)
+            self.assertNotIn('secret', env.values())
             self.assertNotIn(env['TAG_GATEWAY_PROXY_TOKEN'], str(args))
             self.assertIn('features.enable_request_compression=false', args)
             self.assertIn('model_providers.tag_api.env_key="TAG_GATEWAY_PROXY_TOKEN"', args)
