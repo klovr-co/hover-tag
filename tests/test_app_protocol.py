@@ -72,6 +72,19 @@ class ProtocolTests(unittest.TestCase):
         self.assertProvides(logs, example("logs.json"), "tag logs --json")
         self.assertEqual(logs["services"]["slack"], ["Connected to Slack"])
 
+    def test_ai_settings_provide_what_apps_read(self) -> None:
+        tag_instances.create(self.root, "t1-a1")
+        empty = self.root / "no-agents"
+        empty.mkdir()
+        with patch.dict(os.environ, {"PATH": str(empty)}):
+            result = self.cli("t1-a1", "settings", "ai", "--json")
+        promised = example("ai-status.json")
+        self.assertProvides(result, promised, "tag settings ai --json")
+        self.assertProvides(result["connections"][0], promised["connections"][0], "AI connection rows")
+        self.assertProvides(result["default_model"], promised["default_model"], "AI default model")
+        self.assertEqual(["not_installed", "not_installed"], [row["state"] for row in result["connections"]])
+        self.assertEqual(["install"], result["connections"][0]["actions"])
+
     def test_install_progress_lines_match_the_example_format(self) -> None:
         lines = (EXAMPLES / "install-progress.txt").read_text(encoding="utf-8").splitlines()
         steps = [json.loads(line.removeprefix("@tag-progress "))["step"] for line in lines]

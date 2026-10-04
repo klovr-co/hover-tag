@@ -1,6 +1,7 @@
 // Copyright 2026 klovr.co
 // SPDX-License-Identifier: Apache-2.0
 // The setup conversation as plain state, so the UI only draws what Tag asks.
+import { idleSignIn, signInReducer, type SignInState } from "./ai";
 import { parseSetupLine, type SetupQuestion } from "./protocol";
 
 export type SignInStep = 0 | 1 | 2; // copy the line, send it in Slack, paste the code
@@ -13,16 +14,20 @@ export interface SetupState {
   outcome: Outcome | null;
   error: string;
   tag: string;
+  /** An agent sign-in started from the AI step, while it runs and after it ends. */
+  signIn: SignInState;
 }
 
 export const initialSetup: SetupState = {
-  question: null, signInStep: 0, status: "Starting…", outcome: null, error: "", tag: "",
+  question: null, signInStep: 0, status: "Starting…", outcome: null, error: "", tag: "", signIn: idleSignIn,
 };
 
 export type SetupAction =
   | { type: "line"; line: string }
   | { type: "exit"; code: number; stderr: string }
   | { type: "answered" }
+  /** The AI step answered with a sign-in: keep the question up and show progress. */
+  | { type: "agentSignIn"; backend: string }
   | { type: "signIn"; step: SignInStep }
   | { type: "error"; message: string };
 
@@ -42,6 +47,9 @@ export function setupReducer(state: SetupState, action: SetupAction): SetupState
       const event = parseSetupLine(action.line);
       if (!event) return state;
       if (event.type === "message") return { ...state, status: (event as { text: string }).text || state.status };
+      if (event.type === "progress" || event.type === "sign_in") {
+        return { ...state, signIn: signInReducer(state.signIn, { type: "line", line: action.line }) };
+      }
       if (event.type === "question") {
         const question = event as SetupQuestion;
         if (question.kind === "slack_login") {
@@ -52,7 +60,9 @@ export function setupReducer(state: SetupState, action: SetupAction): SetupState
             error: again ? "Slack didn't accept that code. Check it and try again." : "",
           };
         }
-        return { ...state, question };
+        // A sign-in ends when the AI step is asked again; keep its outcome on screen.
+        const signIn = state.signIn.step ? { ...state.signIn, step: null } : state.signIn;
+        return { ...state, question, signIn: ["ai_connection", "default_model"].includes(question.id) ? signIn : idleSignIn };
       }
       if (event.type === "result") {
         const result = event as { status: string; tag?: string; error?: string };
@@ -68,6 +78,8 @@ export function setupReducer(state: SetupState, action: SetupAction): SetupState
       return state.question?.kind === "slack_login"
         ? state
         : { ...state, question: null, status: "Loading…", error: "" };
+    case "agentSignIn":
+      return { ...state, signIn: signInReducer(idleSignIn, { type: "start", backend: action.backend }), error: "" };
     case "signIn":
       return { ...state, signInStep: action.step, error: action.step === 2 ? state.error : "" };
     case "error":
@@ -86,6 +98,10 @@ export function heading(question: SetupQuestion): [string, string] {
       return ["Ready to create Tag's Slack app?", "Continue to create and install it, or go back to change your choices."];
     case "create_app":
       return ["Create the Slack app", "Slack creates and installs Tag's app in this workspace."];
+    case "ai_connection":
+      return [`Connect ${question.tag_name || "Tag"} to an AI`, "Set up Codex or Claude on this Mac to continue."];
+    case "default_model":
+      return [`Choose ${question.tag_name || "Tag"}'s model`, "From the AI accounts on this Mac. Change it any time in Settings."];
     default:
       return [question.prompt, question.kind === "secret" ? "Stays on this computer." : ""];
   }

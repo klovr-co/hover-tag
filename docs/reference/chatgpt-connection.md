@@ -19,8 +19,11 @@ controls this page; its documented dynamic-registration flow has no custom-icon
 parameter. Returning sign-ins reuse the saved registration, so a local name
 change does not rename an existing registration. Tag verifies your identity and the returned grant before making the
 connection active. A connection does not import ChatGPT conversation history.
-You do not need to sign in to Codex separately for this mode. Setup also offers
-Continue with ChatGPT when Codex has no existing sign-in.
+You do not need to sign in to Codex separately for this mode. Setup's AI step
+and Settings → AI & models offer **ChatGPT account for this Tag only** under
+Codex's Change account; in a terminal, run
+`tag settings ai sign-in codex --method chatgpt`. Add `--restart` to stop a
+running Tag while you sign in and start it again afterwards.
 
 Existing installations retain their current Codex sign-in until you explicitly
 connect. Every authorized Slack requester uses the account selected for that
@@ -57,11 +60,15 @@ Review plan usage and app-specific limits at
 not necessarily mean your entire subscription is exhausted. Tag pauses new plan
 requests after this error. Once you have reviewed the limit, stop Tag, run
 `tag chatgpt use ACCOUNT` to explicitly resume requests, and start Tag again.
+**Resume** in Settings → AI & models (`tag settings ai resume --restart`) does
+the same for the selected account.
 
 For automation, `status --json` is read-only and includes no tokens. Mutating
 commands support `--dry-run`. Browser login fails promptly without an interactive
-terminal; complete consent locally first. `--json` login is intentionally
-unavailable. Refresh runs automatically without a terminal during startup and
+terminal; complete consent locally first. `tag chatgpt login --json` is
+intentionally unavailable. Tag.app uses `tag settings ai sign-in codex
+--method chatgpt --json`, which opens the browser on this computer, reports
+progress as JSON lines, and can be cancelled. Refresh runs automatically without a terminal during startup and
 before tasks.
 
 ## Storage and recovery

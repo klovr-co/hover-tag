@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "ok": true,
+  "default_model": {
+    "value": "claude:claude-opus-5-5",
+    "backend": "claude",
+    "model": "claude-opus-5-5",
+    "label": "Opus 5.5",
+    "backend_name": "Claude",
+    "available": true
+  },
+  "restart_required": false,
+  "restarted": true
+}

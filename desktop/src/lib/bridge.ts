@@ -9,6 +9,9 @@ import type { TagRow } from "./protocol";
 import versionExample from "../../../protocol/examples/version.json";
 import progressExample from "../../../protocol/examples/install-progress.txt?raw";
 import setupExample from "../../../protocol/examples/setup.jsonl?raw";
+import aiStatusExample from "../../../protocol/examples/ai-status.json";
+import aiModelsExample from "../../../protocol/examples/ai-models.json";
+import type { AIStatus, Connection } from "./ai";
 
 export interface AppInfo {
   platform: "macos" | "windows" | "linux" | string;
@@ -160,7 +163,31 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
       await sleep(250);
       const [first, second] = args;
       if (first === "list") return json({ schema_version: 1, tags: rows });
-      if (first === "version") return json({ ...versionExample, version: runtimeVersion });
+      if (first === "version") {
+        return json({ ...versionExample, version: runtimeVersion,
+          capabilities: [...versionExample.capabilities, "ai-connections"] });
+      }
+      if (second === "settings" && args[2] === "ai") {
+        const ai = aiFor(first);
+        const [action, value] = args.slice(3).filter((a) => !a.startsWith("--"));
+        if (!action) return json({ ...ai, running: rows.find((r) => r.id === first)?.state === "running" });
+        if (action === "models") {
+          await sleep(900);
+          return json({ ...aiModelsExample, default: { ...ai.default_model, available: true, chosen: true },
+            groups: aiModelsExample.groups.filter((g) => ai.usable.includes(g.backend)) });
+        }
+        if (action === "model" && value) {
+          const entry = aiModelsExample.groups.flatMap((g) => g.models.map((m) => ({ ...m, group: g })))
+            .find((m) => m.value === value);
+          if (!entry) return { code: 1, stdout: JSON.stringify({ schema_version: 1, ok: false, error: `${value} isn't available` }), stderr: "" };
+          ai.default_model = { value, backend: entry.group.backend, model: entry.model, label: entry.label,
+            backend_name: entry.group.name, available: true };
+          const running = rows.find((r) => r.id === first)?.state === "running";
+          const restart = args.includes("--restart") && running;
+          return json({ schema_version: 1, ok: true, default_model: ai.default_model,
+            restart_required: running && !restart, restarted: restart });
+        }
+      }
       if (first === "autostart") {
         if (second === "on" || second === "off") keepRunning = second === "on";
         return json({ schema_version: 1, enabled: keepRunning, mechanism: "launchd",
@@ -198,7 +225,8 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
       }
       return { code: 0, stdout: "", stderr: "" };
     },
-    setup: async (_args, onLine, onExit) => {
+    setup: async (args, onLine, onExit) => {
+      if (args[1] === "settings" && args[2] === "ai") return demoSignIn(aiFor(args[0]), args, onLine, onExit);
       const script = setupExample.trim().split("\n");
       let at = 0;
       const back: number[] = [];
@@ -251,6 +279,48 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
   };
 }
 
+// Sample AI connections, one copy per Tag so changes stick while the demo runs.
+const aiDemo = new Map<string, AIStatus>();
+function aiFor(tag: string): AIStatus {
+  if (!aiDemo.has(tag)) aiDemo.set(tag, { ...structuredClone(aiStatusExample) as AIStatus, tag });
+  return aiDemo.get(tag)!;
+}
+
+/** Plays `tag … settings ai sign-in`: progress, then connected unless cancelled. */
+async function demoSignIn(ai: AIStatus, args: string[], onLine: (line: string) => void,
+  onExit: (code: number, stderr: string) => void): Promise<Session> {
+  const backend = args[3] === "resume" ? "codex" : args[4];
+  const say = (event: object) => onLine(JSON.stringify(event));
+  let cancelled = false;
+  const finish = (status: string, connection?: Connection) => {
+    say({ type: "sign_in", backend, status, connection, retry: status !== "connected",
+      error: status === "cancelled" ? "Sign-in cancelled. Nothing changed." : undefined,
+      restart_required: false, restarted: args.includes("--restart") || undefined });
+    onExit(status === "connected" ? 0 : 1, "");
+  };
+  void (async () => {
+    const steps = [...(args.includes("--restart") ? ["stopping"] : []), "browser", "waiting", "verifying",
+      ...(args.includes("--restart") ? ["restarting"] : [])];
+    const text: Record<string, string> = { stopping: "Stopping Tag while you sign in…", browser: "Opening your browser…",
+      waiting: "Waiting for your browser…", verifying: "Finishing sign-in…", restarting: "Starting Tag again…" };
+    for (const step of steps) {
+      if (cancelled) return;
+      say({ type: "progress", backend, step, text: text[step] });
+      await sleep(step === "waiting" ? 2200 : 600);
+    }
+    if (cancelled) return;
+    const index = ai.connections.findIndex((c) => c.backend === backend);
+    const connection: Connection = { ...ai.connections[index], state: "connected", detail: "",
+      account: backend === "claude" ? "Claude Max · maya@klovr.co" : args.includes("chatgpt") ? "ChatGPT plan · maya@klovr.co" : "ChatGPT sign-in",
+      method: backend === "claude" ? "claude" : args.includes("chatgpt") ? "chatgpt" : "codex",
+      shared: !args.includes("chatgpt"), actions: ["change_account"] };
+    ai.connections[index] = connection;
+    ai.usable = ai.connections.filter((c) => c.state === "connected").map((c) => c.backend);
+    finish("connected", connection);
+  })();
+  const cancel = () => { if (!cancelled) { cancelled = true; finish("cancelled"); } };
+  return { send: (message) => { if ((message as { cancel?: boolean }).cancel) cancel(); }, stop: cancel };
+}
 
 let current: Promise<Bridge> | null = null;
 

@@ -149,16 +149,3 @@ class StepSessionBackTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
-class BackToAgentTests(unittest.TestCase):
-    def test_back_to_the_agent_question_asks_it_again(self) -> None:
-        from scripts import opentag_setup, setup_ui
-        saved = {"OPENTAG_BACKEND": "codex"}
-        self.assertFalse(opentag_setup.needs_backend_choice(saved))
-        setup_ui.start_replay([], ("backend", "2"))
-        try:
-            self.assertTrue(opentag_setup.needs_backend_choice(saved))
-        finally:
-            setup_ui._target = None
-        self.assertTrue(opentag_setup.needs_backend_choice({"OPENTAG_BACKEND": "unknown"}))

@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "tag": "t0klovr1-a0maya01",
+  "running": true,
+  "connections": [
+    {
+      "backend": "codex",
+      "name": "Codex",
+      "provider": "OpenAI models",
+      "state": "connected",
+      "installed": true,
+      "version": "0.157.1",
+      "method": "codex",
+      "account": "ChatGPT sign-in",
+      "detail": "",
+      "shared": true,
+      "actions": ["change_account"],
+      "install_url": "https://learn.chatgpt.com/docs/codex/cli",
+      "allowed": true
+    },
+    {
+      "backend": "claude",
+      "name": "Claude",
+      "provider": "Anthropic models",
+      "state": "expired",
+      "installed": true,
+      "version": "2.1.285",
+      "method": "claude",
+      "account": null,
+      "detail": "Sign in to Claude again.",
+      "shared": true,
+      "actions": ["reconnect"],
+      "install_url": "https://code.claude.com/docs/en/setup",
+      "allowed": true
+    }
+  ],
+  "usable": ["codex"],
+  "default_model": {
+    "value": "codex:gpt-5.5",
+    "backend": "codex",
+    "model": "gpt-5.5",
+    "label": "GPT-5.5",
+    "backend_name": "Codex",
+    "available": null
+  },
+  "checked_at": "2026-10-04T09:30:00+00:00"
+}

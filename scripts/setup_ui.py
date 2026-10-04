@@ -14,6 +14,8 @@ import re
 import shutil
 import sys
 import textwrap
+import threading
+from contextlib import contextmanager
 
 try:
     import tag_display as display
@@ -117,7 +119,9 @@ def _previous(kind: str, answer: object, details: dict) -> dict:
     """Offer the earlier answer as the default when a question is asked again."""
     options = details.get("options") or []
     if kind == "choose":
-        index = options.index(answer) if isinstance(answer, str) and answer in options else answer
+        ids = details.get("option_ids") or []
+        index = (options.index(answer) if isinstance(answer, str) and answer in options
+                 else ids.index(answer) if isinstance(answer, str) and answer in ids else answer)
         return {"default": index} if isinstance(index, int) and not isinstance(index, bool) else {}
     if kind == "multi" and isinstance(answer, list):
         return {"selected": sorted(options.index(item) if isinstance(item, str) and item in options else item
@@ -149,7 +153,7 @@ def ask_client(kind: str, prompt: str, *, qid: str | None = None, **details):
     while True:
         emit({"type": "question", "id": qid, "kind": kind, "prompt": prompt, **details,
               "can_go_back": bool(_history)})
-        line = sys.stdin.readline()
+        line = _readline()
         if not line:
             raise Paused()
         try:
@@ -170,12 +174,63 @@ def ask_client(kind: str, prompt: str, *, qid: str | None = None, **details):
         return reply["answer"]
 
 
-def _option_index(answer, labels: list[str]) -> int:
+def _option_index(answer, labels: list[str], ids: list[str] | None = None) -> int:
     if isinstance(answer, int) and not isinstance(answer, bool) and 0 <= answer < len(labels):
         return answer
     if isinstance(answer, str) and answer in labels:
         return labels.index(answer)
+    if isinstance(answer, str) and ids and answer in ids:
+        return ids.index(answer)
     raise RuntimeError("The setup client chose an option that was not offered")
+
+
+# A line a cancellation watcher read but didn't need, for the next question.
+_unread: list[tuple[threading.Thread, list[str]]] = []
+
+
+def _readline() -> str:
+    if _unread:
+        reader, line = _unread.pop()
+        reader.join()
+        return line[0] if line else ""
+    return sys.stdin.readline()
+
+
+@contextmanager
+def client_cancellation():
+    """While a long action runs, let a client cancel it with ``{"cancel": true}``.
+
+    Closing stdin also cancels, and pauses at the next question. In a terminal
+    Ctrl-C does the same. Yields a callable that reports whether to stop.
+    """
+    if not protocol_active():
+        yield lambda: False
+        return
+    cancelled = threading.Event()
+    kept: list[str] = []
+
+    def watch() -> None:
+        line = _readline()
+        try:
+            message = json.loads(line) if line else None
+        except ValueError:
+            message = None
+        if not line or (isinstance(message, dict) and message.get("cancel")):
+            cancelled.set()
+            if not line:
+                kept.append("")  # EOF stays EOF for the next question.
+        else:
+            if isinstance(message, dict) and message.get("pause"):
+                cancelled.set()  # Pausing setup stops the sign-in too.
+            kept.append(line)  # An early answer belongs to the next question.
+
+    reader = threading.Thread(target=watch, daemon=True)
+    reader.start()
+    try:
+        yield cancelled.is_set
+    finally:
+        if reader.is_alive() or kept:
+            _unread.append((reader, kept))
 
 
 def text(prompt: str, default: str | None = None, *, secret: bool = False, qid: str | None = None) -> str:
@@ -325,11 +380,17 @@ def _ask(question):
     return answer
 
 
-def choose(title: str, options: list[str], *, default: int = 0, qid: str | None = None) -> int:
+def choose(title: str, options: list[str], *, default: int = 0, qid: str | None = None,
+           option_ids: list[str] | None = None, **details) -> int:
+    """Ask for one option. Over JSON lines, ``option_ids`` give clients stable
+    answers and ``details`` carry extra fields for richer clients; older clients
+    still see ordinary options."""
     setup_incomplete = "Save and exit" in options
     labels = [_setup_label(label) for label in options]
     if protocol_active():
-        index = _option_index(ask_client("choose", title, qid=qid, options=labels, default=default), labels)
+        extra = {"option_ids": option_ids, **details} if option_ids else details
+        index = _option_index(ask_client("choose", title, qid=qid, options=labels, default=default, **extra),
+                              labels, option_ids)
         if options[index] == "Save and exit":
             raise Paused()
         return index

@@ -45,10 +45,10 @@ try:
     import slack_manifest_migrations
     import slack_credentials
     import slack_identity
+    import tag_ai
     import tag_credentials
     import tag_telemetry
     import tag_cli as lifecycle
-    from opentag_process_env import without_telemetry_environment
     from tag_mascot import PALETTE as MASCOT_PALETTE, PIXELS as MASCOT_PIXELS
 except ImportError:
     from scripts.tag_paths import (
@@ -66,35 +66,11 @@ except ImportError:
     from scripts import slack_manifest_migrations
     from scripts import slack_credentials
     from scripts import slack_identity
+    from scripts import tag_ai
     from scripts import tag_credentials
     from scripts import tag_telemetry
     from scripts import tag_cli as lifecycle
-    from scripts.opentag_process_env import without_telemetry_environment
     from scripts.tag_mascot import PALETTE as MASCOT_PALETTE, PIXELS as MASCOT_PIXELS
-
-
-@dataclass(frozen=True)
-class BackendOption:
-    key: str
-    name: str
-    note: str
-    install_url: str
-
-
-BACKEND_OPTIONS = (
-    BackendOption(
-        key="codex",
-        name="Codex",
-        note="OpenAI models",
-        install_url="https://learn.chatgpt.com/docs/codex/cli",
-    ),
-    BackendOption(
-        key="claude",
-        name="Claude Code",
-        note="Anthropic models",
-        install_url="https://code.claude.com/docs/en/setup",
-    ),
-)
 
 
 REQUIRED_APP_SETTINGS = {
@@ -148,111 +124,27 @@ def ask_required(prompt: str) -> str:
         ui.message("A value is required.")
 
 
-def choose_backend() -> str:
-    ui.message("Choose the default agent for Tag tasks. Slack users can later switch")
-    ui.message("to any model from the agents that are installed and signed in:")
-    print()
-    for index, option in enumerate(BACKEND_OPTIONS, start=1):
-        availability = "installed" if shutil.which(option.key) else "not found"
-        ui.message(f"{index}. {option.name:<12} {option.note:<27} {availability}")
-
-    aliases = {
-        "1": "codex",
-        "codex": "codex",
-        "2": "claude",
-        "claude": "claude",
-        "claude code": "claude",
-    }
-    while True:
-        print()
-        answer = ask("Agent", "1", qid="backend").lower()
-        backend = aliases.get(answer)
-        if backend:
-            return backend
-        ui.message("Choose 1 for Codex or 2 for Claude Code.")
-
-
 def change_setup_defaults(config_path: Path, values: dict[str, str]) -> dict[str, str]:
-    """Save the history window and switch agents only when installed."""
+    """Save the history window, then review the AI connection and default model."""
     days = ("7", "30", "90")
     day = ui.choose("Slack history window", [f"Last {d} days" for d in days], default=days.index(values["MFS_SLACK_HISTORY_DAYS"]), qid="history_days")
-    agent = ui.choose("Agent", ["Codex", "Claude"], default=int(values["OPENTAG_BACKEND"] == "claude"), qid="agent")
-    selected_backend = ("codex", "claude")[agent]
-    if not shutil.which(selected_backend):
-        ui.message(f"{selected_backend} is not installed. Install it before selecting it as the default agent.")
-        return settings.update_config(config_path, {"MFS_SLACK_HISTORY_DAYS": days[day]})
-    return settings.update_config(config_path, {"MFS_SLACK_HISTORY_DAYS": days[day], "OPENTAG_BACKEND": selected_backend})
+    settings.update_config(config_path, {"MFS_SLACK_HISTORY_DAYS": days[day]})
+    return tag_ai.setup_step(instance_home(), config_path)
 
 
-def ensure_agent(config_path: Path, values: dict[str, str]) -> dict[str, str] | None:
-    """Make an installed agent the default; return None when the user pauses."""
-    checked = False
-    while True:
-        installed = [option for option in BACKEND_OPTIONS if shutil.which(option.key)]
-        current = values["OPENTAG_BACKEND"]
-        if any(option.key == current for option in installed):
+def ensure_agent(config_path: Path, values: dict[str, str], *, review: bool = False) -> dict[str, str]:
+    """The AI step: connect Codex or Claude and choose the Tag's default model.
+
+    A saved default whose agent is still connected is kept without asking
+    again, unless the person is reviewing setup or went Back to this step.
+    """
+    saved = values.get("OPENTAG_DEFAULT_MODEL", "")
+    returning = ui.going_back_to("ai_connection") or ui.going_back_to("default_model")
+    if saved and not review and not returning:
+        backend, _ = agent_models.parse_model_choice(saved, values.get("OPENTAG_BACKEND") or "codex")
+        if tag_ai.connection(instance_home(), backend)["state"] == "connected":
             return values
-        if installed:
-            missing = next(option.name for option in BACKEND_OPTIONS if option.key == current)
-            ui.message(f"{missing} isn't installed, so Tag will use {installed[0].name}, which is.")
-            return settings.update_config(config_path, {"OPENTAG_BACKEND": installed[0].key})
-        if checked:
-            ui.message("Still no agent found. Install Codex or Claude Code, then check again.")
-        else:
-            print()
-            ui.message("Tag needs an AI agent on this computer to do its work.")
-            ui.message("Install one (or both) and sign in, then check again:")
-            for option in BACKEND_OPTIONS:
-                print()
-                ui.message(f"  {option.name} · {option.note}")
-                ui.message(f"  {option.install_url}")
-            print()
-        checked = True
-        if ui.choose("No agent found", ["Check again", "Save and exit"], default=0, qid="agent_install") == 1:
-            ui.message("Your progress is saved. Run tag setup again after installing an agent.")
-            return None
-
-
-SIGN_IN_COMMANDS = {
-    "codex": (("login", "status"), ("login",)),
-    "claude": (("auth", "status"), ("auth", "login")),
-}
-
-
-def backend_signed_in(executable: str, backend: str) -> bool:
-    try:
-        return subprocess.run(
-            [executable, *SIGN_IN_COMMANDS[backend][0]], capture_output=True, timeout=20,
-            env=without_telemetry_environment(os.environ), check=False,
-        ).returncode == 0
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-
-
-def offer_additional_backends(values: dict[str, str]) -> None:
-    """Mention, once and optionally, how to let Slack users switch to another agent."""
-    allowed = [name for name in values.get("OPENTAG_BACKENDS", "").split(",") if name] or [
-        option.key for option in BACKEND_OPTIONS
-    ]
-    for option in BACKEND_OPTIONS:
-        if option.key == values["OPENTAG_BACKEND"] or option.key not in allowed:
-            continue
-        executable = shutil.which(option.key)
-        if not executable:
-            ui.message(f"Optional · install {option.name} to let Slack users switch to its models: {option.install_url}")
-            continue
-        if not backend_signed_in(executable, option.key):
-            choice = ui.choose(
-                f"{option.name} is installed. Sign in so Slack users can also switch to its models?",
-                ["Not now", f"Sign in to {option.name}"], qid=f"{option.key}_optional_sign_in",
-            )
-            if choice == 1:
-                subprocess.run([executable, *SIGN_IN_COMMANDS[option.key][1]], check=False,
-                               env=without_telemetry_environment(os.environ))
-            if choice == 0 or not backend_signed_in(executable, option.key):
-                ui.message(f"{option.name} skipped · sign in any time, then restart Tag to offer it in Slack.")
-                continue
-        ui.message(f"✓ {option.name} also signed in · Slack users can switch to its models")
+    return tag_ai.setup_step(instance_home(), config_path)
 
 
 def ask_secret(prompt: str, prefix: str, *, qid: str | None = None) -> str:
@@ -471,13 +363,6 @@ def choose_slack_person(people: list[dict[str, str]]) -> str | None:
             return None
         if choice == len(matches) + 2:
             raise ui.Paused()
-
-
-def needs_backend_choice(values: dict[str, str]) -> bool:
-    """Ask for the agent when none is valid, or when Back returns to that question
-    (the default would otherwise fill it in and skip it)."""
-    return bool(settings.validation_error("OPENTAG_BACKEND", values.get("OPENTAG_BACKEND", ""))) \
-        or ui.going_back_to("backend")
 
 
 def choose_allowed_users(team_id: str, current: str = "", *, token: str = "", workspace_id: str = "") -> str:
@@ -1571,11 +1456,6 @@ def guided_setup(
     defaults = {key: value for key, value in settings.DEFAULTS.items() if key not in values}
     if defaults:
         values = settings.update_config(config_path, defaults, only_missing=True)
-    if needs_backend_choice(values):
-        values = settings.update_config(config_path, {"OPENTAG_BACKEND": choose_backend()})
-    values = ensure_agent(config_path, values)
-    if values is None:
-        return 1
     needs_slack_connection = any(
         settings.validation_error(key, values.get(key, ""))
         for key in ("SLACK_APP_TOKEN", "SLACK_BOT_TOKEN")
@@ -1640,6 +1520,9 @@ def guided_setup(
         inferred["SLACK_APP_ID"] = str(bot_identity["app_id"])
     if inferred:
         values = settings.update_config(config_path, inferred)
+
+    # After the name and picture, before channels: connect an AI and pick its model.
+    values = ensure_agent(config_path, values, review=review_channels)
 
     if telemetry_session:
         telemetry_session.enter("channels")
@@ -1824,83 +1707,16 @@ def guided_setup(
 def finish_setup(config_path: Path, values: dict[str, str], _channels: list[slack_channels.SlackChannel]) -> int:
     """Finish configuration without starting services or indexing history."""
     ui.message("✓ Slack memory configured")
-    agent_values = ensure_agent(config_path, values)
-    if agent_values is None:
-        raise ui.Paused()
-    values = agent_values
-    backend = values["OPENTAG_BACKEND"]
-    if backend == "codex":
-        backend_environment = without_telemetry_environment(os.environ)
-        transport = "exec" if values.get("OPENTAG_CODEX_TRANSPORT") == "exec" else "app-server"
-        try:
-            compatible = subprocess.run(
-                [shutil.which("codex") or "codex", transport, "--help"],
-                capture_output=True, env=backend_environment, timeout=20, check=False,
-            ).returncode == 0
-        except (OSError, subprocess.TimeoutExpired):
-            compatible = False
-        if not compatible:
-            ui.message(f"This Codex CLI does not support the required {transport} command. Update your existing Codex installation, then run tag setup again.")
-            return 1
-        try:
-            from . import tag_chatgpt
-        except ImportError:
-            import tag_chatgpt
-        store = tag_chatgpt.Store()
-        if not store.enabled():
-            ui.message("Connect a ChatGPT plan with tag chatgpt login, or use your existing Codex sign-in.")
-        if store.enabled():
-            if transport != "app-server":
-                raise RuntimeError("ChatGPT plan usage requires app-server. Run tag config set OPENTAG_CODEX_TRANSPORT app-server.")
-            store.access()
-            ui.message("✓ ChatGPT plan connected · first task still unverified")
-        else:
-            while subprocess.run(
-                [shutil.which("codex") or "codex", "login", "status"],
-                capture_output=True,
-                env=backend_environment,
-            ).returncode:
-                ui.message("Codex needs sign-in. Your Slack and memory choices are saved.")
-                action = ui.choose("Sign in to continue", ["Continue with ChatGPT", "Open Codex sign-in", "Check again", "Save and exit"], qid="agent_sign_in")
-                if action == 3:
-                    raise ui.Paused()
-                if action == 0:
-                    if transport != "app-server":
-                        ui.message("ChatGPT plan usage requires app-server. Run tag config set OPENTAG_CODEX_TRANSPORT app-server.")
-                        raise ui.Paused()
-                    try:
-                        tag_chatgpt.cli(["login"])
-                        store.access()
-                    except tag_chatgpt.ChatGPTError as exc:
-                        ui.message(str(exc))
-                        continue
-                    break
-                if action == 1:
-                    subprocess.run(
-                        [shutil.which("codex") or "codex", "login"],
-                        check=False,
-                        env=backend_environment,
-                    )
-            ui.message("✓ Agent connected · first task still unverified")
-    else:
-        backend_environment = without_telemetry_environment(os.environ)
-        while subprocess.run(
-            [shutil.which("claude") or "claude", "auth", "status"],
-            capture_output=True,
-            env=backend_environment,
-        ).returncode:
-            ui.message("Claude needs sign-in. Your Slack and memory choices are saved.")
-            action = ui.choose("Sign in to continue", ["Open Claude sign-in", "Check again", "Save and exit"], qid="agent_sign_in")
-            if action == 2:
-                raise ui.Paused()
-            if action == 0:
-                subprocess.run(
-                    [shutil.which("claude") or "claude", "auth", "login"],
-                    check=False,
-                    env=backend_environment,
-                )
-        ui.message("✓ Claude signed in · first task still unverified")
-    offer_additional_backends(values)
+    # Sign-ins can lapse while setup waits; check the default agent once more.
+    while True:
+        backend, _ = agent_models.parse_model_choice(
+            values.get("OPENTAG_DEFAULT_MODEL") or values["OPENTAG_BACKEND"], values["OPENTAG_BACKEND"])
+        agent = tag_ai.connection(instance_home(), backend)
+        if agent["state"] == "connected":
+            break
+        ui.message(f"{agent['name']} isn't ready: {tag_ai.status_line(agent)}. Your Slack and memory choices are saved.")
+        values = tag_ai.setup_step(instance_home(), config_path)
+    ui.message(f"✓ {agent['name']} connected · {agent['account'] or 'signed in'}")
     print()
     ui.message("✓ Setup complete. No services were started and no history was indexed.")
     if len(set(values.get("SLACK_ALLOWED_USER_IDS", "").split(","))) == 1 and values.get("SLACK_ALLOWED_USER_IDS"):

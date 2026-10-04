@@ -119,12 +119,23 @@ export interface SetupQuestion {
   sign_in_line?: string;
   people?: SlackPerson[];
   can_go_back?: boolean;
+  /** Stable answers for `choose` options, such as "sign_in:claude" (ai_connection) or model values. */
+  option_ids?: string[];
+  /** ai_connection: each agent's connection, as `tag settings ai --json` reports it. */
+  connections?: import("./ai").Connection[];
+  can_continue?: boolean;
+  tag_name?: string;
+  last_result?: import("./ai").SignInResult;
+  /** default_model: the connected accounts' models, grouped by agent. */
+  groups?: import("./ai").ModelGroup[];
 }
 
 export type SetupEvent =
   | { type: "message"; text: string }
   | SetupQuestion
-  | { type: "result"; status: "complete" | "paused" | "failed" | string; tag?: string; error?: string };
+  | { type: "result"; status: "complete" | "paused" | "failed" | string; tag?: string; error?: string }
+  /** An agent sign-in started from the AI step; never the end of setup. */
+  | import("./ai").SignInEvent;
 
 /** One stdout line from setup; anything that isn't a JSON event is ignored. */
 export function parseSetupLine(line: string): SetupEvent | null {

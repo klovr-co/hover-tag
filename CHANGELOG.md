@@ -6,6 +6,18 @@ All notable changes to Tag are documented here.
 
 ### Added
 
+- Connect an AI during setup, and manage it in Settings → **AI & models**.
+  After the Tag's name and picture, setup asks for the Tag's default model
+  from the models of the Codex and Claude accounts on this computer, grouped
+  by agent, and offers to sign in to an agent that isn't connected. Only when
+  nothing is connected does it list the agents, with sign-in or the install
+  guide. One connected agent is required; both are optional. Settings shows each Tag's connections, Check connections, Sign in /
+  Reconnect / Change account, and the default model, and asks before restarting
+  a running Tag. Tag.app and `tag settings` offer the same choices, and
+  `tag NAME settings ai … --json` gives apps browser sign-in with progress,
+  cancel, and retry. Existing Tags keep their connections, default model, and
+  people's own model choices in Slack.
+
 - Choose the release channel in Tag.app: Settings now has **Release channel**
   (Stable, Beta, or Alpha). It shows what switching will do before anything
   changes, then moves the app and your Tags to that channel together and saves

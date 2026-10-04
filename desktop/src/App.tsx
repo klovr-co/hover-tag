@@ -9,6 +9,8 @@ import { useTags } from "./lib/tags";
 import { Connect } from "./components/Connect";
 import { Home } from "./components/Home";
 import { Installing, Welcome } from "./components/Install";
+import { AI_CAPABILITY } from "./lib/ai";
+import { AISettings } from "./components/AISettings";
 import { Logs, Settings } from "./components/Settings";
 import { ErrorLine, Header, Primary, Spinner } from "./components/ui";
 
@@ -19,6 +21,7 @@ type Screen =
   | { name: "home" }
   | { name: "connect"; args: string[] }
   | { name: "settings" }
+  | { name: "ai"; tag?: string }
   | { name: "logs"; row: TagRow };
 
 /** Capabilities this app needs from the installed Tag. */
@@ -48,6 +51,8 @@ export function App() {
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [screen, setScreen] = useState<Screen>({ name: "loading" });
   const [outdated, setOutdated] = useState(false);
+  /** Whether the installed Tag can report and change AI connections. */
+  const [aiReady, setAiReady] = useState(false);
   const [appUpdate, setAppUpdate] = useState<ProductUpdate | null>(null);
   const installed = !!info?.cli && !["loading", "welcome", "installing"].includes(screen.name);
   const tags = useTags(api, installed);
@@ -69,6 +74,7 @@ export function App() {
     void api.tag(["version", "--json"]).then((r) => {
       try {
         setOutdated(!(r.code === 0 && compatibility(parseJSON<VersionInfo>(r.stdout), NEEDED).ok));
+        setAiReady(r.code === 0 && compatibility(parseJSON<VersionInfo>(r.stdout), [AI_CAPABILITY]).ok);
       } catch {
         setOutdated(true);
       }
@@ -167,7 +173,11 @@ export function App() {
         </>
       )}
       {screen.name === "settings" && (
-        <Settings api={api} info={info} tags={tags} close={home} />
+        <Settings api={api} info={info} tags={tags} close={home}
+          openAI={aiReady ? () => setScreen({ name: "ai" }) : undefined} />
+      )}
+      {screen.name === "ai" && (
+        <AISettings api={api} tags={tags} initial={screen.tag} close={() => setScreen({ name: "settings" })} />
       )}
       {screen.name === "logs" && <Logs api={api} row={screen.row} close={home} />}
     </main>

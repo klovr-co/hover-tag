@@ -4,7 +4,10 @@
 import { useEffect, useReducer, useRef, useState } from "react";
 import type { Bridge, Session } from "../lib/bridge";
 import { personMatches, type SetupQuestion, type SlackPerson } from "../lib/protocol";
-import { EXIT_OPTION, heading, initialSetup, setupReducer, type SignInStep } from "../lib/setup";
+import { EXIT_OPTION, heading, initialSetup, setupReducer, type SetupState, type SignInStep } from "../lib/setup";
+import type { RowAction } from "./AI";
+import { AgentMark, ConnectionRow, ModelPicker } from "./AI";
+import { resultLine } from "../lib/ai";
 import { CommunityLinks } from "./CommunityLinks";
 import { Back, ErrorLine, Heading, Icon, Primary, Secondary, Spinner, TextButton } from "./ui";
 import { SlackCodeModal, SlackComposer, SlackSequence } from "./Slack";
@@ -39,8 +42,14 @@ export function Connect({ api, args, done }: Props) {
     session.current?.send({ back: true });
   };
   const cancel = () => {
+    if (state.signIn.step) session.current?.send({ cancel: true });
     session.current?.send({ answer: null, pause: true });
     done();
+  };
+  /** Start an agent sign-in from the AI step; the question stays up to show progress. */
+  const agentSignIn = (backend: string, answer: string) => {
+    dispatch({ type: "agentSignIn", backend });
+    session.current?.send({ answer });
   };
   const startTag = async () => {
     setStarting(true);
@@ -85,6 +94,12 @@ export function Connect({ api, args, done }: Props) {
         q.kind === "slack_login" ? (
           <SignIn api={api} question={q} step={state.signInStep}
             setStep={(step) => dispatch({ type: "signIn", step })} send={send} />
+        ) : q.id === "ai_connection" && q.connections ? (
+          <AIStep api={api} question={q} signIn={state.signIn} send={send} back={back} startSignIn={agentSignIn}
+            cancelSignIn={() => session.current?.send({ cancel: true })} />
+        ) : q.id === "default_model" && q.groups ? (
+          <ModelStep key={JSON.stringify(q.option_ids)} question={q} signIn={state.signIn} send={send} back={back}
+            startSignIn={agentSignIn} cancelSignIn={() => session.current?.send({ cancel: true })} />
         ) : q.kind === "choose" ? <Choose key={JSON.stringify(q)} question={q} send={send} back={back} />
           : q.kind === "multi" ? <Multi key={JSON.stringify(q)} question={q} send={send} back={back} />
           : q.kind === "people" ? <People key={JSON.stringify(q)} question={q} send={send} />
@@ -97,6 +112,99 @@ export function Connect({ api, args, done }: Props) {
         </div>
       )}
       {state.error && !state.outcome && <ErrorLine>{state.error}</ErrorLine>}
+    </div>
+  );
+}
+
+/** Setup's AI step: every agent's connection, and one usable one to continue. */
+/** Setup lists connections only while nothing usable is connected; Settings manages them otherwise. */
+function AIStep({ api, question, signIn, send, back, startSignIn, cancelSignIn }: {
+  api: Bridge; question: SetupQuestion; signIn: SetupState["signIn"];
+  send: (a: unknown) => void; back: () => void; startSignIn: (backend: string, answer: string) => void; cancelSignIn: () => void;
+}) {
+  const [title, body] = heading(question);
+  const [opened, setOpened] = useState(new Set<string>());
+  const ids = question.option_ids ?? [];
+  const signingIn = !!signIn.step;
+  const act = (action: RowAction) => {
+    if (action.kind === "install" || action.kind === "update") {
+      void api.open(action.url);
+      setOpened((current) => new Set(current).add(action.backend));
+    } else {
+      const id = `${action.kind}:${action.backend}`;
+      if (ids.includes(id)) startSignIn(action.backend, id);
+    }
+  };
+  return (
+    <div className="stack gap-14">
+      <Heading title={title} body={body} />
+      <div className="card">
+        {(question.connections ?? []).filter((c) => c.allowed !== false).map((connection, index) => (
+          <div key={connection.backend}>
+            {index > 0 && <div className="divider" style={{ marginLeft: 58 }} />}
+            <ConnectionRow connection={{ ...connection, actions: connection.actions.filter((a) => a !== "change_account") }}
+              busy={signingIn} signIn={signIn.backend === connection.backend ? signIn : null}
+              opened={opened.has(connection.backend)} act={act} cancel={cancelSignIn}
+              check={() => send("check")} open={(url) => void api.open(url)} />
+          </div>
+        ))}
+      </div>
+      <div className="row gap-8">
+        {!signingIn && <BackIf question={question} back={back} />}
+        <div className="spacer" />
+        <Secondary title="Check again" icon="refresh" disabled={signingIn} onClick={() => send("check")} />
+      </div>
+    </div>
+  );
+}
+
+const SIGN_IN_WORD: Record<string, string> = { sign_in: "Sign in", reconnect: "Reconnect", resume: "Resume" };
+
+/** The Tag's default model, from every connected account; the model picks the agent. */
+function ModelStep({ question, signIn, send, back, startSignIn, cancelSignIn }: {
+  question: SetupQuestion; signIn: SetupState["signIn"]; send: (a: unknown) => void; back: () => void;
+  startSignIn: (backend: string, answer: string) => void; cancelSignIn: () => void;
+}) {
+  const [title, body] = heading(question);
+  const ids = question.option_ids ?? [];
+  const offered = new Set((question.groups ?? []).flatMap((g) => g.models.map((m) => m.value)));
+  const [value, setValue] = useState<string | null>(() => {
+    const preset = typeof question.default === "number" ? ids[question.default] : null;
+    return preset && offered.has(preset) ? preset : null;
+  });
+  const signingIn = !!signIn.step;
+  // Anything that isn't a model is another agent to sign in to, such as "sign_in:claude".
+  const others = ids.filter((id) => !offered.has(id)).map((id) => {
+    const [action, backend] = id.split(":");
+    return { id, action, backend, name: question.connections?.find((c) => c.backend === backend)?.name ?? backend };
+  });
+  return (
+    <div className="stack gap-14">
+      <Heading title={title} body={body} />
+      <ModelPicker groups={question.groups ?? []} value={value} onChange={setValue} disabled={signingIn} />
+      {others.map((other) => {
+        const mine = signIn.backend === other.backend;
+        return (
+          <div key={other.id} className="row gap-8 callout secondary" style={{ padding: "0 2px" }}>
+            <AgentMark backend={other.backend} size={20} />
+            {mine && signIn.step ? (
+              <><Spinner small /><span style={{ color: "var(--accent)" }}>{signIn.text}</span><div className="spacer" />
+                <button className="link-btn" onClick={cancelSignIn}>Cancel</button></>
+            ) : (
+              <><span>{mine && signIn.result && signIn.result.status !== "connected"
+                ? resultLine(signIn.result, other.name) : `Use ${other.name} models too?`}</span><div className="spacer" />
+                <button className="link-btn" disabled={signingIn} onClick={() => startSignIn(other.backend, other.id)}>
+                  {mine && signIn.result?.status === "failed" ? "Try again" : SIGN_IN_WORD[other.action] ?? "Sign in"}
+                </button></>
+            )}
+          </div>
+        );
+      })}
+      <div className="row">
+        {!signingIn && <BackIf question={question} back={back} />}
+        <div className="spacer" />
+        <Primary title="Continue" disabled={!value || signingIn} onClick={() => send(value)} autoFocus />
+      </div>
     </div>
   );
 }

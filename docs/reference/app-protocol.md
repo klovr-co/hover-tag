@@ -28,6 +28,7 @@ it shows is listed in `capabilities`; otherwise it offers to upgrade Tag.
 | `logs-json` | `tag NAME logs --json [--limit N]` |
 | `upgrade-json` | `tag upgrade --dry-run --json`, `tag upgrade --json` |
 | `install-progress` | `TAG_INSTALL_PROGRESS=jsonl` for `install.sh` and `install.ps1` |
+| `ai-connections` | `tag NAME settings ai [models\|sign-in\|resume\|model] --json`; `ai_connection` and `default_model` setup questions |
 
 ## Tags
 
@@ -51,6 +52,59 @@ records that it should stay off (see [Keeping Tags running](../tag-management.md
 ## Setup
 
 See [Guided setup over JSON lines](../tag-management.md#guided-setup-over-json-lines).
+
+## AI connections
+
+A Tag needs at least one connected agent, Codex or Claude, and has one default
+model. Both setup and Settings use these commands; the CLI's `tag settings` →
+AI & models offers the same choices.
+
+`tag NAME settings ai --json` checks each backend now and returns
+`connections`, `usable` (connected backends the Tag may use), and
+`default_model` (`value`, `backend`, `model`, `label`, `backend_name`,
+`available`). Each connection has `backend`, `name`, `provider`, `state`,
+`installed`, `version`, `method`, `account`, `detail`, `shared`, `actions`, and
+`install_url`. `state` is `connected`, `signed_out`, `expired`,
+`limited` (a paused ChatGPT plan), `not_installed`, or `unsupported`; treat
+unknown states as not usable. `actions` lists what to offer: `sign_in`,
+`reconnect`, `change_account`, `install`, `resume`, or `update`. `shared` is
+true when the sign-in belongs to this computer (Codex or Claude sign-in) and
+false for a ChatGPT plan connected to this Tag only.
+
+`tag NAME settings ai models --json` lists the connected accounts' models in
+`groups`, one per backend, each starting with the account's own default (the
+bare backend value, such as `codex`). `default.available` is false when the
+saved default is no longer offered; `suggested` is the model to preselect.
+Loading models can take several seconds.
+
+`tag NAME settings ai model VALUE --json` saves the default model; the backend
+follows the model. People's own model choices in Slack are kept.
+`restart_required` is true when the Tag is running; add `--restart` to restart
+it now, which reports `restarted`.
+
+`tag NAME settings ai sign-in BACKEND --json` runs the backend's browser
+sign-in and writes JSON lines: `progress` events with `step` (`stopping`,
+`browser`, `waiting`, `verifying`, `restarting`), `text`, and sometimes `url`
+to reopen the sign-in page, then one `sign_in` event with `status` `connected`,
+`cancelled`, or `failed`, plus `connection`, `error`, and `retry`. Send
+`{"cancel": true}` or close stdin to cancel; run the command again to retry.
+For Codex, `--method chatgpt` connects a ChatGPT account to this Tag only and
+`--method codex` uses the computer's Codex sign-in. Changing a running Tag's
+ChatGPT plan needs `--restart`, which stops the Tag while you sign in and
+starts it again afterwards, even if sign-in fails. `resume` resumes a paused
+plan the same way. See `protocol/examples/ai-*.json` and `ai-sign-in.jsonl`.
+
+During `tag setup --json`, the AI step uses `choose` questions with extra
+fields, so older clients still show plain options. When an agent is connected,
+setup asks only `default_model`: `option_ids` are model values, followed by
+sign-in options for other agents (such as `sign_in:claude` or
+`reconnect:codex`); it also has `groups`, `connections`, and `tag_name`. Only
+when nothing usable is connected does it ask `ai_connection` first, with
+`option_ids` (such as `sign_in:claude`, `install:codex`, `check`, `exit`),
+`connections`, and `can_continue`. After a sign-in, the next question has
+`last_result`. A sign-in started from either question writes the same
+`progress` and `sign_in` events and accepts `{"cancel": true}`; `result` still
+only ever means setup ended. Answer with an option ID, index, or label.
 
 ## Installing
 

@@ -61,6 +61,10 @@ class ChatGPTError(RuntimeError):
     """Safe public message; never includes an OAuth response or authorization URL."""
 
 
+class SignInCancelled(ChatGPTError):
+    """The person cancelled browser sign-in; nothing was changed."""
+
+
 class RequestError(ChatGPTError):
     def __init__(self, status: int, code: str = "", request_id: str = ""):
         self.status = status
@@ -407,7 +411,11 @@ class Store:
             record["mode"] = "codex"
             atomic_write(self.path, record)
 
-    def login(self, account_id: str | None = None, *, consent: bool = False, timeout: float = 180) -> str:
+    def login(self, account_id: str | None = None, *, consent: bool = False, timeout: float = 180,
+              progress=None, cancelled=None) -> str:
+        """Browser sign-in. ``progress(step)`` reports browser, waiting and verifying;
+        ``cancelled()`` returning true stops waiting without changing any account."""
+        report = progress or (lambda _step: None)
         before = self.read()
         pending = before.get("pending_registration")
         if account_id and account_id not in before["accounts"] and account_id != pending:
@@ -457,15 +465,20 @@ class Store:
             if consent:
                 params["prompt"] = "consent"
             # Never print this URL: returning sign-in can contain an ID token.
+            report("browser")
             if not webbrowser.open(AUTHORIZE + "?" + urllib.parse.urlencode(params)):
                 raise ChatGPTError("Could not open a browser. Run tag chatgpt login in a local desktop terminal.")
+            report("waiting")
             deadline = time.monotonic() + timeout
             while not received and time.monotonic() < deadline:
+                if cancelled and cancelled():
+                    raise SignInCancelled("ChatGPT sign-in was cancelled. Your previous account is unchanged.")
                 server.handle_request()
         if not received:
             raise ChatGPTError("ChatGPT sign-in timed out. Run tag chatgpt login again.")
         if received.get("error"):
             raise ChatGPTError("ChatGPT authorization was declined or failed. Your previous account is unchanged.")
+        report("verifying")
         issued = received.get("client_id", account_id)
         if (not isinstance(issued, str) or not re.fullmatch(r"oaiapp_[A-Za-z0-9_-]+", issued)
                 or (account_id and issued != account_id) or not received.get("code")):

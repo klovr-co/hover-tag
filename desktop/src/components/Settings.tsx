@@ -6,6 +6,7 @@ import type { AppInfo, Bridge } from "../lib/bridge";
 import { parseJSON, title, type TagRow } from "../lib/protocol";
 import { failureLine, type Tags } from "../lib/tags";
 import { APP_CHANNELS, checkUpdate, installUpdate, isAppChannel, type Channel, type ProductUpdate } from "../lib/updates";
+import { AISummaryRow } from "./AISettings";
 import { CommunityLinks } from "./CommunityLinks";
 import { Back, ErrorLine, Heading, Icon, Primary, Secondary, Spinner, Switch } from "./ui";
 
@@ -103,9 +104,11 @@ interface SettingsProps {
   info: AppInfo;
   tags: Tags;
   close: () => void;
+  /** Opens Settings → AI & models. */
+  openAI?: () => void;
 }
 
-export function Settings({ api, info, tags, close }: SettingsProps) {
+export function Settings({ api, info, tags, close, openAI }: SettingsProps) {
   const [login, setLogin] = useState(false);
   const [keepBusy, setKeepBusy] = useState(false);
   const [tagVersion, setTagVersion] = useState("");
@@ -165,6 +168,7 @@ export function Settings({ api, info, tags, close }: SettingsProps) {
           on={tags.keepRunning} busy={keepBusy}
           onChange={async (on) => { setKeepBusy(true); await tags.setAutostart(on); setKeepBusy(false); }} />
       </div>
+      {openAI && <AISummaryRow api={api} tags={tags} open={openAI} />}
       <div className="stack gap-8">
         <div className="headline" style={{ padding: "0 4px" }}>Updates</div>
         <div className="card">

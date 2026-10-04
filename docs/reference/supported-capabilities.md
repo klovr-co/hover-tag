@@ -26,6 +26,7 @@ unavailable behavior.
 | Codex CLI backend | Supported | Used by the v0.1 launch qualification. |
 | Show model and duration | Implemented | Finished replies show the agent, the model the agent reports it actually used (including when the account default was used), thinking level, Fast Mode, and how long the request took, for example `Claude · Opus 5.5 · high thinking · 1m 12s`. The legacy Codex exec and Claude print transports do not report a model, so their replies show the chosen model instead. |
 | Switch models between backends | Implemented | Configure lists models from every signed-in backend; the chosen model selects Codex or Claude for that user's next request. `OPENTAG_DEFAULT_MODEL` sets the Tag default. |
+| Connect agents in setup and Settings | Implemented for both | Setup and Settings → AI & models detect Codex and Claude Code, show each connection's state, and offer browser sign-in, reconnect, account changes, or install guides. Sign-in reports progress and can be cancelled and retried. One connected agent is required; both are optional. |
 | Claude Code backend | Supported | Uses the Claude Agent SDK with an authenticated local Claude CLI session; supports streaming, activity, private one-time approvals, Stop, and model settings; approval scope differences are listed below. |
 | Inspect and change workspace files | Implemented | Uses the permissions of the backend process. |
 | Run workspace commands and tests | Implemented | Available when the selected backend can perform them. |

@@ -162,18 +162,52 @@ printed draft directory, keeps unrelated configuration, and never starts Tag
 or indexes history. Run `tag start` when ready to use the new settings.
 
 `tag setup` saves each completed answer. Ctrl-C pauses; running it again skips
-valid saved answers. It defaults to Codex and puts timeouts, retries, and other
-advanced settings outside the required questions. Choose the Tag's default
-model in Settings → Model or with `tag config set OPENTAG_DEFAULT_MODEL claude:opus`
-(or `codex:MODEL`, or just `codex`/`claude` for that backend's own default).
-Setting a default model also sets `OPENTAG_BACKEND` to match. In Slack, anyone
-authorized can choose any model from the signed-in backends with **Configure**;
-`OPENTAG_BACKENDS=codex` limits the choices to one backend.
-Settings → Model opens one picker with the live models of every connected
-agent. Both Codex and Claude are available by default when installed and signed
-in. Sign out of either agent and reopen the picker to remove its models, even
-if it was the saved default. Restart Tag to refresh Slack’s model list. `tag status` shows the default model and which other agents Slack users
-can switch to, and `tag list` shows each Tag's default model.
+valid saved answers. It puts timeouts, retries, and other advanced settings
+outside the required questions.
+
+### Choose the Tag's model
+
+After the Tag's name and picture, setup asks for the Tag's **default model**,
+from the models your Codex and Claude accounts on this computer offer, grouped
+by agent. Choosing a model also chooses its agent (`OPENTAG_BACKEND` follows
+`OPENTAG_DEFAULT_MODEL`). Each group starts with the account's own default. If
+an agent is installed but not signed in, setup offers to sign in to it too; a
+sign-in opens the browser and can be cancelled and retried. If a saved default
+is no longer offered, setup says so and suggests another. A resumed setup keeps
+a saved default whose agent is still connected.
+
+Only when no agent is connected does setup list them, because one is required:
+each shows **Not signed in**, **Sign-in expired**, **Usage limit reached**,
+**Not installed**, or **Update needed**, with the action that fixes it. Account
+changes and connection details are in Settings → AI & models.
+
+### AI & models
+
+Change these later in `tag settings` → **AI & models**, in Tag.app's Settings →
+**AI & models**, or with `tag NAME settings ai`:
+
+```sh
+tag settings ai                     # check connections now
+tag settings ai models              # models from connected accounts
+tag settings ai model claude:opus   # save the default model
+tag settings ai sign-in claude      # sign in, reconnect, or change account
+tag settings ai sign-in codex --method chatgpt --restart
+```
+
+The default model can also be set with
+`tag config set OPENTAG_DEFAULT_MODEL claude:opus` (or `codex:MODEL`, or just
+`codex`/`claude` for that account's own default). In Slack, anyone authorized
+can choose any model from the signed-in backends with **Configure**; their
+choice is kept when the Tag's default changes. `OPENTAG_BACKENDS=codex` limits
+the choices to one backend.
+
+A running Tag reads its default model and model list when it starts. After a
+change, Tag asks before restarting it; `--restart` restarts it right away.
+Changing a running Tag's ChatGPT plan stops the Tag while you sign in and
+starts it again afterwards, even when sign-in doesn't finish. Sign out of either
+agent and reopen the picker to remove its models, even if it was the saved
+default. `tag status` shows the default model and which other agents Slack
+users can switch to, and `tag list` shows each Tag's default model.
 
 To start onboarding over, run `tag reset`. A confirmation defaults to Cancel.
 After confirmation, Tag stops its managed services, moves saved settings and
@@ -230,13 +264,14 @@ original location. To recover the previous setup, stop Tag and move those items
 back, first keeping a copy of any newer configuration you want to preserve.
 
 The terminal follows four steps: Connect Slack → App → Channels → Finish.
+The AI step runs between App and Channels.
 Finish setup saves configuration. Run `tag start` to initialize shared memory
 and connect Slack. Starting memory for the first time can take a couple of minutes.
 Channels Tag has already joined are included automatically and cannot be
 removed from setup. Use arrow keys and Enter to continue; Space opens an
 optional checklist only after choosing **Add public channels**. Plain terminals
 fall back to numbered input. `q` exits so setup can be finished later. The channel
-summary offers Change channels and Change defaults (history window and agent)
+summary offers Change channels and Change defaults (history window, AI connection, and default model)
 before approval. Approving Finish setup saves these choices without starting
 services or indexing history.
 
@@ -253,7 +288,7 @@ the next `tag start`. The welcome confirms connectivity, not a tested agent repl
 An app compatibility failure stays on the selected app with Open settings,
 Check again, and Exit · finish setup later. Linking is saved separately from compatibility,
 so returning does not repeat a successful link. Browser pages open only through
-an explicit action. Codex sign-in and startup failures have their own retry step.
+an explicit action. Agent sign-in and startup failures have their own retry step.
 Slack onboarding is contained in `tag setup`: it checks Slack CLI authorization,
 offers the real CLI login handoff, creates or links an app with explicit
 approval, validates three credential roles separately, and uses its existing
@@ -425,6 +460,10 @@ setup writes one JSON object per line to stdout and reads each answer from stdin
   `slack_login`.
 - `{"type": "result", "status": "complete" | "paused" | "failed", "tag": …}` —
   the session is over. `paused` means progress was saved and setup can resume.
+- `{"type": "progress", …}` and `{"type": "sign_in", …}` — an agent sign-in
+  started from the `ai_connection` question. Send `{"cancel": true}` to cancel
+  it. See [AI connections](reference/app-protocol.md#ai-connections) for the
+  `ai_connection` and `default_model` questions.
 
 Answer with `{"answer": …}`: an option index or its exact label for `choose`, a
 list of them for `multi`, a string for `text` and `secret`, a boolean for

@@ -57,6 +57,7 @@ APP_PROTOCOL = 1
 CAPABILITIES = (
     "list", "setup-jsonl", "setup-back", "rename", "workspace-lifecycle",
     "autostart", "autostart-keep", "logs-json", "upgrade-json", "install-progress",
+    "ai-connections",
 )
 UPDATE_CHECK_INTERVAL_SECONDS = 24 * 60 * 60
 COMMANDS = tuple(sorted(tag_instances.RESERVED_NAMES))
@@ -1841,6 +1842,38 @@ def _setup_step(args: argparse.Namespace, installation_root: Path, *, raw_tag: s
     return 1 if reply.get("state") == "ended" and result.get("status") == "failed" else 0
 
 
+def _ai_target(context):
+    """The Tag that AI & models acts on, with a quiet restart for JSON clients."""
+    try:
+        import tag_ai
+    except ImportError:
+        from scripts import tag_ai
+
+    def lifecycle(action: str) -> int:
+        command = [sys.executable, str(ROOT / "scripts/tag_cli.py"), *context.command_arguments(action)]
+        environment = os.environ.copy()
+        environment["TAG_RESTART_FLOW"] = "1" if action == "restart" else environment.get("TAG_RESTART_FLOW", "")
+        # Keep this command's own output, such as JSON lines, clean.
+        return subprocess.call(command, env=environment, stdin=subprocess.DEVNULL,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    return tag_ai.Target(
+        home=context.home, tag_id=context.tag_id,
+        running=lambda: process_for(context.home / "state/slack.json") is not None,
+        restart=lifecycle, name=_slack_name(context.home) or "Tag",
+    )
+
+
+def _settings_ai(context, args) -> int:
+    try:
+        import tag_ai
+    except ImportError:
+        from scripts import tag_ai
+    target = _ai_target(context)
+    return tag_ai.cli(args.arguments[1:], target, json_output=args.json_output, restart=args.restart,
+                      method=args.method, account=args.account)
+
+
 def _run_cli() -> int:
     parser = argparse.ArgumentParser(description="Tag: set up, inspect, and manage your Slack teammate.",
                                      usage="tag [TAG] [COMMAND] [OPTIONS]",
@@ -1855,10 +1888,13 @@ def _run_cli() -> int:
                                      ),
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("command", nargs="?", choices=COMMANDS)
-    parser.add_argument("arguments", nargs="*", help="memory: start | status | stop; config: init | show | keys | set KEY VALUE; chatgpt: status | login [ACCOUNT] | use ACCOUNT | logout [ACCOUNT] | use-codex")
+    parser.add_argument("arguments", nargs="*", help="memory: start | status | stop; config: init | show | keys | set KEY VALUE; chatgpt: status | login [ACCOUNT] | use ACCOUNT | logout [ACCOUNT] | use-codex; settings: ai [status | models | sign-in codex|claude | resume | model VALUE]")
     parser.add_argument("--offline", action="store_true")
     parser.add_argument("--json", action="store_true", dest="json_output", help="structured output for inspect, status, doctor, config, paths, upgrade, and chatgpt")
     parser.add_argument("--consent", action="store_true", help="chatgpt login: request plan permission again")
+    parser.add_argument("--method", choices=("chatgpt", "codex"), help="settings ai sign-in codex: a ChatGPT account for this Tag, or the Codex sign-in on this computer")
+    parser.add_argument("--account", help="settings ai sign-in codex --method chatgpt: renew this saved account")
+    parser.add_argument("--restart", action="store_true", help="settings ai: restart a running Tag to apply the change")
     parser.add_argument("--stdin", action="store_true", help="read a config value from stdin")
     parser.add_argument("--from", dest="source", type=Path)
     parser.add_argument("--no-start", action="store_true", help=argparse.SUPPRESS)
@@ -1889,10 +1925,15 @@ def _run_cli() -> int:
     args = parser.parse_args(raw_arguments)
     if (args.no_start or args.test or args.review) and args.command != "setup":
         parser.error("--no-start, --test and --review are only for setup")
-    if args.arguments and args.command not in {"add", "memory", "config", "telemetry", "rename", "autostart", "chatgpt"}:
-        parser.error("Only add, memory, config, telemetry, rename, autostart, and chatgpt accept additional positional arguments")
-    if args.json_output and args.command not in {"list", "memory", "inspect", "status", "doctor", "config", "paths", "upgrade", "telemetry", "setup", "add", "rename", "start", "stop", "restart", "autostart", "version", "logs", "chatgpt"}:
-        parser.error("--json supports list, memory, inspect, status, doctor, config, paths, upgrade, telemetry, chatgpt, autostart, version, logs, setup, add, rename, and start/stop/restart with --workspace")
+    if args.arguments and args.command not in {"add", "memory", "config", "telemetry", "rename", "autostart", "chatgpt", "settings"}:
+        parser.error("Only add, memory, config, telemetry, rename, autostart, chatgpt, and settings accept additional positional arguments")
+    settings_ai = args.command == "settings" and args.arguments[:1] == ["ai"]
+    if args.command == "settings" and args.arguments and not settings_ai:
+        parser.error("settings accepts only ai, for example tag settings ai --json")
+    if (args.method or args.account or args.restart) and not settings_ai:
+        parser.error("--method, --account and --restart are only for tag settings ai")
+    if args.json_output and args.command not in {"list", "memory", "inspect", "status", "doctor", "config", "paths", "upgrade", "telemetry", "setup", "add", "rename", "start", "stop", "restart", "autostart", "version", "logs", "chatgpt"} and not settings_ai:
+        parser.error("--json supports list, memory, inspect, status, doctor, config, paths, upgrade, telemetry, chatgpt, settings ai, autostart, version, logs, setup, add, rename, and start/stop/restart with --workspace")
     if args.json_output and args.follow:
         parser.error("--json cannot be combined with --follow")
     if args.json_output and args.command in {"start", "stop", "restart"} and not args.workspace:
@@ -2190,7 +2231,7 @@ def _run_cli() -> int:
         return int(args.command == "status" and report["state"] != "running")
     if args.command in {"setup", "settings", "reset"} and not display.stdin_is_terminal() and not (
         args.command == "setup" and os.getenv(SETUP_PROTOCOL_ENV) == "jsonl"
-    ):
+    ) and not (settings_ai and (args.json_output or len(args.arguments) > 1)):
         print("Interactive setup requires a terminal. Use tag inspect --json and tag config set for automation.", file=sys.stderr)
         return 2
     if args.command == "reset":
@@ -2199,9 +2240,13 @@ def _run_cli() -> int:
         except ImportError:
             from scripts.tag_reset import reset_and_setup
         return reset_and_setup(home, sys.modules[__name__])
+    if settings_ai:
+        if args.arguments[1:2] not in ([], ["status"], ["models"]):
+            initialize_instance(home)  # Only changes need the private home; checks don't create one.
+        return _settings_ai(context, args)
     if args.command == "settings":
         initialize_instance(home)
-        control.settings_menu(home)
+        control.settings_menu(home, ai=_ai_target(context))
         return 0
     if args.command == "rename":
         return _rename_command(context, args)

@@ -52,7 +52,7 @@ class TagControlTests(unittest.TestCase):
         ) as choose, patch.object(tag_control, "choose_default_model", return_value=None), redirect_stdout(StringIO()):
             tag_control.settings_menu(self.home)
         self.assertEqual(before, tag_config.read_config(self.path))
-        self.assertEqual("Model", choose.call_args_list[0].args[1][2])
+        self.assertEqual("AI & models", choose.call_args_list[0].args[1][2])
 
     def test_settings_default_model_picker_uses_live_models_and_aligns_backend(self):
         self.complete()
@@ -304,7 +304,7 @@ class TagControlTests(unittest.TestCase):
         del values["SLACK_ALLOWED_USER_IDS"]
         values.update(OPENTAG_TIMEOUT_SECONDS="900")
         tag_config.save_config(self.path, values)
-        with patch.object(opentag_setup, "ensure_agent", side_effect=lambda _path, values: values), patch.object(
+        with patch.object(opentag_setup, "ensure_agent", side_effect=lambda _path, values, **_: values), patch.object(
             opentag_setup, "validate_slack_identity", return_value={"team_id": "TTEST", "app_id": "ATEST"}
         ), patch.object(opentag_setup, "validate_socket_token"
         ), patch.object(
@@ -327,7 +327,7 @@ class TagControlTests(unittest.TestCase):
     def test_no_start_setup_never_calls_service_finish(self):
         tag_config.save_config(self.path, self.complete())
         channels = [opentag_setup.slack_channels.SlackChannel("CTEST", "team", False, True)]
-        with patch.object(opentag_setup, "ensure_agent", side_effect=lambda _path, values: values), patch.object(
+        with patch.object(opentag_setup, "ensure_agent", side_effect=lambda _path, values, **_: values), patch.object(
             opentag_setup, "validate_slack_identity", return_value={"team_id": "TTEST", "app_id": "ATEST"}
         ), patch.object(opentag_setup, "validate_socket_token"), patch.object(
             opentag_setup.slack_channels, "list_channels", return_value=channels
@@ -344,7 +344,7 @@ class TagControlTests(unittest.TestCase):
         values["MFS_ALLOWED_SCOPES"] = "slack://tag-ttest/channels/team__CTEST"
         tag_config.save_config(self.path, values)
         selected = [opentag_setup.slack_channels.SlackChannel("CTEAM", "team", False, True)]
-        with patch.object(opentag_setup, "ensure_agent", side_effect=lambda _path, values: values), patch.object(
+        with patch.object(opentag_setup, "ensure_agent", side_effect=lambda _path, values, **_: values), patch.object(
             opentag_setup, "validate_slack_identity", return_value={"team_id": "TTEST", "app_id": "ATEST"}
         ), patch.object(opentag_setup, "validate_socket_token"
         ), patch.object(
@@ -363,7 +363,7 @@ class TagControlTests(unittest.TestCase):
         self.assertEqual(tag_config.read_config(self.path)["SLACK_CHANNEL_IDS"], "CTEAM")
 
     def test_interrupted_setup_keeps_completed_answers(self):
-        with patch.object(opentag_setup, "ensure_agent", side_effect=lambda _path, values: values), patch.object(
+        with patch.object(opentag_setup, "ensure_agent", side_effect=lambda _path, values, **_: values), patch.object(
             opentag_setup, "connect_slack_cli", return_value="TTEST"
         ), patch.object(opentag_setup, "ask_validated", return_value="TTEST"), patch.object(
             opentag_setup, "choose_slack_app", return_value="ATEST"
@@ -382,12 +382,16 @@ class TagControlTests(unittest.TestCase):
         channels = [opentag_setup.slack_channels.SlackChannel("CTEST", "team", False, True)]
         with patch.object(
             opentag_setup.shutil, "which", return_value="/test/bin/claude"
-        ), patch.object(opentag_setup, "ensure_agent", side_effect=lambda _path, values: values), patch.object(
+        ), patch.object(opentag_setup, "ensure_agent", side_effect=lambda _path, values, **_: values), patch.object(
             opentag_setup, "validate_slack_identity", return_value={"team_id": "TTEST", "app_id": "ATEST"}
         ), patch.object(opentag_setup, "validate_socket_token"), patch.object(
             opentag_setup.slack_channels, "list_channels", return_value=channels
         ), patch.object(opentag_setup.slack_channels, "slack_api", return_value={"ok": True}), patch.object(
-            opentag_setup.ui, "choose", side_effect=[2, 0, 1, 0, 0]
+            opentag_setup.ui, "choose", side_effect=[2, 0, 0, 0]
+        ), patch.object(
+            # Change defaults reviews the AI step, which picks a Claude model here.
+            opentag_setup.tag_ai, "setup_step",
+            side_effect=lambda _home, path: tag_config.update_config(path, {"OPENTAG_DEFAULT_MODEL": "claude:claude-opus-5-5"}),
         ), patch.object(opentag_setup, "write_slack_connector", return_value=Path(values["MFS_SLACK_CONNECTOR_CONFIG"])) as connector, patch.object(
             opentag_setup, "finish_setup", return_value=0
         ), redirect_stdout(StringIO()):
@@ -396,13 +400,14 @@ class TagControlTests(unittest.TestCase):
         self.assertEqual(saved["SLACK_APP_ID"], "ATEST")
         self.assertEqual(saved["SLACK_CHANNEL_IDS"], "CTEST")
         self.assertEqual(saved["OPENTAG_BACKEND"], "claude")
+        self.assertEqual(saved["OPENTAG_DEFAULT_MODEL"], "claude:claude-opus-5-5")
         self.assertEqual(saved["MFS_SLACK_HISTORY_DAYS"], "7")
         connector.assert_called_once_with("TTEST", channels, "7", home=self.home)
 
     def test_setup_exit_before_approval_does_not_index_or_connect_slack(self):
         self.complete()
         channels = [opentag_setup.slack_channels.SlackChannel("CTEST", "team", False, True)]
-        with patch.object(opentag_setup, "ensure_agent", side_effect=lambda _path, values: values), patch.object(
+        with patch.object(opentag_setup, "ensure_agent", side_effect=lambda _path, values, **_: values), patch.object(
             opentag_setup, "validate_slack_identity", return_value={"team_id": "TTEST", "app_id": "ATEST"}
         ), patch.object(opentag_setup, "validate_socket_token"), patch.object(
             opentag_setup.slack_channels, "list_channels", return_value=channels

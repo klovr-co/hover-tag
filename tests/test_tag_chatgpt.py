@@ -391,23 +391,6 @@ class ChatGPTTests(unittest.TestCase):
                         operation()
                 self.assertTrue(self.store.enabled())
 
-    def test_setup_returns_to_sign_in_menu_after_chatgpt_failure(self):
-        import subprocess
-        from scripts import opentag_setup as setup
-        for failure in ("login", "access"):
-            with self.subTest(failure=failure), patch.object(
-                setup, "ensure_agent", side_effect=lambda path, values: values
-            ), patch.object(
-                setup.subprocess, "run", side_effect=[subprocess.CompletedProcess([], 0),
-                    subprocess.CompletedProcess([], 1), subprocess.CompletedProcess([], 1)]
-            ), patch.object(setup.ui, "choose", side_effect=[0, 3]) as choose, patch.object(
-                auth, "cli", side_effect=auth.ChatGPTError("declined") if failure == "login" else None
-            ), patch.object(auth.Store, "access", side_effect=auth.ChatGPTError("permission missing")), redirect_stdout(io.StringIO()) as output:
-                with self.assertRaises(setup.ui.Paused):
-                    setup.finish_setup(Path("settings.json"), {"OPENTAG_BACKEND": "codex"}, [])
-                self.assertEqual(choose.call_count, 2)
-                self.assertIn("declined" if failure == "login" else "permission missing", output.getvalue())
-
     def test_renewal_waits_for_interruption_and_hides_intermediate_terminal_event(self):
         server = transport.CodexAppServer(["codex", "app-server"], cwd=self.root, timeout=10)
         server.chatgpt_token = "access-fixture"
@@ -521,17 +504,6 @@ class ChatGPTTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(json.loads(result.stdout)["schema_version"], 1)
             self.assertFalse(root.exists())
-
-    def test_setup_uses_chatgpt_without_checking_codex_login(self):
-        import subprocess
-        from scripts import opentag_setup
-        self.seed()
-        with patch.object(opentag_setup, "ensure_agent", side_effect=lambda path, values: values), patch.object(opentag_setup.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run, redirect_stdout(io.StringIO()) as output:
-            result = opentag_setup.finish_setup(Path("settings.json"), {"OPENTAG_BACKEND": "codex"}, [])
-        self.assertEqual(result, 0)
-        self.assertTrue(any("app-server" in call.args[0] for call in run.call_args_list))
-        self.assertFalse(any("login" in call.args[0] for call in run.call_args_list))
-        self.assertIn("ChatGPT plan connected", output.getvalue())
 
     def test_chatgpt_catalog_does_not_reintroduce_other_accounts_models(self):
         from scripts import agent_models as slack
