@@ -9,6 +9,7 @@
     "backend_name": "Claude",
     "available": true
   },
+  "default_effort": "high",
   "restart_required": false,
   "restarted": true
 }

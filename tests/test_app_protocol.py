@@ -17,7 +17,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts import tag_autostart, tag_cli, tag_config, tag_install, tag_instances
+from scripts import agent_models, tag_activity, tag_autostart, tag_cli, tag_config, tag_install, tag_instances
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = ROOT / "protocol/examples"
@@ -59,6 +59,21 @@ class ProtocolTests(unittest.TestCase):
         result = self.cli("list", "--json")
         self.assertProvides(result, example("list.json"), "tag list --json")
         self.assertProvides(result["tags"][0], example("list.json")["tags"][0], "tag list --json rows")
+        self.assertEqual((None, "Account default", None), (
+            result["tags"][0]["description"], result["tags"][0]["default_model_name"], result["tags"][0]["default_effort"]))
+        # With a description, a chosen model, and its saved catalog, the row names both.
+        tag_config.save_config(home / "config/settings.json", {
+            "SLACK_TEAM_ID": "T1", "SLACK_APP_ID": "A1", "OPENTAG_DEFAULT_MODEL": "codex:gpt-5.5",
+            "OPENTAG_BOT_DESCRIPTION": "I'm Maya's personal assistant. I help with launch work."})
+        agent_models.remember_model_names([agent_models.ModelOption(
+            "gpt-5.5", "GPT-5.5", ("low", "medium", "high"), default_reasoning_effort="medium")],
+            agent_models.model_names_path(home))
+        row = self.cli("list", "--json")["tags"][0]
+        promised = example("list.json")["tags"][0]
+        self.assertEqual({key: promised[key] for key in ("description", "default_model", "default_model_label",
+                                                         "default_model_name", "default_effort")},
+                         {key: row[key] for key in ("description", "default_model", "default_model_label",
+                                                    "default_model_name", "default_effort")})
 
     def test_autostart_and_logs_provide_what_apps_read(self) -> None:
         home = tag_instances.create(self.root, "t1-a1").home
@@ -71,6 +86,15 @@ class ProtocolTests(unittest.TestCase):
         logs = self.cli("t1-a1", "logs", "--json")
         self.assertProvides(logs, example("logs.json"), "tag logs --json")
         self.assertEqual(logs["services"]["slack"], ["Connected to Slack"])
+        self.assertEqual([], logs["activity"])
+        tag_config.save_config(home / "config/settings.json", {
+            "MFS_ALLOWED_SCOPES": "slack://tag-t1-a1/channels/launch__C0LAUNCH1"})
+        store = tag_activity.ActivityStore(home / "state/activity")
+        store.finish(store.create(team="T1", channel="C0LAUNCH1", thread_ts="1.0", request_ts="1.0",
+                                  requester="U1"), "completed")
+        activity = self.cli("t1-a1", "logs", "--json")["activity"]
+        self.assertProvides(activity[0], example("logs.json")["activity"][0], "tag logs --json activity")
+        self.assertEqual(("replied", "launch", False), (activity[0]["kind"], activity[0]["channel_name"], activity[0]["dm"]))
 
     def test_ai_settings_provide_what_apps_read(self) -> None:
         tag_instances.create(self.root, "t1-a1")
@@ -82,6 +106,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertProvides(result, promised, "tag settings ai --json")
         self.assertProvides(result["connections"][0], promised["connections"][0], "AI connection rows")
         self.assertProvides(result["default_model"], promised["default_model"], "AI default model")
+        self.assertEqual((None, [], False), (result["default_effort"], result["effort_levels"], result["effort_chosen"]))
         self.assertEqual(["not_installed", "not_installed"], [row["state"] for row in result["connections"]])
         self.assertEqual(["install"], result["connections"][0]["actions"])
 

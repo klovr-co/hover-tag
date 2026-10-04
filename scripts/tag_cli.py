@@ -57,7 +57,7 @@ APP_PROTOCOL = 1
 CAPABILITIES = (
     "list", "setup-jsonl", "setup-back", "rename", "workspace-lifecycle",
     "autostart", "autostart-keep", "logs-json", "upgrade-json", "install-progress",
-    "ai-connections",
+    "ai-connections", "thinking-level", "logs-activity",
 )
 UPDATE_CHECK_INTERVAL_SECONDS = 24 * 60 * 60
 COMMANDS = tuple(sorted(tag_instances.RESERVED_NAMES))
@@ -1871,7 +1871,7 @@ def _settings_ai(context, args) -> int:
         from scripts import tag_ai
     target = _ai_target(context)
     return tag_ai.cli(args.arguments[1:], target, json_output=args.json_output, restart=args.restart,
-                      method=args.method, account=args.account)
+                      method=args.method, account=args.account, effort=args.effort)
 
 
 def _run_cli() -> int:
@@ -1888,12 +1888,13 @@ def _run_cli() -> int:
                                      ),
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("command", nargs="?", choices=COMMANDS)
-    parser.add_argument("arguments", nargs="*", help="memory: start | status | stop; config: init | show | keys | set KEY VALUE; chatgpt: status | login [ACCOUNT] | use ACCOUNT | logout [ACCOUNT] | use-codex; settings: ai [status | models | sign-in codex|claude | resume | model VALUE]")
+    parser.add_argument("arguments", nargs="*", help="memory: start | status | stop; config: init | show | keys | set KEY VALUE; chatgpt: status | login [ACCOUNT] | use ACCOUNT | logout [ACCOUNT] | use-codex; settings: ai [status | models | sign-in codex|claude | resume | model VALUE | effort LEVEL|default]")
     parser.add_argument("--offline", action="store_true")
     parser.add_argument("--json", action="store_true", dest="json_output", help="structured output for inspect, status, doctor, config, paths, upgrade, and chatgpt")
     parser.add_argument("--consent", action="store_true", help="chatgpt login: request plan permission again")
     parser.add_argument("--method", choices=("chatgpt", "codex"), help="settings ai sign-in codex: a ChatGPT account for this Tag, or the Codex sign-in on this computer")
     parser.add_argument("--account", help="settings ai sign-in codex --method chatgpt: renew this saved account")
+    parser.add_argument("--effort", metavar="LEVEL", help="settings ai model VALUE: also save this thinking level, or default for the model's own")
     parser.add_argument("--restart", action="store_true", help="settings ai: restart a running Tag to apply the change")
     parser.add_argument("--stdin", action="store_true", help="read a config value from stdin")
     parser.add_argument("--from", dest="source", type=Path)
@@ -1930,8 +1931,8 @@ def _run_cli() -> int:
     settings_ai = args.command == "settings" and args.arguments[:1] == ["ai"]
     if args.command == "settings" and args.arguments and not settings_ai:
         parser.error("settings accepts only ai, for example tag settings ai --json")
-    if (args.method or args.account or args.restart) and not settings_ai:
-        parser.error("--method, --account and --restart are only for tag settings ai")
+    if (args.method or args.account or args.restart or args.effort is not None) and not settings_ai:
+        parser.error("--method, --account, --effort and --restart are only for tag settings ai")
     if args.json_output and args.command not in {"list", "memory", "inspect", "status", "doctor", "config", "paths", "upgrade", "telemetry", "setup", "add", "rename", "start", "stop", "restart", "autostart", "version", "logs", "chatgpt"} and not settings_ai:
         parser.error("--json supports list, memory, inspect, status, doctor, config, paths, upgrade, telemetry, chatgpt, settings ai, autostart, version, logs, setup, add, rename, and start/stop/restart with --workspace")
     if args.json_output and args.follow:
@@ -2085,6 +2086,10 @@ def _run_cli() -> int:
                 try:
                     context = tag_instances.resolve(installation_root, str(item["id"]))
                     report = control.inspect(context.home, sys.modules[__name__], tag_id=context.tag_id)
+                    config_file = context.home / "config/settings.json"
+                    values = read_config(config_file) if config_file.is_file() else {}
+                    names = agent_models.load_model_names(agent_models.model_names_path(context.home))
+                    default_backend = report["backend"]["selected"] or "codex"
                     record.update(state=report["state"], configuration=report["configuration"],
                                   services=report["services"], slack_workspace=report.get("slack_workspace"),
                                   workspace_name=tag_instances.workspace_name(context.home),
@@ -2096,9 +2101,13 @@ def _run_cli() -> int:
                                   main=context.tag_id == tag_id,
                                   default_model=report["backend"]["default_model"],
                                   default_model_label=agent_models.describe_model_choice(
-                                      report["backend"]["default_model"], report["backend"]["selected"] or "codex",
-                                      names=agent_models.load_model_names(agent_models.model_names_path(context.home)),
-                                  ))
+                                      report["backend"]["default_model"], default_backend, names=names,
+                                  ),
+                                  default_model_name=agent_models.model_choice_name(
+                                      report["backend"]["default_model"], default_backend, names=names,
+                                  ),
+                                  default_effort=agent_models.effective_effort(context.home, values),
+                                  description=values.get("OPENTAG_BOT_DESCRIPTION") or None)
                 except (OSError, ValueError, RuntimeError) as exc:
                     record.update(valid=False, state="invalid_configuration", error=str(exc))
             else:
@@ -2124,6 +2133,8 @@ def _run_cli() -> int:
                     alias = f" · tag {row['nickname']}" if row.get("nickname") else ""
                     main = " · main" if row.get("main") else ""
                     model = f" · {row['default_model_label']}" if row.get("default_model_label") else ""
+                    if model and row.get("default_effort"):
+                        model += f" · {agent_models.effort_label(row['default_effort'])} thinking"
                     detail = (f"{name} · {row['state']}{alias}{main}{model}" if row.get("valid")
                               else str(row.get("error")))
                     display.info_row(str(row["id"]), detail, good=bool(row.get("valid")))
@@ -2455,9 +2466,19 @@ def _run_cli() -> int:
     if args.command == "logs":
         logs = sorted((home / "state").glob("*.log"))
         if args.json_output:
+            try:
+                import tag_activity
+            except ImportError:
+                from scripts import tag_activity
+            try:
+                # Saved channel sources name the channels; activity never needs Slack.
+                scopes = read_config(home / "config/settings.json").get("MFS_ALLOWED_SCOPES", "")
+            except (OSError, ValueError):
+                scopes = ""
             print(json.dumps({"schema_version": 1, "tag": context.tag_id, "services": {
                 log.stem: log_tail(home, log.stem, args.limit or 200).splitlines() for log in logs
-            }}, indent=2, ensure_ascii=False))
+            }, "activity": tag_activity.recent_activity(home / "state/activity", scopes)},
+                indent=2, ensure_ascii=False))
             return 0
         display.header("Logs", selected_target(home, context.tag_id))
         if not logs:

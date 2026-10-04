@@ -190,6 +190,8 @@ Change these later in `tag settings` → **AI & models**, in Tag.app's Settings 
 tag settings ai                     # check connections now
 tag settings ai models              # models from connected accounts
 tag settings ai model claude:opus   # save the default model
+tag settings ai effort high         # save the default thinking level
+tag settings ai effort default      # use the model's own thinking level
 tag settings ai sign-in claude      # sign in, reconnect, or change account
 tag settings ai sign-in codex --method chatgpt --restart
 ```
@@ -201,13 +203,30 @@ can choose any model from the signed-in backends with **Configure**; their
 choice is kept when the Tag's default changes. `OPENTAG_BACKENDS=codex` limits
 the choices to one backend.
 
+The Tag's **default thinking level** applies to its default model. It must be
+one the model offers (`tag settings ai models` lists them); a model without
+thinking levels, such as Claude Haiku, doesn't use one. Save a model and level
+together with `tag settings ai model codex:gpt-5.5 --effort medium`. Changing
+the model keeps the level when the new model offers it and otherwise switches
+to that model's own default. `tag config set OPENTAG_DEFAULT_EFFORT high` also
+works; leave it empty for the model's default. Both Codex and Claude use the
+Tag's level, and people who chose their own thinking level in Slack keep it.
+A Tag without a saved level, including every Tag set up before this setting
+existed, keeps using the model's own default.
+
+`OPENTAG_BOT_DESCRIPTION` holds a one-line description of the Tag, up to 140
+characters. Tag stores and shows it (`tag list --json` reports it as
+`description`); it doesn't change the Slack app yet, and an existing Slack app's
+description is left as it is.
+
 A running Tag reads its default model and model list when it starts. After a
 change, Tag asks before restarting it; `--restart` restarts it right away.
 Changing a running Tag's ChatGPT plan stops the Tag while you sign in and
 starts it again afterwards, even when sign-in doesn't finish. Sign out of either
 agent and reopen the picker to remove its models, even if it was the saved
 default. `tag status` shows the default model and which other agents Slack
-users can switch to, and `tag list` shows each Tag's default model.
+users can switch to, and `tag list` shows each Tag's default model and
+thinking level.
 
 To start onboarding over, run `tag reset`. A confirmation defaults to Cancel.
 After confirmation, Tag stops its managed services, moves saved settings and

@@ -293,6 +293,14 @@ def fast_mode_available(
     return bool(selected and selected.supports_fast_mode)
 
 
+def model_default_effort(selected: ModelOption, efforts: tuple[str, ...]) -> str | None:
+    """The Tag's level for its default model, or the model's own when operators don't offer it."""
+    effort = selected.default_reasoning_effort
+    if effort not in efforts and selected.tag_effort_applied:
+        return selected.model_reasoning_effort
+    return effort
+
+
 def default_agent_settings(models: list[ModelOption]) -> AgentSettings:
     if not models:
         return AgentSettings()
@@ -300,7 +308,7 @@ def default_agent_settings(models: list[ModelOption]) -> AgentSettings:
     if selected is None:
         return AgentSettings(backend=models[0].backend)
     efforts = efforts_for_model(selected.model_id, models, selected.backend)
-    effort = selected.default_reasoning_effort
+    effort = model_default_effort(selected, efforts)
     if effort not in efforts:
         effort = efforts[0] if efforts else None
     return AgentSettings(
@@ -318,8 +326,8 @@ def default_effort_for_model(
 ) -> str | None:
     selected = find_model(model, models, backend)
     efforts = efforts_for_model(model, models, backend)
-    if selected and selected.default_reasoning_effort in efforts:
-        return selected.default_reasoning_effort
+    if selected and model_default_effort(selected, efforts) in efforts:
+        return model_default_effort(selected, efforts)
     return efforts[0] if efforts else None
 
 

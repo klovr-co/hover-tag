@@ -3,8 +3,9 @@
 Tag.app and the terminal share this module. ``tag [TAG] settings ai --json``
 reports each backend's connection, ``models`` lists the signed-in accounts'
 models grouped by backend, ``sign-in`` runs the browser sign-in with progress
-and cancellation, and ``model`` saves the Tag's default model. Guided setup
-asks the same questions through ``setup_step``.
+and cancellation, ``model`` saves the Tag's default model, and ``effort`` its
+default thinking level. Guided setup asks the same questions through
+``setup_step``.
 """
 
 from __future__ import annotations
@@ -240,6 +241,24 @@ def default_choice(home: Path, values: dict[str, str], *, available: bool | None
             "backend_name": agent_models.backend_display_name(backend), "available": available}
 
 
+def thinking(home: Path, values: dict[str, str]) -> dict[str, Any]:
+    """The Tag's thinking level from the saved catalog: no backend is started."""
+    backend = values.get("OPENTAG_BACKEND") or "codex"
+    return {"default_effort": agent_models.effective_effort(home, values),
+            "effort_levels": agent_models.effort_levels(home, values.get("OPENTAG_DEFAULT_MODEL") or backend, backend),
+            "effort_chosen": bool(values.get("OPENTAG_DEFAULT_EFFORT"))}
+
+
+def thinking_text(home: Path, values: dict[str, str]) -> str:
+    """``Thinking · High``, or ``No thinking levels`` for a model without any."""
+    effort = agent_models.effective_effort(home, values)
+    if effort:
+        return f"Thinking · {agent_models.effort_label(effort)}"
+    if _saved_levels(home, values, values.get("OPENTAG_DEFAULT_MODEL") or values.get("OPENTAG_BACKEND") or "codex") == []:
+        return "No thinking levels"
+    return "Thinking · Model default"
+
+
 def report(home: Path, values: dict[str, str], *, tag_id: str, running: bool) -> dict[str, Any]:
     found = connections(home)
     permitted = allowed(values)
@@ -250,7 +269,7 @@ def report(home: Path, values: dict[str, str], *, tag_id: str, running: bool) ->
     if choice["backend"] not in ready:
         choice["available"] = False
     return {"schema_version": 1, "tag": tag_id, "running": running, "connections": found,
-            "usable": ready, "default_model": choice,
+            "usable": ready, "default_model": choice, **thinking(home, values),
             "checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
 
 
@@ -286,14 +305,17 @@ def models(home: Path, values: dict[str, str], ready: list[str] | None = None) -
         for name in [backend for backend in allowed(values) if backend in ready]:
             options = agent_models.discover_models(name)
             discovered.extend(options)
-            entries = [{"value": name, "model": None, "label": "Account default", "default": False}]
+            # The account's own default model decides what the bare backend offers.
+            account = next((option for option in options if option.is_default), None)
+            entries = [{"value": name, "model": None, "label": "Account default", "default": False,
+                        **_levels(account)}]
             # Claude's placeholder for an unreported catalog is that same account default.
             entries += [{"value": option.value, "model": option.model_id, "label": option.label,
-                         "default": option.is_default}
+                         "default": option.is_default, **_levels(option)}
                         for option in options if option.model_id != "default"]
             groups.append({"backend": name, "name": agent_models.backend_display_name(name), "models": entries})
     if settings.config_path(home).is_file():
-        agent_models.remember_model_names(discovered, agent_models.model_names_path(home))
+        agent_models.remember_model_names(discovered, agent_models.model_names_path(home), account_defaults=True)
     offered = {entry["value"] for group in groups for entry in group["models"]}
     choice = default_choice(home, values)
     choice["available"] = choice["value"] in offered
@@ -302,6 +324,46 @@ def models(home: Path, values: dict[str, str], ready: list[str] | None = None) -
                    for backend in BACKENDS if backend.key not in ready]
     return {"schema_version": 1, "groups": groups, "default": choice, "unavailable": unavailable,
             "suggested": suggested_default(groups, choice)}
+
+
+def _levels(option: agent_models.ModelOption | None) -> dict[str, Any]:
+    if option is None or (option.model_id == "default" and not option.reasoning_efforts):
+        return {"efforts": [], "default_effort": None}
+    efforts = list(option.reasoning_efforts)
+    default = option.default_reasoning_effort
+    return {"efforts": efforts, "default_effort": default if default in efforts else None}
+
+
+def _saved_levels(home: Path, values: dict[str, str], value: str) -> list[str] | None:
+    """A model choice's saved thinking levels; None when its catalog was never seen."""
+    backend = values.get("OPENTAG_BACKEND") or "codex"
+    entry = agent_models.load_model_efforts(agent_models.model_efforts_path(home)).get(
+        agent_models.choice_key(value, backend))
+    return None if entry is None else entry["efforts"]
+
+
+def offered_efforts(home: Path, values: dict[str, str], value: str,
+                    ready: list[str] | None = None) -> list[str] | None:
+    """The levels a model offers, loading its account's catalog once when none is saved yet."""
+    levels = _saved_levels(home, values, value)
+    if levels is not None:
+        return levels
+    backend, _ = agent_models.parse_model_choice(value, values.get("OPENTAG_BACKEND") or "codex")
+    if ready is None:
+        ready = usable([connection(home, backend)], values)
+    if backend not in ready:
+        return None
+    models(home, values, ready)
+    return _saved_levels(home, values, value)
+
+
+def _check_effort(effort: str, offered: list[str] | None, label: str) -> None:
+    if offered is None:
+        raise ValueError(f"Couldn't check which thinking levels {label} offers. Connect its agent, then try again.")
+    if not offered:
+        raise ValueError(f"{label} has no thinking levels. Use default.")
+    if effort not in offered:
+        raise ValueError(f"{label} doesn't offer {effort} thinking. Choose {', '.join(offered)}, or default.")
 
 
 def suggested_default(groups: list[dict[str, Any]], choice: dict[str, Any]) -> str | None:
@@ -315,9 +377,16 @@ def suggested_default(groups: list[dict[str, Any]], choice: dict[str, Any]) -> s
 
 
 def save_default_model(home: Path, value: str, *, ready: list[str] | None = None,
-                       values: dict[str, str] | None = None) -> dict[str, Any]:
-    """Validate and save the Tag's default model; the backend follows the model."""
+                       values: dict[str, str] | None = None, effort: str | None = None) -> dict[str, Any]:
+    """Validate and save the Tag's default model; the backend follows the model.
+
+    ``effort`` saves the thinking level in the same update (``default`` clears
+    it). Without it, the saved level is kept if the new model offers it and
+    cleared otherwise, so the new model uses its own default.
+    """
     if error := settings.validation_error("OPENTAG_DEFAULT_MODEL", value):
+        raise ValueError(error)
+    if effort not in {None, "default"} and (error := settings.validation_error("OPENTAG_DEFAULT_EFFORT", effort or "")):
         raise ValueError(error)
     path = settings.config_path(home)
     values = values if values is not None else settings.load_config(path)
@@ -333,8 +402,35 @@ def save_default_model(home: Path, value: str, *, ready: list[str] | None = None
             offered = {entry["value"] for group in models(home, values, ready)["groups"] for entry in group["models"]}
             if value not in offered:
                 raise ValueError(f"{model} isn't available from your connected {name} account. Pick another model.")
-    saved = settings.update_config(path, {"OPENTAG_DEFAULT_MODEL": value})
+    changes = {"OPENTAG_DEFAULT_MODEL": value}
+    current = values.get("OPENTAG_DEFAULT_EFFORT", "")
+    level = "" if effort == "default" else effort or current
+    if effort not in {None, "default"}:
+        _check_effort(level, offered_efforts(home, values, value, ready), default_choice(home, {**values, **changes})["label"])
+    elif effort is None and current:
+        offered_levels = offered_efforts(home, values, value, ready)
+        # Unknown levels keep the choice; the agent only uses a level its model offers.
+        if offered_levels is not None and current not in offered_levels:
+            level = ""
+    if level != current:
+        changes["OPENTAG_DEFAULT_EFFORT"] = level
+    saved = settings.update_config(path, changes)
     return default_choice(home, saved, available=True)
+
+
+def save_default_effort(home: Path, effort: str, *, values: dict[str, str] | None = None,
+                        ready: list[str] | None = None) -> str | None:
+    """Save the Tag's thinking level (``default`` clears it); return the level now in effect."""
+    path = settings.config_path(home)
+    values = values if values is not None else settings.load_config(path)
+    level = "" if effort == "default" else effort
+    if level:
+        if error := settings.validation_error("OPENTAG_DEFAULT_EFFORT", level):
+            raise ValueError(error)
+        value = values.get("OPENTAG_DEFAULT_MODEL") or values.get("OPENTAG_BACKEND") or "codex"
+        _check_effort(level, offered_efforts(home, values, value, ready), default_choice(home, values)["label"])
+    saved = settings.update_config(path, {"OPENTAG_DEFAULT_EFFORT": level})
+    return agent_models.effective_effort(home, saved)
 
 
 # ---- Sign-in ------------------------------------------------------------------
@@ -649,7 +745,8 @@ def _choose_model(home: Path, values: dict[str, str], found: list[dict[str, Any]
 # ---- Command line: tag [TAG] settings ai … -------------------------------------------
 
 USAGE = ("tag [TAG] settings ai [status | models | sign-in codex|claude [--method chatgpt|codex] "
-         "[--account ID] | resume | model VALUE] [--restart] [--json]")
+         "[--account ID] | resume | model VALUE [--effort LEVEL|default] | effort LEVEL|default] "
+         "[--restart] [--json]")
 
 
 @dataclass
@@ -667,9 +764,11 @@ def _restart_note(target: Target) -> str:
 
 
 def cli(arguments: list[str], target: Target, *, json_output: bool = False, restart: bool = False,
-        method: str | None = None, account: str | None = None) -> int:
+        method: str | None = None, account: str | None = None, effort: str | None = None) -> int:
     action = arguments[0] if arguments else "status"
     values = settings.load_config(settings.config_path(target.home))
+    if effort is not None and action != "model":
+        raise ValueError("--effort is only for tag settings ai model VALUE")
     if action == "status" and len(arguments) <= 1:
         result = report(target.home, values, tag_id=target.tag_id, running=target.running())
         if json_output:
@@ -679,6 +778,7 @@ def cli(arguments: list[str], target: Target, *, json_output: bool = False, rest
         show_connections(result["connections"])
         choice = result["default_model"]
         ui.message(f"Default model · {choice['backend_name']} · {choice['label']}")
+        ui.message(thinking_text(target.home, values))
         if not result["usable"]:
             ui.message("No AI is connected. Run tag settings ai sign-in codex or claude.")
         return 0 if result["usable"] else 1
@@ -690,21 +790,39 @@ def cli(arguments: list[str], target: Target, *, json_output: bool = False, rest
             for group in result["groups"]:
                 ui.message(group["name"])
                 for entry in group["models"]:
-                    ui.message(f"  {entry['value']}  {entry['label']}{' · default' if entry['value'] == result['default']['value'] else ''}")
+                    levels = " · thinking " + ", ".join(entry["efforts"]) if entry["efforts"] else ""
+                    ui.message(f"  {entry['value']}  {entry['label']}{levels}"
+                               f"{' · default' if entry['value'] == result['default']['value'] else ''}")
             for item in result["unavailable"]:
                 ui.message(f"{item['name']} · not connected")
         return 0
     if action == "model" and len(arguments) == 2:
-        choice = save_default_model(target.home, arguments[1], values=values)
+        choice = save_default_model(target.home, arguments[1], values=values, effort=effort)
+        saved = settings.load_config(settings.config_path(target.home))
         running = target.running()
         restarted = bool(restart and running and target.restart("restart") == 0)
         result = {"schema_version": 1, "ok": True, "default_model": choice,
+                  "default_effort": agent_models.effective_effort(target.home, saved),
                   "restart_required": running and not restarted, "restarted": restarted}
         if json_output:
             print(json.dumps(result, indent=2))
         else:
             ui.message(f"✓ Default model · {choice['backend_name']} · {choice['label']}")
+            ui.message(thinking_text(target.home, saved))
             ui.message("People who picked their own model in Slack keep it.")
+            ui.message(f"{target.name} restarted." if restarted else _restart_note(target))
+        return 0
+    if action == "effort" and len(arguments) == 2:
+        level = save_default_effort(target.home, arguments[1], values=values)
+        running = target.running()
+        restarted = bool(restart and running and target.restart("restart") == 0)
+        result = {"schema_version": 1, "ok": True, "default_effort": level,
+                  "restart_required": running and not restarted, "restarted": restarted}
+        if json_output:
+            print(json.dumps(result, indent=2))
+        else:
+            ui.message("✓ " + thinking_text(target.home, settings.load_config(settings.config_path(target.home))))
+            ui.message("People who picked their own thinking level in Slack keep it.")
             ui.message(f"{target.name} restarted." if restarted else _restart_note(target))
         return 0
     if action in {"sign-in", "resume"} and len(arguments) == (2 if action == "sign-in" else 1):
@@ -778,7 +896,8 @@ def settings_menu(target: Target) -> None:
         choice = result["default_model"]
         ui.message(f"Default model · {choice['backend_name']} · {choice['label']}"
                    + ("" if choice["available"] is not False else " · not available"))
-        options = [("model", "Change default model")]
+        ui.message(thinking_text(target.home, values))
+        options = [("model", "Change default model"), ("effort", "Change thinking level")]
         for item in result["connections"]:
             if not item.get("allowed", True):
                 continue
@@ -811,8 +930,13 @@ def settings_menu(target: Target) -> None:
                 continue
             saved = save_default_model(target.home, ids[picked], ready=result["usable"], values=values)
             ui.message(f"✓ Default model · {saved['backend_name']} · {saved['label']}")
+            ui.message(thinking_text(target.home, settings.load_config(settings.config_path(target.home))))
             ui.message("People who picked their own model in Slack keep it.")
             _offer_restart(target)
+            continue
+        if selected == "effort":
+            if _choose_effort(target, values, choice, result["usable"]):
+                _offer_restart(target)
             continue
         if selected.startswith(("install:", "update:")):
             backend = BY_KEY[selected.split(":", 1)[1]]
@@ -835,6 +959,36 @@ def settings_menu(target: Target) -> None:
             continue
         if not restart:
             _offer_restart(target)
+
+
+def _choose_effort(target: Target, values: dict[str, str], choice: dict[str, Any], ready: list[str]) -> bool:
+    """Pick the default model's thinking level; return whether one was saved."""
+    ui.message("Loading thinking levels…")
+    levels = offered_efforts(target.home, values, choice["value"], ready)
+    if levels is None:
+        ui.message(f"Couldn't load {choice['label']}'s thinking levels. Connect {choice['backend_name']} first.")
+        return False
+    if not levels:
+        ui.message(f"{choice['label']} has no thinking levels.")
+        return False
+    entry = agent_models.load_model_efforts(agent_models.model_efforts_path(target.home)).get(
+        agent_models.choice_key(choice["value"], values.get("OPENTAG_BACKEND") or "codex"), {})
+    labels = [agent_models.effort_label(level) + (" · model default" if level == entry.get("default") else "")
+              for level in levels]
+    ids = [*levels, "default"]
+    current = values.get("OPENTAG_DEFAULT_EFFORT", "")
+    picked = ui.choose("Thinking level", [*labels, "Model default", "Cancel"],
+                       default=ids.index(current) if current in ids else len(levels))
+    if picked == len(ids):
+        return False
+    try:
+        save_default_effort(target.home, ids[picked], values=values, ready=ready)
+    except ValueError as exc:
+        ui.message(str(exc))
+        return False
+    ui.message("✓ " + thinking_text(target.home, settings.load_config(settings.config_path(target.home))))
+    ui.message("People who picked their own thinking level in Slack keep it.")
+    return True
 
 
 def _offer_restart(target: Target) -> None:

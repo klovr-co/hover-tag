@@ -11,6 +11,7 @@ import os
 import re
 import threading
 import time
+import urllib.parse
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -206,6 +207,56 @@ class ActivityStore:
                     event["status"] = "interrupted" if outcome == "interrupted" else "unknown"
                     event["finished_at"] = record["finished_at"]
             self._write(record)
+
+
+RECENT_KINDS = {"completed": "replied", "failed": "failed", "interrupted": "stopped", "running": "working"}
+MAX_RECENT = 50
+
+
+def channel_names(scopes: str) -> dict[str, str]:
+    """Channel names from saved Slack history sources such as ``…/channels/launch__C0123``."""
+    names: dict[str, str] = {}
+    for scope in scopes.split(","):
+        _, separator, rest = scope.strip().partition("/channels/")
+        name, _, channel = urllib.parse.unquote(rest.split("/", 1)[0]).rpartition("__")
+        if separator and name and re.fullmatch(r"[CG][A-Z0-9]+", channel):
+            names[channel] = name
+    return names
+
+
+def recent_activity(root: Path, scopes: str = "", limit: int = MAX_RECENT) -> list[dict[str, Any]]:
+    """What a Tag did recently, newest first: only when, where, and how each request ended.
+
+    Records are read through ``ActivityStore.get`` validation, so invalid or
+    expired ones are skipped, and nothing is written or pruned. Prompts,
+    requesters, and tool steps are never included.
+    """
+    store = ActivityStore(root)
+    names = channel_names(scopes)
+    items: list[tuple[datetime, dict[str, Any]]] = []
+    try:
+        paths = list(root.glob("*.json"))
+    except OSError:
+        return []
+    for path in paths:
+        record = store.get(path.stem)
+        if record is None:
+            continue
+        finished = record.get("finished_at")
+        raw = finished if record["outcome"] != "running" and isinstance(finished, str) else record["started_at"]
+        try:
+            at = datetime.fromisoformat(raw)
+        except ValueError:
+            continue
+        at = at.replace(tzinfo=timezone.utc) if at.tzinfo is None else at.astimezone(timezone.utc)
+        channel = record["channel"]
+        dm = channel.startswith("D")
+        items.append((at, {
+            "at": at.isoformat(timespec="seconds"), "kind": RECENT_KINDS[record["outcome"]],
+            "channel": channel, "channel_name": None if dm else names.get(channel), "dm": dm,
+        }))
+    items.sort(key=lambda item: item[0], reverse=True)
+    return [item for _, item in items[:limit]]
 
 
 def activity_modal(record: dict[str, Any]) -> dict[str, Any]:

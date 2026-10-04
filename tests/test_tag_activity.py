@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
+from scripts import tag_activity
 from scripts.tag_activity import ActivityStore, MAX_EVENTS
 from scripts.tag_activity_details import MAX_DETAIL_CHARS, command_identity, item_activity_details
 
@@ -133,6 +135,76 @@ class ActivityStoreTests(unittest.TestCase):
             path = store.root / f"{run_id}.json"
             os.utime(path, (0, 0))
             self.assertIsNone(store.get(run_id))
+
+
+class RecentActivityTests(unittest.TestCase):
+    """``tag NAME logs --json`` activity: when, where, and how requests ended; nothing else."""
+
+    SCOPES = ("slack://tag-t1-a1/channels/launch__C0LAUNCH,"
+              "slack://tag-t1-a1/channels/design-review__G0DESIGN,file://local/notes")
+
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name) / "activity"
+        self.store = ActivityStore(self.root)
+
+    def record(self, channel: str, outcome: str, started: str, finished: str | None = None) -> str:
+        run_id = self.store.create(team="T1", channel=channel, thread_ts="1.0", request_ts="1.0",
+                                   requester="U0PRIVATE")
+        path = self.root / f"{run_id}.json"
+        record = json.loads(path.read_text(encoding="utf-8"))
+        record.update(outcome=outcome, started_at=started, finished_at=finished)
+        path.write_text(json.dumps(record), encoding="utf-8")
+        return run_id
+
+    def test_outcomes_channels_and_order(self) -> None:
+        self.record("C0LAUNCH", "completed", "2026-10-04T09:00:00+00:00", "2026-10-04T09:01:00+00:00")
+        self.record("G0DESIGN", "failed", "2026-10-03T09:00:00+00:00", "2026-10-03T09:02:00+00:00")
+        self.record("D0MAYA", "interrupted", "2026-10-02T09:00:00+00:00", "2026-10-02T09:00:30+00:00")
+        self.record("C0UNKNOWN", "running", "2026-10-04T10:00:00+00:00")
+        items = tag_activity.recent_activity(self.root, self.SCOPES)
+        self.assertEqual([
+            {"at": "2026-10-04T10:00:00+00:00", "kind": "working", "channel": "C0UNKNOWN",
+             "channel_name": None, "dm": False},
+            {"at": "2026-10-04T09:01:00+00:00", "kind": "replied", "channel": "C0LAUNCH",
+             "channel_name": "launch", "dm": False},
+            {"at": "2026-10-03T09:02:00+00:00", "kind": "failed", "channel": "G0DESIGN",
+             "channel_name": "design-review", "dm": False},
+            {"at": "2026-10-02T09:00:30+00:00", "kind": "stopped", "channel": "D0MAYA",
+             "channel_name": None, "dm": True},
+        ], items)
+        # Prompts, requesters, and tool steps never leave the store.
+        self.assertNotIn("U0PRIVATE", json.dumps(items))
+
+    def test_invalid_records_are_skipped_and_reading_changes_nothing(self) -> None:
+        valid = self.record("C0LAUNCH", "completed", "2026-10-04T09:00:00+00:00", "2026-10-04T09:01:00+00:00")
+        broken = self.record("C0LAUNCH", "completed", "2026-10-04T08:00:00+00:00", "2026-10-04T08:01:00+00:00")
+        path = self.root / f"{broken}.json"
+        record = json.loads(path.read_text(encoding="utf-8"))
+        record["events"] = [{"label": "not a public label"}]
+        path.write_text(json.dumps(record), encoding="utf-8")
+        (self.root / "notes.json").write_text("{}", encoding="utf-8")
+        expired = self.record("C0LAUNCH", "completed", "2026-01-01T00:00:00+00:00", "2026-01-01T00:01:00+00:00")
+        old = time.time() - tag_activity.RETENTION_SECONDS - 60
+        os.utime(self.root / f"{expired}.json", (old, old))
+        before = {item.name: item.read_bytes() for item in self.root.iterdir()}
+        items = tag_activity.recent_activity(self.root, "")
+        self.assertEqual(["2026-10-04T09:01:00+00:00"], [item["at"] for item in items])
+        self.assertIsNone(items[0]["channel_name"])
+        self.assertEqual(before, {item.name: item.read_bytes() for item in self.root.iterdir()})
+        self.assertTrue(valid)
+        self.assertEqual([], tag_activity.recent_activity(self.root.parent / "missing"))
+
+    def test_at_most_fifty_newest_first(self) -> None:
+        for day in range(1, 31):
+            for hour in (1, 2):
+                self.record("C0LAUNCH", "completed", f"2026-09-{day:02d}T0{hour}:00:00+00:00",
+                            f"2026-09-{day:02d}T0{hour}:30:00+00:00")
+        items = tag_activity.recent_activity(self.root, self.SCOPES)
+        self.assertEqual(50, len(items))
+        self.assertEqual("2026-09-30T02:30:00+00:00", items[0]["at"])
+        self.assertEqual(sorted((item["at"] for item in items), reverse=True), [item["at"] for item in items])
 
 
 if __name__ == "__main__":

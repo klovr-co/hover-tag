@@ -566,6 +566,148 @@ class CommandTests(Fixture):
                 self.assertTrue(cancel.event.wait(2))
 
 
+class ThinkingLevelTests(Fixture):
+    """The Tag's default thinking level: saved with the model, checked against what it offers."""
+
+    CODEX = [agent_models.ModelOption("gpt-5.5", "GPT-5.5", ("low", "medium", "high", "xhigh"),
+                                      default_reasoning_effort="medium", is_default=True),
+             agent_models.ModelOption("gpt-5.5-mini", "GPT-5.5 mini", ("low", "medium"),
+                                      default_reasoning_effort="medium")]
+    CLAUDE = [agent_models.ModelOption("claude-opus-5-5", "Opus 5.5", ("low", "medium", "high", "max"),
+                                       default_reasoning_effort="high", backend="claude", is_default=True),
+              agent_models.ModelOption("claude-haiku-5", "Haiku 5", (), backend="claude")]
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.machine()
+        self.discover = patch.object(tag_ai.agent_models, "discover_models", side_effect=lambda name: {
+            "codex": self.CODEX, "claude": self.CLAUDE}[name])
+        self.discover.start()
+        self.addCleanup(self.discover.stop)
+
+    def saved(self) -> dict[str, str]:
+        return tag_config.load_config(self.config)
+
+    def run_cli(self, arguments: list[str], **options) -> dict:
+        target = tag_ai.Target(self.home, "maya", lambda: False, lambda action: 0, "Maya's Tag")
+        with redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(0, tag_ai.cli(arguments, target, json_output=True, **options))
+        return json.loads(output.getvalue())
+
+    def test_models_report_levels_and_cache_them(self) -> None:
+        result = tag_ai.models(self.home, {"OPENTAG_BACKEND": "codex"}, ["codex", "claude"])
+        entries = {entry["value"]: entry for group in result["groups"] for entry in group["models"]}
+        self.assertEqual((["low", "medium", "high", "xhigh"], "medium"),
+                         (entries["codex:gpt-5.5"]["efforts"], entries["codex:gpt-5.5"]["default_effort"]))
+        # An account default offers its default model's levels; a model may offer none.
+        self.assertEqual(entries["claude:claude-opus-5-5"]["efforts"], entries["claude"]["efforts"])
+        self.assertEqual(([], None), (entries["claude:claude-haiku-5"]["efforts"],
+                                      entries["claude:claude-haiku-5"]["default_effort"]))
+        promised = json.loads((EXAMPLES / "ai-models.json").read_text(encoding="utf-8"))
+        self.assertEqual(set(promised["groups"][0]["models"][1]), set(entries["codex:gpt-5.5"]))
+        cached = agent_models.load_model_efforts(agent_models.model_efforts_path(self.home))
+        self.assertEqual({"efforts": ["low", "medium", "high", "xhigh"], "default": "medium"}, cached["codex:gpt-5.5"])
+        self.assertEqual({"efforts": [], "default": None}, cached["claude:claude-haiku-5"])
+        self.assertEqual(cached["codex:gpt-5.5"], cached["codex"])
+
+    def test_effective_level_with_and_without_a_saved_catalog(self) -> None:
+        values = {"OPENTAG_BACKEND": "codex", "OPENTAG_DEFAULT_MODEL": "codex:gpt-5.5"}
+        self.assertIsNone(agent_models.effective_effort(self.home, values))
+        # Nothing known about the model yet: the Tag's own level is what it asks for.
+        self.assertEqual("high", agent_models.effective_effort(self.home, {**values, "OPENTAG_DEFAULT_EFFORT": "high"}))
+        self.assertEqual([], agent_models.effort_levels(self.home, "codex:gpt-5.5"))
+        tag_ai.models(self.home, values, ["codex", "claude"])
+        self.assertEqual("medium", agent_models.effective_effort(self.home, values))
+        self.assertEqual("high", agent_models.effective_effort(self.home, {**values, "OPENTAG_DEFAULT_EFFORT": "high"}))
+        self.assertEqual("medium", agent_models.effective_effort(self.home, {**values, "OPENTAG_DEFAULT_EFFORT": "max"}))
+        self.assertEqual("medium", agent_models.effective_effort(self.home, {"OPENTAG_BACKEND": "codex"}))
+        haiku = {"OPENTAG_BACKEND": "claude", "OPENTAG_DEFAULT_MODEL": "claude:claude-haiku-5",
+                 "OPENTAG_DEFAULT_EFFORT": "high"}
+        self.assertIsNone(agent_models.effective_effort(self.home, haiku))
+        self.assertEqual("No thinking levels", tag_ai.thinking_text(self.home, haiku))
+        self.assertEqual("Thinking · Extra high", tag_ai.thinking_text(self.home, {**values, "OPENTAG_DEFAULT_EFFORT": "xhigh"}))
+
+    def test_status_reports_the_level(self) -> None:
+        tag_config.update_config(self.config, {"OPENTAG_DEFAULT_MODEL": "codex:gpt-5.5", "OPENTAG_DEFAULT_EFFORT": "high"})
+        tag_ai.models(self.home, self.saved(), ["codex", "claude"])
+        result = tag_ai.report(self.home, self.saved(), tag_id="maya", running=False)
+        self.assertEqual(("high", ["low", "medium", "high", "xhigh"], True),
+                         (result["default_effort"], result["effort_levels"], result["effort_chosen"]))
+
+    def test_model_and_level_are_saved_together(self) -> None:
+        result = self.run_cli(["model", "claude:claude-opus-5-5"], effort="max")
+        self.assertEqual("max", result["default_effort"])
+        self.assertEqual(("claude:claude-opus-5-5", "max"),
+                         (self.saved()["OPENTAG_DEFAULT_MODEL"], self.saved()["OPENTAG_DEFAULT_EFFORT"]))
+        promised = json.loads((EXAMPLES / "ai-model.json").read_text(encoding="utf-8"))
+        self.assertEqual(set(promised), set(result))
+
+    def test_switching_models_keeps_an_offered_level_and_clears_another(self) -> None:
+        self.run_cli(["model", "codex:gpt-5.5"], effort="low")
+        result = self.run_cli(["model", "claude:claude-opus-5-5"])
+        self.assertEqual(("low", "low"), (self.saved()["OPENTAG_DEFAULT_EFFORT"], result["default_effort"]))
+        self.run_cli(["effort", "max"])
+        result = self.run_cli(["model", "codex:gpt-5.5-mini"])
+        # GPT-5.5 mini has no max, so it uses its own default.
+        self.assertEqual(("", "medium"), (self.saved()["OPENTAG_DEFAULT_EFFORT"], result["default_effort"]))
+        result = self.run_cli(["model", "codex:gpt-5.5"], effort="default")
+        self.assertEqual(("", "medium"), (self.saved()["OPENTAG_DEFAULT_EFFORT"], result["default_effort"]))
+
+    def test_a_level_the_model_does_not_offer_is_refused(self) -> None:
+        with self.assertRaisesRegex(ValueError, "GPT-5.5 mini doesn't offer xhigh thinking"):
+            self.run_cli(["model", "codex:gpt-5.5-mini"], effort="xhigh")
+        with self.assertRaisesRegex(ValueError, "Haiku 5 has no thinking levels"):
+            self.run_cli(["model", "claude:claude-haiku-5"], effort="high")
+        with self.assertRaisesRegex(ValueError, "Choose minimal"):
+            self.run_cli(["model", "codex:gpt-5.5"], effort="huge")
+        self.assertNotIn("OPENTAG_DEFAULT_MODEL", self.saved())
+        self.run_cli(["model", "codex:gpt-5.5-mini"])
+        with self.assertRaisesRegex(ValueError, "doesn't offer xhigh"):
+            self.run_cli(["effort", "xhigh"])
+        with self.assertRaisesRegex(ValueError, "--effort is only for"):
+            self.run_cli(["effort", "low"], effort="low")
+        self.assertNotIn("OPENTAG_DEFAULT_EFFORT", self.saved())
+
+    def test_effort_action_saves_and_default_clears(self) -> None:
+        self.run_cli(["model", "codex:gpt-5.5"])
+        result = self.run_cli(["effort", "high"])
+        promised = json.loads((EXAMPLES / "ai-effort.json").read_text(encoding="utf-8"))
+        self.assertEqual(set(promised), set(result))
+        self.assertEqual(("high", False, False), (result["default_effort"], result["restart_required"], result["restarted"]))
+        self.assertEqual("high", self.saved()["OPENTAG_DEFAULT_EFFORT"])
+        result = self.run_cli(["effort", "default"])
+        self.assertEqual(("medium", ""), (result["default_effort"], self.saved()["OPENTAG_DEFAULT_EFFORT"]))
+
+    def test_menu_offers_the_models_levels(self) -> None:
+        self.run_cli(["model", "codex:gpt-5.5"])
+        target = tag_ai.Target(self.home, "maya", lambda: False, lambda action: 0, "Maya's Tag")
+        prompts: list[tuple[str, list[str]]] = []
+
+        def choose(prompt, options, **_):
+            prompts.append((prompt, options))
+            if prompt == "AI & models":
+                return options.index("Change thinking level") if len(prompts) == 1 else options.index("Back")
+            return options.index("High")
+
+        with patch.object(tag_ai.ui, "choose", side_effect=choose), patch.object(tag_ai.ui, "message"), \
+                patch.object(tag_ai.ui.display, "header"):
+            tag_ai.settings_menu(target)
+        levels = next(options for prompt, options in prompts if prompt == "Thinking level")
+        self.assertEqual(["Low", "Medium · model default", "High", "Extra high", "Model default", "Cancel"], levels)
+        self.assertEqual("high", self.saved()["OPENTAG_DEFAULT_EFFORT"])
+
+    def test_an_older_config_without_the_new_settings_behaves_as_before(self) -> None:
+        tag_config.save_config(self.config, {"OPENTAG_BACKEND": "codex", "OPENTAG_DEFAULT_MODEL": "codex:gpt-5.5"})
+        values = tag_config.load_config(self.config)
+        self.assertNotIn("OPENTAG_DEFAULT_EFFORT", tag_config.config_errors(values))
+        result = tag_ai.report(self.home, values, tag_id="maya", running=False)
+        self.assertEqual((None, [], False), (result["default_effort"], result["effort_levels"], result["effort_chosen"]))
+        # Saving a model writes no level the Tag never chose.
+        self.run_cli(["model", "codex:gpt-5.5-mini"])
+        self.assertNotIn("OPENTAG_DEFAULT_EFFORT", self.saved())
+        self.assertNotIn("OPENTAG_BOT_DESCRIPTION", self.saved())
+
+
 class SignInExampleTests(unittest.TestCase):
     def test_example_stream_ends_with_a_result(self) -> None:
         events = [json.loads(line) for line in (EXAMPLES / "ai-sign-in.jsonl").read_text(encoding="utf-8").splitlines()]

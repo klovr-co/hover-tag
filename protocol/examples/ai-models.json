@@ -5,18 +5,24 @@
       "backend": "codex",
       "name": "Codex",
       "models": [
-        {"value": "codex", "model": null, "label": "Account default", "default": false},
-        {"value": "codex:gpt-5.5", "model": "gpt-5.5", "label": "GPT-5.5", "default": true},
-        {"value": "codex:gpt-5.5-mini", "model": "gpt-5.5-mini", "label": "GPT-5.5 mini", "default": false}
+        {"value": "codex", "model": null, "label": "Account default", "default": false,
+         "efforts": ["low", "medium", "high", "xhigh"], "default_effort": "medium"},
+        {"value": "codex:gpt-5.5", "model": "gpt-5.5", "label": "GPT-5.5", "default": true,
+         "efforts": ["low", "medium", "high", "xhigh"], "default_effort": "medium"},
+        {"value": "codex:gpt-5.5-mini", "model": "gpt-5.5-mini", "label": "GPT-5.5 mini", "default": false,
+         "efforts": ["low", "medium", "high"], "default_effort": "medium"}
       ]
     },
     {
       "backend": "claude",
       "name": "Claude",
       "models": [
-        {"value": "claude", "model": null, "label": "Account default", "default": false},
-        {"value": "claude:claude-opus-5-5", "model": "claude-opus-5-5", "label": "Opus 5.5", "default": true},
-        {"value": "claude:claude-sonnet-5-5", "model": "claude-sonnet-5-5", "label": "Sonnet 5.5", "default": false}
+        {"value": "claude", "model": null, "label": "Account default", "default": false,
+         "efforts": ["low", "medium", "high", "xhigh", "max"], "default_effort": "high"},
+        {"value": "claude:claude-opus-5-5", "model": "claude-opus-5-5", "label": "Opus 5.5", "default": true,
+         "efforts": ["low", "medium", "high", "xhigh", "max"], "default_effort": "high"},
+        {"value": "claude:claude-sonnet-5-5", "model": "claude-sonnet-5-5", "label": "Sonnet 5.5", "default": false,
+         "efforts": ["low", "medium", "high", "max"], "default_effort": "high"}
       ]
     }
   ],

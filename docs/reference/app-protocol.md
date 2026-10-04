@@ -29,21 +29,45 @@ it shows is listed in `capabilities`; otherwise it offers to upgrade Tag.
 | `upgrade-json` | `tag upgrade --dry-run --json`, `tag upgrade --json` |
 | `install-progress` | `TAG_INSTALL_PROGRESS=jsonl` for `install.sh` and `install.ps1` |
 | `ai-connections` | `tag NAME settings ai [models\|sign-in\|resume\|model] --json`; `ai_connection` and `default_model` setup questions |
+| `thinking-level` | `tag NAME settings ai effort LEVEL --json`, `model VALUE --effort LEVEL`; thinking-level fields in `settings ai`, `models`, and `tag list` |
+| `logs-activity` | `activity` in `tag NAME logs --json` |
 
 ## Tags
 
 `tag list --json` returns `tags`, one object per Tag with `id`, `valid`,
 `state`, `slack_workspace`, `workspace_name`, `workspace_icon`, `slack_name`,
-`nickname`, `avatar`, `keep_running`, and `main`. `state` is `running`,
-`stopped`, `not_configured`, `setup_incomplete`, `needs_attention`,
+`nickname`, `avatar`, `keep_running`, `main`, `description`, `default_model`,
+`default_model_label`, `default_model_name`, and `default_effort`. `state` is
+`running`, `stopped`, `not_configured`, `setup_incomplete`, `needs_attention`,
 `invalid_configuration`, or `invalid_tag`; treat unknown states as needing
 attention.
+
+`description` is the Tag's one-line description (`OPENTAG_BOT_DESCRIPTION`, up
+to 140 characters), or `null` when none is saved. `default_model` is the saved
+choice (such as `codex:gpt-5.5`, or `codex` for the account's own default),
+`default_model_label` names the agent and model (`Codex · GPT-5.5`), and
+`default_model_name` just the model (`GPT-5.5`, or `Account default`).
+`default_effort` is the thinking level the default model uses (see
+[AI connections](#ai-connections)), or `null` when the model has no thinking
+levels or Tag hasn't seen its account's catalog yet. These fields come from
+saved settings and the last model catalog Tag loaded, so `tag list` never
+starts an agent.
 
 `workspace_icon` is the path to a local copy of the Slack workspace's icon, or
 `null` when the workspace uses Slack's default icon or Tag hasn't saved one
 yet. Tag refreshes it when setup finishes and on each `tag start`. Show the
 workspace name on its own, or a placeholder, when it is `null` or the file
 can't be read.
+
+`tag NAME logs --json` returns `services`, each service's recent log lines,
+and `activity`: up to 50 of the Tag's recent Slack requests, newest first.
+Each item has `at` (an ISO 8601 UTC time: when the request finished, or when
+it started while it's still running), `kind` (`replied`, `failed`, `stopped`,
+or `working`; treat unknown kinds as finished), `channel` (the Slack channel
+ID), `channel_name` (from the channels the Tag remembers, or `null` when
+unknown or for a direct message), and `dm`. Items come only from Tag's own
+activity records, which it keeps for 30 days; prompts, people, and tool steps
+are never included. See `protocol/examples/logs.json`.
 
 Start or stop one Tag with `tag NAME start` or `tag NAME stop`; the exit code
 is the result. Starting records that the Tag should keep running; stopping
@@ -60,9 +84,12 @@ model. Both setup and Settings use these commands; the CLI's `tag settings` →
 AI & models offers the same choices.
 
 `tag NAME settings ai --json` checks each backend now and returns
-`connections`, `usable` (connected backends the Tag may use), and
+`connections`, `usable` (connected backends the Tag may use),
 `default_model` (`value`, `backend`, `model`, `label`, `backend_name`,
-`available`). Each connection has `backend`, `name`, `provider`, `state`,
+`available`), and the default model's thinking level: `default_effort` (the
+level it uses, or `null`), `effort_levels` (the levels it offers; `[]` when it
+has none or Tag hasn't loaded its catalog yet), and `effort_chosen` (true when
+the Tag has its own level rather than the model's default). Each connection has `backend`, `name`, `provider`, `state`,
 `installed`, `version`, `method`, `account`, `detail`, `shared`, `actions`, and
 `install_url`. `state` is `connected`, `signed_out`, `expired`,
 `limited` (a paused ChatGPT plan), `not_installed`, or `unsupported`; treat
@@ -73,14 +100,28 @@ false for a ChatGPT plan connected to this Tag only.
 
 `tag NAME settings ai models --json` lists the connected accounts' models in
 `groups`, one per backend, each starting with the account's own default (the
-bare backend value, such as `codex`). `default.available` is false when the
+bare backend value, such as `codex`). Each model has `efforts`, the thinking
+levels it offers (`[]` for a model without any), and `default_effort`, the
+level it uses unless the Tag picks one, or `null`; the account default shows
+its default model's levels. `default.available` is false when the
 saved default is no longer offered; `suggested` is the model to preselect.
 Loading models can take several seconds.
 
 `tag NAME settings ai model VALUE --json` saves the default model; the backend
 follows the model. People's own model choices in Slack are kept.
 `restart_required` is true when the Tag is running; add `--restart` to restart
-it now, which reports `restarted`.
+it now, which reports `restarted`. Add `--effort LEVEL` to save a thinking
+level in the same change, or `--effort default` for the model's own; the level
+must be one the model offers. Without `--effort`, the Tag's level is kept if
+the new model offers it and otherwise cleared. The result's `default_effort` is
+the level now in effect.
+
+`tag NAME settings ai effort LEVEL --json` saves the Tag's thinking level for
+its default model; `effort default` clears it so the model's own default
+applies. It returns `ok`, `default_effort`, `restart_required`, and
+`restarted`, and accepts `--restart` like `model`. A level the model doesn't
+offer is refused. People who chose their own thinking level in Slack keep it.
+See `protocol/examples/ai-effort.json`.
 
 `tag NAME settings ai sign-in BACKEND --json` runs the backend's browser
 sign-in and writes JSON lines: `progress` events with `step` (`stopping`,

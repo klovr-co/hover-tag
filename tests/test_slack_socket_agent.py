@@ -3532,6 +3532,46 @@ class ModelSwitchingTests(unittest.TestCase):
         self.assertEqual(("claude", "opus"), (defaults.backend, defaults.model))
         self.assertEqual(["codex:gpt-5"], [item.value for item in models if item.backend == "codex"])
 
+    def test_tag_thinking_level_reaches_codex_and_claude(self) -> None:
+        for default_model, backend in (("codex:gpt-5", "codex"), ("claude:opus", "claude")):
+            with self.subTest(backend=backend), patch.dict(os.environ, {
+                "OPENTAG_DEFAULT_MODEL": default_model, "OPENTAG_DEFAULT_EFFORT": "low",
+            }, clear=True), patch.object(agent_models, "discover_models", side_effect=self.discover), patch.object(
+                agent_models, "backend_signed_in", return_value=True
+            ):
+                models = slack_socket_agent.discover_tag_models("codex")
+            defaults = slack_socket_agent.default_agent_settings(models)
+            self.assertEqual((backend, "low"), (defaults.backend, defaults.reasoning_effort))
+            # Only the Tag's default model takes the level; people's own Slack choices still win.
+            own = next(item for item in models if item.is_default).reasoning_efforts[-1]
+            chosen = slack_socket_agent.normalize_settings(
+                slack_socket_agent.AgentSettings(model=defaults.model, reasoning_effort=own, backend=backend), models)
+            self.assertEqual(own, chosen.reasoning_effort)
+            self.assertNotEqual("low", own)
+            unset = slack_socket_agent.normalize_settings(slack_socket_agent.AgentSettings(), models)
+            self.assertEqual("low", unset.reasoning_effort)
+            # The cache keeps the model's own default, not the Tag's level.
+            with tempfile.TemporaryDirectory() as raw:
+                names = Path(raw) / "state/model-names.json"
+                slack_socket_agent.remember_model_names(models, names)
+                saved = agent_models.load_model_efforts(names.with_name("model-efforts.json"))
+            self.assertIsNone(saved[f"{backend}:{defaults.model}"]["default"])
+
+    def test_tag_thinking_level_is_ignored_when_the_model_lacks_it(self) -> None:
+        with patch.dict(os.environ, {"OPENTAG_DEFAULT_MODEL": "claude:opus", "OPENTAG_DEFAULT_EFFORT": "high"},
+                        clear=True), patch.object(agent_models, "discover_models", side_effect=self.discover), \
+                patch.object(agent_models, "backend_signed_in", return_value=True):
+            models = slack_socket_agent.discover_tag_models("codex")
+        defaults = slack_socket_agent.default_agent_settings(models)
+        self.assertEqual(("opus", "low"), (defaults.model, defaults.reasoning_effort))
+        # Without the setting, as on every Tag set up before it existed, nothing changes.
+        with patch.dict(os.environ, {"OPENTAG_DEFAULT_MODEL": "codex:gpt-5"}, clear=True), patch.object(
+            agent_models, "discover_models", side_effect=self.discover
+        ), patch.object(agent_models, "backend_signed_in", return_value=True):
+            models = slack_socket_agent.discover_tag_models("codex")
+        self.assertEqual(self.CODEX[0].default_reasoning_effort, next(item for item in models if item.is_default).default_reasoning_effort)
+        self.assertFalse(any(item.tag_effort_applied for item in models))
+
     def test_unavailable_or_disallowed_backends_are_not_offered(self) -> None:
         with patch.dict(os.environ, {}, clear=True), patch.object(
             agent_models, "discover_models", side_effect=self.discover

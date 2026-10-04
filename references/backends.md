@@ -95,6 +95,11 @@ complete response without a fake typewriter animation.
   `final`, `error`, plus the richer `message_*`, `activity_*`,
   `approval_request`, `run_info`, and `turn_complete` events); chat transports
   must never parse backend-native event payloads.
+- Receive the thinking level as the backend-neutral `reasoning_effort`. The
+  Tag's default level (`OPENTAG_DEFAULT_EFFORT`) is applied once, in
+  `agent_models.discover_tag_models`, to the default model's default level, so
+  Codex gets it as the App Server turn `effort` and Claude as the Agent SDK
+  `effort` option without either adapter knowing about it.
 - Emit `run_info` with the concrete model the backend actually used, even when
   Tag requested an alias or the account default. Codex reports it from
   `thread/start`; Claude reports the main thread's assistant model.

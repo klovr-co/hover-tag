@@ -10,8 +10,10 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 try:
+    from agent_models import SUPPORTED_REASONING_EFFORTS
     from mfs_scope_policy import canonical_uri, parse_scopes
 except ImportError:
+    from scripts.agent_models import SUPPORTED_REASONING_EFFORTS
     from scripts.mfs_scope_policy import canonical_uri, parse_scopes
 
 DEFAULTS = {
@@ -38,13 +40,16 @@ PUBLIC = frozenset((*DEFAULTS, "MFS_ALLOWED_SCOPES", "OPENTAG_WORKDIR",
                     "MFS_SLACK_HISTORY_DAYS",
                     "MFS_SLACK_CONNECTOR_URI", "MFS_SLACK_CONNECTOR_CONFIG",
                     "OPENTAG_CODEX_MODELS", "OPENTAG_CODEX_REASONING_EFFORTS",
-                    "OPENTAG_CLAUDE_MODELS", "OPENTAG_DEFAULT_MODEL", "OPENTAG_BACKENDS"))
+                    "OPENTAG_CLAUDE_MODELS", "OPENTAG_DEFAULT_MODEL", "OPENTAG_BACKENDS",
+                    "OPENTAG_DEFAULT_EFFORT", "OPENTAG_BOT_DESCRIPTION"))
 EDITABLE = PUBLIC - {"OPENTAG_WORKDIR"} | {
     "SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "MFS_TOKEN", "MFS_SLACK_TOKEN", "MFS_HOME"
 }
 LABELS = {
     "OPENTAG_BACKEND": "Agent", "OPENTAG_BOT_NAME": "Bot name",
     "OPENTAG_DEFAULT_MODEL": "Default model (codex:MODEL, claude:MODEL, or a backend)",
+    "OPENTAG_DEFAULT_EFFORT": "Default thinking level",
+    "OPENTAG_BOT_DESCRIPTION": "Description",
     "OPENTAG_BACKENDS": "Backends users can choose (codex,claude)",
     "OPENTAG_CODEX_TRANSPORT": "Codex transport (exec or app-server)",
     "OPENTAG_CLAUDE_TRANSPORT": "Claude transport (print or sdk)",
@@ -105,6 +110,13 @@ def validation_error(key: str, value: str) -> str | None:
         or any(unicodedata.category(character) in {"Cc", "Zl", "Zp"} for character in value)
     ):
         return "Use a name from 1 to 35 characters without line breaks"
+    if key == "OPENTAG_BOT_DESCRIPTION" and (
+        len(value) > 140
+        or any(unicodedata.category(character) in {"Cc", "Zl", "Zp"} for character in value)
+    ):
+        return "Use one line of up to 140 characters"
+    if key == "OPENTAG_DEFAULT_EFFORT" and value and value not in SUPPORTED_REASONING_EFFORTS:
+        return "Choose " + ", ".join(SUPPORTED_REASONING_EFFORTS) + ", or leave empty for the model's default"
     if key == "OPENTAG_CODEX_TRANSPORT" and value not in {"exec", "app-server"}:
         return "Choose exec or app-server"
     if key == "OPENTAG_CLAUDE_TRANSPORT" and value not in {"print", "sdk"}:

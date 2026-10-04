@@ -20,6 +20,8 @@ from typing import Any
 
 SUPPORTED_REASONING_EFFORTS = ("minimal", "low", "medium", "high", "xhigh", "max", "ultra")
 DEFAULT_REASONING_EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultra")
+EFFORT_LABELS = {"minimal": "Minimal", "low": "Low", "medium": "Medium", "high": "High",
+                 "xhigh": "Extra high", "max": "Max", "ultra": "Ultra"}
 
 
 def default_workdir() -> Path:
@@ -38,6 +40,9 @@ class ModelOption:
     backend: str = "codex"
     # The concrete model an alias such as ``opus`` resolves to, when reported.
     resolved_model: str | None = None
+    # Set when the Tag's thinking level replaced the model's own default, which is kept here.
+    tag_effort_applied: bool = False
+    model_reasoning_effort: str | None = None
 
     @property
     def value(self) -> str:
@@ -382,8 +387,30 @@ def tag_default_choice(default_backend: str) -> tuple[str, str | None]:
     return parse_model_choice(raw, default_backend) if raw else (default_backend, None)
 
 
+def tag_default_effort() -> str | None:
+    value = os.getenv("OPENTAG_DEFAULT_EFFORT", "").strip()
+    return value if value in SUPPORTED_REASONING_EFFORTS else None
+
+
+def apply_tag_effort(models: list[ModelOption], effort: str | None) -> list[ModelOption]:
+    """Use the Tag's thinking level as its default model's default, when the model offers it."""
+    if not effort:
+        return models
+    return [
+        replace(item, default_reasoning_effort=effort, tag_effort_applied=True,
+                model_reasoning_effort=item.default_reasoning_effort)
+        if item.is_default and effort in item.reasoning_efforts else item
+        for item in models
+    ]
+
+
 def discover_tag_models(default_backend: str) -> list[ModelOption]:
-    """Combine every usable backend's catalog and mark the Tag's default model."""
+    """Combine every usable backend's catalog and mark the Tag's default model.
+
+    The Tag's thinking level (``OPENTAG_DEFAULT_EFFORT``) becomes the default
+    model's default level, so every backend receives it; people's own choices
+    in Slack still win.
+    """
     default_choice_backend, default_model = tag_default_choice(default_backend)
     models: list[ModelOption] = []
     connected = [name for name in allowed_backends(default_backend) if backend_signed_in(name)]
@@ -399,23 +426,103 @@ def discover_tag_models(default_backend: str) -> list[ModelOption]:
                 options.append(ModelOption(default_model, default_model, efforts, backend=name))
             options = [replace(item, is_default=item.model_id == default_model) for item in options]
         models.extend(options)
-    return models
+    return apply_tag_effort(models, tag_default_effort())
 
 
 def model_names_path(home: Path | str) -> Path:
     return Path(home) / "state" / "model-names.json"
 
 
-def remember_model_names(models: list[ModelOption], path: Path) -> None:
-    """Save display names from a live catalog so status screens need no backend."""
-    names = {item.value: item.label for item in models if item.label and item.label != item.model_id}
+def model_efforts_path(home: Path | str) -> Path:
+    return Path(home) / "state" / "model-efforts.json"
+
+
+def _write_json(path: Path, value: dict[str, Any]) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(names, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         os.replace(temporary, path)
     except OSError:
-        pass  # Names are cosmetic; status falls back to model IDs.
+        pass  # Cosmetic; status falls back to model IDs and unknown thinking levels.
+
+
+def remember_model_names(models: list[ModelOption], path: Path, *, account_defaults: bool = False) -> None:
+    """Save display names and thinking levels from a live catalog so status screens need no backend.
+
+    Levels go to ``model-efforts.json`` beside the names, keyed like the names.
+    With ``account_defaults``, each backend's ``is_default`` model is the
+    account's own default, so its levels are also saved under the bare
+    backend (``codex``); otherwise earlier bare entries are kept.
+    """
+    names = {item.value: item.label for item in models if item.label and item.label != item.model_id}
+    _write_json(path, names)
+    efforts_path = path.with_name("model-efforts.json")
+    efforts: dict[str, Any] = {} if account_defaults else {
+        key: value for key, value in load_model_efforts(efforts_path).items() if key in BACKEND_NAMES
+    }
+    for item in models:
+        default = item.model_reasoning_effort if item.tag_effort_applied else item.default_reasoning_effort
+        entry = {"efforts": list(item.reasoning_efforts),
+                 "default": default if default in item.reasoning_efforts else None}
+        if item.model_id == "default" and not item.reasoning_efforts:
+            continue  # Claude's placeholder for an unreported catalog says nothing about levels.
+        efforts[item.value] = entry
+        if account_defaults and item.is_default:
+            efforts[item.backend] = entry
+    _write_json(efforts_path, efforts)
+
+
+def load_model_efforts(path: Path) -> dict[str, dict[str, Any]]:
+    """Read saved thinking levels, ignoring anything malformed."""
+    try:
+        saved = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(saved, dict):
+        return {}
+    efforts: dict[str, dict[str, Any]] = {}
+    for key, entry in saved.items():
+        if not isinstance(key, str) or not isinstance(entry, dict) or not isinstance(entry.get("efforts"), list):
+            continue
+        levels = [level for level in entry["efforts"] if level in SUPPORTED_REASONING_EFFORTS]
+        default = entry.get("default")
+        efforts[key] = {"efforts": levels, "default": default if default in levels else None}
+    return efforts
+
+
+def choice_key(value: str, default_backend: str) -> str:
+    backend, model = parse_model_choice(value, default_backend)
+    return f"{backend}:{model}" if model else backend
+
+
+def effort_levels(home: Path | str, value: str, default_backend: str = "codex") -> list[str]:
+    """The thinking levels a model choice offers, from the saved catalog; [] when unknown or none."""
+    entry = load_model_efforts(model_efforts_path(home)).get(choice_key(value, default_backend))
+    return list(entry["efforts"]) if entry else []
+
+
+def effective_effort(home: Path | str, values: dict[str, str]) -> str | None:
+    """The thinking level the Tag's default model uses, without starting a backend.
+
+    The Tag's own level when its default model offers it (or nothing is known
+    about the model yet), otherwise the model's default; None for a model
+    without thinking levels or when nothing is known.
+    """
+    backend = values.get("OPENTAG_BACKEND") or "codex"
+    value = values.get("OPENTAG_DEFAULT_MODEL") or backend
+    chosen = values.get("OPENTAG_DEFAULT_EFFORT", "")
+    chosen = chosen if chosen in SUPPORTED_REASONING_EFFORTS else ""
+    entry = load_model_efforts(model_efforts_path(home)).get(choice_key(value, backend))
+    if entry is None:
+        return chosen or None
+    if chosen in entry["efforts"]:
+        return chosen
+    return entry["default"]
+
+
+def effort_label(effort: str | None) -> str:
+    return EFFORT_LABELS.get(effort or "", effort or "Model default")
 
 
 def load_model_names(path: Path) -> dict[str, str]:
@@ -425,6 +532,12 @@ def load_model_names(path: Path) -> dict[str, str]:
         return {}
     return {key: value for key, value in names.items()
             if isinstance(key, str) and isinstance(value, str)} if isinstance(names, dict) else {}
+
+
+def model_choice_name(value: str, default_backend: str, *, names: dict[str, str] | None = None) -> str:
+    """Just the model's name for a saved choice, e.g. ``Opus 5.5`` or ``Account default``."""
+    backend, model = parse_model_choice(value, default_backend) if value else (default_backend, None)
+    return (names or {}).get(f"{backend}:{model}", model) if model else "Account default"
 
 
 def describe_model_choice(value: str, default_backend: str, *, names: dict[str, str] | None = None) -> str:

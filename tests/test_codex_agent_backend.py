@@ -697,5 +697,48 @@ for raw in sys.stdin:
                 )
 
 
+class TagThinkingLevelTests(unittest.TestCase):
+    FAKE = r'''
+import json, sys
+record = open(sys.argv[1], "w")
+def send(payload):
+    print(json.dumps(payload), flush=True)
+for raw in sys.stdin:
+    m = json.loads(raw)
+    method = m.get("method")
+    if method == "initialize":
+        send({"id": m["id"], "result": {}})
+    elif method == "thread/start":
+        send({"id": m["id"], "result": {"thread": {"id": "thread-1"}, "model": "gpt-5.5"}})
+    elif method == "turn/start":
+        record.write(json.dumps(m["params"])); record.close()
+        send({"id": m["id"], "result": {"turn": {"id": "turn-1"}}})
+        send({"method": "item/completed", "params": {"item": {
+            "id": "answer", "type": "agentMessage", "phase": "final_answer", "text": "Done"}}})
+        send({"method": "turn/completed", "params": {"turn": {"id": "turn-1", "status": "completed"}}})
+'''
+
+    def test_tag_thinking_level_reaches_the_turn_effort(self) -> None:
+        from scripts import agent_models, slack_socket_agent
+
+        catalog = [agent_models.ModelOption("gpt-5.5", "GPT-5.5", ("low", "medium", "high", "xhigh"),
+                                            default_reasoning_effort="medium", is_default=True)]
+        with patch.dict("os.environ", {"OPENTAG_DEFAULT_MODEL": "codex:gpt-5.5", "OPENTAG_DEFAULT_EFFORT": "xhigh"}), \
+                patch.object(agent_models, "discover_models", return_value=catalog), \
+                patch.object(agent_models, "backend_signed_in", side_effect=lambda name: name == "codex"):
+            settings = slack_socket_agent.default_agent_settings(agent_models.discover_tag_models("codex"))
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            (root / "server.py").write_text(self.FAKE, encoding="utf-8")
+            server = CodexAppServer([sys.executable, "-u", str(root / "server.py"), str(root / "turn.json")],
+                                    cwd=root, timeout=5)
+            events: list[dict] = []
+            self.assertEqual(("completed", ""), server.run(
+                "task", model=settings.model, reasoning_effort=settings.reasoning_effort, emit=events.append))
+            params = json.loads((root / "turn.json").read_text(encoding="utf-8"))
+        self.assertEqual(("gpt-5.5", "xhigh"), (params["model"], params["effort"]))
+        self.assertEqual("xhigh", events[0]["reasoning_effort"])
+
+
 if __name__ == "__main__":
     unittest.main()
