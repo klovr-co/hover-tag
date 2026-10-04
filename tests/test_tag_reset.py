@@ -17,10 +17,10 @@ class ResetTests(unittest.TestCase):
     def seed_app(self):
         self.seed()
         self.config.write_text(json.dumps({"SLACK_APP_ID": "AOLD", "SLACK_TEAM_ID": "TTEST",
-                                           "OPENTAG_BOT_NAME": "OpenMax", "SLACK_BOT_TOKEN": "xoxb-private"}))
+                                           "OPENTAG_BOT_NAME": "OpenMax", "SLACK_BOT_TOKEN": "xoxb-private"}), encoding="utf-8")
         directory = self.home / "integrations/slack-cli/.slack"
         directory.mkdir()
-        (directory / "apps.dev.json").write_text(json.dumps({"TTEST": {"app_id": "AOLD", "team_id": "TTEST"}}))
+        (directory / "apps.dev.json").write_text(json.dumps({"TTEST": {"app_id": "AOLD", "team_id": "TTEST"}}), encoding="utf-8")
 
     def test_keep_app_is_default_and_displays_exact_saved_identity(self):
         self.seed_app()
@@ -33,7 +33,7 @@ class ResetTests(unittest.TestCase):
             self.assertIn(value, output.getvalue())
         self.assertNotIn("xoxb-private", output.getvalue())
         remote.assert_not_called()
-        kept = json.loads((self.home / "integrations/slack-cli/tag-kept-app.json").read_text())
+        kept = json.loads((self.home / "integrations/slack-cli/tag-kept-app.json").read_text(encoding="utf-8"))
         self.assertEqual(kept, {"app_id": "AOLD", "team_id": "TTEST", "saved_bot_name": "OpenMax"})
         self.assertFalse(self.config.exists())
 
@@ -61,7 +61,7 @@ class ResetTests(unittest.TestCase):
                                                   "--team", "TTEST", "--force", "--skip-update", "--no-color"])
         backup = next((self.home / "config/backups").iterdir())
         self.assertTrue((backup / "slack-cli/.slack/apps.dev.json").exists())
-        self.assertEqual(json.loads((backup / "app-deletion.json").read_text())["status"], "deleted")
+        self.assertEqual(json.loads((backup / "app-deletion.json").read_text(encoding="utf-8"))["status"], "deleted")
         setup.assert_called_once()
 
     def test_unverified_deletion_keeps_backup_and_does_not_restart_setup(self):
@@ -75,13 +75,13 @@ class ResetTests(unittest.TestCase):
         setup.assert_not_called()
         backup = next((self.home / "config/backups").iterdir())
         self.assertTrue((backup / "settings.json").exists())
-        self.assertEqual(json.loads((backup / "app-deletion.json").read_text())["status"], "unverified")
+        self.assertEqual(json.loads((backup / "app-deletion.json").read_text(encoding="utf-8"))["status"], "unverified")
         self.assertIn("not confirmed", output.getvalue())
 
     def test_conflicting_app_link_prevents_reset_and_deletion(self):
         self.seed_app()
         (self.home / "integrations/slack-cli/.slack/apps.dev.json").write_text(
-            '{"TTEST":{"app_id":"AOTHER","team_id":"TTEST"}}')
+            '{"TTEST":{"app_id":"AOTHER","team_id":"TTEST"}}', encoding="utf-8")
         with patch.object(tag_reset.ui, "choose", side_effect=[1, 1]), redirect_stdout(StringIO()), self.assertRaisesRegex(RuntimeError, "same single app"):
             tag_reset.reset_and_setup(self.home, self.lifecycle)
         self.lifecycle.stop_process.assert_not_called()
@@ -90,7 +90,7 @@ class ResetTests(unittest.TestCase):
     def test_changed_app_after_confirmation_is_rejected_under_lock(self):
         self.seed_app()
         app = tag_reset.selected_app(self.home)
-        self.config.write_text('{"SLACK_APP_ID":"ANEW","SLACK_TEAM_ID":"TTEST"}')
+        self.config.write_text('{"SLACK_APP_ID":"ANEW","SLACK_TEAM_ID":"TTEST"}', encoding="utf-8")
         with self.assertRaisesRegex(RuntimeError, "changed during confirmation"):
             tag_reset.archive_setup(self.home, self.lifecycle, expected_app=app)
         self.lifecycle.stop_process.assert_not_called()
@@ -122,14 +122,14 @@ class ResetTests(unittest.TestCase):
         tag_paths.initialize_instance(self.home)
         tag_paths.initialize_workspace(self.home / "workspace")
         self.config = self.home / "config/settings.json"
-        self.config.write_text('{"SLACK_BOT_TOKEN":"xoxb-private"}')
+        self.config.write_text('{"SLACK_BOT_TOKEN":"xoxb-private"}', encoding="utf-8")
         project = self.home / "integrations/slack-cli"
         project.mkdir()
-        (project / "tag-create.json").write_text('{"app_id":"AOLD"}')
-        (self.home / "state/slack-memory.json").write_text('{"state":"sync_requested"}')
-        (self.home / "workspace/notes.txt").write_text("keep workspace")
+        (project / "tag-create.json").write_text('{"app_id":"AOLD"}', encoding="utf-8")
+        (self.home / "state/slack-memory.json").write_text('{"state":"sync_requested"}', encoding="utf-8")
+        (self.home / "workspace/notes.txt").write_text("keep workspace", encoding="utf-8")
         (self.home / "state/memory").mkdir()
-        (self.home / "state/memory/index.db").write_text("keep indexed data")
+        (self.home / "state/memory/index.db").write_text("keep indexed data", encoding="utf-8")
 
     def test_archive_preserves_data_and_removes_resume_checkpoints(self):
         self.seed()
@@ -137,11 +137,11 @@ class ResetTests(unittest.TestCase):
         self.assertFalse(self.config.exists())
         self.assertFalse((self.home / "integrations/slack-cli").exists())
         self.assertFalse((self.home / "state/slack-memory.json").exists())
-        self.assertIn("xoxb-private", (backup / "settings.json").read_text())
-        self.assertIn("AOLD", (backup / "slack-cli/tag-create.json").read_text())
+        self.assertIn("xoxb-private", (backup / "settings.json").read_text(encoding="utf-8"))
+        self.assertIn("AOLD", (backup / "slack-cli/tag-create.json").read_text(encoding="utf-8"))
         self.assertTrue((backup / "restore-paths.json").exists())
-        self.assertEqual((self.home / "workspace/notes.txt").read_text(), "keep workspace")
-        self.assertEqual((self.home / "state/memory/index.db").read_text(), "keep indexed data")
+        self.assertEqual((self.home / "workspace/notes.txt").read_text(encoding="utf-8"), "keep workspace")
+        self.assertEqual((self.home / "state/memory/index.db").read_text(encoding="utf-8"), "keep indexed data")
         # Reset owns only this instance's bridge. Shared MFS must remain online
         # for other Tag instances.
         self.assertEqual([call.args[1] for call in self.lifecycle.stop_process.call_args_list], ["slack"])
@@ -155,7 +155,7 @@ class ResetTests(unittest.TestCase):
         self.config.write_text(json.dumps({
             "MFS_URL": "http://127.0.0.1:13619",
             "MFS_SLACK_CONNECTOR_URI": "slack://tag-ttest-aold",
-        }))
+        }), encoding="utf-8")
         completed = SimpleNamespace(returncode=0, stdout="", stderr="")
         with patch.object(tag_reset.shutil, "which", return_value="/fixture/mfs"), patch.object(
             tag_reset.subprocess, "run", return_value=completed
@@ -172,7 +172,7 @@ class ResetTests(unittest.TestCase):
 
     def test_connector_removal_failure_keeps_setup_for_retry(self):
         self.seed()
-        self.config.write_text(json.dumps({"MFS_SLACK_CONNECTOR_URI": "slack://tag-ttest-aold"}))
+        self.config.write_text(json.dumps({"MFS_SLACK_CONNECTOR_URI": "slack://tag-ttest-aold"}), encoding="utf-8")
         completed = SimpleNamespace(returncode=1, stdout="", stderr="service unavailable")
         with patch.object(tag_reset.shutil, "which", return_value="/fixture/mfs"), patch.object(
             tag_reset.subprocess, "run", return_value=completed
@@ -232,16 +232,16 @@ class ResetTests(unittest.TestCase):
             return move(source, destination)
         with patch.object(tag_reset.shutil, "move", side_effect=fail_project), self.assertRaisesRegex(RuntimeError, "restored"):
             tag_reset.archive_setup(self.home, self.lifecycle)
-        self.assertIn("xoxb-private", self.config.read_text())
+        self.assertIn("xoxb-private", self.config.read_text(encoding="utf-8"))
         self.assertTrue((self.home / "integrations/slack-cli/tag-create.json").exists())
 
     def test_custom_config_and_invalid_json_are_recoverable(self):
         self.seed()
         custom = Path(self.temporary.name) / "custom.json"
-        custom.write_text("broken json")
+        custom.write_text("broken json", encoding="utf-8")
         with patch.dict(os.environ, {"OPENTAG_ENV_FILE": str(custom)}):
             backup = tag_reset.archive_setup(self.home, self.lifecycle)
-        self.assertEqual((backup / "settings.json").read_text(), "broken json")
+        self.assertEqual((backup / "settings.json").read_text(encoding="utf-8"), "broken json")
         self.assertFalse(custom.exists())
         self.assertTrue(self.config.exists())
 
@@ -273,10 +273,10 @@ class ResetTests(unittest.TestCase):
     def test_symlinked_checkpoint_is_not_moved(self):
         self.seed()
         external = Path(self.temporary.name) / "external.json"
-        external.write_text("keep")
+        external.write_text("keep", encoding="utf-8")
         self.config.unlink()
         self.config.symlink_to(external)
         with self.assertRaisesRegex(RuntimeError, "symlinked"):
             tag_reset.archive_setup(self.home, self.lifecycle)
-        self.assertEqual(external.read_text(), "keep")
+        self.assertEqual(external.read_text(encoding="utf-8"), "keep")
         self.lifecycle.stop_process.assert_not_called()

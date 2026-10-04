@@ -7,7 +7,6 @@ import json
 import os
 import subprocess
 import sys
-import tarfile
 import tempfile
 import unittest
 import urllib.error
@@ -22,14 +21,12 @@ from scripts.tag_install import (
     CHANNEL_INDEX_URL,
     FetchedRelease,
     LEGACY_ADMIN_SKILL,
-    MFS_CLI_RELEASES,
     ReleaseSelection,
     _default_channel,
     command_owner,
     download,
     fetch_release,
     install,
-    install_mfs_cli,
     resolve_channel,
     resolve_version,
     runtime_files,
@@ -70,42 +67,6 @@ def release_record(version: str, *, prerelease: bool, names: list[str] | None = 
             for name in names
         ],
     }
-
-
-class MfsClientBundleTests(unittest.TestCase):
-    def test_installs_pinned_client_beside_managed_python(self) -> None:
-        payload = b"mfs-client-fixture"
-        archive_file = io.BytesIO()
-        with tarfile.open(fileobj=archive_file, mode="w:xz") as bundle:
-            info = tarfile.TarInfo("mfs-cli/mfs")
-            info.size = len(payload)
-            info.mode = 0o755
-            bundle.addfile(info, io.BytesIO(payload))
-        archive = archive_file.getvalue()
-        digest = hashlib.sha256(archive).hexdigest()
-
-        with tempfile.TemporaryDirectory() as temporary:
-            release = Path(temporary) / "release"
-            python = release / ".venv/bin/python"
-            python.parent.mkdir(parents=True)
-            (release / "requirements-runtime.txt").write_text(
-                "mfs-server[slack]==0.4.6\n", encoding="utf-8"
-            )
-            with patch.dict(
-                MFS_CLI_RELEASES,
-                {("darwin", "arm64"): ("fixture.tar.xz", digest)},
-                clear=True,
-            ), patch("scripts.tag_install.sys.platform", "darwin"), patch(
-                "scripts.tag_install.platform.machine", return_value="arm64"
-            ), patch("scripts.tag_install.download", return_value=archive) as fetched:
-                installed = install_mfs_cli(release, python)
-
-            self.assertEqual(installed, release / ".venv/bin/mfs")
-            self.assertEqual(installed.read_bytes(), payload)
-            self.assertTrue(installed.stat().st_mode & 0o100)
-            fetched.assert_called_once_with(
-                "https://github.com/zilliztech/mfs/releases/download/v0.4.6/fixture.tar.xz"
-            )
 
 
 class ReleaseResolutionTests(unittest.TestCase):
@@ -341,7 +302,7 @@ class ReleaseResolutionTests(unittest.TestCase):
                 fetched.selection,
                 ReleaseSelection("alpha", version, sha),
             )
-            self.assertEqual((fetched.source / "VERSION").read_text().strip(), version)
+            self.assertEqual((fetched.source / "VERSION").read_text(encoding="utf-8").strip(), version)
 
             with patch(
                 "scripts.tag_install.resolve_version",
@@ -402,34 +363,34 @@ class TagHomeTests(unittest.TestCase):
             initialize_instance(home)
             skill = source / ".codex/skills/custom/SKILL.md"
             skill.parent.mkdir(parents=True)
-            skill.write_text("custom")
+            skill.write_text("custom", encoding="utf-8")
             source_codex_config = source / ".codex/config.toml"
-            source_codex_config.write_text('model_reasoning_effort = "high"\n')
+            source_codex_config.write_text('model_reasoning_effort = "high"\n', encoding="utf-8")
             old = source / ".env"
-            old.write_text(render_env({"OPENTAG_WORKDIR": str(source), "SLACK_BOT_TOKEN": "quote'and\nnewline"}))
+            old.write_text(render_env({"OPENTAG_WORKDIR": str(source), "SLACK_BOT_TOKEN": "quote'and\nnewline"}), encoding="utf-8")
             self.assertEqual(legacy_config(old)["SLACK_BOT_TOKEN"], "quote'and\nnewline")
             migrate(source, home)
-            self.assertEqual(json.loads((home / "config/settings.json").read_text())["OPENTAG_WORKDIR"], str(home / "workspace"))
+            self.assertEqual(json.loads((home / "config/settings.json").read_text(encoding="utf-8"))["OPENTAG_WORKDIR"], str(home / "workspace"))
             copied = home / "workspace/.agents/skills/custom/SKILL.md"
-            self.assertEqual(copied.read_text(), "custom")
+            self.assertEqual(copied.read_text(encoding="utf-8"), "custom")
             self.assertEqual(
-                (home / "workspace/.codex/config.toml").read_text(),
+                (home / "workspace/.codex/config.toml").read_text(encoding="utf-8"),
                 'model_reasoning_effort = "high"\n',
             )
-            copied.write_text("edited")
+            copied.write_text("edited", encoding="utf-8")
             migrate(source, home)
-            self.assertEqual(copied.read_text(), "edited")
-            self.assertEqual(skill.read_text(), "custom")
+            self.assertEqual(copied.read_text(encoding="utf-8"), "edited")
+            self.assertEqual(skill.read_text(encoding="utf-8"), "custom")
             self.assertTrue(old.exists())
 
     def test_existing_command_is_not_replaced(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             command = root / ("tag.cmd" if os.name == "nt" else "tag")
-            command.write_text("another program")
+            command.write_text("another program", encoding="utf-8")
             with self.assertRaises(RuntimeError):
                 install(ROOT, root / "home", root, dependencies=False)
-            self.assertEqual(command.read_text(), "another program")
+            self.assertEqual(command.read_text(encoding="utf-8"), "another program")
             self.assertFalse((root / "home").exists())
 
     @unittest.skipIf(os.name == "nt", "POSIX symlink migration")
@@ -521,7 +482,7 @@ class TagHomeTests(unittest.TestCase):
             home = Path(temp)
             initialize_instance(home)
             initialize_workspace(home / "workspace")
-            (home / "workspace/.codex/config.toml").write_text('[mcp_servers.example]\ncommand="python"\nargs=["server.py"]\n')
+            (home / "workspace/.codex/config.toml").write_text('[mcp_servers.example]\ncommand="python"\nargs=["server.py"]\n', encoding="utf-8")
             with patch.dict(os.environ, {
                 "TAG_HOME": str(home.parent),
                 "TAG_INSTANCE_HOME": str(home),
@@ -535,9 +496,9 @@ class TagHomeTests(unittest.TestCase):
     def test_config_is_data_not_executable_shell(self):
         with tempfile.TemporaryDirectory() as temp:
             config = Path(temp) / "settings.json"
-            config.write_text(json.dumps({"SLACK_BOT_TOKEN": "$(do-not-execute)"}))
+            config.write_text(json.dumps({"SLACK_BOT_TOKEN": "$(do-not-execute)"}), encoding="utf-8")
             self.assertEqual(read_config(config)["SLACK_BOT_TOKEN"], "$(do-not-execute)")
-            config.write_text('{"PATH":"unexpected"}')
+            config.write_text('{"PATH":"unexpected"}', encoding="utf-8")
             with self.assertRaises(ValueError):
                 read_config(config)
 
@@ -547,7 +508,7 @@ class TagHomeTests(unittest.TestCase):
             home = Path(temp)
             initialize(home)
             default = tag_instances.ensure_default(home).home
-            (default / "config/settings.json").write_text("invalid JSON")
+            (default / "config/settings.json").write_text("invalid JSON", encoding="utf-8")
             with patch.dict(os.environ, {"TAG_HOME": str(home)}), patch.object(sys, "argv", ["tag", "stop"]):
                 self.assertEqual(main(), 0)
 
@@ -569,13 +530,13 @@ class TagHomeTests(unittest.TestCase):
                 for backend in (".agents", ".claude"):
                     folder = home / "workspace" / backend / "skills/open-tag-admin"
                     folder.mkdir(parents=True)
-                    (folder / "SKILL.md").write_text(wrapper)
-                    (folder / "personal-notes.md").write_text("keep this")
+                    (folder / "SKILL.md").write_text(wrapper, encoding="utf-8")
+                    (folder / "personal-notes.md").write_text("keep this", encoding="utf-8")
                 install(ROOT, home, root / "bin", dependencies=False)
                 for backend in (".agents", ".claude"):
                     folder = home / "workspace" / backend / "skills/open-tag-admin"
                     self.assertFalse((folder / "SKILL.md").exists())
-                    self.assertEqual((folder / "personal-notes.md").read_text(), "keep this")
+                    self.assertEqual((folder / "personal-notes.md").read_text(encoding="utf-8"), "keep this")
 
     def test_upgrade_preserves_non_utf8_custom_admin_skill(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -602,27 +563,27 @@ class TagHomeTests(unittest.TestCase):
             self.assertFalse(admin.exists())
             self.assertFalse((first / "SKILL.md").exists())
             admin.parent.mkdir(parents=True)
-            admin.write_text(LEGACY_ADMIN_SKILL)
+            admin.write_text(LEGACY_ADMIN_SKILL, encoding="utf-8")
             custom_admin = default / "workspace/.claude/skills/open-tag-admin/SKILL.md"
             custom_admin.parent.mkdir(parents=True)
-            custom_admin.write_text("personal admin instructions")
+            custom_admin.write_text("personal admin instructions", encoding="utf-8")
             skill = default / "workspace/.agents/skills/personal/SKILL.md"
             skill.parent.mkdir(parents=True)
-            skill.write_text("personal skill")
+            skill.write_text("personal skill", encoding="utf-8")
             config = default / "config/settings.json"
-            config.write_text('{"OPENTAG_BACKEND":"codex"}')
+            config.write_text('{"OPENTAG_BACKEND":"codex"}', encoding="utf-8")
             second = install(ROOT, home, bin_dir, dependencies=False)
             self.assertFalse(admin.exists())
-            self.assertEqual(custom_admin.read_text(), "personal admin instructions")
+            self.assertEqual(custom_admin.read_text(encoding="utf-8"), "personal admin instructions")
             self.assertNotEqual(first, second)
-            previous = json.loads((home / "previous.json").read_text())
+            previous = json.loads((home / "previous.json").read_text(encoding="utf-8"))
             self.assertEqual(previous["release"], first.name)
             self.assertEqual(
                 previous["installed_version"],
-                (ROOT / "VERSION").read_text().strip(),
+                (ROOT / "VERSION").read_text(encoding="utf-8").strip(),
             )
-            self.assertEqual(skill.read_text(), "personal skill")
-            self.assertEqual(config.read_text(), '{"OPENTAG_BACKEND":"codex"}')
+            self.assertEqual(skill.read_text(encoding="utf-8"), "personal skill")
+            self.assertEqual(config.read_text(encoding="utf-8"), '{"OPENTAG_BACKEND":"codex"}')
             command = bin_dir / ("tag.cmd" if os.name == "nt" else "tag")
             result = subprocess.run([str(command), "version"], cwd=root, capture_output=True, text=True, check=True)
             self.assertIn("Tag v", result.stdout)
@@ -642,38 +603,38 @@ class TagHomeTests(unittest.TestCase):
             from scripts.tag_cli import main
             with patch.dict(os.environ, environment), patch.object(sys, "argv", ["tag", "rollback"]):
                 self.assertEqual(main(), 0)
-            self.assertEqual(json.loads((home / "current.json").read_text())["release"], first.name)
-            self.assertEqual(skill.read_text(), "personal skill")
+            self.assertEqual(json.loads((home / "current.json").read_text(encoding="utf-8"))["release"], first.name)
+            self.assertEqual(skill.read_text(encoding="utf-8"), "personal skill")
 
     def test_failed_upgrade_keeps_current_release(self):
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp) / "home"
             bin_dir = Path(temp) / "bin"
             install(ROOT, home, bin_dir, dependencies=False)
-            previous = (home / "current.json").read_text()
+            previous = (home / "current.json").read_text(encoding="utf-8")
             with patch("subprocess.run", side_effect=RuntimeError("dependency installation failed")), patch("shutil.which", return_value="uv"):
                 with self.assertRaises(RuntimeError):
                     install(ROOT, home, bin_dir)
-            self.assertEqual((home / "current.json").read_text(), previous)
+            self.assertEqual((home / "current.json").read_text(encoding="utf-8"), previous)
 
     def test_remote_install_persists_channel_version_and_commit(self):
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp) / "home"
-            version = (ROOT / "VERSION").read_text().strip()
+            version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
             selection = ReleaseSelection("alpha", version, "a" * 40)
 
             install(
                 ROOT, home, Path(temp) / "bin", dependencies=False,
                 selection=selection,
             )
-            current = json.loads((home / "current.json").read_text())
+            current = json.loads((home / "current.json").read_text(encoding="utf-8"))
 
             install(
                 ROOT, home, Path(temp) / "bin", dependencies=False,
                 selection=ReleaseSelection("edge", version, "b" * 40),
             )
-            previous = json.loads((home / "previous.json").read_text())
-            upgraded = json.loads((home / "current.json").read_text())
+            previous = json.loads((home / "previous.json").read_text(encoding="utf-8"))
+            upgraded = json.loads((home / "current.json").read_text(encoding="utf-8"))
 
         self.assertEqual(previous["channel"], "alpha")
         self.assertEqual(current["channel"], "alpha")
@@ -729,7 +690,7 @@ class TagHomeTests(unittest.TestCase):
             ) as resolve:
                 reminder = upgrade_reminder(home, now=2000)
 
-            cached = json.loads((home / "state/update-check.json").read_text())
+            cached = json.loads((home / "state/update-check.json").read_text(encoding="utf-8"))
 
         resolve.assert_called_once_with("alpha", timeout=2, page_limit=1)
         self.assertEqual(reminder["version"], "0.2.0-alpha.3")
@@ -791,7 +752,7 @@ class TagHomeTests(unittest.TestCase):
                 self.assertIsNone(upgrade_reminder(home, now=2000))
                 self.assertIsNone(upgrade_reminder(home, now=2001))
 
-            cached = json.loads((home / "state/update-check.json").read_text())
+            cached = json.loads((home / "state/update-check.json").read_text(encoding="utf-8"))
 
         resolve.assert_called_once_with("alpha", timeout=2, page_limit=1)
         self.assertEqual(cached["checked_at"], 2000)
@@ -826,7 +787,7 @@ class TagHomeTests(unittest.TestCase):
                     "version": "0.2.0-alpha.2",
                     "command": "tag upgrade",
                 })
-            retained = json.loads(cache.read_text())
+            retained = json.loads(cache.read_text(encoding="utf-8"))
 
             current.write_text(json.dumps({
                 "installed_version": "0.2.0-beta.1",
@@ -838,7 +799,7 @@ class TagHomeTests(unittest.TestCase):
                 side_effect=RuntimeError("offline"),
             ):
                 self.assertIsNone(upgrade_reminder(home, now=200000))
-            replaced = json.loads(cache.read_text())
+            replaced = json.loads(cache.read_text(encoding="utf-8"))
 
         self.assertEqual(retained["checked_at"], 100000)
         self.assertEqual(retained["target_version"], "0.2.0-alpha.2")
@@ -849,7 +810,7 @@ class TagHomeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             home, bin_dir = root / "home", root / "bin"
-            version = (ROOT / "VERSION").read_text().strip()
+            version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
             install(
                 ROOT,
                 home,
@@ -878,9 +839,9 @@ class TagHomeTests(unittest.TestCase):
                 )
 
             result = json.loads(output.getvalue())
-            current = json.loads((home / "current.json").read_text())
-            previous = json.loads((home / "previous.json").read_text())
-            config_text = config.read_text()
+            current = json.loads((home / "current.json").read_text(encoding="utf-8"))
+            previous = json.loads((home / "previous.json").read_text(encoding="utf-8"))
+            config_text = config.read_text(encoding="utf-8")
 
         self.assertEqual(result["status"], "upgraded")
         self.assertEqual(current["channel"], "edge")
@@ -892,7 +853,7 @@ class TagHomeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             home, bin_dir = root / "home", root / "bin"
-            version = (ROOT / "VERSION").read_text().strip()
+            version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
             install(
                 ROOT,
                 home,
@@ -900,7 +861,7 @@ class TagHomeTests(unittest.TestCase):
                 dependencies=False,
                 selection=ReleaseSelection("alpha", version, "a" * 40),
             )
-            original = (home / "current.json").read_text()
+            original = (home / "current.json").read_text(encoding="utf-8")
             target = FetchedRelease(
                 ROOT,
                 ReleaseSelection("alpha", version, "b" * 40),
@@ -918,7 +879,7 @@ class TagHomeTests(unittest.TestCase):
                     0,
                 )
             installer.assert_not_called()
-            self.assertEqual((home / "current.json").read_text(), original)
+            self.assertEqual((home / "current.json").read_text(encoding="utf-8"), original)
             self.assertEqual(json.loads(output.getvalue())["status"], "available")
 
             pinned = json.loads(original)
@@ -936,7 +897,7 @@ class TagHomeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             home, bin_dir = root / "home", root / "bin"
-            version = (ROOT / "VERSION").read_text().strip()
+            version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
             selection = ReleaseSelection("edge", version, "a" * 40)
             install(
                 ROOT,
@@ -963,7 +924,7 @@ class TagHomeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             home, bin_dir = root / "home", root / "bin"
-            version = (ROOT / "VERSION").read_text().strip()
+            version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
             selection = ReleaseSelection("edge", version, "a" * 40)
             install(
                 ROOT,
@@ -973,7 +934,7 @@ class TagHomeTests(unittest.TestCase):
                 selection=selection,
             )
             current_path = home / "current.json"
-            current = json.loads(current_path.read_text())
+            current = json.loads(current_path.read_text(encoding="utf-8"))
             del current["installed_version"]
             current_path.write_text(json.dumps(current), encoding="utf-8")
 
@@ -1007,7 +968,7 @@ class TagHomeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             home, bin_dir = root / "home", root / "bin"
-            version = (ROOT / "VERSION").read_text().strip()
+            version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
             install(
                 ROOT,
                 home,
@@ -1051,7 +1012,7 @@ class TagHomeTests(unittest.TestCase):
                 (home / "current.json").write_text(json.dumps({
                     "installed_version": "0.2.0-beta.1", "installed_commit": "a" * 40,
                     "channel": "beta", "selection": "channel",
-                }))
+                }), encoding="utf-8")
                 running_paths = {default.home / "state/slack.json", work.home / "state/slack.json"}
                 target = FetchedRelease(ROOT, ReleaseSelection("beta", "0.2.0-beta.2", "b" * 40))
                 output = io.StringIO()
@@ -1080,7 +1041,7 @@ class TagHomeTests(unittest.TestCase):
             (home / "current.json").write_text(json.dumps({
                 "installed_version": "0.2.0-beta.1", "installed_commit": "a" * 40,
                 "channel": "beta", "selection": "channel",
-            }))
+            }), encoding="utf-8")
             target = FetchedRelease(ROOT, ReleaseSelection("beta", "0.2.0-beta.2", "b" * 40))
             with patch("scripts.tag_install.fetch_release", return_value=target), patch(
                 "scripts.tag_install.install"
@@ -1096,7 +1057,7 @@ class TagHomeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             home, bin_dir = root / "home", root / "bin"
-            version = (ROOT / "VERSION").read_text().strip()
+            version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
             install(
                 ROOT,
                 home,
@@ -1104,7 +1065,7 @@ class TagHomeTests(unittest.TestCase):
                 dependencies=False,
                 selection=ReleaseSelection("alpha", version, "a" * 40),
             )
-            original = (home / "current.json").read_text()
+            original = (home / "current.json").read_text(encoding="utf-8")
             target = FetchedRelease(
                 ROOT,
                 ReleaseSelection("stable", "0.1.0", "b" * 40, "version"),
@@ -1129,7 +1090,7 @@ class TagHomeTests(unittest.TestCase):
 
             result = json.loads(output.getvalue())
             installer.assert_not_called()
-            self.assertEqual((home / "current.json").read_text(), original)
+            self.assertEqual((home / "current.json").read_text(encoding="utf-8"), original)
             self.assertFalse(result["ok"])
             self.assertEqual(result["status"], "downgrade-blocked")
             self.assertTrue(result["downgrade"])
@@ -1139,7 +1100,7 @@ class TagHomeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             home, bin_dir = root / "home", root / "bin"
-            version = (ROOT / "VERSION").read_text().strip()
+            version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
             install(
                 ROOT,
                 home,
@@ -1170,7 +1131,7 @@ class TagHomeTests(unittest.TestCase):
                 )
 
             result = json.loads(output.getvalue())
-            current = json.loads((home / "current.json").read_text())
+            current = json.loads((home / "current.json").read_text(encoding="utf-8"))
             installer.assert_not_called()
             self.assertEqual(result["status"], "channel-updated")
             self.assertTrue(result["policy_updated"])
@@ -1182,7 +1143,7 @@ class TagHomeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             home, bin_dir = root / "home", root / "bin"
-            version = (ROOT / "VERSION").read_text().strip()
+            version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
             install(
                 ROOT,
                 home,
@@ -1259,14 +1220,14 @@ class TagHomeTests(unittest.TestCase):
             release = install(source, root / "home", root / "bin", dependencies=False)
             self.assertTrue((release / "scripts/tag_cli.py").is_file())
             self.assertFalse((release / "scripts/runtime-files.json").exists())
-            self.assertEqual(json.loads((root / "home/current.json").read_text())["release"], release.name)
+            self.assertEqual(json.loads((root / "home/current.json").read_text(encoding="utf-8"))["release"], release.name)
 
     def test_malformed_manifest_never_falls_back_to_legacy_copy(self):
         with tempfile.TemporaryDirectory() as temp:
             source = Path(temp)
             (source / "scripts").mkdir()
             manifest = source / "scripts/runtime-files.json"
-            manifest.write_text('{"schema_version": 100, "files": []}')
+            manifest.write_text('{"schema_version": 100, "files": []}', encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "Unsupported runtime file manifest"):
                 runtime_files(source, allow_legacy=True)
 
@@ -1285,11 +1246,11 @@ class TagHomeTests(unittest.TestCase):
             install(ROOT, home, bin_dir, dependencies=False)
             first = (home / "current.json").read_bytes()
             install(ROOT, home, bin_dir, dependencies=False)
-            record = json.loads((home / "current.json").read_text())
+            record = json.loads((home / "current.json").read_text(encoding="utf-8"))
             record.update(channel="alpha", selection="version", installed_commit="a" * 40)
-            (home / "current.json").write_text(json.dumps(record))
+            (home / "current.json").write_text(json.dumps(record), encoding="utf-8")
             install(ROOT, home, bin_dir, dependencies=False, migrate_dependencies=True)
-            migrated = json.loads((home / "current.json").read_text())
+            migrated = json.loads((home / "current.json").read_text(encoding="utf-8"))
             self.assertEqual((home / "previous.json").read_bytes(), first)
             for key in ("channel", "selection", "installed_commit"):
                 self.assertEqual(migrated[key], record[key])
@@ -1318,10 +1279,7 @@ class TagHomeTests(unittest.TestCase):
         ), patch("scripts.tag_install.tag_dependencies.ensure_slack", return_value=Path("/managed/slack")), patch(
             "scripts.tag_install.subprocess.run",
             return_value=subprocess.CompletedProcess([], 0, "", ""),
-        ) as run, patch(
-            "scripts.tag_install.install_mfs_cli",
-            return_value=Path(temp) / "home/releases/release/.venv/bin/mfs",
-        ):
+        ) as run:
             install(ROOT, Path(temp) / "home", Path(temp) / "bin")
 
         commands = [call.args[0] for call in run.call_args_list]
@@ -1343,20 +1301,18 @@ class TagHomeTests(unittest.TestCase):
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_bytes((ROOT / name).read_bytes())
             manifest = source / "scripts/runtime-files.json"
-            names = json.loads(manifest.read_text())
+            names = json.loads(manifest.read_text(encoding="utf-8"))
             names = [n for n in names if n != "scripts/tag_dependencies.py"] if isinstance(names, list) else {
                 key: [n for n in value if n != "scripts/tag_dependencies.py"] if isinstance(value, list) else value
                 for key, value in names.items()
             }
-            manifest.write_text(json.dumps(names))
+            manifest.write_text(json.dumps(names), encoding="utf-8")
             with patch.dict(sys.modules, {"tag_dependencies": None}), patch(
                 "scripts.tag_install.tag_dependencies", None
             ), patch("scripts.tag_install.shutil.which", return_value=None), patch(
                 "scripts.tag_install.subprocess.run",
                 return_value=subprocess.CompletedProcess([], 0, "", ""),
-            ) as run, patch(
-                "scripts.tag_install.install_mfs_cli", return_value=None
-            ):
+            ) as run:
                 install(source, Path(temp) / "home", Path(temp) / "bin")
 
         commands = [call.args[0] for call in run.call_args_list]
@@ -1366,15 +1322,19 @@ class TagHomeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp)
             initialize_instance(home)
+            # Identified by script name, like Tag's real services; a bare `python -c`
+            # reports a different executable name under macOS framework builds.
+            sleeper = home / "sleeper.py"
+            sleeper.write_text("import time\ntime.sleep(90)\n", encoding="utf-8")
             try:
-                self.assertTrue(start_process(home, "test", [sys.executable, "-c", "import time; time.sleep(90)"]))
+                self.assertTrue(start_process(home, "test", [sys.executable, str(sleeper)]))
                 self.assertFalse(start_process(home, "test", ["must-not-run"]))
                 self.assertIsNotNone(process_for(home / "state/test.json"))
             finally:
                 stop_process(home, "test")
             self.assertIsNone(process_for(home / "state/test.json"))
             record = home / "state/test.json"
-            record.write_text(json.dumps({"pid": os.getpid(), "created": 0}))
+            record.write_text(json.dumps({"pid": os.getpid(), "created": 0}), encoding="utf-8")
             stop_process(home, "test")
             self.assertFalse(record.exists())
 

@@ -1,0 +1,5 @@
+{"type": "progress", "backend": "claude", "step": "browser", "text": "Opening your browser…"}
+{"type": "progress", "backend": "claude", "step": "waiting", "text": "Waiting for your browser…"}
+{"type": "progress", "backend": "claude", "step": "waiting", "text": "Waiting for your browser…", "url": "https://claude.ai/oauth/authorize?code=true&client_id=example"}
+{"type": "progress", "backend": "claude", "step": "verifying", "text": "Finishing sign-in…"}
+{"type": "sign_in", "backend": "claude", "status": "connected", "connection": {"backend": "claude", "name": "Claude", "provider": "Anthropic models", "state": "connected", "installed": true, "version": "2.1.285", "method": "claude", "account": "Claude Max · maya@klovr.co", "detail": "", "shared": true, "actions": ["change_account"], "install_url": "https://code.claude.com/docs/en/setup"}, "restart_required": true}

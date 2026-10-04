@@ -3,6 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 set -eu
 # This bootstrap deliberately needs only POSIX tools, never a system Python.
+# TAG_INSTALL_PROGRESS=jsonl adds "@tag-progress {...}" lines for desktop apps.
+tag_progress() {
+    if [ "${TAG_INSTALL_PROGRESS:-}" = jsonl ]; then
+        printf '@tag-progress {"schema_version":1,"step":"%s"}\n' "$1" >&2
+    fi
+}
 tag_prepare_runtime() {
     case "${TAG_HOME:-}" in
         /*) tag_home=$TAG_HOME ;;
@@ -34,6 +40,7 @@ tag_prepare_runtime() {
         mkdir -p "$tag_home/runtime/uv/$tag_uv_version"
         tag_stage=$(mktemp -d "$tag_home/runtime/uv/$tag_uv_version/.download.XXXXXX")
         trap 'rm -rf "$tag_stage"' EXIT HUP INT TERM
+        tag_progress tools
         printf 'Downloading Tag installation tools…\n' >&2
         curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fL --progress-bar \
             "https://github.com/astral-sh/uv/releases/download/$tag_uv_version/uv-$tag_target.tar.gz" -o "$tag_stage/uv.tar.gz"
@@ -55,6 +62,7 @@ tag_prepare_runtime() {
         tag_python=$("$tag_uv" python find --no-config --managed-python --no-python-downloads "$tag_python_version" 2>/dev/null || true)
     fi
     if [ -z "$tag_python" ]; then
+        tag_progress python
         printf 'Preparing Tag Python %s…\n' "$tag_python_version" >&2
         UV_PYTHON_INSTALL_DIR="$tag_home/runtime/python" UV_PYTHON_BIN_DIR="$tag_home/runtime/bin" \
             "$tag_uv" python install --no-config --no-bin "$tag_python_version" >&2

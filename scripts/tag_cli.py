@@ -1,6 +1,7 @@
 """Cross-platform TAG lifecycle. Installed launchers use the release's Python."""
 from __future__ import annotations
 
+from contextlib import nullcontext
 import argparse
 import contextlib
 import ipaddress
@@ -34,6 +35,7 @@ try:
     import tag_mfs_runtime
     import tag_slack_backoff
     import tag_display as display
+    import tag_autostart as autostart
     import agent_models
 except ImportError:
     from scripts.tag_paths import initialize_instance, initialize_workspace, runtime_environment, tag_home
@@ -45,10 +47,20 @@ except ImportError:
     from scripts import tag_welcome
     from scripts import tag_mfs_runtime, tag_slack_backoff
     from scripts import tag_display as display
+    from scripts import tag_autostart as autostart
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_DEPENDENCIES = ("mfs_server", "psutil", "slack_bolt")
 UPGRADE_CHANNELS = ("stable", "beta", "alpha", "edge")
+# Contract between this CLI and desktop apps; see docs/reference/app-protocol.md.
+# Bump only for incompatible changes; add a capability for anything new.
+APP_PROTOCOL = 1
+CAPABILITIES = (
+    "list", "setup-jsonl", "setup-back", "rename", "workspace-lifecycle",
+    "autostart", "autostart-keep", "logs-json", "upgrade-json", "install-progress",
+    "ai-connections", "shared-ai-connections", "thinking-level", "logs-activity", "activity-details", "setup-v2", "abandon-setup", "remove-tag",
+    "describe", "telemetry-events",
+)
 UPDATE_CHECK_INTERVAL_SECONDS = 24 * 60 * 60
 COMMANDS = tuple(sorted(tag_instances.RESERVED_NAMES))
 STARTUP_ATTEMPT_ENV_KEYS = (
@@ -494,7 +506,8 @@ def start_development_slack(home: Path) -> None:
         "--process-id",
         instance_id,
     ]
-    with LifecycleLock(home / "state/start.lock"):
+    with LifecycleLock(tag_home() / "state/ai-connection.lock"), \
+            LifecycleLock(tag_home() / "state/ai-start.lock"), LifecycleLock(home / "state/start.lock"):
         start_process(
             home,
             "slack",
@@ -619,13 +632,6 @@ def healthy(url: str) -> bool:
 def mfs_server_executable() -> str | None:
     """Prefer a bundled runtime, but support an independently installed server."""
     name = "mfs-server.exe" if os.name == "nt" else "mfs-server"
-    bundled = Path(sys.executable).parent / name
-    return str(bundled) if bundled.is_file() else shutil.which(name)
-
-
-def mfs_client_executable() -> str | None:
-    """Prefer Tag's bundled MFS client, but support an independent install."""
-    name = "mfs.exe" if os.name == "nt" else "mfs"
     bundled = Path(sys.executable).parent / name
     return str(bundled) if bundled.is_file() else shutil.which(name)
 
@@ -870,48 +876,49 @@ def selected_target(home: Path, tag_id: str | None = None, *, suffix: str = "") 
     )
 
 
+def load_connector_config(path: Path) -> dict[str, object]:
+    """A connector's TOML configuration, as the JSON object MFS expects."""
+    try:
+        import tomllib
+    except ImportError:
+        import tomli as tomllib
+    with path.open("rb") as handle:
+        return tomllib.load(handle)
+
+
 def sync_configured_slack_memory(environment: dict[str, str] | None = None) -> None:
-    """Register and incrementally sync the connector approved during setup."""
+    """Register and incrementally sync the connector approved during setup.
+
+    Talks to the MFS server's HTTP API directly (POST /v1/add), as the `mfs`
+    client did, so no separate client program is needed on any platform.
+    """
     source = environment if environment is not None else os.environ
     uri = source.get("MFS_SLACK_CONNECTOR_URI", "").strip()
     config = Path(source.get("MFS_SLACK_CONNECTOR_CONFIG", "")).expanduser()
     if not uri or not config.is_file():
         return
-    executable = mfs_client_executable()
-    if not executable:
-        raise RuntimeError("MFS client is unavailable; install it before indexing Slack history")
-    completed = subprocess.run(
-        [executable, "add", uri, "--config", str(config), "--yes"],
-        check=False,
-        text=True,
-        capture_output=True,
-        env=environment,
-        timeout=120,
-    )
-    if completed.returncode:
-        detail = completed.stdout + completed.stderr
+    settings = load_connector_config(config)
+    try:
+        mfs_post_json("/v1/add", {"target": uri, "config": settings, "full": False, "process": False}, source)
+        return
+    except MfsRequestError as error:
+        failure = error
+    if failure.code == "connector_already_registered":
         # The managed connector survives MFS restarts. Re-adding it reports a
         # conflict, so update that same registered connector instead of
         # pretending that its old configuration describes new channel consent.
-        if "connector_already_registered" in detail or "connector already registered" in detail.lower():
-            completed = subprocess.run(
-                [executable, "connector", "update", uri, "--config", str(config)],
-                check=False,
-                text=True,
-                capture_output=True,
-                env=environment,
-                timeout=120,
-            )
-            if not completed.returncode:
-                return
-            detail = completed.stdout + completed.stderr
-        if "sync_already_running" in detail:
+        try:
+            mfs_post_json("/v1/add", {"target": uri, "update": True, "config": settings}, source)
             return
-        if "environment variable MFS_SLACK_TOKEN is not set" in detail:
-            raise MfsHistoryCredentialUnavailable(MFS_HISTORY_CREDENTIAL_MESSAGE)
-        if "no plugin for slack" in detail.lower():
-            raise MfsSlackConnectorUnavailable(MFS_SLACK_CONNECTOR_MESSAGE)
-        raise RuntimeError("Slack history indexing could not start; run tag logs and mfs status")
+        except MfsRequestError as error:
+            failure = error
+    if failure.code == "sync_already_running":
+        return
+    if "environment variable MFS_SLACK_TOKEN is not set" in failure.detail:
+        raise MfsHistoryCredentialUnavailable(MFS_HISTORY_CREDENTIAL_MESSAGE)
+    if "no plugin for slack" in failure.detail.lower():
+        raise MfsSlackConnectorUnavailable(MFS_SLACK_CONNECTOR_MESSAGE)
+    raise RuntimeError(f"Slack history indexing could not start ({failure.detail}); run tag logs and tag memory")
 
 
 def reconcile_invitation_memory(home: Path) -> None:
@@ -937,7 +944,7 @@ def reconcile_invitation_memory(home: Path) -> None:
     if status.get("check") == "mfs_slack_connector":
         raise MfsSlackConnectorUnavailable(MFS_SLACK_CONNECTOR_MESSAGE)
     if (
-        status.get("state") != "sync_requested"
+        status.get("state") not in {"sync_requested", "no_joined_channels"}
         and status.get("check") != "index_submission"
     ):
         raise RuntimeError(
@@ -976,9 +983,9 @@ def doctor_report(offline: bool) -> tuple[int, dict[str, object]]:
     return completed.returncode, report
 
 
-def authenticated_mfs_url() -> str:
+def authenticated_mfs_url(raw: str | None = None) -> str:
     """Return an MFS base URL that is safe to receive a bearer token."""
-    raw = os.getenv("MFS_URL", "http://127.0.0.1:13619").rstrip("/")
+    raw = (raw or os.getenv("MFS_URL") or "http://127.0.0.1:13619").rstrip("/")
     try:
         parsed = urllib.parse.urlsplit(raw)
         host = parsed.hostname
@@ -1024,15 +1031,61 @@ class RejectMfsRedirects(urllib.request.HTTPRedirectHandler):
         )
 
 
+def mfs_token(source: dict[str, str] | os._Environ | None = None) -> str | None:
+    """MFS_TOKEN, else the token a local mfs-server wrote under MFS_HOME (default ~/.mfs)."""
+    source = os.environ if source is None else source
+    token = source.get("MFS_TOKEN", "").strip()
+    if token:
+        return token
+    home = Path(source.get("MFS_HOME") or Path.home() / ".mfs").expanduser()
+    try:
+        return (home / "server.token").read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
+
+
+class MfsRequestError(RuntimeError):
+    """MFS answered with its {code, detail} error envelope."""
+
+    def __init__(self, status: int, code: str, detail: str):
+        super().__init__(f"MFS error {status} {code}: {detail}")
+        self.status, self.code, self.detail = status, code, detail
+
+
+def mfs_post_json(path: str, body: dict[str, object], environment: dict[str, str] | None = None,
+                  *, timeout: float = 120) -> dict[str, object]:
+    """POST to an authenticated MFS endpoint, under the same rules as mfs_request_json."""
+    source = os.environ if environment is None else environment
+    base = authenticated_mfs_url(source.get("MFS_URL"))
+    headers = {"Content-Type": "application/json"}
+    token = mfs_token(source)
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    data = json.dumps(body, default=str).encode("utf-8")
+    request = urllib.request.Request(f"{base}{path}", data=data, headers=headers, method="POST")
+    opener = urllib.request.build_opener(RejectMfsRedirects())
+    try:
+        with opener.open(request, timeout=timeout) as response:  # noqa: S310
+            payload = json.loads(response.read().decode("utf-8") or "{}")
+    except urllib.error.HTTPError as error:
+        try:
+            envelope = json.loads(error.read().decode("utf-8"))
+        except (OSError, ValueError):
+            envelope = {}
+        envelope = envelope if isinstance(envelope, dict) else {}
+        raise MfsRequestError(error.code, str(envelope.get("code") or "error"),
+                              str(envelope.get("detail") or error.reason)) from None
+    except (OSError, ValueError, urllib.error.URLError) as error:
+        raise RuntimeError(f"Memory isn't reachable at {base}; run tag memory status") from error
+    return payload if isinstance(payload, dict) else {}
+
+
 def mfs_request_json(path: str, parameters: dict[str, str]) -> dict[str, object] | None:
     """Call an authenticated MFS endpoint after enforcing its transport boundary."""
     base = authenticated_mfs_url()
-    token = os.getenv("MFS_TOKEN", "").strip()
+    token = mfs_token()
     if not token:
-        try:
-            token = (Path.home() / ".mfs/server.token").read_text(encoding="utf-8").strip()
-        except OSError:
-            return None
+        return None
     query = urllib.parse.urlencode(parameters)
     request = urllib.request.Request(
         f"{base}{path}?{query}", headers={"Authorization": f"Bearer {token}"}
@@ -1540,11 +1593,554 @@ def upgrade_command(
     return 0
 
 
+SETUP_PROTOCOL_ENV = "TAG_SETUP_PROTOCOL"
+
+
+DEFER_RENAME_ENV = "TAG_DEFER_RENAME"
+
+
+def _workspace_tags(installation_root: Path, workspace: str) -> list[str]:
+    """Tags whose Slack workspace matches a team ID or (case-insensitively) its name."""
+    wanted = workspace.strip().casefold()
+    matches = []
+    for item in tag_instances.discover(installation_root):
+        if not item["valid"] or not Path(str(item["home"])).exists():
+            continue
+        home = Path(str(item["home"]))
+        path = home / "config/settings.json"
+        team = read_config(path).get("SLACK_TEAM_ID", "") if path.is_file() else ""
+        name = tag_instances.workspace_name(home) or ""
+        if wanted and wanted in {team.casefold(), name.casefold()}:
+            matches.append(str(item["id"]))
+    return matches
+
+
+def _workspace_lifecycle(installation_root: Path, workspace: str, action: str, json_output: bool) -> int:
+    """Start, stop, or restart every Tag in one Slack workspace, one at a time."""
+    tags = _workspace_tags(installation_root, workspace)
+    if not tags:
+        raise RuntimeError(f"No Tags are connected to the Slack workspace '{workspace}'. See tag list.")
+    results = []
+    for tag_id in tags:
+        path = tag_instances.resolve(installation_root, tag_id).home / "config/settings.json"
+        if action != "stop" and not (path.is_file() and read_config(path).get("SLACK_APP_ID")):
+            # Unfinished setup isn't a failure; it just can't start yet.
+            results.append({"tag": tag_id, "exit_code": None, "skipped": "setup_incomplete"})
+            continue
+        command = [sys.executable, str(ROOT / "scripts/tag_cli.py"), tag_id, action]
+        # Each Tag runs its own lifecycle; one failure doesn't stop the others.
+        code = subprocess.call(command, stdout=subprocess.DEVNULL if json_output else None)
+        results.append({"tag": tag_id, "exit_code": code})
+    failed = [item["tag"] for item in results if item["exit_code"]]
+    skipped = [item["tag"] for item in results if item.get("skipped")]
+    if json_output:
+        print(json.dumps({"schema_version": 1, "workspace": workspace, "action": action,
+                          "ok": not failed, "tags": results}, indent=2))
+    else:
+        attempted = len(tags) - len(skipped)
+        display.info_row(action.title(), f"{attempted - len(failed)} of {attempted} Tags in {workspace}",
+                         good=not failed)
+        for tag_id in failed:
+            display.info_row(tag_id, f"needs attention · tag {tag_id} status", good=False)
+        for tag_id in skipped:
+            display.info_row(tag_id, f"setup not finished · tag {tag_id} setup", good=False)
+    return 1 if failed else 0
+
+
+def _autostart_command(installation_root: Path, args, parser) -> int:
+    """Keep chosen Tags running after login, and restart them if they stop."""
+    action = args.arguments[0] if args.arguments else "status"
+    if action not in {"status", "on", "off", "run", "keep"} or (len(args.arguments) > 1 and action != "keep"):
+        parser.error("autostart accepts status, on, off, run, or keep TAG...")
+    if action == "run":
+        return autostart.run(installation_root, sys.modules[__name__], ROOT)
+    seeded: list[str] = []
+    if action == "keep":
+        # Record that these Tags should keep running, without starting them now.
+        if len(args.arguments) < 2:
+            parser.error("autostart keep needs one or more Tags")
+        for reference in args.arguments[1:]:
+            tag = tag_instances.resolve_reference(installation_root, reference)
+            autostart.set_wanted(tag_instances.resolve(installation_root, tag).home, True)
+        result = autostart.status(installation_root)
+    elif action == "on":
+        seeded = autostart.seed_from_running(installation_root, sys.modules[__name__])
+        result = autostart.enable(installation_root, ROOT)
+    elif action == "off":
+        result = autostart.disable(installation_root)
+    else:
+        result = autostart.status(installation_root)
+    tags = []
+    for item in tag_instances.discover(installation_root):
+        if item.get("valid") and Path(str(item["home"])).exists():
+            home = tag_instances.resolve(installation_root, str(item["id"])).home
+            tags.append({"tag": str(item["id"]), "keep_running": autostart.wanted(home) is True})
+    result = {"schema_version": 1, **result, "tags": tags}
+    if args.json_output:
+        print(json.dumps(result, indent=2))
+        return 0
+    display.header("Autostart", "Start your Tags after you log in, and restart them if they stop.")
+    display.info_row("Login service", "On" if result["enabled"] else "Off", good=result["enabled"])
+    display.info_row("Mechanism", result["mechanism"])
+    for tag in tags:
+        display.info_row(tag["tag"], "kept running" if tag["keep_running"] else "left off",
+                         good=tag["keep_running"])
+    if seeded:
+        display.info_row("Kept running", "Tags already running: " + ", ".join(seeded), good=True)
+    display.next_action("Choose which Tags run", "tag NAME start  ·  tag NAME stop",
+                        detail="Starting a Tag keeps it running; stopping it leaves it off.")
+    if not result["enabled"]:
+        display.next_action("Turn on", "tag autostart on")
+    return 0
+
+
+def _rename_command(context: tag_instances.InstanceContext, args) -> int:
+    """Rename a Tag in Slack and give it a nickname for commands."""
+    try:
+        import slack_manifest_migrations
+    except ImportError:
+        from scripts import slack_manifest_migrations
+    try:
+        import tag_config as settings
+    except ImportError:
+        from scripts import tag_config as settings
+    if len(args.arguments) != 1 or not args.arguments[0].strip():
+        raise ValueError('rename needs the new Slack name, for example: tag rename "Research Tag"')
+    name = args.arguments[0].strip()
+    if error := settings.validation_error("OPENTAG_BOT_NAME", name):
+        raise ValueError(error)
+    alias = args.nickname or tag_instances.slugify(name)
+    root = context.installation_root
+    # Check the nickname before changing anything in Slack.
+    tag_instances.validate_name(alias, allow_default=False)
+    for other in tag_instances.discover(root):
+        if other["valid"] and other["id"] != context.tag_id and Path(str(other["home"])).exists():
+            if alias in {other["id"], tag_instances.nickname(Path(str(other["home"])))}:
+                raise ValueError(f"Another Tag already uses '{alias}'; choose one with --nickname")
+    config_path = context.home / "config/settings.json"
+    values = read_config(config_path) if config_path.is_file() else {}
+    retry = f'tag {context.tag_id} rename "{name}"'
+    changed = slack_manifest_migrations.set_display_name(context.home, values, name, retry=retry)
+    settings.update_config(config_path, {"OPENTAG_BOT_NAME": name})
+    tag_instances.set_nickname(root, context.tag_id, alias)
+    if args.json_output:
+        print(json.dumps({"schema_version": 1, "tag": context.tag_id, "slack_name": name,
+                          "nickname": alias, "slack_changed": changed}, indent=2))
+    else:
+        display.header("Rename", f"Tag '{context.tag_id}'")
+        display.info_row("Slack", f"Now called {name}" if changed else f"Already called {name}", good=True)
+        display.info_row("Command", f"tag {alias} start", good=True)
+        if process_for(context.home / "state/slack.json") is not None:
+            display.next_action("Use the new name in Tag's own messages", f"tag {alias} restart")
+    return 0
+
+
+def _describe_command(context: tag_instances.InstanceContext, args) -> int:
+    """Change a Tag's one-line description in Slack; an empty one clears it."""
+    try:
+        import slack_manifest_migrations
+    except ImportError:
+        from scripts import slack_manifest_migrations
+    try:
+        import tag_config as settings
+    except ImportError:
+        from scripts import tag_config as settings
+    if len(args.arguments) != 1:
+        raise ValueError('describe needs the new description, for example: tag describe "Answers launch questions"')
+    description = args.arguments[0].strip()
+    if error := settings.validation_error("OPENTAG_BOT_DESCRIPTION", description):
+        raise ValueError(error)
+    config_path = context.home / "config/settings.json"
+    values = read_config(config_path) if config_path.is_file() else {}
+    retry = f"tag {context.tag_id} describe {json.dumps(description, ensure_ascii=False)}"
+    changed = slack_manifest_migrations.set_description(context.home, values, description, retry=retry)
+    settings.update_config(config_path, {"OPENTAG_BOT_DESCRIPTION": description})
+    if args.json_output:
+        print(json.dumps({"schema_version": 1, "tag": context.tag_id, "description": description or None,
+                          "slack_changed": changed}, indent=2))
+    else:
+        display.header("Describe", f"Tag '{context.tag_id}'")
+        display.info_row("Slack", ("Description saved" if description else "Description cleared") if changed
+                         else "Already up to date", good=True)
+    return 0
+
+
+def _abandon_command(context: tag_instances.InstanceContext, args) -> int:
+    """Set aside a Tag whose setup never reached Slack. It is moved, never deleted."""
+    import shutil
+    from datetime import datetime
+    values = read_config(context.home / "config/settings.json") if (context.home / "config/settings.json").is_file() else {}
+    # Setup records the workspace (SLACK_TEAM_ID) before it creates the app, so
+    # only an installed bot token means the Tag reached Slack. A running Tag is
+    # never touched.
+    if (values.get("SLACK_BOT_TOKEN") or values.get("SLACK_APP_ID")
+            or (context.home / "integrations/slack-cli/tag-create.json").exists()
+            or process_for(context.home / "state/slack.json") is not None):
+        raise ValueError(f"Tag '{context.tag_id}' has a Slack app, so it can't be abandoned. Use remove.")
+    backup = context.installation_root / "abandoned" / f"{context.tag_id}-{datetime.now():%Y%m%d-%H%M%S}"
+    backup.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(context.home), str(backup))
+    if args.json_output:
+        print(json.dumps({"schema_version": 1, "tag": context.tag_id, "backup": str(backup)}, indent=2))
+    else:
+        display.header("Abandon", f"Tag '{context.tag_id}'")
+        display.info_row("Backup", display.short_path(backup), good=True)
+    return 0
+
+
+def _remove_command(context: tag_instances.InstanceContext, args) -> int:
+    """Stop a Tag and set its local files aside; optionally delete its Slack app.
+
+    The Slack app is deleted only with --delete-app and --confirm-app naming the
+    saved App ID. The local files are moved, never deleted.
+    """
+    import shutil
+    from datetime import datetime
+    try:
+        import tag_reset
+    except ImportError:
+        from scripts import tag_reset
+    home = context.home
+    app = tag_reset.selected_app(home)
+    executable = None
+    if args.delete_app:
+        if not app:
+            raise ValueError("No reliable saved App ID and Team ID were found. Nothing was removed or deleted.")
+        if args.confirm_app != app["app_id"]:
+            raise ValueError(f"--confirm-app must be this Tag's App ID ({app['app_id']}). Nothing was removed or deleted.")
+        tag_reset.check_app_link(home / "integrations/slack-cli", app)
+        search_path = str(home / "integrations/bin") + os.pathsep + os.environ.get("PATH", "")
+        executable = shutil.which("slack", path=search_path)
+        if not executable:
+            raise ValueError("Slack CLI is unavailable. Nothing was removed or deleted. Remove without deleting the app, or install Slack CLI.")
+    config_path = home / "config/settings.json"
+    values = read_config(config_path) if config_path.is_file() else {}
+    stop_process(home, "slack")
+    tag_reset.unregister_connector(home, values)
+    backup = context.installation_root / "abandoned" / f"{context.tag_id}-{datetime.now():%Y%m%d-%H%M%S}"
+    backup.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(home), str(backup))
+    deleted = False
+    if args.delete_app:
+        (backup / "tmp").mkdir(exist_ok=True)
+        deleted = tag_reset.delete_slack_app(backup, backup, app, executable, source=backup / "integrations/slack-cli")
+        if not deleted:
+            raise RuntimeError(f"The Tag was removed but Slack didn't confirm deleting app {app['app_id']}. "
+                               f"Check it in Slack. Local files: {backup}")
+    if args.json_output:
+        print(json.dumps({"schema_version": 1, "ok": True, "tag": context.tag_id, "backup": str(backup),
+                          "app_deleted": deleted, "app_id": app["app_id"] if app else None}, indent=2))
+    else:
+        display.header("Remove", f"Tag '{context.tag_id}'")
+        display.info_row("Backup", display.short_path(backup), good=True)
+        display.info_row("Slack app", f"{app['app_id']} deleted" if deleted else "Kept", good=True)
+    return 0
+
+
+def _avatar(home: Path, values: dict[str, str] | None = None) -> str | None:
+    """Slack's cached profile first, with the setup upload as an offline fallback."""
+    try:
+        from . import slack_profile_icon
+    except ImportError:
+        import slack_profile_icon
+    values = values or {}
+    icon = slack_profile_icon.path(home, team_id=values.get("SLACK_TEAM_ID", ""),
+                                   app_id=values.get("SLACK_APP_ID", ""))
+    if icon:
+        return str(icon)
+    icons = sorted((home / "integrations/slack-cli/assets").glob("tag-profile.*"))
+    return str(icons[0]) if icons else None
+
+
+def _refresh_avatar(home: Path, values: dict[str, str]) -> str:
+    try:
+        from . import slack_profile_icon
+    except ImportError:
+        import slack_profile_icon
+    return slack_profile_icon.refresh_safely(home, values)
+
+
+def _workspace_icon(home: Path) -> str | None:
+    """The saved Slack workspace icon, for apps that show it beside the workspace name."""
+    try:
+        import slack_workspace_icon
+    except ImportError:
+        from scripts import slack_workspace_icon
+    icon = slack_workspace_icon.path(home)
+    return str(icon) if icon else None
+
+
+def _refresh_workspace_icon(home: Path, values: dict[str, str]) -> str:
+    """Best effort: a missing icon must never stop setup or a start."""
+    try:
+        import slack_workspace_icon
+    except ImportError:
+        from scripts import slack_workspace_icon
+    token, team = values.get("SLACK_BOT_TOKEN", ""), values.get("SLACK_TEAM_ID", "")
+    if not token:
+        return "skipped"
+    try:
+        return slack_workspace_icon.refresh(home, token, team)
+    except (OSError, RuntimeError) as exc:
+        return f"unavailable: {exc}"
+
+
+def _refresh_workspace_name(home: Path, values: dict[str, str], *, api=None) -> str | None:
+    """Record the Slack workspace's name for Tags set up before Tag saved it.
+
+    Without it, Tag.app and tag list show the bare Team ID. Runs on each start
+    until a name is saved; auth.test needs no extra permission, and nothing
+    here may stop a start.
+    """
+    if tag_instances.workspace_name(home) or not values.get("SLACK_BOT_TOKEN"):
+        return None
+    try:
+        import slack_channels
+    except ImportError:
+        from scripts import slack_channels
+    try:
+        payload = (api or slack_channels.slack_api)(values["SLACK_BOT_TOKEN"], "auth.test", {})
+        name = payload.get("team") if isinstance(payload, dict) else None
+        if not isinstance(name, str) or not name.strip():
+            return None
+        tag_instances.record_workspace_name(home, name.strip())
+        return name.strip()
+    except (OSError, ValueError, RuntimeError):
+        return None
+
+
+def _channels(values: dict[str, str], home: Path | None = None) -> list[dict[str, str | None]]:
+    """The channels a Tag answers in, named from local metadata without network IO."""
+    try:
+        import tag_activity, slack_channel_names
+    except ImportError:
+        from scripts import tag_activity, slack_channel_names
+    names = tag_activity.channel_names(values.get("MFS_ALLOWED_SCOPES", ""))
+    if home is not None:
+        names.update(slack_channel_names.read(home, values.get("SLACK_TEAM_ID", "")))
+    ids = [part.strip() for part in values.get("SLACK_CHANNEL_IDS", "").split(",") if part.strip()]
+    rows = [{"id": channel, "name": names.get(channel)} for channel in dict.fromkeys(ids)]
+    return sorted(rows, key=lambda row: (row["name"] is None, (row["name"] or row["id"]).casefold()))
+
+
+def _slack_name(home: Path) -> str | None:
+    """The Tag's display name in Slack, for lists that show people names, not IDs."""
+    path = home / "config/settings.json"
+    name = read_config(path).get("OPENTAG_BOT_NAME", "") if path.is_file() else ""
+    return name or None
+
+
+def _rename(installation_root: Path, tag_id: str) -> str | None:
+    """Name a provisionally named Tag after its Slack IDs once its app exists."""
+    try:
+        import tag_rename
+    except ImportError:
+        from scripts import tag_rename
+    return tag_rename.migrate(installation_root, sys.modules[__name__], tag_id)
+
+
+def _setup_ui():
+    try:
+        import setup_ui as ui
+    except ImportError:
+        from scripts import setup_ui as ui
+    return ui
+
+
+def _setup_ready(home: Path, values: dict[str, str]) -> dict:
+    """What a finished setup made, for the client's Ready screen and its Slack links."""
+    try:
+        import tag_ai
+    except ImportError:
+        from scripts import tag_ai
+    choice = tag_ai.default_choice(home, values)
+    return {"team": values.get("SLACK_TEAM_ID") or None, "app_id": values.get("SLACK_APP_ID") or None,
+            "channels": _channels(values, home),
+            "ai": {key: choice[key] for key in ("backend", "backend_name", "label")}}
+
+
+def _setup_result(code: int, tag_id: str, protocol: bool) -> int:
+    """Close a JSON-lines setup session with the outcome and selected Tag."""
+    if code == 0:
+        try:
+            context = tag_instances.resolve(tag_home(), tag_id)
+            values = read_config(context.home / "config/settings.json")
+            _refresh_avatar(context.home, values)
+        except (OSError, ValueError, RuntimeError):
+            pass
+    if protocol:
+        configured = False
+        try:
+            try:
+                import tag_config as settings
+            except ImportError:
+                from scripts import tag_config as settings
+            context = tag_instances.resolve(tag_home(), tag_id)
+            configured = not settings.config_errors(read_config(context.home / "config/settings.json"))
+        except (OSError, ValueError, RuntimeError):
+            pass
+        status = "complete" if code == 0 and configured else "paused" if code == 0 else "failed"
+        ready = None
+        if status == "complete":
+            try:
+                context = tag_instances.resolve(tag_home(), tag_id)
+                values = read_config(context.home / "config/settings.json")
+                _refresh_workspace_name(context.home, values)
+                _refresh_workspace_icon(context.home, values)
+                ready = _setup_ready(context.home, values)
+            except (OSError, ValueError, RuntimeError):
+                pass
+        _setup_ui().emit({"type": "result", "status": status, "tag": tag_id, "exit_code": code,
+                          **({"ready": ready} if ready else {})})
+    return code
+
+
+def _setup_step(args: argparse.Namespace, installation_root: Path, *, raw_tag: str | None) -> int:
+    """Drive JSON-lines setup one question per command, for agents and scripts."""
+    try:
+        import setup_session
+    except ImportError:
+        from scripts import setup_session
+    command = [sys.executable, str(ROOT / "scripts/tag_cli.py"), *([raw_tag] if raw_tag else []), args.command]
+    command += [flag for flag, on in (("--review", args.review), ("--no-start", args.no_start)) if on]
+    command.append("--json")
+    try:
+        if args.step:
+            reply = setup_session.step(installation_root, command)
+        elif args.step_stop:
+            reply = setup_session.stop(installation_root)
+        elif args.step_back:
+            reply = setup_session.back(installation_root)
+        else:
+            try:
+                value = json.loads(args.step_answer)
+            except ValueError:
+                print(json.dumps({"schema_version": 1, "error": "--answer must be a JSON value, such as 0, true, or \"text\""}))
+                return 2
+            reply = setup_session.answer(installation_root, value, args.step_question)
+    except setup_session.SessionError as error:
+        print(json.dumps({"schema_version": 1, "error": str(error)}))
+        return 1
+    print(json.dumps({"schema_version": 1, **reply}, ensure_ascii=False))
+    result = reply.get("result") or {}
+    return 1 if reply.get("state") == "ended" and result.get("status") == "failed" else 0
+
+
+def _ai_target(context):
+    """The Tag that AI & models acts on, with a quiet restart for JSON clients."""
+    try:
+        import tag_ai
+    except ImportError:
+        from scripts import tag_ai
+
+    def lifecycle(action: str) -> int:
+        command = [sys.executable, str(ROOT / "scripts/tag_cli.py"), *context.command_arguments(action)]
+        environment = os.environ.copy()
+        environment["TAG_RESTART_FLOW"] = "1" if action == "restart" else environment.get("TAG_RESTART_FLOW", "")
+        # Keep this command's own output, such as JSON lines, clean.
+        return subprocess.call(command, env=environment, stdin=subprocess.DEVNULL,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    return tag_ai.Target(
+        home=context.home, tag_id=context.tag_id,
+        running=lambda: process_for(context.home / "state/slack.json") is not None,
+        restart=lifecycle, name=_slack_name(context.home) or "Tag",
+    )
+
+
+def _global_ai_target(installation_root):
+    """Connection changes restart exactly the Tags that were running beforehand."""
+    try:
+        import tag_ai
+    except ImportError:
+        from scripts import tag_ai
+    def targets():
+        # Discover after the connection guard is acquired, so newly started Tags count.
+        return [_ai_target(tag_instances.resolve(installation_root, str(row["id"])))
+                for row in tag_instances.discover(installation_root)
+                if row["valid"] and Path(str(row["home"])).exists()]
+    resume = []
+
+    def lifecycle(action):
+        if action == "stop":
+            for target in targets():
+                if target.running():
+                    resume.append(target)
+                    if target.restart("stop"):
+                        return 1
+            return 0
+        failed = False
+        for target in resume:
+            if target.restart("start"):
+                failed = True
+        return int(failed)
+
+    return tag_ai.Target(installation_root, "", lambda: any(t.running() for t in targets()),
+                         lifecycle, "Your Tags")
+
+
+def _migrate_shared_ai(installation_root, current_home, *, defer_current=True):
+    """Pause existing bridges around v1 credential migration and recover interrupted restarts."""
+    try:
+        import tag_chatgpt
+    except ImportError:
+        from scripts import tag_chatgpt
+    store = tag_chatgpt.Store(current_home)
+    checkpoint = installation_root / "shared/ai/migration-v1.json"
+    if os.getenv("TAG_AI_MIGRATION_RESTART") == "1":
+        return
+    pending = []
+    with LifecycleLock(installation_root / "state/ai-migration.lock"):
+        record = tag_chatgpt.read_object(checkpoint)
+        pending = record.get("restart", [])
+        with LifecycleLock(installation_root / "state/ai-connection.lock"):
+            if not store.path.exists():
+                # Validate before interrupting any service.
+                legacy = tag_chatgpt.legacy_accounts(current_home)
+                running = [str(row["id"]) for row in tag_instances.discover(installation_root)
+                           if legacy["mode"] == "chatgpt" and row["valid"]
+                           and process_for(Path(str(row["home"])) / "state/slack.json")]
+                pending = sorted(set(pending + running))
+                tag_chatgpt.atomic_write(checkpoint, {"version": 1, "restart": pending})
+                for tag_id in pending:
+                    target = _ai_target(tag_instances.resolve(installation_root, tag_id))
+                    if target.running() and target.restart("stop"):
+                        raise RuntimeError("Couldn't stop all Tags for the shared AI migration. Retry tag start.")
+            tag_chatgpt.migrate_shared_accounts(current_home)
+            if store.enabled() and not store.read().get("active"):
+                raise RuntimeError("Choose one shared ChatGPT account in Settings → AI connections, "
+                                   "or run tag chatgpt status then tag chatgpt use ACCOUNT. "
+                                   "Saved accounts were preserved; retry tag start afterwards.")
+        for tag_id in list(pending):
+            target = _ai_target(tag_instances.resolve(installation_root, tag_id))
+            # The current start will finish below; other Tags resume now.
+            if defer_current and target.home == current_home:
+                continue
+            if not target.running():
+                command = [sys.executable, str(ROOT / "scripts/tag_cli.py"), tag_id, "start"]
+                env = {**os.environ, "TAG_AI_MIGRATION_RESTART": "1"}
+                if subprocess.call(command, env=env, stdin=subprocess.DEVNULL,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL):
+                    raise RuntimeError(f"Shared AI accounts migrated, but {tag_id} could not restart. Retry tag start.")
+            pending.remove(tag_id)
+            tag_chatgpt.atomic_write(checkpoint, {"version": 1, "restart": pending})
+
+
+def _settings_ai(context, args) -> int:
+    try:
+        import tag_ai
+    except ImportError:
+        from scripts import tag_ai
+    target = _ai_target(context)
+    return tag_ai.cli(args.arguments[1:], target, json_output=args.json_output, restart=args.restart,
+                      method=args.method, account=args.account, effort=args.effort)
+
+
 def _run_cli() -> int:
     parser = argparse.ArgumentParser(description="Tag: set up, inspect, and manage your Slack teammate.",
                                      usage="tag [TAG] [COMMAND] [OPTIONS]",
                                      epilog=(
-                                         "Use tag for default status, or tag NAME status for a named Tag. "
+                                         "Use tag status for your main Tag, or tag NAME status for another Tag. "
                                          "Start with tag setup; change configuration with tag settings.\n\n"
                                          "Telemetry: Tag can collect minimal anonymous CLI usage without prompts, "
                                          "Slack messages, agent output, paths, logs, credentials, or configuration "
@@ -1554,10 +2150,14 @@ def _run_cli() -> int:
                                      ),
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("command", nargs="?", choices=COMMANDS)
-    parser.add_argument("arguments", nargs="*", help="memory: start | status | stop; config: init | show | keys | set KEY VALUE; chatgpt: status | login [ACCOUNT] | use ACCOUNT | logout [ACCOUNT] | use-codex")
+    parser.add_argument("arguments", nargs="*", help="memory: start | status | stop; config: init | show | keys | set KEY VALUE; chatgpt: status | login [ACCOUNT] | use ACCOUNT | logout [ACCOUNT] | use-codex; settings: ai [status | models | sign-in codex|claude | resume | model VALUE | effort LEVEL|default]")
     parser.add_argument("--offline", action="store_true")
     parser.add_argument("--json", action="store_true", dest="json_output", help="structured output for inspect, status, doctor, config, paths, upgrade, usage, and chatgpt")
     parser.add_argument("--consent", action="store_true", help="chatgpt login: request plan permission again")
+    parser.add_argument("--method", choices=("chatgpt", "codex"), help="settings ai sign-in codex: a shared ChatGPT account, or the Codex sign-in on this computer")
+    parser.add_argument("--account", help="settings ai sign-in codex --method chatgpt: renew this saved account")
+    parser.add_argument("--effort", metavar="LEVEL", help="settings ai model VALUE: also save this thinking level, or default for the model's own")
+    parser.add_argument("--restart", action="store_true", help="settings ai: restart a running Tag to apply the change")
     parser.add_argument("--stdin", action="store_true", help="read a config value from stdin")
     parser.add_argument("--from", dest="source", type=Path)
     parser.add_argument("--no-start", action="store_true", help=argparse.SUPPRESS)
@@ -1565,12 +2165,25 @@ def _run_cli() -> int:
     parser.add_argument("--review", action="store_true", help="setup: review choices even when already configured")
     parser.add_argument("--follow", action="store_true", help="logs: continue streaming new service output")
     parser.add_argument("--limit", type=int, help="logs: recent lines (default: 50); chatgpt status: accounts (default: 10)")
+    parser.add_argument("--activity", metavar="RUN_ID", help="logs: read one request's saved steps and error report (also supports --json)")
+    parser.add_argument("--activity-channel", metavar="CHANNEL_ID", help="logs --json: show activity only in this Slack channel")
+    parser.add_argument("--activity-limit", type=int, help="logs --json: number of recent activity records (default: 50, maximum: 10000)")
+    parser.add_argument("--hide-errors", action="store_true", help="logs --json: omit failed requests from activity")
     upgrade_selector = parser.add_mutually_exclusive_group()
     upgrade_selector.add_argument("--channel", choices=UPGRADE_CHANNELS, help="upgrade: switch to this release channel")
     upgrade_selector.add_argument("--version", dest="target_version", help="upgrade: install and pin this exact version")
     parser.add_argument("--dry-run", action="store_true", help="upgrade or chatgpt: report the action without changing state")
     parser.add_argument("--no-restart", action="store_true", help="upgrade: leave running services on the previous code")
     parser.add_argument("--allow-downgrade", action="store_true", help="upgrade: explicitly permit installing an older release")
+    parser.add_argument("--step", action="store_true", help="setup, add: start or continue setup in the background and print the next question as JSON")
+    parser.add_argument("--answer", dest="step_answer", metavar="JSON", help="setup, add: answer the current --step question with a JSON value")
+    parser.add_argument("--question", dest="step_question", metavar="ID", help="setup, add: with --answer, only answer if this question is being asked")
+    parser.add_argument("--stop", action="store_true", dest="step_stop", help="setup, add: pause the background setup, saving progress")
+    parser.add_argument("--back", action="store_true", dest="step_back", help="setup, add: return to the previous --step question when it says can_go_back")
+    parser.add_argument("--nickname", help="rename: short name for commands (default: derived from the new name)")
+    parser.add_argument("--delete-app", action="store_true", help="remove: also permanently delete the Tag's Slack app")
+    parser.add_argument("--confirm-app", help="remove --delete-app: the App ID to delete, typed to confirm")
+    parser.add_argument("--workspace", help="start, stop, restart: every Tag in this Slack workspace (team ID or name)")
     raw_arguments = sys.argv[1:]
     explicit_tag = bool(
         raw_arguments
@@ -1581,12 +2194,42 @@ def _run_cli() -> int:
     )
     tag_id = raw_arguments.pop(0) if explicit_tag else "default"
     args = parser.parse_args(raw_arguments)
+    if args.activity and (args.command != "logs" or args.follow):
+        parser.error("--activity requires logs and cannot be combined with --follow")
+    if (args.activity_channel or args.hide_errors or args.activity_limit is not None) and (args.command != "logs" or not args.json_output or args.follow or args.activity):
+        parser.error("Activity filters and --activity-limit require logs --json without --activity or --follow")
+    if args.activity_limit is not None and not 1 <= args.activity_limit <= 10000:
+        parser.error("--activity-limit must be between 1 and 10000")
     if (args.no_start or args.test or args.review) and args.command != "setup":
         parser.error("--no-start, --test and --review are only for setup")
-    if args.arguments and args.command not in {"add", "memory", "config", "telemetry", "chatgpt"}:
-        parser.error("Only add, memory, config, telemetry, and chatgpt accept additional positional arguments")
-    if args.json_output and args.command not in {"list", "memory", "inspect", "status", "doctor", "config", "paths", "upgrade", "telemetry", "chatgpt", "usage"}:
-        parser.error("--json supports list, memory, inspect, status, doctor, config, paths, upgrade, telemetry, usage, and chatgpt")
+    if args.arguments and args.command not in {"add", "memory", "config", "telemetry", "rename", "describe", "autostart", "chatgpt", "settings"}:
+        parser.error("Only add, memory, config, telemetry, rename, describe, autostart, chatgpt, and settings accept additional positional arguments")
+    settings_ai = args.command == "settings" and args.arguments[:1] == ["ai"]
+    if args.command == "settings" and args.arguments and not settings_ai:
+        parser.error("settings accepts only ai, for example tag settings ai --json")
+    if (args.method or args.account or args.restart or args.effort is not None) and not settings_ai:
+        parser.error("--method, --account, --effort and --restart are only for tag settings ai")
+    if args.json_output and args.command not in {"list", "memory", "inspect", "status", "doctor", "config", "paths", "upgrade", "telemetry", "setup", "add", "rename", "describe", "abandon", "remove", "start", "stop", "restart", "autostart", "version", "logs", "chatgpt", "usage"} and not settings_ai:
+        parser.error("--json supports list, memory, inspect, status, doctor, config, paths, upgrade, telemetry, usage, chatgpt, settings ai, autostart, version, logs, setup, add, rename, describe, and start/stop/restart with --workspace")
+    if args.json_output and args.follow:
+        parser.error("--json cannot be combined with --follow")
+    if args.json_output and args.command in {"start", "stop", "restart"} and not args.workspace:
+        parser.error("--json for start, stop, and restart requires --workspace")
+    if (args.delete_app or args.confirm_app) and args.command != "remove":
+        parser.error("--delete-app and --confirm-app are only for remove")
+    if args.nickname and args.command != "rename":
+        parser.error("--nickname is only for rename")
+    if args.workspace and args.command not in {"start", "stop", "restart"}:
+        parser.error("--workspace is only for start, stop, and restart")
+    if args.workspace and explicit_tag:
+        parser.error("--workspace selects Tags itself; don't also name a Tag")
+    if args.json_output and args.command in {"setup", "add"}:
+        if args.test:
+            parser.error("--json cannot be combined with --test")
+        # A graphical client drives the same setup flow over JSON lines.
+        os.environ[SETUP_PROTOCOL_ENV] = "jsonl"
+    if os.getenv(SETUP_PROTOCOL_ENV) == "jsonl" and args.command in {"setup", "add"}:
+        _setup_ui().enter_protocol()
     if args.stdin and args.command != "config":
         parser.error("--stdin is only for config set")
     if args.offline and args.command not in {"inspect", "doctor"}:
@@ -1604,8 +2247,47 @@ def _run_cli() -> int:
     if args.limit is not None and args.limit < 1:
         parser.error("--limit must be at least 1")
     installation_root = tag_home()
+    global_ai = settings_ai and args.arguments[1:2] in (["connections"], ["sign-in"], ["resume"])
+    if global_ai:
+        if explicit_tag:
+            parser.error("AI connections are shared by all Tags. Use tag settings ai " + " ".join(args.arguments[1:]))
+        try:
+            import tag_ai
+        except ImportError:
+            from scripts import tag_ai
+        return tag_ai.cli(args.arguments[1:], _global_ai_target(installation_root),
+                          json_output=args.json_output, restart=args.restart,
+                          method=args.method, account=args.account, effort=args.effort)
+    if args.command == "chatgpt":
+        if explicit_tag:
+            parser.error("ChatGPT accounts are shared by all Tags. Use tag chatgpt without a Tag name.")
+        try:
+            from . import tag_chatgpt
+        except ImportError:
+            import tag_chatgpt
+        read_only = args.dry_run or not args.arguments or args.arguments[0] == "status"
+        with nullcontext() if read_only else LifecycleLock(installation_root / "state/ai-connection.lock"):
+            return tag_chatgpt.cli(args.arguments, json_output=args.json_output,
+                                   dry_run=args.dry_run, consent=args.consent, limit=args.limit or 10)
+    stepping = args.step or args.step_answer is not None or args.step_stop or args.step_back
+    if stepping or args.step_question:
+        if args.command not in {"setup", "add"}:
+            parser.error("--step, --answer, --question, --back and --stop are only for setup and add")
+        if sum(map(bool, (args.step, args.step_answer is not None, args.step_stop, args.step_back))) != 1:
+            parser.error("Use exactly one of --step, --answer, --back, or --stop")
+        if args.step_question and args.step_answer is None:
+            parser.error("--question is only used with --answer")
+        if args.test:
+            parser.error("--step cannot be combined with --test")
+        return _setup_step(args, installation_root, raw_tag=sys.argv[1] if explicit_tag else None)
+    if explicit_tag:
+        # A nickname from `tag rename` works anywhere a Tag's ID does.
+        tag_id = tag_instances.resolve_reference(installation_root, tag_id)
     tag_instances.validate_name(tag_id, existing=True)
-    if args.command in {"version", "upgrade", "rollback", "migrate", "list", "add", "memory", "telemetry"} and explicit_tag:
+    if tag_id == tag_instances.DEFAULT_TAG:
+        # Plain commands and the legacy `tag default …` both mean the main Tag.
+        tag_id = tag_instances.select_unnamed(installation_root)
+    if args.command in {"version", "upgrade", "rollback", "migrate", "list", "add", "memory", "telemetry", "autostart"} and explicit_tag:
         parser.error(f"Tag selection is not supported for installation-wide command '{args.command}'")
     try:
         import tag_control as control
@@ -1613,9 +2295,19 @@ def _run_cli() -> int:
     except ImportError:
         from scripts import tag_control as control, tag_config as settings
     if args.command == "telemetry":
-        if len(args.arguments) != 1 or args.arguments[0] not in {"status", "on", "off"}:
+        action = args.arguments[0] if args.arguments else ""
+        if action == "record":
+            # Tag.app's fixed events, recorded only when the saved preference allows it.
+            fields = dict(item.partition("=")[::2] for item in args.arguments[2:])
+            if len(args.arguments) < 2 or not tag_telemetry.record_app_event(
+                installation_root, args.arguments[1], fields
+            ):
+                parser.error("telemetry record requires a known app event and its fields")
+            if args.json_output:
+                print(json.dumps({"schema_version": 1, "ok": True}))
+            return 0
+        if len(args.arguments) != 1 or action not in {"status", "on", "off"}:
             parser.error("telemetry requires status, on, or off")
-        action = args.arguments[0]
         if action == "on":
             if tag_telemetry.hard_disabled():
                 raise RuntimeError(
@@ -1625,7 +2317,9 @@ def _run_cli() -> int:
                 raise RuntimeError(
                     "This Tag build has no approved telemetry destination; no preference was changed"
                 )
-            _show_telemetry_scope(installation_root)
+            # Apps show the same notice themselves before turning telemetry on.
+            if not args.json_output:
+                _show_telemetry_scope(installation_root)
             tag_telemetry.enable(installation_root)
         elif action == "off":
             if not tag_telemetry.disable(installation_root):
@@ -1651,40 +2345,39 @@ def _run_cli() -> int:
                 str(result["privacy_notice"] or "Not configured in this build"),
             )
         return 0
+    if args.command == "autostart":
+        return _autostart_command(installation_root, args, parser)
+    if args.command == "version" and args.json_output:
+        print(json.dumps({"schema_version": 1,
+                          "version": (ROOT / "VERSION").read_text(encoding="utf-8").strip(),
+                          "app_protocol": APP_PROTOCOL, "capabilities": list(CAPABILITIES),
+                          "platform": sys.platform,
+                          "runtime": runtime_identity(installation_root)}, indent=2))
+        return 0
     if args.command == "add":
         if args.arguments:
             parser.error("add does not accept a name; the workspace alias is chosen during onboarding")
-        if not sys.stdin.isatty():
+        if not display.stdin_is_terminal() and not args.json_output:
             print(
                 "Interactive setup requires a terminal. Use tag inspect --json and tag config set for automation.",
                 file=sys.stderr,
             )
             return 2
-        try:
-            import opentag_setup as setup
-        except ImportError:
-            from scripts import opentag_setup as setup
-        selected = setup.connect_slack_workspace()
-        if not selected:
-            return 1
-        team_id, workspace_name = selected[:2]
-        suggestion = tag_instances.suggest_name(installation_root, workspace_name)
-        display.header("Add", f"Slack workspace connected: {workspace_name}")
-        display.paragraph("Choose a workspace alias. It is used in commands and does not change your assistant's Slack name.")
-        while True:
-            alias = setup.ask("Workspace alias", suggestion).strip()
-            try:
-                context = tag_instances.create(installation_root, alias)
-                break
-            except ValueError as exc:
-                display.paragraph(str(exc), display.WARNING)
-        settings.update_config(settings.config_path(context.home), {"SLACK_TEAM_ID": team_id,
-            "SLACK_ENTERPRISE_ID": getattr(selected, "enterprise_id", "")})
-        display.header("Add", f"Created workspace alias '{context.tag_id}'.")
+        # Setup asks for the Tag's name and picture first, then the AI, then the
+        # Slack workspace, and records the workspace name on this Tag. Setup
+        # renames the Tag after its Slack IDs; nobody invents an alias.
+        context = tag_instances.create(
+            installation_root, tag_instances.suggest_name(installation_root, "new tag"), provisional=True
+        )
+        display.header("Add", "New Tag")
         display.info_row("Home", display.short_path(context.home), good=True)
         display.info_row("Command", context.command("setup"), good=True)
         command = [sys.executable, str(ROOT / "scripts/tag_cli.py"), *context.command_arguments("setup")]
-        return subprocess.call(command, env=instance_environment(context))
+        result = subprocess.call(command, env={**instance_environment(context), DEFER_RENAME_ENV: "1"})
+        renamed = _rename(installation_root, context.tag_id) if result == 0 else None
+        if renamed and not args.json_output:
+            display.info_row("Tag", f"Named '{renamed}' after its Slack team and app IDs", good=True)
+        return _setup_result(result, renamed or context.tag_id, args.json_output)
     if args.command == "list":
         if args.arguments:
             parser.error("list does not accept positional arguments")
@@ -1695,40 +2388,84 @@ def _run_cli() -> int:
                 try:
                     context = tag_instances.resolve(installation_root, str(item["id"]))
                     report = control.inspect(context.home, sys.modules[__name__], tag_id=context.tag_id)
+                    config_file = context.home / "config/settings.json"
+                    values = read_config(config_file) if config_file.is_file() else {}
+                    names = agent_models.load_model_names(agent_models.model_names_path(context.home))
+                    default_backend = report["backend"]["selected"] or "codex"
                     record.update(state=report["state"], configuration=report["configuration"],
                                   services=report["services"], slack_workspace=report.get("slack_workspace"),
+                                  workspace_name=tag_instances.workspace_name(context.home),
+                                  slack_name=_slack_name(context.home),
+                                  slack_app_id=values.get("SLACK_APP_ID") or None,
+                                  has_app=bool(values.get("SLACK_APP_ID")) or (
+                                      context.home / "integrations/slack-cli/tag-create.json").exists(),
+                                  nickname=tag_instances.nickname(context.home),
+                                  avatar=_avatar(context.home, values),
+                                  workspace_icon=_workspace_icon(context.home),
+                                  keep_running=autostart.wanted(context.home) is True,
+                                  main=context.tag_id == tag_id,
                                   default_model=report["backend"]["default_model"],
                                   default_model_label=agent_models.describe_model_choice(
-                                      report["backend"]["default_model"], report["backend"]["selected"] or "codex",
-                                      names=agent_models.load_model_names(agent_models.model_names_path(context.home)),
-                                  ))
+                                      report["backend"]["default_model"], default_backend, names=names,
+                                  ),
+                                  default_model_name=agent_models.model_choice_name(
+                                      report["backend"]["default_model"], default_backend, names=names,
+                                  ),
+                                  default_effort=agent_models.effective_effort(context.home, values),
+                                  description=values.get("OPENTAG_BOT_DESCRIPTION") or None,
+                                  channels=_channels(values, context.home))
                 except (OSError, ValueError, RuntimeError) as exc:
                     record.update(valid=False, state="invalid_configuration", error=str(exc))
             else:
                 record["state"] = "invalid_tag"
+            # Before first setup there is no Tag yet; don't list a placeholder.
+            if record["id"] == tag_instances.DEFAULT_TAG and not Path(str(record["home"])).exists():
+                continue
             rows.append(record)
         result = {"schema_version": 1, "installation_root": str(installation_root), "tags": rows}
         if args.json_output:
             print(json.dumps(result, indent=2))
         else:
-            display.header("Tags", "Independent Slack workspaces managed by this installation.")
+            display.header("Tags", "Grouped by Slack workspace. Several Tags can share one.")
+            groups: dict[str, list[dict]] = {}
             for row in rows:
-                workspace = row.get("slack_workspace") or "Slack not configured"
-                model = row.get("default_model_label") or ""
-                detail = (" · ".join(part for part in (row["state"], workspace, model) if part)
-                          if row.get("valid") else str(row.get("error")))
-                display.info_row(str(row["id"]), detail, good=bool(row.get("valid")))
-            display.next_action("Connect another Slack workspace", "tag add")
+                label = row.get("workspace_name") or row.get("slack_workspace") or "Slack not connected yet"
+                groups.setdefault(str(label), []).append(row)
+            for label, members in groups.items():
+                team = members[0].get("slack_workspace")
+                display.section(f"{label} ({team})" if team and team != label else label)
+                for row in members:
+                    name = row.get("slack_name") or "New Tag"
+                    alias = f" · tag {row['nickname']}" if row.get("nickname") else ""
+                    main = " · main" if row.get("main") else ""
+                    model = f" · {row['default_model_label']}" if row.get("default_model_label") else ""
+                    if model and row.get("default_effort"):
+                        model += f" · {agent_models.effort_label(row['default_effort'])} thinking"
+                    detail = (f"{name} · {row['state']}{alias}{main}{model}" if row.get("valid")
+                              else str(row.get("error")))
+                    display.info_row(str(row["id"]), detail, good=bool(row.get("valid")))
+            if len(groups) and any(row.get("slack_workspace") for row in rows):
+                display.next_action("Start every Tag in a workspace", "tag start --workspace TEAM_ID")
+            display.next_action("Add a Tag", "tag add")
         return 0
+    if args.workspace:
+        return _workspace_lifecycle(installation_root, args.workspace, args.command, args.json_output)
     initializes_default = tag_id == "default" and (
         args.command in {"start", "dev", "setup"}
-        or (args.command == "chatgpt" and not args.dry_run and args.arguments and args.arguments[0] in {"login", "use", "logout", "use-codex"})
         or (args.command == "config" and args.arguments and args.arguments[0] in {"init", "set"})
     )
+    if initializes_default and not tag_instances.instance_path(installation_root, tag_id).exists():
+        existing = [str(item["id"]) for item in tag_instances.discover(installation_root)
+                    if item["valid"] and Path(str(item["home"])).exists()]
+        if existing:
+            # Several Tags and no main one: don't guess, and don't create another.
+            raise RuntimeError("Several Tags exist. Name one, for example tag " + existing[0] + " "
+                               + args.command + ", or run tag add for a new Tag.")
     context = (tag_instances.ensure_default(installation_root) if initializes_default
                else tag_instances.resolve(installation_root, tag_id))
     home = context.home
     if args.command in {"start", "dev", "setup"}:
+        _migrate_shared_ai(installation_root, home, defer_current=args.command in {"start", "dev"})
         try:
             from tag_dependencies import migrate as migrate_dependencies
         except ImportError:
@@ -1740,6 +2477,10 @@ def _run_cli() -> int:
             from scripts.tag_layout import migrate as migrate_layout
         migrate_layout(context, sys.modules[__name__])
         context = tag_instances.resolve(installation_root, tag_id)
+        if args.command != "setup":
+            # Setup renames once the Slack name is chosen; start renames first.
+            tag_id = _rename(installation_root, tag_id) or tag_id
+            context = tag_instances.resolve(installation_root, tag_id)
         home = context.home
     environment = instance_environment(context)
     startup_attempt_overrides = {
@@ -1767,13 +2508,6 @@ def _run_cli() -> int:
             print(f"Missing usage: {usage['attempts_without_usage']} attempts; missing cost: {usage['attempts_without_cost']}; unfinished: {usage['unfinished_attempts']}")
             print(usage['coverage'])
         return 0
-    if args.command == "chatgpt":
-        try:
-            from . import tag_chatgpt
-        except ImportError:
-            import tag_chatgpt
-        return tag_chatgpt.cli(args.arguments, json_output=args.json_output,
-                               dry_run=args.dry_run, consent=args.consent, limit=args.limit or 10)
     if args.command == "memory":
         action = args.arguments[0] if len(args.arguments) == 1 else "status" if not args.arguments else ""
         if action not in {"start", "status", "stop"}:
@@ -1825,7 +2559,9 @@ def _run_cli() -> int:
             control.show_status(report)
             show_upgrade_reminder(installation_root)
         return int(args.command == "status" and report["state"] != "running")
-    if args.command in {"setup", "settings", "reset"} and not sys.stdin.isatty():
+    if args.command in {"setup", "settings", "reset"} and not display.stdin_is_terminal() and not (
+        args.command == "setup" and os.getenv(SETUP_PROTOCOL_ENV) == "jsonl"
+    ) and not (settings_ai and (args.json_output or len(args.arguments) > 1)):
         print("Interactive setup requires a terminal. Use tag inspect --json and tag config set for automation.", file=sys.stderr)
         return 2
     if args.command == "reset":
@@ -1834,10 +2570,22 @@ def _run_cli() -> int:
         except ImportError:
             from scripts.tag_reset import reset_and_setup
         return reset_and_setup(home, sys.modules[__name__])
+    if settings_ai:
+        if args.arguments[1:2] not in ([], ["status"], ["models"]):
+            initialize_instance(home)  # Only changes need the private home; checks don't create one.
+        return _settings_ai(context, args)
     if args.command == "settings":
         initialize_instance(home)
-        control.settings_menu(home)
+        control.settings_menu(home, ai=_ai_target(context))
         return 0
+    if args.command == "rename":
+        return _rename_command(context, args)
+    if args.command == "describe":
+        return _describe_command(context, args)
+    if args.command == "abandon":
+        return _abandon_command(context, args)
+    if args.command == "remove":
+        return _remove_command(context, args)
     if args.command == "restart":
         display.header("Restart", selected_target(home, context.tag_id))
         command = [sys.executable, str(ROOT / "scripts/tag_cli.py")]
@@ -1860,7 +2608,7 @@ def _run_cli() -> int:
             show_upgrade_reminder(installation_root)
         return int(args.command == "status" and not all(report["services"].values()))
     if args.command == "version":
-        print("Tag v" + (ROOT / "VERSION").read_text().strip())
+        print("Tag v" + (ROOT / "VERSION").read_text(encoding="utf-8").strip())
         return 0
     if args.command == "paths":
         paths = {key: str(home / key) for key in ("config", "integrations", "state", "tmp")}
@@ -1978,9 +2726,26 @@ def _run_cli() -> int:
         if args.review:
             command.append("--review")
         result = subprocess.call(command, env=environment)
-        if result == 0 and not args.test:
+        tag_id = context.tag_id
+        if result == 0 and not args.test and not os.getenv(DEFER_RENAME_ENV):
+            was_running = process_for(home / "state/slack.json") is not None
+            renamed = _rename(installation_root, tag_id)
+            if renamed:
+                tag_id = renamed
+                if not args.json_output:
+                    display.info_row("Tag", f"Named '{renamed}' after its Slack team and app IDs", good=True)
+                if was_running:
+                    result = subprocess.call(
+                        # Name the renamed Tag: it isn't necessarily the main one.
+                        [sys.executable, str(ROOT / "scripts/tag_cli.py"), tag_id, "start"],
+                        env={key: value for key, value in os.environ.items()
+                             # Drop the pre-rename instance's paths; start rebuilds them.
+                             if not key.startswith(("TAG_INSTANCE_HOME", "TAG_ID", "OPENTAG_"))
+                             and key not in {"TMPDIR", "TEMP", "TMP"}},
+                    )
+        if result == 0 and not args.test and not args.json_output:
             show_upgrade_reminder(installation_root)
-        return result
+        return _setup_result(result, tag_id, args.json_output)
     if args.command == "doctor" and args.json_output:
         report = control.inspect(home, sys.modules[__name__], offline=True, tag_id=context.tag_id)
         if not report["configuration"]["complete"]:
@@ -2017,7 +2782,7 @@ def _run_cli() -> int:
     os.environ["OPENTAG_WORKDIR"] = str(context.workspace)
     if args.command == "doctor":
         result = doctor(home, args.offline, args.json_output, tag_id=context.tag_id)
-        if not args.offline and not args.json_output and sys.stdin.isatty():
+        if not args.offline and not args.json_output and display.stdin_is_terminal():
             try:
                 import tag_diagnose
             except ImportError:
@@ -2027,8 +2792,43 @@ def _run_cli() -> int:
                 report["services"]["mfs"], (home / "state").glob("*.log")))
         return result
     if args.command == "logs":
-        display.header("Logs", selected_target(home, context.tag_id))
+        try:
+            import tag_activity, slack_channel_names
+        except ImportError:
+            from scripts import tag_activity, slack_channel_names
+        if args.activity:
+            details = tag_activity.activity_details(home / "state/activity", args.activity,
+                report_directory=Path(os.getenv("OPENTAG_ERROR_REPORTS_DIR", str(home / "state/error-reports"))).expanduser())
+            if details is None:
+                error = "Activity is unavailable or expired. Run " + context.command("logs") + " --json for retained run IDs."
+                if args.json_output:
+                    print(json.dumps({"schema_version": 1, "ok": False, "error": error}))
+                else:
+                    print(error, file=sys.stderr)
+                return 1
+            if args.json_output:
+                print(json.dumps({"schema_version": 1, "ok": True, "activity": details}, ensure_ascii=False))
+            else:
+                print(tag_activity.activity_details_text(details))
+            return 0
         logs = sorted((home / "state").glob("*.log"))
+        if args.json_output:
+            try:
+                values = read_config(home / "config/settings.json")
+            except (OSError, ValueError):
+                values = {}
+            scopes = values.get("MFS_ALLOWED_SCOPES", "")
+            team = values.get("SLACK_TEAM_ID", "")
+            activity_limit = args.activity_limit or tag_activity.MAX_RECENT
+            activity = tag_activity.recent_activity(home / "state/activity", scopes, limit=activity_limit + 1,
+                channel=args.activity_channel, hide_errors=args.hide_errors,
+                cached_names={team: slack_channel_names.read(home, team)})
+            print(json.dumps({"schema_version": 1, "tag": context.tag_id, "services": {
+                log.stem: log_tail(home, log.stem, args.limit or 200).splitlines() for log in logs
+            }, "activity": activity[:activity_limit], "activity_has_more": len(activity) > activity_limit},
+                indent=2, ensure_ascii=False))
+            return 0
+        display.header("Logs", selected_target(home, context.tag_id))
         if not logs:
             display.section("Services")
             display.info_row("Logs", "No service logs found yet")
@@ -2050,6 +2850,9 @@ def _run_cli() -> int:
         return development_loop(home)
     if args.command == "stop":
         restart_flow = os.getenv("TAG_RESTART_FLOW") == "1"
+        if not restart_flow:
+            # Stopping on purpose means the login service leaves this Tag off.
+            autostart.set_wanted(home, False)
         if restart_flow:
             display.section("Stopping")
         else:
@@ -2086,6 +2889,10 @@ def _run_cli() -> int:
         return 0
     if args.command == "start":
         restart_flow = os.getenv("TAG_RESTART_FLOW") == "1"
+        supervised = os.getenv(autostart.SUPERVISED_ENV) == "1"
+        if not supervised:
+            # Recorded even if this start fails: the login service retries with backoff.
+            autostart.set_wanted(home, True)
         if restart_flow:
             display.section("Starting")
         else:
@@ -2093,9 +2900,24 @@ def _run_cli() -> int:
             display.section("Readiness")
         display.info_row("Runtime", "Dependencies available", good=True)
         # Serialize starts so concurrent invocations cannot create orphan services.
-        lock = LifecycleLock(home / "state/start.lock").acquire()
+        connection_lock = LifecycleLock(installation_root / "state/ai-connection.lock").acquire()
+        try:
+            ai_lock = LifecycleLock(installation_root / "state/ai-start.lock").acquire()
+        except Exception:
+            connection_lock.release()
+            raise
+        try:
+            lock = LifecycleLock(home / "state/start.lock").acquire()
+        except Exception:
+            ai_lock.release()
+            connection_lock.release()
+            raise
         started = []
         try:
+            if supervised and autostart.wanted(home) is not True:
+                # Someone stopped this Tag while the login service was about to start it.
+                display.info_row("Start", "Skipped · this Tag was switched off")
+                return 0
             try:
                 import slack_manifest_migrations
             except ImportError:
@@ -2121,6 +2943,32 @@ def _run_cli() -> int:
                 "Permissions migrated" if manifest_changed else "Permissions current",
                 good=True,
             )
+            avatar = _refresh_avatar(home, values)
+            if avatar != "skipped":
+                display.info_row("Picture", {
+                    "saved": "Slack picture updated", "current": "Slack picture current",
+                    "needs_permission": "Picture waits for users:read · approve Tag's app update in Slack, then retry tag start",
+                    "unavailable": "Slack picture unavailable · keeping the saved picture; Tag will retry",
+                }[avatar], good=avatar in {"saved", "current"})
+            _refresh_workspace_name(home, values)
+            try:
+                import slack_channel_names
+            except ImportError:
+                from scripts import slack_channel_names
+            try:
+                slack_channel_names.migrate(home, values)
+            except (OSError, ValueError):
+                pass  # Display metadata retries on the next start; it cannot block service readiness.
+            icon = _refresh_workspace_icon(home, values)
+            if icon != "skipped":
+                # team:read is optional: without it the workspace shows as a letter, and the start continues.
+                pending = slack_manifest_migrations.optional_pending(home)
+                display.info_row("Workspace", {
+                    "saved": "Icon updated", "current": "Icon current", "default": "Slack's default icon",
+                    "needs_permission": "Icon waits for team:read · approve Tag's app update in Slack"
+                    + ("; Tag asks again within a day" if pending else ""),
+                }.get(icon, "Icon not updated · " + icon.removeprefix("unavailable: ")),
+                    good=icon in {"saved", "current", "default"})
             ensure_connector_credential(home, values)
             display.pending_row("Memory", "Waiting for the service to become healthy…")
             ensure_shared_memory(context, os.environ.copy())
@@ -2137,7 +2985,7 @@ def _run_cli() -> int:
                 raise RuntimeError(
                     "MFS scope did not become readable after indexing: "
                     + unavailable_scopes[0]
-                    + ". Run mfs status and tag doctor, then retry tag start."
+                    + ". Run tag memory and tag doctor, then retry tag start."
                 )
             display.info_row("Channel memory", "Ready", good=True)
             preflight_result, preflight = doctor_report(False)
@@ -2219,6 +3067,18 @@ def _run_cli() -> int:
             raise
         finally:
             lock.release()
+            ai_lock.release()
+            connection_lock.release()
+        try:
+            import tag_chatgpt
+        except ImportError:
+            from scripts import tag_chatgpt
+        checkpoint = installation_root / "shared/ai/migration-v1.json"
+        with nullcontext() if os.getenv("TAG_AI_MIGRATION_RESTART") == "1" else LifecycleLock(installation_root / "state/ai-migration.lock"):
+            record = tag_chatgpt.read_object(checkpoint)
+            if os.getenv("TAG_AI_MIGRATION_RESTART") != "1" and context.tag_id in record.get("restart", []):
+                record["restart"].remove(context.tag_id)
+                tag_chatgpt.atomic_write(checkpoint, record)
         show_upgrade_reminder(installation_root)
     return 0
 
@@ -2244,7 +3104,7 @@ def _offer_first_run_telemetry(installation_root: Path) -> None:
         tag_telemetry.hard_disabled()
         or not tag_telemetry.collection_available()
         or tag_telemetry.saved_preference(installation_root) is not None
-        or not sys.stdin.isatty()
+        or not display.stdin_is_terminal()
         or not sys.stdout.isatty()
     ):
         return
@@ -2322,7 +3182,7 @@ def main() -> int:
     if enabled:
         invocation = (
             "interactive"
-            if sys.stdin.isatty() and sys.stdout.isatty()
+            if display.stdin_is_terminal() and sys.stdout.isatty()
             else "non_interactive"
         )
         tag_telemetry.tui_started(installation_root, invocation)
@@ -2378,7 +3238,9 @@ if __name__ == "__main__":
             print("\nInterrupted. Run tag setup to resume saved setup.", file=sys.stderr)
         raise SystemExit(130)
     except (OSError, ValueError, RuntimeError, ImportError) as exc:
-        if "--json" in sys.argv:
+        if os.getenv(SETUP_PROTOCOL_ENV) == "jsonl":
+            _setup_ui().emit({"type": "result", "status": "failed", "error": str(exc), "exit_code": 1})
+        elif "--json" in sys.argv:
             print(json.dumps({"schema_version": 1, "ok": False, "error": str(exc)}))
         elif len(sys.argv) > 1 and sys.argv[1] in {"start", "restart", "dev"}:
             title = "Dev" if sys.argv[1] == "dev" else (

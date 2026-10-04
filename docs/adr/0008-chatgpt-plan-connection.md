@@ -2,20 +2,23 @@
 
 - Status: Accepted
 - Date: 2026-10-02
+- Amended: 2026-10-05 — shared provider accounts for all Tags.
 - Tracking: [ChatGPT plan connection #153](https://github.com/klovr-co/hover-tag/issues/153)
 - Extends: ADR 0004's inherited authentication and ephemeral-thread defaults.
 
 ## Decision
 
 Existing installations continue to use their existing Codex sign-in. Operators
-may explicitly connect a ChatGPT plan to one Tag with `tag chatgpt login`.
+may explicitly connect a ChatGPT plan for all Tags with `tag chatgpt login`.
 This uses OpenAI's dynamic public-client registration, PKCE, state, nonce,
 and signature-verified OpenID Connect identity. It requires browser consent.
 A valid identity without the plan scope is saved but cannot start inference.
 
 The installation has one stable UUID host identifier, generated before first
-consent and reused across restarts and sign-outs. Each Tag keeps separate
-registrations, token sets, and an explicit active account in its private folder.
+consent and reused across restarts and sign-outs. All Tags share registrations, token sets, and one explicit active account in
+`$TAG_HOME/shared/ai/chatgpt/accounts.json`. Settings manages provider connections;
+Tag details and setup select only a model and thinking level. This supersedes
+the original decision to keep independent accounts per Tag.
 The issued client ID and verified subject identify a registration; email is
 only display metadata. The account store has schema version 1. Its absence
 means inherited Codex authentication and does not trigger consent or rewrite
@@ -26,8 +29,8 @@ set together. Startup checks the selected grant before dependent services;
 each Codex invocation reads fresh credentials. Terminal refresh errors clear
 unusable tokens but retain the registration. Temporary errors preserve it.
 Logout never silently selects a different billing path. Account changes require
-a stopped Slack bridge, so its model catalog and task credentials stay aligned.
-Account mutation commits share the bridge startup lock and recheck the live
+all Slack bridges stopped, so its model catalog and task credentials stay aligned.
+Account mutation commits share the installation and bridge startup locks and recheck the live
 process after browser consent. Each task pins its authentication mode,
 registration, and subject; renewal and usage-pause updates fail closed if that
 identity changes. A failed model-catalog lookup logs the recovery error and
@@ -55,13 +58,17 @@ through App Server's documented provider behavior.
 ## Consequences
 
 - Codex must still be installed, but a plan connection needs no Codex login.
-- All authorized Slack callers for a Tag use its operator-selected account.
+- All authorized Slack callers use the installation's operator-selected provider account.
   This is not per-Slack-user account linking.
-- Account switching requires stopping and restarting that Tag.
+- Account switching pauses all running Tags and restores that running set afterwards.
+- Version 1 migration preserves old registrations and verifies shared storage before
+  completion. Conflicting legacy account selections require an explicit shared
+  selection; migration never guesses a billing identity. Legacy files remain for
+  recovery but are not reimported. Models and thinking levels stay per Tag.
 - Credentials remain subject to ADR 0001's trusted local-account boundary.
   Atomic writes and private permissions do not isolate them from a local agent.
-- Copying a Tag folder also copies its ChatGPT registrations and tokens. The
-  host identifier belongs to the installation, outside the Tag folder. Moving
+- Credentials and the host identifier belong to the installation, outside new
+  Tag folders. Older folders may retain migration copies of credentials. Moving
   to another host requires a fresh sign-in for that host before using the copied
   registration; do not clone the installation host identifier across machines.
 - Browser consent and a completed live inference are manual release

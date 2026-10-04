@@ -24,6 +24,7 @@ class SlackChannel:
     name: str
     is_private: bool
     is_member: bool
+    members: int | None = None
 
     @property
     def label(self) -> str:
@@ -108,6 +109,7 @@ def list_channels(token: str, *, team_id: str = "") -> list[SlackChannel]:
                         name=name,
                         is_private=bool(item.get("is_private")),
                         is_member=bool(item.get("is_member")),
+                        members=item["num_members"] if isinstance(item.get("num_members"), int) else None,
                     )
                 )
         metadata = payload.get("response_metadata") or {}
@@ -186,7 +188,7 @@ def join_selected_channels(token: str, selected: list[SlackChannel], *, app_id: 
     print()
     ui.message("Add Tag to: " + ", ".join(f"#{channel.name}" for channel in pending))
     ui.message("Only these selected public channels will be joined. No history is indexed yet.")
-    action = ui.choose("Add Tag to selected channels?", ["Add Tag and continue", "Back to channels", "Save and exit"], default=1)
+    action = ui.choose("Add Tag to selected channels?", ["Add Tag and continue", "Back to channels", "Save and exit"], default=1, qid="join_channels")
     if action == 1:
         return None
     if action == 2:
@@ -210,7 +212,7 @@ def join_selected_channels(token: str, selected: list[SlackChannel], *, app_id: 
                 if isinstance(error, MissingScope):
                     options.append("Open app settings")
                 while True:
-                    action = ui.choose("Keep your channel selection", options)
+                    action = ui.choose("Keep your channel selection", options, qid="keep_channels")
                     if action != 3:
                         break
                     open_settings(app_id)
@@ -253,7 +255,7 @@ def choose_channels(
                 if public_options:
                     options.append("Add public channels")
                 options.extend(["Check again", "Save and exit"])
-                action = ui.choose("Channel access", options)
+                action = ui.choose("Channel access", options, qid="channel_access")
                 if action == 0:
                     return joined
                 if public_options and action == 1:
@@ -273,7 +275,7 @@ def choose_channels(
             if public_options:
                 print()
                 ui.message("Tag has not joined a channel yet.")
-                action = ui.choose("Add Tag to a channel", ["Choose public channels", "Check after a private invitation", "Save and exit"])
+                action = ui.choose("Add Tag to a channel", ["Choose public channels", "Check after a private invitation", "Save and exit"], qid="add_channel")
                 if action == 0:
                     ui.message("Select public channels for Tag to join.")
                     indices = ui.checklist([f"#{channel.name} (public; Tag will join)" for channel in public_options], set())
@@ -291,7 +293,7 @@ def choose_channels(
             ui.message("No public channels are visible, and Tag has not been invited to a private channel.")
             ui.message("In Slack, open a channel you want Tag to use, type /invite, and select this app.")
             ui.message("Then choose Check again below. Nothing is indexed yet.")
-            if ui.choose("Ready to check membership?", ["Check again", "Save and exit"]) == 1:
+            if ui.choose("Ready to check membership?", ["Check again", "Save and exit"], qid="membership_check") == 1:
                 raise ui.Paused()
             channels = list_channels(token, **({"team_id": team_id} if team_id else {}))
 
@@ -329,6 +331,71 @@ def choose_channels(
         result = join_selected_channels(token, chosen, app_id=app_id)
         if result is not None:
             return result
+
+
+def join_channel(token: str, channel: SlackChannel) -> SlackChannel:
+    """Join one public channel and confirm Slack made Tag a member."""
+    payload = slack_api_post(token, "conversations.join", {"channel": channel.channel_id})
+    result = payload.get("channel") or {}
+    if not isinstance(result, dict) or result.get("id") != channel.channel_id or result.get("is_member") is not True:
+        raise SlackChannelError("Slack did not confirm channel membership.")
+    return SlackChannel(channel.channel_id, channel.name, channel.is_private, True, channel.members)
+
+
+def setup_channels(
+    token: str,
+    current: str = "",
+    *,
+    tag_name: str = "Tag",
+    allow_empty: bool = True,
+    app_id: str = "",
+    team_id: str = "",
+) -> list[SlackChannel]:
+    """Setup's channel step: one multi-choice question, which may be left empty.
+
+    Offers the channels Tag is in and public channels it can join. Choosing a
+    public channel is the approval to join it. Private channels need an
+    invitation, which Tag picks up later when it follows invitations.
+    """
+    try:
+        import setup_ui as ui
+    except ImportError:
+        from scripts import setup_ui as ui
+    saved = set(parse_channel_ids(current))
+    error = None
+    while True:
+        channels = list_channels(token, **({"team_id": team_id} if team_id else {}))
+        offered = [channel for channel in channels if channel.is_member or not channel.is_private]
+        selected = {index for index, channel in enumerate(offered)
+                    if (channel.channel_id in saved if saved else channel.is_member)}
+        details = [{"id": channel.channel_id, "name": channel.name, "member": channel.is_member,
+                    "private": channel.is_private, "members": channel.members} for channel in offered]
+        if not ui.protocol_active():
+            print()
+            if offered:
+                ui.message("Pick channels for Tag to start in. Joined channels are already selected.")
+            if allow_empty:
+                ui.message("You can skip this. Invite Tag with /invite in any channel later, private ones too.")
+            if error:
+                ui.message(error)
+        chosen = ui.checklist(
+            [f"#{channel.name}" for channel in offered], selected, qid="channels",
+            prompt=f"Where should {tag_name} start?", allow_empty=allow_empty,
+            channels=details, **({"error": error} if error else {}),
+        )
+        error = None
+        picked: list[SlackChannel] = []
+        try:
+            for index in sorted(chosen):
+                channel = offered[index]
+                picked.append(channel if channel.is_member else join_channel(token, channel))
+        except (SlackChannelError, MissingScope) as failure:
+            if isinstance(failure, MissingScope):
+                guidance(failure, app_id)
+            error = f"Couldn't add Tag to #{channel.name}: {failure}"
+            saved = {channel.channel_id for channel in picked} | {offered[index].channel_id for index in chosen}
+            continue
+        return picked
 
 
 def validate_app_id(value: str) -> bool:

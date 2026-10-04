@@ -1,0 +1,3 @@
+{"schema_version": 1, "workspace": "T0KLOVR1", "action": "start", "ok": false,
+ "tags": [{"tag": "t0klovr1-a0maya01", "exit_code": 0},
+          {"tag": "new-tag", "exit_code": null, "skipped": "setup_incomplete"}]}

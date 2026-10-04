@@ -80,7 +80,7 @@ def inspect(home: Path, lifecycle, *, offline: bool = False, tag_id: str = "defa
     memory_sync = {"policy": values.get("SLACK_CHANNEL_POLICY", "selected"), "state": "not_checked"}
     if memory_sync["policy"] == "invited":
         try:
-            sync = json.loads((home / "state/slack-memory.json").read_text())
+            sync = json.loads((home / "state/slack-memory.json").read_text(encoding="utf-8"))
             allowed = {"syncing", "sync_requested", "no_joined_channels", "settings_changed", "needs_attention"}
             memory_sync["state"] = sync["state"] if sync["state"] in allowed and 0 <= time.time() - sync["checked_at"] < 600 else "stale"
             if sync.get("check") in {"membership", "history_access", "index_submission", "mfs_slack_connector"}:
@@ -279,9 +279,10 @@ def run_command(lifecycle, *words: str) -> int:
     return subprocess.call([sys.executable, str(lifecycle.ROOT / "scripts/tag_cli.py"), *words])
 
 
-def settings_menu(home: Path) -> None:
+def settings_menu(home: Path, *, ai=None) -> None:
+    """``ai`` is a ``tag_ai.Target``; with it, AI & models offers connections too."""
     try:
-        _settings_menu(home)
+        _settings_menu(home, ai)
     except (ui.Paused, KeyboardInterrupt, EOFError):
         print()
         ui.message("Settings closed. Saved changes are kept.")
@@ -324,11 +325,11 @@ def choose_default_model(home: Path, values: dict[str, str]) -> str | None:
     return values_only[choice] if choice < len(choices) else None
 
 
-def _settings_menu(home: Path) -> None:
+def _settings_menu(home: Path, ai=None) -> None:
     groups = (
-        ("Slack connection and access", ("SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_ALLOWED_USER_IDS", "SLACK_CHANNEL_IDS", "OPENTAG_BOT_NAME", "SLACK_CHANNEL_POLICY", "change_app", "reconnect")),
+        ("Slack connection and access", ("SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_ALLOWED_USER_IDS", "SLACK_CHANNEL_IDS", "OPENTAG_BOT_NAME", "OPENTAG_BOT_DESCRIPTION", "SLACK_CHANNEL_POLICY", "change_app", "reconnect")),
         ("Workspace and memory", ("MFS_SLACK_HISTORY_DAYS", "MFS_ALLOWED_SCOPES", "MFS_URL", "MFS_TOKEN")),
-        ("Model", ("OPENTAG_DEFAULT_MODEL",)),
+        ("AI & models", ("OPENTAG_DEFAULT_MODEL",)),
         ("Advanced", ("OPENTAG_TIMEOUT_SECONDS", "OPENTAG_MAX_TIMEOUT_SECONDS", "OPENTAG_BACKEND_ATTEMPTS", "OPENTAG_SLACK_STREAMING",
                       "OPENTAG_SLACK_DM_ENABLED",
                       "OPENTAG_CODEX_TRANSPORT", "OPENTAG_CLAUDE_TRANSPORT", "OPENTAG_CLAUDE_PERMISSION_MODE")),
@@ -374,6 +375,13 @@ def _settings_menu(home: Path) -> None:
         if selection == "2":
             ui.message(f"Workspace: {home / 'workspace'} (managed by Tag)")
             ui.message("Memory uses sources already indexed in MFS; changing scopes does not index a source.")
+        if selection == "3" and ai is not None:
+            try:
+                import tag_ai
+            except ImportError:
+                from scripts import tag_ai
+            tag_ai.settings_menu(ai)
+            continue
         if selection == "3":
             ui.message("Choose a model from your connected Codex and Claude accounts.")
             value = choose_default_model(home, raw_values)

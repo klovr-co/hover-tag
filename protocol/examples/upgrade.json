@@ -1,0 +1,5 @@
+{"schema_version": 1, "ok": true, "status": "available", "dry_run": true,
+ "current": {"version": "0.2.0", "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "channel": "stable", "selection": "channel"},
+ "target": {"version": "0.2.1", "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "channel": "stable", "selection": "channel"},
+ "services_running": true, "running_tags": ["t0klovr1-a0maya01"],
+ "restart_commands": ["tag t0klovr1-a0maya01 restart"], "restart_required": false, "downgrade": false}

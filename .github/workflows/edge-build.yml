@@ -26,6 +26,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       EDGE_SHA: ${{ github.event.workflow_run.head_sha }}
     outputs:
+      release_tag: ${{ steps.prerelease.outputs.release_tag }}
       docs_tag: ${{ steps.prerelease.outputs.docs_tag }}
       docs_sha: ${{ steps.prerelease.outputs.docs_sha }}
     steps:
@@ -137,10 +138,26 @@ jobs:
             --pattern SHA256SUMS --pattern BUILD-PROVENANCE.json
           python scripts/release_automation.py validate-release \
             --directory published --version "$RELEASE_VERSION" --sha "$EDGE_SHA"
+          echo "release_tag=$tag" >> "$GITHUB_OUTPUT"
           if [[ "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-(alpha|beta)\.[1-9][0-9]*$ ]]; then
             echo "docs_tag=$tag" >> "$GITHUB_OUTPUT"
             echo "docs_sha=$EDGE_SHA" >> "$GITHUB_OUTPUT"
           fi
+  package-desktop:
+    needs: publish-edge
+    if: needs.publish-edge.outputs.release_tag != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ needs.publish-edge.outputs.release_tag }}
+    steps:
+      # Releases made with GITHUB_TOKEN do not trigger release:published.
+      # workflow_dispatch does, and keeps platform builds out of the edge queue.
+      - name: Start desktop packaging for the verified prerelease
+        run: gh workflow run release-package.yml --repo "$GITHUB_REPOSITORY" --ref main -f tag="$RELEASE_TAG"
   notify-site-docs:
     needs: publish-edge
     if: needs.publish-edge.outputs.docs_tag != ''

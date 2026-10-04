@@ -7,11 +7,11 @@ from scripts import tag_display
 
 
 class DisplayTests(unittest.TestCase):
-    def setUp(self):
-        # Unit tests must not consult the developer's real account.
-        connection = patch("scripts.tag_chatgpt.Store.enabled", return_value=False)
-        connection.start()
-        self.addCleanup(connection.stop)
+    def setUp(self) -> None:
+        # These fixtures exercise inherited Codex sign-in, independent of local accounts.
+        auth = patch("scripts.tag_chatgpt.Store.enabled", return_value=False)
+        auth.start()
+        self.addCleanup(auth.stop)
 
     def test_banner_fits_narrow_terminal_and_is_omitted_without_color(self):
         with patch.object(tag_display.shutil, "get_terminal_size", return_value=os.terminal_size((48, 24))), patch.object(

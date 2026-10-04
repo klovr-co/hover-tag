@@ -120,3 +120,55 @@ after upload. Manually published releases trigger `.github/workflows/release-pac
 which verifies attached archives, checksums, provenance, internal versions, and
 the prerelease setting instead of rebuilding. Older releases without prepared
 assets retain the original build-on-publication fallback.
+
+## Tag.app
+
+Each published release also builds Tag.app (`desktop/`) on macOS,
+Windows, and Linux and attaches `Tag-VERSION-macos.dmg` (universal),
+`Tag-VERSION-windows-setup.exe`, `Tag-VERSION-linux-amd64.deb`, and
+`Tag-VERSION-linux-x86_64.AppImage`, with checksums in
+`DESKTOP-SHA256SUMS-PLATFORM`. These are separate from the CLI archive and its
+`SHA256SUMS`, which the installer verifies.
+
+Automatic prereleases explicitly dispatch **Release package** with the verified
+published tag. Releases created with `GITHUB_TOKEN` do not trigger the
+`release: published` event, so this handoff is required to build the desktop
+assets and publish their update feeds. Platform builds run separately from the
+edge publication queue. The packaging workflow validates that the tag belongs
+to `main`, the release is published, and its prerelease flag matches its version.
+It can also be dispatched with a published tag to recover missing packaging.
+
+### Signing
+
+To set the Apple secrets, run `desktop/scripts/set-apple-secrets.sh` on a Mac
+that has the Developer ID certificate; it checks the credentials with Apple
+before storing them and prints nothing secret.
+
+macOS builds are signed and notarized only when these repository secrets are
+set: `APPLE_CERTIFICATE` (base64 Developer ID Application `.p12`),
+`APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`,
+`APPLE_PASSWORD` (an app-specific password), and `APPLE_TEAM_ID`. Without them
+the DMG is unsigned and Gatekeeper blocks it, so don't announce it as an
+end-user download. Windows builds are unsigned until a code-signing certificate
+is configured; SmartScreen warns on them.
+
+### App updates
+
+Tag.app updates itself from signed update bundles. Each release also attaches
+`Tag-VERSION-macos.app.tar.gz`, the Windows installer, and the AppImage with
+`.sig` signatures, and the `desktop-updates` job writes
+`tag-app-{stable,beta,alpha}.json` to the `channels` release. A build follows
+its own line: alpha builds also receive newer betas and stable releases. A
+manifest never moves to an older version, and a platform whose build failed
+gets no update from that release.
+
+Updates are signed with the key in the `TAURI_SIGNING_PRIVATE_KEY` and
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD` secrets; the public half is in
+`desktop/src-tauri/tauri.conf.json`. Keep an offline backup of the private key
+and its password. If the key is lost, installed copies can't accept updates
+signed with a new key; people must download Tag.app again once.
+
+Before a stable release, qualify
+Tag.app on each platform: first-run install, adding a Tag, start and stop from
+the window and the tray, Keep Tags running across a logout, upgrade, and an
+app update from the previous release.

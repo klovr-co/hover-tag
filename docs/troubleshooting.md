@@ -4,11 +4,11 @@ Start with `./tag doctor`, then use the first failed check below.
 
 | Failure | What it means | Fix |
 | --- | --- | --- |
-| `mfs-server` or `mfs` missing/wrong version | The pinned memory runtime is unavailable | Run `./install.sh` again and ensure uv's tool directory and `~/.local/bin` are on `PATH`. |
+| `mfs-server` missing or the wrong version | The pinned memory runtime is unavailable | Run the installer again: `./install.sh` on macOS and Linux, or `./install.ps1` in PowerShell on Windows. Ensure `~/.local/bin` (or `%LOCALAPPDATA%\Tag\bin` on Windows) is on `PATH`. |
 | MFS health fails | Nothing is listening at `MFS_URL` | Run `./tag start`; inspect `./tag logs` and `~/.mfs/server.log`. |
 | Local MFS is healthy but untracked | Another process owns the loopback endpoint | `tag start` and `tag dev` replace an identifiable `mfs-server` with Tag's current runtime. If another kind of service owns the port, stop it or configure a different `MFS_URL`. Remote endpoints are never replaced. |
 | MFS status has no connectors | MFS has no indexed source | Add a source with MFS, then include its exact root in `MFS_ALLOWED_SCOPES`. |
-| MFS scope fails | The scope is absent, outside policy, or its connector credential is unavailable | Compare the exact URI with `mfs ls`; restart MFS after exporting credentials referenced by connector configuration. |
+| MFS scope fails | The scope is absent, outside policy, or its connector credential is unavailable | Check that each URI in `MFS_ALLOWED_SCOPES` (`tag config show`) is, or lies under, a source MFS has indexed (a channel scope sits beneath its connector's root); run `tag doctor`; restart MFS after exporting credentials referenced by connector configuration. |
 | Cross-channel search rejects a channel | The requested name is absent or non-unique in the caller's live grant | Check the channel name, bot membership, caller membership for private/guest access, indexing, and Slack connectivity. The runtime helper never searches outside its bridge-generated grant. |
 | Slack app token fails | Socket Mode cannot connect | Create an `xapp-` app-level token with `connections:write`. |
 | Slack bot token fails | Web API calls cannot authenticate | Reinstall the Slack app and rerun `tag setup`; enter the `xoxb-` token only in its hidden prompt. |
@@ -17,7 +17,7 @@ Start with `./tag doctor`, then use the first failed check below.
 | Slack app installation asks for approval | Workspace or Enterprise app approval is enabled | Submit the Slack app request to a workspace owner or app manager; Tag cannot bypass workspace policy. |
 | Generated image is described but not attached | The app lacks `files:write`, the result is unsupported or over 15 MB, or the backend did not save it in the prompted result directory | Reinstall the app from the current manifest, retry with PNG/JPEG/GIF/WebP, and inspect Tag logs for the per-file upload error. |
 | **Open filename** reports that a local file could not be opened | The file was moved or deleted, its path no longer resolves inside the workspace, or the Tag host has no active desktop application for that file type | Confirm the file still exists in the configured workspace and open it directly on the Tag host to verify its desktop file association. |
-| Agent missing | No supported backend is installed and signed in | Install and sign in to Codex CLI (`codex login status`) or Claude Code (`claude auth status`) in the same shell that starts Tag. A disconnected account's models disappear from Settings → Model. |
+| Agent missing | No supported backend is installed and signed in | Install and sign in to Codex CLI (`codex login status`) or Claude Code (`claude auth status`) in the same shell that starts Tag, or use Settings → AI & models (`tag settings ai`), which checks both and offers sign-in. A disconnected account's models disappear from the default-model picker. |
 | Bridge immediately stops | Runtime dependency or configuration failed after preflight | Run `./tag logs`; rerun `./scripts/ci_check.sh` before reporting a bug. |
 | Mention is denied | The caller is not in the Slack user allowlist | Add their exact member ID to `SLACK_ALLOWED_USER_IDS` only if the owner intends to share access. |
 | Mention receives no reply | Slack did not emit an event or the bridge rejected the channel | Confirm Socket Mode is connected, mention your Tag from an authorized human account, and verify the channel is in `SLACK_CHANNEL_IDS`. |

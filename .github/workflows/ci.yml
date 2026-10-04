@@ -28,13 +28,22 @@ jobs:
         run: ./scripts/ci_check.sh --policy-only
 
   unit-tests:
-    name: ubuntu-latest / Python ${{ matrix.python }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    name: ${{ matrix.os }} / Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest]
         python: ["3.10", "3.14"]
+        include:
+          - os: macos-latest
+            python: "3.12"
+          - os: windows-latest
+            python: "3.12"
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -42,4 +51,56 @@ jobs:
           python-version: ${{ matrix.python }}
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
       - name: Run unit tests
+        if: runner.os != 'Windows'
         run: ./scripts/ci_check.sh --tests-only
+      - name: Run unit tests (Windows, every failure reported)
+        # pytest gives each test a time limit, so one hang can't hide the other tracebacks (#160).
+        if: runner.os == 'Windows'
+        run: |
+          uv run --with slack-bolt==1.30.0 --with PyYAML==6.0.3 --with questionary==2.1.1 --with psutil==7.0.0 \
+            --with tomli==2.2.1 --with "PyJWT[crypto]==2.10.1" --with pytest --with pytest-timeout \
+            python -m pytest tests -p no:cacheprovider -q -rfE --timeout 120 --timeout-method thread
+
+
+  desktop:
+    name: ${{ matrix.os }} / Tag.app
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-22.04]
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      # Runners ship rustup; only org-approved actions are allowed here.
+      - name: Prepare Rust
+        shell: bash
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/src-tauri/target
+          key: tauri-${{ runner.os }}-${{ hashFiles('desktop/src-tauri/Cargo.lock') }}
+          restore-keys: tauri-${{ runner.os }}-
+      - name: Install Linux build libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - run: npm ci
+      - name: Typecheck and test the window
+        run: npm run typecheck && npm test
+      - name: Test the native side
+        run: npm run bundle-installer && cargo test --manifest-path src-tauri/Cargo.toml
+      - name: Build Tag.app
+        run: npm run tauri -- build --debug --no-bundle

@@ -16,10 +16,10 @@ from scripts import setup_ui
 class SetupUITests(unittest.TestCase):
     def test_narrow_screen_keeps_current_step_and_keyboard_help_visible(self):
         with patch.object(setup_ui.shutil, "get_terminal_size", return_value=os.terminal_size((48, 24))), redirect_stdout(StringIO()) as output:
-            setup_ui.screen(3, "Where should Tag respond?", "Slack connected")
+            setup_ui.screen(5, "Where should Tag start?", "Slack connected")
             print(setup_ui._instructions(multiple=True, setup_incomplete=True))
         text = output.getvalue()
-        self.assertIn("STEP 3/4 · Channels", text)
+        self.assertIn("STEP 5/5 · Channels", text)
         self.assertIn("Space Toggle", text)
         self.assertIn("q Exit · finish setup later", text)
         self.assertTrue(all(len(line) < 48 for line in text.splitlines()))
@@ -67,6 +67,16 @@ class SetupUITests(unittest.TestCase):
         with redirect_stdout(StringIO()) as output:
             setup_ui.message("App configuration needs attention")
         self.assertEqual(output.getvalue(), "  App configuration needs attention\n")
+
+    def test_terminal_message_still_wraps_complete_multiline_status(self):
+        text = "✓ Slack connected\n◌ Preparing Slack memory for the selected channels…"
+        with patch.dict(os.environ, {setup_ui.PROTOCOL_ENV: ""}), patch.object(
+            setup_ui.shutil, "get_terminal_size", return_value=os.terminal_size((32, 24))
+        ), redirect_stdout(StringIO()) as output:
+            setup_ui.message(text)
+        lines = output.getvalue().splitlines()
+        self.assertTrue(all(line.startswith("  ") and len(line) <= 30 for line in lines))
+        self.assertEqual(" ".join(line.strip() for line in lines), text.replace("\n", " "))
 
     def test_checklist_preserves_selection_and_validates_nonempty(self):
         with patch.object(setup_ui, "keyboard_available", return_value=True), patch(

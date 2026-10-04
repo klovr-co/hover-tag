@@ -1,28 +1,32 @@
 """Bounded, private records of Slack request activity.
 
-Tag stores public activity labels and bounded, redacted tool-item previews.
+Tag stores public activity labels, bounded reply excerpts, and redacted tool-item previews.
 Raw App Server items, prompts, and reasoning never enter this store.
 """
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import os
 import re
 import threading
 import time
+import urllib.parse
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 
 try:
-    from .agent_activity import MCP_SERVICE_NAMES, MCP_TOOL_NAMES, activity_label, mcp_activity_label
-    from .tag_activity_details import MAX_DETAIL_CHARS, MAX_TOOL_CHARS, sanitize_activity_details
+    from .agent_models import SUPPORTED_REASONING_EFFORTS
+    from .agent_activity import MCP_SERVICE_NAMES, MCP_TOOL_NAMES, activity_label, mcp_activity_label, token_usage
+    from .tag_activity_details import MAX_DETAIL_CHARS, MAX_TOOL_CHARS, sanitize_activity_details, preview
     from .tag_paths import instance_home, restrict_windows_acl
 except ImportError:  # Direct script execution does not create a package context.
-    from agent_activity import MCP_SERVICE_NAMES, MCP_TOOL_NAMES, activity_label, mcp_activity_label
-    from tag_activity_details import MAX_DETAIL_CHARS, MAX_TOOL_CHARS, sanitize_activity_details
+    from agent_models import SUPPORTED_REASONING_EFFORTS
+    from agent_activity import MCP_SERVICE_NAMES, MCP_TOOL_NAMES, activity_label, mcp_activity_label, token_usage
+    from tag_activity_details import MAX_DETAIL_CHARS, MAX_TOOL_CHARS, sanitize_activity_details, preview
     from tag_paths import instance_home, restrict_windows_acl
 
 
@@ -30,10 +34,44 @@ SCHEMA_VERSION = 1
 RETENTION_SECONDS = 30 * 24 * 60 * 60
 MAX_RECORDS = 200
 MAX_EVENTS = 60
+MAX_REPLY_PREVIEW = 220
 ACTIVITY_DETAIL_ACTION_ID = "opentag_activity_detail"
 RUN_ID_RE = re.compile(r"^[a-f0-9]{32}$")
+MAX_ARTIFACTS = 20
 OUTCOMES = frozenset({"running", "completed", "failed", "interrupted"})
 ITEM_STATUSES = frozenset({"running", "completed", "failed", "declined", "interrupted", "unknown"})
+
+
+def artifact_records(value: object) -> list[dict[str, str]]:
+    """Bounded output metadata, with no file contents or temporary download URLs."""
+    if not isinstance(value, list):
+        return []
+    result = []
+    for item in value[:MAX_ARTIFACTS]:
+        if not isinstance(item, dict) or item.get("delivery") not in ("uploaded", "local", "upload_failed"):
+            continue
+        name = item.get("name")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        record = {"name": preview(name.replace("\\", "/").split("/")[-1], limit=180),
+                  "kind": "image" if item.get("kind") == "image" else "file",
+                  "delivery": item["delivery"]}
+        url = item.get("url")
+        if isinstance(url, str):
+            try:
+                parsed = urllib.parse.urlsplit(url)
+                if (parsed.scheme == "https" and parsed.hostname
+                        and parsed.hostname.endswith(".slack.com") and not parsed.username
+                        and not parsed.password and parsed.port in (None, 443)
+                        and parsed.path.startswith("/files/")):
+                    record["url"] = urllib.parse.urlunsplit(("https", parsed.netloc, parsed.path, "", ""))
+            except ValueError:
+                pass
+        local = item.get("local_path")
+        if isinstance(local, str) and Path(local).is_absolute() and "\x00" not in local:
+            record["local_path"] = local
+        result.append(record)
+    return result
 
 
 def _public_labels() -> frozenset[str]:
@@ -59,6 +97,26 @@ PUBLIC_LABELS = _public_labels()
 
 def _timestamp() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def reply_preview(answer: object) -> str:
+    """A bounded excerpt of the delivered answer, never an inferred task outcome."""
+    if not isinstance(answer, str):
+        return ""
+    text = html.unescape(answer[:8_000])
+    text = re.sub(r"```[^\n]*\n.*?(?:```|$)", " ", text, flags=re.S)
+    text = re.sub(r"!?\[([^\]]+)\]\([^\n)]*\)", r"\1", text)
+    text = re.sub(r"<(?:https?://|mailto:)[^>|]+\|([^>]+)>", r"\1", text)
+    text = re.sub(r"(?m)^\s*(?:#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)", "", text)
+    text = re.sub(r"[*`~]", "", text)
+    text = " ".join(preview(text, limit=8_000).split())
+    if len(text) <= MAX_REPLY_PREVIEW:
+        return text
+    clipped = text[:MAX_REPLY_PREVIEW - 1]
+    boundary = clipped.rfind(" ")
+    if boundary > MAX_REPLY_PREVIEW // 2:
+        clipped = clipped[:boundary]
+    return clipped.rstrip() + "…"
 
 
 class ActivityStore:
@@ -94,7 +152,7 @@ class ActivityStore:
                 path.unlink(missing_ok=True)
 
     def create(self, *, team: str, channel: str, thread_ts: str,
-               request_ts: str, requester: str) -> str:
+               request_ts: str, requester: str, reasoning_effort: str | None = None) -> str:
         run_id = uuid.uuid4().hex
         record = {
             "schema_version": SCHEMA_VERSION,
@@ -110,6 +168,8 @@ class ActivityStore:
             "events": [],
             "omitted": 0,
         }
+        if reasoning_effort in SUPPORTED_REASONING_EFFORTS:
+            record["reasoning_effort"] = reasoning_effort
         with self.lock:
             self._write(record)
             self._prune()
@@ -157,8 +217,26 @@ class ActivityStore:
                 return None
         return record
 
+    def save_artifacts(self, run_id: str, artifacts: list[dict[str, str]]) -> None:
+        with self.lock:
+            record = self.get(run_id)
+            if record is not None:
+                record["artifacts"] = artifact_records(artifacts)
+                self._write(record)
+
     def observe(self, run_id: str, event: dict[str, Any]) -> None:
         event_type = event.get("type")
+        if event_type == "usage":
+            usage = token_usage(event.get("usage"))
+            if usage is not None:
+                with self.lock:
+                    record = self.get(run_id)
+                    if record and record["outcome"] == "running":
+                        # Provider snapshots are cumulative; duplicates replace,
+                        # never add to, the last reported total.
+                        record["usage"] = usage
+                        self._write(record)
+            return
         item_id = event.get("activity_id")
         label = event.get("label")
         if event_type not in {"activity_start", "activity_complete"}:
@@ -206,6 +284,230 @@ class ActivityStore:
                     event["status"] = "interrupted" if outcome == "interrupted" else "unknown"
                     event["finished_at"] = record["finished_at"]
             self._write(record)
+
+    def attach_error(self, run_id: str, reference: str) -> None:
+        """Keep the exact failure association, including when a Slack request is retried."""
+        if not re.fullmatch(r"[A-F0-9]{8}", reference):
+            return
+        with self.lock:
+            record = self.get(run_id)
+            if record is not None:
+                record["error_reference"] = reference
+                self._write(record)
+
+    def save_model(self, run_id: str, backend: str, model: str, label: str = "", *, reasoning_effort: str | None = None) -> None:
+        """Remember the model reported for this run, never a later Tag setting."""
+        if backend not in {"codex", "claude"} or not isinstance(model, str) or not model:
+            return
+        with self.lock:
+            record = self.get(run_id)
+            if record is not None:
+                record.update(backend=backend, model=reply_preview(model)[:128],
+                              model_name=reply_preview(label or model)[:128])
+                if reasoning_effort in SUPPORTED_REASONING_EFFORTS:
+                    record["reasoning_effort"] = reasoning_effort
+                self._write(record)
+
+    def summary_status(self, run_id: str, status: str) -> None:
+        if status not in {"pending", "unavailable"}:
+            return
+        with self.lock:
+            record = self.get(run_id)
+            if record and record["outcome"] == "completed" and not record.get("reply_summary"):
+                record.update(reply_summary_status=status, reply_summary_updated_at=_timestamp())
+                self._write(record)
+
+    def save_reply(self, run_id: str, answer: str) -> None:
+        """Save only a redacted preview after successful Slack delivery."""
+        with self.lock:
+            record = self.get(run_id)
+            if record is not None and record["outcome"] == "completed":
+                record["reply_preview"] = reply_preview(answer)
+                self._write(record)
+
+    def save_reply_summary(self, run_id: str, summary: str) -> None:
+        """Cache a generated TL;DR once, preserving the fallback preview."""
+        clean = reply_preview(summary)
+        if not clean:
+            return
+        with self.lock:
+            record = self.get(run_id)
+            if record is not None and record["outcome"] == "completed" and not record.get("reply_summary"):
+                record["reply_summary"] = clean
+                record["reply_summary_status"] = "ready"
+                self._write(record)
+
+
+RECENT_KINDS = {"completed": "replied", "failed": "failed", "interrupted": "stopped", "running": "working"}
+MAX_RECENT = 50
+
+
+def channel_names(scopes: str) -> dict[str, str]:
+    """Channel names from saved Slack history sources such as ``…/channels/launch__C0123``."""
+    names: dict[str, str] = {}
+    for scope in scopes.split(","):
+        _, separator, rest = scope.strip().partition("/channels/")
+        name, _, channel = urllib.parse.unquote(rest.split("/", 1)[0]).rpartition("__")
+        if separator and name and re.fullmatch(r"[CG][A-Z0-9]+", channel):
+            names[channel] = name
+    return names
+
+
+def _summary_expired(record: dict) -> bool:
+    try:
+        at = datetime.fromisoformat(record["reply_summary_updated_at"])
+        return (datetime.now(timezone.utc) - at).total_seconds() > 30 * 60
+    except (KeyError, TypeError, ValueError):
+        return True
+
+
+def generation_seconds(record: dict) -> float | None:
+    if record.get("outcome") == "running":
+        return None
+    try:
+        started = datetime.fromisoformat(record["started_at"])
+        finished = datetime.fromisoformat(record["finished_at"])
+        return max(0, (finished - started).total_seconds())
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def artifact_thread_url(record: dict) -> str | None:
+    if (re.fullmatch(r"T[A-Z0-9]+", record["team"])
+            and re.fullmatch(r"[CDG][A-Z0-9]+", record["channel"])
+            and re.fullmatch(r"\d+\.\d+", record["thread_ts"])):
+        return "slack://channel?" + urllib.parse.urlencode({
+            "team": record["team"], "id": record["channel"], "message": record["thread_ts"]})
+    return None
+
+
+def recent_activity(root: Path, scopes: str = "", limit: int = MAX_RECENT, *,
+                    cached_names: dict[str, dict[str, str]] | None = None,
+                    channel: str | None = None, hide_errors: bool = False) -> list[dict[str, Any]]:
+    """What a Tag did recently, with a short excerpt when a delivered reply was saved.
+
+    Records are read through ``ActivityStore.get`` validation, so invalid or
+    expired ones are skipped, and nothing is written or pruned. Prompts,
+    requesters, and tool steps are never included; only how many steps ran.
+    """
+    store = ActivityStore(root)
+    names = channel_names(scopes)
+    items: list[tuple[datetime, dict[str, Any]]] = []
+    try:
+        paths = list(root.glob("*.json"))
+    except OSError:
+        return []
+    for path in paths:
+        record = store.get(path.stem)
+        if record is None:
+            continue
+        if channel is not None and record["channel"] != channel:
+            continue
+        if hide_errors and record["outcome"] == "failed":
+            continue
+        finished = record.get("finished_at")
+        raw = finished if record["outcome"] != "running" and isinstance(finished, str) else record["started_at"]
+        try:
+            at = datetime.fromisoformat(raw)
+        except ValueError:
+            continue
+        at = at.replace(tzinfo=timezone.utc) if at.tzinfo is None else at.astimezone(timezone.utc)
+        record_channel = record["channel"]
+        dm = record_channel.startswith("D")
+        items.append((at, {
+            "run_id": record["run_id"],
+            "at": at.isoformat(timespec="seconds"), "kind": RECENT_KINDS[record["outcome"]],
+            "channel": record_channel,
+            "channel_name": None if dm else (cached_names or {}).get(record["team"], {}).get(record_channel, names.get(record_channel)),
+            "dm": dm,
+            **({"step_count": steps} if (steps := len(record["events"]) + record["omitted"]) else {}),
+            **({"duration_seconds": duration} if (duration := generation_seconds(record)) is not None else {}),
+            **({"reasoning_effort": effort} if (effort := record.get("reasoning_effort")) in SUPPORTED_REASONING_EFFORTS else {}),
+            **({"usage": usage} if (usage := token_usage(record.get("usage"))) is not None else {}),
+            **({"artifacts": artifacts} if (artifacts := artifact_records(record.get("artifacts"))) else {}),
+            **({"artifact_thread_url": url} if artifacts and (url := artifact_thread_url(record)) else {}),
+            **{key: record[key] for key in ("backend", "model", "model_name")
+               if isinstance(record.get(key), str)},
+            **({"reply_summary_status": (
+                "unavailable" if record.get("reply_summary_status") == "pending"
+                and _summary_expired(record) else record["reply_summary_status"])}
+               if record.get("reply_summary_status") in {"pending", "unavailable", "ready"} else {}),
+            **({"reply_preview": reply_preview(record["reply_preview"])}
+               if record["outcome"] == "completed" and record.get("reply_preview") else {}),
+            **({"reply_summary": reply_preview(record["reply_summary"])}
+               if record["outcome"] == "completed" and record.get("reply_summary") else {}),
+        }))
+    items.sort(key=lambda item: item[0], reverse=True)
+    return [item for _, item in items[:limit]]
+
+
+def activity_details(root: Path, run_id: str, *, report_directory: Path | None = None) -> dict[str, Any] | None:
+    """Read one retained run, with sanitized previews and a matching failure report.
+
+    Older records need no rewrite: they already contain the normalized events
+    from both backends. Legacy reports are matched only when routing and the
+    run's time window identify one unambiguous failure. Reads never prune files.
+    """
+    try:
+        from .tag_error_reporting import ErrorReport, ERROR_REPORT_RETENTION_SECONDS, redact_sensitive_text
+    except ImportError:
+        from tag_error_reporting import ErrorReport, ERROR_REPORT_RETENTION_SECONDS, redact_sensitive_text
+    record = ActivityStore(root).get(run_id)
+    if record is None:
+        return None
+    events = [{key: event.get(key) for key in ("label", "status", "started_at", "finished_at")}
+              | {"details": sanitize_activity_details(event.get("details"))} for event in record["events"]]
+    reports = []
+    directory = report_directory or root.parent / "error-reports"
+    if record["outcome"] == "failed":
+        for path in directory.glob("*.json"):
+            try:
+                report = ErrorReport.from_dict(json.loads(path.read_text(encoding="utf-8")))
+                if report is None:
+                    continue
+                at = datetime.fromisoformat(report.failure_at.replace("Z", "+00:00"))
+                if not 0 <= (datetime.now(timezone.utc) - at).total_seconds() <= ERROR_REPORT_RETENTION_SECONDS:
+                    continue
+                origin = report.origin
+                if (origin.team_id, origin.channel_id, origin.thread_ts, origin.request_ts, origin.requester_id) != (
+                    record["team"], record["channel"], record["thread_ts"], record["request_ts"], record["requester"]):
+                    continue
+                if record.get("error_reference"):
+                    matches = report.reference == record["error_reference"]
+                else:
+                    start = datetime.fromisoformat(record["started_at"])
+                    end = datetime.fromisoformat(record["finished_at"])
+                    # Old activity timestamps have second precision. Reports are
+                    # created immediately after finish, before health checks.
+                    matches = start <= at < end + timedelta(seconds=2)
+                if matches:
+                    reports.append(report)
+            except (OSError, ValueError, TypeError, OverflowError):
+                continue
+    report = reports[0] if len(reports) == 1 else None
+    return {"run_id": run_id, "outcome": record["outcome"], "started_at": record["started_at"],
+            "finished_at": record.get("finished_at"), "team": record["team"], "channel": record["channel"],
+            "thread_ts": record["thread_ts"], "events": events, "omitted": record["omitted"],
+            "error": {"reference": report.reference, "text": redact_sensitive_text(report.report_text())} if report else None}
+
+
+def activity_details_text(details: dict[str, Any]) -> str:
+    lines = [f"Request {details['run_id']} · {details['outcome']}", f"Started: {details['started_at']}"]
+    if details["finished_at"]:
+        lines.append(f"Finished: {details['finished_at']}")
+    for event in details["events"]:
+        lines.append(f"\n{event['label']} · {event['status']}")
+        for key, value in event["details"].items():
+            lines.append(f"{key.capitalize()}: {value}")
+    if not details["events"]:
+        lines.append("No tool activity was recorded for this request.")
+    if details["omitted"]:
+        lines.append(f"{details['omitted']} later steps omitted.")
+    if details["error"]:
+        lines.append("\n" + details["error"]["text"])
+    elif details["outcome"] == "failed":
+        lines.append("No matching error report is available for this request.")
+    return "\n".join(lines)
 
 
 def activity_modal(record: dict[str, Any]) -> dict[str, Any]:

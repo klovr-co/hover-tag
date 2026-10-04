@@ -11,6 +11,79 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+def check_memory_server(python: Path, directory: Path) -> None:
+    """Start the installed MFS server and send it the request Tag uses to index a source."""
+    import socket
+    import time
+    import urllib.request
+
+    server = python.parent / ("mfs-server.exe" if os.name == "nt" else "mfs-server")
+    assert server.is_file(), f"mfs-server is missing from the Tag runtime: {server}"
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    home = directory / "mfs-home"
+    notes = directory / "notes"
+    notes.mkdir()
+    (notes / "hello.md").write_text("Tag memory smoke test\n", encoding="utf-8")
+    log = (directory / "mfs-server.log").open("wb")
+    process = subprocess.Popen([str(server), "run", "--bind", f"127.0.0.1:{port}"],
+                               env=dict(os.environ, MFS_HOME=str(home)), stdout=log, stderr=log)
+    base = f"http://127.0.0.1:{port}"
+    try:
+        deadline = time.monotonic() + 180
+        while True:
+            try:
+                with urllib.request.urlopen(base + "/healthz", timeout=2) as response:
+                    if response.status == 200:
+                        break
+            except OSError:
+                pass
+            if process.poll() is not None or time.monotonic() > deadline:
+                log.flush()
+                raise RuntimeError("mfs-server did not become healthy:\n"
+                                   + (directory / "mfs-server.log").read_text(encoding="utf-8", errors="replace")[-3000:])
+            time.sleep(1)
+        token = (home / "server.token").read_text(encoding="utf-8").strip()
+        request = urllib.request.Request(
+            base + "/v1/add", method="POST",
+            data=json.dumps({"target": str(notes), "full": False, "process": False}).encode(),
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"})
+        with urllib.request.urlopen(request, timeout=60) as response:
+            assert json.loads(response.read())["job_id"], "MFS did not queue the indexing job"
+    finally:
+        if os.name == "nt":
+            # mfs-server.exe is a launcher that runs Python as a child; stop the
+            # whole tree so no process keeps the runtime's files open.
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(process.pid)],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        else:
+            process.terminate()
+        try:
+            process.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            process.kill()
+        log.close()
+
+
+def stop_leftovers(directory: Path) -> None:
+    """Report and stop processes still running from this test's Tag folder (Windows locks open files)."""
+    if os.name != "nt":
+        return
+    script = ("$p = Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like $env:TAG_SMOKE_DIR + '*' };"
+              " $p | ForEach-Object { Write-Output ($_.ProcessId.ToString() + ' ' + $_.CommandLine) };"
+              " $p | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }")
+    try:
+        result = subprocess.run(["powershell.exe", "-NoProfile", "-Command", script], capture_output=True,
+                                text=True, env=dict(os.environ, TAG_SMOKE_DIR=str(directory.resolve())),
+                                check=False, timeout=60)
+    except subprocess.TimeoutExpired:
+        print("Could not list leftover processes within 60 seconds; continuing.")
+        return  # Best effort: never let cleanup hide the test result.
+    if result.stdout.strip():
+        print("Processes left running by Tag (stopped):\n" + result.stdout.strip())
+
+
 with tempfile.TemporaryDirectory(prefix="Tag smoke ") as temporary:
     directory = Path(temporary)
     env = dict(os.environ, TAG_HOME=str(directory / "home"))
@@ -23,9 +96,11 @@ with tempfile.TemporaryDirectory(prefix="Tag smoke ") as temporary:
         for entry in bundle.infolist():
             if entry.external_attr >> 16 & 0o111:
                 (source / entry.filename).chmod(0o755)
-    installer = ([sys.executable, str(source / "scripts/tag_install.py"), "--source", str(source)]
-                 if os.name == "nt" else ["sh", str(source / "install.sh")])
-    subprocess.run([*installer, "--bin-dir", str(directory / "bin")], env=env, check=True)
+    # The real bootstraps: neither needs a system Python.
+    installer = (["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                  "-File", str(source / "install.ps1"), "-BinDir"]
+                 if os.name == "nt" else ["sh", str(source / "install.sh"), "--bin-dir"])
+    subprocess.run([*installer, str(directory / "bin")], env=env, check=True)
     command = directory / "bin" / ("tag.cmd" if os.name == "nt" else "tag")
     subprocess.run([str(command), "version"], cwd=directory, env=env, check=True)
     subprocess.run([str(command), "config", "init", "--json"], cwd=directory, env=env, check=True)
@@ -42,8 +117,17 @@ with tempfile.TemporaryDirectory(prefix="Tag smoke ") as temporary:
             check=True,
         )
     subprocess.run([str(command), "doctor", "--offline"], cwd=directory, env=env, check=True)
-    current = json.loads((directory / "home/current.json").read_text())
+    current = json.loads((directory / "home/current.json").read_text(encoding="utf-8"))
     subprocess.run([current["python"], "-c", "import slack_bolt, psutil, mfs_server"], check=True)
-    if os.name != "nt":
-        mfs = Path(current["python"]).parent / "mfs"
-        subprocess.run([str(mfs), "--version"], check=True)
+    assert current.get("dependency_schema") == 1, current
+    # Tag runs on its own Python, never the one that started this script.
+    assert Path(current["python"]).resolve() != Path(sys.executable).resolve()
+    slack = directory / "home/runtime/slack"
+    if not any(slack.rglob("slack.exe" if os.name == "nt" else "slack")):
+        import shutil
+        assert shutil.which("slack"), "Slack CLI was neither provisioned nor already installed"
+    # Memory needs only the MFS server package; Tag talks to it over HTTP.
+    assert not (Path(current["python"]).parent / "mfs").exists()
+    check_memory_server(Path(current["python"]), directory)
+    print("Memory server: starts, answers, and accepts an indexing request")
+    stop_leftovers(directory)

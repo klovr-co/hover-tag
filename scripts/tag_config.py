@@ -10,8 +10,10 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 try:
+    from agent_models import SUPPORTED_REASONING_EFFORTS
     from mfs_scope_policy import canonical_uri, parse_scopes
 except ImportError:
+    from scripts.agent_models import SUPPORTED_REASONING_EFFORTS
     from scripts.mfs_scope_policy import canonical_uri, parse_scopes
 
 DEFAULTS = {
@@ -38,19 +40,22 @@ PUBLIC = frozenset((*DEFAULTS, "MFS_ALLOWED_SCOPES", "OPENTAG_WORKDIR",
                     "MFS_SLACK_HISTORY_DAYS",
                     "MFS_SLACK_CONNECTOR_URI", "MFS_SLACK_CONNECTOR_CONFIG",
                     "OPENTAG_CODEX_MODELS", "OPENTAG_CODEX_REASONING_EFFORTS",
-                    "OPENTAG_CLAUDE_MODELS", "OPENTAG_DEFAULT_MODEL", "OPENTAG_BACKENDS"))
+                    "OPENTAG_CLAUDE_MODELS", "OPENTAG_DEFAULT_MODEL", "OPENTAG_BACKENDS",
+                    "OPENTAG_DEFAULT_EFFORT", "OPENTAG_BOT_DESCRIPTION"))
 EDITABLE = PUBLIC - {"OPENTAG_WORKDIR"} | {
     "SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "MFS_TOKEN", "MFS_SLACK_TOKEN", "MFS_HOME"
 }
 LABELS = {
     "OPENTAG_BACKEND": "Agent", "OPENTAG_BOT_NAME": "Bot name",
     "OPENTAG_DEFAULT_MODEL": "Default model (codex:MODEL, claude:MODEL, or a backend)",
+    "OPENTAG_DEFAULT_EFFORT": "Default thinking level",
+    "OPENTAG_BOT_DESCRIPTION": "Description",
     "OPENTAG_BACKENDS": "Backends users can choose (codex,claude)",
     "OPENTAG_CODEX_TRANSPORT": "Codex transport (exec or app-server)",
     "OPENTAG_CLAUDE_TRANSPORT": "Claude transport (print or sdk)",
     "OPENTAG_CLAUDE_PERMISSION_MODE": "Claude permission mode",
     "SLACK_APP_TOKEN": "Slack app token", "SLACK_BOT_TOKEN": "Slack bot token",
-    "SLACK_ALLOWED_USER_IDS": "Who can use Tag", "SLACK_CHANNEL_ID": "Legacy channel restriction",
+    "SLACK_ALLOWED_USER_IDS": "Owners", "SLACK_CHANNEL_ID": "Legacy channel restriction",
     "SLACK_CHANNEL_IDS": "Selected channels", "SLACK_TEAM_ID": "Slack workspace",
     "SLACK_CHANNEL_POLICY": "Channel policy (selected or invited)",
     "SLACK_ENTERPRISE_ID": "Slack organization authorization",
@@ -166,6 +171,13 @@ def validation_error(key: str, value: str) -> str | None:
         or any(unicodedata.category(character) in {"Cc", "Zl", "Zp"} for character in value)
     ):
         return "Use a name from 1 to 35 characters without line breaks"
+    if key == "OPENTAG_BOT_DESCRIPTION" and (
+        len(value) > 140
+        or any(unicodedata.category(character) in {"Cc", "Zl", "Zp"} for character in value)
+    ):
+        return "Use one line of up to 140 characters"
+    if key == "OPENTAG_DEFAULT_EFFORT" and value and value not in SUPPORTED_REASONING_EFFORTS:
+        return "Choose " + ", ".join(SUPPORTED_REASONING_EFFORTS) + ", or leave empty for the model's default"
     if key == "OPENTAG_CODEX_TRANSPORT" and value not in {"exec", "app-server"}:
         return "Choose exec or app-server"
     if key == "OPENTAG_CLAUDE_TRANSPORT" and value not in {"print", "sdk"}:
@@ -227,10 +239,18 @@ def validation_error(key: str, value: str) -> str | None:
 
 
 def config_errors(values: dict[str, str]) -> dict[str, str]:
-    errors = {key: "Required" for key in REQUIRED if not values.get(key, "").strip()}
-    if not (values.get("SLACK_CHANNEL_IDS", "").strip() or values.get("SLACK_CHANNEL_ID", "").strip()):
+    # A Tag that follows invitations may start with no channels, and so no
+    # memory sources yet: it picks up each channel it's invited to while it runs.
+    no_channels = not (values.get("SLACK_CHANNEL_IDS", "").strip() or values.get("SLACK_CHANNEL_ID", "").strip())
+    follows_invitations = values.get("SLACK_CHANNEL_POLICY") == "invited"
+    waiting = no_channels and follows_invitations
+    errors = {key: "Required" for key in REQUIRED if not values.get(key, "").strip()
+              and not (waiting and key == "MFS_ALLOWED_SCOPES")}
+    if no_channels and not follows_invitations:
         errors["SLACK_CHANNEL_IDS"] = "Select at least one Slack channel"
     for key, value in values.items():
+        if waiting and key in {"SLACK_CHANNEL_IDS", "MFS_ALLOWED_SCOPES"} and not value.strip():
+            continue
         if key in EDITABLE and (error := validation_error(key, value)):
             errors[key] = error
     return errors
@@ -261,6 +281,9 @@ def update_config(path: Path, changes: dict[str, str], *, only_missing: bool = F
     for key, value in changes.items():
         if key not in EDITABLE:
             raise ValueError("Unsupported setting; run tag config keys for editable settings")
+        if key == "SLACK_CHANNEL_IDS" and not value.strip() and (
+                changes.get("SLACK_CHANNEL_POLICY") or load_config(path).get("SLACK_CHANNEL_POLICY")) == "invited":
+            continue  # A Tag that follows invitations may have no channels yet.
         if error := validation_error(key, value):
             raise ValueError(f"{key}: {error}")
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)

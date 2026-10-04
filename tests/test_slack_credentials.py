@@ -77,8 +77,8 @@ class SlackCredentialsTests(unittest.TestCase):
             self.assertNotIn("SLACK_APP_TOKEN", env)
             self.assertNotIn("SLACK_BOT_TOKEN", env)
             self.assertNotIn("MFS_TOKEN", env)
-            self.assertEqual(json.loads((handoff / ".slack/config.json").read_text()), {"manifest": {"source": "remote"}})
-            hooks = json.loads((handoff / ".slack/hooks.json").read_text())["hooks"]
+            self.assertEqual(json.loads((handoff / ".slack/config.json").read_text(encoding="utf-8")), {"manifest": {"source": "remote"}})
+            hooks = json.loads((handoff / ".slack/hooks.json").read_text(encoding="utf-8"))["hooks"]
             self.assertEqual(set(hooks), {"deploy"})
             destination = Path(env["TAG_SLACK_HANDOFF_FILE"])
             destinations.append(destination)
@@ -114,7 +114,7 @@ class SlackCredentialsTests(unittest.TestCase):
         result = subprocess.run(command, env=env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0)
         self.assertEqual(result.stdout + result.stderr, "")
-        self.assertEqual(json.loads(path.read_text()), self.tokens)
+        self.assertEqual(json.loads(path.read_text(encoding="utf-8")), self.tokens)
         if os.name != "nt":
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
         retry = subprocess.run(command, env=env, capture_output=True, text=True)

@@ -22,7 +22,7 @@ class OpenTagAgentPromptTests(unittest.TestCase):
             attachments_dir=None,
             allowed_scopes="slack://tag-t1/channels/general__C123",
         )
-        self.assertIn("/tmp/open-tag/references/runtime-agent.md", prompt)
+        self.assertIn(str(Path("/tmp/open-tag/references/runtime-agent.md")), prompt)
         self.assertNotIn("/tmp/open-tag/SKILL.md", prompt)
         self.assertIn("search general workspace all", prompt)
         self.assertIn("ask a short scope", prompt)
@@ -33,7 +33,7 @@ class OpenTagAgentPromptTests(unittest.TestCase):
             root = Path(temp)
             script = root / "node_modules/@openai/codex/bin/codex.js"
             script.parent.mkdir(parents=True)
-            script.write_text("// fixture")
+            script.write_text("// fixture", encoding="utf-8")
             shim = root / "codex.cmd"
             with patch.object(opentag_agent, "os", SimpleNamespace(name="nt")), patch(
                 "scripts.opentag_agent.shutil.which", side_effect=[str(shim), "node.exe"]
@@ -131,10 +131,10 @@ class OpenTagAgentPromptTests(unittest.TestCase):
             allowed_scopes="file://local/tmp/workspace",
         )
 
-        self.assertIn("/tmp/invocation/results/images", prompt)
+        self.assertIn(str(Path("/tmp/invocation/results/images")), prompt)
         self.assertIn("Slack bridge uploads supported files", prompt)
         self.assertIn("Do not call Slack's API to upload them", prompt)
-        self.assertIn("/tmp/invocation/results/artifacts", prompt)
+        self.assertIn(str(Path("/tmp/invocation/results/artifacts")), prompt)
         self.assertIn("including generated HTML", prompt)
 
     @patch("scripts.opentag_agent.backend_command", return_value=["codex"])
@@ -163,7 +163,11 @@ class OpenTagAgentPromptTests(unittest.TestCase):
 
 
 class BackendStreamEventTests(unittest.TestCase):
-    def setUp(self):
+    def setUp(self) -> None:
+        # On Windows, Tag resolves codex's npm shim on PATH; these tests don't install Codex.
+        resolve = patch.object(opentag_agent, "backend_command", side_effect=lambda name: [name])
+        resolve.start()
+        self.addCleanup(resolve.stop)
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         usage_home = patch("scripts.agent_usage.instance_home", return_value=Path(temporary.name))
@@ -178,18 +182,19 @@ class BackendStreamEventTests(unittest.TestCase):
 
     def test_watchdog_resets_idle_deadline_but_not_maximum_runtime(self) -> None:
         stopped = threading.Event()
+        # Proportions matter, not absolute times; generous margins keep slow CI runners honest.
         watchdog = opentag_agent.BackendWatchdog(
-            idle_timeout=0.08,
-            max_timeout=0.18,
+            idle_timeout=0.8,
+            max_timeout=1.8,
             stop=stopped.set,
         )
         watchdog.start()
         try:
-            self.assertFalse(stopped.wait(0.05))
+            self.assertFalse(stopped.wait(0.5))
             watchdog.touch()
-            self.assertFalse(stopped.wait(0.05))
+            self.assertFalse(stopped.wait(0.5))
             watchdog.touch()
-            self.assertTrue(stopped.wait(0.12))
+            self.assertTrue(stopped.wait(1.2))
             self.assertEqual("maximum", watchdog.reason)
         finally:
             watchdog.close()
@@ -447,7 +452,7 @@ class ChannelArtifactRoutingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             legacy = root / 'existing.md'
-            legacy.write_text('existing')
+            legacy.write_text('existing', encoding="utf-8")
             def backend(prompt, **kwargs):
                 self.assertEqual(kwargs['workdir'], root)
                 self.assertTrue((root / 'artifacts/C123').is_dir())
@@ -455,7 +460,7 @@ class ChannelArtifactRoutingTests(unittest.TestCase):
                 self.assertIn('--channel-id C123', prompt)
                 self.assertIn('edit existing', prompt)
                 self.assertIn('workspace root for older files', prompt)
-                self.assertEqual(legacy.read_text(), 'existing')
+                self.assertEqual(legacy.read_text(encoding="utf-8"), 'existing')
                 return 0
             with patch.dict(os.environ, {}, clear=True), patch.object(sys, 'argv', [
                 'opentag_agent', '--backend', 'claude', '--channel-id', 'C123',
@@ -470,7 +475,8 @@ class ClaudePrintModelTests(unittest.TestCase):
         for model in (None, "default", "opus"):
             with self.subTest(model=model), patch.object(
                 opentag_agent, "stream_command", return_value=(0, "ok", True, False)
-            ) as stream, patch.object(opentag_agent.subprocess, "run") as run:
+            ) as stream, patch.object(opentag_agent.subprocess, "run") as run, \
+                    patch.object(opentag_agent, "backend_command", side_effect=lambda name: [name]):
                 run.return_value = SimpleNamespace(stdout="", returncode=0)
                 kwargs = dict(skill_dir=Path('/skill'), workdir=Path('/work'),
                               attachments_dir=None, timeout=30, model=model)

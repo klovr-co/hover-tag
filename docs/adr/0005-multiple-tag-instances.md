@@ -75,7 +75,13 @@ decision and explicit operator authorization.
 
 ## Consequences
 
-- Unqualified commands select `instances/default`; installations using the old
+- Tags are named `TEAM_ID-APP_ID` in lowercase once their Slack app exists, so
+  names never collide and nobody chooses one. Unqualified commands, and the
+  legacy `tag default`, select the main Tag recorded in `state/main-tag.json`,
+  or the only Tag. The built-in `default` and `tag add`'s provisional
+  `new-tag` names last only until setup links the Slack app; a retryable
+  migration then renames the folder in one step (amended October 2026).
+- Before that rename, unqualified commands select `instances/default`; installations using the old
   root-level mutable layout are migrated automatically on startup after stopping
   the affected bridge. Settings, integrations, and instance state are copied
   with originals preserved and managed paths updated for the new home.

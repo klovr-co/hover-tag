@@ -12,7 +12,7 @@ class DiagnosisTests(unittest.TestCase):
     def test_report_does_not_forward_log_content(self):
         with tempfile.TemporaryDirectory() as directory:
             log = Path(directory) / "error.log"
-            log.write_text("BrokenPipeError xoxb-secret private Slack message token=arbitrary-secret")
+            log.write_text("BrokenPipeError xoxb-secret private Slack message token=arbitrary-secret", encoding="utf-8")
             payload = diagnosis.report(1, False, True, [log])
         self.assertEqual(payload["historical_log_signals"], ["socket_broken_pipe_observed"])
         self.assertNotIn("secret", str(payload))

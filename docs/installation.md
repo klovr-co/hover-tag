@@ -67,7 +67,7 @@ tools such as `gws`. The installer does not relocate their credentials.
 
 ## Install from a checkout
 
-On supported macOS/Linux systems, install Codex, Claude Code, or both separately,
+On supported macOS, Linux, and Windows systems, install Codex, Claude Code, or both separately,
 then run the installer below. Sign in to your agent or
 [connect a ChatGPT plan directly to Tag](reference/chatgpt-connection.md).
 Tag automatically prepares Python and Slack CLI; neither Python nor uv needs
@@ -76,8 +76,8 @@ to be on PATH. Setup checks the selected transport and agent sign-in
 connection, and explains how to update or sign in when needed. Tag does not
 install either agent or change its global configuration or credentials.
 
-Native Windows retains its Python 3.10+ and Slack CLI prerequisites; WSL uses the
-Linux bootstrap. No local administrator privileges are needed. Slack sign-in
+Native Windows uses `install.ps1`, which needs only Windows PowerShell 5.1; WSL
+uses the Linux bootstrap. No local administrator privileges are needed. Slack sign-in
 and any workspace administrator approval remain explicit user actions.
 
 macOS/Linux:
@@ -108,8 +108,9 @@ Each release has its own Python environment with the pinned runtime requirements
 Installation also downloads and validates MFS's default local embedding model
 into its reusable cache, so the first `tag start` does not wait for a cold model
 download. Later installs reuse the cached model.
-The MFS Python server and matching MFS CLI are installed into Tag's managed
-runtime on macOS and Linux. Google Workspace CLI and third-party MCP packages are
+The MFS Python server is installed into Tag's managed runtime on every
+platform. Tag talks to it over its HTTP API, so the separate `mfs`
+command-line client is not needed. Google Workspace CLI and third-party MCP packages are
 optional integrations, installed and authenticated separately.
 
 The installer keeps dependency-manager output behind a concise Install screen.
@@ -325,6 +326,13 @@ an exact uv-managed Python already on the machine, otherwise downloads one into
 System Python and shell profiles are left alone. Paths containing spaces work;
 activation of a virtual environment is not required.
 
+The Windows bootstrap, `install.ps1`, does the same with `Invoke-WebRequest`
+and `Get-FileHash`: the same pinned uv (x86_64 or ARM64) and Python 3.12.14,
+under `TAG_HOME\runtime`. Installations made before this used a system Python;
+on the next `tag start`, Tag prepares the private Python, reinstalls the
+current release with it, and records `dependency_schema: 1`. If that fails, the
+previous runtime stays selected and the next start retries.
+
 Each release has a separate environment. The launcher records an explicit
 interpreter path, so changing the default `python3` does not change Tag's runtime.
 Old runtimes remain available for rollback. Preparation and runtime import checks
@@ -356,6 +364,7 @@ Measured on macOS ARM64 on 2026-09-27, using Python 3.12.14, uv 0.12.19,
 Slack CLI 4.8.0 and the current runtime requirements. These are measurements,
 not size limits or promises for other platforms. Transitive package updates,
 platform wheels, filesystem allocation, and existing caches change the totals.
+Since this measurement, Tag no longer installs the MFS CLI (about 2 MB less).
 
 | Component | Download payload | Installed logical bytes |
 | --- | ---: | ---: |
@@ -364,8 +373,8 @@ platform wheels, filesystem allocation, and existing caches change the totals.
 | Python | approximately 23.9 MiB reported by uv | 69,627,389 B |
 | Slack CLI | 7,607,363 B | 20,527,232 B |
 | Runtime packages (118 wheels) | 196,784,133 B | included in release environment below |
-| MFS CLI | 2,038,676 B | included in release environment below |
-| Release environment, including packages and MFS CLI | see above | 583,249,864 B |
+| MFS CLI (no longer installed) | 2,038,676 B | included in release environment below |
+| Release environment, including packages and the MFS CLI then installed | see above | 583,249,864 B |
 | MFS embedding model and tokenizer | 587,042,498 B | 587,042,939 B including cache metadata |
 
 The dependency payload is approximately 797 MiB before the Tag runtime archive,

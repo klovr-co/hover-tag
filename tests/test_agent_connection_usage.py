@@ -139,7 +139,8 @@ class ConnectionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings.json"
             tag_config.update_config(path, values)
-            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            if os.name != "nt":
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
         with patch.dict(os.environ, values, clear=True), contextlib.redirect_stdout(io.StringIO()) as out:
             emit_event("error", "failed test-private-credential", nested={"text": "test-private-credential"})
         self.assertNotIn("test-private-credential", out.getvalue())
@@ -204,7 +205,8 @@ class UsageTests(unittest.TestCase):
             self.assertEqual(report["unfinished_attempts"], 2)
             self.assertTrue(report["recorded_cost_over_budget"])
             self.assertEqual(report["enforcement"], "advisory")
-            self.assertEqual((home / "state/usage.sqlite3").stat().st_mode & 0o777, 0o600)
+            if os.name != "nt":
+                self.assertEqual((home / "state/usage.sqlite3").stat().st_mode & 0o777, 0o600)
 
     def test_month_boundary_and_read_only_empty_report(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -262,7 +264,7 @@ class UsageTests(unittest.TestCase):
                 return "completed", ""
             self.assertEqual(run_rich_events(start, errors=(RuntimeError,), backend_name="Claude"), 0)
             self.assertEqual(len(calls), 1)
-            self.assertIn("Usage recording unavailable", emit.call_args.args[1])
+            self.assertTrue(any("Usage recording unavailable" in call.args[1] for call in emit.call_args_list))
 
     def test_usage_cli_uses_selected_tag_budget(self):
         from scripts import tag_cli, tag_instances
@@ -277,14 +279,17 @@ class UsageTests(unittest.TestCase):
             self.assertEqual(report["attempts"], 0)
             self.assertFalse((context.home / "state/usage.sqlite3").exists())
 
-    def test_runner_consumes_usage_without_sending_to_slack(self):
+    def test_runner_records_usage_and_forwards_only_token_counts(self):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"TAG_INSTANCE_HOME": tmp}, clear=True), \
                 patch("scripts.opentag_agent.emit_event") as emit:
             def start(forward):
                 forward({"type": "usage", "input_tokens": 10, "output_tokens": 1, "cost_usd": .01})
                 return "completed", ""
             self.assertEqual(run_rich_events(start, errors=(RuntimeError,), backend_name="Claude"), 0)
-            emit.assert_not_called()
+            # Activity receives token counts; cost and provider scope stay in the ledger.
+            emit.assert_called_once()
+            self.assertEqual("usage", emit.call_args.args[0])
+            self.assertEqual({"usage"}, set(emit.call_args.kwargs))
             self.assertEqual(agent_usage.report(Path(tmp), {})["input_tokens"], 10)
 
 

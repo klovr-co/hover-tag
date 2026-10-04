@@ -47,7 +47,7 @@ def token_from_env() -> str | None:
         return env("MFS_TOKEN")
     token_file = Path.home() / ".mfs" / "server.token"
     if token_file.exists():
-        return token_file.read_text().strip()
+        return token_file.read_text(encoding="utf-8").strip()
     return None
 
 
@@ -109,6 +109,8 @@ def check_env() -> bool:
         "MFS_ALLOWED_SCOPES",
         "OPENTAG_BACKEND",
     ]
+    if env("SLACK_CHANNEL_POLICY") == "invited" and not env("MFS_ALLOWED_SCOPES"):
+        required.remove("MFS_ALLOWED_SCOPES")  # No channel yet: no memory sources.
     required.extend(["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_ALLOWED_USER_IDS"])
     all_ok = True
     for name in required:
@@ -274,7 +276,8 @@ def check_offline(root: Path) -> bool:
         "supported backend": backend in {"codex", "claude"},
         "agent workspace": workspace.is_dir(),
         "MFS URL": env("MFS_URL").startswith(("http://", "https://")),
-        "MFS allowed scopes": bool(scopes),
+        # A Tag following invitations has no sources until it's in a channel.
+        "MFS allowed scopes": bool(scopes) or env("SLACK_CHANNEL_POLICY") == "invited",
         "Slack allowed users": bool(
             [value for value in env("SLACK_ALLOWED_USER_IDS").split(",") if value.strip()]
         ),
@@ -311,7 +314,7 @@ def run_checks(offline: bool, channel_ids: list[str] | None) -> int:
     checks = [
         check_runtime_dependencies(),
         check_env(),
-        check_mfs(scopes) if scopes else False,
+        check_mfs(scopes) if scopes or env("SLACK_CHANNEL_POLICY") == "invited" else False,
         check_backend(),
     ]
     configured = channel_ids or []

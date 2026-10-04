@@ -37,6 +37,15 @@ def without_telemetry_environment(source: Mapping[str, str]) -> dict[str, str]:
     }
 
 
+def text_only_environment(source: Mapping[str, str]) -> dict[str, str]:
+    """Preserve provider auth while blanking task/bridge data, also for SDK env merges."""
+    clean = without_telemetry_environment(source)
+    return {key: "" if key not in clean or key.startswith(("SLACK_", "MFS_"))
+            or key in {"OPENTAG_CALLER_ID", "OPENTAG_CURRENT_CHANNEL_ID",
+                       "OPENTAG_SLACK_SEARCH_GRANT", "OPENTAG_SLACK_CHANNEL_LABELS"}
+            else value for key, value in source.items()}
+
+
 def current_channel_scopes(raw_scopes: str, conversation_id: str) -> str:
     """Narrow Slack connector scopes to this invocation's channel directory."""
     scopes = [scope.strip() for scope in raw_scopes.split(",") if scope.strip()]

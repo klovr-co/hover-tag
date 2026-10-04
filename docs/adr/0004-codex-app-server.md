@@ -123,7 +123,7 @@ task stream starts with `chunks`, so answer text and stream recovery also use
 markdown chunks. The shared activity block shows short identities and counts.
 Full redacted inputs and results are available through the requester-only
 Activity button; no extra tool-details message is posted in the thread.
-Failure replies place recovery, Configure (when relevant), and Activity buttons
+Failure replies place recovery and Activity buttons
 in one actions block so the client can wrap them naturally without forced rows.
 
 

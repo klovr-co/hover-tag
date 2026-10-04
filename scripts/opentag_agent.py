@@ -18,12 +18,14 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from agent_activity import token_usage
     import agent_connection, agent_usage
     from tag_paths import codex_workspace_args, tag_temp_dir
     from codex_agent_backend import CodexAppServer, CodexAppServerError
     from claude_agent_backend import ClaudeAgentError, ClaudeAgentRun
     from record_output_artifact import channel_artifact_directory
 except ImportError:
+    from scripts.agent_activity import token_usage
     from scripts import agent_connection, agent_usage
     from scripts.tag_paths import codex_workspace_args, tag_temp_dir
     from scripts.codex_agent_backend import CodexAppServer, CodexAppServerError
@@ -649,8 +651,10 @@ def run_rich_events(
 ) -> int:
     """Run one request-scoped turn per attempt and emit the richer event contract."""
     attempts = max(1, int(os.getenv("OPENTAG_BACKEND_ATTEMPTS", "3")))
+    previous_usage: dict[str, int] = {}
     for attempt in range(1, attempts + 1):
         made_progress = False
+        attempt_usage: dict[str, int] = {}
         recorder = None
         try:
             recorder = agent_usage.Recorder(backend_name.lower())
@@ -658,7 +662,7 @@ def run_rich_events(
             emit_event("status", "Usage recording unavailable; task will continue.")
 
         def forward_event(event: dict[str, Any]) -> None:
-            nonlocal made_progress, recorder
+            nonlocal made_progress, attempt_usage, recorder
             if event.get("type") == "usage":
                 if recorder is not None:
                     try:
@@ -666,10 +670,22 @@ def run_rich_events(
                     except (OSError, sqlite3.Error, ValueError):
                         recorder = None
                         emit_event("status", "Usage recording unavailable; totals may be incomplete.")
-                return
+                # Activity shows the same counts in its own vocabulary.
+                event = {"type": "usage", "usage": {
+                    "input_tokens": event.get("input_tokens"), "output_tokens": event.get("output_tokens"),
+                    "cache_read_input_tokens": event.get("cached_input_tokens"),
+                    "cache_creation_input_tokens": event.get("cache_creation_tokens"),
+                    "reasoning_output_tokens": event.get("reasoning_output_tokens")}}
             payload = dict(event)
             event_type = str(payload.pop("type"))
             text = str(payload.pop("text", ""))
+            if event_type == "usage":
+                usage = token_usage(payload.get("usage"))
+                if usage is None:
+                    return
+                attempt_usage = usage
+                payload["usage"] = {key: previous_usage.get(key, 0) + usage.get(key, 0)
+                                    for key in previous_usage.keys() | usage.keys()}
             if event_type in {
                 "approval_request",
                 "activity_start",
@@ -701,6 +717,8 @@ def run_rich_events(
             and retryable_backend_failure(detail)
             and attempt < attempts
         ):
+            previous_usage = {key: previous_usage.get(key, 0) + attempt_usage.get(key, 0)
+                              for key in previous_usage.keys() | attempt_usage.keys()}
             emit_event("status", retry_status(attempt + 1, attempts))
             time.sleep(min(2 * attempt, 8))
             continue

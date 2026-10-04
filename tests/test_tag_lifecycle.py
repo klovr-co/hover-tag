@@ -125,7 +125,7 @@ class TagLifecycleTests(unittest.TestCase):
 
     def test_memory_start_uses_saved_mfs_settings_before_onboarding_completes(self) -> None:
         config = self.home / "config/settings.json"
-        config.write_text('{"MFS_URL":"http://localhost:13619"}')
+        config.write_text('{"MFS_URL":"http://localhost:13619"}', encoding="utf-8")
 
         with patch.dict(os.environ, {"TAG_HOME": str(self.root)}, clear=False), patch.object(
             sys, "argv", ["tag", "memory", "start"]
@@ -157,6 +157,7 @@ class TagLifecycleTests(unittest.TestCase):
         self.assertEqual(start.call_args.kwargs["state_dir"], context.shared_mfs_home)
         self.assertEqual(start.call_args.kwargs["cwd"], context.workspace)
 
+    @unittest.skipIf(os.name == "nt", "Tag finds the listener with lsof only on macOS and Linux")
     def test_local_mfs_listener_matches_the_resolved_configured_address(self) -> None:
         expected = MagicMock(pid=22)
         expected.cmdline.return_value = ["python", "-m", "mfs_server", "run"]
@@ -191,6 +192,7 @@ class TagLifecycleTests(unittest.TestCase):
         )
         process.assert_called_once_with(22)
 
+    @unittest.skipIf(os.name == "nt", "Tag finds the listener with lsof only on macOS and Linux")
     def test_local_mfs_listener_rejects_multiple_matching_processes(self) -> None:
         first = MagicMock(pid=11)
         first.cmdline.return_value = ["mfs-server", "run"]
@@ -328,6 +330,13 @@ class TagLifecycleTests(unittest.TestCase):
         ) as tick:
             tag_cli.reconcile_invitation_memory(self.home)
         tick.assert_called_once_with()
+
+        # A Tag set up without channels starts and waits for its first invitation.
+        status.write_text(json.dumps({"state": "no_joined_channels"}), encoding="utf-8")
+        with patch.dict(sys.modules, {"slack_invitation_memory": slack_invitation_memory}), patch.object(
+            slack_invitation_memory.InvitationMemory, "tick"
+        ):
+            tag_cli.reconcile_invitation_memory(self.home)
 
         status.write_text(json.dumps({"state": "needs_attention"}), encoding="utf-8")
         with patch.dict(sys.modules, {"slack_invitation_memory": slack_invitation_memory}), patch.object(
@@ -482,78 +491,100 @@ class TagLifecycleTests(unittest.TestCase):
         ), patch.object(tag_cli.time, "sleep"):
             self.assertEqual(tag_cli.wait_for_configured_mfs_scopes(attempts=2), [failed])
 
-    def test_sync_explains_when_the_running_mfs_server_lacks_history_credential(self) -> None:
+    def fake_mfs(self, *replies: tuple[int, dict]) -> list[dict]:
+        """A local MFS server answering POST /v1/add with the given replies in order."""
+        import http.server
+        import threading
+        requests: list[dict] = []
+        queue = list(replies)
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802
+                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                requests.append({"path": self.path, "auth": self.headers.get("Authorization"), "body": body})
+                status, reply = queue.pop(0)
+                data = json.dumps(reply).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *_):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.shutdown)
+        self.mfs_url = f"http://127.0.0.1:{server.server_address[1]}"
+        return requests
+
+    def sync(self) -> None:
         config = self.home / "connector.toml"
-        config.touch()
-        completed = type("Completed", (), {
-            "returncode": 1,
-            "stdout": "",
-            "stderr": "credential_ref 'env:MFS_SLACK_TOKEN': environment variable MFS_SLACK_TOKEN is not set",
-        })()
-        with patch.object(tag_cli.shutil, "which", return_value="mfs"), patch.object(
-            tag_cli.subprocess, "run", return_value=completed
-        ):
-            with self.assertRaisesRegex(RuntimeError, "already running without Tag's Slack-history credential"):
-                tag_cli.sync_configured_slack_memory({
-                    "MFS_SLACK_CONNECTOR_URI": "slack://tag-test",
-                    "MFS_SLACK_CONNECTOR_CONFIG": str(config),
-                })
+        config.write_text('type = "slack"\n_credential_ref = "env:MFS_SLACK_TOKEN"\n'
+                          '[[objects]]\nchannel = "C1"\n', encoding="utf-8")
+        tag_cli.sync_configured_slack_memory({
+            "MFS_URL": self.mfs_url, "MFS_TOKEN": "secret",
+            "MFS_SLACK_CONNECTOR_URI": "slack://tag-test",
+            "MFS_SLACK_CONNECTOR_CONFIG": str(config),
+        })
+
+    def test_sync_registers_the_connector_over_http_like_the_mfs_client(self) -> None:
+        requests = self.fake_mfs((200, {"job_id": "j1"}))
+        self.sync()
+        self.assertEqual(requests, [{
+            "path": "/v1/add", "auth": "Bearer secret",
+            "body": {"target": "slack://tag-test", "full": False, "process": False,
+                     "config": {"type": "slack", "_credential_ref": "env:MFS_SLACK_TOKEN",
+                                "objects": [{"channel": "C1"}]}},
+        }])
+
+    def test_sync_explains_when_the_running_mfs_server_lacks_history_credential(self) -> None:
+        self.fake_mfs((400, {"code": "bad_request", "detail":
+                             "credential_ref 'env:MFS_SLACK_TOKEN': environment variable MFS_SLACK_TOKEN is not set"}))
+        with self.assertRaisesRegex(RuntimeError, "already running without Tag's Slack-history credential"):
+            self.sync()
 
     def test_sync_explains_when_mfs_lacks_the_slack_connector(self) -> None:
-        config = self.home / "connector.toml"
-        config.touch()
-        completed = type("Completed", (), {
-            "returncode": 1,
-            "stdout": "",
-            "stderr": "error 501: no plugin for slack",
-        })()
-        with patch.object(tag_cli.shutil, "which", return_value="mfs"), patch.object(
-            tag_cli.subprocess, "run", return_value=completed
-        ):
-            with self.assertRaisesRegex(tag_cli.MfsSlackConnectorUnavailable, "Slack connector support is not installed"):
-                tag_cli.sync_configured_slack_memory({
-                    "MFS_SLACK_CONNECTOR_URI": "slack://tag-test",
-                    "MFS_SLACK_CONNECTOR_CONFIG": str(config),
-                })
+        self.fake_mfs((501, {"code": "not_implemented", "detail": "no plugin for slack"}))
+        with self.assertRaisesRegex(tag_cli.MfsSlackConnectorUnavailable, "Slack connector support is not installed"):
+            self.sync()
 
     def test_sync_updates_an_existing_connector_and_accepts_an_in_progress_sync(self) -> None:
-        config = self.home / "connector.toml"
-        config.touch()
-        existing = type("Completed", (), {"returncode": 1, "stdout": "", "stderr": "connector_already_registered"})()
-        updated = type("Completed", (), {"returncode": 0, "stdout": "", "stderr": ""})()
-        with patch.object(tag_cli, "mfs_client_executable", return_value="mfs"), patch.object(
-            tag_cli.subprocess, "run", side_effect=[existing, updated]
-        ) as run:
-            tag_cli.sync_configured_slack_memory({
-                "MFS_SLACK_CONNECTOR_URI": "slack://tag-test",
-                "MFS_SLACK_CONNECTOR_CONFIG": str(config),
-            })
-        self.assertEqual(run.call_args_list[1].args[0], ["mfs", "connector", "update", "slack://tag-test", "--config", str(config)])
+        requests = self.fake_mfs((409, {"code": "connector_already_registered", "detail": "connector_already_registered"}),
+                                 (200, {"job_id": "j2"}))
+        self.sync()
+        self.assertEqual(requests[1]["body"]["update"], True)
+        self.assertEqual(requests[1]["body"]["target"], "slack://tag-test")
+        self.assertIn("config", requests[1]["body"])
 
-        in_progress = type("Completed", (), {"returncode": 1, "stdout": "", "stderr": "sync_already_running"})()
-        with patch.object(tag_cli.shutil, "which", return_value="mfs"), patch.object(
-            tag_cli.subprocess, "run", return_value=in_progress
-        ):
-            tag_cli.sync_configured_slack_memory({
-                "MFS_SLACK_CONNECTOR_URI": "slack://tag-test",
-                "MFS_SLACK_CONNECTOR_CONFIG": str(config),
-            })
+        self.fake_mfs((409, {"code": "sync_already_running", "detail": "sync_already_running"}))
+        self.sync()
+
+    def test_sync_reports_unknown_failures_and_an_unreachable_server(self) -> None:
+        self.fake_mfs((500, {"code": "internal_error", "detail": "disk full"}))
+        with self.assertRaisesRegex(RuntimeError, "could not start \\(disk full\\)"):
+            self.sync()
+        self.mfs_url = "http://127.0.0.1:9"  # nothing listens here
+        with self.assertRaisesRegex(RuntimeError, "Memory isn't reachable"):
+            self.sync()
+
+    def test_sync_never_sends_the_token_to_a_plain_http_remote(self) -> None:
+        self.mfs_url = "http://memory.example.com"
+        with self.assertRaisesRegex(RuntimeError, "refusing to send the MFS bearer token"):
+            self.sync()
+
+    def test_token_comes_from_mfs_home_when_set(self) -> None:
+        (self.home / "mfs").mkdir()
+        (self.home / "mfs/server.token").write_text("from-home\n", encoding="utf-8")
+        self.assertEqual(tag_cli.mfs_token({"MFS_HOME": str(self.home / "mfs")}), "from-home")
+        self.assertEqual(tag_cli.mfs_token({"MFS_TOKEN": "explicit", "MFS_HOME": str(self.home / "mfs")}), "explicit")
 
     def test_mfs_server_falls_back_to_path_when_python_runtime_has_no_server(self) -> None:
         with patch.object(tag_cli.Path, "is_file", return_value=False), patch.object(
             tag_cli.shutil, "which", return_value="/usr/local/bin/mfs-server"
         ):
             self.assertEqual(tag_cli.mfs_server_executable(), "/usr/local/bin/mfs-server")
-
-    def test_mfs_client_prefers_managed_runtime_over_path(self) -> None:
-        with patch.object(tag_cli.Path, "is_file", return_value=True), patch.object(
-            tag_cli.shutil, "which", return_value="/usr/local/bin/mfs"
-        ) as which:
-            self.assertEqual(
-                tag_cli.mfs_client_executable(),
-                str(tag_cli.Path(sys.executable).parent / ("mfs.exe" if os.name == "nt" else "mfs")),
-            )
-        which.assert_not_called()
 
 
 if __name__ == "__main__":

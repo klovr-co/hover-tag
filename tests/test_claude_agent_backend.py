@@ -55,6 +55,7 @@ class ResultMessage:
     terminal_reason: str | None = None
     errors: list[str] | None = None
     api_error_status: int | None = None
+    usage: dict[str, Any] | None = None
 
 
 def stream(message_id: str, *texts: str, stop_reason: str, tool: bool = False) -> list[StreamEvent]:
@@ -276,6 +277,21 @@ class ClaudeAgentRunTests(unittest.TestCase):
         self.assertEqual("/bin/claude", options.cli_path)
         self.assertTrue(options.include_partial_messages)
         self.assertTrue(FakeClient.instances[0].disconnected)
+
+    def test_tag_thinking_level_reaches_the_sdk_effort_option(self) -> None:
+        from scripts import agent_models, slack_socket_agent
+
+        async def script(_client):
+            yield ResultMessage(result="ok")
+
+        catalog = [agent_models.ModelOption("opus", "Opus", ("low", "medium", "high", "max"),
+                                            default_reasoning_effort="high", is_default=True, backend="claude")]
+        with patch.dict(os.environ, {"OPENTAG_DEFAULT_MODEL": "claude:opus", "OPENTAG_DEFAULT_EFFORT": "max"}), \
+                patch.object(agent_models, "discover_models", return_value=catalog), \
+                patch.object(agent_models, "backend_signed_in", side_effect=lambda name: name == "claude"):
+            settings = slack_socket_agent.default_agent_settings(agent_models.discover_tag_models("claude"))
+        self.run_agent(script, model=settings.model, reasoning_effort=settings.reasoning_effort)
+        self.assertEqual(("opus", "max"), (FakeClient.instances[0].options.model, FakeClient.instances[0].options.effort))
 
     def test_default_model_alias_lets_claude_choose(self) -> None:
         async def script(_client):
