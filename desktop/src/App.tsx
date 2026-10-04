@@ -197,7 +197,7 @@ export function App() {
           openAI={capabilities.includes(AI_CAPABILITY) ? () => setScreen({ name: "ai" }) : undefined} />
       )}
       {screen.name === "ai" && (
-        <AISettings api={api} tags={tags} initial={screen.tag} close={() => { watch.recheck(); setScreen({ name: "settings" }); }} />
+        <AISettings api={api} tags={tags} initial={screen.tag} add={add} close={() => { watch.recheck(); setScreen({ name: "settings" }); }} />
       )}
       {screen.name === "tag" && (
         <TagDetail api={api} tags={tags} initial={screen.id} problems={watch.problems} back={home} add={add}

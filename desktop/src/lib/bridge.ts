@@ -68,6 +68,10 @@ export interface Bridge {
   checkAppUpdate(channel?: string): Promise<AppUpdate | null>;
   /** Install the update found by checkAppUpdate and restart into it. */
   installAppUpdate(version: string): Promise<void>;
+  /** Choose a picture file; Tag checks it. Null when the person cancels. */
+  pickImage(): Promise<string | null>;
+  /** Files dropped on the window, while `over` reports a drag above it. */
+  onFileDrop(handler: (paths: string[]) => void, over?: (dragging: boolean) => void): () => void;
 }
 
 export interface AppUpdate {
@@ -127,11 +131,32 @@ async function tauriBridge(): Promise<Bridge> {
       if (granted) notification.sendNotification({ title, body });
     },
     showWindow: () => invoke("show_window"),
-    fitWindow: (width, height) => getCurrentWindow().setSize(new LogicalSize(width, Math.min(Math.max(height, 300), 860))),
+    fitWindow: async (width, height) => {
+      const wanted = Math.min(Math.max(height, 300), 860);
+      const window_ = getCurrentWindow();
+      await window_.setSize(new LogicalSize(width, wanted));
+      // With macOS's overlay title bar the size can include the title bar; correct by what the page really got.
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      const extra = window.innerHeight - wanted;
+      if (Math.abs(extra) > 1) await window_.setSize(new LogicalSize(width, wanted - extra));
+    },
     quit: () => invoke("quit"),
     markMigrated: () => invoke("mark_migrated"),
     checkAppUpdate: (channel) => invoke<AppUpdate | null>("app_update_check", { channel: channel ?? null }),
     installAppUpdate: (version) => invoke("app_update_install", { version }),
+    pickImage: async () => {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const picked = await open({ multiple: false, directory: false, filters: [{ name: "Pictures", extensions: ["png", "jpg", "jpeg", "gif"] }] });
+      return typeof picked === "string" ? picked : null;
+    },
+    onFileDrop: (handler, over) => {
+      const stop = import("@tauri-apps/api/webview").then(({ getCurrentWebview }) => getCurrentWebview().onDragDropEvent((event) => {
+        if (event.payload.type === "drop") { over?.(false); handler(event.payload.paths); }
+        else if (event.payload.type === "leave") over?.(false);
+        else over?.(true);
+      }));
+      return () => void stop.then((unlisten) => unlisten());
+    },
   };
 }
 
@@ -300,6 +325,8 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
     markMigrated: async () => {},
     checkAppUpdate: async () => desktopVersion !== targetVersion ? { version: targetVersion } : null,
     installAppUpdate: async () => { desktopVersion = targetVersion; await sleep(1500); },
+    pickImage: async () => null,
+    onFileDrop: () => () => {},
   };
 }
 
@@ -361,7 +388,10 @@ export function bridge(): Promise<Bridge> {
   if (!current) {
     const params = new URLSearchParams(typeof location === "undefined" ? "" : location.search);
     current = inTauri
-      ? tauriBridge().then(async (real) => ((await real.info()).demo ? demoBridge() : real))
+      // Sample data in the real app still sizes, shows and quits the real window.
+      ? tauriBridge().then(async (real) => ((await real.info()).demo
+        ? { ...demoBridge(), fitWindow: real.fitWindow, showWindow: real.showWindow, quit: real.quit, onFileDrop: real.onFileDrop }
+        : real))
       : Promise.resolve(demoBridge({ installed: params.get("installed") !== "0" }));
   }
   return current;

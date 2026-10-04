@@ -6,6 +6,31 @@ All notable changes to Tag are documented here.
 
 ### Added
 
+- Setting up a Tag starts with the Tag itself: its name, a one-line
+  description, and its picture. Shuffle draws another waterdrop from any of
+  the five elements, one your other Tags don't use, or you can upload your own.
+  Then pick the AI, then the Slack workspace from the sign-ins you already
+  have; Tag signs in to Slack only when it needs to. One recap shows what will
+  be created, with Edit and Edit AI, before anything changes in Slack. The
+  description appears on the app's Slack profile and in Slack's agent view.
+  Choosing channels is optional: new Tags pick up channels they're invited to.
+  `tag setup` in a terminal and Tag.app follow the same steps, and a setup
+  paused in the old order picks up where it stopped.
+
+- In Tag.app, Add a Tag shows these steps as a track in the sky with your new
+  Tag as the marker: the picture, an @mention name and the description on one
+  screen (Upload or drop an image), the model, your workspaces with
+  organizations opening in place, one recap, and channels with search. Ready
+  starts the Tag, copies a first message and opens the right place in Slack,
+  and ticks only once the Tag has really replied. Settings → **AI & models**
+  gets the same model picker and thinking level as Tag detail, and Change
+  account opens as a dialog.
+
+- Use an existing Slack app by picking it from the apps Tag knows (apps linked
+  to this Tag, the Slack CLI's apps, and apps your other Tags use, which can't
+  be picked twice), or paste its link. Tag shows what the app is missing, and
+  **Update app** adds only those settings, keeping the rest.
+
 - Tag.app has a new look: hover.team's sky and frosted panel, its navy main
   button, and Source Sans 3, by day and by night. Clouds, stars and the pixel
   Tags stand still when the system asks for less motion. First run greets you
@@ -167,6 +192,14 @@ All notable changes to Tag are documented here.
   and upgrade without changing system Python or requiring a preinstalled CLI.
 
 ### Fixed
+
+- Setup no longer asks who you are from a list of everyone in the workspace:
+  the person signed in to Slack becomes the Tag's owner, and if Slack can't
+  say who that is, setup asks you to sign in to Slack again. Owners already
+  saved are kept.
+
+- Setup recognises an app that already has Slack's agent view, instead of
+  reporting it missing every time.
 
 - Read and write Tag's files as UTF-8 on Windows. Windows used a legacy code
   page, so a saved Slack memory connector containing "—" never matched, and

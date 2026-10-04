@@ -101,6 +101,14 @@ from `tag NAME settings ai --json` and `models --json`; saving runs
 `tag NAME settings ai model VALUE --effort LEVEL`, with `--restart` only after
 Save and restart. Copy full log copies the services' recent output.
 
+**Add a Tag** draws `tag setup --json` (or `tag add --json`) in setup's own
+order: `profile` (the `profile_picture` kind: name, description, Shuffle,
+Upload through the file picker or a dropped file), `default_model`,
+`workspace` (organizations open in place), `approve_setup`, the app-creation
+`progress` steps, and `channels`. The finished result's `ready` gives the
+Ready screen its Slack deep links. The step track's marker is the Tag's
+picture; `existing_app` and `app_checks` switch it to the existing-app track.
+
 **Look.** The window uses the Hover style from hover.team: its sky, frosted
 panel and navy button. Source Sans 3 is bundled in `src/assets/fonts`
 (SIL Open Font License), and the pixel art in `src/assets/art` comes from the

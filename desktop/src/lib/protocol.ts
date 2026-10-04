@@ -119,23 +119,15 @@ export function compatibility(info: VersionInfo, needed: string[]) {
 
 // ---- Setup over JSON lines ---------------------------------------------------
 
-export interface SlackPerson {
-  id: string;
-  name: string;
-  username: string;
-  image_url?: string | null;
-}
-
 export interface SetupQuestion {
   type: "question";
   id: string;
-  kind: "choose" | "multi" | "text" | "secret" | "confirm" | "people" | "slack_login" | string;
+  kind: "choose" | "multi" | "text" | "secret" | "confirm" | "profile_picture" | "slack_login" | string;
   prompt: string;
   options?: string[];
   default?: number | string | boolean | null;
   selected?: number[];
   sign_in_line?: string;
-  people?: SlackPerson[];
   can_go_back?: boolean;
   /** Stable answers for `choose` options, such as "sign_in:claude" (ai_connection) or model values. */
   option_ids?: string[];
@@ -146,12 +138,78 @@ export interface SetupQuestion {
   last_result?: import("./ai").SignInResult;
   /** default_model: the connected accounts' models, grouped by agent. */
   groups?: import("./ai").ModelGroup[];
+  // ---- Onboarding v2 (capability setup-v2) ----
+  /** profile: the Tag's name, description and the picture Tag will upload. */
+  name?: string;
+  name_limit?: number;
+  description?: string;
+  description_limit?: number;
+  preview?: string | null;
+  picture?: "waterdrop" | "custom" | string;
+  picture_label?: string;
+  error?: string | null;
+  editing?: boolean;
+  can_use_existing?: boolean;
+  /** workspace / org_workspace: the Slack CLI's sign-ins, or an organization's workspaces. */
+  workspaces?: SetupWorkspace[];
+  organization?: { id: string; name: string } | null;
+  /** approve_setup: everything Create will use. */
+  recap?: SetupRecap;
+  /** existing_app: Slack apps Tag knows; app_checks: what the chosen app is missing. */
+  apps?: SetupApp[];
+  checks?: { label: string; ok: boolean; detail: string | null }[];
+  /** channels: every channel Slack lists to the new app; [] is allowed. */
+  channels?: SetupChannel[];
+  allow_empty?: boolean;
+}
+
+export interface SetupWorkspace {
+  id: string;
+  name: string;
+  kind?: "workspace" | "organization" | string;
+  user_id?: string | null;
+  user_name?: string | null;
+}
+
+export interface SetupRecap {
+  name: string;
+  description: string;
+  picture: string | null;
+  workspace: { id: string; name: string; organization: { id: string; name: string } | null };
+  owner: { id: string; name: string | null };
+  ai: { value: string; backend: string; backend_name: string; label: string } | null;
+  approval: boolean;
+}
+
+export interface SetupApp {
+  id: string;
+  name: string;
+  source: "linked" | "cli" | "tag" | string;
+  used_by: string | null;
+}
+
+export interface SetupChannel {
+  id: string;
+  name: string;
+  member: boolean;
+  private: boolean;
+  members?: number | null;
+}
+
+/** What the Ready screen needs once setup completes. */
+export interface SetupReady {
+  team: string;
+  app_id: string;
+  channels: { id: string; name: string }[];
+  ai: { backend: string; backend_name: string; label: string } | null;
 }
 
 export type SetupEvent =
   | { type: "message"; text: string }
   | SetupQuestion
-  | { type: "result"; status: "complete" | "paused" | "failed" | string; tag?: string; error?: string }
+  | { type: "result"; status: "complete" | "paused" | "failed" | string; tag?: string; error?: string; ready?: SetupReady }
+  /** A step of creating the Slack app, from Create in Slack. */
+  | { type: "progress"; step: string; text: string; backend?: undefined }
   /** An agent sign-in started from the AI step; never the end of setup. */
   | import("./ai").SignInEvent;
 
@@ -165,11 +223,6 @@ export function parseSetupLine(line: string): SetupEvent | null {
   } catch {
     return null;
   }
-}
-
-export function personMatches(person: SlackPerson, query: string) {
-  const q = query.trim().toLocaleLowerCase();
-  return !q || [person.name, person.username, person.id].some((v) => v.toLocaleLowerCase().includes(q));
 }
 
 // ---- Installer progress ------------------------------------------------------

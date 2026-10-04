@@ -9,10 +9,10 @@ import progress from "../../../protocol/examples/install-progress.txt?raw";
 import setup from "../../../protocol/examples/setup.jsonl?raw";
 import { fraction, initialInstall, installReducer } from "./install";
 import {
-  compatibility, groups, INSTALL_STEPS, parseList, parseProgressLine, parseSetupLine, personMatches, status, title,
+  compatibility, groups, INSTALL_STEPS, parseList, parseProgressLine, parseSetupLine, status, title,
   type VersionInfo,
 } from "./protocol";
-import { explainExit, initialSetup, setupReducer } from "./setup";
+import { explainExit, initialSetup, setupReducer, trackStep } from "./setup";
 import { droppedTags, failureLine } from "./tags";
 import { workingFolder } from "../components/Home";
 import { modelText, quietLine, rowLine, type ActivityItem } from "./home";
@@ -73,18 +73,36 @@ describe("setup", () => {
     expect(parseSetupLine("{not json")).toBeNull();
   });
 
-  it("walks the example conversation to a finished Tag", () => {
+  it("walks the example conversation to a finished Tag, in onboarding order", () => {
     let state = initialSetup;
-    for (const line of lines) state = setupReducer(state, { type: "line", line });
-    expect(state).toMatchObject({ outcome: "complete", tag: "t0klovr1-a0maya01", question: null });
+    const asked: string[] = [];
+    const steps: number[] = [];
+    for (const line of lines) {
+      state = setupReducer(state, { type: "line", line });
+      if (state.question && asked.at(-1) !== state.question.id) { asked.push(state.question.id); steps.push(trackStep(state)); }
+    }
+    expect(asked).toEqual(["profile", "default_model", "workspace", "approve_setup", "channels"]);
+    expect(steps).toEqual([0, 1, 2, 3, 4]);
+    expect(asked).not.toContain("person");
+    expect(state).toMatchObject({ outcome: "complete", tag: "t0bnd7v5j2w-a0maya01", question: null,
+      ready: { team: "T0BND7V5J2W", app_id: "A0MAYA01" }, profile: { name: "Maya's Tag" } });
+  });
+
+  it("shows creating the Slack app as its own steps, apart from agent sign-in", () => {
+    let state = initialSetup;
+    for (const line of lines.filter((l) => l.includes('"progress"'))) state = setupReducer(state, { type: "line", line });
+    expect(state.creating?.map((s) => s.step)).toEqual(["create", "picture", "install", "connect"]);
+    expect(state.signIn.backend).toBeNull();
   });
 
   it("stays on the code step when Slack refuses a code", () => {
-    let state = setupReducer(initialSetup, { type: "line", line: lines[1] });
+    const login = JSON.stringify({ type: "question", id: "slack_login", kind: "slack_login", prompt: "Sign in to Slack",
+      sign_in_line: "/slackauthticket ABC123", can_go_back: false });
+    let state = setupReducer(initialSetup, { type: "line", line: login });
     state = setupReducer(state, { type: "signIn", step: 2 });
     state = setupReducer(state, { type: "answered" });
     expect(state.question?.kind).toBe("slack_login");
-    state = setupReducer(state, { type: "line", line: lines[1] });
+    state = setupReducer(state, { type: "line", line: login });
     expect(state.signInStep).toBe(2);
     expect(state.error).toMatch(/didn't accept/);
   });
@@ -96,12 +114,6 @@ describe("setup", () => {
     state = setupReducer(initialSetup, { type: "line", line: lines.at(-1)! });
     expect(setupReducer(state, { type: "exit", code: 0, stderr: "" }).outcome).toBe("complete");
     expect(explainExit("")).toMatch(/terminal/);
-  });
-
-  it("searches people by name, username, or ID", () => {
-    const person = { id: "U123", name: "Jamie Chen", username: "jchen" };
-    expect(["  JAMIE ", "jchen", "u123", ""].every((q) => personMatches(person, q))).toBe(true);
-    expect(personMatches(person, "missing")).toBe(false);
   });
 });
 
