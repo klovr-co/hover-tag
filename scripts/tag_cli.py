@@ -1763,6 +1763,30 @@ def _refresh_workspace_icon(home: Path, values: dict[str, str]) -> str:
         return f"unavailable: {exc}"
 
 
+def _refresh_workspace_name(home: Path, values: dict[str, str], *, api=None) -> str | None:
+    """Record the Slack workspace's name for Tags set up before Tag saved it.
+
+    Without it, Tag.app and tag list show the bare Team ID. Runs on each start
+    until a name is saved; auth.test needs no extra permission, and nothing
+    here may stop a start.
+    """
+    if tag_instances.workspace_name(home) or not values.get("SLACK_BOT_TOKEN"):
+        return None
+    try:
+        import slack_channels
+    except ImportError:
+        from scripts import slack_channels
+    try:
+        payload = (api or slack_channels.slack_api)(values["SLACK_BOT_TOKEN"], "auth.test", {})
+        name = payload.get("team") if isinstance(payload, dict) else None
+        if not isinstance(name, str) or not name.strip():
+            return None
+        tag_instances.record_workspace_name(home, name.strip())
+        return name.strip()
+    except (OSError, ValueError, RuntimeError):
+        return None
+
+
 def _channels(values: dict[str, str]) -> list[dict[str, str | None]]:
     """The channels a Tag answers in, named from its saved Slack history sources."""
     try:
@@ -1830,6 +1854,7 @@ def _setup_result(code: int, tag_id: str, protocol: bool) -> int:
             try:
                 context = tag_instances.resolve(tag_home(), tag_id)
                 values = read_config(context.home / "config/settings.json")
+                _refresh_workspace_name(context.home, values)
                 _refresh_workspace_icon(context.home, values)
                 ready = _setup_ready(context.home, values)
             except (OSError, ValueError, RuntimeError):
@@ -2603,6 +2628,7 @@ def _run_cli() -> int:
                 "Permissions migrated" if manifest_changed else "Permissions current",
                 good=True,
             )
+            _refresh_workspace_name(home, values)
             icon = _refresh_workspace_icon(home, values)
             if icon != "skipped":
                 # team:read is optional: without it the workspace shows as a letter, and the start continues.

@@ -4,6 +4,12 @@ All notable changes to Tag are documented here.
 
 ## Unreleased
 
+### Fixed
+
+- Tags set up before Tag saved the Slack workspace's name now learn it on
+  their next `tag start`, so Tag.app and `tag list` show "Klovr" instead of the
+  workspace's Team ID.
+
 ### Added
 
 - Setting up a Tag starts with the Tag itself: its name, a one-line
