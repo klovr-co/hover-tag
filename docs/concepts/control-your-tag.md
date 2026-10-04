@@ -1,50 +1,146 @@
 # Control your Tag
 
-You can stop an active Codex task from Slack. If Codex asks for extra access,
-Tag sends the approval request privately to the person who started the task.
+You choose who can ask your Tag to work, which sources it can use, and when to
+stop a task. Some agent actions also ask for a decision while the task is running.
 
-## Review an approval request
+## Respond to a Codex approval request
 
-Suppose you ask Tag to update a budget spreadsheet in a shared Finance folder:
+Codex normally reviews actions that need additional permissions automatically.
+If a supported request reaches Tag, it pauses for your decision and shows
+**Codex needs approval** with a short action category. You will not see this
+prompt for every task.
 
-> @Tag update /shared/Finance/budget.xlsx with the approved forecast.
+### Example: update the budget spreadsheet in your shared folder
 
-If Codex asks for write access to that folder and supplies the reason shown
-below, the private approval message displays these fields:
+You ask Tag to add this month's expenses to the budget spreadsheet in your
+team's shared folder. The folder is available on the computer running Tag,
+and your agent has a tool that can edit the spreadsheet.
+
+If the shared folder is outside the locations Codex is allowed to write to,
+the edit may need additional file access. When Codex sends Tag a file-change
+approval request, you see this private message in Slack:
 
 > **Tag**
 >
-> Codex needs approval to use additional filesystem or network access.
+> **Codex needs approval** to change files outside the workspace sandbox.
+> Choose the scope you want to allow.
 >
-> Requested: /shared/Finance
->
-> Why: This folder is outside the permitted write locations.
->
-> Approve only if you expect this request.
->
-> Details · Approve once · Deny
+> **Allow once** · **Allow for this task** · **Deny** · **Deny and stop**
+
+Choose **Allow once** if you expected Tag to edit the shared budget. Choose
+**Deny** if you want to review the changes first; you can then ask Tag to
+prepare a separate draft in its workspace. Approval does not grant access
+that your local account lacks or change the shared folder's permissions for
+other people.
+
+### Inspect the request details
 
 Select **Details** to inspect the actual path or permission Codex supplied. A
-file change request may instead show a requested write root; a legacy patch
-request can show up to three file paths. A command request identifies a known
+file change request may show a requested write root; a legacy patch request
+can show up to three file paths. A command request identifies a known
 executable and its working directory, while withholding arguments that could
 contain credentials or file contents. A permission request can show requested
 filesystem paths or network access. Tag shows Codex's reason when present and
 explicitly says when details or a reason were not provided.
 
-Check that the target and reason match what you asked for. **Approve once**
-lets that one pending Codex request continue. **Deny** declines it. Neither
-button changes general permissions. The request expires if the task ends or
-the approval times out; reopening its details or pressing a stale button
-cannot revive it. Only the original requester can inspect or decide it.
+Check that the target and reason match what you asked for. Only the original
+requester can inspect the details while the approval remains pending. Tag
+cannot verify what a command's withheld arguments will do; if the visible
+context is insufficient, deny and ask Tag to explain or narrow the action.
 
-Codex normally reviews sandbox boundary actions automatically, so editing a
-spreadsheet does not always produce an approval. Tag cannot verify what a
-command's withheld arguments will do; if the visible context is insufficient,
-deny and ask Tag to explain or narrow the action.
+### Other actions that may need approval
 
-## Stop an active task
+| Your task | Why approval may be needed |
+| --- | --- |
+| Update your team's weekly report in its existing folder | The report is outside the locations Codex can write to. |
+| Extract the figures from a scanned invoice | A required document tool needs to be installed using additional permissions. |
+| Refresh a report with the latest sales export | The download command needs network access that the current sandbox does not allow. |
 
-Use Slack's **Stop** control while Codex is working. Tag interrupts the active
-turn and shows the task as stopped. Work the backend already completed may
-remain, so inspect the files or external service before restarting the task.
+These are possible triggers, not a fixed list of tasks that always show a
+prompt. Existing permissions and Codex's automatic review determine whether
+the action is allowed, refused, or sent to you for a decision. Tag shows these
+buttons only when Codex sends it a supported approval request.
+
+### Make your decision
+
+1. Read the action category and any proposed permission or rule details.
+   If the action is not what you expected, choose **Deny**.
+2. Select one of the choices Codex supports for that request:
+
+   | Choice | Effect |
+   | --- | --- |
+   | **Allow once** | Approve the pending command or file change. |
+   | **Allow for this turn** | Grant the requested permissions for the current agent turn. |
+   | **Allow for this task** | Use Codex's session-scoped approval for this Tag task, including follow-up turns. It does not carry over to later Slack requests. |
+   | **Always allow this prefix** | Save Codex's proposed command-prefix rule for future matching commands. |
+   | **Always allow this host** / **Always deny this host** | Save Codex's proposed network rule for that host. |
+   | **Deny** | Refuse the action; Codex may continue with another approach. |
+   | **Deny and stop** | Refuse the action and interrupt the agent turn. |
+
+   Not every request offers every choice. Tag respects Codex's explicit choice
+   list when provided. Persistent choices appear only when Codex proposes a rule;
+   review the complete prefix or host in the private prompt before confirming it.
+   These rules are saved by Codex and can affect future Codex runs.
+3. Tag replaces the controls with an acknowledgment that your choice was sent
+   to Codex. The task's activity and final response show what happened next.
+
+If automatic review already denied an action, supported denials instead offer
+**Approve retry** / **Dismiss**. The private prompt identifies the denied action
+and shows Codex's stated reason. Common credentials and URL credentials/query
+parameters are redacted, and long details are marked as truncated or omitted.
+Terminal input content is withheld. If Codex provides no reason, Tag says so.
+Approve retry applies only to that exact action
+and the retry still undergoes automatic review; this override has no persistent
+or session-wide option.
+
+In a channel, only the person who started the task sees the approval prompt.
+In a direct message, it appears in that conversation. Only the original
+requester can decide, and they must still be authorized to use Tag there.
+
+If Tag says the request has expired or was already decided, the old buttons
+cannot approve it. Review the task's latest status before starting another
+request. Unsupported or unavailable approval requests are refused rather than
+approved automatically by Tag.
+
+## Respond to a Claude approval request
+
+Claude runs in its automatic permission mode, so most actions proceed without a
+prompt. When Claude would still ask, Tag privately shows **Claude needs
+approval** with **Approve** and **Deny**. These are one-time decisions: Claude
+requests do not offer task-scoped, persistent-rule, or **Approve retry**
+choices. The same requester and expiry rules apply, and unanswered or
+unavailable requests are denied.
+
+## Follow a task as it works
+
+With Codex App Server, **Agent activity** shows readable tool steps in the Slack thread,
+such as reading a file or reviewing changes. Repeated steps are grouped, and
+the card shows complete when the task succeeds. See the
+[live activity example](../reference/supported-capabilities.md#watch-tag-work).
+Short activity descriptions are shared with the thread; full tool inputs and
+results are not shown. The separate Activity button is currently hidden.
+
+## Stop a task
+
+Use Slack's **Stop** control to interrupt an active Codex task. Stopping a task
+does not undo files it already changed or actions it already completed. Check
+the result before asking Tag to try again.
+
+Approval buttons and Stop require Codex App Server, Tag's default Codex
+connection. They are not available with the legacy Codex exec or Claude backends.
+After a successful run, review the completed activity card and final answer in
+the thread. For failed or stopped requests, review the private recovery message.
+
+## Choose who and what Tag can access
+
+By default, only you can give your Tag instructions. See
+[Sharing access](sharing-access.md) before authorizing another person.
+[What Tag knows](what-tag-knows.md) explains the conversations and indexed
+sources available to it; [Adding integrations](adding-integrations.md) covers
+connected tools and accounts.
+
+Tag uses the local account running its backend, subject to the backend's
+permissions. Its workspace folder alone does not restrict access to other files,
+and approval prompts do not appear before every action. See
+[Your own Tag](access.md#the-work-happens-on-your-computer) for the execution
+model and ways to limit the files and accounts available on the host.

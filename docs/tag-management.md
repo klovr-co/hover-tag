@@ -53,6 +53,11 @@ begin with `tag inspect --json` to inspect what is already configured.
 Slack runtime agents load the runtime contract; Tag does not bundle an admin
 skill into their workspace.
 
+## Advanced Slack setup
+
+For organization-level Slack authorization, see
+[Developer sandboxes and Enterprise organizations](reference/slack-organizations.md).
+
 ## The journey
 
 ```mermaid
@@ -124,8 +129,17 @@ or indexes history. Run `tag start` when ready to use the new settings.
 
 `tag setup` saves each completed answer. Ctrl-C pauses; running it again skips
 valid saved answers. It defaults to Codex and puts timeouts, retries, and other
-advanced settings outside the required questions. Claude Code is available in
-Settings or with `tag config set OPENTAG_BACKEND claude` and remains experimental.
+advanced settings outside the required questions. Choose the Tag's default
+model in Settings → Model or with `tag config set OPENTAG_DEFAULT_MODEL claude:opus`
+(or `codex:MODEL`, or just `codex`/`claude` for that backend's own default).
+Setting a default model also sets `OPENTAG_BACKEND` to match. In Slack, anyone
+authorized can choose any model from the signed-in backends with **Configure**;
+`OPENTAG_BACKENDS=codex` limits the choices to one backend.
+Settings → Model opens one picker with the live models of every connected
+agent. Both Codex and Claude are available by default when installed and signed
+in. Sign out of either agent and reopen the picker to remove its models, even
+if it was the saved default. Restart Tag to refresh Slack’s model list. `tag status` shows the default model and which other agents Slack users
+can switch to, and `tag list` shows each Tag's default model.
 
 To start onboarding over, run `tag reset`. A confirmation defaults to Cancel.
 After confirmation, Tag stops its managed services, moves saved settings and
@@ -380,3 +394,10 @@ The older installed CLI also offers `tag update` and `tag restart`.
 Its `slack-run` command remains a compatibility
 alias for `run`; use `run` only for foreground debugging. The workspace lifecycle
 does not yet expose the same update/restart commands.
+
+## ChatGPT account connection
+
+Use `tag chatgpt login` to connect a ChatGPT plan directly to this Tag,
+`tag chatgpt status --json` to inspect it, and `tag chatgpt use-codex` to return
+to the existing Codex sign-in. Stop the Tag before changing accounts. See
+[ChatGPT connection commands and recovery](reference/chatgpt-connection.md).

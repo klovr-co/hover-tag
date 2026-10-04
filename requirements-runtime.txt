@@ -5,3 +5,5 @@ PyYAML==6.0.3
 psutil==7.0.0
 tomli==2.2.1; python_version < "3.11"
 mfs-server[slack]==0.4.6
+PyJWT[crypto]==2.10.1
+claude-agent-sdk==0.2.163

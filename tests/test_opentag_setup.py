@@ -19,12 +19,43 @@ from scripts.opentag_setup import (
     main,
     render_env,
     runtime_requirement,
-    selected_backend_available,
     write_config,
 )
 
 
 class OpenTagSetupTests(unittest.TestCase):
+    def test_second_agent_is_offered_once_and_never_required(self):
+        values = {"OPENTAG_BACKEND": "codex"}
+        signed_in = subprocess.CompletedProcess([], 0, "", "")
+        signed_out = subprocess.CompletedProcess([], 1, "", "")
+        cases = (
+            ("already signed in", [signed_in], [], "✓ Claude Code also signed in"),
+            ("declined", [signed_out], [0], "Claude Code skipped"),
+            ("signed in now", [signed_out, signed_in, signed_in], [1], "✓ Claude Code also signed in"),
+        )
+        for name, results, choices, expected in cases:
+            with self.subTest(name), patch.object(
+                opentag_setup.shutil, "which", side_effect=lambda command: f"/bin/{command}"
+            ), patch.object(opentag_setup.subprocess, "run", side_effect=results) as run, patch.object(
+                opentag_setup.ui, "choose", side_effect=choices
+            ) as choose, redirect_stdout(StringIO()) as output:
+                opentag_setup.offer_additional_backends(values)
+            self.assertIn(expected, output.getvalue())
+            self.assertEqual(len(choices), choose.call_count)
+            self.assertEqual(["/bin/claude", "auth", "status"], run.call_args_list[0].args[0])
+            if choices == [0]:
+                self.assertEqual(1, run.call_count)
+            if choices:
+                self.assertEqual(["Not now", "Sign in to Claude Code"], choose.call_args.args[1])
+
+    def test_second_agent_hint_respects_allowed_backends(self):
+        with patch.object(opentag_setup.shutil, "which", return_value=None), patch.object(
+            opentag_setup.subprocess, "run"
+        ) as run, redirect_stdout(StringIO()) as output:
+            opentag_setup.offer_additional_backends({"OPENTAG_BACKEND": "codex", "OPENTAG_BACKENDS": "codex"})
+        self.assertEqual("", output.getvalue())
+        run.assert_not_called()
+
     def test_finish_setup_leaves_start_as_a_separate_command(self):
         channel = opentag_setup.slack_channels.SlackChannel(
             "C123", "general", False, True
@@ -32,8 +63,8 @@ class OpenTagSetupTests(unittest.TestCase):
         values = {"OPENTAG_BACKEND": "claude", "OPENTAG_BOT_NAME": "Tag", "SLACK_ALLOWED_USER_IDS": "UOWNER"}
         started = subprocess.CompletedProcess([], 0, "", "")
 
-        with patch.dict(os.environ, {"TAG_ID": "personal"}), patch.object(
-            opentag_setup, "selected_backend_available", return_value=True
+        with patch.dict(os.environ, {"TAG_ID": "personal"}), patch.object(opentag_setup, "ensure_agent", side_effect=lambda _path, values: values), patch.object(
+            opentag_setup.shutil, "which", side_effect=lambda name: "/bin/claude" if name == "claude" else None
         ), patch.object(
             opentag_setup.lifecycle, "mfs_client_executable", return_value="/runtime/bin/mfs"
         ), patch.object(
@@ -42,7 +73,11 @@ class OpenTagSetupTests(unittest.TestCase):
             result = opentag_setup.finish_setup(Path("settings.json"), values, [channel])
 
         self.assertEqual(result, 0)
-        run.assert_not_called()
+        # Only Claude's sign-in status is checked; setup never starts services.
+        run.assert_called_once()
+        self.assertEqual(run.call_args.args[0][1:], ["auth", "status"])
+        self.assertIn("Claude signed in", output.getvalue())
+        self.assertIn("Optional · install Codex to let Slack users switch to its models", output.getvalue())
         self.assertIn("MFS client ready", output.getvalue())
         self.assertIn("Next step · start Tag", output.getvalue())
         self.assertIn("tag personal start", output.getvalue())
@@ -51,7 +86,7 @@ class OpenTagSetupTests(unittest.TestCase):
         self.assertIn("welcome DM with the community help link", output.getvalue())
 
     def test_codex_compatibility_failure_does_not_attempt_login_or_install(self):
-        with patch.object(opentag_setup, "selected_backend_available", return_value=True), patch.object(
+        with patch.object(opentag_setup, "ensure_agent", side_effect=lambda _path, values: values), patch.object(
                 opentag_setup.lifecycle, "mfs_client_executable", return_value="/runtime/bin/mfs"), patch.object(
                 opentag_setup.shutil, "which", return_value="/user/codex"), patch.object(
                 opentag_setup.subprocess, "run", return_value=subprocess.CompletedProcess([], 1)) as run, redirect_stdout(StringIO()) as output:
@@ -769,15 +804,16 @@ class OpenTagSetupTests(unittest.TestCase):
             backend = choose_backend()
 
         self.assertEqual(backend, "codex")
-        self.assertIn("Codex        Recommended and supported", output.getvalue())
-        self.assertIn("Claude Code  Experimental", output.getvalue())
+        self.assertIn("Codex        OpenAI models", output.getvalue())
+        self.assertIn("Claude Code  Anthropic models", output.getvalue())
+        self.assertNotIn("Experimental", output.getvalue())
 
     @patch(
         "scripts.opentag_setup.shutil.which",
         side_effect=lambda command: "/bin/codex" if command == "codex" else None,
     )
     @patch("builtins.input", return_value="2")
-    def test_backend_menu_can_select_experimental_claude(
+    def test_backend_menu_can_select_claude(
         self, _mock_input: object, _mock_which: object
     ) -> None:
         output = StringIO()
@@ -786,7 +822,7 @@ class OpenTagSetupTests(unittest.TestCase):
             backend = choose_backend()
 
         self.assertEqual(backend, "claude")
-        self.assertIn("Claude Code  Experimental", output.getvalue())
+        self.assertIn("Claude Code  Anthropic models", output.getvalue())
         self.assertIn("not found", output.getvalue())
 
     @patch("scripts.opentag_setup.shutil.which", return_value="/bin/claude")
@@ -797,22 +833,45 @@ class OpenTagSetupTests(unittest.TestCase):
         with redirect_stdout(StringIO()):
             self.assertEqual(choose_backend(), "claude")
 
-    @patch("scripts.opentag_setup.shutil.which", return_value="/bin/codex")
-    def test_selected_backend_is_available(self, _mock_which: object) -> None:
-        self.assertTrue(selected_backend_available("codex"))
+    def test_installed_default_agent_is_kept(self) -> None:
+        values = {"OPENTAG_BACKEND": "codex"}
+        with patch.object(opentag_setup.shutil, "which", return_value="/bin/agent"), patch.object(
+            opentag_setup.settings, "update_config"
+        ) as update:
+            self.assertIs(values, opentag_setup.ensure_agent(Path("settings.json"), values))
+        update.assert_not_called()
 
-    @patch("scripts.opentag_setup.shutil.which", return_value=None)
-    def test_missing_selected_backend_has_actionable_guidance(
-        self, _mock_which: object
-    ) -> None:
-        output = StringIO()
+    def test_only_installed_agent_becomes_the_default(self) -> None:
+        with patch.object(
+            opentag_setup.shutil, "which", side_effect=lambda name: "/bin/claude" if name == "claude" else None
+        ), patch.object(
+            opentag_setup.settings, "update_config", return_value={"OPENTAG_BACKEND": "claude"}
+        ) as update, redirect_stdout(StringIO()) as output:
+            values = opentag_setup.ensure_agent(Path("settings.json"), {"OPENTAG_BACKEND": "codex"})
+        self.assertEqual("claude", values["OPENTAG_BACKEND"])
+        update.assert_called_once_with(Path("settings.json"), {"OPENTAG_BACKEND": "claude"})
+        self.assertIn("Codex isn't installed, so Tag will use Claude Code, which is.", output.getvalue())
 
-        with redirect_stdout(output):
-            available = selected_backend_available("claude")
+    def test_no_agent_lists_both_and_waits_for_installation(self) -> None:
+        installed = iter([None, None, None, None, "/bin/codex", None])
+        with patch.object(opentag_setup.shutil, "which", side_effect=lambda _name: next(installed)), patch.object(
+            opentag_setup.ui, "choose", return_value=0
+        ) as choose, redirect_stdout(StringIO()) as output:
+            values = opentag_setup.ensure_agent(Path("settings.json"), {"OPENTAG_BACKEND": "codex"})
+        self.assertEqual({"OPENTAG_BACKEND": "codex"}, values)
+        self.assertEqual(["Check again", "Save and exit"], choose.call_args.args[1])
+        self.assertIn("Tag needs an AI agent on this computer", output.getvalue())
+        self.assertIn("https://learn.chatgpt.com/docs/codex/cli", output.getvalue())
+        self.assertIn("https://code.claude.com/docs/en/setup", output.getvalue())
+        self.assertEqual(1, output.getvalue().count("https://code.claude.com/docs/en/setup"))
+        self.assertIn("Still no agent found", output.getvalue())
 
-        self.assertFalse(available)
-        self.assertIn("Claude Code was selected", output.getvalue())
-        self.assertIn("run ./tag setup again", output.getvalue())
+    def test_no_agent_can_save_and_exit(self) -> None:
+        with patch.object(opentag_setup.shutil, "which", return_value=None), patch.object(
+            opentag_setup.ui, "choose", return_value=1
+        ), redirect_stdout(StringIO()) as output:
+            self.assertIsNone(opentag_setup.ensure_agent(Path("settings.json"), {"OPENTAG_BACKEND": "claude"}))
+        self.assertIn("Your progress is saved", output.getvalue())
 
     @patch("scripts.opentag_setup.shutil.which", return_value="/bin/codex")
     @patch("builtins.input", side_effect=["other", "codex"])
@@ -828,7 +887,7 @@ class OpenTagSetupTests(unittest.TestCase):
         self.assertIn("Choose 1 for Codex or 2 for Claude Code.", output.getvalue())
 
     @patch("scripts.opentag_setup.ask_secret")
-    @patch("scripts.opentag_setup.selected_backend_available", return_value=False)
+    @patch("scripts.opentag_setup.ensure_agent", return_value=None)
     @patch("scripts.opentag_setup.choose_backend", return_value="claude")
     @patch(
         "scripts.opentag_setup.subprocess.run",
@@ -863,9 +922,7 @@ class OpenTagSetupTests(unittest.TestCase):
             }
             with patch.dict(os.environ, environment, clear=True), patch.object(
                 opentag_setup.ui, "screen"
-            ), patch.object(
-                opentag_setup, "selected_backend_available", return_value=False
-            ), patch.object(opentag_setup.subprocess, "run") as run, redirect_stdout(
+            ), patch.object(opentag_setup, "ensure_agent", return_value=None), patch.object(opentag_setup.subprocess, "run") as run, redirect_stdout(
                 StringIO()
             ):
                 self.assertEqual(
@@ -938,3 +995,36 @@ class OpenTagSetupTests(unittest.TestCase):
             mode = stat.S_IMODE(path.stat().st_mode)
 
         self.assertEqual(mode, 0o600)
+
+class SetupDefaultSelectionTests(unittest.TestCase):
+    def test_missing_agent_saves_history_and_preserves_backend_for_both_backends(self):
+        for current, selected in (("codex", 1), ("claude", 0)):
+            values = {"OPENTAG_BACKEND": current, "MFS_SLACK_HISTORY_DAYS": "30",
+                      "OPENTAG_DEFAULT_MODEL": f"{current}:custom", "OPENTAG_BOT_NAME": "Personal"}
+            with self.subTest(current=current), tempfile.TemporaryDirectory() as raw, patch.object(
+                opentag_setup.ui, "choose", side_effect=[0, selected]
+            ), patch.object(opentag_setup.shutil, "which", return_value=None), patch.object(
+                opentag_setup.ui, "message"
+            ) as message:
+                config = Path(raw) / "settings.json"
+                opentag_setup.settings.save_config(config, values)
+                result = opentag_setup.change_setup_defaults(config, values)
+                expected = {**values, "MFS_SLACK_HISTORY_DAYS": "7"}
+                for key, value in expected.items():
+                    self.assertEqual(value, result[key])
+                    self.assertEqual(value, opentag_setup.settings.read_config(config)[key])
+                self.assertIn("not installed", message.call_args.args[0])
+
+    def test_installed_agent_saves_selected_defaults_for_both_backends(self):
+        for selected, backend in enumerate(("codex", "claude")):
+            with self.subTest(backend=backend), patch.object(
+                opentag_setup.ui, "choose", side_effect=[0, selected]
+            ), patch.object(opentag_setup.shutil, "which", return_value='/bin/agent'), patch.object(
+                opentag_setup.settings, "update_config", return_value={"saved": "yes"}
+            ) as update:
+                result = opentag_setup.change_setup_defaults(Path('/config'), {
+                    "OPENTAG_BACKEND": "codex", "MFS_SLACK_HISTORY_DAYS": "30",
+                })
+                self.assertEqual({"saved": "yes"}, result)
+                self.assertEqual({"MFS_SLACK_HISTORY_DAYS": "7", "OPENTAG_BACKEND": backend},
+                                 update.call_args.args[1])

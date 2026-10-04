@@ -632,7 +632,11 @@ def install(
     sys.path.insert(0, scripts_dir)
     try:
         if tag_dependencies is None:
-            import tag_dependencies
+            try:
+                import tag_dependencies
+            except ImportError:
+                # Releases before managed dependencies do not ship this module.
+                tag_dependencies = None
         from tag_paths import initialize
         import tag_instances
         from release_check import validate_release
@@ -678,7 +682,7 @@ def install(
         python = release / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
         if dependencies:
             runtime_python = Path(sys.executable)
-            if os.name != "nt":
+            if os.name != "nt" and tag_dependencies is not None:
                 runtime_python, uv_path = tag_dependencies.prepare_python(source, home)
                 uv = str(uv_path)
             else:
@@ -714,7 +718,8 @@ def install(
             )
             row("Memory", "Local embedding model cached")
             if os.name != "nt":
-                tag_dependencies.ensure_slack(home)
+                if tag_dependencies is not None:
+                    tag_dependencies.ensure_slack(home)
                 install_step([str(python), "-c", "import mfs_server, psutil, slack_bolt"], "Checking the prepared runtime")
         else:
             # Explicit test/development mode; never advertised as a complete install.

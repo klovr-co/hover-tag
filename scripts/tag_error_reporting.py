@@ -46,6 +46,7 @@ class FailureCategory:
     IDLE_TIMEOUT = "idle_timeout"
     MAXIMUM_RUNTIME = "maximum_runtime"
     UNEXPECTED_EXIT = "unexpected_backend_exit"
+    MODEL_UNAVAILABLE = "model_unavailable"
     UNKNOWN = "unknown"
 
 
@@ -279,6 +280,8 @@ _CODE_CATEGORIES = {
     "missing_executable": FailureCategory.MISSING_EXECUTABLE,
     "executable_missing": FailureCategory.MISSING_EXECUTABLE,
     "rate_limit": FailureCategory.RATE_LIMIT,
+    "http_429": FailureCategory.RATE_LIMIT,
+    "http_401": FailureCategory.AUTHENTICATION,
     "too_many_requests": FailureCategory.RATE_LIMIT,
     "idle_timeout": FailureCategory.IDLE_TIMEOUT,
     "maximum_runtime": FailureCategory.MAXIMUM_RUNTIME,
@@ -287,6 +290,12 @@ _CODE_CATEGORIES = {
     "backend_exit": FailureCategory.UNEXPECTED_EXIT,
     "process_exit": FailureCategory.UNEXPECTED_EXIT,
 }
+
+_UNSUPPORTED_CHATGPT_MODEL_RE = re.compile(
+    r"The '([A-Za-z0-9][A-Za-z0-9._-]{0,79})' model is not supported "
+    r"when using Codex with a ChatGPT account\.",
+    re.IGNORECASE,
+)
 
 
 def _classification_for_category(category: str, *, code: str | None, detail: str) -> FailureClassification:
@@ -297,6 +306,7 @@ def _classification_for_category(category: str, *, code: str | None, detail: str
         FailureCategory.IDLE_TIMEOUT: "The coding backend timed out before completing the request.",
         FailureCategory.MAXIMUM_RUNTIME: "The coding backend reached Tag's maximum runtime.",
         FailureCategory.UNEXPECTED_EXIT: "The coding backend exited unexpectedly.",
+        FailureCategory.MODEL_UNAVAILABLE: "The selected model is unavailable for this ChatGPT account. Choose another model in Configure.",
         FailureCategory.UNKNOWN: "Cause not identified.",
     }
     evidence = {
@@ -306,12 +316,20 @@ def _classification_for_category(category: str, *, code: str | None, detail: str
         FailureCategory.IDLE_TIMEOUT: "The backend did not complete before its timeout.",
         FailureCategory.MAXIMUM_RUNTIME: "The configured maximum runtime was reached.",
         FailureCategory.UNEXPECTED_EXIT: "The backend process reported a non-success exit.",
+        FailureCategory.MODEL_UNAVAILABLE: "The backend rejected the selected model for a ChatGPT account.",
         FailureCategory.UNKNOWN: "The failure did not match a recognized evidence pattern.",
     }
     if category == FailureCategory.IDLE_TIMEOUT and "no backend activity" in detail.lower():
         evidence = "No backend activity was observed before the timeout."
     else:
         evidence = evidence[category]
+    if category == FailureCategory.MODEL_UNAVAILABLE:
+        match = _UNSUPPORTED_CHATGPT_MODEL_RE.search(detail)
+        if match:
+            explanations[category] = (
+                f"The '{match.group(1)}' model is not supported when using Codex "
+                "with a ChatGPT account. Choose another model in Configure."
+            )
     return FailureClassification(category, explanations[category], evidence, code)
 
 
@@ -319,12 +337,27 @@ def classify_failure(detail: str, backend_code: str | None = None) -> FailureCla
     """Classify from an allowlist; an explicit structured code always wins."""
     safe_detail = detail if isinstance(detail, str) else ""
     normalized_code = _normalize_code(backend_code)
+    try:
+        from .tag_chatgpt import PLAN_ERRORS
+    except ImportError:
+        from tag_chatgpt import PLAN_ERRORS
+    plan_code = next((code for code in PLAN_ERRORS if code == normalized_code or code in safe_detail), None)
+    if plan_code:
+        category = (FailureCategory.RATE_LIMIT if plan_code == "subscription_sharing_usage_limit_exceeded"
+                    else FailureCategory.AUTHENTICATION if plan_code in {
+                        "subscription_sharing_invalid_user", "chatpass_v2_scope_not_authorized",
+                        "chatpass_v2_invalid_authorization_context", "subscription_sharing_user_not_eligible"}
+                    else FailureCategory.UNKNOWN)
+        return FailureClassification(category, PLAN_ERRORS[plan_code],
+                                     "The ChatGPT plan route returned an explicit failure code.", plan_code)
     if normalized_code in _CODE_CATEGORIES:
         return _classification_for_category(
             _CODE_CATEGORIES[normalized_code], code=normalized_code, detail=safe_detail
         )
 
     lowered = safe_detail.lower()
+    if re.search(r"model.{0,160}not supported when using codex with a chatgpt account", lowered):
+        return _classification_for_category(FailureCategory.MODEL_UNAVAILABLE, code=normalized_code, detail=safe_detail)
     if re.search(r"\bno backend activity\b|\bidle(?:[_ -]|\u00a0)?timeout\b", lowered):
         return _classification_for_category(FailureCategory.IDLE_TIMEOUT, code=None, detail=safe_detail)
     if re.search(r"\bmaximum runtime\b|\bmax(?:imum)?[_ -]?runtime\b", lowered):
@@ -352,6 +385,8 @@ def classify_failure(detail: str, backend_code: str | None = None) -> FailureCla
 
 
 _SECRET_PATTERNS = (
+    re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+"),
+    re.compile(r"(?i)(\b(?:access_token|refresh_token|id_token|id_token_hint)[\"']?\s*[:=]\s*[\"']?)[^\s,;\"'&]+"),
     re.compile(r"\bxapp-[A-Za-z0-9-]+\b", re.IGNORECASE),
     re.compile(r"\bxox[a-z]-[A-Za-z0-9-]+\b", re.IGNORECASE),
     re.compile(r"\b(?:sk|rk)-[A-Za-z0-9_-]+\b", re.IGNORECASE),

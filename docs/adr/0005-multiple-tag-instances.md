@@ -58,6 +58,16 @@ Team ID and App ID. Existing roots are retained during credential migration so
 an upgrade does not cause destructive reindexing. A local `file:` reference is
 never presented as valid for a remote MFS endpoint.
 
+Slack CLI organization authorization is stored separately as `SLACK_ENTERPRISE_ID`
+(`E…`). `SLACK_TEAM_ID` remains the selected workspace (`T…`), including in a
+Developer Program sandbox. App CLI metadata belongs to the authorization identity;
+installation requests name the selected workspace grant explicitly. Organization
+bot credentials must prove that grant before setup and Socket Mode startup.
+The bridge filters the receiving workspace before handlers run, and the managed
+MFS connector keys channel caches by workspace as well as token and filters.
+Runtime migration version 2 installs this connector automatically for Tag-owned
+MFS processes; existing workspace connectors retain their roots and settings.
+
 Normal retrieval remains limited to the selected instance's approved Slack
 scopes. Sharing an MFS database is storage reuse, not cross-workspace
 authorization. Cross-workspace search and identity mapping require a future

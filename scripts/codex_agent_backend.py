@@ -8,9 +8,9 @@ NOTICE for attribution.
 from __future__ import annotations
 
 import json
+import os
 import queue
 import re
-import shlex
 import subprocess
 import threading
 import time
@@ -20,11 +20,29 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from . import tag_chatgpt
+    from .agent_activity import (
+        APPROVAL_POLL_SECONDS,
+        APPROVAL_TIMEOUT_SECONDS,
+        INTERRUPT_GRACE_SECONDS,
+        MCP_SERVICE_NAMES,
+        activity_label,
+    )
     from .tag_activity_details import item_activity_details
     from .tag_approval_details import approval_details
+    from .tag_approval_choices import approval_choices, public_approval_choices, auto_review_details
 except ImportError:  # Direct script execution does not create a package context.
+    import tag_chatgpt
+    from agent_activity import (
+        APPROVAL_POLL_SECONDS,
+        APPROVAL_TIMEOUT_SECONDS,
+        INTERRUPT_GRACE_SECONDS,
+        MCP_SERVICE_NAMES,
+        activity_label,
+    )
     from tag_activity_details import item_activity_details
     from tag_approval_details import approval_details
+    from tag_approval_choices import approval_choices, public_approval_choices, auto_review_details
 
 
 # Prompts are controlled by Tag, while completed tool and image events may
@@ -34,9 +52,8 @@ MAX_REQUEST_LINE_BYTES = 1024 * 1024
 MAX_RESPONSE_LINE_BYTES = 32 * 1024 * 1024
 MAX_STDERR_BYTES = 64 * 1024
 REQUEST_TIMEOUT_SECONDS = 60.0
-INTERRUPT_GRACE_SECONDS = 5.0
-APPROVAL_POLL_SECONDS = 0.1
-APPROVAL_TIMEOUT_SECONDS = 600.0
+AUTO_REVIEW_RETRY_LABEL = "retry an action denied by automatic review"
+MAX_AUTO_REVIEW_APPROVALS = 10
 
 APPROVAL_REQUEST_LABELS = {
     "item/commandExecution/requestApproval": "run a command outside the workspace sandbox",
@@ -45,101 +62,6 @@ APPROVAL_REQUEST_LABELS = {
     "applyPatchApproval": "apply a file change that requires approval",
     "execCommandApproval": "run a command that requires approval",
 }
-
-# Public display vocabulary, never populated from tool arguments or results.
-MCP_SERVICE_NAMES = {
-    "github": "GitHub", "slack": "Slack", "linear": "Linear",
-    "notion": "Notion", "datadog": "Datadog", "mfs": "connected knowledge",
-    "playwright": "Playwright", "context7": "Context7",
-}
-MCP_TOOL_NAMES = frozenset({
-    "search", "fetch", "read_resource", "list_resources", "search_issues",
-    "get_issue", "list_issues", "create_issue", "update_issue",
-    "search_code", "get_file_contents", "list_pull_requests", "pull_request_read",
-    "create_pull_request", "query_metrics", "search_logs", "list_dashboards",
-    "get_document", "search_pages", "fetch_documentation", "resolve_library_id",
-    "resolve-library-id", "query-docs", "browser_navigate", "browser_snapshot",
-    "browser_click", "browser_take_screenshot",
-})
-COMMAND_LABELS = {
-    "mfs_search.py": "Searching connected knowledge…",
-    "mfs_cat.py": "Reading connected knowledge…",
-    "mfs_ls.py": "Browsing connected knowledge…",
-    "slack_canvas.py": "Creating a Slack canvas…",
-    "slack_post_message.py": "Posting to Slack…",
-}
-DOCUMENT_HELPER_RE = re.compile(
-    r"(?:create|generate|render|build|export)[-_].*(?:docx|document|pdf|pptx|xlsx)"
-    r"|(?:docx|document|pdf|pptx|xlsx)[-_].*(?:create|generate|render|build|export)",
-    re.IGNORECASE,
-)
-FILE_READ_COMMANDS = frozenset({"cat", "head", "tail"})
-FILE_WRITE_COMMANDS = frozenset({"cp", "install", "mkdir", "mv", "tee", "touch"})
-TEST_COMMANDS = frozenset({
-    "cargo", "go", "jest", "mocha", "npm", "pnpm", "pytest", "swift", "vitest", "yarn",
-})
-
-
-def command_activity_label(command: Any, depth: int = 0) -> str:
-    """Recognize a simple invocation, not a helper name mentioned in arguments.
-
-    This is conservative classification, not a shell interpreter or a claim
-    that the operation succeeded. Compound commands retain a generic label.
-    """
-    fallback = "Running a command…"
-    if not isinstance(command, str) or len(command) > 8192 or depth > 1:
-        return fallback
-    try:
-        argv = shlex.split(command)
-    except ValueError:
-        return fallback
-    if not argv:
-        return fallback
-    executable = argv[0].replace("\\", "/").rsplit("/", 1)[-1]
-    if executable in {"sh", "bash", "zsh"} and len(argv) == 3 and argv[1] in {"-c", "-lc"}:
-        return command_activity_label(argv[2], depth + 1)
-    if any(char in command for char in "\n\r;&|<>`$"):
-        return fallback
-    if re.fullmatch(r"python(?:3(?:\.\d+)?)?(?:\.exe)?", executable):
-        if len(argv) >= 3 and argv[1] == "-m" and argv[2] in {"pytest", "unittest"}:
-            return "Running tests…"
-        if len(argv) < 2 or argv[1].startswith("-"):
-            return fallback
-        executable = argv[1].replace("\\", "/").rsplit("/", 1)[-1]
-    if executable in COMMAND_LABELS:
-        return COMMAND_LABELS[executable]
-    if DOCUMENT_HELPER_RE.search(executable):
-        return "Creating a document…"
-    if executable in FILE_READ_COMMANDS:
-        return "Reading files…"
-    if executable in FILE_WRITE_COMMANDS:
-        return "Writing files…"
-    if executable in TEST_COMMANDS:
-        if executable in {"cargo", "go", "npm", "pnpm", "swift", "yarn"}:
-            if len(argv) < 2 or argv[1] not in {"test", "t"}:
-                return fallback
-        return "Running tests…"
-    return fallback
-
-
-def mcp_activity_label(item: dict[str, Any]) -> str:
-    """Expose only explicitly approved service/tool names, with safe fallbacks."""
-    server, tool = item.get("server"), item.get("tool")
-    service = MCP_SERVICE_NAMES.get(server.lower()) if isinstance(server, str) else None
-    name = tool if isinstance(tool, str) and tool in MCP_TOOL_NAMES else None
-    if name:
-        words = name.replace("-", "_").split("_")
-        verb = {"search": "Searching", "fetch": "Fetching", "get": "Reading",
-                "read": "Reading", "list": "Listing", "create": "Creating",
-                "update": "Updating", "query": "Querying", "resolve": "Looking up"}.get(words[0])
-        if verb:
-            subject = " ".join(words[1:])
-            target = " ".join(part for part in (service, subject) if part)
-            return f"{verb} {target or 'with a connected tool'}…"
-    if service:
-        return f"Using {service}…"
-    return "Using a connected tool…"
-
 
 class CodexAppServerError(RuntimeError):
     """A bounded, user-safe App Server transport failure."""
@@ -153,16 +75,20 @@ class JsonLineDecoder:
         self.buffer = bytearray()
 
     def feed(self, chunk: bytes) -> list[bytes]:
+        # The previous partial buffer contains no newline. Scan only new bytes
+        # so a large image event delivered in small chunks remains linear-time.
+        scan_from = len(self.buffer)
         self.buffer.extend(chunk)
-        if len(self.buffer) > self.max_line_bytes and b"\n" not in self.buffer:
-            raise CodexAppServerError("Codex App Server emitted an oversized JSONL line")
         lines: list[bytes] = []
         while True:
-            newline = self.buffer.find(b"\n")
+            newline = self.buffer.find(b"\n", scan_from)
             if newline < 0:
+                if len(self.buffer) > self.max_line_bytes:
+                    raise CodexAppServerError("Codex App Server emitted an oversized JSONL line")
                 break
             line = bytes(self.buffer[:newline]).strip()
             del self.buffer[: newline + 1]
+            scan_from = 0
             if len(line) > self.max_line_bytes:
                 raise CodexAppServerError("Codex App Server emitted an oversized JSONL line")
             if line:
@@ -174,26 +100,6 @@ class JsonLineDecoder:
             raise CodexAppServerError("Codex App Server exited with a truncated JSONL line")
 
 
-def activity_label(item: dict[str, Any]) -> str | None:
-    """Return a truthful, sanitized label derived from an identifiable action."""
-    item_type = item.get("type")
-    if item_type == "webSearch":
-        return "Searching the web…"
-    if item_type == "fileChange":
-        return "Updating files…"
-    if item_type == "imageView":
-        return "Inspecting an image…"
-    if item_type == "imageGeneration":
-        return "Creating an image…"
-    if item_type == "dynamicToolCall":
-        return "Using agent tools…"
-    if item_type == "mcpToolCall":
-        return mcp_activity_label(item)
-    if item_type == "commandExecution":
-        return command_activity_label(item.get("command"))
-    return None
-
-
 class CodexEventMapper:
     """Map native lifecycle notifications to Tag's Slack-safe event contract."""
 
@@ -202,6 +108,7 @@ class CodexEventMapper:
         self.pending_deltas: dict[str, list[str]] = {}
         self.completed_messages: list[tuple[str, str | None, str]] = []
         self.emitted_final_ids: set[str] = set()
+        self.failure_detail = ""
 
     def map(self, message: dict[str, Any]) -> list[dict[str, Any]]:
         method = message.get("method")
@@ -220,7 +127,10 @@ class CodexEventMapper:
             error = params.get("error")
             text = error.get("message") if isinstance(error, dict) else None
             if isinstance(text, str) and text and not params.get("willRetry"):
-                return [{"type": "error", "text": text}]
+                code = error.get("code")
+                prefix = f"{code}: " if isinstance(code, str) and code in tag_chatgpt.PLAN_ERRORS else ""
+                self.failure_detail = prefix + text
+                return [{"type": "error", "text": self.failure_detail}]
         return []
 
     def _item_started(self, params: dict[str, Any]) -> list[dict[str, Any]]:
@@ -332,7 +242,11 @@ class CodexEventMapper:
         terminal = {"type": "turn_complete", "status": status or "failed"}
         error = turn.get("error")
         if isinstance(error, dict) and isinstance(error.get("message"), str):
-            terminal["text"] = error["message"]
+            code = error.get("code")
+            prefix = f"{code}: " if isinstance(code, str) and code in tag_chatgpt.PLAN_ERRORS else ""
+            terminal["text"] = prefix + error["message"]
+        elif status == "failed" and self.failure_detail:
+            terminal["text"] = self.failure_detail
         events.append(terminal)
         return events
 
@@ -352,6 +266,10 @@ class CodexAppServer:
         approval_dir: Path | None = None,
     ) -> None:
         self.command = command
+        self.chatgpt_token = ""
+        self.auth_identity: tuple | None = None
+        self.token_renewal_deadline = float("inf")
+        self.renewing_token = False
         self.cwd = cwd
         self.timeout = timeout
         self.max_timeout = max_timeout if max_timeout is not None else timeout
@@ -367,6 +285,38 @@ class CodexAppServer:
         self.turn_id: str | None = None
         self.interrupt_sent = False
         self.reader_threads: list[threading.Thread] = []
+        self.auto_review_denials: list[dict[str, Any]] = []
+        self.seen_auto_reviews: set[str] = set()
+        self.held_auto_review_messages: list[dict[str, Any]] = []
+
+    def model_catalog(self) -> list[dict[str, Any]]:
+        """Read models for the signed-in account without creating a thread or turn."""
+        if tag_chatgpt.enabled():
+            return tag_chatgpt.models()
+        mapper = CodexEventMapper()
+        deadline = time.monotonic() + self.timeout
+        try:
+            self._start()
+            self._request("initialize", {"clientInfo": self._client_info()},
+                          mapper, lambda event: None, deadline)
+            self._notify("initialized", {})
+            models: list[dict[str, Any]] = []
+            cursor = None
+            for _ in range(10):
+                result = self._request("model/list", {"cursor": cursor} if cursor else {},
+                                       mapper, lambda event: None, deadline)
+                if not isinstance(result, dict) or not isinstance(result.get("data"), list):
+                    raise CodexAppServerError("Codex returned an invalid model/list response")
+                models.extend(item for item in result["data"] if isinstance(item, dict))
+                next_cursor = result.get("nextCursor")
+                if not next_cursor:
+                    return models
+                if not isinstance(next_cursor, str) or next_cursor == cursor:
+                    break
+                cursor = next_cursor
+            raise CodexAppServerError("Codex model/list pagination did not finish")
+        finally:
+            self.close()
 
     def run(
         self,
@@ -382,7 +332,8 @@ class CodexAppServer:
         try:
             self._request(
                 "initialize",
-                {"clientInfo": {"name": "tag", "title": "Tag", "version": "0.1"}},
+                {"clientInfo": self._client_info(),
+                 "capabilities": {"experimentalApi": True}},
                 mapper,
                 emit,
                 max_deadline,
@@ -392,7 +343,7 @@ class CodexAppServer:
                 "cwd": str(self.cwd),
                 "sandbox": "workspace-write",
                 "approvalsReviewer": "auto_review",
-                "ephemeral": True,
+                "ephemeral": not bool(self.chatgpt_token),
                 "serviceName": "tag_slack_bridge",
             }
             if model:
@@ -402,6 +353,13 @@ class CodexAppServer:
             if not isinstance(thread, dict) or not isinstance(thread.get("id"), str):
                 raise CodexAppServerError("Codex returned an invalid thread/start response")
             self.thread_id = thread["id"]
+            resolved_model = thread_result.get("model") or thread.get("model")
+            if isinstance(resolved_model, str) and resolved_model:
+                info: dict[str, Any] = {"type": "run_info", "model": resolved_model}
+                resolved_effort = reasoning_effort or thread_result.get("reasoningEffort")
+                if isinstance(resolved_effort, str) and resolved_effort:
+                    info["reasoning_effort"] = resolved_effort
+                emit(info)
             turn_params: dict[str, Any] = {
                 "threadId": self.thread_id,
                 "input": [{"type": "text", "text": prompt}],
@@ -410,24 +368,83 @@ class CodexAppServer:
                 turn_params["model"] = model
             if reasoning_effort:
                 turn_params["effort"] = reasoning_effort
-            turn_result = self._request("turn/start", turn_params, mapper, emit, max_deadline)
-            turn = turn_result.get("turn") if isinstance(turn_result, dict) else None
-            if not isinstance(turn, dict) or not isinstance(turn.get("id"), str):
-                raise CodexAppServerError("Codex returned an invalid turn/start response")
-            self.turn_id = turn["id"]
-            return self._consume_turn(
-                mapper,
-                emit,
-                idle_deadline=time.monotonic() + self.timeout,
-                max_deadline=max_deadline,
-            )
+            while True:
+                turn_result = self._request("turn/start", turn_params, mapper, emit, max_deadline)
+                turn = turn_result.get("turn") if isinstance(turn_result, dict) else None
+                if not isinstance(turn, dict) or not isinstance(turn.get("id"), str):
+                    raise CodexAppServerError("Codex returned an invalid turn/start response")
+                self.turn_id = turn["id"]
+                status, detail = self._consume_turn(
+                    mapper, emit, idle_deadline=time.monotonic() + self.timeout,
+                    max_deadline=max_deadline,
+                )
+                if status != "renew_token":
+                    if self.chatgpt_token and "subscription_sharing_usage_limit_exceeded" in detail:
+                        try:
+                            tag_chatgpt.Store().pause_usage(expected_identity=self.auth_identity)
+                        except tag_chatgpt.ChatGPTError as exc:
+                            raise CodexAppServerError(str(exc)) from None
+                    return status, detail
+                if self._stop_requested():
+                    return "interrupted", "Stopped by requester"
+                # Resume the same saved history only after acknowledged interruption;
+                # never rerun the original prompt or restart an unacknowledged turn.
+                self.close()
+                self.process = None
+                self.messages = queue.Queue()
+                self.stderr.clear()
+                self.reader_threads = []
+                self.interrupt_sent = False
+                self.renewing_token = False
+                self.turn_id = None
+                self._start()
+                self._request("initialize", {"clientInfo": self._client_info(),
+                    "capabilities": {"experimentalApi": True}}, mapper, emit, max_deadline)
+                self._notify("initialized", {})
+                resumed = self._request("thread/resume", {"threadId": self.thread_id,
+                    "cwd": str(self.cwd), "sandbox": "workspace-write", "approvalsReviewer": "auto_review"},
+                    mapper, emit, max_deadline)
+                resumed_thread = resumed.get("thread") if isinstance(resumed, dict) else None
+                if not isinstance(resumed_thread, dict) or resumed_thread.get("id") != self.thread_id:
+                    raise CodexAppServerError("Codex could not resume the task after ChatGPT token renewal")
+                turn_params["input"] = [{"type": "text", "text":
+                    "Continue the interrupted task from the saved history. Authentication was renewed. "
+                    "Check the outcome of interrupted tools before proceeding; do not repeat completed actions."}]
+                emit({"type": "status", "text": "ChatGPT connection renewed; continuing the task."})
         finally:
             self.close()
 
+    @staticmethod
+    def _client_info() -> dict[str, str]:
+        return {"name": tag_chatgpt.APP_NAME, "title": "Tag",
+                "version": (Path(__file__).resolve().parents[1] / "VERSION").read_text().strip()}
+
     def _start(self) -> None:
+        environment = None
+        command = self.command
+        store = tag_chatgpt.Store()
+        try:
+            identity = store.identity()
+            if self.auth_identity is None:
+                self.auth_identity = identity
+            elif self.auth_identity != identity:
+                raise tag_chatgpt.ChatGPTError("ChatGPT account changed during the task; restart the task with the intended account.")
+        except tag_chatgpt.ChatGPTError as exc:
+            raise CodexAppServerError(str(exc)) from None
+        if self.auth_identity[0] == "chatgpt":
+            try:
+                self.chatgpt_token, expiry = store.lease(expected_identity=self.auth_identity)
+                self.token_renewal_deadline = time.monotonic() + max(0, expiry - time.time() - 90)
+            except tag_chatgpt.ChatGPTError as exc:
+                raise CodexAppServerError(str(exc)) from None
+            environment = dict(os.environ)
+            environment[tag_chatgpt.TOKEN_ENV] = self.chatgpt_token
+            command = [part for part in command if part != "--stdio"]
+            command += ["--listen", "stdio://", *tag_chatgpt.provider_options()]
         try:
             self.process = subprocess.Popen(
-                self.command,
+                command,
+                env=environment,
                 cwd=self.cwd,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
@@ -450,7 +467,8 @@ class CodexAppServer:
             while chunk := self.process.stdout.read(4096):
                 for raw_line in decoder.feed(chunk):
                     try:
-                        payload = json.loads(raw_line)
+                        payload = json.loads(raw_line.replace(self.chatgpt_token.encode(), b"<redacted>")
+                                             if self.chatgpt_token else raw_line)
                     except (UnicodeDecodeError, json.JSONDecodeError):
                         continue
                     if isinstance(payload, dict):
@@ -528,8 +546,12 @@ class CodexAppServer:
     ) -> bool:
         if "method" in message and "id" in message:
             return self._resolve_server_request(message, emit=emit, deadline=deadline)
+        self._remember_auto_review(message)
         for event in mapper.map(message):
-            emit(event)
+            if self.auto_review_denials and event.get("type", "").startswith("message_"):
+                self.held_auto_review_messages.append(event)
+            else:
+                emit(event)
         return False
 
     def _consume_turn(
@@ -539,16 +561,19 @@ class CodexAppServer:
         idle_deadline: float,
         max_deadline: float,
     ) -> tuple[str, str]:
+        held_messages = self.held_auto_review_messages
         timed_out = False
         timeout_detail = ""
         interrupt_deadline = float("inf")
         while True:
             try:
-                deadline = min(idle_deadline, max_deadline) if not timed_out else interrupt_deadline
+                deadline = min(idle_deadline, max_deadline, self.token_renewal_deadline) if not timed_out else interrupt_deadline
                 message = self._next_message(deadline)
             except CodexAppServerError as exc:
                 now = time.monotonic()
                 if not timed_out and now >= deadline:
+                    self.renewing_token = (self.chatgpt_token != "" and not self.interrupt_sent
+                                           and self.token_renewal_deadline < min(idle_deadline, max_deadline))
                     timed_out = True
                     timeout_detail = (
                         f"maximum runtime of {self.max_timeout}s exceeded"
@@ -563,18 +588,131 @@ class CodexAppServer:
                     return "timeout", f"{timeout_detail}; {suffix}"
                 raise
             if "method" in message and "id" not in message:
+                self._remember_auto_review(message)
                 events = mapper.map(message)
                 if self._is_progress_notification(message) and not timed_out:
                     idle_deadline = time.monotonic() + self.timeout
                 for event in events:
-                    emit(event)
                     if event.get("type") == "turn_complete":
+                        if self.renewing_token and event.get("status") == "interrupted":
+                            return "renew_token", ""
+                        if (not timed_out and not self.interrupt_sent
+                                and event.get("status") == "completed"
+                                and self._approve_auto_review_denials(mapper, emit, max_deadline)):
+                            held_messages.clear()
+                            mapper = CodexEventMapper()
+                            self.turn_id = None
+                            result = self._request("turn/start", {
+                                "threadId": self.thread_id,
+                                "input": [{"type": "text", "text":
+                                    "Retry only the exact denied action explicitly approved through "
+                                    "the preceding approval marker, then continue the original task. "
+                                    "Keep automatic review enabled and respect any further denial."}],
+                            }, mapper, emit, max_deadline)
+                            turn = result.get("turn") if isinstance(result, dict) else None
+                            if not isinstance(turn, dict) or not isinstance(turn.get("id"), str):
+                                raise CodexAppServerError("Codex returned an invalid retry turn")
+                            self.turn_id = turn["id"]
+                            idle_deadline = time.monotonic() + self.timeout
+                            break
+                        for held in held_messages:
+                            emit(held)
+                        held_messages.clear()
+                        emit(event)
+                        if self.renewing_token:
+                            # The task can finish while renewal interruption is in flight.
+                            return str(event.get("status", "failed")), str(event.get("text", ""))
                         if timed_out:
                             return "timeout", timeout_detail
+                        if self.interrupt_sent:
+                            return "interrupted", ""
                         return str(event.get("status", "failed")), str(event.get("text", ""))
+                    if self.auto_review_denials and event.get("type", "").startswith("message_"):
+                        held_messages.append(event)
+                    else:
+                        emit(event)
                 continue
             if self._dispatch(message, mapper, emit, max_deadline) and not timed_out:
                 idle_deadline = time.monotonic() + self.timeout
+
+    def _remember_auto_review(self, message: dict[str, Any]) -> None:
+        """Retain exact denials locally; Slack receives only a separate redacted preview."""
+        if message.get("method") != "item/autoApprovalReview/completed" or self.approval_dir is None:
+            return
+        params = message.get("params")
+        if not isinstance(params, dict) or params.get("threadId") != self.thread_id:
+            return
+        if not isinstance(params.get("turnId"), str) or not params["turnId"]:
+            return
+        if self.turn_id is not None and params.get("turnId") != self.turn_id:
+            return
+        review, action = params.get("review"), params.get("action")
+        review_id = params.get("reviewId")
+        if (not isinstance(review, dict) or review.get("status") != "denied"
+                or not isinstance(action, dict) or not isinstance(review_id, str) or not review_id
+                or review_id in self.seen_auto_reviews
+                or len(self.seen_auto_reviews) >= MAX_AUTO_REVIEW_APPROVALS):
+            return
+        # The override takes the core protocol's snake_case action, not the
+        # app-server's camelCase action. Unknown variants fail closed.
+        variants = {
+            "command": ("command", ("command", "cwd", "source")),
+            "execve": ("execve", ("program", "argv", "cwd", "source")),
+            "writeStdin": ("write_stdin", ("approvalId", "processId", "stdin", "cwd")),
+            "applyPatch": ("apply_patch", ("cwd", "files")),
+            "networkAccess": ("network_access", ("target", "host", "protocol", "port")),
+            "mcpToolCall": ("mcp_tool_call", ("server", "toolName")),
+        }
+        action_type = action.get("type")
+        if not isinstance(action_type, str):
+            return
+        variant = variants.get(action_type)
+        if variant is None or any(key not in action for key in variant[1]):
+            return
+        def snake(key: str) -> str:
+            return re.sub(r"(?<!^)(?=[A-Z])", "_", key).lower()
+        core_action = {snake(key): value for key, value in action.items()}
+        core_action["type"] = variant[0]
+        if core_action.get("source") == "unifiedExec":
+            core_action["source"] = "unified_exec"
+        event = {
+            "id": review_id, "turn_id": params.get("turnId"),
+            "target_item_id": params.get("targetItemId"),
+            "started_at_ms": params.get("startedAtMs", 0),
+            "completed_at_ms": params.get("completedAtMs"),
+            "status": "denied", "risk_level": review.get("riskLevel"),
+            "user_authorization": review.get("userAuthorization"),
+            "rationale": review.get("rationale"), "action": core_action,
+        }
+        self.seen_auto_reviews.add(review_id)
+        self.auto_review_denials.append(event)
+
+    def _approve_auto_review_denials(
+        self, mapper: CodexEventMapper, emit: Callable[[dict[str, Any]], None], deadline: float,
+    ) -> bool:
+        denials, self.auto_review_denials = self.auto_review_denials, []
+        approved_any = False
+        for event in denials:
+            self._check_control()
+            if self.interrupt_sent or time.monotonic() >= deadline:
+                break
+            approval_id = uuid.uuid4().hex
+            emit({"type": "approval_request", "approval_id": approval_id,
+                  "label": AUTO_REVIEW_RETRY_LABEL, "review_details": auto_review_details(event)})
+            approved = self._wait_for_approval(
+                approval_id, min(deadline, time.monotonic() + APPROVAL_TIMEOUT_SECONDS),
+            )
+            emit({"type": "approval_expired", "approval_id": approval_id})
+            if approved and not self.interrupt_sent and time.monotonic() < deadline:
+                try:
+                    self._request("thread/approveGuardianDeniedAction", {
+                        "threadId": self.thread_id, "event": event,
+                    }, mapper, emit, deadline)
+                except CodexAppServerError:
+                    # A rejected override grants no retry; preserve the held answer.
+                    continue
+                approved_any = True
+        return approved_any and not self.interrupt_sent and time.monotonic() < deadline
 
     @staticmethod
     def _is_progress_notification(message: dict[str, Any]) -> bool:
@@ -603,25 +741,27 @@ class CodexAppServer:
             and deadline is not None
         ):
             approval_id = uuid.uuid4().hex
-            emit({
-                "type": "approval_request",
-                "approval_id": approval_id,
-                "label": APPROVAL_REQUEST_LABELS[method],
-                "details": approval_details(method, params),
-            })
-            approved = self._wait_for_approval(
-                approval_id,
-                min(deadline, time.monotonic() + APPROVAL_TIMEOUT_SECONDS),
-            )
-            emit({"type": "approval_expired", "approval_id": approval_id})
-            self._send({
-                "id": request_id,
-                "result": self._approval_result(
-                    method,
-                    params if isinstance(params, dict) else {},
-                    approved,
-                ),
-            })
+            request_params = params if isinstance(params, dict) else {}
+            choices = approval_choices(method, request_params)
+            result = self._approval_result(method, request_params, False)
+            if choices:
+                emit({
+                    "type": "approval_request", "approval_id": approval_id,
+                    "label": APPROVAL_REQUEST_LABELS[method],
+                    "choices": public_approval_choices(choices),
+                    "details": approval_details(method, request_params),
+                })
+                try:
+                    selected = self._wait_for_approval_decision(
+                        approval_id, min(deadline, time.monotonic() + APPROVAL_TIMEOUT_SECONDS),
+                    )
+                finally:
+                    emit({"type": "approval_expired", "approval_id": approval_id})
+                choice = next((c for c in choices if c["id"] == selected.get("choice")), None)
+                self._check_control()
+                if choice is not None and not self.interrupt_sent and time.monotonic() < deadline:
+                    result = choice["result"]
+            self._send({"id": request_id, "result": result})
             return True
         responses: dict[str, dict[str, Any]] = {
             "item/commandExecution/requestApproval": {"decision": "decline"},
@@ -642,12 +782,15 @@ class CodexAppServer:
         return False
 
     def _wait_for_approval(self, approval_id: str, deadline: float) -> bool:
+        return self._wait_for_approval_decision(approval_id, deadline).get("decision") == "approve"
+
+    def _wait_for_approval_decision(self, approval_id: str, deadline: float) -> dict[str, Any]:
         assert self.approval_dir is not None
         decision_file = self.approval_dir / f"{approval_id}.json"
         while time.monotonic() < deadline:
             self._check_control()
             if self.interrupt_sent:
-                return False
+                return {}
             try:
                 payload = json.loads(decision_file.read_text(encoding="utf-8"))
             except FileNotFoundError:
@@ -655,10 +798,12 @@ class CodexAppServer:
                 continue
             except (OSError, json.JSONDecodeError):
                 decision_file.unlink(missing_ok=True)
-                return False
+                return {}
             decision_file.unlink(missing_ok=True)
-            return isinstance(payload, dict) and payload.get("decision") == "approve"
-        return False
+            if time.monotonic() >= deadline:
+                return {}
+            return payload if isinstance(payload, dict) else {}
+        return {}
 
     @staticmethod
     def _approval_result(method: str, params: dict[str, Any], approved: bool) -> dict[str, Any]:
@@ -679,6 +824,14 @@ class CodexAppServer:
             }
             return {"decision": decision}
         return {}
+
+    def _stop_requested(self) -> bool:
+        if not self.control_file or not self.run_id:
+            return False
+        try:
+            return self.control_file.read_text(encoding="utf-8").strip() == self.run_id
+        except OSError:
+            return False
 
     def _check_control(self) -> None:
         if self.interrupt_sent or not self.control_file or not self.run_id:
@@ -733,6 +886,8 @@ class CodexAppServer:
     def _exit_message(self) -> str:
         assert self.process is not None
         detail = bytes(self.stderr).decode("utf-8", errors="replace").strip()
+        if self.chatgpt_token:
+            detail = detail.replace(self.chatgpt_token, "<redacted>")
         suffix = f": {detail[-4000:]}" if detail else ""
         return f"Codex App Server exited with code {self.process.returncode}{suffix}"
 

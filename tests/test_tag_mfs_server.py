@@ -56,6 +56,41 @@ class ConnectorTests(unittest.IsolatedAsyncioTestCase):
                 await other._channels()
             self.assertEqual(channels.await_count, 3)
 
+    async def test_org_channel_cache_is_separate_for_each_workspace(self):
+        auth = {"team_id": None, "enterprise_id": "EORG", "is_enterprise_install": True}
+        async def response(method, **kwargs):
+            if method == "auth.test":
+                return auth
+            if method == "auth.teams.list":
+                return {"teams": [{"id": "TONE"}, {"id": "TTWO"}]}
+            return {"channels": []}
+        self.call.side_effect = response
+        with patch.object(SlackPlugin, "_channels", new_callable=AsyncMock, return_value=[]) as channels:
+            for team in ("TONE", "TTWO", "TONE"):
+                plugin = self.plugin_type({"team_id": team, "channel_ids": ["CONE"]},
+                                          "shared-org-token", ctx=SimpleNamespace(state=None))
+                await plugin.connect()
+                self.assertEqual(plugin._client.default_params["team_id"], team)
+                await plugin._channels()
+            self.assertEqual(channels.await_count, 2)
+
+    async def test_org_connector_requires_workspace_and_actual_grant(self):
+        self.call.return_value = {"team_id": None, "is_enterprise_install": True}
+        with self.assertRaisesRegex(RuntimeError, "workspace"):
+            await self.plugin.connect()
+        self.call.side_effect = [
+            {"team_id": None, "is_enterprise_install": True},
+            {"teams": [{"id": "TOTHER"}]},
+        ]
+        plugin = self.plugin_type({"team_id": "TSELECTED"}, "new-token", ctx=SimpleNamespace(state=None))
+        with self.assertRaisesRegex(RuntimeError, "no grant"):
+            await plugin.connect()
+
+    async def test_workspace_token_cannot_be_relabelled_as_another_workspace(self):
+        plugin = self.plugin_type({"team_id": "TOTHER"}, "fixture", ctx=SimpleNamespace(state=None))
+        with self.assertRaisesRegex(RuntimeError, "different workspace"):
+            await plugin.connect()
+
     async def test_429_retries_current_cursor_without_reemitting_completed_page(self):
         await self.plugin.connect()
         response = AsyncSlackResponse(client=None, http_verb="GET", api_url="fixture",

@@ -43,6 +43,24 @@ class FailureClassificationTests(unittest.TestCase):
         self.assertEqual(FailureCategory.AUTHENTICATION, result.category)
         self.assertNotIn("expired", result.explanation.lower())
 
+    def test_rejected_chatgpt_model_has_actionable_safe_cause(self) -> None:
+        detail = ('{"type":"error","status":400,"error":{"type":"invalid_request_error",'
+                  '"message":"The \'gpt-6.1-sol\' model is not supported when using Codex with a ChatGPT account."}}')
+        result = classify_failure(detail, "invalid_request_error")
+
+        self.assertEqual(FailureCategory.MODEL_UNAVAILABLE, result.category)
+        self.assertIn("Choose another model in Configure", result.explanation)
+        self.assertIn("The 'gpt-6.1-sol' model is not supported", result.explanation)
+
+    def test_rejected_model_with_unsafe_name_keeps_generic_cause(self) -> None:
+        result = classify_failure(
+            "The 'gpt-6.1-sol token=sk-secret' model is not supported "
+            "when using Codex with a ChatGPT account."
+        )
+
+        self.assertEqual(FailureCategory.MODEL_UNAVAILABLE, result.category)
+        self.assertNotIn("sk-secret", result.explanation)
+
 
 class ErrorReportTests(unittest.TestCase):
     def report(self, detail: str = "backend exited with code 17"):

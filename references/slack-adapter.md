@@ -66,7 +66,7 @@ connector configuration; `tag start` registers it after starting MFS:
 5. Select one or more joined channels and the owner member ID.
 6. Choose/reuse the history credential and approve the exact channel list and
    history window before connector creation or indexing.
-7. Choose Codex (default) or experimental Claude, then run `tag start`.
+7. Choose the default agent (Codex or Claude), then run `tag start`.
 8. Mention the bot in each selected test channel and record an observed reply;
    service readiness alone is not an end-to-end pass.
 9. Send Tag (or the customized app name) a direct message and confirm an
@@ -277,7 +277,7 @@ the private details. See [Control your Tag](../docs/concepts/control-your-tag.md
 Activity copy uses a fixed public vocabulary. Recognized MCP services and tool
 names produce natural copy (for example, `Searching GitHub issues…`); unrecognized
 names fall back to a service-only or generic label. Extend `MCP_SERVICE_NAMES`
-and `MCP_TOOL_NAMES` in `scripts/codex_app_server.py` to approve more display
+and `MCP_TOOL_NAMES` in `scripts/agent_activity.py` to approve more display
 names. Arguments, results, URLs, and private server identifiers are not used in
 activity labels. Helper commands are classified by simple invocation, never by
 a filename mentioned somewhere in a command. Compound or ambiguous commands

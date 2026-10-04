@@ -3,7 +3,7 @@
 ## Who it's for
 
 Bring your own Tag to work. Tag is for people who want to use their Codex
-agent in Slack, with context from Slack threads and integrations already
+or Claude agent in Slack, with context from Slack threads and integrations already
 connected to their agent. Requests, updates, and results stay in the thread,
 where teammates can follow the work.
 
@@ -21,7 +21,7 @@ You can ask Tag to:
 - summarize a discussion and turn it into decisions, owners, and next steps;
 - investigate a question across approved Slack history and other sources;
 - compare information from conversations, documents, issues, and repositories;
-- use locally installed tools available to Codex;
+- use locally installed tools available to your agent;
 - inspect or change files in its configured workspace when explicitly asked;
 - return an answer to the thread, post to the channel, or create a Slack Canvas.
 
@@ -44,8 +44,8 @@ its workspace, and the sources and tools made available to it. See
 | Set up Tag and try a first task | [Set up Tag](getting-started/first-task.md) |
 | Understand why I’d bring my assistant into Slack | [Why Tag](index.md) |
 | Know who can use my Tag and see its replies | [Your own Tag](concepts/access.md) |
-| Review an approval request or stop a task | [Control your Tag](concepts/control-your-tag.md) |
 | Let someone else make requests to my Tag | [Sharing access to your Tag](concepts/sharing-access.md) |
+| Approve actions, stop tasks, and understand permissions | [Control your Tag](concepts/control-your-tag.md) |
 | See what happens when I ask for help | [How Tag works](concepts/mental-model.md) |
 | Follow up or find an earlier discussion | [What Tag knows](concepts/what-tag-knows.md) |
 | Work with attachments and save files | [Working with files](concepts/workspaces-and-tools.md) |

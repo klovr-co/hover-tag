@@ -67,11 +67,14 @@ tools such as `gws`. The installer does not relocate their credentials.
 
 ## Install from a checkout
 
-On supported macOS/Linux systems, install and sign in to Codex separately, then
-run the installer below. Tag automatically prepares Python and Slack CLI; neither
-Python nor uv needs to be on PATH. Setup checks the selected Codex transport and
-`codex login status`, and explains how to update or sign in when needed. Tag does
-not install Codex or change its global configuration or credentials.
+On supported macOS/Linux systems, install Codex, Claude Code, or both separately,
+then run the installer below. Sign in to your agent or
+[connect a ChatGPT plan directly to Tag](reference/chatgpt-connection.md).
+Tag automatically prepares Python and Slack CLI; neither Python nor uv needs
+to be on PATH. Setup checks the selected transport and agent sign-in
+(`codex login status` or `claude auth status`), or Tag’s selected ChatGPT
+connection, and explains how to update or sign in when needed. Tag does not
+install either agent or change its global configuration or credentials.
 
 Native Windows retains its Python 3.10+ and Slack CLI prerequisites; WSL uses the
 Linux bootstrap. No local administrator privileges are needed. Slack sign-in
@@ -222,9 +225,10 @@ Use environment references (`env_vars`, `bearer_token_env_var`,
 Configure OAuth with the backend's supported login flow. TAG does not grant
 access merely by adding a server definition; normal backend permissions apply.
 
-Claude remains experimental. It runs from the same stable workspace, with
-project skills under `.claude/skills` and normal Claude project MCP settings in
-`.mcp.json`; use Claude's own trust/approval setup for project MCP servers.
+Claude runs from the same stable workspace through
+the Claude Agent SDK, with project skills under `.claude/skills`. Tag passes
+the workspace `.mcp.json` servers to each Claude run, mirroring how it layers
+`.codex/config.toml` MCP servers for Codex.
 
 Codex discovery references: [skills](https://developers.openai.com/codex/skills)
 and [MCP](https://developers.openai.com/codex/mcp).

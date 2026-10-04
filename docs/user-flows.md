@@ -122,7 +122,7 @@ flowchart LR
     Slack["Connect Slack<br/>Create or approve app"]
     Connected["App connected<br/>Tag + workspace"]
     Channel["Choose destination<br/>Visual channel picker"]
-    Agent["Review settings<br/>Codex default, Claude experimental"]
+    Agent["Review settings<br/>Default agent and model"]
     Guardrails["Set boundaries<br/>Users, workspace, MFS roots"]
     Doctor{"Run doctor<br/>Checks pass?"}
     Start["Start services<br/>MFS + Slack bridge"]
@@ -135,8 +135,7 @@ flowchart LR
 
 ### Level 2 · Task flow
 
-1. Install Python 3.10+, `uv`, and an authenticated Codex or experimental Claude
-   Code CLI. Run `./install.sh` (or `./install.ps1` on Windows) for Tag's runtime.
+1. Install Python 3.10+, `uv`, and an authenticated Codex or Claude Code CLI. Run `./install.sh` (or `./install.ps1` on Windows) for Tag's runtime.
 2. Open `tag` for the menu or ask the admin skill to inspect with `tag inspect --json`.
 3. Use `tag setup` to resume missing answers, or let the skill seed defaults with
    `tag config init --json` and apply targeted `tag config set` operations.
@@ -233,10 +232,9 @@ Try this:
 3. Watch Slack's loading state while the bounded backend run is active.
 4. Review the answer in the invoking thread. Long results may arrive as
    multiple readable replies.
-5. For a Codex App Server task, select **Activity** on the reply to review tool
-   steps. Select **Details** for available input and result
-   previews, then **Back** to return to the timeline. Only the original requester
-   can open these views. See [Review task activity](reference/supported-capabilities.md#review-task-activity).
+5. For a Codex App Server task, follow readable tool steps in **Agent activity**
+   directly in the thread. Repeated work is grouped; the card shows complete when
+   the task succeeds. See [Watch Tag work](reference/supported-capabilities.md#watch-tag-work).
 6. If the result needs refinement, mention the bot again in the same thread so
    the next run receives the recent discussion.
 
@@ -260,7 +258,7 @@ sequenceDiagram
     M-->>B: Evidence or task result
     B-->>T: Normalized status/delta/final events
     T->>S: Stream or post formatted threaded answer
-    T->>S: Add Configure and requester-only Activity controls for Codex run
+    T->>S: Add Configure controls for Codex run
 ```
 
 Runtime behavior:
@@ -269,10 +267,12 @@ Runtime behavior:
   thread continues with that thread's context.
 - The bridge strips the mention before sending the request to the backend.
 - Slack's native loading indicator is used while work is in progress.
-- Claude can stream answer text. Codex uses App Server by default to stream
-  final-answer deltas and report observed tool activity. Shared replies omit
-  raw commentary, reasoning, and tool output; the original requester can open
-  bounded tool previews through the Activity control.
+- Codex (App Server) and Claude (Agent SDK) stream
+  final-answer deltas and show compact **Agent activity** rows with readable
+  command and file descriptions. Repeated steps are grouped, and successful
+  tasks finish with a completed card. Shared replies omit
+  raw commentary, reasoning, and tool output. The separate Activity button is
+  hidden; bounded diagnostic records remain stored for future developer tooling.
 - Long answers are split into readable threaded replies.
 - Failures are returned in the same thread with a bounded error message.
 
@@ -538,11 +538,17 @@ sequenceDiagram
 Settings are user-specific, so each authorized teammate can choose a model,
 reasoning level, and Fast Mode without changing another teammate's settings.
 Saved choices follow that user across channels and threads and survive bridge
-restarts. Reasoning levels retain the names reported by Codex; Fast Mode is an
-independent latency setting that uses increased usage. “Default” delegates
-model or reasoning selection to the Codex CLI. If a saved choice is no longer
-available, Tag normalizes it back to the applicable default. Claude replies do
-not show this control.
+restarts. Reasoning levels retain the names reported by the selected backend;
+Fast Mode is an independent latency setting that uses increased usage.
+“Default” delegates model or reasoning selection to the backend CLI. If a saved
+choice is no longer available, Tag normalizes it back to the applicable default.
+When both Codex and Claude are allowed, installed, and signed in, the picker groups
+their models and the chosen model decides which backend runs that user's next
+request. Switching mid-thread is safe: every request is a fresh run that
+receives the Slack thread (up to 30 messages, including Tag's replies), so the
+new model continues from what is visible in Slack. It does not inherit the
+previous model's private reasoning or tool output; files it saved remain in
+the workspace. A running task keeps its model until it finishes or is stopped.
 
 ## Flow 8: Denials, failures, and recovery
 
@@ -701,9 +707,9 @@ isolated chat location. Skip an optional step when its dependency is not set up.
 | Image attachment understanding | Implemented bridge path | Images up to 15 MB are downloaded temporarily; successful interpretation still depends on the selected backend/model. |
 | Generated-file delivery | Implemented | Only explicitly declared regular files inside the workspace are uploaded to the invoking thread and returned as private Slack file links; each file is limited to 15 MB. |
 | Generated-image upload to Slack | Implemented bridge path | The backend saves up to 10 final PNG, JPEG, GIF, or WebP files in the invocation's dedicated result directory; the bridge validates files up to 15 MB and uploads them to the requesting thread. |
-| Slack loading state and answers | Implemented | Claude streams text deltas; Codex App Server streams final-answer deltas and observed activity. |
+| Slack loading state and answers | Implemented | Codex App Server and the Claude Agent SDK stream final-answer deltas and observed activity. |
 | Long-answer splitting | Implemented | Results remain in the invoking thread. |
-| Model/reasoning/Fast Mode settings | Implemented for Codex | Requires Slack interactivity and a reinstalled updated manifest; Fast Mode uses increased usage. |
+| Model/reasoning/Fast Mode settings | Implemented for Codex and Claude | Requires Slack interactivity and a reinstalled updated manifest; Fast Mode uses increased usage. |
 | Top-level channel posts | Implemented on explicit request | Restricted to the invoking channel. |
 | Slack Canvas creation | Implemented on explicit request | Restricted to the invoking channel; `canvases:write` required. |
 | Slack MFS search/read | Implemented; live acceptance pending | Setup creates selected-channel scopes; each reply receives only its current channel's Slack scope. ADR 0001 still applies. |
@@ -712,7 +718,7 @@ isolated chat location. Skip an optional step when its dependency is not set up.
 | Slack direct messages | Implemented, enabled by default | Requires an allowlisted sender. `tag start` migrates existing linked apps to `message.im` + `im:history` and opens Slack approval when needed. Set `OPENTAG_SLACK_DM_ENABLED=0` to disable it. Top-level DMs are separate tasks; thread replies provide bounded context. |
 | Duplicate-event idempotency | Not implemented | Avoid concurrent mentions in the same thread. |
 | Codex cancellation | Implemented with App Server | Slack's native Stop button interrupts the active Codex turn; the legacy exec transport remains a rollback path. |
-| Codex action approval | Automatic review with App Server fallback | Supported requests delivered to Tag show bounded action context, a requester-only Details view, and one-time Approve and Deny buttons; missing details are identified, and unsupported or stale requests fail closed. See [Control your Tag](concepts/control-your-tag.md). |
+| Codex action approval | Automatic review with App Server fallback | Supported requests delivered to Tag show bounded action context, a requester-only Details view, and the native approval choices supported by Codex; missing details are identified, and unsupported or stale requests fail closed. See [Control your Tag](concepts/control-your-tag.md). |
 | Connected-tool confirmation layer | Not provided by Tag | Connected-tool actions follow the selected backend/tool's permissions and confirmation behavior. |
 | Enterprise governance/audit/approvals | Not provided | Add external sandboxing and policy systems for production use. |
 

@@ -138,7 +138,7 @@ class SlackCredentialsTests(unittest.TestCase):
             setup, "validate_socket_token"
         ) as socket, patch.object(setup.getpass, "getpass") as secret, redirect_stdout(StringIO()):
             result = setup.connect_app_credentials(self.home, self.config, "TTEST", "ATEST")
-        bot.assert_called_once_with(self.tokens["SLACK_BOT_TOKEN"], team_id="TTEST", app_id="ATEST", label="Bot token")
+        bot.assert_called_once_with(self.tokens["SLACK_BOT_TOKEN"], team_id="TTEST", app_id="ATEST", enterprise_id="", label="Bot token")
         socket.assert_called_once_with(self.tokens["SLACK_APP_TOKEN"], "ATEST")
         secret.assert_not_called()
         self.assertEqual(result["SLACK_APP_TOKEN"], self.tokens["SLACK_APP_TOKEN"])

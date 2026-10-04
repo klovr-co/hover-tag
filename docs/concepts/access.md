@@ -67,3 +67,6 @@ The owner-only default doesn't limit what Codex can do on the host computer. To
 keep unrelated files and accounts out of reach, consider running Tag on a
 separate computer or under a separate local account with limited permissions.
 See the [security policy](../../SECURITY.md) for details.
+
+For approval prompts and stopping a running task, see
+[Control your Tag](control-your-tag.md).

@@ -17,33 +17,43 @@ except ImportError:
 DEFAULTS = {
     "OPENTAG_BACKEND": "codex", "OPENTAG_BOT_NAME": "Tag",
     "OPENTAG_CODEX_TRANSPORT": "app-server",
+    "OPENTAG_CLAUDE_TRANSPORT": "sdk", "OPENTAG_CLAUDE_PERMISSION_MODE": "auto",
     "OPENTAG_TRANSPORT": "slack", "OPENTAG_TIMEOUT_SECONDS": "420",
     "OPENTAG_MAX_TIMEOUT_SECONDS": "3600",
     "OPENTAG_BACKEND_ATTEMPTS": "3", "OPENTAG_SLACK_STREAMING": "1",
     "OPENTAG_SLACK_DM_ENABLED": "1",
+    "OPENTAG_FILE_DELIVERY": "local+slack",
     "MFS_URL": "http://127.0.0.1:13619", "MFS_SLACK_HISTORY_DAYS": "30",
 }
+BACKENDS = frozenset({"codex", "claude"})
+DEFAULT_MODEL_RE = re.compile(r"(?:codex|claude)(?::[A-Za-z0-9][A-Za-z0-9._\[\]-]{0,99})?")
 REQUIRED = ("OPENTAG_BACKEND", "MFS_URL", "MFS_ALLOWED_SCOPES",
             "SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_ALLOWED_USER_IDS",
             "SLACK_TEAM_ID", "SLACK_APP_ID")
 # Unknown extension settings are preserved but never exposed by config show.
 PUBLIC = frozenset((*DEFAULTS, "MFS_ALLOWED_SCOPES", "OPENTAG_WORKDIR",
                     "SLACK_CHANNEL_ID", "SLACK_CHANNEL_IDS", "SLACK_TEAM_ID",
-                    "SLACK_APP_ID", "SLACK_ALLOWED_USER_IDS",
+                    "SLACK_APP_ID", "SLACK_ALLOWED_USER_IDS", "SLACK_ENTERPRISE_ID",
                     "SLACK_CHANNEL_POLICY",
                     "MFS_SLACK_HISTORY_DAYS",
                     "MFS_SLACK_CONNECTOR_URI", "MFS_SLACK_CONNECTOR_CONFIG",
-                    "OPENTAG_CODEX_MODELS", "OPENTAG_CODEX_REASONING_EFFORTS"))
+                    "OPENTAG_CODEX_MODELS", "OPENTAG_CODEX_REASONING_EFFORTS",
+                    "OPENTAG_CLAUDE_MODELS", "OPENTAG_DEFAULT_MODEL", "OPENTAG_BACKENDS"))
 EDITABLE = PUBLIC - {"OPENTAG_WORKDIR"} | {
     "SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "MFS_TOKEN", "MFS_SLACK_TOKEN", "MFS_HOME"
 }
 LABELS = {
     "OPENTAG_BACKEND": "Agent", "OPENTAG_BOT_NAME": "Bot name",
+    "OPENTAG_DEFAULT_MODEL": "Default model (codex:MODEL, claude:MODEL, or a backend)",
+    "OPENTAG_BACKENDS": "Backends users can choose (codex,claude)",
     "OPENTAG_CODEX_TRANSPORT": "Codex transport (exec or app-server)",
+    "OPENTAG_CLAUDE_TRANSPORT": "Claude transport (print or sdk)",
+    "OPENTAG_CLAUDE_PERMISSION_MODE": "Claude permission mode",
     "SLACK_APP_TOKEN": "Slack app token", "SLACK_BOT_TOKEN": "Slack bot token",
     "SLACK_ALLOWED_USER_IDS": "Who can use Tag", "SLACK_CHANNEL_ID": "Legacy channel restriction",
     "SLACK_CHANNEL_IDS": "Selected channels", "SLACK_TEAM_ID": "Slack workspace",
     "SLACK_CHANNEL_POLICY": "Channel policy (selected or invited)",
+    "SLACK_ENTERPRISE_ID": "Slack organization authorization",
     "SLACK_APP_ID": "Slack app ID", "MFS_SLACK_TOKEN": "Slack history credential",
     "MFS_ALLOWED_SCOPES": "Allowed memory sources", "MFS_URL": "Memory server",
     "MFS_TOKEN": "Memory server token", "OPENTAG_TIMEOUT_SECONDS": "Agent idle timeout (seconds)",
@@ -53,6 +63,7 @@ LABELS = {
     "MFS_SLACK_CONNECTOR_CONFIG": "Slack history connector config",
     "OPENTAG_BACKEND_ATTEMPTS": "Retry attempts", "OPENTAG_SLACK_STREAMING": "Stream replies (1 on, 0 off)",
     "OPENTAG_SLACK_DM_ENABLED": "Direct messages (1 on, 0 off)",
+    "OPENTAG_FILE_DELIVERY": "File delivery (local or local+slack)",
     "OPENTAG_TRANSPORT": "Chat service",
 }
 
@@ -82,8 +93,12 @@ def validation_error(key: str, value: str) -> str | None:
         return "Required"
     if "\x00" in value:
         return "Must not contain a null character"
-    if key == "OPENTAG_BACKEND" and value not in {"codex", "claude"}:
-        return "Choose codex or claude (experimental)"
+    if key == "OPENTAG_BACKEND" and value not in BACKENDS:
+        return "Choose codex or claude"
+    if key == "OPENTAG_DEFAULT_MODEL" and value and not DEFAULT_MODEL_RE.fullmatch(value):
+        return "Use codex, claude, codex:MODEL, or claude:MODEL"
+    if key == "OPENTAG_BACKENDS" and value and not set(value.split(",")) <= BACKENDS:
+        return "Use a comma-separated list of codex and claude"
     if key == "OPENTAG_BOT_NAME" and (
         not value.strip()
         or len(value) > 35
@@ -92,6 +107,12 @@ def validation_error(key: str, value: str) -> str | None:
         return "Use a name from 1 to 35 characters without line breaks"
     if key == "OPENTAG_CODEX_TRANSPORT" and value not in {"exec", "app-server"}:
         return "Choose exec or app-server"
+    if key == "OPENTAG_CLAUDE_TRANSPORT" and value not in {"print", "sdk"}:
+        return "Choose print or sdk"
+    if key == "OPENTAG_CLAUDE_PERMISSION_MODE" and value not in {"auto", "acceptEdits", "default", "dontAsk", "bypassPermissions"}:
+        return "Choose auto, acceptEdits, default, dontAsk, or bypassPermissions"
+    if key == "OPENTAG_FILE_DELIVERY" and value not in {"local", "local+slack"}:
+        return "Choose local or local+slack"
     if key == "OPENTAG_TRANSPORT" and value != "slack":
         return "Only slack is supported"
     if key in {"OPENTAG_TIMEOUT_SECONDS", "OPENTAG_MAX_TIMEOUT_SECONDS", "OPENTAG_BACKEND_ATTEMPTS"} and (not value.isascii() or not value.isdigit() or int(value) < 1):
@@ -120,6 +141,8 @@ def validation_error(key: str, value: str) -> str | None:
             return "Select one or more comma-separated Slack channel IDs"
     if key == "SLACK_TEAM_ID" and value and not re.fullmatch(r"T[A-Z0-9]+", value):
         return "Use a Slack workspace Team ID"
+    if key == "SLACK_ENTERPRISE_ID" and value and not re.fullmatch(r"E[A-Z0-9]+", value):
+        return "Use a Slack organization ID starting with E"
     if key == "SLACK_APP_ID" and value and not re.fullmatch(r"A[A-Z0-9]+", value):
         return "Use a Slack App ID"
     if key == "MFS_URL":
@@ -189,7 +212,40 @@ def update_config(path: Path, changes: dict[str, str], *, only_missing: bool = F
     try:
         values = load_config(path)
         values.update({key: value for key, value in changes.items() if not only_missing or key not in values})
+        align_default_backend(values, changes)
         save_config(path, values)
         return values
     finally:
         lock.unlink(missing_ok=True)
+
+
+def align_default_backend(values: dict[str, str], changes: dict[str, str]) -> None:
+    """Keep the default backend and the default model naming the same backend."""
+    default_model = values.get("OPENTAG_DEFAULT_MODEL", "")
+    model_backend = default_model.partition(":")[0]
+    if "OPENTAG_DEFAULT_MODEL" in changes and model_backend in BACKENDS:
+        values["OPENTAG_BACKEND"] = model_backend
+    elif "OPENTAG_BACKEND" in changes and model_backend and model_backend != values.get("OPENTAG_BACKEND"):
+        values["OPENTAG_DEFAULT_MODEL"] = ""
+
+
+def migrate_file_delivery(home: Path, path: Path) -> bool:
+    """Version 1: persist the new default without replacing an operator's choice."""
+    marker = home / "state/migrations/file-delivery-v1.json"
+    try:
+        checkpoint = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        checkpoint = {}
+    if isinstance(checkpoint, dict) and checkpoint.get("version") == "1":
+        return False
+    update_config(path, {"OPENTAG_FILE_DELIVERY": "local+slack"}, only_missing=True)
+    saved = read_config(path)
+    mode = saved.get("OPENTAG_FILE_DELIVERY", "")
+    if mode not in {"local", "local+slack"}:
+        raise RuntimeError(
+            f"Invalid OPENTAG_FILE_DELIVERY value {mode!r}; "
+            "run tag config set OPENTAG_FILE_DELIVERY local+slack"
+        )
+    # Atomic checkpoint comes last. Interrupted writes can be retried safely.
+    save_config(marker, {"version": "1"})
+    return True
