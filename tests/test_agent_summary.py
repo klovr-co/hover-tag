@@ -25,7 +25,8 @@ class SummaryTests(unittest.TestCase):
                 emit({"type": "message_complete", "phase": "final_answer",
                       "text": "Launch remains blocked by missing approval."})
                 return "completed", ""
-            with self.subTest(backend=backend), patch.object(agent_summary, adapter) as factory:
+            with self.subTest(backend=backend), patch.object(agent_summary, adapter) as factory, \
+                    patch("scripts.opentag_agent.backend_command", side_effect=lambda name: [name]):
                 factory.return_value.run.side_effect = run
                 self.assertEqual(agent_summary.summarize_reply(answer, backend, "selected-model"),
                                  "Launch remains blocked by missing approval.")
@@ -40,7 +41,8 @@ class SummaryTests(unittest.TestCase):
             def run(_prompt, **kwargs):
                 kwargs["emit"]({"type": "message_complete", "phase": "final_answer", "text": answer})
                 return status, ""
-            with self.subTest(status=status, answer=answer), patch.object(agent_summary, "CodexAppServer") as factory:
+            with self.subTest(status=status, answer=answer), patch.object(agent_summary, "CodexAppServer") as factory, \
+                    patch("scripts.opentag_agent.backend_command", side_effect=lambda name: [name]):
                 factory.return_value.run.side_effect = run
                 self.assertEqual("", agent_summary.summarize_reply("Delivered answer", "codex", None))
 

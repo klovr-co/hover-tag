@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import json
 import tempfile
 import unittest
@@ -28,7 +29,8 @@ class ChannelNameCacheTests(unittest.TestCase):
         self.assertEqual(3, api.call_count)
         self.assertEqual({}, cache.read(self.home, "TOTHER"))
         path = self.home / "state/slack-channel-names/T1/C1.json"
-        self.assertEqual(0o600, path.stat().st_mode & 0o777)
+        if os.name != "nt":
+            self.assertEqual(0o600, path.stat().st_mode & 0o777)
         self.assertNotIn("fixture", path.read_text(encoding="utf-8"))
 
     def test_partial_failure_retries_only_missing_names_and_marks_after_verification(self):

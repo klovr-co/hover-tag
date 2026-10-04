@@ -32,11 +32,11 @@ class ArtifactTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw).resolve()
             for name in ("ok.txt", "local.txt", "failed.txt", "large.txt"):
-                (root / name).write_text("ok")
+                (root / name).write_text("ok", encoding="utf-8")
             (root / "large.txt").write_bytes(b"x" * 11)
             manifest = root / "manifest.json"
             manifest.write_text(json.dumps([{"path": str(root / name), "attach": name != "local.txt"}
-                for name in ("ok.txt", "local.txt", "failed.txt", "large.txt")]))
+                for name in ("ok.txt", "local.txt", "failed.txt", "large.txt")]), encoding="utf-8")
             client = MagicMock()
             client.files_upload_v2.side_effect = [{"files": [{"permalink": "https://example.slack.com/files/F1/ok.txt"}]}, RuntimeError("offline")]
             artifacts = []
@@ -49,7 +49,8 @@ class ArtifactTests(unittest.TestCase):
 
     def test_both_summary_backends_receive_status_but_no_paths_or_urls(self):
         for backend, adapter in (("codex", "CodexAppServer"), ("claude", "ClaudeAgentRun")):
-            with self.subTest(backend=backend), patch.object(agent_summary, adapter) as factory:
+            with self.subTest(backend=backend), patch.object(agent_summary, adapter) as factory, \
+                    patch("scripts.opentag_agent.backend_command", side_effect=lambda name: [name]):
                 def run(prompt, **kwargs):
                     payload = json.loads(prompt)
                     self.assertEqual(payload["artifacts"], [{"name": "plan.pdf", "kind": "file", "delivery": "upload_failed", "available_locally": True}])
@@ -57,7 +58,7 @@ class ArtifactTests(unittest.TestCase):
                     return "completed", ""
                 factory.return_value.run.side_effect = run
                 result = agent_summary.summarize_reply("Attached the plan.", backend, None, artifacts=[{
-                    "name": "plan.pdf", "kind": "file", "delivery": "upload_failed", "local_path": "/private/plan.pdf",
+                    "name": "plan.pdf", "kind": "file", "delivery": "upload_failed", "local_path": str(Path("/private/plan.pdf").resolve()),
                     "url": "https://example.slack.com/files/F1/plan.pdf"}])
                 self.assertIn("upload failed", result)
 

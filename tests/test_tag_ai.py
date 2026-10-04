@@ -390,12 +390,12 @@ class SetupStepTests(Fixture):
 
     def test_setup_rejects_unsupported_thinking_without_saving(self) -> None:
         self.machine()
-        before = self.config.read_text()
+        before = self.config.read_text(encoding="utf-8")
         for model in ("codex:gpt-5.5", "claude:claude-opus-5-5"):
             with self.subTest(model=model), ProtocolClient([{"answer": {"value": model, "effort": "max"}}]):
                 with self.assertRaisesRegex(ValueError, "doesn't offer"):
                     tag_ai.setup_step(self.home, self.config)
-                self.assertEqual(before, self.config.read_text())
+                self.assertEqual(before, self.config.read_text(encoding="utf-8"))
 
     def test_cli_setup_offers_thinking_for_both_backends(self) -> None:
         self.machine()

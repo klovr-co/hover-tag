@@ -79,13 +79,13 @@ class TagInstanceTests(unittest.TestCase):
                 def publish_other_tag(source, target):
                     self.assertEqual(target, destination)
                     target.mkdir()
-                    (target / "keep.txt").write_text("other creator")
+                    (target / "keep.txt").write_text("other creator", encoding="utf-8")
                     raise OSError(code, "Directory exists", str(target))
 
                 with patch.object(tag_instances.os, "rename", side_effect=publish_other_tag):
                     with self.assertRaisesRegex(ValueError, "already exists; its configuration was preserved"):
                         tag_instances.create(self.root, tag_id)
-                self.assertEqual((destination / "keep.txt").read_text(), "other creator")
+                self.assertEqual((destination / "keep.txt").read_text(encoding="utf-8"), "other creator")
                 self.assertEqual(list(destination.parent.glob(f".{tag_id}-*")), [])
 
     def test_creation_keeps_unrelated_io_errors_and_can_retry(self) -> None:

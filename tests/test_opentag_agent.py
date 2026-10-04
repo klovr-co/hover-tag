@@ -470,7 +470,8 @@ class ClaudePrintModelTests(unittest.TestCase):
         for model in (None, "default", "opus"):
             with self.subTest(model=model), patch.object(
                 opentag_agent, "stream_command", return_value=(0, "ok", True, False)
-            ) as stream, patch.object(opentag_agent.subprocess, "run") as run:
+            ) as stream, patch.object(opentag_agent.subprocess, "run") as run, \
+                    patch.object(opentag_agent, "backend_command", side_effect=lambda name: [name]):
                 run.return_value = SimpleNamespace(stdout="", returncode=0)
                 kwargs = dict(skill_dir=Path('/skill'), workdir=Path('/work'),
                               attachments_dir=None, timeout=30, model=model)

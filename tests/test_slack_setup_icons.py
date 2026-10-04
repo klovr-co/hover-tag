@@ -104,10 +104,10 @@ class SetupPicturesTests(unittest.TestCase):
     def test_expired_cache_survives_network_failure_but_never_crosses_identities(self):
         result = self.pictures()
         record_path = next((self.home / "state").glob("setup-icons-v*.json"))
-        record = json.loads(record_path.read_text())
+        record = json.loads(record_path.read_text(encoding="utf-8"))
         for kind in ("workspace", "owner"):
             record[kind]["checked"] = 0
-        record_path.write_text(json.dumps(record))
+        record_path.write_text(json.dumps(record), encoding="utf-8")
         self.api.side_effect = RuntimeError("offline")
         self.assertEqual(result, self.pictures())
         self.assertFalse(any(self.pictures({**CONNECTION, "SLACK_ALLOWED_USER_IDS": "U2"}).values()))
