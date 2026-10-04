@@ -58,7 +58,7 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           uv run --with slack-bolt==1.30.0 --with PyYAML==6.0.3 --with questionary==2.1.1 --with psutil==7.0.0 \
-            --with tomli==2.2.1 --with pytest --with pytest-timeout \
+            --with tomli==2.2.1 --with "PyJWT[crypto]==2.10.1" --with pytest --with pytest-timeout \
             python -m pytest tests -p no:cacheprovider -q -rfE --timeout 120 --timeout-method thread
 
 
