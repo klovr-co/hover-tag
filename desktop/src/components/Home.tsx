@@ -1,13 +1,20 @@
 // Copyright 2026 klovr.co
 // SPDX-License-Identifier: Apache-2.0
-// Every Tag on this computer, grouped by Slack workspace.
-import { useState } from "react";
+// Every Tag on this computer, grouped by Slack workspace, under the sky.
+import type { AIStatus } from "../lib/ai";
 import type { Bridge } from "../lib/bridge";
-import { groups, status, STATUS_LABEL, title, type Group, type TagRow } from "../lib/protocol";
+import {
+  effortLabel, liveRows, modelText, quietLine, roster, rowLine, summary, type ActivityItem, type QuietLine,
+} from "../lib/home";
+import { groups, problemText, status, title, type Group, type TagRow } from "../lib/protocol";
 import type { Tags } from "../lib/tags";
-import { Avatar, ErrorLine, Icon, MoreMenu, Primary, Secondary, Switch, tagIcon, WorkspaceIcon } from "./ui";
+import type { UpdateState } from "../lib/updates";
+import teamArt from "../assets/art/tag-team.png";
+import fiveTags from "../assets/art/five-tags.png";
+import { Avatar, ErrorLine, Icon, MOON, Primary, Sky, Switch, tagIcon, WorkspaceMark } from "./ui";
+import { UpdateNotice } from "./UpdateNotice";
 
-const DOT = { online: "var(--green)", offline: "var(--secondary)", setup: "var(--orange)", attention: "var(--red)" };
+export const HOW_TAG_WORKS = "https://hover.team/tag/how-tag-works";
 
 /** The folder people open: the Tag's working folder, which holds its private `.tag` data. */
 export function workingFolder(row: TagRow & { home?: string }) {
@@ -18,135 +25,206 @@ export function workingFolder(row: TagRow & { home?: string }) {
 interface Props {
   api: Bridge;
   tags: Tags;
+  reports: Record<string, AIStatus>;
+  problems: Record<string, string | null>;
+  activity: Record<string, ActivityItem[]>;
+  firstName: string | null;
+  update: UpdateState;
+  /** The installed Tag is too old for this app. */
+  outdated: boolean;
+  runUpdate: () => void;
   add: () => void;
   finishSetup: (row: TagRow) => void;
-  showLogs: (row: TagRow) => void;
+  open: (row: TagRow) => void;
+  fixAI: (row: string) => void;
   showSettings: () => void;
+  now?: Date;
 }
 
-export function Home({ api, tags, add, finishSetup, showLogs, showSettings }: Props) {
-  const online = tags.rows.filter((r) => r.state === "running").length;
-  const [renaming, setRenaming] = useState<string | null>(null);
+export function Home(props: Props) {
+  const { api, tags, problems, activity, firstName, update, outdated, add, finishSetup, open, showSettings } = props;
+  const rows = tags.rows;
+  const setup = rows.filter((row) => status(row) === "setup");
+  const live = liveRows(rows);
+  const urgent = outdated || update.status === "failed";
+  const sum = summary(rows);
+  const { shown, extra } = roster(rows);
+  const running = live.find((row) => row.state === "running");
   return (
-    <div className="stack gap-20">
-      <div className="row gap-10">
-        <img src={tagIcon} alt="" width={30} height={30} style={{ borderRadius: 7, imageRendering: "pixelated" }} />
-        <div className="stack">
-          <div className="title3" style={{ fontSize: 17, fontWeight: 700 }}>Tag</div>
-          <div className="caption secondary">
-            {tags.rows.length ? `${online} of ${tags.rows.length} online` : "No Tags yet"}
+    <>
+      <Sky kind="home">
+        <div className="sky-row">
+          {rows.length > 0 && (
+            <span className="roster" aria-hidden="true">
+              {shown.map((row) => <Avatar key={row.id} row={row} size={36} badge={false} className="" />)}
+              {extra > 0 && <span className="more-n">+{extra}</span>}
+            </span>
+          )}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <h2>Your Tags</h2>
+            <div className="sum"><span className={sum.on ? "sq" : "sq off"} />{sum.text}</div>
           </div>
+          <button className="sky-btn" aria-label="Settings" title="Settings" onClick={showSettings}><Icon name="gear" size={16} /></button>
+          <button className={rows.length > 2 && !setup.length && !urgent ? "add solid" : "add"} onClick={add}>
+            <Icon name="plus" />Add Tag
+          </button>
         </div>
-        <div className="spacer" />
-        <button className="icon-btn" title="Settings" aria-label="Settings" onClick={showSettings}><Icon name="gear" /></button>
-        <button className="icon-btn" title="Refresh" aria-label="Refresh" onClick={() => void tags.refresh()}><Icon name="refresh" /></button>
-        <Primary title="Add Tag" icon="plus" onClick={add} />
-      </div>
-      {tags.loaded && tags.rows.length === 0 && (
-        <div className="card stack gap-10" style={{ alignItems: "center", padding: "36px 20px", textAlign: "center" }}>
-          <Avatar row={null} size={56} />
-          <div className="headline">Bring your first Tag to Slack</div>
-          <div className="secondary">Connect a workspace and Tag sets up its own Slack app.</div>
-          <div style={{ marginTop: 4 }}><Primary title="Add Tag" icon="plus" onClick={add} /></div>
-        </div>
-      )}
-      {groups(tags.rows).map((group) => (
-        <div key={group.key} className="stack gap-8">
-          <WorkspaceHeader group={group} tags={tags} />
-          <div className="card" style={{ overflow: "visible" }}>
-            {group.rows.map((row, index) => (
-              <div key={row.id}>
-                {index > 0 && <div className="divider" style={{ marginLeft: 62 }} />}
-                <TagRowView api={api} row={row} tags={tags} renaming={renaming === row.id}
-                  setRenaming={(on) => setRenaming(on ? row.id : null)}
-                  finishSetup={() => finishSetup(row)} showLogs={() => showLogs(row)} />
+      </Sky>
+      <div className="body">
+        <UpdateNotice state={update} outdated={outdated} run={props.runUpdate} />
+        {rows.length > 2 && (
+          <Quiet line={quietLine(rows, problems, activity, props.now ?? new Date(), firstName)} open={open} rows={rows}
+            fix={props.fixAI} />
+        )}
+        {tags.loaded && rows.length === 0 && (
+          <div className="card empty">
+            <img src={teamArt} alt="The Tag characters" />
+            <h3>Bring your first Tag to Slack</h3>
+            <p>Connect a workspace and Tag sets up its own Slack app.</p>
+            <Primary title="Add your first Tag" icon="plus" onClick={add} />
+          </div>
+        )}
+        {setup.length > 0 && (
+          <div className="section">
+            <div className="sec-head"><h3>Finish setting up</h3><span className="meta">{setup.length === 1 ? "1 Tag" : `${setup.length} Tags`}</span></div>
+            <div className="card todo">
+              {setup.map((row) => (
+                <div key={row.id} className="r">
+                  <Avatar row={row} />
+                  <div className="txt">
+                    <span className="name"><span className="nm">{title(row)}</span></span>
+                    <span className="sub"><span className="needs">Not in Slack yet</span>
+                      {row.workspace_name && <><span>·</span><span>{row.workspace_name}</span></>}</span>
+                  </div>
+                  <button className={`p-btn ${urgent ? "soft" : "ink"} sm`} disabled={tags.busy.has(row.id)} onClick={() => finishSetup(row)}>
+                    Continue<Icon name="arrow" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {groups(live).map((group) => (
+          <WorkspaceCard key={group.key} group={group} {...props} />
+        ))}
+        {rows.length > 0 && rows.length <= 2 && (
+          <>
+            {running && (
+              <div className="section">
+                <div className="sec-head"><h3>Try it in Slack</h3><span className="meta">in a channel you picked</span></div>
+                <div className="thread">
+                  <div className="smsg">
+                    <span className="you"><Icon name="user" size={16} /></span>
+                    <div>
+                      <div className="who">You<span>now</span></div>
+                      <p><span className="mention">@{title(running)}</span> pull this thread into a launch checklist with owners.</p>
+                    </div>
+                  </div>
+                </div>
               </div>
-            ))}
-          </div>
-        </div>
-      ))}
-      {tags.error && <ErrorLine>{tags.error}</ErrorLine>}
-    </div>
-  );
-}
-
-function WorkspaceHeader({ group, tags }: { group: Group; tags: Tags }) {
-  const running = group.rows.filter((r) => r.state === "running").length;
-  const startable = group.rows.filter((r) => status(r) !== "setup").length;
-  const all = running >= startable;
-  return (
-    <div className="row gap-8" style={{ padding: "0 4px" }}>
-      <WorkspaceIcon path={group.icon} />
-      <span className="headline" style={{ fontSize: 12 }}>{group.label}</span>
-      <span className="count">{running}/{group.rows.length}</span>
-      <div className="spacer" />
-      {group.key && startable > 1 && (
-        <button className="link-btn" disabled={tags.busy.has(group.key)}
-          onClick={() => void tags.workspace(group.key, all ? "stop" : "start")}>
-          <Icon name={all ? "stop" : "play"} size={11} />{all ? "Stop all" : "Start all"}
-        </button>
-      )}
-    </div>
-  );
-}
-
-interface RowProps {
-  api: Bridge;
-  row: TagRow;
-  tags: Tags;
-  renaming: boolean;
-  setRenaming: (on: boolean) => void;
-  finishSetup: () => void;
-  showLogs: () => void;
-}
-
-function TagRowView({ api, row, tags, renaming, setRenaming, finishSetup, showLogs }: RowProps) {
-  const busy = tags.busy.has(row.id);
-  const state = status(row);
-  const [name, setName] = useState(row.slack_name ?? "");
-  const command = `tag ${row.nickname ?? row.id}`;
-  const save = async () => { if (await tags.rename(row, name)) setRenaming(false); };
-  const menu: [string, () => void][] = [
-    ...(row.slack_name ? [["Rename…", () => { setName(row.slack_name ?? ""); setRenaming(true); }] as [string, () => void]] : []),
-    ["Show logs", showLogs],
-    ["Copy command", () => void api.copy(`${command} start`)],
-    ["Show working folder", () => void api.open(workingFolder(row))],
-  ];
-  return (
-    <div className="row gap-12" style={{ padding: "10px 12px" }} title={command}>
-      <Avatar row={row} />
-      {renaming ? (
-        <>
-          <input className="field" autoFocus placeholder="Name in Slack" value={name} aria-label="Name in Slack"
-            onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter" && name.trim()) void save(); if (e.key === "Escape") setRenaming(false); }} />
-          <Secondary title="Cancel" onClick={() => setRenaming(false)} />
-          <Primary title="Save" disabled={busy || !name.trim()} onClick={() => void save()} />
-        </>
-      ) : (
-        <>
-          <div className="stack gap-4" style={{ minWidth: 0, flex: 1 }}>
-            <div className="row gap-6">
-              <span style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title(row)}</span>
-              {row.main && <span className="pill main" title="tag start without a name uses this Tag">Main</span>}
-            </div>
-            <div className="row gap-6 caption secondary">
-              <span className="dot" style={{ background: DOT[state] }} />
-              <span>{STATUS_LABEL[state]}</span>
-              {row.nickname && <><span>·</span><span className="mono">tag {row.nickname}</span></>}
-            </div>
-          </div>
-          <div className="row" style={{ width: 112, justifyContent: "flex-end" }}>
-            {state === "setup" ? (
-              <button className="finish" disabled={busy} onClick={finishSetup}>Finish setup</button>
-            ) : (
-              <Switch on={row.state === "running"} busy={busy} label={`${row.state === "running" ? "Stop" : "Start"} ${title(row)}`}
-                onClick={() => void tags.toggle(row)} />
             )}
-          </div>
-          <MoreMenu label={`More for ${title(row)}`} items={menu} />
-        </>
-      )}
+            <button className="ghost-add" onClick={add}>
+              <span className="gi"><Icon name="plus" /></span>
+              <span><b>Add another Tag</b><span className="meta">Connect another workspace, or add a second Tag to {live[0]?.workspace_name || "the same one"}.</span></span>
+            </button>
+            <div className="home-foot">
+              <img className="tags-row" src={fiveTags} alt="" />
+              <button className="link" onClick={() => void api.open(HOW_TAG_WORKS)}>New to Tag? Read how Tag works <Icon name="arrow" /></button>
+            </div>
+          </>
+        )}
+        {tags.error && <ErrorLine>{tags.error}</ErrorLine>}
+      </div>
+    </>
+  );
+}
+
+/** The one quiet line between the header and the cards. */
+export function Quiet({ line, rows, open, fix }: { line: QuietLine; rows: TagRow[]; open: (row: TagRow) => void; fix: (tag: string) => void }) {
+  if (line.kind === "ai") {
+    return (
+      <div className="hello warn" role="status">
+        <Icon name="warn" />
+        <span>{line.cause ? <><b>{line.cause}</b> · {line.who} can't answer</> : <><b>{line.who} can't answer</b> · {line.causes.join(", ")}</>}</span>
+        <button className="link" onClick={() => fix(line.tag)}>Fix</button>
+      </div>
+    );
+  }
+  if (line.kind === "reply") {
+    const row = rows.find((r) => r.id === line.tag)!;
+    return (
+      <button className="hello" onClick={() => open(row)}>
+        <Avatar row={line.avatar} size={20} badge={false} className="" />
+        <span><b>{line.name}</b> {line.today ? "just" : "last"} replied in <span className="chan">{line.place}</span></span>
+        <span className="when">{line.when}</span>
+      </button>
+    );
+  }
+  return (
+    <div className="hello">
+      <picture>
+        <source srcSet={MOON} media="(prefers-color-scheme: dark)" />
+        <img src={tagIcon} alt="" />
+      </picture>
+      <span><b>{line.hello}{line.name ? `, ${line.name}` : ""}.</b> {line.listening ? "Your Tags are listening in Slack." : "Your Tags are taking a break."}</span>
+    </div>
+  );
+}
+
+function WorkspaceCard({ group, tags, ...props }: Props & { group: Group }) {
+  const running = group.rows.filter((row) => row.state === "running").length;
+  const all = running >= group.rows.length;
+  return (
+    <div className="card">
+      <div className="ws-head">
+        <WorkspaceMark label={group.label} icon={group.icon} />
+        <h3>{group.label}</h3>
+        <span className="meta">{running} of {group.rows.length} online</span>
+        <span className="spacer" />
+        {group.key && (
+          <button className="link" disabled={tags.busy.has(group.key)} aria-label={`${all ? "Stop" : "Start"} all Tags in ${group.label}`}
+            onClick={() => void tags.workspace(group.key, all ? "stop" : "start")}>
+            <Icon name={all ? "stop" : "play"} size={10} />{all ? "Stop all" : "Start all"}
+          </button>
+        )}
+      </div>
+      {group.rows.map((row) => <TagRowView key={row.id} row={row} tags={tags} report={props.reports[row.id]}
+        problem={props.problems[row.id] ?? null} open={() => props.open(row)} />)}
+    </div>
+  );
+}
+
+const STATE_WORD = { online: "online", offline: "offline", attention: "stopped", setup: "not in Slack yet" };
+
+/** Two lines: the name and its model, then what it's for, unless something needs you. */
+export function TagRowView({ row, tags, report, problem, open }: {
+  row: TagRow; tags: Tags; report?: AIStatus; problem: string | null; open: () => void;
+}) {
+  const state = status(row);
+  const on = row.state === "running";
+  const model = modelText(row, report);
+  const line = rowLine(row, problem, problemText(row));
+  const backend = report?.default_model.backend_name ?? row.default_model_label?.split(" · ")[0] ?? "";
+  const effort = model?.effort ? effortLabel(model.effort) : "";
+  const label = [`Open ${title(row)}`, STATE_WORD[state], model?.model, effort && `${effort} thinking`].filter(Boolean).join(", ");
+  return (
+    <div className="r click" role="button" tabIndex={0} aria-label={label} onClick={open}
+      onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); open(); } }}>
+      <Avatar row={row} />
+      <div className="txt">
+        <span className="name">
+          <span className="nm">{title(row)}</span>
+          {model && (
+            <span className={problem ? "mname bad" : "mname"}
+              title={problem ?? `Default model${backend ? ` · ${backend}` : ""}${effort ? ` · ${effort} thinking` : ""}`}>{model.text}</span>
+          )}
+        </span>
+        {line.kind === "error" && <span className="sub bad"><Icon name="warn" /><span>{line.text}</span></span>}
+        {line.kind === "ai" && <span className="sub warnline"><Icon name="warn" /><span>{line.text}</span></span>}
+        {line.kind === "description" && <span className="desc-line">{line.text}</span>}
+      </div>
+      <Switch on={on} busy={tags.busy.has(row.id)} label={`${on ? "Stop" : "Start"} ${title(row)}`} onClick={() => void tags.toggle(row)} />
+      <span className="chev" aria-hidden="true"><Icon name="right" size={13} /></span>
     </div>
   );
 }

@@ -10,7 +10,7 @@ import {
 import { status as tagStatus, title, type TagRow } from "../lib/protocol";
 import { failureLine, type Tags } from "../lib/tags";
 import { ChangeAccount, ConnectionRow, LoadingLine, ModelPicker, type RowAction } from "./AI";
-import { Back, ErrorLine, Heading, Icon, Primary, Secondary } from "./ui";
+import { CompactSky, ErrorLine, Heading, Icon, Primary, Secondary } from "./ui";
 
 /** Tags that finished setup; the others have no agent settings yet. */
 export const configuredTags = (rows: TagRow[]) => rows.filter((row) => row.valid && tagStatus(row) !== "setup");
@@ -144,16 +144,16 @@ export function AISettings({ api, tags, initial, close }: { api: Bridge; tags: T
 
   if (!choices.length) {
     return (
-      <div className="stack gap-20">
-        <div className="row"><Back onClick={close} /></div>
-        <Heading title="No Tags yet" body="Each Tag has its own default model. Add a Tag first." />
-      </div>
+      <>
+        <CompactSky title="AI & models" sub="No Tags yet" back={close} />
+        <div className="body"><Heading title="No Tags yet" body="Each Tag has its own default model. Add a Tag first." /></div>
+      </>
     );
   }
   return (
-    <div className="stack gap-20">
-      <div className="row gap-10"><Back onClick={close} /><div className="spacer" /></div>
-      <Heading title="AI & models" />
+    <>
+    <CompactSky title="AI & models" sub={tagName} back={close} />
+    <div className="body">
       <div className="stack gap-6">
         <select className="field" aria-label="Tag" value={tagId} disabled={signingIn || saving}
           onChange={(e) => setTagId(e.target.value)} style={{ appearance: "auto" }}>
@@ -205,7 +205,7 @@ export function AISettings({ api, tags, initial, close }: { api: Bridge; tags: T
           <div className="stack gap-8">
             {gone && !picked && (
               <div className="row gap-6 callout" style={{ color: "var(--orange)" }} role="alert">
-                <Icon name="warning" />{models.default.label} isn't available from your connected accounts. Pick another so new tasks don't fail.
+                <Icon name="warn" />{models.default.label} isn't available from your connected accounts. Pick another so new tasks don't fail.
               </div>
             )}
             <ModelPicker groups={models.groups} value={value} unavailable={gone} disabled={saving || signingIn}
@@ -237,31 +237,6 @@ export function AISettings({ api, tags, initial, close }: { api: Bridge; tags: T
       {notice && <div className="row gap-6 callout" style={{ color: "var(--green)" }} role="status"><Icon name="check" />{notice}</div>}
       {error && <ErrorLine>{error}</ErrorLine>}
     </div>
-  );
-}
-
-/** The Settings row that opens AI & models, with a quick summary for the first Tag. */
-export function AISummaryRow({ api, tags, open }: { api: Bridge; tags: Tags; open: () => void }) {
-  const first = configuredTags(tags.rows)[0];
-  const [summary, setSummary] = useState("");
-  useEffect(() => {
-    if (!first) { setSummary("Set up a Tag to choose its model."); return; }
-    let live = true;
-    void api.tag(aiArgs(first.id, "--json")).then((r) => {
-      if (!live || r.code !== 0) return;
-      const report = parseStatus(r.stdout);
-      const many = configuredTags(tags.rows).length > 1 ? `${title(first)}: ` : "";
-      setSummary(`${many}${report.usable.length} of ${report.connections.length} connected · Default: ${choiceLabel(report.default_model)}`);
-    }).catch(() => {});
-    return () => { live = false; };
-  }, [api, first?.id, tags.rows, first]);
-  return (
-    <button className="card list-item" onClick={open} style={{ gap: 12 }}>
-      <span className="stack gap-4" style={{ flex: 1 }}>
-        <span style={{ fontWeight: 500 }}>AI & models</span>
-        <span className="caption secondary">{summary || "Connections and each Tag's default model"}</span>
-      </span>
-      <span className="tertiary"><Icon name="right" size={11} /></span>
-    </button>
+    </>
   );
 }

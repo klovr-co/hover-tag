@@ -28,6 +28,15 @@ export interface TagRow {
   keep_running?: boolean;
   main?: boolean;
   error?: string;
+  /** The one-line description people gave the Tag (its Slack app description). */
+  description?: string | null;
+  /** The Tag's default model, such as "codex:gpt-5.5", and how people read it. */
+  default_model?: string | null;
+  default_model_label?: string | null;
+  /** Just the model, such as "GPT-5.5". */
+  default_model_name?: string | null;
+  /** The thinking level the default model uses; null for models without levels. */
+  default_effort?: string | null;
 }
 
 export type Status = "online" | "offline" | "setup" | "attention";
@@ -53,6 +62,13 @@ export const STATUS_LABEL: Record<Status, string> = {
   setup: "Needs setup",
   attention: "Needs attention",
 };
+
+/** What went wrong with a Tag that needs attention, in its own words when Tag gave one. */
+export function problemText(row: TagRow) {
+  if (row.error) return row.error;
+  return row.state === "invalid_configuration" ? "Its settings can't be read"
+    : row.state === "invalid_tag" ? "This Tag's folder is damaged" : "Needs attention";
+}
 
 /** People see the Tag's Slack name and workspace; the ID is only for commands. */
 export const title = (row: TagRow) => row.slack_name || "New Tag";
@@ -161,7 +177,7 @@ export const INSTALL_STEPS = [
   { step: "python", title: "Preparing Python", detail: "A private copy, so your system stays untouched", weight: 0.15 },
   { step: "download", title: "Downloading Tag", detail: "The latest release, checked before it's used", weight: 0.1 },
   { step: "components", title: "Installing components", detail: "Slack connection and local search", weight: 0.3 },
-  { step: "memory", title: "Preparing local memory", detail: "Downloads a search model — the longest step", weight: 0.3 },
+  { step: "memory", title: "Preparing local memory", detail: "Downloads a search model, the longest step", weight: 0.3 },
   { step: "command", title: "Finishing up", detail: "Adding the tag command", weight: 0.05 },
 ] as const;
 

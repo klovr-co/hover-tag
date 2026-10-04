@@ -1,38 +1,58 @@
 // Copyright 2026 klovr.co
 // SPDX-License-Identifier: Apache-2.0
-// App settings, updates, and a Tag's recent logs.
-import { useCallback, useEffect, useState } from "react";
+// App settings, the one Tag update, and a Tag's recent logs.
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import type { AppInfo, Bridge } from "../lib/bridge";
+import { aiArgs, parseStatus } from "../lib/ai";
 import { parseJSON, title, type TagRow } from "../lib/protocol";
 import { failureLine, type Tags } from "../lib/tags";
-import { APP_CHANNELS, checkUpdate, installUpdate, isAppChannel, type Channel, type ProductUpdate } from "../lib/updates";
-import { AISummaryRow } from "./AISettings";
+import {
+  APP_CHANNELS, checkUpdate, installUpdate, isAppChannel, targetVersion,
+  type Channel, type ProductUpdate, type UpdateState,
+} from "../lib/updates";
+import building from "../assets/art/tag-building.png";
+import puzzled from "../assets/art/tag-puzzled.png";
+import { configuredTags } from "./AISettings";
 import { CommunityLinks } from "./CommunityLinks";
-import { Back, ErrorLine, Heading, Icon, Primary, Secondary, Spinner, Switch } from "./ui";
+import { CompactSky, ErrorLine, Icon, Primary, Secondary, Spinner, Switch, tagIcon } from "./ui";
 
-function Toggle({ label, detail, on, busy, onChange }: {
-  label: string; detail: string; on: boolean; busy?: boolean; onChange: (on: boolean) => void;
-}) {
+function SetRow({ label, detail, children }: { label: ReactNode; detail: ReactNode; children?: ReactNode }) {
   return (
-    <div className="list-item" style={{ gap: 16 }}>
-      <span className="stack gap-4" style={{ flex: 1 }}>
-        <span style={{ fontWeight: 500 }}>{label}</span>
-        <span className="caption secondary">{detail}</span>
-      </span>
-      <Switch on={on} busy={!!busy} label={label} onClick={() => onChange(!on)} />
+    <div className="r set" style={{ padding: "13px 14px", gap: 16 }}>
+      <div className="txt"><span className="label" style={{ fontSize: 14.5 }}>{label}</span><span className="sub wrap">{detail}</span></div>
+      {children}
     </div>
   );
 }
 
-const CHANNEL_LABEL: Record<Channel, string> = { stable: "Stable", beta: "Beta", alpha: "Alpha" };
+const Busy = ({ text }: { text: string }) => (
+  <span className="meta" style={{ display: "inline-flex", gap: 6, alignItems: "center" }}><Spinner small label={text} />{text}</span>
+);
+
+const UpToDate = () => (
+  <span className="meta" style={{ color: "var(--green)", fontWeight: 600, display: "inline-flex", gap: 4, alignItems: "center" }}>
+    <Icon name="check" size={12} />Up to date
+  </span>
+);
+
+export const CHANNEL_LABEL: Record<Channel, string> = { stable: "Stable", beta: "Beta", alpha: "Alpha" };
 const CHANNEL_DETAIL: Record<Channel, string> = {
   stable: "Tested releases. Recommended for most people.",
   beta: "New features a little earlier, once they're mostly finished.",
   alpha: "The newest changes as soon as they're released. Things may break.",
 };
 
+/** What switching to a channel would do, in a sentence. */
+export function previewText(name: string, preview: ProductUpdate) {
+  if (preview.runtime || preview.desktop) {
+    return `Switch to ${name} and update to Tag ${preview.version}. The app and your Tags update together, and your settings are kept.`;
+  }
+  if (preview.ahead) return `${name}'s newest release is older than Tag ${preview.current}. Tag keeps ${preview.current} and follows ${name} from its next release.`;
+  return `Switch to ${name}. You already have its newest release.`;
+}
+
 /** Choose the release channel the app and your Tags follow, after confirming what changes. */
-function ReleaseChannel({ api, appVersion, update, busy, setBusy, switched, setError }: {
+export function ReleaseChannel({ api, appVersion, update, busy, setBusy, switched, setError }: {
   api: Bridge; appVersion: string; update: ProductUpdate | null; busy: boolean;
   setBusy: (on: boolean) => void; switched: (done: ProductUpdate, restarting: boolean) => void; setError: (message: string) => void;
 }) {
@@ -41,7 +61,7 @@ function ReleaseChannel({ api, appVersion, update, busy, setBusy, switched, setE
   const following = update?.pinned ? null : update?.channel ?? null;
 
   const pick = async (channel: Channel) => {
-    if (channel === following) return;
+    if (channel === following) { setChoice(null); setPreview(null); return; }
     setChoice(channel);
     setPreview(null);
     setError("");
@@ -64,35 +84,31 @@ function ReleaseChannel({ api, appVersion, update, busy, setBusy, switched, setE
   };
   const name = choice ? CHANNEL_LABEL[choice] : "";
   const installs = preview && (preview.runtime || preview.desktop);
+  const shown = choice ?? following;
   return (
-    <div className="list-item stack gap-10" style={{ alignItems: "stretch" }}>
-      <div className="row gap-12">
-        <span className="stack gap-4" style={{ flex: 1 }}>
-          <span style={{ fontWeight: 500 }}>Release channel</span>
-          <span className="caption secondary">
-            {update?.pinned ? `Pinned to Tag ${update.current}. Choose a channel to follow one again.`
-              : following === "edge" ? "Following edge, chosen in the terminal. Tag.app doesn't follow edge; choose a channel to update the app too."
-              : isAppChannel(choice ?? following) ? CHANNEL_DETAIL[(choice ?? following) as Channel]
-              : "The app and your Tags follow the same channel."}
-          </span>
+    <div className="r set" style={{ padding: "13px 14px", gap: 16, flexWrap: "wrap" }}>
+      <div className="txt">
+        <span className="label" style={{ fontSize: 14.5 }}>Release channel</span>
+        <span className="sub wrap">
+          {update?.pinned && !choice ? `Pinned to Tag ${update.current}. Choose a channel to follow one again.`
+            : following === "edge" && !choice ? "Following edge, chosen in the terminal. Tag.app doesn't follow edge; choose a channel to update the app too."
+            : isAppChannel(shown) ? CHANNEL_DETAIL[shown] : "The app and your Tags follow the same channel."}
         </span>
-        <div className="segmented" role="radiogroup" aria-label="Release channel">
-          {APP_CHANNELS.map((channel) => (
-            <button key={channel} role="radio" aria-checked={(choice ?? following) === channel}
-              disabled={busy || !update} onClick={() => void pick(channel)}>{CHANNEL_LABEL[channel]}</button>
-          ))}
-        </div>
       </div>
-      {choice && !preview && <span className="caption secondary row gap-6"><Spinner small />Checking {name}…</span>}
+      <div className="segc" role="radiogroup" aria-label="Release channel">
+        {APP_CHANNELS.map((channel) => (
+          <button key={channel} role="radio" aria-checked={shown === channel}
+            disabled={busy || !update} onClick={() => void pick(channel)}>{CHANNEL_LABEL[channel]}</button>
+        ))}
+      </div>
+      {choice && !preview && <span className="caption secondary row gap-6" style={{ flexBasis: "100%" }}><Spinner small />Checking {name}…</span>}
       {choice && preview && (
-        <div className="well row gap-10">
-          <span className="caption" style={{ flex: 1 }}>
-            {installs ? `Switch to ${name} and update to Tag ${preview.version}. The app and your Tags update together, and your settings are kept.`
-              : preview.ahead ? `${name}'s newest release is older than Tag ${preview.current}. Tag keeps ${preview.current} and follows ${name} from its next release.`
-              : `Switch to ${name}. You already have its newest release.`}
-          </span>
-          <Secondary title="Cancel" disabled={busy} onClick={() => { setChoice(null); setPreview(null); }} />
-          <Primary title={busy ? "Switching…" : installs ? "Switch and update" : "Switch"} disabled={busy} onClick={() => void confirm()} />
+        <div className="ch-confirm">
+          <span className="sub wrap" style={{ flex: 1, color: "var(--text)" }}>{previewText(name, preview)}</span>
+          <button className="p-btn quiet sm" disabled={busy} onClick={() => { setChoice(null); setPreview(null); }}>Cancel</button>
+          <button className="p-btn ink sm" disabled={busy} onClick={() => void confirm()}>
+            {busy ? "Switching…" : installs ? "Switch and update" : "Switch"}
+          </button>
         </div>
       )}
     </div>
@@ -104,17 +120,19 @@ interface SettingsProps {
   info: AppInfo;
   tags: Tags;
   close: () => void;
+  update: UpdateState;
+  check: () => void;
+  runUpdate: () => void;
+  /** A channel switch finished; Home and Settings show the result. */
+  switched: (done: ProductUpdate) => void;
   /** Opens Settings → AI & models. */
   openAI?: () => void;
 }
 
-export function Settings({ api, info, tags, close, openAI }: SettingsProps) {
+export function Settings({ api, info, tags, close, update, check, runUpdate, switched, openAI }: SettingsProps) {
   const [login, setLogin] = useState(false);
   const [keepBusy, setKeepBusy] = useState(false);
   const [tagVersion, setTagVersion] = useState("");
-  const [update, setUpdate] = useState<ProductUpdate | null>(null);
-  const [checking, setChecking] = useState(false);
-  const [upgrading, setUpgrading] = useState(false);
   const [switching, setSwitching] = useState(false);
   const [error, setError] = useState("");
 
@@ -125,75 +143,101 @@ export function Settings({ api, info, tags, close, openAI }: SettingsProps) {
     }).catch(() => {});
   }, [api]);
 
-  const check = useCallback(async () => {
-    setChecking(true);
-    setError("");
-    setUpdate(null);
-    try { setUpdate(await checkUpdate(api, info.version)); }
-    catch (error) { setError(String(error)); }
-    finally { setChecking(false); }
-  }, [api, info.version]);
+  // Opening Settings checks for an update.
+  useEffect(() => {
+    if (update.status === "idle" || update.status === "current" || update.status === "available") check();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  useEffect(() => { void check(); }, [check]);
-
-  const upgrade = async () => {
-    setUpgrading(true);
-    setError("");
-    try {
-      const done = await installUpdate(api, info.version);
-      setUpdate(done);
-      setTagVersion(done.version);
-    } catch (error) {
-      setUpdate(null);
-      setError(String(error));
-    } finally {
-      setUpgrading(false);
-      void tags.refresh();
-    }
+  const version = update.update?.current || tagVersion || info.version;
+  const target = targetVersion(update);
+  const row: Record<UpdateState["status"], [string, string, ReactNode]> = {
+    idle: [`Tag ${version}`, "One version for the app and your Tags.", <Secondary small title="Check for updates" onClick={check} />],
+    checking: [`Tag ${version}`, "Checking for updates…", <Busy text="Checking…" />],
+    available: [`Tag ${target} is available`, `Updates the app and your Tags together, and restarts the app if needed. Your settings are kept. You have ${version}.`,
+      <Primary small title="Update Tag" onClick={runUpdate} />],
+    updating: [`Updating to ${target}…`, update.phase === "app" ? "Restarting the app to finish. Your Tags keep running." : "Updating your Tags. They restart on the new version.",
+      <Spinner small label="Updating" />],
+    failed: ["The update didn't finish", `Your settings are kept. Try again to finish updating${target ? ` to ${target}` : ""}.`,
+      <Primary small title="Try again" onClick={runUpdate} />],
+    done: [`Tag ${version}`, "Up to date. The app and your Tags are on the same version.", <UpToDate />],
+    current: [`Tag ${version}`, "Up to date. The app and your Tags are on the same version.", <UpToDate />],
   };
-  const available = update && (update.runtime || update.desktop);
-
+  const [label, detail, control] = row[update.status];
+  const art = update.status === "failed" ? puzzled : update.status === "updating" ? building : tagIcon;
   return (
-    <div className="stack gap-20">
-      <div className="row gap-10">
-        <Back onClick={close} />
-        <div className="spacer" />
-      </div>
-      <Heading title="Settings" />
-      <div className="card">
-        <Toggle label="Open Tag at login" detail="Keep Tag in the menu bar after you log in."
-          on={login} onChange={(on) => void api.openAtLogin(on).then(setLogin).catch((e) => setError(String(e)))} />
-        <Toggle label="Keep Tags running"
-          detail="Start the Tags you switched on after you log in, and restart any that stop. Works even when this app is closed."
-          on={tags.keepRunning} busy={keepBusy}
-          onChange={async (on) => { setKeepBusy(true); await tags.setAutostart(on); setKeepBusy(false); }} />
-      </div>
-      {openAI && <AISummaryRow api={api} tags={tags} open={openAI} />}
-      <div className="stack gap-8">
-        <div className="headline" style={{ padding: "0 4px" }}>Updates</div>
-        <div className="card">
-        <div className="list-item" style={{ gap: 12 }}>
-          <span className="stack gap-4" style={{ flex: 1 }}>
-            <span style={{ fontWeight: 500 }}>
-              {available ? `Tag ${update.version} is available` : `Tag ${tagVersion || info.version}`}
-            </span>
-            <span className="caption secondary">
-              {available ? "Updates Tag and restarts the app if needed. Your settings are kept."
-                : update ? "Tag is up to date" : "One update for the app and your Tags"}
-            </span>
-          </span>
-          {upgrading ? <><Spinner small /><span className="caption secondary">Updating…</span></>
-            : available ? <Primary title="Update Tag" onClick={() => void upgrade()} />
-            : <Secondary title={checking ? "Checking…" : "Check for updates"} disabled={checking || switching} onClick={() => void check()} />}
+    <>
+      <CompactSky title="Settings" sub={`Tag ${version}`} back={close} />
+      <div className="body">
+        <div className="section">
+          <div className="sec-head"><h3>General</h3></div>
+          <div className="card">
+            <SetRow label="Open Tag at login" detail="Keep Tag in the menu bar after you log in.">
+              <Switch on={login} busy={false} label="Open Tag at login"
+                onClick={() => void api.openAtLogin(!login).then(setLogin).catch((e) => setError(String(e)))} />
+            </SetRow>
+            <SetRow label="Keep Tags running"
+              detail="Start the Tags you switched on after you log in, and restart any that stop. Works even when this app is closed.">
+              <Switch on={tags.keepRunning} busy={keepBusy} label="Keep Tags running"
+                onClick={async () => { setKeepBusy(true); await tags.setAutostart(!tags.keepRunning); setKeepBusy(false); }} />
+            </SetRow>
+          </div>
         </div>
-        <ReleaseChannel api={api} appVersion={info.version} update={update} busy={switching || upgrading || checking}
-          setBusy={setSwitching} setError={setError}
-          switched={(done, restarting) => { setTagVersion(done.version); setUpdate(done); void tags.refresh(); if (!restarting) void check(); }} />
+        {openAI && (
+          <div className="section">
+            <div className="sec-head"><h3>AI &amp; models</h3></div>
+            <div className="card"><AISummaryRow api={api} tags={tags} open={openAI} /></div>
+          </div>
+        )}
+        <div className="section">
+          <div className="sec-head"><h3>Updates</h3></div>
+          <div className={update.status === "failed" ? "card upd-card failed" : "card upd-card"}>
+            <div className="r set" style={{ padding: "13px 14px", gap: 16 }}>
+              <img className="upd-icon" src={art} alt="" />
+              <div className="txt"><span className="label" style={{ fontSize: 14.5 }}>{label}</span><span className="sub wrap">{detail}</span></div>
+              {control}
+            </div>
+            {update.status === "updating" && <div className="upd-bar"><i style={{ width: update.phase === "app" ? "85%" : "40%" }} /></div>}
+            <ReleaseChannel api={api} appVersion={info.version} update={update.update}
+              busy={switching || update.status === "updating" || update.status === "checking"}
+              setBusy={setSwitching} setError={setError}
+              switched={(done, restarting) => { setTagVersion(done.version); switched(done); void tags.refresh(); if (!restarting) check(); }} />
+          </div>
         </div>
+        <div className="section">
+          <div className="sec-head"><h3>About</h3></div>
+          <div className="card" style={{ padding: "12px 14px", display: "flex", alignItems: "center", gap: 12 }}>
+            <div className="txt"><span className="label" style={{ fontSize: 14.5 }}>Enjoying Tag?</span><CommunityLinks api={api} /></div>
+          </div>
+        </div>
+        {(error || update.error || tags.error) && <ErrorLine>{error || update.error || tags.error}</ErrorLine>}
       </div>
-      {(error || tags.error) && <ErrorLine>{error || tags.error}</ErrorLine>}
-      <div className="divider" />
-      <CommunityLinks api={api} />
+    </>
+  );
+}
+
+/** The Settings row that opens AI & models, with a summary for the main Tag. */
+export function AISummaryRow({ api, tags, open }: { api: Bridge; tags: Tags; open: () => void }) {
+  const list = configuredTags(tags.rows);
+  const first = list.find((row) => row.main) ?? list[0];
+  const [summary, setSummary] = useState("");
+  useEffect(() => {
+    if (!first) { setSummary("Set up a Tag to choose its model."); return; }
+    let live = true;
+    void api.tag(aiArgs(first.id, "--json")).then((r) => {
+      if (!live || r.code !== 0) return;
+      const report = parseStatus(r.stdout);
+      setSummary(`${report.usable.length} of ${report.connections.length} connected · Default: ${report.default_model.label}`);
+    }).catch(() => {});
+    return () => { live = false; };
+  }, [api, first?.id, first]);
+  return (
+    <div className="r set click" role="button" tabIndex={0} aria-label="Open AI and models" onClick={open}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } }}
+      style={{ padding: "13px 14px", gap: 16, borderRadius: "inherit" }}>
+      <div className="txt"><span className="label" style={{ fontSize: 14.5 }}>AI &amp; models</span>
+        <span className="sub wrap">{summary || "Connections and each Tag's default model"}</span></div>
+      <span className="chev" aria-hidden="true"><Icon name="right" size={13} /></span>
     </div>
   );
 }
@@ -209,19 +253,14 @@ export function Logs({ api, row, close }: { api: Bridge; row: TagRow; close: () 
   useEffect(() => { void load(); }, [load]);
   const text = Object.entries(logs ?? {}).map(([name, lines]) => `── ${name} ──\n${lines.join("\n") || "No recent entries"}`).join("\n\n");
   return (
-    <div className="stack gap-14">
-      <div className="row gap-8">
-        <Back onClick={close} />
-        <div className="spacer" />
-        <button className="icon-btn" title="Refresh" aria-label="Refresh logs" onClick={() => void load()}><Icon name="refresh" /></button>
+    <>
+      <CompactSky title={title(row)} sub="Recent output from this Tag's services. Tokens are hidden." back={close}
+        right={<button className="sky-btn" title="Refresh" aria-label="Refresh logs" onClick={() => void load()}><Icon name="refresh" /></button>} />
+      <div className="body">
+        {logs === null && !error ? <Spinner /> : <pre className="logbox selectable" style={{ maxHeight: 340 }}>{text || "No logs yet."}</pre>}
+        {error && <ErrorLine>{error}</ErrorLine>}
+        <div className="foot"><span className="spacer" /><Secondary title="Copy" icon="copy" onClick={() => void api.copy(text)} /></div>
       </div>
-      <Heading title={`${title(row)} logs`} body="Recent output from this Tag's services. Tokens are hidden." />
-      {logs === null && !error ? <Spinner /> : <pre className="log tall selectable mono">{text || "No logs yet."}</pre>}
-      {error && <ErrorLine>{error}</ErrorLine>}
-      <div className="row gap-8">
-        <div className="spacer" />
-        <Secondary title="Copy" icon="copy" onClick={() => void api.copy(text)} />
-      </div>
-    </div>
+    </>
   );
 }

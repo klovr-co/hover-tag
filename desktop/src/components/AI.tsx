@@ -75,13 +75,13 @@ export function ConnectionRow({ connection: c, signIn, opened, busy, quiet, act,
           <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={line.text}>{line.text}</span>
         </div>
         {running && signIn.url && (
-          <div><button className="link-btn" onClick={() => open(signIn.url!)}>Open the sign-in page again</button></div>
+          <div><button className="link" onClick={() => open(signIn.url!)}>Open the sign-in page again</button></div>
         )}
         {!running && c.state !== "connected" && c.state !== "unsupported" && c.detail && (
           <div className="caption secondary">{c.detail}</div>
         )}
         {!running && c.state === "limited" && (
-          <div><button className="link-btn" onClick={() => open("https://chatgpt.com/settings/usage")}>Review usage</button></div>
+          <div><button className="link" onClick={() => open("https://chatgpt.com/settings/usage")}>Review usage</button></div>
         )}
         {result && result.status !== "connected" && <ResultLine result={result} name={c.name} />}
         {opened && !running && (action === "install" || action === "update") && (

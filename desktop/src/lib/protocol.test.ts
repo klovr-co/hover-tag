@@ -2,6 +2,8 @@
 // which tests/test_app_protocol.py checks real CLI output against.
 import { describe, expect, it } from "vitest";
 import list from "../../../protocol/examples/list.json";
+import logs from "../../../protocol/examples/logs.json";
+import aiStatus from "../../../protocol/examples/ai-status.json";
 import version from "../../../protocol/examples/version.json";
 import progress from "../../../protocol/examples/install-progress.txt?raw";
 import setup from "../../../protocol/examples/setup.jsonl?raw";
@@ -13,6 +15,8 @@ import {
 import { explainExit, initialSetup, setupReducer } from "./setup";
 import { droppedTags, failureLine } from "./tags";
 import { workingFolder } from "../components/Home";
+import { modelText, quietLine, rowLine, type ActivityItem } from "./home";
+import { parseStatus } from "./ai";
 
 describe("tag list", () => {
   it("reads the example, even after warnings", () => {
@@ -31,6 +35,14 @@ describe("tag list", () => {
     const rows = parseList(JSON.stringify(list));
     expect(groups(rows).map((g) => g.icon)).toEqual(["/Users/maya/Tag/t0klovr1-a0maya01/.tag/state/workspace-icon.png", null]);
     expect(groups([{ id: "a", valid: true, slack_workspace: "T1" }, { id: "b", valid: true, slack_workspace: "T1", workspace_icon: "/b.png" }])[0].icon).toBe("/b.png");
+  });
+
+  it("reads each Tag's description, model and thinking level for Home's rows", () => {
+    const [maya, unfinished] = parseList(JSON.stringify(list));
+    expect(modelText(maya)).toEqual({ text: "GPT-5.5 · med", model: "GPT-5.5", effort: "medium" });
+    expect(rowLine(maya, null, "")).toEqual({ kind: "description", text: "I'm Maya's personal assistant. I help with launch work." });
+    expect(unfinished.description).toBeNull();
+    expect(unfinished.default_effort).toBeNull();
   });
 
   it("treats unknown states as needing attention", () => {
@@ -142,5 +154,24 @@ describe("tags", () => {
   it("shows the last line Tag printed when something fails", () => {
     expect(failureLine({ code: 1, stdout: "", stderr: "Traceback\nError: Slack refused\n" }, "x")).toBe("Slack refused");
     expect(failureLine({ code: 1, stdout: "", stderr: "" }, "fallback")).toBe("fallback");
+  });
+});
+
+describe("tag logs activity", () => {
+  it("finds the latest reply for Home's quiet line", () => {
+    const rows = parseList(JSON.stringify(list));
+    const activity = { [rows[0].id]: logs.activity as ActivityItem[] };
+    const latest = new Date(logs.activity[0].at);
+    const line = quietLine([...rows, rows[0], rows[0]], {}, activity, latest, "Maya");
+    expect(line).toMatchObject({ kind: "reply", name: "Maya's Tag", today: true, place: "#launch" });
+  });
+});
+
+describe("tag settings ai", () => {
+  it("reads the thinking level beside the default model", () => {
+    const report = parseStatus(JSON.stringify(aiStatus));
+    expect(report.default_effort).toBe("medium");
+    expect(report.effort_levels).toContain("high");
+    expect(typeof report.effort_chosen).toBe("boolean");
   });
 });

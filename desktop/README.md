@@ -85,6 +85,24 @@ sign-in link for an agent that isn't connected, and shows connection cards
 (`ai_connection`) only while nothing is connected. `tag settings` → AI & models offers the same
 choices in a terminal.
 
+**Home** reads `tag list --json` every 30 seconds. Each row shows the Tag's
+`default_model_name` and `default_effort` after its name, then its
+`description`. The quiet line under the sky comes from two slower checks: each
+Tag's `tag NAME settings ai --json` every five minutes (an AI that can't answer,
+grouped by cause) and `tag NAME logs --json` → `activity` every minute (the
+latest reply). Both need the `ai-connections` and `logs-activity`
+capabilities; without them Home shows the greeting. Nothing is invented: a
+reply appears only once Tag recorded one.
+
+**Look.** The window uses the Hover style from hover.team: its sky, frosted
+panel and navy button. Source Sans 3 is bundled in `src/assets/fonts`
+(SIL Open Font License), and the pixel art in `src/assets/art` comes from the
+Tag cast in `assets/characters`. `prefers-color-scheme` switches day and night,
+and `prefers-reduced-motion` stops the clouds, stars and sprites. On macOS the
+window buttons sit in the sky (`titleBarStyle: Overlay`), and the sky is the
+window's drag area. `?tags=N` in `npm run dev` shows Home with fewer sample
+Tags, and `?update=1` offers a sample update.
+
 The standalone CLI keeps `tag upgrade` for installations without the desktop
 app. It uses the same product release number and existing migrations. If the
 CLI was updated separately, the desktop's next update completes alignment.

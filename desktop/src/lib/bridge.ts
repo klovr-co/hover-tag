@@ -22,6 +22,8 @@ export interface AppInfo {
   launchedAtLogin: boolean;
   /** Tags the earlier Mac app kept running at login, to carry over once. */
   legacyWantedTags: string[] | null;
+  /** The person's first name from their computer account, for Home's greeting. */
+  firstName?: string | null;
 }
 
 export interface RunResult {
@@ -57,7 +59,8 @@ export interface Bridge {
   openAtLogin(enabled?: boolean): Promise<boolean>;
   notify(title: string, body: string): Promise<void>;
   showWindow(): Promise<void>;
-  fitWindow(height: number): Promise<void>;
+  /** Size the window to its content; Tag detail is wider than the other screens. */
+  fitWindow(width: number, height: number): Promise<void>;
   quit(): Promise<void>;
   /** Record that the Swift app's login behaviour was carried over. */
   markMigrated(): Promise<void>;
@@ -124,7 +127,7 @@ async function tauriBridge(): Promise<Bridge> {
       if (granted) notification.sendNotification({ title, body });
     },
     showWindow: () => invoke("show_window"),
-    fitWindow: (height) => getCurrentWindow().setSize(new LogicalSize(520, Math.min(Math.max(height, 300), 860))),
+    fitWindow: (width, height) => getCurrentWindow().setSize(new LogicalSize(width, Math.min(Math.max(height, 300), 860))),
     quit: () => invoke("quit"),
     markMigrated: () => invoke("mark_migrated"),
     checkAppUpdate: (channel) => invoke<AppUpdate | null>("app_update_check", { channel: channel ?? null }),
@@ -141,11 +144,24 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
   rows.splice(1, 0, {
     ...rows[0], id: "t0klovr1-a0rese02", slack_name: "Research Tag", state: "stopped",
     nickname: "research", main: false, keep_running: false,
+    description: "Digs through docs and old threads to answer research questions.",
+    default_model: "claude:claude-opus-5-5", default_model_label: "Claude · Opus 5.5", default_model_name: "Opus 5.5", default_effort: "max",
   });
   rows.splice(2, 0, {
     ...rows[0], id: "t0acme01-a0ops003", slack_name: "Ops Tag", slack_workspace: "T0ACME01",
-    workspace_name: "Acme Inc", main: false,
+    workspace_name: "Acme Inc", workspace_icon: null, main: false,
+    description: "Keeps on-call notes and launch checklists up to date.",
+    default_model: "codex:gpt-5.5-mini", default_model_label: "Codex · GPT-5.5 mini", default_model_name: "GPT-5.5 mini", default_effort: "medium",
   });
+  // Sample data shows only what Tag itself would report: replies come from its activity records.
+  const today = (hours: number, minutes: number) => { const d = new Date(); d.setHours(hours, minutes, 0, 0); return d.toISOString(); };
+  const activity: Record<string, { at: string; kind: string; channel: string; channel_name: string | null; dm: boolean }[]> = {
+    [rows[0].id]: [{ at: today(9, 20), kind: "replied", channel: "C0LAUNCH", channel_name: "launch", dm: false }],
+    "t0acme01-a0ops003": [{ at: today(10, 12), kind: "replied", channel: "C0LAUNCHOPS", channel_name: "launch-ops", dm: false }],
+  };
+  // ?tags=N shows only the first N sample Tags, for checking Home with one or two.
+  const shown = typeof location === "undefined" ? null : new URLSearchParams(location.search).get("tags");
+  if (shown !== null) rows.splice(Number(shown));
   let installed = options.installed ?? true;
   let runtimeVersion = productVersion.trim();
   let desktopVersion = runtimeVersion;
@@ -157,7 +173,7 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
   return {
     info: async () => ({
       platform: "macos", demo: true, cli: installed ? "~/.local/bin/tag" : null,
-      version: desktopVersion, launchedAtLogin: false, legacyWantedTags: null,
+      version: desktopVersion, launchedAtLogin: false, legacyWantedTags: null, firstName: "Maya",
     }),
     tag: async (args) => {
       await sleep(250);
@@ -165,10 +181,10 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
       if (first === "list") return json({ schema_version: 1, tags: rows });
       if (first === "version") {
         return json({ ...versionExample, version: runtimeVersion,
-          capabilities: [...versionExample.capabilities, "ai-connections"] });
+          capabilities: [...new Set([...versionExample.capabilities, "ai-connections", "logs-activity", "thinking-level"])] });
       }
       if (second === "settings" && args[2] === "ai") {
-        const ai = aiFor(first);
+        const ai = aiFor(first, rows.find((r) => r.id === first));
         const [action, value] = args.slice(3).filter((a) => !a.startsWith("--"));
         if (!action) return json({ ...ai, running: rows.find((r) => r.id === first)?.state === "running" });
         if (action === "models") {
@@ -212,8 +228,8 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
       const row = rows.find((r) => r.id === first);
       if (row && second === "logs") {
         return json({ schema_version: 1, tag: row.id, services: {
-          slack: ["2026-10-02 09:14:03 Connected to Slack", "2026-10-02 09:20:41 Replied in #launch"],
-          mfs: ["2026-10-02 09:14:01 Memory ready"] } });
+          slack: ["Open Tag is live as @" + (row.slack_name ?? "Tag")],
+          mfs: ["Memory server ready"] }, activity: activity[row.id] ?? [] });
       }
       if (row && (second === "start" || second === "stop")) {
         row.state = second === "start" ? "running" : "stopped";
@@ -281,8 +297,16 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
 
 // Sample AI connections, one copy per Tag so changes stick while the demo runs.
 const aiDemo = new Map<string, AIStatus>();
-function aiFor(tag: string): AIStatus {
-  if (!aiDemo.has(tag)) aiDemo.set(tag, { ...structuredClone(aiStatusExample) as AIStatus, tag });
+function aiFor(tag: string, row?: TagRow): AIStatus {
+  if (!aiDemo.has(tag)) {
+    const ai = { ...structuredClone(aiStatusExample) as AIStatus, tag };
+    const [backend, model] = (row?.default_model ?? "").split(":");
+    if (backend && model) {
+      ai.default_model = { ...ai.default_model, value: row!.default_model!, backend, model, label: row?.default_model_name ?? model,
+        backend_name: backend === "claude" ? "Claude" : "Codex" };
+    }
+    aiDemo.set(tag, ai);
+  }
   return aiDemo.get(tag)!;
 }
 

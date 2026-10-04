@@ -98,6 +98,33 @@ struct AppInfo {
     version: String,
     launched_at_login: bool,
     legacy_wanted_tags: Option<Vec<String>>,
+    first_name: Option<String>,
+}
+
+/// The first word of the account's full name, for Home's greeting. Windows
+/// keeps only a login name, so Home greets without a name there.
+fn first_name() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    let full = Command::new("id").arg("-F").output().ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
+    #[cfg(target_os = "linux")]
+    let full = std::env::var("USER").ok().and_then(|user| Command::new("getent").args(["passwd", &user]).output().ok())
+        .filter(|o| o.status.success())
+        .and_then(|o| gecos_name(&String::from_utf8_lossy(&o.stdout)));
+    #[cfg(windows)]
+    let full: Option<String> = None;
+    full.as_deref().and_then(first_word)
+}
+
+/// The full name in a passwd line's comment field, before any extra comma fields.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn gecos_name(line: &str) -> Option<String> {
+    line.trim().split(':').nth(4).map(|g| g.split(',').next().unwrap_or("").to_string())
+}
+
+fn first_word(full: &str) -> Option<String> {
+    full.split_whitespace().next().map(str::to_string)
 }
 
 #[derive(Serialize)]
@@ -160,6 +187,7 @@ fn app_info(app: AppHandle) -> AppInfo {
         version: app.package_info().version.to_string(),
         launched_at_login: std::env::args().any(|a| a == AUTOSTART_FLAG),
         legacy_wanted_tags: if migrated { None } else { legacy_wanted_tags() },
+        first_name: first_name(),
     }
 }
 
@@ -303,7 +331,15 @@ pub(crate) fn quit_now(app: &AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_defaults_array;
+    use super::{first_word, gecos_name, parse_defaults_array};
+
+    #[test]
+    fn greets_by_the_first_word_of_the_account_name() {
+        assert_eq!(first_word("Maya Chen\n").as_deref(), Some("Maya"));
+        assert_eq!(first_word("  \n"), None);
+        assert_eq!(gecos_name("maya:x:1000:1000:Maya Chen,,,:/home/maya:/bin/bash").as_deref(), Some("Maya Chen"));
+        assert_eq!(gecos_name("maya:x:1000:1000::/home/maya:/bin/bash").as_deref(), Some(""));
+    }
 
     #[test]
     fn each_build_follows_its_own_release_line() {

@@ -6,6 +6,36 @@ All notable changes to Tag are documented here.
 
 ### Added
 
+- Tag.app has a new look: hover.team's sky and frosted panel, its navy main
+  button, and Source Sans 3, by day and by night. Clouds, stars and the pixel
+  Tags stand still when the system asks for less motion. First run greets you
+  with Maya, shows install progress in the sky, and goes straight on to setting
+  up your first Tag. Home shows your Tags' pictures in the header, one quiet
+  line (a Tag whose AI can't answer and why, otherwise the latest reply, or a
+  greeting), and two lines per Tag: its name with its model and thinking level,
+  then what it's for. Updates run from the notice on Home, show their progress
+  there, and offer Try again if one stops halfway. Settings is grouped into
+  General, AI & models, Updates and About.
+
+- Choose a Tag's default thinking level. `tag settings ai effort high` (or
+  Settings → **AI & models** → **Change thinking level** in `tag settings`)
+  saves it for the Tag's default model, and
+  `tag settings ai model codex:gpt-5.5 --effort medium` saves a model and level
+  together. Only levels the model offers are accepted. Codex and Claude both
+  use it, and people's own choices in Slack still win. Changing the model keeps
+  the level when the new model offers it and otherwise uses the new model's
+  default. Existing Tags have no saved level and keep using each model's own
+  default, so nothing changes until you choose one.
+
+- Give a Tag a one-line description of up to 140 characters with
+  `tag config set OPENTAG_BOT_DESCRIPTION "…"`. It's stored and shown in
+  `tag list --json`; existing Tags and their Slack apps are unchanged.
+
+- `tag list --json` adds each Tag's `description`, `default_model_name`, and
+  `default_effort`, and `tag NAME logs --json` adds `activity`: the Tag's 50
+  most recent Slack requests with when, where, and how each ended, from the
+  activity records Tag already keeps. Prompts and people are never included.
+
 - Connect an AI during setup, and manage it in Settings → **AI & models**.
   After the Tag's name and picture, setup asks for the Tag's default model
   from the models of the Codex and Claude accounts on this computer, grouped

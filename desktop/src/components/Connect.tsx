@@ -9,7 +9,7 @@ import type { RowAction } from "./AI";
 import { AgentMark, ConnectionRow, ModelPicker } from "./AI";
 import { resultLine } from "../lib/ai";
 import { CommunityLinks } from "./CommunityLinks";
-import { Back, ErrorLine, Heading, Icon, Primary, Secondary, Spinner, TextButton } from "./ui";
+import { Back, ErrorLine, Heading, Icon, Primary, Secondary, Sky, Spinner, TextButton } from "./ui";
 import { SlackCodeModal, SlackComposer, SlackSequence } from "./Slack";
 
 interface Props {
@@ -17,9 +17,11 @@ interface Props {
   /** Arguments for `tag … --json`: ["setup"], ["add"], or [tagId, "setup"]. */
   args: string[];
   done: () => void;
+  /** Setup was cancelled; its progress is saved. */
+  paused: () => void;
 }
 
-export function Connect({ api, args, done }: Props) {
+export function Connect({ api, args, done, paused }: Props) {
   const [state, dispatch] = useReducer(setupReducer, initialSetup);
   const session = useRef<Session | null>(null);
   const [starting, setStarting] = useState(false);
@@ -44,7 +46,7 @@ export function Connect({ api, args, done }: Props) {
   const cancel = () => {
     if (state.signIn.step) session.current?.send({ cancel: true });
     session.current?.send({ answer: null, pause: true });
-    done();
+    paused();
   };
   /** Start an agent sign-in from the AI step; the question stays up to show progress. */
   const agentSignIn = (backend: string, answer: string) => {
@@ -59,12 +61,17 @@ export function Connect({ api, args, done }: Props) {
 
   const q = state.question;
   return (
-    <div className="stack gap-14">
-      <div className="row" style={{ marginBottom: -6 }}>
-        {q?.kind === "slack_login" && <span className="caption secondary" style={{ fontWeight: 500 }}>Step {state.signInStep + 1} of 3</span>}
-        <div className="spacer" />
-        {!state.outcome && <TextButton title="Cancel" onClick={cancel} />}
+    <>
+    <Sky kind="compact" stars={60}>
+      {!state.outcome && <div className="sky-top"><button className="sky-btn small" onClick={cancel}>Cancel</button></div>}
+      <div className="sky-row">
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <h2>Add a Tag</h2>
+          <div className="sum">{q?.kind === "slack_login" ? `Sign in · step ${state.signInStep + 1} of 3` : "Connect it to Slack"}</div>
+        </div>
       </div>
+    </Sky>
+    <div className="body roomy">
       {state.outcome === "complete" && (
         <div className="stack gap-14">
           <div className="row gap-8 title3" style={{ color: "var(--green)" }}><Icon name="check" size={18} />Your Tag is ready</div>
@@ -85,7 +92,7 @@ export function Connect({ api, args, done }: Props) {
       )}
       {state.outcome === "failed" && (
         <div className="stack gap-14">
-          <div className="row gap-8 title3 error"><Icon name="warning" size={18} />Setup stopped</div>
+          <div className="row gap-8 title3 error"><Icon name="warn" size={18} />Setup stopped</div>
           <div className="secondary selectable">{state.error || "Something went wrong. Your progress is saved."}</div>
           <div className="row"><div className="spacer" /><Primary title="Done" onClick={done} autoFocus /></div>
         </div>
@@ -113,6 +120,7 @@ export function Connect({ api, args, done }: Props) {
       )}
       {state.error && !state.outcome && <ErrorLine>{state.error}</ErrorLine>}
     </div>
+    </>
   );
 }
 
@@ -189,11 +197,11 @@ function ModelStep({ question, signIn, send, back, startSignIn, cancelSignIn }: 
             <AgentMark backend={other.backend} size={20} />
             {mine && signIn.step ? (
               <><Spinner small /><span style={{ color: "var(--accent)" }}>{signIn.text}</span><div className="spacer" />
-                <button className="link-btn" onClick={cancelSignIn}>Cancel</button></>
+                <button className="link" onClick={cancelSignIn}>Cancel</button></>
             ) : (
               <><span>{mine && signIn.result && signIn.result.status !== "connected"
                 ? resultLine(signIn.result, other.name) : `Use ${other.name} models too?`}</span><div className="spacer" />
-                <button className="link-btn" disabled={signingIn} onClick={() => startSignIn(other.backend, other.id)}>
+                <button className="link" disabled={signingIn} onClick={() => startSignIn(other.backend, other.id)}>
                   {mine && signIn.result?.status === "failed" ? "Try again" : SIGN_IN_WORD[other.action] ?? "Sign in"}
                 </button></>
             )}

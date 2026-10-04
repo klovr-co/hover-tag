@@ -55,12 +55,17 @@ export async function checkUpdate(api: Bridge, appVersion: string, channel?: Cha
   return { ...update, desktop };
 }
 
+/** What an update is doing: your Tags first, then the app restarts if it changed. */
+export type UpdatePhase = "runtime" | "app";
+
 /** Update the app and runtime together. With `channel`, also switches to it and saves the choice. */
-export async function installUpdate(api: Bridge, appVersion: string, channel?: Channel): Promise<ProductUpdate> {
+export async function installUpdate(api: Bridge, appVersion: string, channel?: Channel,
+  onPhase?: (phase: UpdatePhase) => void): Promise<ProductUpdate> {
   // Recheck on every attempt, including retries after a partial installation.
   const update = await checkUpdate(api, appVersion, channel);
   // Switching runs even when nothing installs, so the CLI saves the new channel.
   if (update.runtime || channel) {
+    onPhase?.("runtime");
     const result = await api.tag(["upgrade", ...(channel ? ["--channel", channel] : []), "--json"]);
     if (result.code !== 0) throw new Error(failureLine(result, "Couldn't finish updating Tag. Try again to continue."));
     const upgraded = parseJSON<Upgrade>(result.stdout);
@@ -71,6 +76,58 @@ export async function installUpdate(api: Bridge, appVersion: string, channel?: C
   if (result.code !== 0 || parseJSON<{ version: string }>(result.stdout).version !== update.version) {
     throw new Error("Tag changed during the update. Check again to finish updating.");
   }
-  if (update.desktop) await api.installAppUpdate(update.version);
+  if (update.desktop) {
+    onPhase?.("app");
+    await api.installAppUpdate(update.version);
+  }
   return { ...update, current: update.version, runtime: false, desktop: false, pinned: channel ? false : update.pinned };
 }
+
+// ---- One update, shared by Home and Settings ------------------------------------
+
+export type UpdateStatus = "idle" | "checking" | "available" | "current" | "updating" | "done" | "failed";
+
+export interface UpdateState {
+  status: UpdateStatus;
+  /** What the last check found; kept while updating so notices can name the version. */
+  update: ProductUpdate | null;
+  phase: UpdatePhase | null;
+  error: string;
+}
+
+export const initialUpdate: UpdateState = { status: "idle", update: null, phase: null, error: "" };
+
+export type UpdateAction =
+  | { type: "checking" }
+  | { type: "checked"; update: ProductUpdate }
+  | { type: "updating" }
+  | { type: "phase"; phase: UpdatePhase }
+  | { type: "updated"; update: ProductUpdate }
+  | { type: "failed"; error: string }
+  | { type: "settled" };
+
+export function updateReducer(state: UpdateState, action: UpdateAction): UpdateState {
+  switch (action.type) {
+    case "checking":
+      // A check never interrupts an update in progress.
+      return state.status === "updating" ? state : { ...state, status: "checking", error: "" };
+    case "checked": {
+      if (state.status === "updating") return state;
+      const available = action.update.runtime || action.update.desktop;
+      return { ...state, status: available ? "available" : "current", update: action.update, error: "" };
+    }
+    case "updating":
+      return { ...state, status: "updating", phase: null, error: "" };
+    case "phase":
+      return { ...state, phase: action.phase };
+    case "updated":
+      return { status: "done", update: action.update, phase: null, error: "" };
+    case "failed":
+      return { ...state, status: state.status === "checking" ? "idle" : "failed", phase: null, error: action.error };
+    case "settled":
+      return state.status === "done" ? { ...state, status: "current" } : state;
+  }
+}
+
+/** The version an update is going to, for notices. */
+export const targetVersion = (state: UpdateState) => state.update?.version ?? "";

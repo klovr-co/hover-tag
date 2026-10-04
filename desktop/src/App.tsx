@@ -1,18 +1,19 @@
 // Copyright 2026 klovr.co
 // SPDX-License-Identifier: Apache-2.0
 // Tag.app: installs Tag on first run, then lists, starts and adds Tags.
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
 import { bridge, type AppInfo, type Bridge } from "./lib/bridge";
 import { compatibility, parseJSON, status, type TagRow, type VersionInfo } from "./lib/protocol";
-import { checkUpdate, type ProductUpdate } from "./lib/updates";
+import { checkUpdate, initialUpdate, installUpdate, updateReducer } from "./lib/updates";
 import { useTags } from "./lib/tags";
+import { useWatch } from "./lib/watch";
 import { Connect } from "./components/Connect";
 import { Home } from "./components/Home";
 import { Installing, Welcome } from "./components/Install";
 import { AI_CAPABILITY } from "./lib/ai";
 import { AISettings } from "./components/AISettings";
 import { Logs, Settings } from "./components/Settings";
-import { ErrorLine, Header, Primary, Spinner } from "./components/ui";
+import { Spinner, Toast } from "./components/ui";
 
 type Screen =
   | { name: "loading" }
@@ -28,6 +29,9 @@ type Screen =
 const NEEDED = ["list", "setup-jsonl"];
 /** How often Tag checks for a complete product update. */
 const APP_UPDATE_HOURS = 6;
+/** Window widths: everyday screens, and Tag detail's Slack layout. */
+export const WIDTH = 520;
+export const WIDE = 800;
 
 /** Keep the Tags the Swift app restored at login, then let the login service do it. */
 export async function migrateFromSwiftApp(api: Bridge, legacy: string[], existing: string[]) {
@@ -51,12 +55,16 @@ export function App() {
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [screen, setScreen] = useState<Screen>({ name: "loading" });
   const [outdated, setOutdated] = useState(false);
-  /** Whether the installed Tag can report and change AI connections. */
-  const [aiReady, setAiReady] = useState(false);
-  const [appUpdate, setAppUpdate] = useState<ProductUpdate | null>(null);
+  const [capabilities, setCapabilities] = useState<string[]>([]);
+  const [update, dispatchUpdate] = useReducer(updateReducer, initialUpdate);
+  const [toast, setToast] = useState<string | null>(null);
   const installed = !!info?.cli && !["loading", "welcome", "installing"].includes(screen.name);
   const tags = useTags(api, installed);
-  const root = useRef<HTMLDivElement>(null);
+  const watch = useWatch(api, tags.rows, {
+    ai: installed && capabilities.includes(AI_CAPABILITY),
+    activity: installed && capabilities.includes("logs-activity"),
+  });
+  const root = useRef<HTMLElement>(null);
 
   useEffect(() => {
     void bridge().then(async (b) => {
@@ -67,14 +75,20 @@ export function App() {
     });
   }, []);
 
+  const say = useCallback((text: string) => {
+    setToast(text);
+    setTimeout(() => setToast((current) => (current === text ? null : current)), 2600);
+  }, []);
+
   // Make sure this Tag can be driven by this app.
   useEffect(() => {
     if (!api || !info?.cli || screen.name !== "home") return;
-    // A failed call or unreadable output counts as outdated, so the banner offers an update.
+    // A failed call or unreadable output counts as outdated, so the notice offers an update.
     void api.tag(["version", "--json"]).then((r) => {
       try {
-        setOutdated(!(r.code === 0 && compatibility(parseJSON<VersionInfo>(r.stdout), NEEDED).ok));
-        setAiReady(r.code === 0 && compatibility(parseJSON<VersionInfo>(r.stdout), [AI_CAPABILITY]).ok);
+        const version = parseJSON<VersionInfo>(r.stdout);
+        setOutdated(!(r.code === 0 && compatibility(version, NEEDED).ok));
+        setCapabilities(r.code === 0 ? version.capabilities : []);
       } catch {
         setOutdated(true);
       }
@@ -95,23 +109,43 @@ export function App() {
   }, [api, info?.legacyWantedTags, tags.loaded, tags.rows, tags]);
 
   // Check the complete product; installation always waits for a click.
+  const check = useCallback(async () => {
+    if (!api || !info) return;
+    dispatchUpdate({ type: "checking" });
+    try { dispatchUpdate({ type: "checked", update: await checkUpdate(api, info.version) }); }
+    catch (error) { dispatchUpdate({ type: "failed", error: String(error) }); }
+  }, [api, info]);
+
   useEffect(() => {
     if (!api || !info?.cli || screen.name !== "home") return;
-    const check = () => void checkUpdate(api, info.version).then((update) => {
-      setAppUpdate(update.runtime || update.desktop ? update : null);
-    }).catch(() => {});
-    check();
-    const timer = setInterval(check, APP_UPDATE_HOURS * 3600 * 1000);
+    void check();
+    const timer = setInterval(() => void check(), APP_UPDATE_HOURS * 3600 * 1000);
     return () => clearInterval(timer);
-  }, [api, info, screen.name]);
+  }, [api, info?.cli, screen.name, check]);
 
-  // The window always fits its content.
+  const runUpdate = useCallback(async () => {
+    if (!api || !info) return;
+    dispatchUpdate({ type: "updating" });
+    try {
+      const done = await installUpdate(api, info.version, undefined, (phase) => dispatchUpdate({ type: "phase", phase }));
+      dispatchUpdate({ type: "updated", update: done });
+      setOutdated(false);
+      setTimeout(() => dispatchUpdate({ type: "settled" }), 3200);
+    } catch (error) {
+      dispatchUpdate({ type: "failed", error: String(error) });
+    } finally {
+      void tags.refresh();
+    }
+  }, [api, info, tags]);
+
+  // The window always fits its content, and Tag detail is wider.
+  const width = WIDTH;
   useLayoutEffect(() => {
     if (!api || !root.current) return;
-    const observer = new ResizeObserver(([entry]) => void api.fitWindow(Math.ceil(entry.target.getBoundingClientRect().height)));
+    const observer = new ResizeObserver(([entry]) => void api.fitWindow(width, Math.ceil(entry.target.getBoundingClientRect().height)));
     observer.observe(root.current);
     return () => observer.disconnect();
-  }, [api]);
+  }, [api, width, screen.name]);
 
   // Tray menu actions arrive here, even while the window is hidden.
   useEffect(() => {
@@ -130,56 +164,42 @@ export function App() {
   }, [api, tags]);
 
   if (!api || !info || screen.name === "loading") {
-    return <div ref={root} className="app" style={{ alignItems: "center" }}><Spinner /></div>;
+    return <main ref={root} className="app" style={{ alignItems: "center", padding: 40 }}><Spinner /></main>;
   }
-  const home = () => { setScreen({ name: "home" }); void tags.refresh(); };
+  const home = () => { setScreen({ name: "home" }); void tags.refresh(); watch.recheck(); };
+  const add = () => setScreen({ name: "connect", args: tags.rows.length ? ["add"] : ["setup"] });
   return (
-    <main ref={root} className="app">
+    <main ref={root} className={`app${info.platform === "macos" ? " overlay" : ""}${screen.name === "home" ? " home" : ""}`}>
       {screen.name === "welcome" && <Welcome api={api} platform={info.platform} install={() => setScreen({ name: "installing", attempt: 0 })} />}
       {screen.name === "installing" && (
         <Installing key={screen.attempt} api={api}
           retry={() => setScreen({ name: "installing", attempt: screen.attempt + 1 })}
-          done={(command) => { setInfo({ ...info, cli: command || info.cli || "tag" }); setScreen({ name: "home" }); }} />
+          cancel={() => setScreen({ name: "welcome" })}
+          done={(command) => { setInfo({ ...info, cli: command || info.cli || "tag" }); setScreen({ name: "connect", args: ["setup"] }); }} />
       )}
       {screen.name === "home" && (
-        <>
-          {appUpdate && (
-            <div className="well row gap-10">
-              <span className="stack gap-4" style={{ flex: 1 }}>
-                <span style={{ fontWeight: 600 }}>Tag {appUpdate.version} is ready</span>
-                <span className="caption secondary">Update the app and your Tags together.</span>
-              </span>
-              <Primary title="Update Tag" onClick={() => setScreen({ name: "settings" })} />
-            </div>
-          )}
-          {outdated && (
-            <div className="well row gap-10">
-              <ErrorLine>Tag needs an update to continue.</ErrorLine>
-              <div className="spacer" />
-              <Primary title="Update" onClick={() => setScreen({ name: "settings" })} />
-            </div>
-          )}
-          <Home api={api} tags={tags}
-            add={() => setScreen({ name: "connect", args: tags.rows.length ? ["add"] : ["setup"] })}
-            finishSetup={(row) => setScreen({ name: "connect", args: [row.id, "setup"] })}
-            showLogs={(row) => setScreen({ name: "logs", row })}
-            showSettings={() => setScreen({ name: "settings" })} />
-        </>
+        <Home api={api} tags={tags} reports={watch.reports} problems={watch.problems} activity={watch.activity}
+          firstName={info.firstName ?? null} update={update} outdated={outdated} runUpdate={() => void runUpdate()}
+          add={add}
+          finishSetup={(row) => setScreen({ name: "connect", args: [row.id, "setup"] })}
+          open={(row) => setScreen({ name: "logs", row })}
+          fixAI={(tag) => setScreen({ name: "ai", tag })}
+          showSettings={() => setScreen({ name: "settings" })} />
       )}
       {screen.name === "connect" && (
-        <>
-          <Header title="Add a Tag" subtitle="Connect a Slack workspace" />
-          <Connect api={api} args={screen.args} done={home} />
-        </>
+        <Connect api={api} args={screen.args} done={home}
+          paused={() => { home(); say("Progress saved. Finish setup from Home any time."); }} />
       )}
       {screen.name === "settings" && (
-        <Settings api={api} info={info} tags={tags} close={home}
-          openAI={aiReady ? () => setScreen({ name: "ai" }) : undefined} />
+        <Settings api={api} info={info} tags={tags} close={home} update={update} check={() => void check()}
+          runUpdate={() => void runUpdate()} switched={(done) => dispatchUpdate({ type: "updated", update: done })}
+          openAI={capabilities.includes(AI_CAPABILITY) ? () => setScreen({ name: "ai" }) : undefined} />
       )}
       {screen.name === "ai" && (
-        <AISettings api={api} tags={tags} initial={screen.tag} close={() => setScreen({ name: "settings" })} />
+        <AISettings api={api} tags={tags} initial={screen.tag} close={() => { watch.recheck(); setScreen({ name: "settings" }); }} />
       )}
       {screen.name === "logs" && <Logs api={api} row={screen.row} close={home} />}
+      <Toast text={toast} />
     </main>
   );
 }

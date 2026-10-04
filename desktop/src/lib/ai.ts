@@ -45,6 +45,12 @@ export interface AIStatus {
   connections: Connection[];
   usable: string[];
   default_model: ModelChoice;
+  /** The thinking level the default model uses: the saved one, or the model's own default. */
+  default_effort?: string | null;
+  /** The default model's thinking levels; empty when it has none or Tag doesn't know them yet. */
+  effort_levels?: string[];
+  /** Whether a thinking level was chosen for this Tag, rather than the model's default. */
+  effort_chosen?: boolean;
   checked_at?: string;
 }
 
@@ -53,6 +59,9 @@ export interface ModelEntry {
   model: string | null;
   label: string;
   default: boolean;
+  /** The model's thinking levels, and its own default level; empty and null when it has none. */
+  efforts?: string[];
+  default_effort?: string | null;
 }
 
 export interface ModelGroup {
