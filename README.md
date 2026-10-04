@@ -10,7 +10,7 @@
 <p align="center">by <a href="https://www.hover.team/">Hover</a></p>
 <p align="center"><strong>Your personal assistant, in Slack.</strong></p>
 <p align="center">
-  Powered by your Codex setup · Runs on a computer you control
+  Powered by your Codex or Claude Code setup · Runs on a computer you control
 </p>
 <p align="center"><strong>Everyone brings their own Tag. Everyone works in the same conversation.</strong></p>
 <p align="center">
@@ -34,8 +34,8 @@ follow how you got there.
   save a checklist or draft a document in your working folder.
 - **Bring the missing context.** Find earlier discussions in approved, indexed
   Slack history, or use connected tools to find an email or inspect a repository.
-- **Make it yours.** Tag runs on a computer you control using your Codex setup,
-  files, skills, and connected accounts. Your teammates can see the results in
+- **Make it yours.** Tag runs on a computer you control using your Codex or Claude Code
+  setup, files, skills, and connected accounts. Your teammates can see the results in
   Slack.
 
 Your Tag runs from your own agent environment, and only you can invoke it by
@@ -45,7 +45,7 @@ conversation and results; each assistant stays personal.
 
 ## Runs locally, with clear boundaries
 
-Tag's Slack bridge and Codex agent run on a computer you control, using the
+Tag's Slack bridge and your Codex or Claude agent run on a computer you control, using the
 files, tools, skills, and accounts you choose to make available.
 
 - **Hover does not host your conversations or working files.** Your agent
@@ -53,7 +53,7 @@ files, tools, skills, and accounts you choose to make available.
 - **Your files stay useful outside Tag.** They are ordinary files in your working
   folder, so you can open, edit, move, or reuse them with other tools.
 - **External services are still external.** Slack carries the team conversation;
-  Codex processes agent requests; and optional connected services process the
+  OpenAI or Anthropic processes agent requests; and optional connected services process the
   information required to use them, each under its own data policies.
 
 Tag is local by design, not offline.
@@ -62,20 +62,23 @@ Tag is local by design, not offline.
 ## Bring your Tag to work
 
 Start with a Mac or Linux computer that can stay awake and online, a working
-Codex CLI login, and permission to install a Slack app. Agent-guided setup also
+Codex CLI or Claude Code login, and permission to install a Slack app. Agent-guided setup also
 requires Node.js and npm.
 
 Install the setup skill:
 
 ```bash
+# Codex
 npx skills add klovr-co/hover-tag --skill hover-tag-setup -a codex -g
+# Claude Code
+npx skills add klovr-co/hover-tag --skill hover-tag-setup -a claude-code -g
 ```
 
-Open a new Codex session and ask:
+Open a new Codex or Claude Code session and ask:
 
 > Use the hover-tag-setup skill to set up Tag for me.
 
-Codex checks prerequisites, proposes the setup with recommended defaults, and
+Your agent checks prerequisites, proposes the setup with recommended defaults, and
 drives installation locally. If Slack login is needed, it gives you a one-time
 connection to approve in Slack and return in one reply, with a private clipboard
 handoff available instead. Then bring your Tag online:
@@ -108,8 +111,9 @@ conversation. [See how it works →](https://www.hover.team/tag/how-it-works/)
 
 ## Early, open source, yours to run
 
-Tag is an early project for experimentation in a trusted environment. Codex is
-the supported path; Claude Code is experimental. Your agent runs with local
+Tag is an early project for experimentation in a trusted environment. Codex and
+Claude Code are both supported, and users can switch models between them
+in Slack. Your agent runs with local
 account permissions and inherited bot/MFS credentials; Tag is not a hardened
 sandbox. Connected services process requests under their own data policies.
 Read the [security model](docs/adr/0001-credential-boundary.md) before connecting

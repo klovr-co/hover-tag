@@ -35,10 +35,12 @@ try:
     import tag_slack_backoff
     import tag_display as display
     import tag_autostart as autostart
+    import agent_models
 except ImportError:
     from scripts.tag_paths import initialize_instance, initialize_workspace, runtime_environment, tag_home
     from scripts import tag_instances, tag_telemetry
     from scripts.tag_locks import LifecycleLock
+    from scripts import agent_models
     from scripts.tag_config import read_config
     from scripts import tag_credentials
     from scripts import tag_welcome
@@ -501,13 +503,14 @@ def start_development_slack(home: Path) -> None:
         "--process-id",
         instance_id,
     ]
-    start_process(
-        home,
-        "slack",
-        command,
-        environment=environment,
-        metadata={"instance_id": instance_id},
-    )
+    with LifecycleLock(home / "state/start.lock"):
+        start_process(
+            home,
+            "slack",
+            command,
+            environment=environment,
+            metadata={"instance_id": instance_id},
+        )
     attempts = int(os.getenv("OPENTAG_STARTUP_ATTEMPTS", "30"))
     for _ in range(attempts):
         if slack_ready(home):
@@ -1821,20 +1824,21 @@ def _run_cli() -> int:
                                      ),
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("command", nargs="?", choices=COMMANDS)
-    parser.add_argument("arguments", nargs="*", help="memory: start | status | stop; config: init | show | keys | set KEY VALUE")
+    parser.add_argument("arguments", nargs="*", help="memory: start | status | stop; config: init | show | keys | set KEY VALUE; chatgpt: status | login [ACCOUNT] | use ACCOUNT | logout [ACCOUNT] | use-codex")
     parser.add_argument("--offline", action="store_true")
-    parser.add_argument("--json", action="store_true", dest="json_output", help="structured output for inspect, status, doctor, config, paths, and upgrade")
+    parser.add_argument("--json", action="store_true", dest="json_output", help="structured output for inspect, status, doctor, config, paths, upgrade, and chatgpt")
+    parser.add_argument("--consent", action="store_true", help="chatgpt login: request plan permission again")
     parser.add_argument("--stdin", action="store_true", help="read a config value from stdin")
     parser.add_argument("--from", dest="source", type=Path)
     parser.add_argument("--no-start", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--test", action="store_true", help="setup: use a separate test home; implies --no-start")
     parser.add_argument("--review", action="store_true", help="setup: review choices even when already configured")
     parser.add_argument("--follow", action="store_true", help="logs: continue streaming new service output")
-    parser.add_argument("--limit", type=int, help="logs: number of recent lines per service (default: 50)")
+    parser.add_argument("--limit", type=int, help="logs: recent lines (default: 50); chatgpt status: accounts (default: 10)")
     upgrade_selector = parser.add_mutually_exclusive_group()
     upgrade_selector.add_argument("--channel", choices=UPGRADE_CHANNELS, help="upgrade: switch to this release channel")
     upgrade_selector.add_argument("--version", dest="target_version", help="upgrade: install and pin this exact version")
-    parser.add_argument("--dry-run", action="store_true", help="upgrade: verify and report the target without installing")
+    parser.add_argument("--dry-run", action="store_true", help="upgrade or chatgpt: report the action without changing state")
     parser.add_argument("--no-restart", action="store_true", help="upgrade: leave running services on the previous code")
     parser.add_argument("--allow-downgrade", action="store_true", help="upgrade: explicitly permit installing an older release")
     parser.add_argument("--step", action="store_true", help="setup, add: start or continue setup in the background and print the next question as JSON")
@@ -1854,10 +1858,10 @@ def _run_cli() -> int:
     args = parser.parse_args(raw_arguments)
     if (args.no_start or args.test or args.review) and args.command != "setup":
         parser.error("--no-start, --test and --review are only for setup")
-    if args.arguments and args.command not in {"add", "memory", "config", "telemetry", "rename", "autostart"}:
-        parser.error("Only add, memory, config, telemetry, rename, and autostart accept additional positional arguments")
-    if args.json_output and args.command not in {"list", "memory", "inspect", "status", "doctor", "config", "paths", "upgrade", "telemetry", "setup", "add", "rename", "start", "stop", "restart", "autostart", "version", "logs"}:
-        parser.error("--json supports list, memory, inspect, status, doctor, config, paths, upgrade, telemetry, autostart, version, logs, setup, add, rename, and start/stop/restart with --workspace")
+    if args.arguments and args.command not in {"add", "memory", "config", "telemetry", "rename", "autostart", "chatgpt"}:
+        parser.error("Only add, memory, config, telemetry, rename, autostart, and chatgpt accept additional positional arguments")
+    if args.json_output and args.command not in {"list", "memory", "inspect", "status", "doctor", "config", "paths", "upgrade", "telemetry", "setup", "add", "rename", "start", "stop", "restart", "autostart", "version", "logs", "chatgpt"}:
+        parser.error("--json supports list, memory, inspect, status, doctor, config, paths, upgrade, telemetry, chatgpt, autostart, version, logs, setup, add, rename, and start/stop/restart with --workspace")
     if args.json_output and args.follow:
         parser.error("--json cannot be combined with --follow")
     if args.json_output and args.command in {"start", "stop", "restart"} and not args.workspace:
@@ -1879,10 +1883,16 @@ def _run_cli() -> int:
         parser.error("--stdin is only for config set")
     if args.offline and args.command not in {"inspect", "doctor"}:
         parser.error("--offline supports inspect and doctor")
-    if (args.follow or args.limit is not None) and args.command != "logs":
-        parser.error("--follow and --limit are only for logs")
-    if (args.channel or args.target_version or args.dry_run or args.no_restart or args.allow_downgrade) and args.command != "upgrade":
-        parser.error("--channel, --version, --dry-run, --no-restart, and --allow-downgrade are only for upgrade")
+    if args.follow and args.command != "logs":
+        parser.error("--follow is only for logs")
+    if (args.channel or args.target_version or args.no_restart or args.allow_downgrade) and args.command != "upgrade":
+        parser.error("--channel, --version, --no-restart, and --allow-downgrade are only for upgrade")
+    if args.dry_run and args.command not in {"upgrade", "chatgpt"}:
+        parser.error("--dry-run supports upgrade and chatgpt")
+    if args.consent and args.command != "chatgpt":
+        parser.error("--consent is only for chatgpt login")
+    if args.limit is not None and args.command not in {"logs", "chatgpt"}:
+        parser.error("--limit supports logs and chatgpt status")
     if args.limit is not None and args.limit < 1:
         parser.error("--limit must be at least 1")
     installation_root = tag_home()
@@ -2010,7 +2020,12 @@ def _run_cli() -> int:
                                   nickname=tag_instances.nickname(context.home),
                                   avatar=_avatar(context.home),
                                   keep_running=autostart.wanted(context.home) is True,
-                                  main=context.tag_id == tag_id)
+                                  main=context.tag_id == tag_id,
+                                  default_model=report["backend"]["default_model"],
+                                  default_model_label=agent_models.describe_model_choice(
+                                      report["backend"]["default_model"], report["backend"]["selected"] or "codex",
+                                      names=agent_models.load_model_names(agent_models.model_names_path(context.home)),
+                                  ))
                 except (OSError, ValueError, RuntimeError) as exc:
                     record.update(valid=False, state="invalid_configuration", error=str(exc))
             else:
@@ -2035,7 +2050,8 @@ def _run_cli() -> int:
                     name = row.get("slack_name") or "New Tag"
                     alias = f" · tag {row['nickname']}" if row.get("nickname") else ""
                     main = " · main" if row.get("main") else ""
-                    detail = (f"{name} · {row['state']}{alias}{main}" if row.get("valid")
+                    model = f" · {row['default_model_label']}" if row.get("default_model_label") else ""
+                    detail = (f"{name} · {row['state']}{alias}{main}{model}" if row.get("valid")
                               else str(row.get("error")))
                     display.info_row(str(row["id"]), detail, good=bool(row.get("valid")))
             if len(groups) and any(row.get("slack_workspace") for row in rows):
@@ -2046,6 +2062,7 @@ def _run_cli() -> int:
         return _workspace_lifecycle(installation_root, args.workspace, args.command, args.json_output)
     initializes_default = tag_id == "default" and (
         args.command in {"start", "dev", "setup"}
+        or (args.command == "chatgpt" and not args.dry_run and args.arguments and args.arguments[0] in {"login", "use", "logout", "use-codex"})
         or (args.command == "config" and args.arguments and args.arguments[0] in {"init", "set"})
     )
     if initializes_default and not tag_instances.instance_path(installation_root, tag_id).exists():
@@ -2081,6 +2098,13 @@ def _run_cli() -> int:
     }
     os.environ.clear()
     os.environ.update(environment)
+    if args.command == "chatgpt":
+        try:
+            from . import tag_chatgpt
+        except ImportError:
+            import tag_chatgpt
+        return tag_chatgpt.cli(args.arguments, json_output=args.json_output,
+                               dry_run=args.dry_run, consent=args.consent, limit=args.limit or 10)
     if args.command == "memory":
         action = args.arguments[0] if len(args.arguments) == 1 else "status" if not args.arguments else ""
         if action not in {"start", "status", "stop"}:
@@ -2329,6 +2353,15 @@ def _run_cli() -> int:
         os.environ.update(startup_attempt_overrides)
     elif args.command in {"start", "dev"} or (args.command == "doctor" and not args.offline):
         raise RuntimeError(f"Missing configuration: {config_path}. Run tag setup.")
+    if args.command in {"start", "dev"} and os.getenv("OPENTAG_BACKEND", "codex") == "codex":
+        try:
+            from . import tag_chatgpt
+        except ImportError:
+            import tag_chatgpt
+        if tag_chatgpt.enabled():
+            if os.getenv("OPENTAG_CODEX_TRANSPORT", "app-server") != "app-server":
+                raise RuntimeError("ChatGPT plan usage requires app-server. Run tag config set OPENTAG_CODEX_TRANSPORT app-server.")
+            tag_chatgpt.Store().access()  # Refresh before starting dependent services.
     # A TAG installation always has one stable integration workspace.
     os.environ["OPENTAG_WORKDIR"] = str(context.workspace)
     if args.command == "doctor":

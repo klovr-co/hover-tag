@@ -3,7 +3,7 @@
 ## Who it's for
 
 Bring your own Tag to work. Tag is for people who want to use their Codex
-agent in Slack, with context from Slack threads and integrations already
+or Claude agent in Slack, with context from Slack threads and integrations already
 connected to their agent. Requests, updates, and results stay in the thread,
 where teammates can follow the work.
 
@@ -21,7 +21,7 @@ You can ask Tag to:
 - summarize a discussion and turn it into decisions, owners, and next steps;
 - investigate a question across approved Slack history and other sources;
 - compare information from conversations, documents, issues, and repositories;
-- use locally installed tools available to Codex;
+- use locally installed tools available to your agent;
 - inspect or change files in its configured workspace when explicitly asked;
 - return an answer to the thread, post to the channel, or create a Slack Canvas.
 

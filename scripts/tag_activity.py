@@ -17,11 +17,11 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from .codex_app_server import MCP_SERVICE_NAMES, MCP_TOOL_NAMES, activity_label, mcp_activity_label
+    from .agent_activity import MCP_SERVICE_NAMES, MCP_TOOL_NAMES, activity_label, mcp_activity_label
     from .tag_activity_details import MAX_DETAIL_CHARS, MAX_TOOL_CHARS, sanitize_activity_details
     from .tag_paths import instance_home, restrict_windows_acl
 except ImportError:  # Direct script execution does not create a package context.
-    from codex_app_server import MCP_SERVICE_NAMES, MCP_TOOL_NAMES, activity_label, mcp_activity_label
+    from agent_activity import MCP_SERVICE_NAMES, MCP_TOOL_NAMES, activity_label, mcp_activity_label
     from tag_activity_details import MAX_DETAIL_CHARS, MAX_TOOL_CHARS, sanitize_activity_details
     from tag_paths import instance_home, restrict_windows_acl
 

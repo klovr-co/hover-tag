@@ -7,6 +7,12 @@ from scripts import tag_display
 
 
 class DisplayTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # These fixtures exercise inherited Codex sign-in, independent of local accounts.
+        auth = patch("scripts.tag_chatgpt.Store.enabled", return_value=False)
+        auth.start()
+        self.addCleanup(auth.stop)
+
     def test_banner_fits_narrow_terminal_and_is_omitted_without_color(self):
         with patch.object(tag_display.shutil, "get_terminal_size", return_value=os.terminal_size((48, 24))), patch.object(
             tag_display, "color_available", return_value=True
@@ -89,6 +95,15 @@ class DisplayTests(unittest.TestCase):
         self.assertEqual(run.call_args.args[0], ["/custom/codex", "login", "status"])
         self.assertIn("Signed in · task not tested", output.getvalue())
         self.assertNotIn("sensitive", output.getvalue())
+
+    def test_stopped_tag_without_agent_points_to_doctor_not_start(self):
+        with redirect_stdout(StringIO()) as output:
+            tag_display.summary("stopped", "tag start", backend="codex", agent=("Not installed", False),
+                                model="Codex · account default")
+        self.assertIn("Needs attention", output.getvalue())
+        self.assertIn("Codex · account default · not installed", output.getvalue())
+        self.assertIn("› tag doctor", output.getvalue())
+        self.assertNotIn("› tag start", output.getvalue())
 
     def test_auth_timeout_is_unverified(self):
         with patch.object(tag_display.shutil, "which", return_value="/custom/codex"), patch.object(tag_display.subprocess, "run", side_effect=tag_display.subprocess.TimeoutExpired("codex", 3)):

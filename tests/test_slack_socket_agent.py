@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 import os
 import signal
 import tempfile
@@ -14,7 +15,7 @@ try:
 except ModuleNotFoundError:
     raise unittest.SkipTest("slack_bolt is installed by the Slack bridge runtime")
 
-from scripts import slack_socket_agent
+from scripts import agent_models, slack_socket_agent
 from scripts.tag_error_reporting import ErrorReportStore, ReportOrigin, make_error_report
 from scripts.tag_activity import ActivityStore
 
@@ -1095,6 +1096,7 @@ class SlackOutputArtifactTests(unittest.TestCase):
                     "SLACK_BOT_TOKEN": "xoxb-test",
                     "SLACK_CHANNEL_IDS": "C123",
                     "OPENTAG_SLACK_STREAMING": "0",
+                    "OPENTAG_CLAUDE_TRANSPORT": "print",
                 },
                 clear=True,
             ), patch.object(
@@ -1133,8 +1135,10 @@ class SlackOutputArtifactTests(unittest.TestCase):
         posted_blocks = client.chat_postMessage.call_args.kwargs["blocks"]
         actions = [element for block in posted_blocks if block["type"] == "actions"
                    for element in block["elements"]]
-        self.assertEqual(len(actions), 1)
-        self.assertEqual(actions[0]["action_id"], slack_socket_agent.OPEN_LOCAL_ARTIFACT_DIRECTORY_ACTION_ID)
+        self.assertEqual(
+            [action["action_id"] for action in actions],
+            [slack_socket_agent.OPEN_LOCAL_ARTIFACT_DIRECTORY_ACTION_ID, slack_socket_agent.SETTINGS_ACTION_ID],
+        )
         self.assertEqual(actions[0]["text"]["text"], "📁 Open folder")
 
 
@@ -1197,6 +1201,7 @@ class SlackGeneratedImageTests(unittest.TestCase):
                 "SLACK_BOT_TOKEN": "xoxb-test",
                 "SLACK_CHANNEL_IDS": "C123",
                 "OPENTAG_SLACK_STREAMING": "0",
+                "OPENTAG_CLAUDE_TRANSPORT": "print",
             },
             clear=True,
         ), patch.object(
@@ -1213,13 +1218,10 @@ class SlackGeneratedImageTests(unittest.TestCase):
                 MagicMock(),
             )
 
-        client.chat_postMessage.assert_called_once_with(
-            channel="C123",
-            thread_ts="1.23",
-            text="Here is the chart.",
-            mrkdwn=True,
-            blocks=None,
-        )
+        client.chat_postMessage.assert_called_once()
+        posted = client.chat_postMessage.call_args.kwargs
+        self.assertEqual(("C123", "1.23", "Here is the chart."), (posted["channel"], posted["thread_ts"], posted["text"]))
+        self.assertEqual(posted["blocks"][-1]["elements"][0]["action_id"], slack_socket_agent.SETTINGS_ACTION_ID)
         upload = client.files_upload_v2.call_args.kwargs
         self.assertEqual("C123", upload["channel"])
         self.assertEqual("1.23", upload["thread_ts"])
@@ -1578,7 +1580,7 @@ class SlackFailureReplyTests(unittest.TestCase):
             os.environ,
             {"SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_IDS": "C1"},
             clear=True,
-        ), patch.object(slack_socket_agent, "discover_codex_models", return_value=[]), patch.object(
+        ), patch.object(agent_models, "discover_codex_models", return_value=[]), patch.object(
             slack_socket_agent, "build_thread_text", return_value="thread"
         ), patch.object(
             slack_socket_agent, "run_backend_events", return_value=("done", True)
@@ -1667,7 +1669,7 @@ class SlackApprovalTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw, patch.object(
             slack_socket_agent, "App", return_value=fake_app
         ), patch.dict(os.environ, {"SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_IDS": "C1"}, clear=True), patch.object(
-            slack_socket_agent, "discover_codex_models", return_value=[]
+            slack_socket_agent, "discover_tag_models", return_value=[]
         ):
             slack_socket_agent.create_app("codex", 30, frozenset({"UOWNER", "UOTHER"}))
             handler = next(fn for key, fn in fake_app.actions.items()
@@ -1690,7 +1692,7 @@ class SlackApprovalTests(unittest.TestCase):
             body["user"]["id"] = "UOWNER"
             handler(MagicMock(), body, client, MagicMock(), respond)
             self.assertEqual({"choice": "1"}, json.loads((Path(raw) / (aid + ".json")).read_text(encoding="utf-8")))
-            self.assertIn("sent to Codex", respond.call_args.kwargs["text"])
+            self.assertIn("sent to Tag", respond.call_args.kwargs["text"])
             handler(MagicMock(), body, client, MagicMock(), respond)
             self.assertIn("expired", respond.call_args.kwargs["text"])
 
@@ -1766,7 +1768,7 @@ class SlackApprovalTests(unittest.TestCase):
             os.environ,
             {"SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_IDS": "C1"},
             clear=True,
-        ), patch.object(slack_socket_agent, "discover_codex_models", return_value=[]):
+        ), patch.object(agent_models, "discover_codex_models", return_value=[]):
             slack_socket_agent.create_app("codex", 30, frozenset({"UOWNER"}))
             process = MagicMock()
             process.poll.return_value = None
@@ -1826,7 +1828,7 @@ class SlackApprovalTests(unittest.TestCase):
                 "SLACK_CHANNEL_IDS": "C1",
             },
             clear=True,
-        ), patch.object(slack_socket_agent, "discover_codex_models", return_value=[]):
+        ), patch.object(agent_models, "discover_codex_models", return_value=[]):
             slack_socket_agent.create_app("codex", 30, frozenset({"UOWNER", "UOTHER"}))
             process = MagicMock()
             process.poll.return_value = None
@@ -2069,6 +2071,7 @@ class SlackCrossChannelSearchTests(unittest.TestCase):
                     "slack://tag-t123/channels/old-support__C456"
                 ),
                 "OPENTAG_SLACK_STREAMING": "0",
+                "OPENTAG_CLAUDE_TRANSPORT": "print",
             },
             clear=True,
         ), patch(
@@ -2113,6 +2116,7 @@ class SlackCrossChannelSearchTests(unittest.TestCase):
                     "slack://tag-t123/channels/support__C456"
                 ),
                 "OPENTAG_SLACK_STREAMING": "0",
+                "OPENTAG_CLAUDE_TRANSPORT": "print",
             },
             clear=True,
         ), patch(
@@ -2158,6 +2162,7 @@ class SlackCrossChannelSearchTests(unittest.TestCase):
                 "SLACK_BOT_TOKEN": "xoxb-test",
                 "SLACK_CHANNEL_IDS": "C123,C456",
                 "OPENTAG_SLACK_STREAMING": "0",
+                "OPENTAG_CLAUDE_TRANSPORT": "print",
             },
             clear=True,
         ), patch.object(
@@ -2303,7 +2308,7 @@ class SlackUserAllowlistTests(unittest.TestCase):
             os.environ,
             {"SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_IDS": "C123"},
             clear=True,
-        ), patch.object(slack_socket_agent, "discover_codex_models", return_value=[]):
+        ), patch.object(agent_models, "discover_codex_models", return_value=[]):
             slack_socket_agent.create_app("codex", 30, frozenset({"UOWNER"}))
             handler = fake_app.actions[slack_socket_agent.SETTINGS_ACTION_ID]
             handler(
@@ -2330,7 +2335,7 @@ class SlackUserAllowlistTests(unittest.TestCase):
             os.environ,
             {"SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_IDS": "C123"},
             clear=True,
-        ), patch.object(slack_socket_agent, "discover_codex_models", return_value=[]):
+        ), patch.object(agent_models, "discover_codex_models", return_value=[]):
             slack_socket_agent.create_app("codex", 30, frozenset({"UOWNER"}))
             handler = fake_app.actions[slack_socket_agent.SETTINGS_ACTION_ID]
             handler(
@@ -2395,6 +2400,7 @@ class SlackDirectMessageTests(unittest.TestCase):
                 "SLACK_CHANNEL_ID": "C-SANDBOX",
                 "OPENTAG_SLACK_DM_ENABLED": "1",
                 "OPENTAG_SLACK_STREAMING": "0",
+                "OPENTAG_CLAUDE_TRANSPORT": "print",
             },
             clear=True,
         ), patch.object(
@@ -3414,6 +3420,305 @@ class BackendEventRunnerTests(unittest.TestCase):
         self.assertIn("did not confirm interruption", answer)
 
 
+class ClaudeBackendParityTests(unittest.TestCase):
+    def test_both_backends_select_rich_events_by_default_with_rollbacks(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertTrue(slack_socket_agent.rich_events_selected("codex"))
+            self.assertTrue(slack_socket_agent.rich_events_selected("claude"))
+        with patch.dict(os.environ, {"OPENTAG_CLAUDE_TRANSPORT": "print",
+                                     "OPENTAG_CODEX_TRANSPORT": "exec"}, clear=True):
+            self.assertFalse(slack_socket_agent.rich_events_selected("claude"))
+            self.assertFalse(slack_socket_agent.rich_events_selected("codex"))
+
+    def test_claude_run_receives_model_effort_and_fast_mode(self) -> None:
+        process = MagicMock()
+        process.stdout = iter([json.dumps({"type": "turn_complete", "status": "completed"}) + "\n"])
+        process.wait.return_value = 0
+        process.poll.return_value = None
+        with tempfile.TemporaryDirectory() as raw_dir, patch.object(
+            slack_socket_agent.subprocess, "Popen", return_value=process
+        ) as popen, patch.object(slack_socket_agent.threading, "Timer"), patch.object(
+            slack_socket_agent, "register_active_run"
+        ):
+            slack_socket_agent.run_backend_events(
+                "claude", "T123", "C123", "1.23", "U123", "question", "thread",
+                Path(raw_dir), 30, MagicMock(), model="opus", reasoning_effort="max", fast_mode=True,
+            )
+        command = popen.call_args.args[0]
+        self.assertEqual("claude", command[command.index("--backend") + 1])
+        self.assertEqual("opus", command[command.index("--model") + 1])
+        self.assertEqual("max", command[command.index("--reasoning-effort") + 1])
+        self.assertEqual("on", command[command.index("--fast-mode") + 1])
+
+    def test_claude_models_come_from_the_signed_in_account(self) -> None:
+        catalog = [
+            {"model": "default", "displayName": "Default (recommended)", "isDefault": True,
+             "supportedEfforts": ["low", "medium", "high", "max"], "supportsFastMode": False},
+            {"model": "opus", "displayName": "Opus", "isDefault": False,
+             "supportedEfforts": ["low", "high", "xhigh"], "supportsFastMode": True},
+            {"model": "haiku", "displayName": "Haiku", "isDefault": False,
+             "supportedEfforts": [], "supportsFastMode": False},
+        ]
+        with patch.dict(os.environ, {}, clear=True), patch.object(
+            agent_models, "fetch_claude_model_catalog", return_value=catalog
+        ):
+            models = agent_models.discover_models("claude")
+        self.assertEqual(["default", "opus", "haiku"], [item.model_id for item in models])
+        defaults = slack_socket_agent.default_agent_settings(models)
+        self.assertEqual(("default", "high", False), (defaults.model, defaults.reasoning_effort, defaults.fast_mode))
+        self.assertTrue(slack_socket_agent.fast_mode_available("opus", models))
+        self.assertEqual((), slack_socket_agent.efforts_for_model("haiku", models))
+        modal = slack_socket_agent.settings_modal(
+            metadata={}, settings=slack_socket_agent.AgentSettings(), models=models, backend="claude",
+        )
+        self.assertEqual("Claude settings", modal["title"]["text"])
+
+    def test_unavailable_claude_catalog_still_offers_cli_default(self) -> None:
+        with patch.dict(os.environ, {}, clear=True), patch.object(
+            agent_models, "fetch_claude_model_catalog", return_value=None
+        ):
+            models = agent_models.discover_models("claude")
+        self.assertEqual([("default", True)], [(item.model_id, item.is_default) for item in models])
+
+    def test_saved_choice_records_backend_and_older_choices_read_as_codex(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            path = Path(raw_dir) / "settings.json"
+            path.write_text(json.dumps({
+                "T1:U1": {"model": "gpt-5", "reasoning_effort": "high", "fast_mode": False},
+                "T1:U2": {"model": None, "reasoning_effort": "low", "fast_mode": None},
+            }), encoding="utf-8")
+            store = slack_socket_agent.UserAgentSettingsStore(path)
+            self.assertEqual("codex", store.get("T1", "U1").backend)
+            self.assertIsNone(store.get("T1", "U2").backend)
+            store.set("T1", "U1", slack_socket_agent.AgentSettings(model="opus", backend="claude"))
+            self.assertEqual(("claude", "opus"), (store.get("T1", "U1").backend, store.get("T1", "U1").model))
+            self.assertEqual("claude", json.loads(path.read_text(encoding="utf-8"))["T1:U1"]["backend"])
+
+    def test_claude_approval_names_the_backend_and_tool_label(self) -> None:
+        blocks = slack_socket_agent.approval_button_blocks(
+            team="T1", channel="C1", thread_ts="1.2", user_id="U1", approval_id="a" * 32,
+            label="use a tool that requires approval", backend="claude",
+        )
+        self.assertEqual(
+            "*Claude needs approval* to use a tool that requires approval. Approve only if you expect this request.",
+            blocks[0]["text"]["text"],
+        )
+
+
+class ModelSwitchingTests(unittest.TestCase):
+    CODEX = [slack_socket_agent.ModelOption("gpt-5", "GPT-5", ("low", "high"), is_default=True)]
+    CLAUDE = [
+        slack_socket_agent.ModelOption("default", "Default", ("low", "high"), is_default=True, backend="claude"),
+        slack_socket_agent.ModelOption("opus", "Opus", ("low", "max"), supports_fast_mode=True, backend="claude"),
+    ]
+
+    def discover(self, backend: str) -> list[slack_socket_agent.ModelOption]:
+        return {"codex": self.CODEX, "claude": self.CLAUDE}[backend]
+
+    def test_tag_models_combine_signed_in_backends_with_default_first(self) -> None:
+        with patch.dict(os.environ, {}, clear=True), patch.object(
+            agent_models, "discover_models", side_effect=self.discover
+        ), patch.object(agent_models, "backend_signed_in", return_value=True):
+            models = slack_socket_agent.discover_tag_models("codex")
+        self.assertEqual(["codex:gpt-5", "claude:default", "claude:opus"], [item.value for item in models])
+        self.assertEqual(["codex:gpt-5"], [item.value for item in models if item.is_default])
+
+    def test_tag_default_model_can_select_another_backend(self) -> None:
+        with patch.dict(os.environ, {"OPENTAG_DEFAULT_MODEL": "claude:opus"}, clear=True), patch.object(
+            agent_models, "discover_models", side_effect=self.discover
+        ), patch.object(agent_models, "backend_signed_in", return_value=True):
+            models = slack_socket_agent.discover_tag_models("codex")
+        defaults = slack_socket_agent.default_agent_settings(models)
+        self.assertEqual(("claude", "opus"), (defaults.backend, defaults.model))
+        self.assertEqual(["codex:gpt-5"], [item.value for item in models if item.backend == "codex"])
+
+    def test_unavailable_or_disallowed_backends_are_not_offered(self) -> None:
+        with patch.dict(os.environ, {}, clear=True), patch.object(
+            agent_models, "discover_models", side_effect=self.discover
+        ), patch.object(agent_models, "backend_signed_in", side_effect=lambda name: name == "codex"):
+            self.assertEqual({"codex"}, {item.backend for item in slack_socket_agent.discover_tag_models("codex")})
+        with patch.dict(os.environ, {"OPENTAG_BACKENDS": "codex"}, clear=True), patch.object(
+            agent_models, "discover_models", side_effect=self.discover
+        ), patch.object(agent_models, "backend_signed_in", return_value=True) as signed_in:
+            self.assertEqual({"codex"}, {item.backend for item in slack_socket_agent.discover_tag_models("codex")})
+        signed_in.assert_called_once_with("codex")
+
+    def test_disconnected_default_is_excluded_and_connected_account_becomes_default(self):
+        for disconnected, connected in (("claude", "codex"), ("codex", "claude")):
+            with self.subTest(disconnected=disconnected), patch.dict(os.environ, {
+                "OPENTAG_DEFAULT_MODEL": f"{disconnected}:saved-model",
+            }, clear=True), patch.object(agent_models, "discover_models", side_effect=self.discover), patch.object(
+                agent_models, "backend_signed_in", side_effect=lambda name: name == connected
+            ):
+                models = agent_models.discover_tag_models(disconnected)
+                self.assertEqual({connected}, {item.backend for item in models})
+                self.assertEqual(connected, slack_socket_agent.default_agent_settings(models).backend)
+                self.assertTrue(any(item.is_default for item in models))
+
+    def test_no_connected_accounts_offer_no_models(self):
+        with patch.object(agent_models, "backend_signed_in", return_value=False), patch.object(
+            agent_models, "discover_models"
+        ) as discover:
+            self.assertEqual([], agent_models.discover_tag_models("codex"))
+            discover.assert_not_called()
+
+    def test_picker_groups_models_by_backend(self) -> None:
+        models = self.CODEX + [replace(item, is_default=False) for item in self.CLAUDE]
+        modal = slack_socket_agent.settings_modal(
+            metadata={}, settings=slack_socket_agent.AgentSettings(model="opus", backend="claude"),
+            models=models,
+        )
+        element = modal["blocks"][0]["element"]
+        self.assertEqual("Agent settings", modal["title"]["text"])
+        self.assertEqual(["Codex", "Claude"], [group["label"]["text"] for group in element["option_groups"]])
+        self.assertEqual("claude:opus", element["initial_option"]["value"])
+        self.assertEqual(["low", "max"], [option["value"] for option in modal["blocks"][1]["element"]["options"]])
+        self.assertIn("accessory", modal["blocks"][2])
+
+    def test_same_model_name_resolves_by_backend(self) -> None:
+        models = [
+            slack_socket_agent.ModelOption("shared", "Codex shared", ("low",), is_default=True),
+            slack_socket_agent.ModelOption("shared", "Claude shared", ("max",), backend="claude"),
+        ]
+        normalized = slack_socket_agent.normalize_settings(
+            slack_socket_agent.AgentSettings(model="shared", backend="claude"), models,
+        )
+        self.assertEqual(("claude", "max"), (normalized.backend, normalized.reasoning_effort))
+
+    def test_choosing_a_claude_model_runs_the_next_request_on_claude(self) -> None:
+        fake_app = FakeApp()
+        client = MagicMock()
+        models = self.CODEX + [replace(item, is_default=False) for item in self.CLAUDE]
+        with tempfile.TemporaryDirectory() as raw_dir, patch.object(
+            slack_socket_agent, "App", return_value=fake_app
+        ), patch.dict(
+            os.environ,
+            {"SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_IDS": "C1",
+             "OPENTAG_SLACK_SETTINGS_FILE": str(Path(raw_dir) / "settings.json")},
+            clear=True,
+        ), patch.object(slack_socket_agent, "discover_tag_models", return_value=models), patch.object(
+            slack_socket_agent, "build_thread_text", return_value="thread"
+        ), patch.object(
+            slack_socket_agent, "run_backend_events", return_value=("done", True)
+        ) as run_events:
+            slack_socket_agent.create_app("codex", 30, frozenset({"UOWNER"}))
+            ack = MagicMock()
+            fake_app.views[slack_socket_agent.SETTINGS_VIEW_ID](
+                ack,
+                {
+                    "user": {"id": "UOWNER"},
+                    "view": {
+                        "private_metadata": json.dumps({"team": "T1", "channel": "C1", "thread_ts": "1.0"}),
+                        "state": {"values": {
+                            "model": {slack_socket_agent.SETTINGS_MODEL_ACTION_ID: {
+                                "selected_option": {"value": "claude:opus"}}},
+                            "reasoning_effort": {slack_socket_agent.SETTINGS_EFFORT_ACTION_ID: {
+                                "selected_option": {"value": "max"}}},
+                            "fast_mode": {slack_socket_agent.SETTINGS_FAST_ACTION_ID: {
+                                "selected_options": [{"value": "on"}]}},
+                        }},
+                    },
+                },
+                client,
+                MagicMock(),
+            )
+            fake_app.events["app_mention"](
+                {"channel": "C1", "ts": "1.1", "thread_ts": "1.0", "user": "UOWNER", "text": "<@BOT> continue"},
+                {"team_id": "T1"},
+                client,
+                MagicMock(),
+            )
+
+        ack.assert_called_once_with()
+        self.assertIn("Claude · Opus · max · Fast mode on", client.chat_postEphemeral.call_args.kwargs["text"])
+        reply_blocks = client.chat_postMessage.call_args.kwargs["blocks"]
+        summary = next(block for block in reply_blocks if block["type"] == "context")["elements"][0]["text"]
+        self.assertRegex(summary, r"^Claude · Opus · max thinking · Fast mode · \d+s$")
+        self.assertEqual("claude", run_events.call_args.args[0])
+        self.assertEqual(
+            ("opus", "max", True),
+            tuple(run_events.call_args.kwargs[key] for key in ("model", "reasoning_effort", "fast_mode")),
+        )
+
+
+class RunSummaryTests(unittest.TestCase):
+    MODELS = [slack_socket_agent.ModelOption("opus", "Opus 5.5", ("high",), backend="claude")]
+
+    def test_durations_are_short_and_readable(self) -> None:
+        self.assertEqual(
+            ["0s", "42s", "1m", "1m 12s", "59m 59s", "1h", "1h 3m"],
+            [slack_socket_agent.format_duration(value) for value in (0.2, 42, 60, 72, 3599, 3600, 3780)],
+        )
+
+    def test_summary_names_backend_model_thinking_and_duration(self) -> None:
+        settings = slack_socket_agent.AgentSettings("opus", "high", True, backend="claude")
+        blocks = slack_socket_agent.run_summary_blocks(settings, self.MODELS, "claude", 72)
+        self.assertEqual(
+            [{"type": "context", "elements": [{"type": "mrkdwn",
+                                               "text": "Claude · Opus 5.5 · high thinking · Fast mode · 1m 12s"}]}],
+            blocks,
+        )
+
+    def test_summary_names_the_model_the_backend_reported(self) -> None:
+        models = [
+            slack_socket_agent.ModelOption("default", "Default (recommended)", ("low", "high"), backend="claude",
+                                           resolved_model="claude-sonnet-5-5"),
+            slack_socket_agent.ModelOption("sonnet", "Sonnet 5.5", ("low", "high"), backend="claude",
+                                           resolved_model="claude-sonnet-5-5"),
+        ]
+        settings = slack_socket_agent.AgentSettings("default", None, False, backend="claude")
+        text = lambda reported: slack_socket_agent.run_summary_blocks(
+            settings, models, "claude", 5, reported_model=reported)[0]["elements"][0]["text"]
+        self.assertEqual("Claude · Sonnet 5.5 · default thinking · 5s", text("claude-sonnet-5-5"))
+        self.assertEqual("Claude · claude-new-model · default thinking · 5s", text("claude-new-model"))
+        self.assertEqual("Claude · default model · default thinking · 5s", text(None))
+
+    def test_summary_thinking_level_falls_back_to_reported_then_catalog_default(self) -> None:
+        models = [
+            slack_socket_agent.ModelOption("gpt-6-astra", "GPT-6-Astra", ("low", "high"), default_reasoning_effort="high"),
+            slack_socket_agent.ModelOption("haiku", "Haiku 4.5", (), backend="claude"),
+        ]
+        default = slack_socket_agent.AgentSettings(None, None, False, backend="codex")
+        text = lambda settings, backend, **kwargs: slack_socket_agent.run_summary_blocks(
+            settings, models, backend, 42, **kwargs)[0]["elements"][0]["text"]
+        self.assertEqual("Codex · GPT-6-Astra · high thinking · 42s",
+                         text(default, "codex", reported_model="gpt-6-astra"))
+        self.assertEqual("Codex · GPT-6-Astra · xhigh thinking · 42s",
+                         text(default, "codex", reported_model="gpt-6-astra", reported_effort="xhigh"))
+        self.assertEqual("Codex · GPT-6-Astra · low thinking · 42s",
+                         text(replace(default, reasoning_effort="low"), "codex",
+                              reported_model="gpt-6-astra", reported_effort="xhigh"))
+        haiku = slack_socket_agent.AgentSettings("haiku", None, False, backend="claude")
+        self.assertEqual("Claude · Haiku 4.5 · 42s", text(haiku, "claude"))
+
+    def test_bridge_forwards_reported_model(self) -> None:
+        process = MagicMock()
+        process.stdout = iter([json.dumps(event) + "\n" for event in (
+            {"type": "run_info", "model": "gpt-6-astra", "reasoning_effort": "xhigh"},
+            {"type": "turn_complete", "status": "completed"},
+        )])
+        process.wait.return_value = 0
+        process.poll.return_value = None
+        reported: list[dict[str, str]] = []
+        with tempfile.TemporaryDirectory() as raw_dir, patch.object(
+            slack_socket_agent.subprocess, "Popen", return_value=process
+        ), patch.object(slack_socket_agent.threading, "Timer"), patch.object(
+            slack_socket_agent, "register_active_run"
+        ):
+            slack_socket_agent.run_backend_events(
+                "codex", "T1", "C1", "1.0", "U1", "q", "thread", Path(raw_dir), 30, MagicMock(),
+                on_run_info=reported.append,
+            )
+        self.assertEqual([{"model": "gpt-6-astra", "reasoning_effort": "xhigh"}], reported)
+
+    def test_summary_marks_stopped_and_failed_runs_and_default_models(self) -> None:
+        settings = slack_socket_agent.AgentSettings(None, None, False, backend="codex")
+        text = lambda outcome: slack_socket_agent.run_summary_blocks(
+            settings, [], "codex", 45, outcome=outcome)[0]["elements"][0]["text"]
+        self.assertEqual("Codex · default model · default thinking · stopped after 45s", text("stopped"))
+        self.assertEqual("Codex · default model · default thinking · failed after 45s", text("failed"))
+
+
 class SlackCancellationTests(unittest.TestCase):
     def tearDown(self) -> None:
         with slack_socket_agent.ACTIVE_RUNS_LOCK:
@@ -3525,7 +3830,14 @@ class SlackCancellationTests(unittest.TestCase):
 
 class SlackAgentSettingsTests(unittest.TestCase):
     def setUp(self) -> None:
-        catalog = patch.object(slack_socket_agent, "fetch_codex_model_catalog", return_value=None)
+        # Legacy Codex fixtures must not read the operator's ChatGPT account.
+        auth = patch("scripts.tag_chatgpt.enabled", return_value=False)
+        auth.start()
+        self.addCleanup(auth.stop)
+        connected = patch.object(agent_models, "backend_signed_in", side_effect=lambda name: name == "codex")
+        connected.start()
+        self.addCleanup(connected.stop)
+        catalog = patch.object(agent_models, "fetch_codex_model_catalog", return_value=None)
         self.live_catalog = catalog.start()
         self.addCleanup(catalog.stop)
 
@@ -3539,16 +3851,16 @@ class SlackAgentSettingsTests(unittest.TestCase):
             (Path(raw_dir) / "models_cache.json").write_text(json.dumps({"models": [
                 {"slug": "gpt-6.1-sol", "visibility": "list", "priority": 1},
             ]}), encoding="utf-8")
-            models = slack_socket_agent.discover_codex_models()
+            models = agent_models.discover_codex_models()
             self.assertEqual([model.model_id for model in models], ["gpt-6-astra"])
             self.assertEqual(slack_socket_agent.default_agent_settings(models).model, "gpt-6-astra")
             old_saved_choice = slack_socket_agent.AgentSettings("gpt-6.1-sol", "low", False)
             repaired = slack_socket_agent.normalize_settings(old_saved_choice, models)
             self.assertEqual((repaired.model, repaired.reasoning_effort), ("gpt-6-astra", "low"))
-            explicit = slack_socket_agent.AgentSettings("gpt-6-astra", "low", False)
+            explicit = slack_socket_agent.AgentSettings("gpt-6-astra", "low", False, backend="codex")
             self.assertEqual(slack_socket_agent.normalize_settings(explicit, models), explicit)
             # A later cache rewrite cannot bring back the rejected model.
-            self.assertEqual(slack_socket_agent.default_agent_settings(slack_socket_agent.discover_codex_models()).model, "gpt-6-astra")
+            self.assertEqual(slack_socket_agent.default_agent_settings(agent_models.discover_codex_models()).model, "gpt-6-astra")
 
     def test_malformed_live_reasoning_efforts_preserve_catalog(self) -> None:
         """Malformed optional metadata must not discard other account models."""
@@ -3560,7 +3872,7 @@ class SlackAgentSettingsTests(unittest.TestCase):
                     {"model": "valid", "isDefault": True,
                      "supportedReasoningEfforts": [{"reasoningEffort": "medium"}]},
                 ]
-                models = slack_socket_agent.discover_codex_models()
+                models = agent_models.discover_codex_models()
                 self.assertEqual([model.model_id for model in models], ["malformed", "valid"])
                 self.assertEqual(models[0].reasoning_efforts,
                                  ("low",) if isinstance(efforts, list)
@@ -3573,7 +3885,7 @@ class SlackAgentSettingsTests(unittest.TestCase):
             (Path(raw_dir) / "models_cache.json").write_text(json.dumps({"models": [
                 {"slug": "gpt-6.1-sol", "visibility": "list", "priority": 1},
             ]}), encoding="utf-8")
-            models = slack_socket_agent.discover_codex_models()
+            models = agent_models.discover_codex_models()
             self.assertIsNone(slack_socket_agent.default_agent_settings(models).model)
             modal = slack_socket_agent.settings_modal(metadata={}, settings=slack_socket_agent.AgentSettings(), models=models)
             self.assertEqual(modal["blocks"][0]["element"]["initial_option"]["text"]["text"], "Codex default")
@@ -3599,7 +3911,7 @@ class SlackAgentSettingsTests(unittest.TestCase):
                         "SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_IDS": "C1",
                         "OPENTAG_SLACK_STREAMING": "0",
                     }, clear=True,
-                ), patch.object(slack_socket_agent, "discover_codex_models", return_value=[]), patch.object(
+                ), patch.object(agent_models, "discover_codex_models", return_value=[]), patch.object(
                     slack_socket_agent, "build_thread_text", return_value="thread"
                 ), patch.object(slack_socket_agent, "run_backend_events", side_effect=run_events), patch.object(
                     slack_socket_agent, "collect_health_checks", return_value=[]
@@ -3642,7 +3954,7 @@ class SlackAgentSettingsTests(unittest.TestCase):
                     "SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_IDS": "C1",
                     "OPENTAG_SLACK_STREAMING": "0",
                 }, clear=True,
-            ), patch.object(slack_socket_agent, "discover_codex_models", return_value=[]), patch.object(
+            ), patch.object(agent_models, "discover_codex_models", return_value=[]), patch.object(
                 slack_socket_agent, "build_thread_text", return_value="thread"
             ), patch.object(slack_socket_agent, "run_backend_events", side_effect=run_events):
                 slack_socket_agent.create_app(
@@ -3693,7 +4005,7 @@ class SlackAgentSettingsTests(unittest.TestCase):
             client = MagicMock()
             with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
                 os.environ, {"SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_IDS": "C1"}, clear=True,
-            ), patch.object(slack_socket_agent, "discover_codex_models", return_value=[]):
+            ), patch.object(agent_models, "discover_codex_models", return_value=[]):
                 slack_socket_agent.create_app(
                     "codex", 30, frozenset({"UOWNER", "UOTHER"}), activity_store=store,
                 )
@@ -3839,10 +4151,10 @@ class SlackAgentSettingsTests(unittest.TestCase):
             cache = Path(raw_dir) / "models_cache.json"
             cache.write_text(json.dumps(payload), encoding="utf-8")
             with patch(
-                "scripts.slack_socket_agent.codex_models_cache_path",
+                "scripts.agent_models.codex_models_cache_path",
                 return_value=cache,
             ), patch.dict(os.environ, {}, clear=True):
-                models = slack_socket_agent.discover_codex_models()
+                models = agent_models.discover_codex_models()
 
         self.assertEqual(["gpt-visible"], [model.model_id for model in models])
         self.assertEqual(("low", "medium"), models[0].reasoning_efforts)
@@ -3853,7 +4165,7 @@ class SlackAgentSettingsTests(unittest.TestCase):
     def test_user_settings_survive_a_new_store_instance(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
             path = Path(raw_dir) / "settings.json"
-            settings = slack_socket_agent.AgentSettings("gpt-visible", "high", fast_mode=True)
+            settings = slack_socket_agent.AgentSettings("gpt-visible", "high", fast_mode=True, backend="codex")
             slack_socket_agent.UserAgentSettingsStore(path).set("T1", "U1", settings)
 
             loaded = slack_socket_agent.UserAgentSettingsStore(path).get("T1", "U1")
@@ -3897,13 +4209,13 @@ class SlackAgentSettingsTests(unittest.TestCase):
                 encoding="utf-8",
             )
             with patch.dict(os.environ, {"CODEX_HOME": raw_dir}, clear=True):
-                models = slack_socket_agent.discover_codex_models()
+                models = agent_models.discover_codex_models()
 
         configured = next(model for model in models if model.is_default)
         self.assertEqual("gpt-configured", configured.model_id)
         self.assertEqual("high", configured.default_reasoning_effort)
         self.assertEqual(
-            slack_socket_agent.AgentSettings("gpt-configured", "high", fast_mode=True),
+            slack_socket_agent.AgentSettings("gpt-configured", "high", fast_mode=True, backend="codex"),
             slack_socket_agent.default_agent_settings(models),
         )
 
@@ -3955,7 +4267,7 @@ class SlackAgentSettingsTests(unittest.TestCase):
                 {"CODEX_HOME": str(codex_home), "OPENTAG_WORKDIR": str(workdir)},
                 clear=True,
             ):
-                models = slack_socket_agent.discover_codex_models()
+                models = agent_models.discover_codex_models()
                 modal = slack_socket_agent.settings_modal(
                     metadata={"team": "T1", "channel": "C1", "thread_ts": "1.23"},
                     settings=slack_socket_agent.AgentSettings(),
@@ -3963,7 +4275,7 @@ class SlackAgentSettingsTests(unittest.TestCase):
                 )
 
         self.assertEqual(
-            "gpt-tag", modal["blocks"][0]["element"]["initial_option"]["value"]
+            "codex:gpt-tag", modal["blocks"][0]["element"]["initial_option"]["value"]
         )
         self.assertEqual(
             "high", modal["blocks"][1]["element"]["initial_option"]["value"]
@@ -3990,7 +4302,7 @@ class SlackAgentSettingsTests(unittest.TestCase):
                 {"CODEX_HOME": str(codex_home), "OPENTAG_WORKDIR": str(workdir)},
                 clear=True,
             ):
-                defaults = slack_socket_agent.configured_codex_defaults()
+                defaults = agent_models.configured_codex_defaults()
 
         self.assertEqual(("gpt-global", "high", True), defaults)
 
@@ -4012,7 +4324,7 @@ class SlackAgentSettingsTests(unittest.TestCase):
                 {"CODEX_HOME": str(codex_home), "OPENTAG_WORKDIR": str(workdir)},
                 clear=True,
             ):
-                defaults = slack_socket_agent.configured_codex_defaults()
+                defaults = agent_models.configured_codex_defaults()
 
         self.assertEqual((None, None, True), defaults)
 
@@ -4039,7 +4351,7 @@ class SlackAgentSettingsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw_dir:
             path = Path(raw_dir) / "settings.json"
             store = slack_socket_agent.UserAgentSettingsStore(path)
-            settings = slack_socket_agent.AgentSettings("gpt-visible", "high", fast_mode=True)
+            settings = slack_socket_agent.AgentSettings("gpt-visible", "high", fast_mode=True, backend="codex")
             store.set("T1", "U1", settings)
 
             self.assertEqual(settings, store.get("T1", "U1"))
@@ -4066,7 +4378,7 @@ class SlackAgentSettingsTests(unittest.TestCase):
                 "OPENTAG_SLACK_SETTINGS_FILE": str(Path(raw_dir) / "settings.json"),
             },
             clear=True,
-        ), patch.object(slack_socket_agent, "discover_codex_models", return_value=models):
+        ), patch.object(agent_models, "discover_codex_models", return_value=models):
             slack_socket_agent.create_app("codex", 30, frozenset({"UOWNER"}))
             save = fake_app.views[slack_socket_agent.SETTINGS_VIEW_ID]
             save(
@@ -4126,7 +4438,7 @@ class SlackAgentSettingsTests(unittest.TestCase):
 
         modal = client.views_open.call_args.kwargs["view"]
         self.assertEqual(
-            "gpt-visible", modal["blocks"][0]["element"]["initial_option"]["value"]
+            "codex:gpt-visible", modal["blocks"][0]["element"]["initial_option"]["value"]
         )
         self.assertEqual("high", modal["blocks"][1]["element"]["initial_option"]["value"])
         self.assertEqual(
@@ -4170,7 +4482,7 @@ class SlackAgentSettingsTests(unittest.TestCase):
         self.assertEqual("high", effort_element["initial_option"]["value"])
         model_element = modal["blocks"][0]["element"]
         self.assertEqual(
-            ["gpt-visible"],
+            ["codex:gpt-visible"],
             [option["value"] for option in model_element["options"]],
         )
         self.assertTrue(
@@ -4216,7 +4528,7 @@ class SlackAgentSettingsTests(unittest.TestCase):
             os.environ,
             {"SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_IDS": "C123"},
             clear=True,
-        ), patch.object(slack_socket_agent, "discover_codex_models", return_value=models):
+        ), patch.object(agent_models, "discover_codex_models", return_value=models):
             slack_socket_agent.create_app("codex", 30, frozenset({"UOWNER"}))
             handler = fake_app.actions[slack_socket_agent.SETTINGS_RESET_ACTION_ID]
             handler(
@@ -4236,7 +4548,7 @@ class SlackAgentSettingsTests(unittest.TestCase):
         ack.assert_called_once_with()
         reset_view = client.views_update.call_args.kwargs["view"]
         self.assertEqual(
-            "gpt-visible",
+            "codex:gpt-visible",
             reset_view["blocks"][0]["element"]["initial_option"]["value"],
         )
         self.assertEqual(
@@ -4369,3 +4681,15 @@ class SlackStreamingConfigurationTests(unittest.TestCase):
             self.assertTrue(slack_socket_agent.env_enabled("OPENTAG_SLACK_STREAMING", default=True))
         with patch.dict(os.environ, {"OPENTAG_SLACK_STREAMING": "0"}, clear=True):
             self.assertFalse(slack_socket_agent.env_enabled("OPENTAG_SLACK_STREAMING", default=True))
+
+class BackendEffortIsolationTests(unittest.TestCase):
+    def test_codex_allowlist_does_not_remove_claude_efforts_or_default(self):
+        models = [slack_socket_agent.ModelOption(
+            "opus", "Opus", ("high", "max"), backend="claude",
+            default_reasoning_effort="high", is_default=True,
+        ), slack_socket_agent.ModelOption("gpt", "GPT", ("low", "high"))]
+        with patch.dict(os.environ, {"OPENTAG_CODEX_REASONING_EFFORTS": "low,medium"}):
+            self.assertEqual(("high", "max"), slack_socket_agent.efforts_for_model("opus", models, "claude"))
+            self.assertEqual(("high", "max"), slack_socket_agent.efforts_for_model(None, models, "claude"))
+            self.assertEqual("high", slack_socket_agent.default_agent_settings(models).reasoning_effort)
+            self.assertEqual(("low",), slack_socket_agent.efforts_for_model("gpt", models, "codex"))

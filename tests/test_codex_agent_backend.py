@@ -8,13 +8,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from scripts.codex_app_server import (
-    APPROVAL_TIMEOUT_SECONDS,
+from scripts.agent_activity import APPROVAL_TIMEOUT_SECONDS, activity_label
+from scripts.codex_agent_backend import (
     CodexAppServer,
     CodexAppServerError,
     CodexEventMapper,
     JsonLineDecoder,
-    activity_label,
 )
 
 
@@ -41,6 +40,12 @@ class JsonLineDecoderTests(unittest.TestCase):
 
 
 class ModelCatalogTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # These fixtures exercise inherited Codex sign-in, independent of local accounts.
+        auth = patch("scripts.tag_chatgpt.enabled", return_value=False)
+        auth.start()
+        self.addCleanup(auth.stop)
+
     def test_catalog_reads_all_pages_without_starting_an_agent_task(self) -> None:
         server = CodexAppServer(["codex", "app-server"], cwd=Path.cwd(), timeout=10)
         with patch.object(server, "_start"), patch.object(server, "_notify"), patch.object(server, "close") as close, patch.object(
@@ -288,7 +293,7 @@ class ServerRequestTests(unittest.TestCase):
             server._send = MagicMock()  # type: ignore[method-assign]
             emitted: list[dict[str, object]] = []
 
-            with patch("scripts.codex_app_server.uuid.uuid4") as make_id:
+            with patch("scripts.codex_agent_backend.uuid.uuid4") as make_id:
                 make_id.return_value.hex = approval_id
                 handled = server._resolve_server_request(
                     {
@@ -342,7 +347,7 @@ class ServerRequestTests(unittest.TestCase):
                 (500.0, 500.0),
             ]:
                 with self.subTest(outer_deadline=outer_deadline), patch(
-                    "scripts.codex_app_server.time.monotonic", return_value=100.0
+                    "scripts.codex_agent_backend.time.monotonic", return_value=100.0
                 ):
                     server._resolve_server_request(
                         {
@@ -541,7 +546,7 @@ for raw in sys.stdin:
     method = message.get("method")
     if message.get("id") == 900 and method is None:
         assert message["result"]["decision"] == "decline"
-        send({"id": pending_thread_start["id"], "result": {"thread": {"id": "thread-1"}}})
+        send({"id": pending_thread_start["id"], "result": {"thread": {"id": "thread-1"}, "model": "gpt-resolved"}})
     elif method == "initialize":
         send({"id": message["id"], "result": {"userAgent": "fake"}})
     elif method == "initialized":
@@ -614,6 +619,7 @@ for raw in sys.stdin:
             )
 
         self.assertEqual(("completed", ""), (status, detail))
+        self.assertEqual({"type": "run_info", "model": "gpt-resolved", "reasoning_effort": "high"}, events[0])
         self.assertEqual("Hello", next(
             event["text"] for event in events if event["type"] == "message_delta"
         ))

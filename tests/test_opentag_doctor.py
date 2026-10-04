@@ -75,3 +75,14 @@ class OpenTagDoctorTests(unittest.TestCase):
 
         with patch.dict(os.environ, environment, clear=True):
             self.assertFalse(check_offline(root))
+
+class ClaudeTransportDoctorTests(unittest.TestCase):
+    def test_sdk_case_and_whitespace_still_check_dependency(self):
+        for transport in ("sdk", "SDK", " SDK ", "print"):
+            with self.subTest(transport=transport), patch.dict(os.environ, {
+                "OPENTAG_BACKEND": "claude", "OPENTAG_CLAUDE_TRANSPORT": transport,
+            }), patch.object(opentag_doctor.shutil, "which", return_value="/bin/claude"), patch.object(
+                opentag_doctor.importlib.util, "find_spec", return_value=None
+            ) as find, patch.object(opentag_doctor, "print_check"):
+                self.assertEqual(transport == "print", opentag_doctor.check_backend())
+                self.assertEqual(transport != "print", find.called)
