@@ -47,6 +47,7 @@ class FailureCategory:
     MAXIMUM_RUNTIME = "maximum_runtime"
     UNEXPECTED_EXIT = "unexpected_backend_exit"
     MODEL_UNAVAILABLE = "model_unavailable"
+    UNSUPPORTED_TOOL = "unsupported_tool"
     UNKNOWN = "unknown"
 
 
@@ -307,7 +308,8 @@ def _classification_for_category(category: str, *, code: str | None, detail: str
         FailureCategory.MAXIMUM_RUNTIME: "The coding backend reached Tag's maximum runtime.",
         FailureCategory.UNEXPECTED_EXIT: "The coding backend exited unexpectedly.",
         FailureCategory.MODEL_UNAVAILABLE: "The selected model is unavailable for this ChatGPT account. Choose another model in Configure.",
-        FailureCategory.UNKNOWN: "Cause not identified.",
+        FailureCategory.UNKNOWN: "The backend failed without returning an error message. Retry or open the error report for diagnostics.",
+        FailureCategory.UNSUPPORTED_TOOL: "The API gateway rejected a tool type. It accepts only function or custom tools; hosted tools and tool namespaces may be unsupported.",
     }
     evidence = {
         FailureCategory.AUTHENTICATION: "An explicit authentication failure was observed.",
@@ -318,6 +320,7 @@ def _classification_for_category(category: str, *, code: str | None, detail: str
         FailureCategory.UNEXPECTED_EXIT: "The backend process reported a non-success exit.",
         FailureCategory.MODEL_UNAVAILABLE: "The backend rejected the selected model for a ChatGPT account.",
         FailureCategory.UNKNOWN: "The failure did not match a recognized evidence pattern.",
+        FailureCategory.UNSUPPORTED_TOOL: "The gateway explicitly required function or custom Responses tools.",
     }
     if category == FailureCategory.IDLE_TIMEOUT and "no backend activity" in detail.lower():
         evidence = "No backend activity was observed before the timeout."
@@ -330,7 +333,34 @@ def _classification_for_category(category: str, *, code: str | None, detail: str
                 f"The '{match.group(1)}' model is not supported when using Codex "
                 "with a ChatGPT account. Choose another model in Configure."
             )
+    if category == FailureCategory.UNKNOWN:
+        message = _backend_error_message(detail)
+        if message:
+            explanations[category] = f"The backend reported: {message}"
     return FailureClassification(category, explanations[category], evidence, code)
+
+
+def _backend_error_message(detail: str) -> str:
+    """Use bounded, redacted error prose without exposing unrelated JSON fields."""
+    message = detail.strip()
+    try:
+        payload = json.loads(message)
+    except (ValueError, TypeError):
+        pass  # Backends also emit plain-text exceptions.
+    else:
+        message = ""
+        if isinstance(payload, dict):
+            error = payload.get("error", payload)
+            if isinstance(error, dict):
+                candidate = error.get("message")
+            else:
+                candidate = error
+            if isinstance(candidate, str):
+                message = candidate
+    message = redact_sensitive_text(message)
+    # Slack renders angle-bracket mentions and links in mrkdwn. Treat backend
+    # prose as text, including redaction markers, not interactive Slack markup.
+    return message.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def classify_failure(detail: str, backend_code: str | None = None) -> FailureClassification:
@@ -356,6 +386,8 @@ def classify_failure(detail: str, backend_code: str | None = None) -> FailureCla
         )
 
     lowered = safe_detail.lower()
+    if "responses tools must be function or custom tools" in lowered:
+        return _classification_for_category(FailureCategory.UNSUPPORTED_TOOL, code=normalized_code, detail=safe_detail)
     if re.search(r"model.{0,160}not supported when using codex with a chatgpt account", lowered):
         return _classification_for_category(FailureCategory.MODEL_UNAVAILABLE, code=normalized_code, detail=safe_detail)
     if re.search(r"\bno backend activity\b|\bidle(?:[_ -]|\u00a0)?timeout\b", lowered):
@@ -401,6 +433,10 @@ def redact_sensitive_text(
 ) -> str:
     """Redact common credentials before a value can enter a local/public report."""
     redacted = str(value)
+    for name in ("OPENTAG_CODEX_API_KEY", "OPENTAG_CLAUDE_API_KEY"):
+        secret = os.getenv(name, "")
+        if secret:
+            redacted = redacted.replace(secret, "<redacted>")
     for pattern in _SECRET_PATTERNS:
         redacted = pattern.sub(lambda match: (match.group(1) if match.lastindex else "") + "<redacted>", redacted)
     if preserve_whitespace:
@@ -435,7 +471,7 @@ def supporting_diagnostics(
         if match:
             items.append(f"The backend exit status was {match.group(1)}.")
     if not items:
-        items.append("Raw backend diagnostics were kept local and are not included by default.")
+        items.append("Only bounded, redacted error text is included; full backend logs remain local.")
     return tuple(redact_sensitive_text(item) for item in items[:MAX_SUPPORTING_DIAGNOSTICS])
 
 

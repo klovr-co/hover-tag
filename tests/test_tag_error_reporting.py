@@ -19,6 +19,16 @@ from scripts.tag_error_reporting import (
 
 
 class FailureClassificationTests(unittest.TestCase):
+    def test_gateway_tool_rejection_has_safe_specific_cause_for_both_backends(self):
+        detail = json.dumps({"error": {"message": "Responses tools must be function or custom tools. Provider-hosted tools are unavailable through this gateway.", "code": "invalid_request"}})
+        for backend in ("codex", "claude"):
+            report = make_error_report("8BE7B439", detail, backend=backend,
+                                      backend_version_value="test", tag_version_value="test")
+            self.assertEqual(report.classification.category, FailureCategory.UNSUPPORTED_TOOL)
+            self.assertIn("gateway rejected a tool type", report.report_text())
+            self.assertNotIn("Cause not identified", report.report_text())
+        self.assertEqual(classify_failure('invalid_request: unrelated error').category, FailureCategory.UNKNOWN)
+
     def test_structured_code_wins_over_conflicting_text(self) -> None:
         result = classify_failure(
             "the backend exited unexpectedly after a request",
@@ -35,7 +45,31 @@ class FailureClassificationTests(unittest.TestCase):
         self.assertEqual(FailureCategory.IDLE_TIMEOUT, idle.category)
         self.assertNotIn("network", idle.explanation.lower())
         self.assertEqual(FailureCategory.UNKNOWN, unknown.category)
-        self.assertEqual("Cause not identified.", unknown.explanation)
+        self.assertEqual("The backend reported: RuntimeError: private prompt text", unknown.explanation)
+
+    def test_unrecognized_provider_error_preserves_message_for_both_backends(self):
+        detail = json.dumps({"error": {"message": "This deployment does not support streaming.",
+                                       "code": "new_provider_code"}, "request": "private request"})
+        for backend in ("codex", "claude"):
+            report = make_error_report("ABC12345", detail, backend=backend)
+            self.assertIn("The backend reported: This deployment does not support streaming.", report.report_text())
+            self.assertNotIn("private request", report.report_text())
+
+    def test_unknown_message_is_bounded_redacted_and_cannot_mention_slack_users(self):
+        with patch.dict("os.environ", {"OPENTAG_CODEX_API_KEY": "provider-private-key"}):
+            result = classify_failure("Rejected provider-private-key token=secret <!channel> " + "x" * 1000)
+        self.assertNotIn("provider-private-key", result.explanation)
+        self.assertNotIn("token=secret", result.explanation)
+        self.assertNotIn("<!channel>", result.explanation)
+        self.assertIn("&lt;!channel&gt;", result.explanation)
+        self.assertLess(len(result.explanation), 350)
+
+    def test_absent_error_message_does_not_invent_a_cause_or_dump_json(self):
+        for detail in ("", "   ", '{"request":"private request","error":{"code":"new_code"}}'):
+            result = classify_failure(detail)
+            self.assertIn("without returning an error message", result.explanation)
+            self.assertNotIn("private request", result.explanation)
+            self.assertNotIn("Cause not identified", result.explanation)
 
     def test_authentication_mapping_does_not_claim_expiration(self) -> None:
         result = classify_failure("authentication failed: invalid api key")
@@ -169,7 +203,9 @@ class ErrorReportStoreTests(unittest.TestCase):
 
             self.assertEqual("C123", payload["origin"]["channel_id"])
             self.assertNotIn("xoxb-secret", report.report_text())
-            self.assertNotIn("private prompt", report.report_text())
+            # Unknown failures now retain bounded, redacted backend prose in
+            # the human-reviewed report rather than dropping its message.
+            self.assertIn("The backend reported: RuntimeError:", report.report_text())
 
     def test_unavailable_or_invalid_references_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:

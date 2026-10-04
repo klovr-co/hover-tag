@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from . import tag_chatgpt
+    from . import tag_chatgpt, agent_connection, agent_usage, agent_gateway
     from .agent_activity import (
         APPROVAL_POLL_SECONDS,
         APPROVAL_TIMEOUT_SECONDS,
@@ -32,6 +32,7 @@ try:
     from .tag_approval_choices import approval_choices, public_approval_choices, auto_review_details
 except ImportError:  # Direct script execution does not create a package context.
     import tag_chatgpt
+    import agent_connection, agent_usage, agent_gateway
     from agent_activity import (
         APPROVAL_POLL_SECONDS,
         APPROVAL_TIMEOUT_SECONDS,
@@ -113,6 +114,8 @@ class CodexEventMapper:
         params = message.get("params")
         if not isinstance(method, str) or not isinstance(params, dict):
             return []
+        if method == "thread/tokenUsage/updated":
+            return agent_usage.codex_event(params)
         if method == "item/started":
             return self._item_started(params)
         if method == "item/agentMessage/delta":
@@ -265,6 +268,7 @@ class CodexAppServer:
     ) -> None:
         self.command = command
         self.chatgpt_token = ""
+        self.gateway_proxy: agent_gateway.GatewayProxy | None = None
         self.auth_identity: tuple | None = None
         self.token_renewal_deadline = float("inf")
         self.renewing_token = False
@@ -289,7 +293,7 @@ class CodexAppServer:
 
     def model_catalog(self) -> list[dict[str, Any]]:
         """Read models for the signed-in account without creating a thread or turn."""
-        if tag_chatgpt.enabled():
+        if tag_chatgpt.enabled() and not agent_connection.active("codex"):
             return tag_chatgpt.models()
         mapper = CodexEventMapper()
         deadline = time.monotonic() + self.timeout
@@ -422,12 +426,13 @@ class CodexAppServer:
         command = self.command
         store = tag_chatgpt.Store()
         try:
-            identity = store.identity()
+            agent_connection.routing("codex")
+            identity = ("api",) if agent_connection.active("codex") else store.identity()
             if self.auth_identity is None:
                 self.auth_identity = identity
             elif self.auth_identity != identity:
                 raise tag_chatgpt.ChatGPTError("ChatGPT account changed during the task; restart the task with the intended account.")
-        except tag_chatgpt.ChatGPTError as exc:
+        except (tag_chatgpt.ChatGPTError, ValueError) as exc:
             raise CodexAppServerError(str(exc)) from None
         if self.auth_identity[0] == "chatgpt":
             try:
@@ -439,6 +444,25 @@ class CodexAppServer:
             environment[tag_chatgpt.TOKEN_ENV] = self.chatgpt_token
             command = [part for part in command if part != "--stdio"]
             command += ["--listen", "stdio://", *tag_chatgpt.provider_options()]
+        if agent_connection.active("codex"):
+            try:
+                agent_connection.validate("codex")
+                route = agent_connection.routing("codex")
+                if route:
+                    self.gateway_proxy = agent_gateway.GatewayProxy(
+                        os.environ["OPENTAG_CODEX_BASE_URL"], os.environ["OPENTAG_CODEX_API_KEY"],
+                        route, timeout=self.max_timeout,
+                        disable_tools=os.getenv("OPENTAG_CODEX_GATEWAY_DISABLE_TOOLS") == "1")
+                    environment = dict(os.environ)
+                    environment["TAG_GATEWAY_PROXY_TOKEN"] = self.gateway_proxy.token
+                command = [part for part in command if part != "--stdio"]
+                command += ["--listen", "stdio://", *agent_connection.codex_options(
+                    proxy_url=self.gateway_proxy.base_url if self.gateway_proxy else None)]
+            except (ValueError, OSError) as exc:
+                if self.gateway_proxy:
+                    self.gateway_proxy.close()
+                    self.gateway_proxy = None
+                raise CodexAppServerError(str(exc)) from None
         try:
             self.process = subprocess.Popen(
                 command,
@@ -450,6 +474,9 @@ class CodexAppServer:
                 bufsize=0,
             )
         except OSError as exc:
+            if self.gateway_proxy:
+                self.gateway_proxy.close()
+                self.gateway_proxy = None
             raise CodexAppServerError(f"Could not start Codex App Server: {exc}") from exc
         self.reader_threads = [
             threading.Thread(target=self._read_stdout, daemon=True),
@@ -853,6 +880,9 @@ class CodexAppServer:
         })
 
     def close(self) -> None:
+        if self.gateway_proxy:
+            self.gateway_proxy.close()
+            self.gateway_proxy = None
         process = self.process
         if process is None:
             return

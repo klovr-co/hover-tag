@@ -1556,7 +1556,7 @@ def _run_cli() -> int:
     parser.add_argument("command", nargs="?", choices=COMMANDS)
     parser.add_argument("arguments", nargs="*", help="memory: start | status | stop; config: init | show | keys | set KEY VALUE; chatgpt: status | login [ACCOUNT] | use ACCOUNT | logout [ACCOUNT] | use-codex")
     parser.add_argument("--offline", action="store_true")
-    parser.add_argument("--json", action="store_true", dest="json_output", help="structured output for inspect, status, doctor, config, paths, upgrade, and chatgpt")
+    parser.add_argument("--json", action="store_true", dest="json_output", help="structured output for inspect, status, doctor, config, paths, upgrade, usage, and chatgpt")
     parser.add_argument("--consent", action="store_true", help="chatgpt login: request plan permission again")
     parser.add_argument("--stdin", action="store_true", help="read a config value from stdin")
     parser.add_argument("--from", dest="source", type=Path)
@@ -1583,8 +1583,8 @@ def _run_cli() -> int:
         parser.error("--no-start, --test and --review are only for setup")
     if args.arguments and args.command not in {"add", "memory", "config", "telemetry", "chatgpt"}:
         parser.error("Only add, memory, config, telemetry, and chatgpt accept additional positional arguments")
-    if args.json_output and args.command not in {"list", "memory", "inspect", "status", "doctor", "config", "paths", "upgrade", "telemetry", "chatgpt"}:
-        parser.error("--json supports list, memory, inspect, status, doctor, config, paths, upgrade, telemetry, and chatgpt")
+    if args.json_output and args.command not in {"list", "memory", "inspect", "status", "doctor", "config", "paths", "upgrade", "telemetry", "chatgpt", "usage"}:
+        parser.error("--json supports list, memory, inspect, status, doctor, config, paths, upgrade, telemetry, usage, and chatgpt")
     if args.stdin and args.command != "config":
         parser.error("--stdin is only for config set")
     if args.offline and args.command not in {"inspect", "doctor"}:
@@ -1745,6 +1745,26 @@ def _run_cli() -> int:
     }
     os.environ.clear()
     os.environ.update(environment)
+    if args.command == "usage":
+        try:
+            from . import agent_usage
+        except ImportError:
+            import agent_usage
+        values = settings.load_config(settings.config_path(home))
+        usage = agent_usage.report(home, values)
+        if args.json_output:
+            print(json.dumps(usage, indent=2))
+        else:
+            print(f"Usage · {usage['month_utc']} UTC · {usage['attempts']} attempts")
+            print(f"Tokens: {usage['input_tokens']} input, {usage['output_tokens']} output, {usage['cached_input_tokens']} cached input")
+            print(f"Recorded estimated cost: ${usage['estimated_cost_usd']:.4f}")
+            if usage['monthly_budget_usd'] is not None:
+                print(f"Monthly advisory budget: ${usage['monthly_budget_usd']:.2f}")
+                if usage['recorded_cost_over_budget']:
+                    print("Recorded estimated cost has reached the budget.")
+            print(f"Missing usage: {usage['attempts_without_usage']} attempts; missing cost: {usage['attempts_without_cost']}; unfinished: {usage['unfinished_attempts']}")
+            print(usage['coverage'])
+        return 0
     if args.command == "chatgpt":
         try:
             from . import tag_chatgpt
@@ -1984,10 +2004,13 @@ def _run_cli() -> int:
             from . import tag_chatgpt
         except ImportError:
             import tag_chatgpt
-        if tag_chatgpt.enabled():
+        if tag_chatgpt.enabled() and not agent_models.agent_connection.active("codex"):
             if os.getenv("OPENTAG_CODEX_TRANSPORT", "app-server") != "app-server":
                 raise RuntimeError("ChatGPT plan usage requires app-server. Run tag config set OPENTAG_CODEX_TRANSPORT app-server.")
             tag_chatgpt.Store().access()  # Refresh before starting dependent services.
+    if args.command in {"start", "dev"}:
+        for backend in agent_models.allowed_backends(os.getenv("OPENTAG_BACKEND", "codex")):
+            agent_models.agent_connection.validate(backend)
     # A TAG installation always has one stable integration workspace.
     os.environ["OPENTAG_WORKDIR"] = str(context.workspace)
     if args.command == "doctor":

@@ -68,6 +68,36 @@ LABELS = {
 }
 
 
+# API secrets stay outside PUBLIC; config show reports only whether they are set.
+for _backend in ("CODEX", "CLAUDE"):
+    for _suffix in ("AUTH", "BASE_URL"):
+        PUBLIC |= {f"OPENTAG_{_backend}_{_suffix}"}
+    EDITABLE |= {f"OPENTAG_{_backend}_{suffix}" for suffix in ("AUTH", "BASE_URL", "API_KEY")}
+PUBLIC |= {"OPENTAG_CODEX_API_VERSION", "OPENTAG_MONTHLY_BUDGET_USD",
+           "OPENTAG_CODEX_GATEWAY_FORMAT", "OPENTAG_CODEX_GATEWAY_PROVIDER",
+            "OPENTAG_CODEX_GATEWAY_DISABLE_TOOLS",
+           "OPENTAG_CODEX_INPUT_USD_PER_MILLION", "OPENTAG_CODEX_OUTPUT_USD_PER_MILLION",
+           "OPENTAG_CODEX_CACHED_INPUT_USD_PER_MILLION"}
+EDITABLE |= PUBLIC - {"OPENTAG_WORKDIR"}
+EDITABLE |= {"OPENTAG_CODEX_API_VERSION"}
+LABELS.update({
+    "OPENTAG_CODEX_GATEWAY_DISABLE_TOOLS": "Gateway chat only: disable all tools (1 on, 0 off)",
+    "OPENTAG_CODEX_AUTH": "Codex connection (inherit, api, azure)",
+    "OPENTAG_CLAUDE_AUTH": "Claude connection (inherit, api)",
+    "OPENTAG_CODEX_API_KEY": "Codex API key", "OPENTAG_CLAUDE_API_KEY": "Claude API key",
+    "OPENTAG_CODEX_BASE_URL": "Codex API base URL", "OPENTAG_CLAUDE_BASE_URL": "Claude API base URL",
+    "OPENTAG_CODEX_API_VERSION": "Azure API version (empty for v1)",
+    "OPENTAG_CODEX_GATEWAY_FORMAT": "Gateway routing format (empty or provider.only)",
+    "OPENTAG_CODEX_GATEWAY_PROVIDER": "Gateway provider ID (optional)",
+    "OPENTAG_CODEX_MODELS": "Codex models or Azure deployment names (comma-separated)",
+    "OPENTAG_CLAUDE_MODELS": "Claude API models (comma-separated)",
+    "OPENTAG_MONTHLY_BUDGET_USD": "Monthly advisory budget (USD)",
+    "OPENTAG_CODEX_INPUT_USD_PER_MILLION": "Codex uncached input (USD per million)",
+    "OPENTAG_CODEX_OUTPUT_USD_PER_MILLION": "Codex output (USD per million)",
+    "OPENTAG_CODEX_CACHED_INPUT_USD_PER_MILLION": "Codex cached input (USD per million)",
+})
+
+
 def config_path(home: Path) -> Path:
     return Path(os.getenv("OPENTAG_ENV_FILE", str(home / "config/settings.json"))).expanduser()
 
@@ -89,10 +119,40 @@ def load_config(path: Path) -> dict[str, str]:
 
 
 def validation_error(key: str, value: str) -> str | None:
+    if (key.endswith("_USD_PER_MILLION") or key == "OPENTAG_MONTHLY_BUDGET_USD") and value:
+        import math
+        try:
+            if not math.isfinite(float(value)) or float(value) < 0:
+                return "Use a finite nonnegative dollar amount"
+        except ValueError:
+            return "Use a finite nonnegative dollar amount"
     if key in REQUIRED and not value.strip():
         return "Required"
     if "\x00" in value:
         return "Must not contain a null character"
+    if key in {"OPENTAG_CODEX_AUTH", "OPENTAG_CLAUDE_AUTH"}:
+        allowed = {"inherit", "api", "azure"} if "CODEX" in key else {"inherit", "api"}
+        if value not in allowed:
+            return "Choose " + ", ".join(sorted(allowed))
+    if key == "OPENTAG_CODEX_GATEWAY_DISABLE_TOOLS" and value not in {"", "0", "1"}:
+        return "Use 1 for chat only or 0 to enable tools"
+    if key == "OPENTAG_CODEX_GATEWAY_FORMAT" and value not in {"", "provider.only"}:
+        return "Use provider.only, or leave empty to disable routing"
+    if key == "OPENTAG_CODEX_GATEWAY_PROVIDER" and value and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", value):
+        return "Use one gateway provider ID (letters, numbers, underscores, dots, hyphens)"
+    if key in {"OPENTAG_CODEX_BASE_URL", "OPENTAG_CLAUDE_BASE_URL"} and value:
+        try:
+            from .agent_connection import validate_url
+        except ImportError:
+            from agent_connection import validate_url
+        try:
+            validate_url(value)
+        except ValueError as exc:
+            return str(exc)
+    if key.endswith("_API_KEY") and value and any(c.isspace() for c in value):
+        return "API keys must not contain whitespace"
+    if key == "OPENTAG_CODEX_API_VERSION" and value and not re.fullmatch(r"[A-Za-z0-9.-]{1,80}", value):
+        return "Use the Azure API version without query syntax"
     if key == "OPENTAG_BACKEND" and value not in BACKENDS:
         return "Choose codex or claude"
     if key == "OPENTAG_DEFAULT_MODEL" and value and not DEFAULT_MODEL_RE.fullmatch(value):
