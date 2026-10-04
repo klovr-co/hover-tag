@@ -3,6 +3,7 @@
 // Everything the UI asks of the operating system goes through here. In Tag.app
 // it calls the Rust side (src-tauri); in a plain browser, or with
 // TAG_INSTALLER_DEMO set, it plays sample data so nothing real changes.
+import productVersion from "../../../VERSION?raw";
 import listExample from "../../../protocol/examples/list.json";
 import type { TagRow } from "./protocol";
 import versionExample from "../../../protocol/examples/version.json";
@@ -60,7 +61,7 @@ export interface Bridge {
   /** A newer signed Tag.app on this build's release line, if any. */
   checkAppUpdate(): Promise<AppUpdate | null>;
   /** Install the update found by checkAppUpdate and restart into it. */
-  installAppUpdate(): Promise<void>;
+  installAppUpdate(version: string): Promise<void>;
 }
 
 export interface AppUpdate {
@@ -124,7 +125,7 @@ async function tauriBridge(): Promise<Bridge> {
     quit: () => invoke("quit"),
     markMigrated: () => invoke("mark_migrated"),
     checkAppUpdate: () => invoke<AppUpdate | null>("app_update_check"),
-    installAppUpdate: () => invoke("app_update_install"),
+    installAppUpdate: (version) => invoke("app_update_install", { version }),
   };
 }
 
@@ -143,27 +144,34 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
     workspace_name: "Acme Inc", main: false,
   });
   let installed = options.installed ?? true;
+  let runtimeVersion = productVersion.trim();
+  let desktopVersion = runtimeVersion;
+  const targetVersion = new URLSearchParams(location.search).get("update") ? "0.4.0-alpha.1" : runtimeVersion;
   let keepRunning = false;
   let loginItem = false;
   const json = (value: unknown): RunResult => ({ code: 0, stdout: JSON.stringify(value), stderr: "" });
   return {
     info: async () => ({
       platform: "macos", demo: true, cli: installed ? "~/.local/bin/tag" : null,
-      version: "0.2.0", launchedAtLogin: false, legacyWantedTags: null,
+      version: desktopVersion, launchedAtLogin: false, legacyWantedTags: null,
     }),
     tag: async (args) => {
       await sleep(250);
       const [first, second] = args;
       if (first === "list") return json({ schema_version: 1, tags: rows });
-      if (first === "version") return json(versionExample);
+      if (first === "version") return json({ ...versionExample, version: runtimeVersion });
       if (first === "autostart") {
         if (second === "on" || second === "off") keepRunning = second === "on";
         return json({ schema_version: 1, enabled: keepRunning, mechanism: "launchd",
           tags: rows.map((r) => ({ tag: r.id, keep_running: !!r.keep_running })) });
       }
       if (first === "upgrade") {
-        return json({ schema_version: 1, ok: true, status: "current", current: { version: "0.2.0" },
-          target: { version: "0.2.0" } });
+        const current = runtimeVersion;
+        const dry = args.includes("--dry-run");
+        if (!dry) runtimeVersion = targetVersion;
+        return json({ schema_version: 1, ok: true,
+          status: dry ? (current === targetVersion ? "current" : "available") : "upgraded",
+          current: { version: current }, target: { version: targetVersion } });
       }
       if ((first === "start" || first === "stop") && args.includes("--workspace")) {
         const team = args[args.indexOf("--workspace") + 1];
@@ -235,8 +243,8 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
     fitWindow: async () => {},
     quit: async () => {},
     markMigrated: async () => {},
-    checkAppUpdate: async () => (new URLSearchParams(location.search).get("update") ? { version: "0.3.0" } : null),
-    installAppUpdate: async () => { await sleep(1500); },
+    checkAppUpdate: async () => desktopVersion !== targetVersion ? { version: targetVersion } : null,
+    installAppUpdate: async () => { desktopVersion = targetVersion; await sleep(1500); },
   };
 }
 

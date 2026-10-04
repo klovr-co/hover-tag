@@ -60,8 +60,11 @@ async fn app_update_check(app: AppHandle, pending: State<'_, PendingUpdate>) -> 
 
 /// Download, verify the signature, install, and restart into the new version.
 #[tauri::command]
-async fn app_update_install(app: AppHandle, pending: State<'_, PendingUpdate>) -> Result<(), String> {
+async fn app_update_install(app: AppHandle, pending: State<'_, PendingUpdate>, version: String) -> Result<(), String> {
     let update = pending.0.lock().unwrap().take().ok_or("No update is ready; check again.")?;
+    if update.version != version {
+        return Err("The update changed. Check again to finish updating Tag.".into());
+    }
     update.download_and_install(|_, _| {}, || {}).await.map_err(|e| e.to_string())?;
     app.state::<Arc<Sessions>>().stop_all();
     app.restart();

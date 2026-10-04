@@ -2,18 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // App settings, updates, and a Tag's recent logs.
 import { useCallback, useEffect, useState } from "react";
-import type { AppInfo, AppUpdate, Bridge } from "../lib/bridge";
+import type { AppInfo, Bridge } from "../lib/bridge";
 import { parseJSON, title, type TagRow } from "../lib/protocol";
 import { failureLine, type Tags } from "../lib/tags";
+import { checkUpdate, installUpdate, type ProductUpdate } from "../lib/updates";
 import { CommunityLinks } from "./CommunityLinks";
 import { Back, ErrorLine, Heading, Icon, Primary, Secondary, Spinner, Switch } from "./ui";
-
-interface Upgrade {
-  status: string;
-  current?: { version?: string };
-  target?: { version?: string };
-  restart_required?: boolean;
-}
 
 function Toggle({ label, detail, on, busy, onChange }: {
   label: string; detail: string; on: boolean; busy?: boolean; onChange: (on: boolean) => void;
@@ -34,19 +28,13 @@ interface SettingsProps {
   info: AppInfo;
   tags: Tags;
   close: () => void;
-  appUpdate: AppUpdate | null;
-  checkApp: () => Promise<AppUpdate | null>;
-  installApp: () => void;
-  installingApp: boolean;
 }
 
-export function Settings({ api, info, tags, close, appUpdate, checkApp, installApp, installingApp }: SettingsProps) {
-  const [appChecked, setAppChecked] = useState(false);
-  const [checkingApp, setCheckingApp] = useState(false);
+export function Settings({ api, info, tags, close }: SettingsProps) {
   const [login, setLogin] = useState(false);
   const [keepBusy, setKeepBusy] = useState(false);
   const [tagVersion, setTagVersion] = useState("");
-  const [update, setUpdate] = useState<Upgrade | null>(null);
+  const [update, setUpdate] = useState<ProductUpdate | null>(null);
   const [checking, setChecking] = useState(false);
   const [upgrading, setUpgrading] = useState(false);
   const [error, setError] = useState("");
@@ -55,30 +43,36 @@ export function Settings({ api, info, tags, close, appUpdate, checkApp, installA
     void api.openAtLogin().then(setLogin).catch(() => setLogin(false));
     void api.tag(["version", "--json"]).then((r) => {
       if (r.code === 0) setTagVersion(parseJSON<{ version: string }>(r.stdout).version);
-    });
+    }).catch(() => {});
   }, [api]);
 
   const check = useCallback(async () => {
     setChecking(true);
     setError("");
-    const result = await api.tag(["upgrade", "--dry-run", "--json"]);
-    setChecking(false);
-    if (result.code === 0) setUpdate(parseJSON<Upgrade>(result.stdout));
-    else setError(failureLine(result, "Couldn't check for updates."));
-  }, [api]);
+    setUpdate(null);
+    try { setUpdate(await checkUpdate(api, info.version)); }
+    catch (error) { setError(String(error)); }
+    finally { setChecking(false); }
+  }, [api, info.version]);
+
+  useEffect(() => { void check(); }, [check]);
 
   const upgrade = async () => {
     setUpgrading(true);
     setError("");
-    const result = await api.tag(["upgrade", "--json"]);
-    setUpgrading(false);
-    if (result.code === 0) {
-      const done = parseJSON<Upgrade>(result.stdout);
-      setUpdate({ ...done, status: done.status === "upgraded" ? "current" : done.status });
-      setTagVersion(done.target?.version ?? tagVersion);
+    try {
+      const done = await installUpdate(api, info.version);
+      setUpdate(done);
+      setTagVersion(done.version);
+    } catch (error) {
+      setUpdate(null);
+      setError(String(error));
+    } finally {
+      setUpgrading(false);
       void tags.refresh();
-    } else setError(failureLine(result, "The upgrade didn't finish. Your Tags still use the previous version."));
+    }
   };
+  const available = update && (update.runtime || update.desktop);
 
   return (
     <div className="stack gap-20">
@@ -100,37 +94,16 @@ export function Settings({ api, info, tags, close, appUpdate, checkApp, installA
         <div className="card list-item" style={{ gap: 12 }}>
           <span className="stack gap-4" style={{ flex: 1 }}>
             <span style={{ fontWeight: 500 }}>
-              {update?.status === "available" ? `Tag ${update.target?.version} is available`
-                : update?.status === "current" ? "Tag is up to date" : `Tag ${tagVersion || "…"}`}
+              {available ? `Tag ${update.version} is available` : `Tag ${tagVersion || info.version}`}
             </span>
             <span className="caption secondary">
-              {update?.status === "available" ? "Running Tags restart on the new version. Your settings are kept."
-                : "The tag command and your Tags"}
+              {available ? "Updates Tag and restarts the app if needed. Your settings are kept."
+                : update ? "Tag is up to date" : "One update for the app and your Tags"}
             </span>
           </span>
-          {upgrading ? <><Spinner small /><span className="caption secondary">Upgrading…</span></>
-            : update?.status === "available" ? <Primary title="Upgrade" onClick={() => void upgrade()} />
+          {upgrading ? <><Spinner small /><span className="caption secondary">Updating…</span></>
+            : available ? <Primary title="Update Tag" onClick={() => void upgrade()} />
             : <Secondary title={checking ? "Checking…" : "Check for updates"} disabled={checking} onClick={() => void check()} />}
-        </div>
-        <div className="card list-item" style={{ gap: 12 }}>
-          <span className="stack gap-4" style={{ flex: 1 }}>
-            <span style={{ fontWeight: 500 }}>
-              {appUpdate ? `Tag.app ${appUpdate.version} is available`
-                : appChecked ? "Tag.app is up to date" : `Tag.app ${info.version}`}
-            </span>
-            <span className="caption secondary">
-              {appUpdate ? "Restarts the app; your Tags keep running." : "Checks automatically every few hours"}
-            </span>
-          </span>
-          {installingApp ? <><Spinner small /><span className="caption secondary">Updating…</span></>
-            : appUpdate ? <Primary title="Restart to update" onClick={installApp} />
-            : <Secondary title={checkingApp ? "Checking…" : "Check for updates"} disabled={checkingApp}
-                onClick={async () => {
-                  setCheckingApp(true);
-                  try { await checkApp(); setAppChecked(true); }
-                  catch { setError("Couldn't check for a new Tag.app. Check your connection and try again."); }
-                  setCheckingApp(false);
-                }} />}
         </div>
       </div>
       {(error || tags.error) && <ErrorLine>{error || tags.error}</ErrorLine>}

@@ -22,10 +22,10 @@ Needs Node 22 and a Rust toolchain. On Linux, also install
 npm install
 npm run dev            # the window in a browser, with sample data
 npm test               # protocol and state tests
-npx tauri dev          # the real app, driving your installed tag
+npm run tauri -- dev          # the real app, driving your installed tag
 ```
 
-`npx tauri dev` uses your real Tags. To try it against this checkout's CLI
+`npm run tauri -- dev` uses your real Tags. To try it against this checkout's CLI
 instead, point `TAG_CLI` at a wrapper script, and set `TAG_HOME` to a scratch
 folder to keep your real Tags out of it. `TAG_INSTALLER_SOURCE=/path/to/repo`
 makes the first-run installer install that checkout. `TAG_INSTALLER_DEMO=1`
@@ -37,7 +37,7 @@ and dark, from `npm run dev`.
 ## Build
 
 ```sh
-npx tauri build        # Tag.app and .dmg, setup.exe, or .deb and .AppImage
+npm run tauri -- build        # Tag.app and .dmg, setup.exe, or .deb and .AppImage
 ```
 
 The build copies `install.sh`, `install.ps1`, and `scripts/tag_install.py`
@@ -51,9 +51,33 @@ them), and a code-signing certificate for Windows. Update bundles are signed
 with the updater key in `TAURI_SIGNING_PRIVATE_KEY`. See
 [`RELEASE.md`](../RELEASE.md).
 
-Tag.app checks for a newer version of itself every six hours and offers
-**Restart to update**; it never restarts on its own. Sample data shows the
-offer with `npm run dev` and `?update=1`.
+Tag has one product version, sourced from the root `VERSION` file. The npm
+build, development, and Tauri commands synchronize the desktop package and
+Rust crate metadata automatically. Release builds use `RELEASE_TAG` for the
+immutable release number; do not bump desktop versions separately.
+
+Settings shows one version and one **Update Tag** action. It checks the saved
+CLI release channel (or exact version pin), requires a matching signed desktop
+release, updates the runtime, verifies its version, then updates and restarts
+the desktop app when needed. An interrupted update can be retried; existing
+settings and update policy are preserved. Missing desktop artifacts never
+produce a false “up to date” result. Checks run every six hours; installation
+always waits for a click.
+
+**AI & models** in Settings shows each set-up Tag's Codex and Claude
+connections and its default model, using `tag NAME settings ai … --json` (see
+[AI connections](../docs/reference/app-protocol.md#ai-connections)). Sign-ins
+run through the same streaming session as setup, so they report progress and
+can be cancelled; the app never handles credentials. The section appears only
+when the installed Tag reports the `ai-connections` capability. First-run setup
+draws the CLI's `default_model` question as a grouped model picker with a
+sign-in link for an agent that isn't connected, and shows connection cards
+(`ai_connection`) only while nothing is connected. `tag settings` → AI & models offers the same
+choices in a terminal.
+
+The standalone CLI keeps `tag upgrade` for installations without the desktop
+app. It uses the same product release number and existing migrations. If the
+CLI was updated separately, the desktop's next update completes alignment.
 
 ## Upgrading from the Swift Tag.app
 

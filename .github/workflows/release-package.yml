@@ -126,7 +126,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           npm ci
-          npm version --no-git-tag-version --allow-same-version "${RELEASE_TAG#v}"
+          node scripts/sync-version.mjs
           # Signed update bundles need the updater key; without it, ship unsigned downloads only.
           if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
             updates='{"bundle":{"createUpdaterArtifacts":true}}'
@@ -135,9 +135,9 @@ jobs:
             updates='{}'
           fi
           if [ "${{ matrix.name }}" = macos ]; then
-            npx tauri build --target universal-apple-darwin --bundles app,dmg --config "$updates"
+            npm run tauri -- build --target universal-apple-darwin --bundles app,dmg --config "$updates"
           else
-            npx tauri build --config "$updates"
+            npm run tauri -- build --config "$updates"
           fi
       - name: Attach to the release
         env:
