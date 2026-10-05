@@ -29,6 +29,9 @@ AUTO_RELEASE_LABELS = {
     "release:next-patch", "release:next-minor", "release:skip",
 }
 SEMVER_CHANNELS = ("stable", "beta", "alpha")
+DESKTOP_CHECKSUMS = frozenset(
+    f"DESKTOP-SHA256SUMS-{platform}" for platform in ("macos", "windows", "linux")
+)
 
 
 @dataclass(frozen=True)
@@ -263,6 +266,21 @@ def build_channel_index(
         if bool(release.get("prerelease")) != (version.phase != "stable"):
             continue
         parsed.append((version, release))
+
+    # Once Tag.app has shipped, a newer release is complete only after every
+    # platform build is attached. Until then its channel keeps the previous
+    # release, so `tag upgrade` never moves past the Tag.app update feed.
+    first_desktop = min(
+        (version.precedence() for version, release in parsed
+         if DESKTOP_CHECKSUMS <= _release_asset_names(release)),
+        default=None,
+    )
+    if first_desktop is not None:
+        parsed = [
+            (version, release) for version, release in parsed
+            if version.precedence() <= first_desktop
+            or DESKTOP_CHECKSUMS <= _release_asset_names(release)
+        ]
 
     channels: dict[str, dict[str, str]] = {}
     for channel in SEMVER_CHANNELS:

@@ -6,6 +6,11 @@ All notable changes to Tag are documented here.
 
 ### Fixed
 
+- Tag.app no longer says "Couldn't check for updates" for the few minutes
+  after a release is published. Release channels for `tag upgrade` and the
+  installers now move to a new release only after Tag.app has been built for
+  every platform, so the app and your Tags update together.
+
 - Tag.app activity shows how many steps each request took (for example
   "7 steps") next to its time and model, and flags failed requests there. Click
   it to see the steps, replacing the separate "Request details" link.
