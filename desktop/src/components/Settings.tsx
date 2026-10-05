@@ -19,6 +19,10 @@ import { CompactSky, ErrorLine, Icon, Primary, Secondary, Spinner, Switch, tagIc
 
 const DOCS = "https://www.hover.team/tag/";
 
+export type SettingsTab = "general" | "updates" | "about";
+const SETTINGS_TABS: SettingsTab[] = ["general", "updates", "about"];
+const TAB_LABEL: Record<SettingsTab, string> = { general: "General", updates: "Updates", about: "About" };
+
 function SetRow({ label, detail, children }: { label: ReactNode; detail: ReactNode; children?: ReactNode }) {
   return (
     <div className="r set" style={{ padding: "13px 14px", gap: 16 }}>
@@ -126,6 +130,10 @@ interface SettingsProps {
   tags: Tags;
   telemetry: Telemetry;
   close: () => void;
+  /** Shows the first-run screens again without changing anything. */
+  replay: () => void;
+  /** The tab to open on; General if left out. */
+  initialTab?: SettingsTab;
   update: UpdateState;
   check: () => void;
   runUpdate: () => void;
@@ -135,13 +143,14 @@ interface SettingsProps {
   openAI?: () => void;
 }
 
-export function Settings({ api, info, tags, telemetry, close, update, check, runUpdate, switched, openAI }: SettingsProps) {
+export function Settings({ api, info, tags, telemetry, close, replay, initialTab, update, check, runUpdate, switched, openAI }: SettingsProps) {
   const appearance = useAppearance();
   const [login, setLogin] = useState(false);
   const [keepBusy, setKeepBusy] = useState(false);
   const [tagVersion, setTagVersion] = useState("");
   const [switching, setSwitching] = useState(false);
   const [error, setError] = useState("");
+  const [tab, setTab] = useState<SettingsTab>(initialTab ?? "general");
 
   useEffect(() => {
     void api.openAtLogin().then(setLogin).catch(() => setLogin(false));
@@ -180,6 +189,14 @@ export function Settings({ api, info, tags, telemetry, close, update, check, run
     <>
       <CompactSky title="Settings" sub={`Tag ${version}`} back={close} />
       <div className="body">
+        <div className="segc tabs" role="tablist" aria-label="Settings">
+          {SETTINGS_TABS.map((t) => (
+            <button key={t} role="tab" aria-selected={tab === t} onClick={() => setTab(t)}>
+              {TAB_LABEL[t]}{t === "updates" && (update.status === "available" || update.status === "failed") && <i className="tab-dot" aria-label="needs attention" />}
+            </button>
+          ))}
+        </div>
+        {tab === "general" && <>
         <div className="section">
           <div className="sec-head"><h3>General</h3></div>
           <div className="card">
@@ -208,7 +225,11 @@ export function Settings({ api, info, tags, telemetry, close, update, check, run
           </div>
         )}
         <div className="section">
-          <div className="sec-head"><h3>Updates</h3></div>
+          <div className="sec-head"><h3>Privacy</h3></div>
+          <div className="card"><UsageDataRow api={api} telemetry={telemetry} setError={setError} /></div>
+        </div>
+        </>}
+        {tab === "updates" && <div className="section">
           <div className={update.status === "failed" ? "card upd-card failed" : "card upd-card"}>
             <div className="r set" style={{ padding: "13px 14px", gap: 16 }}>
               <img className="upd-icon" src={art} alt="" />
@@ -221,22 +242,20 @@ export function Settings({ api, info, tags, telemetry, close, update, check, run
               setBusy={setSwitching} setError={setError}
               switched={(done, restarting) => { setTagVersion(done.version); switched(done); void tags.refresh(); if (!restarting) check(); }} />
           </div>
-        </div>
-        <div className="section">
-          <div className="sec-head"><h3>Privacy</h3></div>
-          <div className="card"><UsageDataRow api={api} telemetry={telemetry} setError={setError} /></div>
-        </div>
-        <div className="section">
-          <div className="sec-head"><h3>About</h3></div>
+        </div>}
+        {tab === "about" && <div className="section">
           <div className="card">
             <SetRow label="Documentation" detail="Setup guides, capabilities, and integrations.">
               <button className="p-btn quiet sm" onClick={() => void api.open(DOCS)}>Open</button>
+            </SetRow>
+            <SetRow label="Replay onboarding" detail="See the welcome screens again. Your setup stays the same.">
+              <button className="p-btn quiet sm" onClick={replay}>Replay</button>
             </SetRow>
           </div>
           <div className="card" style={{ padding: "12px 14px", display: "flex", alignItems: "center", gap: 12, marginTop: 8 }}>
             <div className="txt"><span className="label" style={{ fontSize: 14.5 }}>Enjoying Tag?</span><CommunityLinks api={api} /></div>
           </div>
-        </div>
+        </div>}
         {(error || update.error || tags.error) && <ErrorLine>{error || update.error || tags.error}</ErrorLine>}
       </div>
     </>

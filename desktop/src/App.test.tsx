@@ -68,6 +68,24 @@ it("asks about usage data before Home, then records only after the choice", asyn
 });
 
 
+it("replays onboarding from Settings without saving, installing, or quitting", async () => {
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  const api = demoBridge();
+  api.tag = vi.fn(api.tag);
+  api.quit = vi.fn(api.quit);
+  vi.mocked(bridge).mockResolvedValue(api);
+  render(<StrictMode><App /></StrictMode>);
+  fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
+  fireEvent.click(await screen.findByRole("tab", { name: "About" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Replay" }));
+  fireEvent.click(await screen.findByRole("button", { name: "No thanks" }));
+  expect(await screen.findByRole("button", { name: "Install Tag" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Done" }));
+  expect(await screen.findByRole("button", { name: "Replay" })).toBeTruthy();
+  expect(api.tag).not.toHaveBeenCalledWith(["telemetry", "off", "--json"]);
+  expect(api.quit).not.toHaveBeenCalled();
+});
+
 it("keeps measuring Home after it replaces the startup element", async () => {
   const observed = new Map<Element, ResizeObserverCallback>();
   vi.stubGlobal("ResizeObserver", class {

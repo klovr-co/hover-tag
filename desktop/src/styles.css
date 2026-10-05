@@ -815,3 +815,11 @@ button.list-item:hover { background: var(--fill); }
 
 /* Headers move the window, so pressing on their text shouldn't select it. */
 .sky, .sl-top { user-select: none; -webkit-user-select: none; }
+.segc.tabs { display: flex; flex: none; }
+.segc.tabs button { flex: 1; padding: 5px 12px; }
+.segc button[aria-selected="true"] { background: var(--paper-2); color: var(--ink); box-shadow: 0 1px 2px rgba(0, 0, 0, .1); }
+@media (prefers-color-scheme: dark) {
+:where(:root:not([data-theme="light"])) .segc button[aria-selected="true"] { background: rgba(255, 255, 255, .14); }
+}
+:where(:root[data-theme="dark"]) .segc button[aria-selected="true"] { background: rgba(255, 255, 255, .14); }
+.tab-dot { display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: 50%; background: var(--link); vertical-align: middle; }

@@ -8,11 +8,13 @@ import { USAGE_DATA_NEVER, USAGE_DATA_SUMMARY, type Telemetry } from "../lib/tel
 import keyArt from "../assets/art/tag-key.png";
 import { CompactSky, ErrorLine, Icon, Primary, Secondary } from "./ui";
 
-export function TelemetryNotice({ api, telemetry }: { api: Bridge; telemetry: Telemetry }) {
+/** With `preview`, both buttons just move on and nothing is saved. */
+export function TelemetryNotice({ api, telemetry, preview }: { api: Bridge; telemetry: Telemetry; preview?: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const notice = telemetry.status?.privacy_notice;
   const choose = async (on: boolean) => {
+    if (preview) return preview();
     setBusy(true);
     setError("");
     try { await telemetry.choose(on); }

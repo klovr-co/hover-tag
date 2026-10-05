@@ -9,6 +9,7 @@ import {
 import { groups, problemText, status, title, type Group, type TagRow } from "../lib/protocol";
 import type { Tags } from "../lib/tags";
 import type { UpdateState } from "../lib/updates";
+import type { SettingsTab } from "./Settings";
 import teamArt from "../assets/art/tag-team.png";
 import fiveTags from "../assets/art/five-tags.png";
 import { useNight } from "../lib/appearance";
@@ -39,7 +40,7 @@ interface Props {
   finishSetup: (row: TagRow) => void;
   open: (row: TagRow) => void;
   fixAI: (row: string) => void;
-  showSettings: () => void;
+  showSettings: (tab?: SettingsTab) => void;
   now?: Date;
 }
 
@@ -69,14 +70,14 @@ export function Home(props: Props) {
             <h2>Your Tags</h2>
             <div className="sum"><span className={sum.on ? "sq" : "sq off"} />{sum.text}</div>
           </div>
-          <button className="sky-btn" aria-label="Settings" title="Settings" onClick={showSettings}><Icon name="gear" size={16} /></button>
+          <button className="sky-btn" aria-label="Settings" title="Settings" onClick={() => showSettings()}><Icon name="gear" size={16} /></button>
           <button className={rows.length > 2 && !setup.length && !urgent ? "add solid" : "add"} onClick={add}>
             <Icon name="plus" />Add Tag
           </button>
         </div>
       </Sky>
       <div className="body">
-        <UpdateNotice state={update} outdated={outdated} run={props.runUpdate} settings={props.showSettings} />
+        <UpdateNotice state={update} outdated={outdated} run={props.runUpdate} settings={() => props.showSettings("updates")} />
         {rows.length > 2 && (
           <Quiet line={quietLine(rows, problems, activity, props.now ?? new Date(), firstName)} open={open} rows={rows}
             fix={props.fixAI} />

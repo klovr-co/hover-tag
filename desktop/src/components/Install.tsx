@@ -27,7 +27,8 @@ export function Starting({ error, retry }: { error?: string; retry: () => void }
   </>;
 }
 
-export function Welcome({ api, platform, install }: { api: Bridge; platform: string; install: () => void }) {
+/** With `preview`, Quit returns instead of quitting. */
+export function Welcome({ api, platform, install, preview }: { api: Bridge; platform: string; install: () => void; preview?: () => void }) {
   const machine = platform === "macos" ? "Mac" : "computer";
   return (
     <>
@@ -47,7 +48,7 @@ export function Welcome({ api, platform, install }: { api: Bridge; platform: str
         </div>
         <div className="foot">
           <span className="spacer" />
-          <Quiet title="Quit" onClick={() => void api.quit()} />
+          <Quiet title={preview ? "Done" : "Quit"} onClick={() => preview ? preview() : void api.quit()} />
           <Primary title="Install Tag" onClick={install} autoFocus />
         </div>
       </div>

@@ -13,7 +13,7 @@ import { Home } from "./components/Home";
 import { Installing, Starting, Welcome } from "./components/Install";
 import { AI_CAPABILITY, SHARED_AI_CAPABILITY } from "./lib/ai";
 import { AISettings } from "./components/AISettings";
-import { Settings } from "./components/Settings";
+import { Settings, type SettingsTab } from "./components/Settings";
 import { TagDetail } from "./components/TagDetail";
 import { TelemetryNotice } from "./components/TelemetryNotice";
 import { Toast } from "./components/ui";
@@ -24,9 +24,11 @@ type Screen =
   | { name: "installing"; attempt: number }
   | { name: "home" }
   | { name: "connect"; args: string[] }
-  | { name: "settings" }
+  | { name: "settings"; tab?: SettingsTab }
   | { name: "ai"; resume?: string[] }
-  | { name: "tag"; id: string };
+  | { name: "tag"; id: string }
+  /** Settings > Replay onboarding: the first-run screens again, changing nothing. */
+  | { name: "replay"; step: "telemetry" | "welcome" };
 
 /** What each screen counts as in usage data. */
 const SCREEN_EVENT: Partial<Record<Screen["name"], AppEvents["app_screen_viewed"]["screen"]>> = {
@@ -215,6 +217,8 @@ export function App() {
   return (
     <TrackContext.Provider value={track}>
       <main ref={setRoot} className={`app${info.platform === "macos" ? " overlay" : ""}${screen.name === "home" ? " home" : ""}${screen.name === "tag" ? " wide" : ""}`}>
+        {screen.name === "replay" && screen.step === "telemetry" && <TelemetryNotice api={api} telemetry={telemetry} preview={() => setScreen({ name: "replay", step: "welcome" })} />}
+        {screen.name === "replay" && screen.step === "welcome" && <Welcome api={api} platform={info.platform} preview={() => setScreen({ name: "settings", tab: "about" })} install={() => setScreen({ name: "settings", tab: "about" })} />}
         {screen.name === "welcome" && <Welcome api={api} platform={info.platform} install={() => setScreen({ name: "installing", attempt: 0 })} />}
         {screen.name === "installing" && (
           <Installing key={screen.attempt} api={api}
@@ -230,15 +234,15 @@ export function App() {
             finishSetup={(row) => setScreen({ name: "connect", args: [row.id, "setup"] })}
             open={(row) => setScreen({ name: "tag", id: row.id })}
             fixAI={() => capabilities.includes(SHARED_AI_CAPABILITY) ? setScreen({ name: "ai" }) : say("Update Tag to manage shared AI accounts in Settings.")}
-            showSettings={() => setScreen({ name: "settings" })} />
+            showSettings={(tab) => setScreen({ name: "settings", tab })} />
         )}
         {screen.name === "connect" && (
           <Connect api={api} args={screen.args} openAI={capabilities.includes(SHARED_AI_CAPABILITY) ? (resume) => setScreen({ name: "ai", resume }) : undefined} done={home}
             paused={() => { home(); say("Progress saved. Finish setup from Home any time."); }} />
         )}
         {screen.name === "settings" && (
-          <Settings api={api} info={info} tags={tags} telemetry={telemetry} close={home} update={update} check={() => void check()}
-            runUpdate={() => void runUpdate()} switched={(done) => dispatchUpdate({ type: "updated", update: done })}
+          <Settings key={screen.tab} initialTab={screen.tab} api={api} info={info} tags={tags} telemetry={telemetry} close={home} update={update} check={() => void check()}
+            runUpdate={() => void runUpdate()} replay={() => setScreen({ name: "replay", step: "telemetry" })} switched={(done) => dispatchUpdate({ type: "updated", update: done })}
             openAI={capabilities.includes(SHARED_AI_CAPABILITY) ? () => setScreen({ name: "ai" }) : undefined} />
         )}
         {screen.name === "ai" && (
