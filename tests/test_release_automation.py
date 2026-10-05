@@ -243,6 +243,34 @@ class ChannelIndexTests(unittest.TestCase):
             "commit_sha": "d" * 40,
         })
 
+    def test_waits_for_tag_app_builds_before_advancing_a_channel(self) -> None:
+        def with_desktop(release: dict, platforms=("macos", "windows", "linux")) -> dict:
+            release["assets"] += [{"name": f"DESKTOP-SHA256SUMS-{name}"} for name in platforms]
+            return release
+
+        stable = self.release("1.0.0", "a" * 40, prerelease=False)
+        alpha = self.release("1.1.0-alpha.1", "b" * 40, prerelease=True)
+        first = with_desktop(self.release("1.1.0-beta.1", "c" * 40, prerelease=True))
+        built = with_desktop(self.release("1.1.0-beta.2", "d" * 40, prerelease=True))
+        partial = with_desktop(self.release("1.1.0-beta.3", "e" * 40, prerelease=True), ("macos", "linux"))
+        pending = self.release("1.1.0-beta.4", "f" * 40, prerelease=True)
+
+        def channels(*releases: dict) -> dict:
+            return build_channel_index(
+                releases, repository="klovr-co/hover-tag", generated_at="2026-10-05T18:41:49Z",
+            )["channels"]
+
+        index = channels(stable, alpha, first, built, partial, pending)
+        # Releases from before Tag.app shipped remain selectable.
+        self.assertEqual(index["stable"]["version"], "1.0.0")
+        self.assertEqual(index["alpha"]["version"], "1.1.0-alpha.1")
+        self.assertEqual(index["beta"]["version"], "1.1.0-beta.2")
+
+        with_desktop(pending)
+        self.assertEqual(channels(stable, alpha, first, built, partial, pending)["beta"]["version"], "1.1.0-beta.4")
+        # Without any Tag.app release, CLI-only releases advance as before.
+        self.assertEqual(channels(stable, self.release("1.1.0-beta.1", "c" * 40, prerelease=True))["beta"]["version"], "1.1.0-beta.1")
+
     def test_rejects_selected_release_with_missing_verified_assets(self) -> None:
         release = self.release("1.1.0-alpha.1", "a" * 40, prerelease=True)
         release["assets"] = [{"name": "tag-1.1.0-alpha.1.zip"}]
