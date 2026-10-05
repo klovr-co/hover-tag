@@ -221,8 +221,8 @@ jobs:
   channel-index:
     # A run started by GITHUB_TOKEN does not fire workflow_run, so the index
     # would stay on the previous release. Republish it now that builds are attached.
-    needs: desktop-updates
-    if: ${{ !cancelled() && needs.desktop-updates.result == 'success' }}
+    needs: [desktop, desktop-updates]
+    if: ${{ !cancelled() && needs.desktop.result == 'success' && needs.desktop-updates.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
