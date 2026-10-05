@@ -76,7 +76,7 @@ export function App() {
   });
   const telemetry = useTelemetry(api, !!info?.cli);
   const { track } = telemetry;
-  const root = useRef<HTMLElement>(null);
+  const [root, setRoot] = useState<HTMLElement | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -172,11 +172,11 @@ export function App() {
   // The window always fits its content, and Tag detail is wider.
   const width = screen.name === "tag" ? WIDE : WIDTH;
   useLayoutEffect(() => {
-    if (!api || !root.current) return;
+    if (!api || !root) return;
     const observer = new ResizeObserver(([entry]) => void api.fitWindow(width, Math.ceil(entry.target.getBoundingClientRect().height)));
-    observer.observe(root.current);
+    observer.observe(root);
     return () => observer.disconnect();
-  }, [api, width, screen.name]);
+  }, [api, width, root]);
 
   // Tray menu actions arrive here, even while the window is hidden.
   useEffect(() => {
@@ -203,18 +203,18 @@ export function App() {
     return () => clearTimeout(timer);
   }, [screen.name, tags.rows, tags.discardDrafts]);
   if (!api || !info || screen.name === "loading") {
-    return <main ref={root} className="app"><Starting error={bootError} retry={() => setBootAttempt((value) => value + 1)} /></main>;
+    return <main ref={setRoot} className="app"><Starting error={bootError} retry={() => setBootAttempt((value) => value + 1)} /></main>;
   }
   // The usage data notice comes before Home and setup, so it's seen before anything is recorded.
   if (screen.name === "home" || screen.name === "connect") {
-    if (!telemetry.loaded) return <main ref={root} className="app"><Starting retry={telemetry.reload} /></main>;
-    if (telemetry.asking) return <main ref={root} className="app"><TelemetryNotice api={api} telemetry={telemetry} /></main>;
+    if (!telemetry.loaded) return <main ref={setRoot} className="app"><Starting retry={telemetry.reload} /></main>;
+    if (telemetry.asking) return <main ref={setRoot} className="app"><TelemetryNotice api={api} telemetry={telemetry} /></main>;
   }
   const home = () => { setScreen({ name: "home" }); void tags.refresh(); watch.recheck(); };
   const add = () => setScreen({ name: "connect", args: tags.rows.length ? ["add"] : ["setup"] });
   return (
     <TrackContext.Provider value={track}>
-      <main ref={root} className={`app${info.platform === "macos" ? " overlay" : ""}${screen.name === "home" ? " home" : ""}${screen.name === "tag" ? " wide" : ""}`}>
+      <main ref={setRoot} className={`app${info.platform === "macos" ? " overlay" : ""}${screen.name === "home" ? " home" : ""}${screen.name === "tag" ? " wide" : ""}`}>
         {screen.name === "welcome" && <Welcome api={api} platform={info.platform} install={() => setScreen({ name: "installing", attempt: 0 })} />}
         {screen.name === "installing" && (
           <Installing key={screen.attempt} api={api}

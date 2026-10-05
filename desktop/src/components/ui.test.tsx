@@ -1,7 +1,9 @@
 import { cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Avatar, tagIcon } from "./ui";
+import { Avatar, Sky, tagIcon } from "./ui";
 
+const startDragging = vi.fn(() => Promise.resolve());
+vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ startDragging }) }));
 vi.mock("@tauri-apps/api/core", () => ({ convertFileSrc: (path: string) => `asset://localhost${path}` }));
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
@@ -26,5 +28,15 @@ describe("Slack avatar", () => {
     expect(container.querySelector("img")!.getAttribute("src")).toBe(tagIcon);
     rerender(<Avatar row={{ ...row, avatar: "/slack.png" }} />);
     expect(container.querySelector("img")!.getAttribute("src")).toBe("asset://localhost/slack.png");
+  });
+});
+
+describe("Window headers", () => {
+  it("drag the window from their text but not from their buttons", async () => {
+    vi.stubGlobal("__TAURI_INTERNALS__", {});
+    const { getByRole } = render(<Sky><h1>Your Tags</h1><button>Add Tag</button></Sky>);
+    fireEvent.mouseDown(getByRole("button", { name: "Add Tag" }));
+    fireEvent.mouseDown(getByRole("heading", { name: "Your Tags" }));
+    await vi.waitFor(() => expect(startDragging).toHaveBeenCalledTimes(1));
   });
 });

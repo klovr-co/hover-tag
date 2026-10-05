@@ -12,6 +12,7 @@ import type { UpdateState } from "../lib/updates";
 import teamArt from "../assets/art/tag-team.png";
 import fiveTags from "../assets/art/five-tags.png";
 import { useNight } from "../lib/appearance";
+import { ordered, useOrder, useReorder } from "../lib/order";
 import { Avatar, ErrorLine, Icon, MOON, Primary, Sky, Switch, tagIcon, WorkspaceMark } from "./ui";
 import { UpdateNotice } from "./UpdateNotice";
 
@@ -51,6 +52,9 @@ export function Home(props: Props) {
   const sum = summary(rows);
   const { shown, extra } = roster(rows);
   const running = live.find((row) => row.state === "running");
+  const { order, setWorkspaces, setTags } = useOrder();
+  const cards = ordered(groups(live), order);
+  const reorder = useReorder(cards.map((g) => g.key), setWorkspaces);
   return (
     <>
       <Sky kind="home">
@@ -72,7 +76,7 @@ export function Home(props: Props) {
         </div>
       </Sky>
       <div className="body">
-        <UpdateNotice state={update} outdated={outdated} run={props.runUpdate} />
+        <UpdateNotice state={update} outdated={outdated} run={props.runUpdate} settings={props.showSettings} />
         {rows.length > 2 && (
           <Quiet line={quietLine(rows, problems, activity, props.now ?? new Date(), firstName)} open={open} rows={rows}
             fix={props.fixAI} />
@@ -106,8 +110,9 @@ export function Home(props: Props) {
             </div>
           </div>
         )}
-        {groups(live).map((group) => (
-          <WorkspaceCard key={group.key} group={group} {...props} />
+        {cards.map((group) => (
+          <WorkspaceCard key={group.key} group={group} drag={reorder.props(group.key)} movable={cards.length > 1}
+            setTags={(ids) => setTags(group.key, ids)} {...props} />
         ))}
         {rows.length > 0 && rows.length <= 2 && (
           <>
@@ -171,12 +176,21 @@ export function Quiet({ line, rows, open, fix }: { line: QuietLine; rows: TagRow
   );
 }
 
-function WorkspaceCard({ group, tags, ...props }: Props & { group: Group }) {
+type Drag = ReturnType<ReturnType<typeof useReorder>["props"]>;
+
+function WorkspaceCard({ group, tags, drag, movable, setTags, ...props }: Props & {
+  group: Group; drag: Drag; movable: boolean; setTags: (ids: string[]) => void;
+}) {
   const running = group.rows.filter((row) => row.state === "running").length;
   const all = running >= group.rows.length;
+  const reorder = useReorder(group.rows.map((row) => row.id), setTags);
+  const { ref, onPointerDown, onKeyDown, onClickCapture, ...state } = drag;
   return (
-    <div className="card">
-      <div className="ws-head">
+    <div className={reorder.dragging ? "card sorting" : "card"} ref={ref} {...state}>
+      <div className={movable ? "ws-head movable" : "ws-head"} onPointerDown={onPointerDown} onKeyDown={onKeyDown}
+        onClickCapture={onClickCapture} tabIndex={movable ? 0 : undefined}
+        aria-label={movable ? `${group.label}. Drag, or press Option and an arrow key, to move.` : undefined}>
+        {movable && <Grip />}
         <WorkspaceMark label={group.label} icon={group.icon} />
         <h3>{group.label}</h3>
         <span className="meta">{running} of {group.rows.length} online</span>
@@ -189,16 +203,25 @@ function WorkspaceCard({ group, tags, ...props }: Props & { group: Group }) {
         )}
       </div>
       {group.rows.map((row) => <TagRowView key={row.id} row={row} tags={tags} report={props.reports[row.id]}
-        problem={props.problems[row.id] ?? null} open={() => props.open(row)} />)}
+        problem={props.problems[row.id] ?? null} open={() => props.open(row)} drag={reorder.props(row.id)} />)}
     </div>
+  );
+}
+
+/** Six dots that appear on hover to say "this can be dragged". */
+function Grip() {
+  return (
+    <svg className="grip" width="6" height="10" viewBox="0 0 6 10" aria-hidden="true">
+      {[1, 5, 9].flatMap((y) => [1, 5].map((x) => <circle key={`${x}${y}`} cx={x} cy={y} r="1" />))}
+    </svg>
   );
 }
 
 const STATE_WORD = { online: "online", offline: "offline", attention: "stopped", setup: "not in Slack yet" };
 
 /** Two lines: the name and its model, then what it's for, unless something needs you. */
-export function TagRowView({ row, tags, report, problem, open }: {
-  row: TagRow; tags: Tags; report?: AIStatus; problem: string | null; open: () => void;
+export function TagRowView({ row, tags, report, problem, open, drag }: {
+  row: TagRow; tags: Tags; report?: AIStatus; problem: string | null; open: () => void; drag?: Drag;
 }) {
   const state = status(row);
   const on = row.state === "running";
@@ -208,8 +231,12 @@ export function TagRowView({ row, tags, report, problem, open }: {
   const effort = model?.effort ? effortLabel(model.effort) : "";
   const label = [`Open ${title(row)}`, STATE_WORD[state], model?.model, effort && `${effort} thinking`].filter(Boolean).join(", ");
   return (
-    <div className="r click" role="button" tabIndex={0} aria-label={label} onClick={open}
-      onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); open(); } }}>
+    <div className="r click" role="button" tabIndex={0} aria-label={label} onClick={open} {...drag}
+      onKeyDown={(e) => {
+        drag?.onKeyDown(e);
+        if (!e.defaultPrevented && e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); open(); }
+      }}>
+      {drag && <Grip />}
       <Avatar row={row} />
       <div className="txt">
         <span className="name">

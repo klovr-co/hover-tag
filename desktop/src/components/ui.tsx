@@ -1,7 +1,7 @@
 // Copyright 2026 klovr.co
 // SPDX-License-Identifier: Apache-2.0
 // Small building blocks shared by every screen, in the Hover look.
-import { useState, type ReactNode } from "react";
+import { useState, type MouseEvent, type ReactNode } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import icon from "../../../assets/branding/tag-icon.png";
 import { status, type Status, type TagRow } from "../lib/protocol";
@@ -136,11 +136,25 @@ export function Sky({ kind = "home", clouds, stars, children }: {
 }) {
   const height = SKY_HEIGHT[kind];
   return (
-    <div className={`sky ${kind}`} data-tauri-drag-region>
+    <div className={`sky ${kind}`} onMouseDown={dragWindow}>
       <Decor height={height} clouds={clouds ?? (kind === "compact" ? "compact" : kind === "thin" ? "thin" : "wide")} stars={stars ?? height} />
       {children}
     </div>
   );
+}
+
+const CONTROLS = "button, a, input, textarea, select, label, [role=button], [role=switch]";
+
+/**
+ * Move the window from anywhere in a header, not just its bare background: Tauri's
+ * drag region only answers presses on the marked element itself, and the header's
+ * titles, avatars and clouds cover most of it.
+ */
+export function dragWindow(event: MouseEvent) {
+  if (event.button !== 0 || !("__TAURI_INTERNALS__" in window) || (event.target as Element).closest(CONTROLS)) return;
+  event.preventDefault();
+  void import("@tauri-apps/api/window").then(({ getCurrentWindow }) => getCurrentWindow().startDragging())
+    .catch(() => { /* the window just stays put */ });
 }
 
 /** A compact sky with a back button and a title, used by Settings and other inner screens. */

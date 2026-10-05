@@ -153,3 +153,21 @@ describe("Tag rows", () => {
     expect(screen.getByText("2 of 3 online · 1 to finish")).toBeTruthy();
   });
 });
+
+describe("Reordering Tags", () => {
+  it("moves a Tag with Option and an arrow key without opening it", async () => {
+    const { useReorder } = await import("../lib/order");
+    const commit = vi.fn();
+    const open = vi.fn();
+    function List() {
+      const reorder = useReorder([maya.id, "research"], commit);
+      return <>{[maya, research].map((r) => <TagRowView key={r.id} row={r} tags={{ busy: new Set() } as unknown as Tags}
+        problem={null} open={open} drag={reorder.props(r.id)} />)}</>;
+    }
+    render(<List />);
+    fireEvent.keyDown(screen.getByRole("button", { name: /Open Research Tag/ }), { key: "ArrowUp", altKey: true });
+    expect(commit).toHaveBeenCalledWith(["research", maya.id]);
+    fireEvent.keyDown(screen.getByRole("button", { name: /Open Research Tag/ }), { key: "Enter" });
+    expect(open).toHaveBeenCalledTimes(1);
+  });
+});

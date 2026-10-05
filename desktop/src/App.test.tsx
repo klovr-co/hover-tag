@@ -1,5 +1,5 @@
 import { StrictMode } from "react";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { bridge, demoBridge, type AppInfo } from "./lib/bridge";
@@ -60,9 +60,52 @@ it("asks about usage data before Home, then records only after the choice", asyn
   expect(await screen.findByText("Help support Tag's development")).toBeTruthy();
   const records = () => vi.mocked(api.tag).mock.calls.map(([args]) => args).filter((args) => args[1] === "record");
   expect(records()).toEqual([]);
-  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  fireEvent.click(screen.getByRole("button", { name: "Happy to help" }));
   await vi.waitFor(() => expect(records().map((args) => args[2])).toEqual(expect.arrayContaining(["app_opened", "app_screen_viewed"])));
   expect(api.tag).toHaveBeenCalledWith(["telemetry", "on", "--json"]);
   expect(screen.queryByText("Help support Tag's development")).toBeNull();
   expect(records().filter((args) => args[2] === "app_opened")).toHaveLength(1);
+});
+
+
+it("keeps measuring Home after it replaces the startup element", async () => {
+  const observed = new Map<Element, ResizeObserverCallback>();
+  vi.stubGlobal("ResizeObserver", class {
+    element?: Element;
+    constructor(private callback: ResizeObserverCallback) {}
+    observe(element: Element) { this.element = element; observed.set(element, this.callback); }
+    disconnect() { if (this.element) observed.delete(this.element); }
+  });
+  const api = demoBridge();
+  api.fitWindow = vi.fn(async () => {});
+  vi.mocked(bridge).mockResolvedValue(api);
+  const { container } = render(<StrictMode><App /></StrictMode>);
+  const startup = container.querySelector("main")!;
+  await screen.findByRole("heading", { name: "Your Tags" });
+  const home = container.querySelector("main")!;
+  expect(home).not.toBe(startup);
+  expect([...observed.keys()]).toEqual([home]);
+  vi.spyOn(home, "getBoundingClientRect").mockReturnValue({ height: 720 } as DOMRect);
+  act(() => observed.get(home)!([{ target: home, contentRect: home.getBoundingClientRect(),
+    borderBoxSize: [], contentBoxSize: [], devicePixelContentBoxSize: [] }], {} as ResizeObserver));
+  expect(api.fitWindow).toHaveBeenLastCalledWith(520, 720);
+});
+
+it("reports a missing feed as a check failure after retry and opens channel settings", async () => {
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  const api = demoBridge();
+  const tag = api.tag;
+  api.tag = vi.fn(async (args: string[]) => args[0] === "upgrade"
+    ? { code: 0, stderr: "", stdout: JSON.stringify({ ok: true, status: "current", current: { version: "0.2.0", channel: "stable" } }) }
+    : tag(args));
+  api.checkAppUpdate = vi.fn(async () => { throw new Error("Stable feed unavailable"); });
+  vi.mocked(bridge).mockResolvedValue(api);
+  render(<App />);
+  await screen.findByText("Couldn't check for updates");
+  fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+  await screen.findByText("Couldn't check for updates");
+  expect(screen.queryByText("The update didn't finish")).toBeNull();
+  expect(vi.mocked(api.tag).mock.calls.filter(([args]) => args[0] === "upgrade").every(([args]) => args.includes("--dry-run"))).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "Release channel settings" }));
+  expect(await screen.findByRole("radio", { name: /Beta/ })).toBeTruthy();
 });

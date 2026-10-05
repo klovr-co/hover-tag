@@ -65,7 +65,8 @@ class ModelChoiceDisplayTests(unittest.TestCase):
         names = {"claude:claude-opus-5-5": "Opus 5.5"}
         self.assertEqual("Opus 5.5", agent_models.model_choice_name("claude:claude-opus-5-5", "codex", names=names))
         self.assertEqual("gpt-5.5", agent_models.model_choice_name("codex:gpt-5.5", "codex", names=names))
-        self.assertEqual("Account default", agent_models.model_choice_name("", "claude"))
+        self.assertEqual("Claude default", agent_models.model_choice_name("", "claude"))
+        self.assertEqual("Codex default", agent_models.model_choice_name("codex", "claude"))
 
 
 if __name__ == "__main__":

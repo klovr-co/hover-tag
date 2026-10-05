@@ -113,6 +113,7 @@ struct AppInfo {
     cli: Option<String>,
     version: String,
     launched_at_login: bool,
+    channel_initialized: bool,
     legacy_wanted_tags: Option<Vec<String>>,
     first_name: Option<String>,
 }
@@ -186,22 +187,30 @@ fn parse_defaults_array(text: &str) -> Vec<String> {
 /// Marks the one-time carry-over from the Swift app as done, per `tag` command,
 /// so a development build pointed at another Tag never affects the real one.
 fn migrated_marker(app: &AppHandle, cli: &std::path::Path) -> PathBuf {
+    migration_marker(&config_dir(app), cli, "migrated-from-swift-app")
+}
+
+fn migration_marker(config: &std::path::Path, cli: &std::path::Path, name: &str) -> PathBuf {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     cli.hash(&mut hasher);
-    config_dir(app).join(format!("migrated-from-swift-app-{:016x}", hasher.finish()))
+    config.join(format!("{name}-{:016x}", hasher.finish()))
 }
+
+const CHANNEL_MIGRATION: &str = "app-release-channel-v1";
 
 #[tauri::command]
 fn app_info(app: AppHandle) -> AppInfo {
     let cli = cli::find(&config_dir(&app));
     let migrated = cli.as_ref().is_some_and(|c| migrated_marker(&app, c).exists());
+    let channel_initialized = cli.as_ref().is_some_and(|c| migration_marker(&config_dir(&app), c, CHANNEL_MIGRATION).exists());
     AppInfo {
         platform: if cfg!(target_os = "macos") { "macos" } else if cfg!(windows) { "windows" } else { "linux" },
         demo: std::env::var_os("TAG_INSTALLER_DEMO").is_some(),
         cli: cli.map(|p| p.display().to_string()),
         version: app.package_info().version.to_string(),
         launched_at_login: std::env::args().any(|a| a == AUTOSTART_FLAG),
+        channel_initialized,
         legacy_wanted_tags: if migrated { None } else { legacy_wanted_tags() },
         first_name: first_name(),
     }
@@ -211,6 +220,13 @@ fn app_info(app: AppHandle) -> AppInfo {
 fn mark_migrated(app: AppHandle) -> Result<(), String> {
     let cli = find_cli(&app)?;
     let marker = migrated_marker(&app, &cli);
+    std::fs::create_dir_all(config_dir(&app)).and_then(|_| std::fs::write(marker, "1")).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn mark_channel_initialized(app: AppHandle) -> Result<(), String> {
+    let cli = find_cli(&app)?;
+    let marker = migration_marker(&config_dir(&app), &cli, CHANNEL_MIGRATION);
     std::fs::create_dir_all(config_dir(&app)).and_then(|_| std::fs::write(marker, "1")).map_err(|e| e.to_string())
 }
 
@@ -246,28 +262,21 @@ fn installer_command(app: &AppHandle, channel: &str) -> Result<Command, String> 
         return Ok(command);
     }
     let dir = app.path().resource_dir().map_err(|e| e.to_string())?.join("installer");
-    let channel = if channel.is_empty() { default_channel(&dir) } else { channel.to_string() };
+    let version = app.package_info().version.to_string();
+    let channel = feed_channel(if channel.is_empty() { None } else { Some(channel) }, &version)?;
     let mut command = if cfg!(windows) {
         let mut c = Command::new("powershell.exe");
         c.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
             .arg(dir.join("install.ps1"))
-            .args(["-Channel", &channel]);
+            .args(["-Channel", channel]);
         c
     } else {
         let mut c = Command::new("/bin/sh");
-        c.arg(dir.join("install.sh")).args(["--channel", &channel]);
+        c.arg(dir.join("install.sh")).args(["--channel", channel]);
         c
     };
     cli::quiet(&mut command);
     Ok(command)
-}
-
-fn default_channel(dir: &std::path::Path) -> String {
-    std::fs::read_to_string(dir.join("release-channels.json"))
-        .ok()
-        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-        .and_then(|policy| policy["default_channel"].as_str().map(str::to_string))
-        .unwrap_or_else(|| "stable".into())
 }
 
 #[tauri::command]
@@ -385,6 +394,18 @@ mod tests {
     }
 
     #[test]
+    fn channel_migration_is_versioned_and_isolated_from_other_installations() {
+        use std::path::Path;
+        let config = Path::new("/config");
+        let cli = Path::new("/user/bin/tag");
+        let marker = super::migration_marker(config, cli, super::CHANNEL_MIGRATION);
+        assert_eq!(marker, super::migration_marker(config, cli, super::CHANNEL_MIGRATION));
+        assert_ne!(marker, super::migration_marker(config, Path::new("/dev/bin/tag"), super::CHANNEL_MIGRATION));
+        assert_ne!(marker, super::migration_marker(config, cli, "app-release-channel-v2"));
+        assert_ne!(marker, super::migration_marker(config, cli, "migrated-from-swift-app"));
+    }
+
+    #[test]
     fn follows_the_channel_chosen_in_settings() {
         assert_eq!(super::feed_channel(None, "0.3.0-alpha.2"), Ok("alpha"));
         assert_eq!(super::feed_channel(Some("stable"), "0.3.0-alpha.2"), Ok("stable"));
@@ -434,7 +455,7 @@ pub fn run() {
         .manage(PendingUpdate::default())
         .invoke_handler(tauri::generate_handler![
             app_info, run_tag, setup_start, install_start, session_send, session_stop,
-            update_tray, show_window, quit, mark_migrated,
+            update_tray, show_window, quit, mark_migrated, mark_channel_initialized,
             app_update_check, app_update_install
         ])
         .setup(|app| {

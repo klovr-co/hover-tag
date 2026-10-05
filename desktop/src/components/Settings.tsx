@@ -7,7 +7,7 @@ import type { AppInfo, Bridge } from "../lib/bridge";
 import { parseConnections } from "../lib/ai";
 import { parseJSON } from "../lib/protocol";
 import type { Tags } from "../lib/tags";
-import { USAGE_DATA_NEVER, useTrack, type Telemetry } from "../lib/telemetry";
+import { useTrack, type Telemetry } from "../lib/telemetry";
 import {
   APP_CHANNELS, checkUpdate, installUpdate, isAppChannel, targetVersion,
   type Channel, type ProductUpdate, type UpdateState,
@@ -16,6 +16,8 @@ import building from "../assets/art/tag-building.png";
 import puzzled from "../assets/art/tag-puzzled.png";
 import { CommunityLinks } from "./CommunityLinks";
 import { CompactSky, ErrorLine, Icon, Primary, Secondary, Spinner, Switch, tagIcon } from "./ui";
+
+const DOCS = "https://www.hover.team/tag/";
 
 function SetRow({ label, detail, children }: { label: ReactNode; detail: ReactNode; children?: ReactNode }) {
   return (
@@ -157,11 +159,15 @@ export function Settings({ api, info, tags, telemetry, close, update, check, run
   const version = update.update?.current || tagVersion || info.version;
   const target = targetVersion(update);
   const row: Record<UpdateState["status"], [string, string, ReactNode]> = {
-    idle: [`Tag ${version}`, "One version for the app and your Tags.", <Secondary small title="Check for updates" onClick={check} />],
+    idle: [update.error ? "Couldn't check for updates" : `Tag ${version}`,
+      update.error ? "This check made no changes. Your settings are kept." : "One version for the app and your Tags.",
+      <Secondary small title="Check for updates" onClick={check} />],
     checking: [`Tag ${version}`, "Checking for updates…", <Busy text="Checking…" />],
     available: [`Tag ${target} is available`, `Updates the app and your Tags together, and restarts the app if needed. Your settings are kept. You have ${version}.`,
       <Primary small title="Update Tag" onClick={runUpdate} />],
-    updating: [`Updating to ${target}…`, update.phase === "app" ? "Restarting the app to finish. Your Tags keep running." : "Updating your Tags. They restart on the new version.",
+    updating: [target ? `Updating to ${target}…` : "Checking for updates…", update.phase === "app"
+      ? "Restarting the app to finish. Your Tags keep running." : update.phase === "runtime"
+        ? "Updating your Tags. They restart on the new version." : "Checking that a complete update is available.",
       <Spinner small label="Updating" />],
     failed: ["The update didn't finish", `Your settings are kept. Try again to finish updating${target ? ` to ${target}` : ""}.`,
       <Primary small title="Try again" onClick={runUpdate} />],
@@ -222,7 +228,12 @@ export function Settings({ api, info, tags, telemetry, close, update, check, run
         </div>
         <div className="section">
           <div className="sec-head"><h3>About</h3></div>
-          <div className="card" style={{ padding: "12px 14px", display: "flex", alignItems: "center", gap: 12 }}>
+          <div className="card">
+            <SetRow label="Documentation" detail="Setup guides, capabilities, and integrations.">
+              <button className="p-btn quiet sm" onClick={() => void api.open(DOCS)}>Open</button>
+            </SetRow>
+          </div>
+          <div className="card" style={{ padding: "12px 14px", display: "flex", alignItems: "center", gap: 12, marginTop: 8 }}>
             <div className="txt"><span className="label" style={{ fontSize: 14.5 }}>Enjoying Tag?</span><CommunityLinks api={api} /></div>
           </div>
         </div>
@@ -240,7 +251,7 @@ export function UsageDataRow({ api, telemetry, setError }: { api: Bridge; teleme
   const detail = !status ? "Update Tag to manage usage data here."
     : status.process_override ? "Off for this app because TAG_TELEMETRY=off is set."
     : status.available === false || !notice ? "This build of Tag doesn't collect usage data."
-    : <>Anonymous usage data helps improve setup and reliability. {USAGE_DATA_NEVER} Also applies to the tag command.{" "}
+    : <>Help make Tag better for everyone. It's anonymous and never includes your prompts, messages, or credentials.{" "}
       <button className="link" style={{ padding: 0 }} onClick={() => void api.open(notice)}>Privacy notice</button></>;
   const changeable = !!status && !status.process_override && status.available !== false && !!notice;
   return (

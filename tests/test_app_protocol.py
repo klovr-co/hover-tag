@@ -59,7 +59,7 @@ class ProtocolTests(unittest.TestCase):
         result = self.cli("list", "--json")
         self.assertProvides(result, example("list.json"), "tag list --json")
         self.assertProvides(result["tags"][0], example("list.json")["tags"][0], "tag list --json rows")
-        self.assertEqual((None, "Account default", None), (
+        self.assertEqual((None, "Codex default", None), (
             result["tags"][0]["description"], result["tags"][0]["default_model_name"], result["tags"][0]["default_effort"]))
         # With a description, a chosen model, and its saved catalog, the row names both.
         tag_config.save_config(home / "config/settings.json", {

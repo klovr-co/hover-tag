@@ -57,8 +57,9 @@ npm run tauri -- build        # Tag.app and .dmg, setup.exe, or .deb and .AppIma
 
 The build copies `install.sh`, `install.ps1`, and `scripts/tag_install.py`
 from the same commit into the app (`npm run bundle-installer`), so Tag.app
-installs with reviewed code and passes `--channel` explicitly. The installer
-still verifies each release's checksum and provenance.
+installs with reviewed code and passes its published channel (`alpha`, `beta`,
+or `stable`) explicitly. The standalone CLI installer keeps its own default.
+The installer still verifies each release's checksum and provenance.
 
 Release builds need signing credentials in CI: a Developer ID certificate and
 notarization credentials for macOS (`scripts/set-apple-secrets.sh` stores
@@ -71,13 +72,23 @@ build, development, and Tauri commands synchronize the desktop package and
 Rust crate metadata automatically. Release builds use `RELEASE_TAG` for the
 immutable release number; do not bump desktop versions separately.
 
-Settings shows one version and one **Update Tag** action. It checks the saved
-CLI release channel (or exact version pin), requires a matching signed desktop
-release, updates the runtime, verifies its version, then updates and restarts
+Settings shows one version and one **Update Tag** action. On older installations,
+migration `app-release-channel-v1` defaults channel-based installations to the
+app's published channel. The preview is read-only; the next upgrade automatically
+saves that channel through the CLI and verifies both the installed version and
+saved policy before recording completion, before restarting the app. Failed or
+interrupted migrations retry safely. The completion marker is scoped to the CLI
+path so a development installation does not affect another runtime. Exact pins
+and edge selections are preserved. After migration, explicit choices in Settings
+or the CLI remain authoritative, including when a newer app is installed.
+
+The updater requires a matching signed desktop release, updates the runtime,
+verifies its version, then updates and restarts
 the desktop app when needed. An interrupted update can be retried; existing
 settings and update policy are preserved. Missing desktop artifacts never
-produce a false “up to date” result. Checks run every six hours; installation
-always waits for a click.
+produce a false “up to date” result. Preflight failures say the check failed;
+only failures after installation begins say the update did not finish. Checks
+run every six hours; installation always waits for a click.
 
 **Release channel** in Settings switches between Stable, Beta, and Alpha. It
 previews the switch with `tag upgrade --channel CHANNEL --dry-run --json`, says
@@ -150,8 +161,10 @@ picture; `existing_app` and `app_checks` switch it to the existing-app track.
 panel and navy button. Source Sans 3 is bundled in `src/assets/fonts`
 (SIL Open Font License), and the pixel art in `src/assets/art` comes from the
 Tag cast in `assets/characters`. `prefers-color-scheme` switches day and night,
-and `prefers-reduced-motion` stops the clouds, stars and sprites. On macOS the
-window buttons sit in the sky (`titleBarStyle: Overlay`), and the sky is the
+and `prefers-reduced-motion` stops the clouds, stars and sprites. Automatic window
+sizing follows the currently mounted content element, including when Home replaces
+the startup or usage-data notice. It is independent of the agent backend. On
+macOS the window buttons sit in the sky (`titleBarStyle: Overlay`), and the sky is the
 window's drag area. `?tags=N` in `npm run dev` shows Home with fewer sample
 Tags, and `?update=1` offers a sample update.
 

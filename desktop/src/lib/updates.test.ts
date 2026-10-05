@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { demoBridge } from "./bridge";
-import { checkUpdate, installUpdate } from "./updates";
+import { checkUpdate, initialUpdate, installUpdate, updateReducer } from "./updates";
 
 function fixture(current = "0.2.0", target = "0.3.0", app: string | null = target) {
   const api = demoBridge();
@@ -156,8 +156,12 @@ describe("release channels", () => {
   it("follows no channel while pinned until one is chosen", async () => {
     const { api } = channels("0.3.0", "stable", newest);
     const tag = api.tag;
-    api.tag = vi.fn(async (args) => args.includes("--channel") || args[0] === "version" ? tag(args)
-      : { code: 0, stderr: "", stdout: JSON.stringify({ ok: true, status: "pinned", current: { version: "0.3.0", channel: "stable", selection: "version" } }) });
+    let pinned = true;
+    api.tag = vi.fn(async (args) => {
+      if (args.includes("--channel") && !args.includes("--dry-run")) pinned = false;
+      return !pinned || args.includes("--channel") || args[0] === "version" ? tag(args)
+        : { code: 0, stderr: "", stdout: JSON.stringify({ ok: true, status: "pinned", current: { version: "0.3.0", channel: "stable", selection: "version" } }) };
+    });
     expect(await checkUpdate(api, "0.3.0")).toMatchObject({ pinned: true, channel: null });
     expect(await installUpdate(api, "0.3.0", "beta")).toMatchObject({ pinned: false, channel: "beta" });
   });
@@ -171,7 +175,10 @@ describe("update state", () => {
     state = updateReducer(state, { type: "checkFailed", error: "Tag is not managed by the installer." });
     state = updateReducer(state, { type: "checkFailed", error: "Tag is not managed by the installer." });
     expect(state).toMatchObject({ status: "idle", error: "Tag is not managed by the installer." });
-    expect(updateReducer({ ...state, status: "updating" }, { type: "failed", error: "Download failed" }).status).toBe("failed");
+    expect(updateReducer({ ...state, status: "updating" }, { type: "failed", error: "Feed unavailable" }).status).toBe("idle");
+    for (const phase of ["runtime", "app"] as const) {
+      expect(updateReducer({ ...state, status: "updating", phase }, { type: "failed", error: "Download failed" }).status).toBe("failed");
+    }
   });
 
   it("says a JSON command's error, not its JSON", async () => {
@@ -179,5 +186,101 @@ describe("update state", () => {
     const stdout = '{"schema_version": 1, "ok": false, "error": "Tag is not managed by the installer. Install it once before using tag upgrade."}';
     expect(failureLine({ code: 1, stdout, stderr: "" }, "x")).toBe("Tag is not managed by the installer. Install it once before using tag upgrade.");
     expect(failureLine({ code: 1, stdout: "", stderr: "tag_cli.py: error: bad\n" }, "x")).toBe("bad");
+  });
+});
+
+describe("app release channel migration v1", () => {
+  const newest = { stable: "0.2.0", beta: "0.3.0-beta.1", alpha: "0.3.0-alpha.2" };
+  function unmigrated(installed = "0.2.0", saved = "stable") {
+    const fixture = channels(installed, saved, newest);
+    const info = fixture.api.info;
+    let initialized = false;
+    fixture.api.info = async () => ({ ...await info(), channelInitialized: initialized });
+    fixture.api.markChannelInitialized = vi.fn(async () => { initialized = true; });
+    return { ...fixture, initialized: () => initialized };
+  }
+
+  it("completes without an update notice when the saved channel already matches the app", async () => {
+    const { api, saved, initialized } = unmigrated(newest.beta, "beta");
+    const update = await checkUpdate(api, newest.beta);
+    expect(update.initializeChannel).toBeUndefined();
+    expect(updateReducer(initialUpdate, { type: "checked", update }).status).toBe("current");
+    expect(saved()).toBe("beta");
+    expect(initialized()).toBe(true);
+  });
+
+  it.each(["beta", "alpha"] as const)("defaults to the published %s app channel without mutating a preview", async (channel) => {
+    const { api, saved, initialized } = unmigrated();
+    expect(await checkUpdate(api, newest[channel])).toMatchObject({ channel, initializeChannel: true });
+    expect(saved()).toBe("stable");
+    expect(initialized()).toBe(false);
+    expect(vi.mocked(api.tag).mock.calls.every(([args]) => args.includes("--dry-run"))).toBe(true);
+  });
+
+  it("migrates an older Stable runtime to Beta and preserves a later explicit choice across checks", async () => {
+    const { api, saved, initialized } = unmigrated();
+    await installUpdate(api, newest.beta);
+    expect(saved()).toBe("beta");
+    expect(initialized()).toBe(true);
+    expect(api.checkAppUpdate).not.toHaveBeenCalled(); // The installed app already matches.
+    await installUpdate(api, newest.beta, "stable");
+    expect(await checkUpdate(api, newest.beta)).toMatchObject({ channel: "stable", ahead: true });
+    expect(saved()).toBe("stable");
+  });
+
+  it("saves the default even when app and runtime versions already match", async () => {
+    const { api, saved } = unmigrated(newest.beta);
+    await installUpdate(api, newest.beta);
+    expect(saved()).toBe("beta");
+    expect(api.tag).toHaveBeenCalledWith(["upgrade", "--channel", "beta", "--json"]);
+    vi.mocked(api.tag).mockClear();
+    await installUpdate(api, newest.beta);
+    expect(vi.mocked(api.tag).mock.calls.filter(([args]) => args[0] === "upgrade" && !args.includes("--dry-run"))).toEqual([]);
+  });
+
+  it("retries a failed upgrade without prematurely completing the migration", async () => {
+    const { api, initialized } = unmigrated();
+    const tag = api.tag;
+    let fail = true;
+    api.tag = vi.fn(async (args) => fail && args[0] === "upgrade" && !args.includes("--dry-run")
+      ? { code: 1, stdout: "", stderr: "Interrupted" } : tag(args));
+    await expect(installUpdate(api, newest.beta)).rejects.toThrow("Interrupted");
+    expect(initialized()).toBe(false);
+    fail = false;
+    await installUpdate(api, newest.beta);
+    expect(initialized()).toBe(true);
+  });
+
+  it("does not complete migration when the saved policy cannot be verified", async () => {
+    const { api, initialized } = unmigrated();
+    const tag = api.tag;
+    let writes = 0;
+    api.tag = vi.fn(async (args) => {
+      if (args[0] === "upgrade" && !args.includes("--dry-run")) writes++;
+      if (writes && args[0] === "upgrade" && !args.includes("--channel")) {
+        return { code: 0, stderr: "", stdout: JSON.stringify({ ok: true, current: { channel: "stable", selection: "channel" } }) };
+      }
+      return tag(args);
+    });
+    await expect(installUpdate(api, newest.beta)).rejects.toThrow("verify the saved release channel");
+    expect(initialized()).toBe(false);
+  });
+
+  it("resumes safely if recording migration completion fails", async () => {
+    const { api, initialized, saved } = unmigrated();
+    vi.mocked(api.markChannelInitialized).mockRejectedValueOnce(new Error("Disk full"));
+    await expect(installUpdate(api, newest.beta)).rejects.toThrow("Disk full");
+    expect(initialized()).toBe(false);
+    expect(saved()).toBe("beta");
+    await installUpdate(api, newest.beta);
+    expect(initialized()).toBe(true);
+  });
+
+  it("preserves an exact pin on an older installation", async () => {
+    const { api } = unmigrated();
+    api.tag = vi.fn(async () => ({ code: 0, stderr: "", stdout: JSON.stringify({ ok: true, status: "pinned",
+      current: { version: newest.stable, selection: "version", channel: "stable" } }) }));
+    expect(await checkUpdate(api, newest.stable)).toMatchObject({ pinned: true, channel: null });
+    expect(vi.mocked(api.tag).mock.calls.every(([args]) => !args.includes("--channel"))).toBe(true);
   });
 });
