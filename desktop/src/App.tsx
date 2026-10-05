@@ -198,9 +198,9 @@ export function App() {
     });
   }, [api, tags]);
 
-  // Tag was removed after this app started: offer to install it again instead of a dead-end error.
+  // Tag was removed after this app started, even while Home is showing: offer to install it again.
   useEffect(() => {
-    if (!api || screen.name !== "home" || tags.loaded || !tags.error) return;
+    if (!api || screen.name !== "home" || !tags.error) return;
     let live = true;
     void api.info().then((i) => {
       if (!live || i.cli) return;
@@ -208,7 +208,7 @@ export function App() {
       setScreen({ name: "welcome" });
     }, () => {});
     return () => { live = false; };
-  }, [api, screen.name, tags.loaded, tags.error]);
+  }, [api, screen.name, tags.error]);
 
   // Setups that never reached Slack are set aside once the setup flow has ended.
   useEffect(() => {
@@ -229,9 +229,10 @@ export function App() {
   const afterInstall = async (command: string) => {
     setInfo({ ...info, cli: command || info.cli || "tag" });
     const listed = await api.tag(["list", "--json"]).catch(() => null);
-    let existing = false;
-    try { existing = !!listed && listed.code === 0 && parseList(listed.stdout).some((row) => !isDraft(row)); } catch { /* treat as new */ }
-    if (existing) home(); else setScreen({ name: "connect", args: ["setup"] });
+    let empty = false;
+    // Only a list that reads cleanly may start first-Tag setup; otherwise Home shows the error and retries.
+    try { empty = !!listed && listed.code === 0 && !parseList(listed.stdout).some((row) => !isDraft(row)); } catch { /* go Home */ }
+    if (empty) setScreen({ name: "connect", args: ["setup"] }); else home();
   };
   const add = () => setScreen({ name: "connect", args: tags.rows.length ? ["add"] : ["setup"] });
   return (

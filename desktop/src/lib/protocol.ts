@@ -296,3 +296,17 @@ export function cleanLog(chunk: string) {
   // eslint-disable-next-line no-control-regex
   return chunk.replace(/\u001b\[[0-9;?]*[A-Za-z]/g, "").replace(/\r/g, "\n");
 }
+
+/** Consecutive log lines that differ only in IDs or numbers, shown once with a count. */
+export function collapseRepeats(lines: string[]): string[] {
+  const shape = (line: string) => line.replace(/[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}/gi, "#").replace(/\d+/g, "#");
+  const out: string[] = [];
+  for (let i = 0; i < lines.length;) {
+    let j = i + 1;
+    while (j < lines.length && shape(lines[j]) === shape(lines[i])) j++;
+    // The newest line stands for the run, so its details stay accurate.
+    out.push(j - i > 1 ? `${lines[j - 1]}  … ×${j - i}` : lines[i]);
+    i = j;
+  }
+  return out;
+}

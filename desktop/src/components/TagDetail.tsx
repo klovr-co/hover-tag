@@ -10,7 +10,7 @@ import { ActivityDetails, StepsToggle } from "./ActivityDetails";
 import { ActivityArtifacts } from "./ActivityArtifacts";
 import { ActivityTokens } from "./ActivityTokens";
 import { useModelChoice } from "../lib/model";
-import { groups, parseJSON, problemHelp, problemText, status, title, type Group, type TagRow } from "../lib/protocol";
+import { collapseRepeats, groups, parseJSON, problemHelp, problemText, status, title, type Group, type TagRow } from "../lib/protocol";
 import type { Tags } from "../lib/tags";
 import teamArt from "../assets/art/tag-team.png";
 import keyArt from "../assets/art/tag-key.png";
@@ -264,6 +264,7 @@ function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, sa
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
   const [logText, setLogText] = useState("");
+  const [logView, setLogView] = useState("");
   const request = useRef(0);
   const load = useCallback(async () => {
     const current = ++request.current;
@@ -279,7 +280,11 @@ function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, sa
         return [...merged.values()];
       });
       setHasMore(logs.activity_has_more === true);
-      setLogText(Object.entries(logs.services).map(([name, lines]) => `── ${name} ──\n${lines.join("\n") || "No recent entries"}`).join("\n\n"));
+      const section = (fold: (lines: string[]) => string[]) => Object.entries(logs.services)
+        .map(([name, lines]) => `── ${name} ──\n${fold(lines).join("\n") || "No recent entries"}`).join("\n\n");
+      // Copy keeps every line; the Logs tab folds repeats so the cause stays visible.
+      setLogText(section((lines) => lines));
+      setLogView(section(collapseRepeats));
     } catch {
       if (current === request.current) setActivity((previous) => previous ?? []);
     } finally {
@@ -354,7 +359,7 @@ function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, sa
             )}
           </>
         )}
-        {tab === "logs" && <Logs text={logText} copyLog={copyLog} />}
+        {tab === "logs" && <Logs text={logView} copyLog={copyLog} />}
         {tab === "details" && <Details api={api} tags={tags} row={row} copyLog={copyLog} openAI={() => openAI(row.id)} say={say} canDescribe={canDescribe} />}
       </div>
       {on && tab === "activity" && (
