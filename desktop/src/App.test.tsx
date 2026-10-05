@@ -73,17 +73,21 @@ it("replays onboarding from Settings without saving, installing, or quitting", a
   const api = demoBridge();
   api.tag = vi.fn(api.tag);
   api.quit = vi.fn(api.quit);
+  api.install = vi.fn(api.install);
   vi.mocked(bridge).mockResolvedValue(api);
   render(<StrictMode><App /></StrictMode>);
   fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
   fireEvent.click(await screen.findByRole("tab", { name: "About" }));
   fireEvent.click(await screen.findByRole("button", { name: "Replay" }));
   fireEvent.click(await screen.findByRole("button", { name: "No thanks" }));
-  expect(await screen.findByRole("button", { name: "Install Tag" })).toBeTruthy();
+  expect(await screen.findByRole("button", { name: "Done" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Install Tag" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Quit" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Done" }));
   expect(await screen.findByRole("button", { name: "Replay" })).toBeTruthy();
   expect(api.tag).not.toHaveBeenCalledWith(["telemetry", "off", "--json"]);
   expect(api.quit).not.toHaveBeenCalled();
+  expect(api.install).not.toHaveBeenCalled();
 });
 
 it("keeps measuring Home after it replaces the startup element", async () => {

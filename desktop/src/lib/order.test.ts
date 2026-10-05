@@ -29,4 +29,15 @@ describe("Home order", () => {
     window.localStorage.setItem("tag.home-order", "{nope");
     expect(savedOrder()).toEqual({ workspaces: [], tags: {} });
   });
+
+  it("keeps valid saved orders while discarding malformed entries in valid JSON", () => {
+    window.localStorage.setItem("tag.home-order", JSON.stringify({
+      workspaces: ["A", 42], tags: { K: "bad", A: ["a2", "a1"], B: null, C: ["c2", 42], D: {} },
+    }));
+    const saved = savedOrder();
+    expect(saved).toEqual({ workspaces: ["A"], tags: { A: ["a2", "a1"] } });
+    const result = ordered([group("K", ["k1", "k2"]), group("A", ["a1", "a2"]), group("C", ["c1", "c2"])], saved);
+    expect(result.map((g) => [g.key, g.rows.map((r) => r.id)]))
+      .toEqual([["A", ["a2", "a1"]], ["K", ["k1", "k2"]], ["C", ["c1", "c2"]]]);
+  });
 });

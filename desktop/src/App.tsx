@@ -218,7 +218,7 @@ export function App() {
     <TrackContext.Provider value={track}>
       <main ref={setRoot} className={`app${info.platform === "macos" ? " overlay" : ""}${screen.name === "home" ? " home" : ""}${screen.name === "tag" ? " wide" : ""}`}>
         {screen.name === "replay" && screen.step === "telemetry" && <TelemetryNotice api={api} telemetry={telemetry} preview={() => setScreen({ name: "replay", step: "welcome" })} />}
-        {screen.name === "replay" && screen.step === "welcome" && <Welcome api={api} platform={info.platform} preview={() => setScreen({ name: "settings", tab: "about" })} install={() => setScreen({ name: "settings", tab: "about" })} />}
+        {screen.name === "replay" && screen.step === "welcome" && <Welcome api={api} platform={info.platform} preview={() => setScreen({ name: "settings", tab: "about" })} />}
         {screen.name === "welcome" && <Welcome api={api} platform={info.platform} install={() => setScreen({ name: "installing", attempt: 0 })} />}
         {screen.name === "installing" && (
           <Installing key={screen.attempt} api={api}
