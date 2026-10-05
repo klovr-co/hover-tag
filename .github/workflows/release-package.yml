@@ -218,6 +218,20 @@ jobs:
           if ls manifests/*.json >/dev/null 2>&1; then
             gh release upload channels manifests/*.json --clobber
           fi
+  channel-index:
+    # A run started by GITHUB_TOKEN does not fire workflow_run, so the index
+    # would stay on the previous release. Republish it now that builds are attached.
+    needs: [desktop, desktop-updates]
+    if: ${{ !cancelled() && needs.desktop.result == 'success' && needs.desktop-updates.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Republish the release channel index
+        run: gh workflow run channel-index.yml --repo "$GITHUB_REPOSITORY" --ref main
   notify-site-docs:
     needs: package
     if: needs.package.outputs.docs_tag != ''

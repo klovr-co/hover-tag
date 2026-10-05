@@ -38,10 +38,20 @@ describe("one Tag update", () => {
     await installUpdate(api, "0.2.0");
     expect(events).toEqual(["desktop"]);
   });
-  it.each([null, "0.4.0"])("leaves the installation alone without matching desktop artifacts (%s)", async (app) => {
+  it.each([null, "0.4.0"])("waits for desktop artifacts before offering a release (%s)", async (app) => {
     const { api, events } = fixture("0.2.0", "0.3.0", app);
-    await expect(installUpdate(api, "0.2.0")).rejects.toThrow("complete Tag update");
+    expect(await checkUpdate(api, "0.2.0")).toMatchObject({ version: "0.2.0", runtime: false, desktop: false, preparing: "0.3.0" });
+    expect(await installUpdate(api, "0.2.0")).toMatchObject({ current: "0.2.0", preparing: "0.3.0" });
     expect(events).toEqual([]);
+  });
+  it("refuses a channel switch onto a release the app can't follow yet", async () => {
+    const { api, events } = fixture("0.2.0", "0.3.0", null);
+    await expect(installUpdate(api, "0.2.0", "beta")).rejects.toThrow("still being prepared");
+    expect(events).toEqual([]);
+  });
+  it("still reports a mismatch when the installed app and Tags differ", async () => {
+    const { api } = fixture("0.2.0", "0.3.0", null);
+    await expect(checkUpdate(api, "0.1.0")).rejects.toThrow("complete Tag update");
   });
   it("keeps both versions installed when the desktop feed cannot be fetched", async () => {
     const { api, events } = fixture();

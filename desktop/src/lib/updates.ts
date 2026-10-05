@@ -27,6 +27,8 @@ export interface ProductUpdate {
   pinned: boolean;
   /** The channel's newest release is older than the installed one, so Tag waits for it to catch up. */
   ahead: boolean;
+  /** A newer release whose Tag.app builds aren't published yet; Tag stays on `current` until they are. */
+  preparing?: string;
   /** Adopt the app's default through the shared CLI policy on the next upgrade. */
   initializeChannel?: boolean;
 }
@@ -68,10 +70,18 @@ export async function checkUpdate(api: Bridge, appVersion: string, channel?: Cha
   // The app follows the same channel as the runtime, so both land on one version.
   const app = await api.checkAppUpdate(isAppChannel(following) ? following : undefined);
   if (app?.version !== version) {
+    // The channel moved before its Tag.app builds were attached. Nothing is wrong
+    // with this installation: report it as current and offer the update once ready.
+    if (update.runtime && current === appVersion) {
+      return { ...update, version: current, runtime: false, desktop: false, preparing: version };
+    }
     throw new Error("A complete Tag update isn't available for your release channel yet. Check again later. Your installed version has been kept.");
   }
   return { ...update, desktop };
 }
+
+export const preparingText = (version: string) =>
+  `Tag ${version} is still being prepared for the app. Check again in a few minutes.`;
 
 /** What an update is doing: your Tags first, then the app restarts if it changed. */
 export type UpdatePhase = "runtime" | "app";
@@ -82,6 +92,8 @@ export async function installUpdate(api: Bridge, appVersion: string, channel?: C
   // Recheck on every attempt, including retries after a partial installation.
   const update = await checkUpdate(api, appVersion, channel);
   const requested = channel ?? (update.initializeChannel && isAppChannel(update.channel) ? update.channel : undefined);
+  // Switching would move your Tags to a release the app can't follow yet.
+  if (requested && update.preparing) throw new Error(preparingText(update.preparing));
   // Switching runs even when nothing installs, so the CLI saves the new channel.
   if (update.runtime || requested) {
     onPhase?.("runtime");
