@@ -13,7 +13,7 @@ import { Home } from "./components/Home";
 import { Installing, Starting, Welcome } from "./components/Install";
 import { AI_CAPABILITY, SHARED_AI_CAPABILITY } from "./lib/ai";
 import { AISettings } from "./components/AISettings";
-import { Settings } from "./components/Settings";
+import { Settings, type SettingsTab } from "./components/Settings";
 import { TagDetail } from "./components/TagDetail";
 import { TelemetryNotice } from "./components/TelemetryNotice";
 import { Toast } from "./components/ui";
@@ -24,9 +24,11 @@ type Screen =
   | { name: "installing"; attempt: number }
   | { name: "home" }
   | { name: "connect"; args: string[] }
-  | { name: "settings" }
+  | { name: "settings"; tab?: SettingsTab }
   | { name: "ai"; resume?: string[] }
-  | { name: "tag"; id: string };
+  | { name: "tag"; id: string }
+  /** Settings > Replay onboarding: the first-run screens again, changing nothing. */
+  | { name: "replay"; step: "telemetry" | "welcome" };
 
 /** What each screen counts as in usage data. */
 const SCREEN_EVENT: Partial<Record<Screen["name"], AppEvents["app_screen_viewed"]["screen"]>> = {
@@ -76,7 +78,7 @@ export function App() {
   });
   const telemetry = useTelemetry(api, !!info?.cli);
   const { track } = telemetry;
-  const root = useRef<HTMLElement>(null);
+  const [root, setRoot] = useState<HTMLElement | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -172,11 +174,11 @@ export function App() {
   // The window always fits its content, and Tag detail is wider.
   const width = screen.name === "tag" ? WIDE : WIDTH;
   useLayoutEffect(() => {
-    if (!api || !root.current) return;
+    if (!api || !root) return;
     const observer = new ResizeObserver(([entry]) => void api.fitWindow(width, Math.ceil(entry.target.getBoundingClientRect().height)));
-    observer.observe(root.current);
+    observer.observe(root);
     return () => observer.disconnect();
-  }, [api, width, screen.name]);
+  }, [api, width, root]);
 
   // Tray menu actions arrive here, even while the window is hidden.
   useEffect(() => {
@@ -203,18 +205,20 @@ export function App() {
     return () => clearTimeout(timer);
   }, [screen.name, tags.rows, tags.discardDrafts]);
   if (!api || !info || screen.name === "loading") {
-    return <main ref={root} className="app"><Starting error={bootError} retry={() => setBootAttempt((value) => value + 1)} /></main>;
+    return <main ref={setRoot} className="app"><Starting error={bootError} retry={() => setBootAttempt((value) => value + 1)} /></main>;
   }
   // The usage data notice comes before Home and setup, so it's seen before anything is recorded.
   if (screen.name === "home" || screen.name === "connect") {
-    if (!telemetry.loaded) return <main ref={root} className="app"><Starting retry={telemetry.reload} /></main>;
-    if (telemetry.asking) return <main ref={root} className="app"><TelemetryNotice api={api} telemetry={telemetry} /></main>;
+    if (!telemetry.loaded) return <main ref={setRoot} className="app"><Starting retry={telemetry.reload} /></main>;
+    if (telemetry.asking) return <main ref={setRoot} className="app"><TelemetryNotice api={api} telemetry={telemetry} /></main>;
   }
   const home = () => { setScreen({ name: "home" }); void tags.refresh(); watch.recheck(); };
   const add = () => setScreen({ name: "connect", args: tags.rows.length ? ["add"] : ["setup"] });
   return (
     <TrackContext.Provider value={track}>
-      <main ref={root} className={`app${info.platform === "macos" ? " overlay" : ""}${screen.name === "home" ? " home" : ""}${screen.name === "tag" ? " wide" : ""}`}>
+      <main ref={setRoot} className={`app${info.platform === "macos" ? " overlay" : ""}${screen.name === "home" ? " home" : ""}${screen.name === "tag" ? " wide" : ""}`}>
+        {screen.name === "replay" && screen.step === "telemetry" && <TelemetryNotice api={api} telemetry={telemetry} preview={() => setScreen({ name: "replay", step: "welcome" })} />}
+        {screen.name === "replay" && screen.step === "welcome" && <Welcome api={api} platform={info.platform} preview={() => setScreen({ name: "settings", tab: "about" })} />}
         {screen.name === "welcome" && <Welcome api={api} platform={info.platform} install={() => setScreen({ name: "installing", attempt: 0 })} />}
         {screen.name === "installing" && (
           <Installing key={screen.attempt} api={api}
@@ -230,15 +234,15 @@ export function App() {
             finishSetup={(row) => setScreen({ name: "connect", args: [row.id, "setup"] })}
             open={(row) => setScreen({ name: "tag", id: row.id })}
             fixAI={() => capabilities.includes(SHARED_AI_CAPABILITY) ? setScreen({ name: "ai" }) : say("Update Tag to manage shared AI accounts in Settings.")}
-            showSettings={() => setScreen({ name: "settings" })} />
+            showSettings={(tab) => setScreen({ name: "settings", tab })} />
         )}
         {screen.name === "connect" && (
           <Connect api={api} args={screen.args} openAI={capabilities.includes(SHARED_AI_CAPABILITY) ? (resume) => setScreen({ name: "ai", resume }) : undefined} done={home}
             paused={() => { home(); say("Progress saved. Finish setup from Home any time."); }} />
         )}
         {screen.name === "settings" && (
-          <Settings api={api} info={info} tags={tags} telemetry={telemetry} close={home} update={update} check={() => void check()}
-            runUpdate={() => void runUpdate()} switched={(done) => dispatchUpdate({ type: "updated", update: done })}
+          <Settings key={screen.tab} initialTab={screen.tab} api={api} info={info} tags={tags} telemetry={telemetry} close={home} update={update} check={() => void check()}
+            runUpdate={() => void runUpdate()} replay={() => setScreen({ name: "replay", step: "telemetry" })} switched={(done) => dispatchUpdate({ type: "updated", update: done })}
             openAI={capabilities.includes(SHARED_AI_CAPABILITY) ? () => setScreen({ name: "ai" }) : undefined} />
         )}
         {screen.name === "ai" && (

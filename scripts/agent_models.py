@@ -557,9 +557,9 @@ def load_model_names(path: Path) -> dict[str, str]:
 
 
 def model_choice_name(value: str, default_backend: str, *, names: dict[str, str] | None = None) -> str:
-    """Just the model's name for a saved choice, e.g. ``Opus 5.5`` or ``Account default``."""
+    """Compact model name for a saved choice, e.g. ``Opus 5.5`` or ``Codex default``."""
     backend, model = parse_model_choice(value, default_backend) if value else (default_backend, None)
-    return (names or {}).get(f"{backend}:{model}", model) if model else "Account default"
+    return (names or {}).get(f"{backend}:{model}", model) if model else f"{backend_display_name(backend)} default"
 
 
 def describe_model_choice(value: str, default_backend: str, *, names: dict[str, str] | None = None) -> str:

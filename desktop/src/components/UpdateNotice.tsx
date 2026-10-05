@@ -5,7 +5,7 @@
 import { targetVersion, type UpdateState } from "../lib/updates";
 import { Icon, Spinner } from "./ui";
 
-export function UpdateNotice({ state, outdated, run }: { state: UpdateState; outdated: boolean; run: () => void }) {
+export function UpdateNotice({ state, outdated, run, settings }: { state: UpdateState; outdated: boolean; run: () => void; settings: () => void }) {
   const version = targetVersion(state);
   const current = state.update?.current ?? "";
   if (state.status === "updating") {
@@ -15,7 +15,8 @@ export function UpdateNotice({ state, outdated, run }: { state: UpdateState; out
         <span className="ic"><Icon name="up" size={16} /></span>
         <div style={{ flex: 1 }}>
           <div className="t">Updating Tag{version ? ` to ${version}` : ""}…</div>
-          <div className="d">{app ? "Restarting the app to finish. Your Tags keep running." : "Updating your Tags. They restart on the new version."}</div>
+          <div className="d">{app ? "Restarting the app to finish. Your Tags keep running." : state.phase === "runtime"
+            ? "Updating your Tags. They restart on the new version." : "Checking that a complete update is available."}</div>
         </div>
         <div className="act" style={{ color: "var(--muted)" }}><Spinner small label="Updating" /></div>
         <span className="bar" style={{ width: app ? "85%" : "40%" }} />
@@ -41,6 +42,20 @@ export function UpdateNotice({ state, outdated, run }: { state: UpdateState; out
           <div className="t">The update didn't finish</div>
           <div className="d">Your settings are kept. Try again to finish updating{version ? ` to ${version}` : ""}.</div>
           {state.error && <div className="d selectable">{state.error}</div>}
+        </div>
+        <div className="act"><button className="p-btn ink sm" onClick={run}>Try again</button></div>
+      </div>
+    );
+  }
+  if (state.status === "idle" && state.error) {
+    return (
+      <div className="notice" role="alert">
+        <span className="ic"><Icon name="warn" size={16} /></span>
+        <div style={{ flex: 1 }}>
+          <div className="t">Couldn't check for updates</div>
+          <div className="d">This check made no changes. Your settings are kept.</div>
+          <div className="d selectable">{state.error}</div>
+          <button className="link" onClick={settings}>Release channel settings</button>
         </div>
         <div className="act"><button className="p-btn ink sm" onClick={run}>Try again</button></div>
       </div>

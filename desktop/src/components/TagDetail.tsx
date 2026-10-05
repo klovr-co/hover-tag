@@ -5,7 +5,7 @@
 // Details. It replaces the Logs screen and Home's ··· menu.
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Bridge } from "../lib/bridge";
-import { effortLabel, effortShort, generationTime, liveRows, placeText, type ActivityItem } from "../lib/home";
+import { effortLabel, effortShort, generationTime, liveRows, modelText, placeText, type ActivityItem } from "../lib/home";
 import { ActivityDetails, StepsToggle } from "./ActivityDetails";
 import { ActivityArtifacts } from "./ActivityArtifacts";
 import { ActivityTokens } from "./ActivityTokens";
@@ -16,7 +16,7 @@ import teamArt from "../assets/art/tag-team.png";
 import keyArt from "../assets/art/tag-key.png";
 import { workingFolder } from "./Home";
 import { ModelMenu, ModelWarning, SaveBar, ThinkingRow } from "./AI";
-import { Avatar, ErrorLine, fitText, Icon, Primary, Switch, workspaceColor, WorkspaceMark, source, tagIcon } from "./ui";
+import { Avatar, dragWindow, ErrorLine, fitText, Icon, Primary, Switch, workspaceColor, WorkspaceMark, source, tagIcon } from "./ui";
 
 export type Selection = { kind: "tag"; id: string } | { kind: "channel"; id: string };
 type Tab = "activity" | "channels" | "details";
@@ -57,7 +57,7 @@ export function TagDetail({ api, tags, initial, problems, back, add, showSetting
   const all = groups(rows);
   const group = all.find((g) => g.key === workspace) ?? all[0];
   const top = (
-    <div className="sl-top" data-tauri-drag-region>
+    <div className="sl-top" onMouseDown={dragWindow}>
       <button className="sky-btn" onClick={back} aria-label="Back to Your Tags"><Icon name="left" />Your Tags</button>
       <label className="sl-search"><Icon name="search" size={16} />
         <input placeholder="Search Tags and channels" value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Search Tags and channels" />
@@ -306,7 +306,7 @@ function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, sa
   }
   const on = row.state === "running";
   const channels = row.channels ?? [];
-  const model = row.default_model_name ?? "";
+  const model = modelText(row)?.model ?? "";
   const effort = row.default_effort ? ` · ${effortShort(row.default_effort)}` : "";
   const copyLog = () => { void api.copy(logText); say("Copied the full log"); };
   return (

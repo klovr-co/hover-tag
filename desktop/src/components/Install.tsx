@@ -27,7 +27,9 @@ export function Starting({ error, retry }: { error?: string; retry: () => void }
   </>;
 }
 
-export function Welcome({ api, platform, install }: { api: Bridge; platform: string; install: () => void }) {
+/** Replay ends with Done; first-run welcome offers installation and quitting. */
+export function Welcome({ api, platform, install, preview }: { api: Bridge; platform: string } &
+  ({ install: () => void; preview?: never } | { preview: () => void; install?: never })) {
   const machine = platform === "macos" ? "Mac" : "computer";
   return (
     <>
@@ -47,8 +49,10 @@ export function Welcome({ api, platform, install }: { api: Bridge; platform: str
         </div>
         <div className="foot">
           <span className="spacer" />
-          <Quiet title="Quit" onClick={() => void api.quit()} />
-          <Primary title="Install Tag" onClick={install} autoFocus />
+          {preview ? <Primary title="Done" onClick={preview} autoFocus /> : <>
+            <Quiet title="Quit" onClick={() => void api.quit()} />
+            <Primary title="Install Tag" onClick={install} autoFocus />
+          </>}
         </div>
       </div>
     </>

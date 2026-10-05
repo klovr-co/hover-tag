@@ -145,7 +145,14 @@ export function rowLine(row: TagRow, problem: string | null, error: string): Row
 
 /** The model after the name, such as "GPT-5.5 · med". */
 export function modelText(row: TagRow, report?: AIStatus | null) {
-  const name = row.default_model_name ?? report?.default_model.label ?? null;
+  let name = row.default_model_name ?? report?.default_model.label ?? null;
+  // Older installed CLIs omit the backend from this display name.
+  if (name === "Account default") {
+    const backend = row.default_model?.split(":")[0] ?? report?.default_model.backend;
+    if (backend === "codex" || backend === "claude") {
+      name = `${backend === "codex" ? "Codex" : "Claude"} default`;
+    }
+  }
   if (!name) return null;
   const effort = row.default_effort;
   return { text: effort ? `${name} · ${effortShort(effort)}` : name, model: name, effort: effort ?? null };

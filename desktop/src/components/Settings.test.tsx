@@ -15,16 +15,17 @@ function channels(newest: Record<string, string>, update: ProductUpdate | null =
   const calls: string[][] = [];
   const json = (value: unknown): RunResult => ({ code: 0, stdout: JSON.stringify(value), stderr: "" });
   let installed = "0.3.0";
+  let saved = "stable";
   api.tag = async (args) => {
     calls.push(args);
     if (args[0] === "version") return json({ version: installed });
-    const channel = args[args.indexOf("--channel") + 1];
+    const channel = args.includes("--channel") ? args[args.indexOf("--channel") + 1] : saved;
     const target = newest[channel];
     const order = (v: string) => v.replace(/-(alpha|beta)\.(\d+)/, (_, kind, n) => `.${kind === "alpha" ? 0 : 1}.${n}`);
     const status = target === installed ? "current" : order(target) < order(installed) ? "ahead" : "available";
-    if (!args.includes("--dry-run")) installed = status === "available" ? target : installed;
+    if (!args.includes("--dry-run")) { installed = status === "available" ? target : installed; saved = channel; }
     return json({ ok: true, status: args.includes("--dry-run") ? status : "upgraded",
-      current: { version: "0.3.0", channel: "stable" }, target: { version: target, channel } });
+      current: { version: installed, channel: saved, selection: "channel" }, target: { version: target, channel } });
   };
   api.checkAppUpdate = async (channel) => ({ version: newest[channel ?? "stable"] });
   api.installAppUpdate = vi.fn(async () => {});

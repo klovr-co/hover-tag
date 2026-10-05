@@ -21,6 +21,8 @@ export interface AppInfo {
   /** Path of the `tag` command, when Tag is installed. */
   cli: string | null;
   version: string;
+  /** Version 1 migration: this installation has adopted its app release channel. */
+  channelInitialized?: boolean;
   launchedAtLogin: boolean;
   /** Tags the earlier Mac app kept running at login, to carry over once. */
   legacyWantedTags: string[] | null;
@@ -66,6 +68,7 @@ export interface Bridge {
   quit(): Promise<void>;
   /** Record that the Swift app's login behaviour was carried over. */
   markMigrated(): Promise<void>;
+  markChannelInitialized(): Promise<void>;
   /** A newer signed Tag.app on `channel` (stable, beta, or alpha); otherwise on this build's own release line. */
   checkAppUpdate(channel?: string): Promise<AppUpdate | null>;
   /** Install the update found by checkAppUpdate and restart into it. */
@@ -136,6 +139,7 @@ async function tauriBridge(): Promise<Bridge> {
     fitWindow: windowFitter((width, height) => getCurrentWindow().setSize(new LogicalSize(width, height)), window),
     quit: () => invoke("quit"),
     markMigrated: () => invoke("mark_migrated"),
+    markChannelInitialized: () => invoke("mark_channel_initialized"),
     checkAppUpdate: (channel) => invoke<AppUpdate | null>("app_update_check", { channel: channel ?? null }),
     installAppUpdate: (version) => invoke("app_update_install", { version }),
     pickImage: async () => {
@@ -200,6 +204,7 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
     info: async () => ({
       platform: "macos", demo: true, cli: installed ? "~/.local/bin/tag" : null,
       version: desktopVersion, launchedAtLogin: false, legacyWantedTags: null, firstName: "Maya",
+      channelInitialized: true,
     }),
     tag: async (args) => {
       await sleep(250);
@@ -349,6 +354,7 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
     fitWindow: async () => {},
     quit: async () => {},
     markMigrated: async () => {},
+    markChannelInitialized: async () => {},
     checkAppUpdate: async () => desktopVersion !== targetVersion ? { version: targetVersion } : null,
     installAppUpdate: async () => { desktopVersion = targetVersion; await sleep(1500); },
     pickImage: async () => null,
