@@ -12,10 +12,10 @@ agent before claiming a release qualified for it. Hosted operation, enterprise p
 and production-grade sandboxing are out of scope.
 
 The canonical source repository is <https://github.com/klovr-co/hover-tag>. `VERSION`
-selects the current release line (`v0.3.0-alpha`). On an alpha source
-line, automatic releases append a monotonically increasing candidate number
-such as `v0.3.0-alpha.3`. Alpha releases are GitHub prereleases and remain
-explicitly experimental. The previous line published `v0.2.0-alpha` and
+selects the current release line (`v0.3.0-beta`). The first beta is
+`v0.3.0-beta.1`; later eligible merges publish monotonically increasing
+candidates such as `v0.3.0-beta.2`. Beta releases are GitHub prereleases
+and remain opt-in. The previous line published `v0.2.0-alpha` and
 `v0.2.0-beta` candidates before stable `v0.2.0`.
 
 Published releases trigger `.github/workflows/release-package.yml`, which

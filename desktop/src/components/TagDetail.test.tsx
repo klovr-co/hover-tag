@@ -1,5 +1,5 @@
 // Tag detail: the feed shows only Tag's own records, and model changes wait for a click.
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type Bridge, demoBridge } from "../lib/bridge";
 import { parseList, type TagRow } from "../lib/protocol";
@@ -198,27 +198,31 @@ it("opens at the latest request, loads older records on upward scroll, and prese
   });
   const clientHeight = vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(200);
   try {
-    const { calls } = await open(undefined, false, (api) => {
-      const run = api.tag;
-      api.tag = async (args) => {
-        if (args[1] !== "logs") return run(args);
-        const limit = Number(args[args.indexOf("--activity-limit") + 1]);
-        const all = Array.from({ length: 120 }, (_, index) => entry(`Reply ${index}`, new Date(Date.UTC(2026, 9, 5, 0, index)).toISOString())).reverse();
-        return { code: 0, stderr: "", stdout: JSON.stringify({ services: {}, activity: all.slice(0, limit), activity_has_more: limit < all.length }) };
-      };
+    let calls: string[][] = [];
+    // Flush each mocked response and its effects before the next scroll/assertion.
+    await act(async () => {
+      ({ calls } = await open(undefined, false, (api) => {
+        const run = api.tag;
+        api.tag = async (args) => {
+          if (args[1] !== "logs") return run(args);
+          const limit = Number(args[args.indexOf("--activity-limit") + 1]);
+          const all = Array.from({ length: 120 }, (_, index) => entry(`Reply ${index}`, new Date(Date.UTC(2026, 9, 5, 0, index)).toISOString())).reverse();
+          return { code: 0, stderr: "", stdout: JSON.stringify({ services: {}, activity: all.slice(0, limit), activity_has_more: limit < all.length }) };
+        };
+      }));
     });
-    await screen.findByText("Reply 119");
+    expect(screen.getByText("Reply 119")).toBeTruthy();
     const panel = screen.getByRole("tabpanel");
     expect(panel.scrollTop).toBe(1000);
     expect(screen.queryByText("Reply 69")).toBeNull();
     panel.scrollTop = 5;
-    fireEvent.scroll(panel);
-    await screen.findByText("Reply 20");
+    await act(async () => { fireEvent.scroll(panel); });
+    expect(screen.getByText("Reply 20")).toBeTruthy();
     expect(panel.scrollTop).toBe(1005);
     expect(calls.some((args) => args.includes("--activity-limit") && args[args.indexOf("--activity-limit") + 1] === "100")).toBe(true);
     expect([...document.querySelectorAll(".activity-reply-preview")].map((el) => el.textContent).slice(-1)).toEqual(["Reply 119"]);
-    fireEvent.click(screen.getByRole("button", { name: "Load older activity" }));
-    await screen.findByText("Reply 0");
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Load older activity" })); });
+    expect(screen.getByText("Reply 0")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Load older activity" })).toBeNull();
     expect(panel.scrollTop).toBe(1405);
   } finally { height.mockRestore(); clientHeight.mockRestore(); }
