@@ -9,7 +9,7 @@ import { parseJSON } from "../lib/protocol";
 import type { Tags } from "../lib/tags";
 import { useTrack, type Telemetry } from "../lib/telemetry";
 import {
-  APP_CHANNELS, checkUpdate, installUpdate, isAppChannel, targetVersion,
+  APP_CHANNELS, checkUpdate, installUpdate, isAppChannel, preparingText, targetVersion,
   type Channel, type ProductUpdate, type UpdateState,
 } from "../lib/updates";
 import building from "../assets/art/tag-building.png";
@@ -54,6 +54,7 @@ export function previewText(name: string, preview: ProductUpdate) {
   if (preview.runtime || preview.desktop) {
     return `Switch to ${name} and update to Tag ${preview.version}. The app and your Tags update together, and your settings are kept.`;
   }
+  if (preview.preparing) return `${preparingText(preview.preparing)} Tag stays on ${preview.current} until then.`;
   if (preview.ahead) return `${name}'s newest release is older than Tag ${preview.current}. Tag keeps ${preview.current} and follows ${name} from its next release.`;
   return `Switch to ${name}. You already have its newest release.`;
 }
@@ -115,9 +116,9 @@ export function ReleaseChannel({ api, appVersion, update, busy, setBusy, switche
         <div className="ch-confirm">
           <span className="sub wrap" style={{ flex: "1 1 100%", color: "var(--text)" }}>{previewText(name, preview)}</span>
           <button className="p-btn quiet sm" disabled={busy} onClick={() => { setChoice(null); setPreview(null); }}>Cancel</button>
-          <button className="p-btn ink sm" disabled={busy} onClick={() => void confirm()}>
+          {!preview.preparing && <button className="p-btn ink sm" disabled={busy} onClick={() => void confirm()}>
             {busy ? "Switching…" : installs ? "Switch and update" : "Switch"}
-          </button>
+          </button>}
         </div>
       )}
     </div>
@@ -181,7 +182,9 @@ export function Settings({ api, info, tags, telemetry, close, replay, initialTab
     failed: ["The update didn't finish", `Your settings are kept. Try again to finish updating${target ? ` to ${target}` : ""}.`,
       <Primary small title="Try again" onClick={runUpdate} />],
     done: [`Tag ${version}`, "Up to date. The app and your Tags are on the same version.", <UpToDate />],
-    current: [`Tag ${version}`, "Up to date. The app and your Tags are on the same version.", <UpToDate />],
+    current: [`Tag ${version}`, update.update?.preparing ? preparingText(update.update.preparing)
+      : "Up to date. The app and your Tags are on the same version.", update.update?.preparing
+      ? <Secondary small title="Check again" onClick={check} /> : <UpToDate />],
   };
   const [label, detail, control] = row[update.status];
   const art = update.status === "failed" ? puzzled : update.status === "updating" ? building : tagIcon;

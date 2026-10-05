@@ -48,7 +48,9 @@ published tag. To roll back, revert the site pin commit. See
 Public installers resolve channels through `tag-release-channels.json` on the
 moving `channels` GitHub release. `.github/workflows/channel-index.yml`
 regenerates that index from published, fully attributed releases after edge or
-release packaging completes. Once a release has shipped Tag.app, each newer
+release packaging completes. Release packaging started by the edge build uses
+`GITHUB_TOKEN`, which does not fire `workflow_run`, so its final
+`channel-index` job dispatches the index directly once Tag.app builds are attached. Once a release has shipped Tag.app, each newer
 release also needs `DESKTOP-SHA256SUMS-PLATFORM` for macOS, Windows, and Linux
 before its channel moves to it. Until all three builds are attached, the
 channel keeps the previous release, so `tag upgrade` never moves past Tag.app's
