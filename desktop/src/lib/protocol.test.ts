@@ -12,6 +12,7 @@ import {
   compatibility, groups, INSTALL_STEPS, parseList, parseProgressLine, parseSetupLine, status, title,
   type VersionInfo,
 } from "./protocol";
+import { collapseRepeats } from "./protocol";
 import { explainExit, initialSetup, setupReducer, trackStep } from "./setup";
 import { droppedTags, failureLine } from "./tags";
 import { workingFolder } from "../components/Home";
@@ -93,6 +94,12 @@ describe("setup", () => {
     for (const line of lines.filter((l) => l.includes('"progress"'))) state = setupReducer(state, { type: "line", line });
     expect(state.creating?.map((s) => s.step)).toEqual(["create", "picture", "install", "connect"]);
     expect(state.signIn.backend).toBeNull();
+  });
+
+  it("says what to do when an existing Tag's readiness check fails without a message", () => {
+    const line = JSON.stringify({ type: "result", status: "failed", tag: "t0bnd7v5j2w-a0maya01", exit_code: 1 });
+    expect(setupReducer(initialSetup, { type: "line", line }).error)
+      .toBe("This Tag needs attention. Run tag t0bnd7v5j2w-a0maya01 doctor to see why.");
   });
 
   it("stays on the code step when Slack refuses a code", () => {
@@ -198,4 +205,14 @@ it("keeps setup progress on the last question during transitions and errors", ()
     state = setupReducer(state, { type: "exit", code: 1, stderr: "Interrupted" });
     expect(trackStep(state)).toBe(step);
   }
+});
+
+describe("log repeats", () => {
+  it("folds consecutive lines that differ only in IDs and numbers", () => {
+    const pipe = (id: string) => `on_error invoked (session id: ${id}, error: BrokenPipeError, message: [Errno 32] Broken pipe)`;
+    const a = "2624278d-0e33-4c86-b0bf-54b9a3f82730", b = "90703d30-b53c-46c3-b805-695fc7d8392a";
+    expect(collapseRepeats(["Started", pipe(a), pipe(b), "Stopped", "Stopped"]))
+      .toEqual(["Started", `${pipe(b)}  … ×2`, "Stopped  … ×2"]);
+    expect(collapseRepeats(["one", "two"])).toEqual(["one", "two"]);
+  });
 });

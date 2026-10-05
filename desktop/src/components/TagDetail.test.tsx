@@ -109,6 +109,20 @@ describe("Tag detail", () => {
     expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
   });
 
+  it("shows the Tag's service log in a Logs tab", async () => {
+    const { calls } = await open("Logs");
+    await vi.waitFor(() => expect(screen.getByLabelText("Tag log").textContent).toContain("── slack ──"));
+    expect(calls.some((args) => args[1] === "logs")).toBe(true);
+  });
+
+  it("says a running Tag lost Slack and points to its logs", async () => {
+    await open(undefined, false, (_api, rows) => Object.assign(rows[0], { state: "needs_attention", services: { slack: false, mfs: true } }));
+    expect((await screen.findAllByText("Not connected to Slack")).length).toBeGreaterThan(0);
+    expect(screen.getByText(/stopped hearing from Slack/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "View logs" }));
+    expect(screen.getByRole("tab", { name: "Logs" }).getAttribute("aria-selected")).toBe("true");
+  });
+
   it("Cancel puts the saved level back", async () => {
     await open("Details");
     await screen.findByRole("radio", { name: "Low" }, { timeout: 5000 });

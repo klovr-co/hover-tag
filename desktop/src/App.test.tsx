@@ -44,6 +44,83 @@ it("shows a broken launcher error on first open and recovers after retry", async
   expect(screen.queryByText(/missing-python/)).toBeNull();
 });
 
+it("offers to install Tag again when it was removed after the app started", async () => {
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  const api = demoBridge();
+  const working = api.tag;
+  api.info = vi.fn().mockResolvedValueOnce({ platform: "macos", cli: "/missing/tag", version: "test" })
+    .mockResolvedValue({ platform: "macos", cli: null, version: "test" });
+  api.tag = vi.fn(async (args: string[]) => {
+    if (args[0] === "list") throw new Error("Tag isn't installed yet.");
+    return working(args);
+  });
+  vi.mocked(bridge).mockResolvedValue(api);
+  render(<App />);
+  expect(await screen.findByRole("button", { name: "Install Tag" })).toBeTruthy();
+  expect(screen.queryByText("Couldn't open Tag")).toBeNull();
+});
+
+it("returns to existing Tags after reinstalling instead of setting up a first Tag", async () => {
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  const api = demoBridge();
+  api.info = vi.fn().mockResolvedValue({ platform: "macos", cli: null, version: "test" });
+  api.tag = vi.fn(async (args: string[]) => args[0] === "telemetry"
+    ? { code: 0, stderr: "", stdout: JSON.stringify({ schema_version: 1, enabled: false, available: true,
+      saved_preference: "off", process_override: null, privacy_notice: "" }) }
+    : await demoBridge().tag(args));
+  api.install = vi.fn(async (_channel, _onLine, onExit) => { setTimeout(() => onExit(0)); return { stop() {}, send() {} }; });
+  const setup = vi.spyOn(api, "setup");
+  vi.mocked(bridge).mockResolvedValue(api);
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Install Tag" }));
+  fireEvent.click(await screen.findByRole("button", { name: /Set up your first Tag/ }));
+  expect(await screen.findByRole("heading", { name: "Your Tags" })).toBeTruthy();
+  expect(setup).not.toHaveBeenCalled();
+});
+
+it("goes Home, not first-Tag setup, when the list can't be read after installing", async () => {
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  const api = demoBridge();
+  api.info = vi.fn().mockResolvedValue({ platform: "macos", cli: null, version: "test" });
+  let failList = true;
+  api.tag = vi.fn(async (args: string[]) => {
+    if (args[0] === "telemetry") return { code: 0, stderr: "", stdout: JSON.stringify({ schema_version: 1, enabled: false,
+      available: true, saved_preference: "off", process_override: null, privacy_notice: "" }) };
+    if (args[0] === "list" && failList) { failList = false; return { code: 1, stdout: "", stderr: "busy\n" }; }
+    return demoBridge().tag(args);
+  });
+  api.install = vi.fn(async (_channel, _onLine, onExit) => { setTimeout(() => onExit(0)); return { stop() {}, send() {} }; });
+  const setup = vi.spyOn(api, "setup");
+  vi.mocked(bridge).mockResolvedValue(api);
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Install Tag" }));
+  fireEvent.click(await screen.findByRole("button", { name: /Set up your first Tag/ }));
+  expect(await screen.findByRole("heading", { name: "Your Tags" })).toBeTruthy();
+  expect(setup).not.toHaveBeenCalled();
+});
+
+it("offers to install Tag again when it is removed while Home is open", async () => {
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  const api = demoBridge();
+  const working = api.tag;
+  let removed = false;
+  api.info = vi.fn(async () => ({ platform: "macos", cli: removed ? null : "/tag", version: "test" }) as AppInfo);
+  api.tag = vi.fn(async (args: string[]) => {
+    if (args[0] === "telemetry") return { code: 0, stderr: "", stdout: JSON.stringify({ schema_version: 1, enabled: false,
+      available: true, saved_preference: "off", process_override: null, privacy_notice: "" }) };
+    if (removed && args[0] === "list") throw new Error("Tag isn't installed yet.");
+    return working(args);
+  });
+  vi.mocked(bridge).mockResolvedValue(api);
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  render(<App />);
+  expect(await screen.findByRole("heading", { name: "Your Tags" })).toBeTruthy();
+  removed = true;
+  await act(async () => { await vi.advanceTimersByTimeAsync(31_000); });
+  vi.useRealTimers();
+  expect(await screen.findByRole("button", { name: "Install Tag" })).toBeTruthy();
+});
+
 it("asks about usage data before Home, then records only after the choice", async () => {
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
   const api = demoBridge();

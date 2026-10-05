@@ -10,7 +10,7 @@ import { ActivityDetails, StepsToggle } from "./ActivityDetails";
 import { ActivityArtifacts } from "./ActivityArtifacts";
 import { ActivityTokens } from "./ActivityTokens";
 import { useModelChoice } from "../lib/model";
-import { groups, parseJSON, problemText, status, title, type Group, type TagRow } from "../lib/protocol";
+import { collapseRepeats, groups, parseJSON, problemHelp, problemText, status, title, type Group, type TagRow } from "../lib/protocol";
 import type { Tags } from "../lib/tags";
 import teamArt from "../assets/art/tag-team.png";
 import keyArt from "../assets/art/tag-key.png";
@@ -19,7 +19,7 @@ import { ModelMenu, ModelWarning, SaveBar, ThinkingRow } from "./AI";
 import { Avatar, dragWindow, ErrorLine, fitText, Icon, Primary, Switch, workspaceColor, WorkspaceMark, source, tagIcon } from "./ui";
 
 export type Selection = { kind: "tag"; id: string } | { kind: "channel"; id: string };
-type Tab = "activity" | "channels" | "details";
+type Tab = "activity" | "channels" | "logs" | "details";
 
 interface Props {
   api: Bridge;
@@ -264,6 +264,7 @@ function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, sa
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
   const [logText, setLogText] = useState("");
+  const [logView, setLogView] = useState("");
   const request = useRef(0);
   const load = useCallback(async () => {
     const current = ++request.current;
@@ -279,7 +280,11 @@ function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, sa
         return [...merged.values()];
       });
       setHasMore(logs.activity_has_more === true);
-      setLogText(Object.entries(logs.services).map(([name, lines]) => `── ${name} ──\n${lines.join("\n") || "No recent entries"}`).join("\n\n"));
+      const section = (fold: (lines: string[]) => string[]) => Object.entries(logs.services)
+        .map(([name, lines]) => `── ${name} ──\n${fold(lines).join("\n") || "No recent entries"}`).join("\n\n");
+      // Copy keeps every line; the Logs tab folds repeats so the cause stays visible.
+      setLogText(section((lines) => lines));
+      setLogView(section(collapseRepeats));
     } catch {
       if (current === request.current) setActivity((previous) => previous ?? []);
     } finally {
@@ -325,7 +330,7 @@ function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, sa
       </div>
       <div className="sl-tabbar">
       <div className="sl-tabs" role="tablist">
-        {([["activity", "Activity", null], ["channels", "Channels", channels.length], ["details", "Details", null]] as const).map(([key, label, count]) => (
+        {([["activity", "Activity", null], ["channels", "Channels", channels.length], ["logs", "Logs", null], ["details", "Details", null]] as const).map(([key, label, count]) => (
           <button key={key} role="tab" aria-selected={tab === key} onClick={() => setTab(key)}>
             {label}{count !== null && <> <span className="tcount">{count}</span></>}
           </button>
@@ -336,7 +341,7 @@ function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, sa
       <div key={tab} className="sl-body" role="tabpanel">
         {/* Rename, description, remove and start/stop report failures here, not only on Home. */}
         {tags.error && <ErrorLine>{tags.error}</ErrorLine>}
-        {tab === "activity" && <Activity hasMore={hasMore} loading={loading} loadOlder={() => setLimit((value) => value + 50)} hideErrors={hideErrors} api={api} row={row} items={activity} copyLog={copyLog} problem={problem} openAI={() => openAI(row.id)} />}
+        {tab === "activity" && <Activity hasMore={hasMore} loading={loading} loadOlder={() => setLimit((value) => value + 50)} hideErrors={hideErrors} api={api} row={row} items={activity} copyLog={copyLog} showLogs={() => setTab("logs")} problem={problem} openAI={() => openAI(row.id)} />}
         {tab === "channels" && (
           <>
             <p className="lead" style={{ margin: "0 0 8px" }}>{title(row)} answers and remembers conversations in these channels.</p>
@@ -354,6 +359,7 @@ function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, sa
             )}
           </>
         )}
+        {tab === "logs" && <Logs text={logView} copyLog={copyLog} />}
         {tab === "details" && <Details api={api} tags={tags} row={row} copyLog={copyLog} openAI={() => openAI(row.id)} say={say} canDescribe={canDescribe} />}
       </div>
       {on && tab === "activity" && (
@@ -511,8 +517,18 @@ function ActivityFeed({ api, rows, entries, hideErrors, hasMore, loading, loadOl
   </>;
 }
 
-function Activity({ api, row, items, copyLog, problem, openAI, hideErrors, hasMore, loading, loadOlder }: Pick<FilterProps, "hideErrors"> & HistoryProps & {
-  api: Bridge; row: TagRow; items: ActivityItem[] | null; copyLog: () => void; problem: string | null; openAI: () => void;
+function Logs({ text, copyLog }: { text: string; copyLog: () => void }) {
+  return <>
+    <div className="row" style={{ marginBottom: 8 }}>
+      <p className="lead" style={{ margin: 0, flex: 1 }}>Recent entries from this Tag's services, newest last.</p>
+      <button className="p-btn soft sm" onClick={copyLog}>Copy full log</button>
+    </div>
+    <pre className="logbox selectable" aria-label="Tag log" style={{ maxHeight: "none" }}>{text.trim() || "No log entries yet."}</pre>
+  </>;
+}
+
+function Activity({ api, row, items, showLogs, problem, openAI, hideErrors, hasMore, loading, loadOlder }: Pick<FilterProps, "hideErrors"> & HistoryProps & {
+  api: Bridge; row: TagRow; items: ActivityItem[] | null; copyLog: () => void; showLogs: () => void; problem: string | null; openAI: () => void;
 }) {
   const attention = status(row) === "attention";
   return <>
@@ -528,8 +544,8 @@ function Activity({ api, row, items, copyLog, problem, openAI, hideErrors, hasMo
       {attention && (
         <div className="notice" style={{ marginTop: 8 }}>
           <span className="ic"><Icon name="warn" size={16} /></span>
-          <div style={{ flex: 1 }}><div className="t">{problemText(row)}</div><div className="d">Switch it on to try again, or open the full log.</div></div>
-          <div className="act"><button className="p-btn soft sm" onClick={copyLog}>Copy full log</button></div>
+          <div style={{ flex: 1 }}><div className="t">{problemText(row)}</div><div className="d">{problemHelp(row, problem)}</div></div>
+          <div className="act"><button className="p-btn soft sm" onClick={showLogs}>View logs</button></div>
         </div>
       )}
   </>;
