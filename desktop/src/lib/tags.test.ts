@@ -20,6 +20,41 @@ describe("useTags", () => {
     const api = demoBridge();
     api.tag = async () => ({ code: 0, stdout: "not json", stderr: "" });
     const { result } = renderHook(() => useTags(api, true));
-    await waitFor(() => expect(result.current.error).toBe("Couldn't read your Tags."));
+    await waitFor(() => expect(result.current.error).toBe("Couldn't read your Tags. Tag printed no JSON"));
+    expect(result.current.loaded).toBe(false);
+  });
+
+  it.each([
+    { code: 126, stdout: "", stderr: "tag: missing-python: No such file or directory\n" },
+    { code: 1, stdout: '{"ok":false,"error":"The installation is incomplete."}', stderr: "" },
+  ])("shows the CLI's failure and clears it after retry ($code)", async (failure) => {
+    const api = demoBridge();
+    const working = api.tag;
+    api.tag = async () => failure;
+    const { result } = renderHook(() => useTags(api, false));
+    await act(async () => { await result.current.refresh(); });
+    expect(result.current.loaded).toBe(false);
+    expect(result.current.error).toContain(failure.stderr.trim() || "The installation is incomplete.");
+    api.tag = working;
+    await act(async () => { await result.current.refresh(); });
+    expect(result.current.loaded).toBe(true);
+    expect(result.current.error).toBe("");
+  });
+
+  it("keeps action failures when the list recovers, then clears the stale list failure", async () => {
+    const api = demoBridge();
+    const working = api.tag;
+    api.tag = async () => { throw "Couldn't run Tag: permission denied"; };
+    const { result } = renderHook(() => useTags(api, false));
+    await act(async () => { await result.current.refresh(); });
+    expect(result.current.error).toContain("Couldn't run Tag: permission denied");
+    act(() => result.current.setError("Couldn't stop this Tag."));
+    await act(async () => { await result.current.refresh(); });
+    expect(result.current.error).toBe("Couldn't stop this Tag.");
+    api.tag = working;
+    await act(async () => { await result.current.refresh(); });
+    expect(result.current.error).toBe("Couldn't stop this Tag.");
+    act(() => result.current.setError(""));
+    expect(result.current.error).toBe("");
   });
 });

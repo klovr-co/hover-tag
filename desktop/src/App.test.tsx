@@ -26,6 +26,24 @@ it("shows a styled startup and recovers when reading app information fails", asy
   expect(screen.queryByText("Couldn't open Tag")).toBeNull();
 });
 
+it("shows a broken launcher error on first open and recovers after retry", async () => {
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  const api = demoBridge();
+  const working = api.tag;
+  let repaired = false;
+  api.tag = vi.fn(async (args: string[]) => args[0] === "list" && !repaired
+    ? { code: 126, stdout: "", stderr: "tag: missing-python: No such file or directory\n" }
+    : working(args));
+  vi.mocked(bridge).mockResolvedValue(api);
+  render(<App />);
+  expect(await screen.findByText("Couldn't open Tag")).toBeTruthy();
+  expect(screen.getByText(/missing-python: No such file or directory/)).toBeTruthy();
+  repaired = true;
+  fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+  expect(await screen.findByRole("heading", { name: "Your Tags" })).toBeTruthy();
+  expect(screen.queryByText(/missing-python/)).toBeNull();
+});
+
 it("asks about usage data before Home, then records only after the choice", async () => {
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
   const api = demoBridge();

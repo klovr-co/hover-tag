@@ -116,6 +116,12 @@ latest reply). Both need the `ai-connections` and `logs-activity`
 capabilities; without them Home shows the greeting. Nothing is invented: a
 reply appears only once Tag recorded one.
 
+If the list cannot load, the startup screen includes the CLI or process launch
+error. **Try again** clears that error after a successful read. Errors from
+other actions remain visible until those actions succeed or are dismissed.
+The CLI already reports these errors; this display change applies to both
+backends and needs no stored-data migration.
+
 **Tag detail** opens from a Home row at 800 px wide (`fitWindow` sets the
 width too). It reads `channels` from `tag list --json`, the Tag's `activity`
 from `tag NAME logs --json` every 30 seconds, and the model and thinking level
