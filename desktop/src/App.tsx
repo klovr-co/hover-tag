@@ -3,7 +3,7 @@
 // Tag.app: installs Tag on first run, then lists, starts and adds Tags.
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
 import { bridge, type AppInfo, type Bridge } from "./lib/bridge";
-import { compatibility, parseJSON, status, type VersionInfo } from "./lib/protocol";
+import { compatibility, isDraft, parseJSON, parseList, status, type VersionInfo } from "./lib/protocol";
 import { checkUpdate, initialUpdate, installUpdate, updateReducer } from "./lib/updates";
 import { useTags } from "./lib/tags";
 import { TrackContext, useTelemetry, type AppEvents } from "./lib/telemetry";
@@ -198,6 +198,18 @@ export function App() {
     });
   }, [api, tags]);
 
+  // Tag was removed after this app started: offer to install it again instead of a dead-end error.
+  useEffect(() => {
+    if (!api || screen.name !== "home" || tags.loaded || !tags.error) return;
+    let live = true;
+    void api.info().then((i) => {
+      if (!live || i.cli) return;
+      setInfo(i);
+      setScreen({ name: "welcome" });
+    }, () => {});
+    return () => { live = false; };
+  }, [api, screen.name, tags.loaded, tags.error]);
+
   // Setups that never reached Slack are set aside once the setup flow has ended.
   useEffect(() => {
     if (screen.name !== "home" && screen.name !== "tag") return;
@@ -213,6 +225,14 @@ export function App() {
     if (telemetry.asking) return <main ref={setRoot} className="app"><TelemetryNotice api={api} telemetry={telemetry} /></main>;
   }
   const home = () => { setScreen({ name: "home" }); void tags.refresh(); watch.recheck(); };
+  // A reinstall keeps existing Tags: return to them instead of setting up a first Tag again.
+  const afterInstall = async (command: string) => {
+    setInfo({ ...info, cli: command || info.cli || "tag" });
+    const listed = await api.tag(["list", "--json"]).catch(() => null);
+    let existing = false;
+    try { existing = !!listed && listed.code === 0 && parseList(listed.stdout).some((row) => !isDraft(row)); } catch { /* treat as new */ }
+    if (existing) home(); else setScreen({ name: "connect", args: ["setup"] });
+  };
   const add = () => setScreen({ name: "connect", args: tags.rows.length ? ["add"] : ["setup"] });
   return (
     <TrackContext.Provider value={track}>
@@ -224,7 +244,7 @@ export function App() {
           <Installing key={screen.attempt} api={api}
             retry={() => setScreen({ name: "installing", attempt: screen.attempt + 1 })}
             cancel={() => setScreen({ name: "welcome" })}
-            done={(command) => { setInfo({ ...info, cli: command || info.cli || "tag" }); setScreen({ name: "connect", args: ["setup"] }); }} />
+            done={(command) => void afterInstall(command)} />
         )}
         {screen.name === "home" && !tags.loaded && <Starting error={tags.error} retry={() => void tags.refresh()} />}
         {screen.name === "home" && tags.loaded && (

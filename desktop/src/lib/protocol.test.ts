@@ -95,6 +95,12 @@ describe("setup", () => {
     expect(state.signIn.backend).toBeNull();
   });
 
+  it("says what to do when an existing Tag's readiness check fails without a message", () => {
+    const line = JSON.stringify({ type: "result", status: "failed", tag: "t0bnd7v5j2w-a0maya01", exit_code: 1 });
+    expect(setupReducer(initialSetup, { type: "line", line }).error)
+      .toBe("This Tag needs attention. Run tag t0bnd7v5j2w-a0maya01 doctor to see why.");
+  });
+
   it("stays on the code step when Slack refuses a code", () => {
     const login = JSON.stringify({ type: "question", id: "slack_login", kind: "slack_login", prompt: "Sign in to Slack",
       sign_in_line: "/slackauthticket ABC123", can_go_back: false });

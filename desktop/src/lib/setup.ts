@@ -107,7 +107,8 @@ export function setupReducer(state: SetupState, action: SetupAction): SetupState
       if (event.type === "result") {
         const result = event as { status: string; tag?: string; error?: string; ready?: SetupReady };
         const outcome: Outcome = result.status === "complete" || result.status === "paused" ? result.status : "failed";
-        return { ...state, question: null, creating: null, outcome, tag: result.tag ?? "", error: result.error ?? "", ready: result.ready ?? null };
+        const error = result.error || (outcome === "failed" && result.tag ? `This Tag needs attention. Run tag ${result.tag} doctor to see why.` : "");
+        return { ...state, question: null, creating: null, outcome, tag: result.tag ?? "", error, ready: result.ready ?? null };
       }
       return state;
     }

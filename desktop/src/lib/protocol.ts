@@ -32,6 +32,8 @@ export interface TagRow {
   keep_running?: boolean;
   main?: boolean;
   error?: string;
+  /** Which of the Tag's services answered the last check. */
+  services?: { slack?: boolean; mfs?: boolean } | null;
   /** The one-line description people gave the Tag (its Slack app description). */
   description?: string | null;
   /** The Tag's default model, such as "codex:gpt-5.5", and how people read it. */
@@ -75,8 +77,23 @@ export const STATUS_LABEL: Record<Status, string> = {
 /** What went wrong with a Tag that needs attention, in its own words when Tag gave one. */
 export function problemText(row: TagRow) {
   if (row.error) return row.error;
-  return row.state === "invalid_configuration" ? "Its settings can't be read"
-    : row.state === "invalid_tag" ? "This Tag's folder is damaged" : "Needs attention";
+  if (row.state === "invalid_configuration") return "Its settings can't be read";
+  if (row.state === "invalid_tag") return "This Tag's folder is damaged";
+  if (row.services?.slack === false) return "Not connected to Slack";
+  if (row.services?.mfs === false) return "Memory isn't responding";
+  return "Needs attention";
+}
+
+/** What someone can do about a Tag that needs attention. */
+export function problemHelp(row: TagRow, aiProblem: string | null) {
+  if (row.state === "invalid_configuration" || row.state === "invalid_tag") return "Check the logs, or run tag doctor in a terminal.";
+  if (row.services?.slack === false) {
+    return aiProblem
+      ? "Its AI sign-in needs fixing first. Then turn it off and on again."
+      : "It's still running but stopped hearing from Slack. Turn it off and on again; if that doesn't help, check the logs.";
+  }
+  if (row.services?.mfs === false) return "Tag can't reach its memory service. Turn it off and on again, or check the logs.";
+  return "Turn it off and on again, or check the logs to see why.";
 }
 
 /** People see the Tag's Slack name and workspace; the ID is only for commands. */
