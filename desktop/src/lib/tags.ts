@@ -34,6 +34,7 @@ export function useTags(api: Bridge | null, enabled: boolean) {
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState<Set<string>>(new Set());
   const [error, setError] = useState("");
+  const [refreshError, setRefreshError] = useState("");
   const [keepRunning, setKeepRunning] = useState(false);
   const previous = useRef<TagRow[]>([]);
   const stopping = useRef(new Set<string>());
@@ -50,7 +51,7 @@ export function useTags(api: Bridge | null, enabled: boolean) {
     if (!api) return;
     try {
       const result = await api.tag(["list", "--json"]);
-      if (result.code !== 0) throw new Error();
+      if (result.code !== 0) throw new Error(failureLine(result, "Couldn't read your Tags."));
       const all = parseList(result.stdout);
       // Setups that never reached Slack aren't shown; they are set aside once nothing is setting them up.
       drafts.current = all.filter(isDraft).map((row) => row.id);
@@ -62,9 +63,11 @@ export function useTags(api: Bridge | null, enabled: boolean) {
       previous.current = next;
       setRows(next);
       setLoaded(true);
-      setError((e) => (e === "Couldn't read your Tags." ? "" : e));
-    } catch {
-      setError((current) => current || "Couldn't read your Tags.");  // keep a more specific message
+      setRefreshError("");
+    } catch (cause) {
+      const detail = cause instanceof Error ? cause.message : String(cause ?? "");
+      const fallback = "Couldn't read your Tags.";
+      setRefreshError(detail && detail !== fallback ? `${fallback} ${detail}` : fallback);
     }
   }, [api]);
 
@@ -157,7 +160,7 @@ export function useTags(api: Bridge | null, enabled: boolean) {
   }, [run]);
 
   return {
-    rows, loaded, busy, error, setError, keepRunning,
+    rows, loaded, busy, error: error || refreshError, setError, keepRunning,
     refresh, refreshAutostart, toggle, workspace, all, rename, describe, discardDrafts, remove, setAutostart,
   };
 }
