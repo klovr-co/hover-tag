@@ -338,7 +338,7 @@ class HandoffPromptAndSettingsTests(unittest.TestCase):
     def test_only_a_first_level_run_with_a_request_file_is_offered_the_helper(self) -> None:
         offered = self.prompt(OPENTAG_HANDOFF_REQUESTS="/tmp/r.jsonl", OPENTAG_HANDOFF_DEPTH="0")
         self.assertIn("Other Tags you may ask: Tag B, Tag C.", offered)
-        self.assertIn("/tmp/open-tag/scripts/tag_handoff.py", offered)
+        self.assertIn(str(Path("/tmp/open-tag/scripts/tag_handoff.py")), offered)
         self.assertIn("cannot see this thread", offered)
         self.assertNotIn("tag_handoff.py", self.prompt(OPENTAG_HANDOFF_REQUESTS="/tmp/r.jsonl",
                                                        OPENTAG_HANDOFF_DEPTH="1"))

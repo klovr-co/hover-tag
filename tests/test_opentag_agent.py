@@ -47,7 +47,7 @@ class OpenTagAgentPromptTests(unittest.TestCase):
                 )
         self.assertIn("- deadline: Reports are due Friday.", prompt)
         self.assertIn("- pricing: Launch pricing is 49 per seat. (this channel)", prompt)
-        self.assertIn("/tmp/open-tag/scripts/tag_memory.py", prompt)
+        self.assertIn(str(Path("/tmp/open-tag/scripts/tag_memory.py")), prompt)
         self.assertIn("Do not save memory on your own initiative", prompt)
         self.assertIn("only when the\n  user explicitly says it is for all channels", prompt)
         self.assertLess(prompt.index("<tag-memory"), prompt.index("User question:"))
@@ -56,7 +56,8 @@ class OpenTagAgentPromptTests(unittest.TestCase):
         with patch.dict(os.environ, {"CLAUDE_CODE_DISABLE_AUTO_MEMORY": "0"}):
             opentag_agent.disable_native_memory()
             self.assertEqual("1", os.environ["CLAUDE_CODE_DISABLE_AUTO_MEMORY"])
-        with patch.object(opentag_agent, "codex_workspace_args", return_value=[]):
+        with patch.object(opentag_agent, "codex_workspace_args", return_value=[]), \
+                patch.object(opentag_agent, "backend_command", side_effect=lambda name: [name]):
             commands = [
                 opentag_agent.codex_app_server_command(Path("/work")),
                 opentag_agent.codex_stream_command(
@@ -362,7 +363,8 @@ class BackendStreamEventTests(unittest.TestCase):
                 opentag_agent.codex_event_transport()
 
     def test_app_server_command_applies_selected_fast_mode(self) -> None:
-        with patch.object(opentag_agent, "codex_workspace_args", return_value=[]):
+        with patch.object(opentag_agent, "codex_workspace_args", return_value=[]), \
+                patch.object(opentag_agent, "backend_command", side_effect=lambda name: [name]):
             command = opentag_agent.codex_app_server_command(
                 Path("/work"),
                 fast_mode=True,
