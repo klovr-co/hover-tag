@@ -117,6 +117,9 @@ class SlackBus:
         while time.monotonic() < deadline:
             with self.lock:
                 pending = [thread for thread in self.threads if thread.is_alive()]
+            # The combining run starts on its own thread after the last peer replies.
+            pending += [thread for thread in threading.enumerate()
+                        if thread.name.startswith("tag-handoff-") and thread.is_alive()]
             if not pending:
                 return
             for thread in pending:
