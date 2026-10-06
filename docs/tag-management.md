@@ -576,7 +576,9 @@ verified. `first_reply` stays `not_verified`; it is not an automatic receipt.
 
 For Slack memory failures, rerun setup and review the selected channels,
 history credential, window, and indexing approval. `tag start` registers the
-saved connector after MFS is healthy. Additional sources still require normal
+saved connector after MFS is healthy, then connects without waiting for the
+first import: the Tag answers right away, and history search covers each
+channel once memory has indexed it. Additional sources still require normal
 MFS configuration and an exact URI in `MFS_ALLOWED_SCOPES`.
 
 If an interrupted settings write leaves `settings.json.lock`, first ensure no

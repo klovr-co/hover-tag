@@ -68,6 +68,8 @@ for (const scheme of ["light", "dark"]) {
   await page.getByText("Where should Maya's Tag start?").waitFor({ timeout: 15000 });
   await shot(page, "add-channels" + suffix);
   await button(page, /Continue with/).click();
+  await page.locator(".st.running", { hasText: "Reading its channels" }).waitFor({ timeout: 15000 });
+  await shot(page, "add-starting" + suffix);
   await page.getByText("Say hi to Maya's Tag").waitFor({ timeout: 15000 });
   await shot(page, "add-ready" + suffix);
   // First run: install.

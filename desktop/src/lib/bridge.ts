@@ -9,6 +9,7 @@ import type { TagRow } from "./protocol";
 import versionExample from "../../../protocol/examples/version.json";
 import progressExample from "../../../protocol/examples/install-progress.txt?raw";
 import setupExample from "../../../protocol/examples/setup.jsonl?raw";
+import startExample from "../../../protocol/examples/start-progress.jsonl?raw";
 import aiStatusExample from "../../../protocol/examples/ai-status.json";
 import aiModelsExample from "../../../protocol/examples/ai-models.json";
 import type { AIStatus, Connection } from "./ai";
@@ -28,6 +29,8 @@ export interface AppInfo {
   legacyWantedTags: string[] | null;
   /** The person's first name from their computer account, for Home's greeting. */
   firstName?: string | null;
+  /** A development build, such as `./tag app`: it never offers or installs updates. */
+  development?: boolean;
 }
 
 export interface RunResult {
@@ -54,6 +57,8 @@ export interface Bridge {
   tag(args: string[]): Promise<RunResult>;
   /** `tag ARGS --json` setup conversation: one stdout line per callback. */
   setup(args: string[], onLine: (line: string) => void, onExit: (code: number, stderr: string) => void): Promise<Session>;
+  /** `tag ARGS --json` for a command that reports progress as it goes, such as start. */
+  follow(args: string[], onLine: (line: string) => void, onExit: (code: number, stderr: string) => void): Promise<Session>;
   install(channel: string, onLine: (line: string) => void, onExit: (code: number) => void): Promise<Session>;
   copy(text: string): Promise<void>;
   paste(): Promise<string>;
@@ -116,6 +121,8 @@ async function tauriBridge(): Promise<Bridge> {
     info: () => invoke<AppInfo>("app_info"),
     tag: (args) => invoke<RunResult>("run_tag", { args }),
     setup: (args, onLine, onExit) => stream("setup_start", { args }, onLine, onExit),
+    // The same streamed `tag ARGS --json` session as setup; start never reads input.
+    follow: (args, onLine, onExit) => stream("setup_start", { args }, onLine, onExit),
     install: (channel, onLine, onExit) => stream("install_start", { channel }, onLine, (code) => onExit(code)),
     copy: (text) => clipboard.writeText(text),
     paste: async () => (await clipboard.readText()) ?? "",
@@ -303,6 +310,18 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
       }
       if (row && second === "describe") row.description = args[2] || null;
       return { code: 0, stdout: "", stderr: "" };
+    },
+    follow: async (args, onLine, onExit) => {
+      const row = rows.find((r) => r.id === args[0]);
+      const lines = startExample.trim().split("\n");
+      lines.forEach((line, i) => setTimeout(() => {
+        onLine(line);
+        if (i === lines.length - 1) {
+          if (row) { row.state = "running"; row.keep_running = true; }
+          onExit(0, "");
+        }
+      }, 700 * (i + 1)));
+      return { send: () => {}, stop: () => {} };
     },
     setup: async (args, onLine, onExit) => {
       if (args[0] === "settings" && args[1] === "ai") return demoSignIn(sharedAI, ["", ...args], onLine, onExit);

@@ -363,3 +363,21 @@ class SlackManifestMigrationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SlackCliFailureTests(unittest.TestCase):
+    def failure(self, stdout="", stderr=""):
+        result = subprocess.CompletedProcess(["slack"], 1, stdout=stdout, stderr=stderr)
+        return str(migrations._cli_failure(result, "Slack could not change the description", 'tag t1 describe "x"'))
+
+    def test_says_what_slack_reported_and_only_suggests_login_for_sign_in_problems(self):
+        busy = self.failure(stderr="\x1b[31m✗ The request to Slack timed out (ratelimited)\x1b[0m\n")
+        self.assertEqual(busy, "Slack could not change the description (The request to Slack timed out (ratelimited)); "
+                               'retry `tag t1 describe "x"`')
+        signed_out = self.failure(stderr="Error: invalid_auth: Your session has expired\n")
+        self.assertIn("run `slack login`, then retry", signed_out)
+        self.assertIn("invalid_auth", signed_out)
+
+    def test_never_repeats_a_token_and_falls_back_to_login_without_output(self):
+        self.assertNotIn("xoxb-secret", self.failure(stdout="token xoxb-secret-123 was rejected"))
+        self.assertEqual(self.failure(), 'Slack could not change the description; run `slack login`, then retry `tag t1 describe "x"`')

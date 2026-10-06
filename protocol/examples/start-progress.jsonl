@@ -1,0 +1,9 @@
+{"type": "progress", "step": "runtime", "label": "Runtime", "state": "done", "text": "Dependencies available"}
+{"type": "progress", "step": "slack-app", "label": "Slack app", "state": "done", "text": "Permissions current"}
+{"type": "progress", "step": "memory", "label": "Memory", "state": "running", "text": "Waiting for the service to become healthy…"}
+{"type": "progress", "step": "memory", "label": "Memory", "state": "done", "text": "Healthy"}
+{"type": "progress", "step": "channel-memory", "label": "Channel memory", "state": "running", "text": "Waiting for selected channels to become readable…"}
+{"type": "progress", "step": "channel-memory", "label": "Channel memory", "state": "done", "text": "Ready"}
+{"type": "progress", "step": "slack", "label": "Slack", "state": "running", "text": "Waiting for the connection to become ready…"}
+{"type": "progress", "step": "slack", "label": "Slack", "state": "done", "text": "Connected"}
+{"type": "result", "status": "complete"}

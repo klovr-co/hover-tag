@@ -565,11 +565,20 @@ function Details({ api, tags, row, copyLog, openAI, say, canDescribe }: {
   const folder = workingFolder(row as TagRow & { home?: string });
   const running = row.state === "running";
   const saved = choice.report?.default_model;
-  const rename = async () => { if (await tags.rename(row, newName)) { setRenaming(false); say(`Renamed to ${newName.trim()}`); } };
+  // A failed rename or description change shows under the field being edited, which stays open to retry.
+  const [renameError, setRenameError] = useState("");
+  const rename = async () => {
+    const failure = await tags.rename(row, newName);
+    setRenameError(failure);
+    if (!failure) { setRenaming(false); say(`Renamed to ${newName.trim()}`); }
+  };
   const [describing, setDescribing] = useState(false);
   const [newDescription, setNewDescription] = useState(row.description ?? "");
+  const [describeError, setDescribeError] = useState("");
   const describe = async () => {
-    if (await tags.describe(row, newDescription)) { setDescribing(false); say(newDescription.trim() ? "Saved the description" : "Cleared the description"); }
+    const failure = await tags.describe(row, newDescription);
+    setDescribeError(failure);
+    if (!failure) { setDescribing(false); say(newDescription.trim() ? "Saved the description" : "Cleared the description"); }
   };
   const describeBusy = tags.busy.has(row.id);
   return (
@@ -580,9 +589,10 @@ function Details({ api, tags, row, copyLog, openAI, say, canDescribe }: {
           <dd>
             <input className="field" autoFocus value={newName} aria-label="Name in Slack" maxLength={35} style={{ height: 32, flex: 1, minWidth: 0, maxWidth: 240 }}
               onChange={(e) => setNewName(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter" && newName.trim()) void rename(); if (e.key === "Escape") setRenaming(false); }} />
-            <button className="p-btn quiet sm" onClick={() => setRenaming(false)}>Cancel</button>
+              onKeyDown={(e) => { if (e.key === "Enter" && newName.trim()) void rename(); if (e.key === "Escape") { setRenaming(false); setRenameError(""); } }} />
+            <button className="p-btn quiet sm" onClick={() => { setRenaming(false); setRenameError(""); }}>Cancel</button>
             <button className="p-btn ink sm" disabled={!newName.trim() || tags.busy.has(row.id)} onClick={() => void rename()}>Save</button>
+            {renameError && <div className="edit-err"><ErrorLine>{renameError}</ErrorLine></div>}
           </dd>
         ) : (
           <dd>
@@ -597,12 +607,13 @@ function Details({ api, tags, row, copyLog, openAI, say, canDescribe }: {
             <div className="desc-wrap">
               <textarea className="field desc" autoFocus rows={2} maxLength={DESCRIPTION_LIMIT} value={newDescription} aria-label="Description" ref={fitText}
                 placeholder="One line on what it does" onChange={(e) => { setNewDescription(e.target.value.replace(/[\r\n]+/g, " ")); fitText(e.currentTarget); }}
-                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void describe(); } if (e.key === "Escape") setDescribing(false); }} />
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void describe(); } if (e.key === "Escape") { setDescribing(false); setDescribeError(""); } }} />
               {newDescription.length > DESCRIPTION_LIMIT - 30 && <span className="desc-count">{DESCRIPTION_LIMIT - newDescription.length}</span>}
             </div>
+            {describeError && <ErrorLine>{describeError}</ErrorLine>}
             <div className="desc-acts">
-              <button className="p-btn quiet sm" onClick={() => setDescribing(false)}>Cancel</button>
-              <button className="p-btn ink sm" disabled={describeBusy || newDescription.trim() === (row.description ?? "")} onClick={() => void describe()}>Save</button>
+              <button className="p-btn quiet sm" onClick={() => { setDescribing(false); setDescribeError(""); }}>Cancel</button>
+              <button className="p-btn ink sm" disabled={describeBusy || newDescription.trim() === (row.description ?? "")} onClick={() => void describe()}>{describeBusy ? "Saving…" : "Save"}</button>
             </div>
           </dd>
         ) : (row.description || canDescribe) && (

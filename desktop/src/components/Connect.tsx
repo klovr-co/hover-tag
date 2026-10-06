@@ -3,7 +3,7 @@
 // Add a Tag: draws the questions Tag's own setup asks over JSON lines, in the
 // onboarding order (Your Tag · AI · Workspace · Create · Channels). It holds no
 // setup logic; every choice is an answer to `tag setup --json`.
-import { useEffect, useReducer, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState, type ReactNode } from "react";
 import type { Bridge, Session } from "../lib/bridge";
 import type { AIModels, AIStatus } from "../lib/ai";
 import { findModel } from "../lib/ai";
@@ -13,6 +13,11 @@ import {
   EXISTING_FLOW, EXIT_OPTION, FLOW, heading, initialSetup, setupReducer, trackStep, type SetupState, type SignInStep,
 } from "../lib/setup";
 import { SetupTracker, setupEntry, useTrack } from "../lib/telemetry";
+import { startTag } from "../lib/tags";
+import { initialStart, START_PHASES, startReducer, type Phase, type StartProgress, type StepState } from "../lib/start";
+
+/** Start a Tag; `onLine` follows its progress when Tag reports it. Returns what went wrong, or "". */
+type StartTag = (tag: string, onLine?: (line: string) => void) => Promise<string>;
 import { readActivity } from "../lib/watch";
 import keyArt from "../assets/art/tag-key.png";
 import puzzled from "../assets/art/tag-puzzled.png";
@@ -28,6 +33,8 @@ interface Props {
   /** Setup was cancelled; its progress is saved. */
   paused: () => void;
   openAI?: (resume: string[]) => void;
+  /** Start the finished Tag where Home can see it; returns what went wrong, or "". */
+  start?: StartTag;
 }
 
 /** What a choose question's answer is: its stable ID when Tag gave them, else its index. */
@@ -36,7 +43,7 @@ const answerFor = (question: SetupQuestion, id: string) => {
   return index >= 0 ? id : (question.options ?? []).indexOf(id);
 };
 
-export function Connect({ api, args, done, paused, openAI }: Props) {
+export function Connect({ api, args, done, paused, openAI, start }: Props) {
   const [state, dispatch] = useReducer(setupReducer, initialSetup);
   const session = useRef<Session | null>(null);
   const [attempt, setAttempt] = useState(0);
@@ -99,7 +106,10 @@ export function Connect({ api, args, done, paused, openAI }: Props) {
     }
   }, [q]);
 
+  const startHere = useCallback((tag: string) => startTag(api, tag), [api]);
   const send = (answer: unknown) => {
+    const named = q?.id === "profile" && (answer as { name?: unknown } | null)?.name;
+    if (typeof named === "string" && named) dispatch({ type: "named", name: named });
     dispatch({ type: "answered" });
     session.current?.send({ answer });
   };
@@ -116,7 +126,7 @@ export function Connect({ api, args, done, paused, openAI }: Props) {
     session.current?.send({ answer: null, pause: true });
     paused();
   };
-  if (state.outcome === "complete") return <Ready api={api} state={state} done={done} />;
+  if (state.outcome === "complete") return <Ready api={api} state={state} done={done} start={start ?? startHere} />;
   const picture = source(state.profile?.preview, state.profile?.revision);
   const body = (): ReactNode => {
     if (state.outcome === "paused") {
@@ -660,18 +670,96 @@ export function slackLink(ready: SetupReady, place: string) {
     : `slack://channel?team=${encodeURIComponent(ready.team)}&id=${encodeURIComponent(place)}`;
 }
 
-function Ready({ api, state, done }: { api: Bridge; state: SetupState; done: () => void }) {
-  const name = state.profile?.name || "your Tag";
+/** Plain words for what each start phase is doing, while it runs. */
+function phaseDetail(phase: Phase, name: string, channels: string[], seconds: number) {
+  switch (phase) {
+    case "prepare": return "Making sure its Slack app, picture and permissions are current.";
+    case "memory": return `Memory lets ${name} remember conversations. It loads once and stays on for all your Tags.`;
+    case "channels": {
+      const where = channels.length === 1 ? `#${channels[0]}` : channels.length ? `${channels.length} channels` : "its channels";
+      return seconds >= 20 ? `Reading recent messages in ${where} so ${name} has context. The first time can take a few minutes.`
+        : `Reading recent messages in ${where}.`;
+    }
+    case "slack": return `Checking ${name}'s access, then connecting to Slack.`;
+  }
+}
+
+function elapsed(seconds: number) {
+  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
+}
+
+function StartSteps({ progress, name, channels, seconds, failed, error, detailed }: {
+  progress: StartProgress; name: string; channels: string[]; seconds: number; failed: boolean; error: string; detailed: boolean;
+}) {
+  // An older Tag reports no steps; show one honest step instead.
+  const rows = detailed ? START_PHASES.map((phase) => ({ id: phase.id as Phase | null, title: phase.title, ...progress.phases[phase.id] }))
+    : [{ id: null, title: `Starting ${name}`, state: (failed ? "attention" : "running") as StepState, text: "" }];
+  // A failure lands on the step that was running, else the first one that didn't finish.
+  const failedAt = failed ? (rows.find((r) => r.state === "running" || r.state === "attention") ?? rows.find((r) => r.state !== "done")) : undefined;
+  return (
+    <div className="card steps start-steps" aria-live="polite">
+      {rows.map((row) => {
+        const st = row === failedAt ? "failed" : row.state === "attention" ? "failed" : row.state === "running" && !failed ? "running"
+          : row.state === "done" ? "done" : "pending";
+        return (
+          <div key={row.title} className={`st ${st}`}>
+            <span className={`sicon ${st}`}>{st === "done" ? <Icon name="check" size={12} /> : st === "running" ? <span className="spin" />
+              : st === "failed" ? <Icon name="bang" size={12} /> : null}</span>
+            <div style={{ flex: 1 }}>
+              <div className="stt">{row.title}{st === "running" && <span className="st-time">{elapsed(seconds)}</span>}</div>
+              {st === "running" && row.id && <div className="std">{phaseDetail(row.id, name, channels, seconds)}</div>}
+              {st === "failed" && <div className="std bad">{error || row.text || "Something went wrong."}</div>}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function Ready({ api, state, done, start }: { api: Bridge; state: SetupState; done: () => void; start: StartTag }) {
   const ready = state.ready;
+  const name = ready?.name || state.profile?.name || "your Tag";
   const places = tryPlaces(ready);
   const [where, setWhere] = useState("dm");
   const [prompt, setPrompt] = useState(0);
-  const [step, setStep] = useState<"idle" | "starting" | "waiting" | "done" | "failed">("idle");
+  const [step, setStep] = useState<"starting" | "idle" | "waiting" | "done" | "failed">("starting");
   const [error, setError] = useState("");
+  const [attempt, setAttempt] = useState(0);
+  const [progress, setProgress] = useState(initialStart);
+  const [detailed, setDetailed] = useState(false);
+  const [seconds, setSeconds] = useState(0);
   const place = places.find((p) => p.id === where) ?? places[0];
   const text = `${place.dm ? "" : `@${name} `}${TRY_PROMPTS[prompt]}`;
   const picture = source(state.profile?.preview, state.profile?.revision);
-  // Ticks only once Tag records a reply after Start; nothing is made up.
+  // Setup is done, so start the Tag once its process has exited and let go of the Tag.
+  // Once per try, even when StrictMode replays the effect.
+  const tried = useRef("");
+  useEffect(() => {
+    const key = `${state.tag}:${attempt}`;
+    if (!state.ended || !state.tag || tried.current === key) return;
+    tried.current = key;
+    setStep("starting");
+    setError("");
+    setProgress(initialStart());
+    setDetailed(false);
+    void start(state.tag, (line) => {
+      setDetailed(true);
+      setProgress((current) => startReducer(current, line));
+    }).then((failure) => {
+      if (failure) { setStep("failed"); setError(failure); } else setStep("idle");
+    });
+  }, [start, state.ended, state.tag, attempt]);
+  // Time spent on the current step, so a long one reads as working, not stuck.
+  const phaseKey = `${attempt}:${progress.current ?? ""}`;
+  useEffect(() => {
+    if (step !== "starting") return;
+    setSeconds(0);
+    const began = Date.now();
+    const timer = setInterval(() => setSeconds(Math.floor((Date.now() - began) / 1000)), 1000);
+    return () => clearInterval(timer);
+  }, [step, phaseKey]);
+  // Ticks only once Tag records a reply after Slack opens; nothing is made up.
   useEffect(() => {
     if (step !== "waiting" || !state.tag) return;
     const since = Date.now();
@@ -680,15 +768,13 @@ function Ready({ api, state, done }: { api: Bridge; state: SetupState; done: () 
     }).catch(() => {}), 5000);
     return () => clearInterval(timer);
   }, [api, state.tag, step]);
-  const start = async () => {
-    setStep("starting");
-    setError("");
-    const result = await api.tag(state.tag ? [state.tag, "start"] : ["start"]);
-    if (result.code !== 0) { setStep("failed"); setError((result.stderr || result.stdout).trim().split("\n").pop() ?? ""); return; }
+  const openSlack = async () => {
     await api.copy(text);
     if (ready) void api.open(slackLink(ready, place.id));
     setStep("waiting");
   };
+  const starting = step === "starting" || step === "failed";
+  const channels = (ready?.channels ?? []).map((c) => c.name);
   return (
     <>
       <Sky kind="ready" stars={90}>
@@ -698,31 +784,42 @@ function Ready({ api, state, done }: { api: Bridge; state: SetupState; done: () 
       <div className="body roomy">
         <div style={{ textAlign: "center" }}>
           <div className="eyebrow" style={{ color: "var(--green)" }}>Setup complete</div>
-          <div className="h2" style={{ fontSize: 26 }}>Say hi to {name}</div>
-          <p className="lead">Start it, then send this in Slack. We copy it for you.</p>
+          <div className="h2" style={{ fontSize: 26 }}>{step === "starting" ? `Starting ${name}…` : step === "failed" ? `${name} didn't start` : `Say hi to ${name}`}</div>
+          <p className="lead">{step === "starting" ? "About a minute the first time. You can go to Home; it keeps starting."
+            : step === "failed" ? "Your setup is saved. Try again, or check it from Home."
+            : "Send this in Slack. We copy it for you."}</p>
           {ready?.ai && <p className="ai-line"><AgentMark backend={ready.ai.backend} size={18} /><span><b>{ready.ai.backend_name} connected</b></span></p>}
         </div>
-        <div className="thread try-thread">
-          <div className="thread-h">{place.dm ? "Direct message" : "Thread"}
-            <span className="place-wrap"><span className="place-now">{place.dm ? `DM with ${name}` : place.label}</span>
-              <select className="place-sel" aria-label="Where to try it" value={place.id} disabled={step !== "idle"} onChange={(e) => setWhere(e.target.value)}>
-                {places.map((p) => <option key={p.id} value={p.id}>{p.dm ? `DM with ${name}` : p.label}</option>)}
-              </select>{step === "idle" && <Icon name="chevdown" size={10} />}</span>
+        {starting ? <StartSteps progress={progress} name={name} channels={channels} seconds={seconds} failed={step === "failed"} error={error} detailed={detailed} />
+          : (
+          <div className="thread try-thread">
+            <div className="thread-h">{place.dm ? "Direct message" : "Thread"}
+              <span className="place-wrap"><span className="place-now">{place.dm ? `DM with ${name}` : place.label}</span>
+                <select className="place-sel" aria-label="Where to try it" value={place.id} disabled={step !== "idle"} onChange={(e) => setWhere(e.target.value)}>
+                  {places.map((p) => <option key={p.id} value={p.id}>{p.dm ? `DM with ${name}` : p.label}</option>)}
+                </select>{step === "idle" && <Icon name="chevdown" size={10} />}</span>
+            </div>
+            <div className="smsg"><OwnerMark icon={ready?.owner?.icon} />
+              <div><div className="who">{ready?.owner?.name || "You"}<span>now</span></div><p>{!place.dm && <span className="mention">@{name}</span>}{!place.dm && " "}{TRY_PROMPTS[prompt]}</p></div></div>
+            {progress.phases.channels.background && step === "idle" && (
+              <p className="meta import-note">{name} can answer now. It's still reading older messages
+                in {channels.length === 1 ? `#${channels[0]}` : "its channels"}; questions about them work once that finishes.</p>
+            )}
+            <div className="try-foot">
+              {step === "idle" && <button className="link" onClick={() => setPrompt((prompt + 1) % TRY_PROMPTS.length)}>Try another message</button>}
+              {step === "waiting" && <>Paste and send it in Slack. {ready && <button className="link" onClick={() => void api.open(slackLink(ready, place.id))}>Open Slack again</button>}</>}
+              {step === "done" && <span className="replied"><Icon name="check" size={12} />{name} replied in Slack</span>}
+            </div>
           </div>
-          <div className="smsg"><span className="you"><Icon name="user" size={16} /></span>
-            <div><div className="who">You<span>now</span></div><p>{!place.dm && <span className="mention">@{name}</span>}{!place.dm && " "}{TRY_PROMPTS[prompt]}</p></div></div>
-          <div className="try-foot">
-            {step === "idle" && <button className="link" onClick={() => setPrompt((prompt + 1) % TRY_PROMPTS.length)}>Try another message</button>}
-            {step === "starting" && <>Starting {name}…</>}
-            {step === "waiting" && <>Paste and send it in Slack. {ready && <button className="link" onClick={() => void api.open(slackLink(ready, place.id))}>Open Slack again</button>}</>}
-            {step === "done" && <span className="replied"><Icon name="check" size={12} />{name} replied in Slack</span>}
-            {step === "failed" && <span style={{ color: "var(--red)" }}>{name} didn't start. {error}</span>}
-          </div>
-        </div>
+        )}
         <div className="foot">
           {step === "done" ? <><span className="spacer" /><Primary title="Go to Home" onClick={done} /></>
-            : step === "idle" || step === "failed" ? <><button className="link" onClick={done}>Later</button><span className="spacer" />
-              <Primary title="Start and open Slack" icon="external" onClick={() => void start()} /></>
+            : step === "failed" ? <><button className="link" onClick={done}>Later</button><span className="spacer" />
+              <Primary title="Try again" onClick={() => setAttempt((value) => value + 1)} /></>
+            : step === "starting" ? <><button className="link" onClick={done}>Go to Home</button><span className="spacer" />
+              <Primary title="Open Slack" icon="external" disabled onClick={() => {}} /></>
+            : step === "idle" ? <><button className="link" onClick={done}>Later</button><span className="spacer" />
+              <Primary title="Open Slack" icon="external" onClick={() => void openSlack()} /></>
             : <><button className="link" onClick={done}>Skip to Home</button><span className="spacer" /></>}
         </div>
       </div>

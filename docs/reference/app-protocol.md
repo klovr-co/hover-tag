@@ -26,6 +26,7 @@ it shows is listed in `capabilities`; otherwise it offers to upgrade Tag.
 | `abandon-setup` | `tag NAME abandon --json`: moves a Tag that never reached Slack to `abandoned/` under the installation root; refuses a Tag that has a Slack app, a bot token, or a running bridge |
 | `remove-tag` | `tag NAME remove --json [--delete-app --confirm-app APP_ID]`: stops the Tag and moves its files to `abandoned/`. The Slack app is kept unless `--delete-app` is given with its exact App ID in `--confirm-app` |
 | `workspace-lifecycle` | `tag start\|stop\|restart --workspace TEAM --json` |
+| `start-progress` | `tag NAME start --json`: one `{"type": "progress", "step", "label", "state", "text"}` line per readiness step as it happens (`state` is `running`, `done`, `attention`, or `info`; a `running` step is followed by its outcome; `info` on `channel-memory` means channels are still importing in the background and the Tag starts without waiting), then `{"type": "result", "status": "complete"\|"failed", "error"?}` |
 | `autostart` | `tag autostart [status\|on\|off] --json`, `keep_running` in `tag list` |
 | `autostart-keep` | `tag autostart keep TAG... --json`: keep Tags running without starting them now |
 | `logs-json` | `tag NAME logs --json [--limit N]` |

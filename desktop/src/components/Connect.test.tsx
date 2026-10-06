@@ -35,7 +35,7 @@ function setup(track: Track = () => {}) {
   let emit: (line: string) => void = () => {};
   let at = 0;
   const ask = (id: string) => act(() => emit(JSON.stringify({ type: "question", ...QUESTIONS[id] })));
-  api.setup = async (_args, onLine) => {
+  api.setup = async (_args, onLine, onExit) => {
     emit = onLine;
     setTimeout(() => ask(ORDER[0]), 0);
     const session: Session = {
@@ -51,8 +51,11 @@ function setup(track: Track = () => {}) {
         }
         at += 1;
         if (at < ORDER.length) setTimeout(() => ask(ORDER[at]), 0);
-        else setTimeout(() => act(() => emit(JSON.stringify({ type: "result", status: "complete", tag: "t1",
-          ready: { team: "T0KLOVR1", app_id: "A1", channels: [{ id: "C1", name: "general" }], ai: { backend: "codex", backend_name: "Codex", label: "GPT-5.5" } } }))), 0);
+        else setTimeout(() => act(() => {
+          emit(JSON.stringify({ type: "result", status: "complete", tag: "t1",
+            ready: { team: "T0KLOVR1", app_id: "A1", channels: [{ id: "C1", name: "general" }], ai: { backend: "codex", backend_name: "Codex", label: "GPT-5.5" } } }));
+          onExit(0, "");
+        }), 0);
       },
       stop: () => {},
     };
@@ -302,4 +305,78 @@ it("retains the failed step and retries the reported Tag instead of adding anoth
   fireEvent.click(screen.getByRole("button", { name: "Try again" }));
   await vi.waitFor(() => expect(api.setup).toHaveBeenCalledTimes(2));
   expect(vi.mocked(api.setup).mock.calls[1][0]).toEqual(["new-tag", "setup"]);
+});
+
+it("greets the Tag by the name it was given and starts it without a click", async () => {
+  const api = demoBridge();
+  let emit: (line: string) => void = () => {};
+  const started = vi.fn(async () => ({ code: 0, stdout: "", stderr: "" }));
+  api.tag = started as typeof api.tag;
+  let exit: (code: number, stderr: string) => void = () => {};
+  api.setup = async (_args, onLine, onExit) => {
+    emit = onLine;
+    exit = onExit;
+    setTimeout(() => act(() => emit(JSON.stringify({ type: "question", ...QUESTIONS.profile }))), 0);
+    return { send: () => setTimeout(() => act(() => {
+      emit(JSON.stringify({ type: "result", status: "complete", tag: "t1",
+        ready: { team: "T1", app_id: "A1", channels: [], ai: null, owner: { id: "U1", name: "maya", icon: null } } }));
+      exit(0, "");
+    }), 0), stop: () => {} };
+  };
+  render(<Connect api={api} args={["setup"]} done={() => {}} paused={() => {}} />);
+  fireEvent.change(await screen.findByLabelText("Name, as people mention it in Slack"), { target: { value: "Nova" } });
+  fireEvent.click(screen.getByRole("button", { name: /Continue/ }));
+  expect(await screen.findByText("Say hi to Nova")).toBeTruthy();
+  expect(screen.getByText("maya")).toBeTruthy();
+  await vi.waitFor(() => expect(started).toHaveBeenCalledWith(["t1", "start"]));
+  await vi.waitFor(() => expect(screen.getByRole("button", { name: /Open Slack/ }).hasAttribute("disabled")).toBe(false));
+});
+
+it("shows each start step as it happens, then the message to send", async () => {
+  const api = demoBridge();
+  let emit: (line: string) => void = () => {};
+  let exit: (code: number, stderr: string) => void = () => {};
+  api.setup = async (_args, onLine, onExit) => {
+    emit = onLine;
+    exit = onExit;
+    setTimeout(() => act(() => {
+      emit(JSON.stringify({ type: "result", status: "complete", tag: "t1",
+        ready: { name: "Nova", team: "T1", app_id: "A1", channels: [{ id: "C1", name: "prod-hover" }], ai: null } }));
+      exit(0, "");
+    }), 0);
+    return { send: () => {}, stop: () => {} };
+  };
+  let report: (line: string) => void = () => {};
+  let finish: (failure: string) => void = () => {};
+  const start = vi.fn((_tag: string, onLine?: (line: string) => void) => {
+    report = onLine ?? (() => {});
+    return new Promise<string>((resolve) => { finish = resolve; });
+  });
+  render(<Connect api={api} args={["setup"]} done={() => {}} paused={() => {}} start={start} />);
+  expect(await screen.findByText("Starting Nova…")).toBeTruthy();
+  expect(start).toHaveBeenCalledWith("t1", expect.any(Function));
+  act(() => {
+    report('{"type": "progress", "step": "memory", "label": "Memory", "state": "done", "text": "Healthy"}');
+    report('{"type": "progress", "step": "channel-memory", "label": "Channel memory", "state": "running", "text": "Waiting…"}');
+  });
+  expect(screen.getByText("Reading its channels").closest(".st")?.className).toContain("running");
+  expect(screen.getByText("Starting memory").closest(".st")?.className).toContain("done");
+  expect(screen.getByText(/Reading recent messages in #prod-hover/)).toBeTruthy();
+  // The message to send waits until the Tag can answer it.
+  expect(screen.queryByText("What can you help me with?")).toBeNull();
+  expect(screen.getByRole("button", { name: /Open Slack/ }).hasAttribute("disabled")).toBe(true);
+
+  await act(async () => finish("MFS scope did not become readable after indexing"));
+  expect(screen.getByText("Nova didn't start")).toBeTruthy();
+  expect(screen.getByText("Reading its channels").closest(".st")?.className).toContain("failed");
+  expect(screen.getByText("MFS scope did not become readable after indexing")).toBeTruthy();
+
+  fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+  await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(2));
+  act(() => report('{"type": "progress", "step": "channel-memory", "label": "Channel memory", "state": "info", "text": "Importing #prod-hover in the background"}'));
+  await act(async () => finish(""));
+  expect(screen.getByText("Say hi to Nova")).toBeTruthy();
+  expect(screen.getByText("What can you help me with?")).toBeTruthy();
+  // It answers now; history search catches up.
+  expect(screen.getByText(/Nova can answer now. It's still reading older messages in #prod-hover/)).toBeTruthy();
 });

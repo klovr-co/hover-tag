@@ -228,6 +228,10 @@ export interface SetupChannel {
 
 /** What the Ready screen needs once setup completes. */
 export interface SetupReady {
+  /** The name the Tag was given, as people mention it in Slack. */
+  name?: string | null;
+  /** The person who owns the Tag, for the Ready screen's first message. */
+  owner?: { id: string | null; name: string | null; icon: string | null } | null;
   team: string;
   app_id: string;
   channels: { id: string; name: string }[];

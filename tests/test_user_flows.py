@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from contextlib import redirect_stdout
 from io import StringIO
@@ -12,6 +13,7 @@ from unittest.mock import ANY, patch
 
 from scripts import tag_cli, tag_control, tag_config, tag_instances, tag_reconfigure, opentag_setup
 from scripts.tag_paths import initialize_instance
+from scripts.tag_locks import LifecycleLock
 
 
 class FlowTests(unittest.TestCase):
@@ -104,6 +106,64 @@ class FlowTests(unittest.TestCase):
                 unittest.mock.call(self.home, "mfs"),
             ],
         )
+
+    def start_while_locked(self, wait, release_after=None, args=("start",)):
+        """Run tag start while another operation holds this Tag's start lock."""
+        other = LifecycleLock(self.home / "state/start.lock").acquire()
+        timer = threading.Timer(release_after, other.release) if release_after is not None else None
+        if timer:
+            timer.start()
+        try:
+            # The one-time shared AI migration and ID rename are already done on set-up Tags.
+            with patch.object(tag_cli, "START_LOCK_WAIT_SECONDS", wait), patch.object(
+                tag_cli, "_migrate_shared_ai"
+            ), patch.object(tag_cli, "_rename", return_value=None), patch.object(tag_cli, "missing_runtime_dependencies", return_value=()), patch.object(
+                tag_cli, "slack_ready", return_value=True
+            ), patch.object(tag_cli, "ensure_shared_memory") as memory:
+                try:
+                    return self.invoke(list(args)), memory
+                except RuntimeError as error:
+                    return error, memory
+        finally:
+            if timer:
+                timer.join()
+            else:
+                other.release()
+
+    def test_start_waits_for_a_start_in_progress_and_does_not_start_twice(self):
+        self.seed()
+        (code, output), memory = self.start_while_locked(10, release_after=0.3)
+        self.assertEqual(code, 0)
+        self.assertIn("Waiting for another start, stop or setup to finish", output)
+        self.assertIn("Already connected", output)
+        memory.assert_not_called()
+        # Every lock was let go.
+        LifecycleLock(self.home / "state/start.lock").acquire().release()
+        LifecycleLock(self.root / "state/ai-start.lock").acquire().release()
+
+    def test_start_json_reports_each_step_as_it_happens(self):
+        self.seed()
+        self.addCleanup(tag_cli.display.progress_events, False)
+        (code, output), _ = self.start_while_locked(10, release_after=0.3, args=("start", "--json"))
+        self.assertEqual(code, 0)
+        events = [json.loads(line) for line in output.splitlines()]
+        # Only JSON lines: no banner or completion text for the client to skip.
+        self.assertEqual([(e["step"], e["state"]) for e in events], [("runtime", "done"), ("start", "running"), ("slack", "done")])
+        promised = json.loads((Path(tag_cli.ROOT) / "protocol/examples/start-progress.jsonl").read_text(
+            encoding="utf-8").splitlines()[0])
+        for event in events:
+            self.assertEqual(set(event), set(promised))
+        with redirect_stdout(StringIO()) as result:
+            tag_cli.display.progress_result(1, "Slack bridge did not become ready")
+        self.assertEqual(json.loads(result.getvalue()),
+                         {"type": "result", "status": "failed", "error": "Slack bridge did not become ready"})
+
+    def test_start_reports_a_lock_that_stays_busy(self):
+        self.seed()
+        error, memory = self.start_while_locked(0.6)
+        self.assertIsInstance(error, RuntimeError)
+        self.assertIn("Another lifecycle operation is in progress", str(error))
+        memory.assert_not_called()
 
     def test_logs_are_bounded_redacted_and_offer_follow_mode(self):
         log = self.home / "state/slack.log"

@@ -141,6 +141,12 @@ the Slack bridge when files change, and shows bridge logs in the foreground.
 For a loopback `MFS_URL`, it owns the MFS process and Ctrl-C stops both services.
 A configured remote MFS endpoint remains externally managed.
 
+`./tag app` opens Tag.app from the same checkout, driving this checkout's CLI
+instead of an installed one. It needs Node 22 and a Rust toolchain, installs the
+app's dependencies when needed, and refuses to run while the installed Tag.app is
+open, because only one Tag.app runs at a time. Set `TAG_HOME` to a scratch folder
+to try setup without touching your real Tags.
+
 ## Download installer
 
 These endpoints become usable after this implementation is merged and a release

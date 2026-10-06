@@ -34,11 +34,13 @@ export interface SetupState {
   profile: { name: string; preview: string | null; revision?: string | null } | null;
   /** Slack sign-in came from "Sign in to another workspace". */
   addingWorkspace: boolean;
+  /** The setup process has exited and released its locks. */
+  ended: boolean;
 }
 
 export const initialSetup: SetupState = {
   question: null, lastQuestion: null, signInStep: 0, status: "Preparing setup…", outcome: null, error: "", tag: "", signIn: idleSignIn,
-  creating: null, ready: null, existing: false, workspaces: null, profile: null, addingWorkspace: false,
+  creating: null, ready: null, existing: false, workspaces: null, profile: null, addingWorkspace: false, ended: false,
 };
 
 export type SetupAction =
@@ -46,6 +48,8 @@ export type SetupAction =
   | { type: "line"; line: string }
   | { type: "exit"; code: number; stderr: string }
   | { type: "answered" }
+  /** The name the person gave on the profile step, which later steps show. */
+  | { type: "named"; name: string }
   /** The AI step answered with a sign-in: keep the question up and show progress. */
   | { type: "agentSignIn"; backend: string }
   | { type: "signIn"; step: SignInStep }
@@ -113,12 +117,14 @@ export function setupReducer(state: SetupState, action: SetupAction): SetupState
       return state;
     }
     case "exit":
-      return state.outcome ? state : { ...state, outcome: "failed", question: null, creating: null, error: explainExit(action.stderr) };
+      return state.outcome ? { ...state, ended: true } : { ...state, ended: true, outcome: "failed", question: null, creating: null, error: explainExit(action.stderr) };
     case "answered":
       // Keep the sign-in question up while Slack checks the code; it may come back.
       return state.question?.kind === "slack_login"
         ? state
         : { ...state, question: null, status: "Loading…", error: "" };
+    case "named":
+      return state.profile ? { ...state, profile: { ...state.profile, name: action.name } } : state;
     case "agentSignIn":
       return { ...state, signIn: signInReducer(idleSignIn, { type: "start", backend: action.backend }), error: "" };
     case "signIn":
