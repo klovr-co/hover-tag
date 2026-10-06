@@ -232,7 +232,7 @@ class ProtocolTests(unittest.TestCase):
             "OPENTAG_BACKEND": "codex", "OPENTAG_DEFAULT_MODEL": "codex:gpt-5.5", "MFS_URL": "http://127.0.0.1:13619",
             "MFS_ALLOWED_SCOPES": "slack://tag-t1-a1/channels/general__C0GENERAL", "SLACK_APP_TOKEN": "xapp-1",
             "SLACK_BOT_TOKEN": "xoxb-1", "SLACK_ALLOWED_USER_IDS": "U1", "SLACK_TEAM_ID": "T1", "SLACK_APP_ID": "A1",
-            "SLACK_CHANNEL_IDS": "C0GENERAL"})
+            "SLACK_CHANNEL_IDS": "C0GENERAL", "OPENTAG_BOT_NAME": "Nova"})
         raw = io.StringIO()
         with patch.object(sys, "__stdout__", raw), patch.object(tag_cli, "_refresh_workspace_icon"):
             self.assertEqual(tag_cli._setup_result(0, "t1-a1", True), 0)
@@ -240,7 +240,7 @@ class ProtocolTests(unittest.TestCase):
         promised = [json.loads(line) for line in (EXAMPLES / "setup.jsonl").read_text(encoding="utf-8").splitlines()][-1]
         self.assertProvides(result, promised, "setup result")
         self.assertProvides(result["ready"], promised["ready"], "setup result ready")
-        self.assertEqual(result["ready"], {"team": "T1", "app_id": "A1",
+        self.assertEqual(result["ready"], {"name": "Nova", "owner": {"id": "U1", "name": None, "icon": None}, "team": "T1", "app_id": "A1",
                                            "channels": [{"id": "C0GENERAL", "name": "general"}],
                                            "ai": {"backend": "codex", "backend_name": "Codex", "label": "gpt-5.5"}})
 

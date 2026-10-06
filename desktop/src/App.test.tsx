@@ -208,3 +208,20 @@ it("reports a missing feed as a check failure after retry and opens channel sett
   fireEvent.click(screen.getByRole("button", { name: "Release channel settings" }));
   expect(await screen.findByRole("radio", { name: /Beta/ })).toBeTruthy();
 });
+
+it("never offers an update in a development build, whose version names a release line", async () => {
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  const api = demoBridge();
+  const info = api.info;
+  api.info = vi.fn(async () => ({ ...await info(), development: true }));
+  const tag = api.tag;
+  api.tag = vi.fn((args: string[]) => tag(args));
+  api.checkAppUpdate = vi.fn(async () => ({ version: "9.9.9", notes: "" }) as never);
+  vi.mocked(bridge).mockResolvedValue(api);
+  render(<App />);
+  expect(await screen.findByText("Your Tags")).toBeTruthy();
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+  expect(api.checkAppUpdate).not.toHaveBeenCalled();
+  expect(vi.mocked(api.tag).mock.calls.some(([args]) => args[0] === "upgrade")).toBe(false);
+  expect(screen.queryByText(/is ready/)).toBeNull();
+});

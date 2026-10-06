@@ -10,7 +10,7 @@ from io import StringIO
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from scripts import tag_paths, tag_reset
+from scripts import tag_cli, tag_paths, tag_reset
 
 
 class ResetTests(unittest.TestCase):
@@ -156,32 +156,62 @@ class ResetTests(unittest.TestCase):
             "MFS_URL": "http://127.0.0.1:13619",
             "MFS_SLACK_CONNECTOR_URI": "slack://tag-ttest-aold",
         }), encoding="utf-8")
-        completed = SimpleNamespace(returncode=0, stdout="", stderr="")
-        with patch.object(tag_reset.shutil, "which", return_value="/fixture/mfs"), patch.object(
-            tag_reset.subprocess, "run", return_value=completed
-        ) as run:
+        with patch.object(tag_cli, "_mfs_send", return_value={"removed": True}) as send:
             backup = tag_reset.archive_setup(self.home, self.lifecycle)
 
         self.assertTrue((backup / "settings.json").exists())
-        run.assert_called_once()
-        self.assertEqual(
-            run.call_args.args[0],
-            ["/fixture/mfs", "connector", "remove", "slack://tag-ttest-aold", "--yes"],
-        )
+        # Over the MFS HTTP API: Tag no longer installs the mfs client.
+        send.assert_called_once()
+        self.assertEqual(send.call_args.args, ("DELETE", "/v1/connectors"))
+        self.assertEqual(send.call_args.kwargs["query"], {"target": "slack://tag-ttest-aold"})
+        self.assertEqual(send.call_args.kwargs["environment"]["MFS_URL"], "http://127.0.0.1:13619")
         self.assertNotIn("mfs", [call.args[1] for call in self.lifecycle.stop_process.call_args_list])
+
+    def test_a_connector_memory_never_had_counts_as_removed(self):
+        self.seed()
+        self.config.write_text(json.dumps({"MFS_SLACK_CONNECTOR_URI": "slack://tag-ttest-aold"}), encoding="utf-8")
+        missing = tag_cli.MfsRequestError(400, "bad_request", "remove_requires_connector_root")
+        with patch.object(tag_cli, "_mfs_send", side_effect=missing):
+            backup = tag_reset.archive_setup(self.home, self.lifecycle)
+        self.assertTrue((backup / "settings.json").exists())
 
     def test_connector_removal_failure_keeps_setup_for_retry(self):
         self.seed()
         self.config.write_text(json.dumps({"MFS_SLACK_CONNECTOR_URI": "slack://tag-ttest-aold"}), encoding="utf-8")
-        completed = SimpleNamespace(returncode=1, stdout="", stderr="service unavailable")
-        with patch.object(tag_reset.shutil, "which", return_value="/fixture/mfs"), patch.object(
-            tag_reset.subprocess, "run", return_value=completed
-        ), self.assertRaisesRegex(RuntimeError, "could not be removed"):
+        failure = tag_cli.MfsRequestError(500, "internal_error", "service unavailable")
+        with patch.object(tag_cli, "_mfs_send", side_effect=failure), \
+                self.assertRaisesRegex(RuntimeError, "could not be removed"):
             tag_reset.archive_setup(self.home, self.lifecycle)
 
         self.assertTrue(self.config.exists())
         self.assertTrue((self.home / "integrations/slack-cli/tag-create.json").exists())
         self.assertFalse((self.home / "state/start.lock").exists())
+
+    def test_memory_offline_queues_the_removal_until_memory_next_starts(self):
+        self.seed()
+        self.config.write_text(json.dumps({"MFS_SLACK_CONNECTOR_URI": "slack://tag-ttest-aold"}), encoding="utf-8")
+        with patch.object(tag_cli, "_mfs_send", side_effect=tag_cli.MfsUnreachable("down")):
+            backup = tag_reset.archive_setup(self.home, self.lifecycle)
+        self.assertTrue((backup / "settings.json").exists())
+        shared = self.home / "shared/mfs"
+        self.assertTrue((shared / tag_cli.PENDING_REMOVALS).is_file())
+
+        # Still down: the removal stays queued.
+        environment = {"MFS_URL": "http://127.0.0.1:13619"}
+        with patch.object(tag_cli, "_mfs_send", side_effect=tag_cli.MfsUnreachable("down")):
+            tag_cli.finish_connector_removals(shared, environment)
+        self.assertTrue((shared / tag_cli.PENDING_REMOVALS).is_file())
+        # Memory on another URL leaves it for the memory it belongs to.
+        with patch.object(tag_cli, "_mfs_send") as send:
+            tag_cli.finish_connector_removals(shared, {"MFS_URL": "https://memory.example"})
+        send.assert_not_called()
+        # Back up: removed once, then forgotten.
+        with patch.object(tag_cli, "_mfs_send", return_value={"removed": True}) as send:
+            tag_cli.finish_connector_removals(shared, environment)
+            tag_cli.finish_connector_removals(shared, environment)
+        send.assert_called_once()
+        self.assertEqual(send.call_args.kwargs["query"], {"target": "slack://tag-ttest-aold"})
+        self.assertFalse((shared / tag_cli.PENDING_REMOVALS).exists())
 
     def test_cancel_and_pause_do_not_initialize_or_stop(self):
         for response in (0, tag_reset.ui.Paused(), KeyboardInterrupt()):

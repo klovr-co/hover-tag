@@ -6,6 +6,37 @@ All notable changes to Tag are documented here.
 
 ### Fixed
 
+- Tag.app starts your new Tag as soon as setup finishes and greets it by the
+  name you gave it, with your Slack name and picture on the example message.
+  While it starts, Tag.app shows each step (Slack app, memory, reading its
+  channels, connecting to Slack) and how long the current one has taken, and
+  names the step that failed. `tag NAME start --json` reports those steps as
+  JSON lines. Home shows the Tag as starting meanwhile.
+
+- `tag start` no longer waits for memory to import a channel's Slack history
+  before connecting, so a new Tag answers in seconds instead of failing after
+  90 seconds when memory is busy. The import continues in the background, and
+  history search covers each channel once it's imported. `tag start` now waits up to 90
+  seconds for a setup, start or stop that is still running, instead of failing
+  with "Another lifecycle operation is in progress". If that other operation
+  already started the Tag, `tag start` reports it as running.
+
+- When Slack refuses a rename, description change, or app settings update, the
+  error now says what Slack reported, and suggests `slack login` only when
+  Slack's message is about signing in.
+
+- In Tag.app, a failed rename or description change shows under the field you
+  were editing, which stays open so you can retry, instead of at the bottom of
+  Home.
+
+- Development builds of Tag.app (`./tag app`) no longer offer to update
+  themselves to the latest release.
+
+- Removing or resetting a Tag no longer fails with "MFS client is
+  unavailable". Tag stopped installing the `mfs` client in 0.3.0, so it now
+  removes the Tag's Slack history through the memory server's API. If memory
+  isn't running, Tag finishes the removal the next time memory starts.
+
 - Tag.app no longer says "Couldn't check for updates" for the few minutes
   after a release is published. Release channels for `tag upgrade` and the
   installers now move to a new release only after Tag.app has been built for

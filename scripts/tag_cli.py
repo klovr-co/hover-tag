@@ -29,6 +29,7 @@ try:
     import tag_instances
     import tag_telemetry
     from tag_locks import LifecycleLock
+    import tag_locks
     from tag_config import read_config
     import tag_credentials
     import tag_welcome
@@ -41,6 +42,7 @@ except ImportError:
     from scripts.tag_paths import initialize_instance, initialize_workspace, runtime_environment, tag_home
     from scripts import tag_instances, tag_telemetry
     from scripts.tag_locks import LifecycleLock
+    from scripts import tag_locks
     from scripts import agent_models
     from scripts.tag_config import read_config
     from scripts import tag_credentials
@@ -52,6 +54,8 @@ except ImportError:
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_DEPENDENCIES = ("mfs_server", "psutil", "slack_bolt")
 UPGRADE_CHANNELS = ("stable", "beta", "alpha", "edge")
+# How long tag start waits for a setup, start or stop that holds the Tag's locks.
+START_LOCK_WAIT_SECONDS = 90
 # Contract between this CLI and desktop apps; see docs/reference/app-protocol.md.
 # Bump only for incompatible changes; add a capability for anything new.
 APP_PROTOCOL = 1
@@ -59,7 +63,7 @@ CAPABILITIES = (
     "list", "setup-jsonl", "setup-back", "rename", "workspace-lifecycle",
     "autostart", "autostart-keep", "logs-json", "upgrade-json", "install-progress",
     "ai-connections", "shared-ai-connections", "thinking-level", "logs-activity", "activity-details", "setup-v2", "abandon-setup", "remove-tag",
-    "describe", "telemetry-events",
+    "describe", "telemetry-events", "start-progress",
 )
 UPDATE_CHECK_INTERVAL_SECONDS = 24 * 60 * 60
 COMMANDS = tuple(sorted(tag_instances.RESERVED_NAMES))
@@ -705,7 +709,14 @@ def migrate_legacy_mfs_record(context: tag_instances.InstanceContext) -> None:
 def ensure_shared_memory(
     context: tag_instances.InstanceContext, environment: dict[str, str]
 ) -> None:
-    """Start the configured shared MFS if needed and wait until it is healthy."""
+    """Start the configured shared MFS if needed, wait until it is healthy, then finish queued removals."""
+    _ensure_shared_memory_running(context, environment)
+    finish_connector_removals(context.shared_mfs_home, environment)
+
+
+def _ensure_shared_memory_running(
+    context: tag_instances.InstanceContext, environment: dict[str, str]
+) -> None:
     url = environment.get("MFS_URL", "http://127.0.0.1:13619")
     local_mfs = local_mfs_endpoint(url)
     if local_mfs:
@@ -1052,17 +1063,23 @@ class MfsRequestError(RuntimeError):
         self.status, self.code, self.detail = status, code, detail
 
 
-def mfs_post_json(path: str, body: dict[str, object], environment: dict[str, str] | None = None,
-                  *, timeout: float = 120) -> dict[str, object]:
-    """POST to an authenticated MFS endpoint, under the same rules as mfs_request_json."""
+class MfsUnreachable(RuntimeError):
+    """Nothing answered at MFS_URL, for example because memory isn't running."""
+
+
+def _mfs_send(method: str, path: str, *, body: dict[str, object] | None = None,
+              query: dict[str, str] | None = None, environment: dict[str, str] | None = None,
+              timeout: float = 120) -> dict[str, object]:
+    """Call an authenticated MFS endpoint, enforcing its transport boundary and error envelope."""
     source = os.environ if environment is None else environment
     base = authenticated_mfs_url(source.get("MFS_URL"))
-    headers = {"Content-Type": "application/json"}
+    headers = {"Content-Type": "application/json"} if body is not None else {}
     token = mfs_token(source)
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    data = json.dumps(body, default=str).encode("utf-8")
-    request = urllib.request.Request(f"{base}{path}", data=data, headers=headers, method="POST")
+    data = json.dumps(body, default=str).encode("utf-8") if body is not None else None
+    url = f"{base}{path}" + (f"?{urllib.parse.urlencode(query)}" if query else "")
+    request = urllib.request.Request(url, data=data, headers=headers, method=method)
     opener = urllib.request.build_opener(RejectMfsRedirects())
     try:
         with opener.open(request, timeout=timeout) as response:  # noqa: S310
@@ -1076,8 +1093,78 @@ def mfs_post_json(path: str, body: dict[str, object], environment: dict[str, str
         raise MfsRequestError(error.code, str(envelope.get("code") or "error"),
                               str(envelope.get("detail") or error.reason)) from None
     except (OSError, ValueError, urllib.error.URLError) as error:
-        raise RuntimeError(f"Memory isn't reachable at {base}; run tag memory status") from error
+        raise MfsUnreachable(f"Memory isn't reachable at {base}; run tag memory status") from error
     return payload if isinstance(payload, dict) else {}
+
+
+def mfs_post_json(path: str, body: dict[str, object], environment: dict[str, str] | None = None,
+                  *, timeout: float = 120) -> dict[str, object]:
+    """POST to an authenticated MFS endpoint, under the same rules as mfs_request_json."""
+    return _mfs_send("POST", path, body=body, environment=environment, timeout=timeout)
+
+
+def mfs_remove_connector(uri: str, environment: dict[str, str] | None = None) -> None:
+    """Remove a registered connector and everything it indexed. Raises MfsUnreachable when memory is down."""
+    try:
+        _mfs_send("DELETE", "/v1/connectors", query={"target": uri}, environment=environment)
+    except MfsRequestError as error:
+        # Never registered, or already removed: nothing is left to delete.
+        if error.status == 404 or "remove_requires_connector_root" in (error.code, error.detail) \
+                or "not found" in error.detail.lower():
+            return
+        raise RuntimeError(f"Memory couldn't remove {uri} ({error.detail}); run tag memory status and retry") from None
+
+
+PENDING_REMOVALS = "pending-connector-removals.json"
+
+
+def queue_connector_removal(shared: Path, uri: str, url: str) -> None:
+    """Remember a connector to remove the next time memory at `url` is running."""
+    try:
+        from tag_config import save_config
+    except ImportError:
+        from scripts.tag_config import save_config
+    shared.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with LifecycleLock(shared / "removals.lock"):
+        pending = _pending_removals(shared)
+        entry = {"uri": uri, "url": url.rstrip("/")}
+        if entry not in pending:
+            save_config(shared / PENDING_REMOVALS, {"version": 1, "removals": [*pending, entry]})
+
+
+def _pending_removals(shared: Path) -> list[dict[str, str]]:
+    try:
+        record = json.loads((shared / PENDING_REMOVALS).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    rows = record.get("removals") if isinstance(record, dict) else None
+    return [row for row in rows or [] if isinstance(row, dict) and isinstance(row.get("uri"), str)
+            and isinstance(row.get("url"), str)]
+
+
+def finish_connector_removals(shared: Path, environment: dict[str, str]) -> None:
+    """Remove connectors of Tags removed while memory was down. Failures stay queued for the next start."""
+    if not (shared / PENDING_REMOVALS).is_file():
+        return
+    try:
+        from tag_config import save_config
+    except ImportError:
+        from scripts.tag_config import save_config
+    url = environment.get("MFS_URL", "http://127.0.0.1:13619").rstrip("/")
+    with LifecycleLock(shared / "removals.lock"):
+        remaining = []
+        for entry in _pending_removals(shared):
+            if entry["url"] != url:
+                remaining.append(entry)
+                continue
+            try:
+                mfs_remove_connector(entry["uri"], environment)
+            except RuntimeError:
+                remaining.append(entry)
+        if remaining:
+            save_config(shared / PENDING_REMOVALS, {"version": 1, "removals": remaining})
+        else:
+            (shared / PENDING_REMOVALS).unlink(missing_ok=True)
 
 
 def mfs_request_json(path: str, parameters: dict[str, str]) -> dict[str, object] | None:
@@ -1816,7 +1903,7 @@ def _remove_command(context: tag_instances.InstanceContext, args) -> int:
     config_path = home / "config/settings.json"
     values = read_config(config_path) if config_path.is_file() else {}
     stop_process(home, "slack")
-    tag_reset.unregister_connector(home, values)
+    memory = tag_reset.unregister_connector(home, values)
     backup = context.installation_root / "abandoned" / f"{context.tag_id}-{datetime.now():%Y%m%d-%H%M%S}"
     backup.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(home), str(backup))
@@ -1834,6 +1921,8 @@ def _remove_command(context: tag_instances.InstanceContext, args) -> int:
         display.header("Remove", f"Tag '{context.tag_id}'")
         display.info_row("Backup", display.short_path(backup), good=True)
         display.info_row("Slack app", f"{app['app_id']} deleted" if deleted else "Kept", good=True)
+        display.info_row("Memory", "Slack history removed" if memory == "removed"
+                         else "Slack history is removed the next time memory starts", good=True)
     return 0
 
 
@@ -1953,8 +2042,20 @@ def _setup_ready(home: Path, values: dict[str, str]) -> dict:
         import tag_ai
     except ImportError:
         from scripts import tag_ai
+    try:
+        import slack_setup_icons
+    except ImportError:
+        from scripts import slack_setup_icons
     choice = tag_ai.default_choice(home, values)
-    return {"team": values.get("SLACK_TEAM_ID") or None, "app_id": values.get("SLACK_APP_ID") or None,
+    try:
+        progress = json.loads((home / "config/setup-progress.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        progress = {}
+    owner = values.get("SLACK_ALLOWED_USER_IDS", "").split(",")[0] or None
+    return {"name": values.get("OPENTAG_BOT_NAME") or None,
+            "owner": {"id": owner, "name": (progress.get("owner_name") if isinstance(progress, dict) else None) or None,
+                      "icon": slack_setup_icons.pictures(tag_home(), home, values)["owner"]},
+            "team": values.get("SLACK_TEAM_ID") or None, "app_id": values.get("SLACK_APP_ID") or None,
             "channels": _channels(values, home),
             "ai": {key: choice[key] for key in ("backend", "backend_name", "label")}}
 
@@ -2210,11 +2311,11 @@ def _run_cli() -> int:
     if (args.method or args.account or args.restart or args.effort is not None) and not settings_ai:
         parser.error("--method, --account, --effort and --restart are only for tag settings ai")
     if args.json_output and args.command not in {"list", "memory", "inspect", "status", "doctor", "config", "paths", "upgrade", "telemetry", "setup", "add", "rename", "describe", "abandon", "remove", "start", "stop", "restart", "autostart", "version", "logs", "chatgpt", "usage"} and not settings_ai:
-        parser.error("--json supports list, memory, inspect, status, doctor, config, paths, upgrade, telemetry, usage, chatgpt, settings ai, autostart, version, logs, setup, add, rename, describe, and start/stop/restart with --workspace")
+        parser.error("--json supports list, memory, inspect, status, doctor, config, paths, upgrade, telemetry, usage, chatgpt, settings ai, autostart, version, logs, setup, add, rename, describe, start, and stop/restart with --workspace")
     if args.json_output and args.follow:
         parser.error("--json cannot be combined with --follow")
-    if args.json_output and args.command in {"start", "stop", "restart"} and not args.workspace:
-        parser.error("--json for start, stop, and restart requires --workspace")
+    if args.json_output and args.command in {"stop", "restart"} and not args.workspace:
+        parser.error("--json for stop and restart requires --workspace")
     if (args.delete_app or args.confirm_app) and args.command != "remove":
         parser.error("--delete-app and --confirm-app are only for remove")
     if args.nickname and args.command != "rename":
@@ -2888,6 +2989,9 @@ def _run_cli() -> int:
                 display.next_action("Stop memory too", "tag memory stop")
         return 0
     if args.command == "start":
+        if args.json_output:
+            # One JSON line per readiness step as it happens, then the outcome.
+            display.progress_events()
         restart_flow = os.getenv("TAG_RESTART_FLOW") == "1"
         supervised = os.getenv(autostart.SUPERVISED_ENV) == "1"
         if not supervised:
@@ -2900,18 +3004,20 @@ def _run_cli() -> int:
             display.section("Readiness")
         display.info_row("Runtime", "Dependencies available", good=True)
         # Serialize starts so concurrent invocations cannot create orphan services.
-        connection_lock = LifecycleLock(installation_root / "state/ai-connection.lock").acquire()
-        try:
-            ai_lock = LifecycleLock(installation_root / "state/ai-start.lock").acquire()
-        except Exception:
-            connection_lock.release()
-            raise
-        try:
-            lock = LifecycleLock(home / "state/start.lock").acquire()
-        except Exception:
-            ai_lock.release()
-            connection_lock.release()
-            raise
+        # Wait briefly for a setup, start or stop that already holds them rather than failing at once.
+        (connection_lock, ai_lock, lock), waited = tag_locks.acquire_all(
+            [installation_root / "state/ai-connection.lock", installation_root / "state/ai-start.lock",
+             home / "state/start.lock"],
+            wait=START_LOCK_WAIT_SECONDS,
+            waiting=lambda: display.pending_row("Start", "Waiting for another start, stop or setup to finish…"))
+        if waited and slack_ready(home):
+            # The operation we waited for started this Tag; starting it again would only restart it.
+            for held in (lock, ai_lock, connection_lock):
+                held.release()
+            display.info_row("Slack", "Already connected", good=True)
+            if not restart_flow:
+                display.completion("Tag is running", "Another start finished first.")
+            return 0
         started = []
         try:
             if supervised and autostart.wanted(home) is not True:
@@ -2973,21 +3079,26 @@ def _run_cli() -> int:
             display.pending_row("Memory", "Waiting for the service to become healthy…")
             ensure_shared_memory(context, os.environ.copy())
             display.info_row("Memory", "Healthy", good=True)
-            display.pending_row(
-                "Channel memory", "Waiting for selected channels to become readable…"
-            )
+            display.pending_row("Channel memory", "Checking which channels are imported…")
             if os.getenv("SLACK_CHANNEL_POLICY") == "invited":
                 reconcile_invitation_memory(home)
             else:
                 sync_configured_slack_memory()
-            unavailable_scopes = wait_for_configured_mfs_scopes()
-            if unavailable_scopes:
-                raise RuntimeError(
-                    "MFS scope did not become readable after indexing: "
-                    + unavailable_scopes[0]
-                    + ". Run tag memory and tag doctor, then retry tag start."
-                )
-            display.info_row("Channel memory", "Ready", good=True)
+            # Don't wait for the first import: Tag answers now, and history search covers each
+            # channel once memory has imported it. One check still picks up renamed channels.
+            try:
+                importing = wait_for_configured_mfs_scopes(attempts=1)
+                paused = False
+            except RuntimeError:
+                importing, paused = [], True
+            if importing or paused:
+                names = [urllib.parse.unquote(scope.rstrip("/").rsplit("/", 1)[-1]).rpartition("__")[0] for scope in importing]
+                where = ", ".join(f"#{name}" for name in names if name) or "its channels"
+                display.info_row("Channel memory", (f"Importing {where} in the background"
+                                 if not paused else "Import paused by a Slack rate limit; it resumes in the background")
+                                 + " · history search covers it once done")
+            else:
+                display.info_row("Channel memory", "Ready", good=True)
             preflight_result, preflight = doctor_report(False)
             if preflight_result:
                 failed = [item for item in preflight.get("checks", []) if not item.get("ok")]
@@ -3228,7 +3339,10 @@ def main() -> int:
 
 if __name__ == "__main__":
     try:
-        raise SystemExit(main())
+        code = main()
+        if display.progress_active():
+            display.progress_result(code)
+        raise SystemExit(code)
     except KeyboardInterrupt:
         if len(sys.argv) > 1 and sys.argv[1] == "logs":
             print("\nStopped following logs.", file=sys.stderr)
@@ -3240,6 +3354,8 @@ if __name__ == "__main__":
     except (OSError, ValueError, RuntimeError, ImportError) as exc:
         if os.getenv(SETUP_PROTOCOL_ENV) == "jsonl":
             _setup_ui().emit({"type": "result", "status": "failed", "error": str(exc), "exit_code": 1})
+        elif display.progress_active():
+            display.progress_result(1, str(exc))
         elif "--json" in sys.argv:
             print(json.dumps({"schema_version": 1, "ok": False, "error": str(exc)}))
         elif len(sys.argv) > 1 and sys.argv[1] in {"start", "restart", "dev"}:

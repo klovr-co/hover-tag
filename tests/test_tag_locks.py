@@ -96,3 +96,46 @@ class LifecycleLockTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'legacy lock'):
                     LifecycleLock(path).acquire()
             self.assertTrue(path.is_dir())
+
+
+class AcquireAllTests(unittest.TestCase):
+    def test_waits_for_a_busy_lock_then_takes_every_lock(self):
+        with tempfile.TemporaryDirectory() as directory:
+            paths = [Path(directory) / 'a.lock', Path(directory) / 'b.lock']
+            other = LifecycleLock(paths[1]).acquire()
+            waits = []
+
+            def sleep(_):
+                # The other operation finishes while we wait.
+                if other.handle is not None:
+                    other.release()
+
+            held, waited = tag_locks.acquire_all(paths, wait=5, waiting=lambda: waits.append(1), sleep=sleep)
+            self.assertTrue(waited)
+            self.assertEqual(waits, [1])
+            self.assertEqual([lock.path for lock in held], paths)
+            for lock in held:
+                lock.release()
+
+    def test_gives_up_after_the_wait_and_holds_nothing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            paths = [Path(directory) / 'a.lock', Path(directory) / 'b.lock']
+            other = LifecycleLock(paths[1]).acquire()
+            now = [0.0]
+
+            def sleep(seconds):
+                now[0] += seconds
+
+            with self.assertRaisesRegex(tag_locks.LockBusy, 'Another lifecycle operation'):
+                tag_locks.acquire_all(paths, wait=2, sleep=sleep, clock=lambda: now[0])
+            # The first lock was let go, so nothing is left half-held.
+            LifecycleLock(paths[0]).acquire().release()
+            other.release()
+
+    def test_does_not_wait_without_a_wait(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'a.lock'
+            other = LifecycleLock(path).acquire()
+            with self.assertRaises(tag_locks.LockBusy):
+                tag_locks.acquire_all([path], sleep=lambda _: self.fail('slept'))
+            other.release()

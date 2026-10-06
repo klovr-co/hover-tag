@@ -16,8 +16,8 @@ async function open(tab?: string, canDescribe = false, configure?: (api: Bridge,
   const run = api.tag;
   api.tag = (args) => { calls.push(args); return run(args); };
   const remove = vi.fn(async () => true);
-  const describe = vi.fn(async () => true);
-  const tags = { rows, busy: new Set<string>(), toggle: vi.fn(), workspace: vi.fn(), rename: vi.fn(async () => true), describe, refresh: vi.fn(), remove } as unknown as Tags;
+  const describe = vi.fn(async () => "");
+  const tags = { rows, busy: new Set<string>(), toggle: vi.fn(), workspace: vi.fn(), rename: vi.fn(async () => ""), describe, refresh: vi.fn(), remove } as unknown as Tags;
   const say = vi.fn();
   render(<TagDetail api={api} tags={tags} initial={rows[0].id} problems={{}} back={vi.fn()} add={vi.fn()} showSettings={vi.fn()}
     finishSetup={vi.fn()} openAI={vi.fn()} say={say} canDescribe={canDescribe} />);
@@ -92,15 +92,26 @@ describe("Tag detail", () => {
     await vi.waitFor(() => expect(say).toHaveBeenCalledWith("Saved the description"));
   });
 
-  it("shows why a change failed instead of quietly leaving the form open", async () => {
+  it("shows why a change failed under the field being edited, and keeps it open to retry", async () => {
     const api = demoBridge();
     const rows: TagRow[] = parseList((await api.tag(["list", "--json"])).stdout);
-    const tags = { rows, busy: new Set<string>(), error: "Rename failed. Slack did not save the new name; retry `tag maya rename \"Maxine's Tag\"`",
-      toggle: vi.fn(), workspace: vi.fn(), rename: vi.fn(async () => false), refresh: vi.fn(), remove: vi.fn() } as unknown as Tags;
+    const failure = "Slack could not change the description (The request to Slack timed out); retry `tag maya describe \"Launch help\"`";
+    const tags = { rows, busy: new Set<string>(), error: "", toggle: vi.fn(), workspace: vi.fn(),
+      rename: vi.fn(async () => "Rename failed. Slack did not save the new name; retry `tag maya rename \"Maxine's Tag\"`"),
+      describe: vi.fn(async () => failure), refresh: vi.fn(), remove: vi.fn() } as unknown as Tags;
     render(<TagDetail api={api} tags={tags} initial={rows[0].id} problems={{}} back={vi.fn()} add={vi.fn()} showSettings={vi.fn()}
-      finishSetup={vi.fn()} openAI={vi.fn()} say={vi.fn()} />);
+      finishSetup={vi.fn()} openAI={vi.fn()} say={vi.fn()} canDescribe />);
     fireEvent.click(screen.getByRole("tab", { name: "Details" }));
-    expect(screen.getByText(/Slack did not save the new name/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.change(screen.getByLabelText("Description"), { target: { value: "Launch help" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    const shown = await screen.findByText(/The request to Slack timed out/);
+    expect(shown.closest(".desc-edit")).toBeTruthy();
+    expect(screen.getByLabelText("Description")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Save" })[0]);
+    expect((await screen.findByText(/Slack did not save the new name/)).closest(".edit-err")).toBeTruthy();
   });
 
   it("shows the description but no Edit when the installed Tag can't change it", async () => {

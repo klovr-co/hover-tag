@@ -70,7 +70,39 @@ def terminal_text(text):
     return text
 
 
+# Set by progress_events(): rows become JSON progress events and other text is dropped.
+_progress = None
+
+
+def progress_events(on: bool = True):
+    """Report readiness rows as JSON lines, for a client showing a command's steps as they happen."""
+    global _progress
+    _progress = on
+
+
+def progress_active() -> bool:
+    return bool(_progress)
+
+
+def _progress_event(event):
+    import json
+    print(json.dumps(event, ensure_ascii=False), flush=True)
+
+
+def progress_result(code, error=""):
+    """End a progress stream with the command's outcome."""
+    _progress_event({"type": "result", "status": "complete" if code == 0 else "failed",
+                     **({"error": error} if error else {})})
+
+
+def _row(name, value, state):
+    step = "-".join(str(name).lower().split())
+    _progress_event({"type": "progress", "step": step, "label": str(name), "state": state, "text": str(value)})
+
+
 def emit(text=""):
+    if _progress:
+        return
     print(terminal_text(str(text)))
 
 
@@ -134,6 +166,11 @@ def content_width():
 
 def paragraph(text, code="", *, indent="  "):
     """Wrap before styling so ANSI sequences never count toward line width."""
+    if os.getenv("TAG_SETUP_PROTOCOL") == "jsonl":
+        # Setup clients receive one status event per line; hard wrapping would
+        # split one sentence into updates that replace each other.
+        emit(indent + text.strip())
+        return
     for line in textwrap.wrap(text, width=max(8, content_width() - len(indent) + 2),
                               break_long_words=True, break_on_hyphens=False):
         emit(indent + styled(line, code) if code else indent + line)
@@ -206,6 +243,9 @@ def section(label):
 
 def info_row(name, value, *, good=None):
     """Render one aligned row for lifecycle and informational screens."""
+    if _progress:
+        _row(name, value, "info" if good is None else "done" if good else "attention")
+        return
     if good is None:
         if len(f"{name:<12} {value}") > content_width() - 4:
             paragraph(name, MUTED, indent="    ")
@@ -220,6 +260,9 @@ def info_row(name, value, *, good=None):
 
 def pending_row(name, value):
     """Render a readiness step before its blocking check has completed."""
+    if _progress:
+        _row(name, value, "running")
+        return
     paragraph(f"◌  {name:<14} {value}", MUTED, indent="    ")
 
 

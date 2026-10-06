@@ -66,10 +66,11 @@ request without restarting the channel's in-progress history read. Channel
 listings are cached for up to a minute so readiness checks do not repeatedly
 consume Slack's discovery quota.
 
-During a cooldown, startup and `tag status` show **Indexing paused by Slack**
-with the retry delay. Indexing continues in the background if the startup
-readiness wait expires. Let it finish, then run `tag start`; repeating setup
-or restarting memory does not clear Slack's limit. A memory restart preserves
+During a cooldown, `tag status` shows **Indexing paused by Slack** with the
+retry delay. `tag start` doesn't wait for it: the Tag connects and answers, and
+indexing continues in the background. History search covers each channel once
+it is indexed. Repeating setup or restarting memory does not clear Slack's
+limit. A memory restart preserves
 the cooldown, but may require replaying an interrupted indexing task.
 
 Existing Tag-managed memory processes automatically migrate to the rate-aware

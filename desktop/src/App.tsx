@@ -39,6 +39,7 @@ const SCREEN_EVENT: Partial<Record<Screen["name"], AppEvents["app_screen_viewed"
 const NEEDED = ["list", "setup-jsonl"];
 /** How often Tag checks for a complete product update. */
 const APP_UPDATE_HOURS = 6;
+const DEVELOPMENT_UPDATES = "Updates are off in development builds. Use the installed Tag.app to update.";
 /** Window widths: everyday screens, and Tag detail's Slack layout. */
 export const WIDTH = 520;
 export const WIDE = 800;
@@ -141,20 +142,22 @@ export function App() {
   // Check the complete product; installation always waits for a click.
   const check = useCallback(async () => {
     if (!api || !info) return;
+    // A development build's version names its release line, not a release; updating would replace it.
+    if (info.development) { dispatchUpdate({ type: "checkFailed", error: DEVELOPMENT_UPDATES }); return; }
     dispatchUpdate({ type: "checking" });
     try { dispatchUpdate({ type: "checked", update: await checkUpdate(api, info.version) }); }
     catch (error) { dispatchUpdate({ type: "checkFailed", error: error instanceof Error ? error.message : String(error) }); }
   }, [api, info]);
 
   useEffect(() => {
-    if (!api || !info?.cli || screen.name !== "home") return;
+    if (!api || !info?.cli || info.development || screen.name !== "home") return;
     void check();
     const timer = setInterval(() => void check(), APP_UPDATE_HOURS * 3600 * 1000);
     return () => clearInterval(timer);
-  }, [api, info?.cli, screen.name, check]);
+  }, [api, info?.cli, info?.development, screen.name, check]);
 
   const runUpdate = useCallback(async () => {
-    if (!api || !info) return;
+    if (!api || !info || info.development) return;
     dispatchUpdate({ type: "updating" });
     try {
       const done = await installUpdate(api, info.version, undefined, (phase) => dispatchUpdate({ type: "phase", phase }));
@@ -258,7 +261,7 @@ export function App() {
             showSettings={(tab) => setScreen({ name: "settings", tab })} />
         )}
         {screen.name === "connect" && (
-          <Connect api={api} args={screen.args} openAI={capabilities.includes(SHARED_AI_CAPABILITY) ? (resume) => setScreen({ name: "ai", resume }) : undefined} done={home}
+          <Connect api={api} args={screen.args} start={(id, onLine) => tags.start(id, capabilities.includes("start-progress") ? onLine : undefined)} openAI={capabilities.includes(SHARED_AI_CAPABILITY) ? (resume) => setScreen({ name: "ai", resume }) : undefined} done={home}
             paused={() => { home(); say("Progress saved. Finish setup from Home any time."); }} />
         )}
         {screen.name === "settings" && (

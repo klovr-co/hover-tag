@@ -451,7 +451,7 @@ class TagControlTests(unittest.TestCase):
                 command = start.call_args.args[2]
                 self.assertEqual(command[command.index("--backend") + 1], backend)
                 self.assertIn("Waiting for the service to become healthy", output.getvalue())
-                self.assertIn("Waiting for selected channels to become readable", output.getvalue())
+                self.assertIn("Checking which channels are imported", output.getvalue())
                 self.assertIn("Waiting for the connection to become ready", output.getvalue())
                 self.assertIn("Tag is connected", output.getvalue())
                 self.assertNotIn("[ok]", output.getvalue())
@@ -464,7 +464,8 @@ class TagControlTests(unittest.TestCase):
                 self.complete()
                 self.welcome.reset_mock()
                 self.welcome.side_effect = RuntimeError("xoxb-do-not-print") if failure == "welcome" else None
-                with patch.object(sys, "argv", ["tag", "start"]), patch.object(
+                # Renaming is covered by test_tag_rename; keep this home fixed.
+                with patch.object(sys, "argv", ["tag", "start"]), patch.object(tag_cli, "_rename", return_value=None), patch.object(
                     tag_cli, "missing_runtime_dependencies", return_value=()
                 ), patch.object(slack_manifest_migrations, "reconcile", return_value=False), patch.object(
                     tag_cli, "ensure_shared_memory"
@@ -474,7 +475,7 @@ class TagControlTests(unittest.TestCase):
                     tag_cli, "slack_ready", side_effect=RuntimeError("disconnected") if failure == "slack" else None,
                     return_value=True
                 ), patch.object(tag_cli, "stop_process") as stop, redirect_stdout(StringIO()) as output:
-                    if failure in {"memory", "preflight", "slack"}:
+                    if failure in {"preflight", "slack"}:
                         with self.assertRaises(RuntimeError):
                             tag_cli.main()
                         self.welcome.assert_not_called()
@@ -486,6 +487,9 @@ class TagControlTests(unittest.TestCase):
                         self.assertNotIn("xoxb-do-not-print", output.getvalue())
                         if failure == "welcome":
                             self.assertIn("Could not confirm delivery", output.getvalue())
+                        if failure == "memory":
+                            # A channel still importing doesn't hold the start back.
+                            self.assertIn("in the background", output.getvalue())
 
     def test_start_allows_mfs_cold_initialization_beyond_thirty_seconds(self):
         self.complete()
