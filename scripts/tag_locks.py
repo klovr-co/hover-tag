@@ -38,7 +38,15 @@ class LifecycleLock:
             self.handle = None
             raise LockBusy("Another lifecycle operation is in progress; retry when it finishes") from None
         if self.shared:
-            # The marker directory and legacy recovery belong to exclusive owners.
+            # The marker directory and legacy recovery belong to exclusive owners,
+            # but an older CLI holds only the directory: never share with it.
+            try:
+                self.handle.seek(0)
+                if self.path.exists() and self.handle.read() != b"tag-lifecycle-lock-v1":
+                    self._check_legacy_owner()
+            except Exception:
+                self._unlock()
+                raise
             return self
         try:
             self.handle.seek(0)

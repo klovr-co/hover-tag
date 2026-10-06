@@ -134,6 +134,29 @@ class LifecycleLockTests(unittest.TestCase):
                     LifecycleLock(path).acquire()
             self.assertTrue(path.is_dir())
 
+    @unittest.skipIf(os.name == 'nt', 'msvcrt has no shared locks; Windows stays exclusive')
+    def test_shared_holder_refuses_a_live_legacy_owner(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'ai-start.lock'
+            path.mkdir()
+            process = Mock(pid=999999999, info={'cmdline': ['python', '/old/scripts/tag_cli.py', 'setup']})
+            with patch('psutil.process_iter', return_value=[process]):
+                with self.assertRaisesRegex(RuntimeError, 'legacy lock'):
+                    LifecycleLock(path, shared=True).acquire()
+            self.assertTrue(path.is_dir())
+            # The guard is released, so an exclusive owner can still take it.
+            with patch('psutil.process_iter', return_value=[]):
+                LifecycleLock(path).acquire().release()
+
+    @unittest.skipIf(os.name == 'nt', 'msvcrt has no shared locks; Windows stays exclusive')
+    def test_shared_holder_ignores_the_marker_of_a_crashed_new_owner(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'ai-start.lock'
+            LifecycleLock(path).acquire()._unlock()
+            self.assertTrue(path.is_dir())
+            with patch('psutil.process_iter', side_effect=AssertionError):
+                LifecycleLock(path, shared=True).acquire().release()
+
 
 class AcquireAllTests(unittest.TestCase):
     def test_waits_for_a_busy_lock_then_takes_every_lock(self):
