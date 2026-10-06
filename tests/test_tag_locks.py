@@ -68,6 +68,43 @@ class LifecycleLockTests(unittest.TestCase):
                 self.assertTrue(path.is_dir())
             self.assertFalse(path.exists())
 
+    @unittest.skipIf(os.name == 'nt', 'msvcrt has no shared locks; Windows stays exclusive')
+    def test_shared_holders_coexist_and_exclude_an_exclusive_owner(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'ai-start.lock'
+            first = LifecycleLock(path, shared=True).acquire()
+            second = LifecycleLock(path, shared=True).acquire()
+            with self.assertRaises(tag_locks.LockBusy):
+                LifecycleLock(path).acquire()
+            first.release()
+            with self.assertRaises(tag_locks.LockBusy):
+                LifecycleLock(path).acquire()
+            second.release()
+            LifecycleLock(path).acquire().release()
+
+    @unittest.skipIf(os.name == 'nt', 'msvcrt has no shared locks; Windows stays exclusive')
+    def test_shared_holder_waits_for_an_exclusive_owner(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'ai-start.lock'
+            owner = LifecycleLock(path).acquire()
+            with self.assertRaises(tag_locks.LockBusy):
+                LifecycleLock(path, shared=True).acquire()
+            owner.release()
+            LifecycleLock(path, shared=True).acquire().release()
+
+    @unittest.skipIf(os.name == 'nt', 'msvcrt has no shared locks; Windows stays exclusive')
+    def test_two_tags_take_shared_ai_locks_and_their_own_start_locks_together(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            shared = (root / 'ai-connection.lock', root / 'ai-start.lock')
+            first, _ = tag_locks.acquire_all([*shared, root / 'a/start.lock'], shared=shared)
+            second, waited = tag_locks.acquire_all([*shared, root / 'b/start.lock'], shared=shared)
+            self.assertFalse(waited)
+            with self.assertRaises(tag_locks.LockBusy):
+                tag_locks.acquire_all([*shared, root / 'a/start.lock'], shared=shared)
+            for lock in reversed(first + second):
+                lock.release()
+
     def test_process_crash_releases_lock_and_next_start_recovers(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'start.lock'
@@ -96,6 +133,29 @@ class LifecycleLockTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'legacy lock'):
                     LifecycleLock(path).acquire()
             self.assertTrue(path.is_dir())
+
+    @unittest.skipIf(os.name == 'nt', 'msvcrt has no shared locks; Windows stays exclusive')
+    def test_shared_holder_refuses_a_live_legacy_owner(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'ai-start.lock'
+            path.mkdir()
+            process = Mock(pid=999999999, info={'cmdline': ['python', '/old/scripts/tag_cli.py', 'setup']})
+            with patch('psutil.process_iter', return_value=[process]):
+                with self.assertRaisesRegex(RuntimeError, 'legacy lock'):
+                    LifecycleLock(path, shared=True).acquire()
+            self.assertTrue(path.is_dir())
+            # The guard is released, so an exclusive owner can still take it.
+            with patch('psutil.process_iter', return_value=[]):
+                LifecycleLock(path).acquire().release()
+
+    @unittest.skipIf(os.name == 'nt', 'msvcrt has no shared locks; Windows stays exclusive')
+    def test_shared_holder_ignores_the_marker_of_a_crashed_new_owner(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'ai-start.lock'
+            LifecycleLock(path).acquire()._unlock()
+            self.assertTrue(path.is_dir())
+            with patch('psutil.process_iter', side_effect=AssertionError):
+                LifecycleLock(path, shared=True).acquire().release()
 
 
 class AcquireAllTests(unittest.TestCase):

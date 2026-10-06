@@ -56,6 +56,7 @@ RUNTIME_DEPENDENCIES = ("mfs_server", "psutil", "slack_bolt")
 UPGRADE_CHANNELS = ("stable", "beta", "alpha", "edge")
 # How long tag start waits for a setup, start or stop that holds the Tag's locks.
 START_LOCK_WAIT_SECONDS = 90
+APP_IDENTITY_WAIT_SECONDS = 10
 # Contract between this CLI and desktop apps; see docs/reference/app-protocol.md.
 # Bump only for incompatible changes; add a capability for anything new.
 APP_PROTOCOL = 1
@@ -510,8 +511,8 @@ def start_development_slack(home: Path) -> None:
         "--process-id",
         instance_id,
     ]
-    with LifecycleLock(tag_home() / "state/ai-connection.lock"), \
-            LifecycleLock(tag_home() / "state/ai-start.lock"), LifecycleLock(home / "state/start.lock"):
+    with LifecycleLock(tag_home() / "state/ai-connection.lock", shared=True), \
+            LifecycleLock(tag_home() / "state/ai-start.lock", shared=True), LifecycleLock(home / "state/start.lock"):
         start_process(
             home,
             "slack",
@@ -796,12 +797,18 @@ def assert_unique_slack_app(context: tag_instances.InstanceContext, values: dict
     shared = context.installation_root / "shared"
     shared.mkdir(parents=True, exist_ok=True, mode=0o700)
     lock = shared / "app-identity.lock"
-    try:
-        lock.mkdir()
-    except FileExistsError:
-        raise RuntimeError(
-            f"Another Tag is activating a Slack app. If interrupted, remove {lock} and retry."
-        ) from None
+    # The check is brief: let another Tag starting now finish it first.
+    deadline = time.monotonic() + APP_IDENTITY_WAIT_SECONDS
+    while True:
+        try:
+            lock.mkdir()
+            break
+        except FileExistsError:
+            if time.monotonic() >= deadline:
+                raise RuntimeError(
+                    f"Another Tag is activating a Slack app. If interrupted, remove {lock} and retry."
+                ) from None
+            time.sleep(0.2)
     try:
         for item in tag_instances.discover(context.installation_root):
             if not item.get("valid") or item["id"] == context.tag_id:
@@ -2180,6 +2187,16 @@ def _global_ai_target(installation_root):
                          lifecycle, "Your Tags")
 
 
+@contextlib.contextmanager
+def _waiting_lock(path):
+    """Hold one exclusive lifecycle lock, waiting while another start, stop or setup holds it."""
+    (lock,), _ = tag_locks.acquire_all([path], wait=START_LOCK_WAIT_SECONDS)
+    try:
+        yield lock
+    finally:
+        lock.release()
+
+
 def _migrate_shared_ai(installation_root, current_home, *, defer_current=True):
     """Pause existing bridges around v1 credential migration and recover interrupted restarts."""
     try:
@@ -2191,10 +2208,11 @@ def _migrate_shared_ai(installation_root, current_home, *, defer_current=True):
     if os.getenv("TAG_AI_MIGRATION_RESTART") == "1":
         return
     pending = []
-    with LifecycleLock(installation_root / "state/ai-migration.lock"):
+    # Other Tags may be starting: wait for their migration check and shared AI locks.
+    with _waiting_lock(installation_root / "state/ai-migration.lock"):
         record = tag_chatgpt.read_object(checkpoint)
         pending = record.get("restart", [])
-        with LifecycleLock(installation_root / "state/ai-connection.lock"):
+        with _waiting_lock(installation_root / "state/ai-connection.lock"):
             if not store.path.exists():
                 # Validate before interrupting any service.
                 legacy = tag_chatgpt.legacy_accounts(current_home)
@@ -3003,11 +3021,13 @@ def _run_cli() -> int:
             display.header("Start", selected_target(home, context.tag_id))
             display.section("Readiness")
         display.info_row("Runtime", "Dependencies available", good=True)
-        # Serialize starts so concurrent invocations cannot create orphan services.
+        # Serialize starts of this Tag so concurrent invocations cannot create orphan services.
+        # Other Tags may start in parallel: the shared AI locks only exclude account changes.
         # Wait briefly for a setup, start or stop that already holds them rather than failing at once.
+        shared_locks = (installation_root / "state/ai-connection.lock", installation_root / "state/ai-start.lock")
         (connection_lock, ai_lock, lock), waited = tag_locks.acquire_all(
-            [installation_root / "state/ai-connection.lock", installation_root / "state/ai-start.lock",
-             home / "state/start.lock"],
+            [*shared_locks, home / "state/start.lock"],
+            shared=shared_locks,
             wait=START_LOCK_WAIT_SECONDS,
             waiting=lambda: display.pending_row("Start", "Waiting for another start, stop or setup to finish…"))
         if waited and slack_ready(home):
