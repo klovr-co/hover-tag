@@ -311,6 +311,15 @@ class HandoffHelperTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 tag_handoff.parse_peers(value)
 
+    def test_a_stray_or_damaged_file_does_not_stop_other_waits(self) -> None:
+        store = HandoffStore(Path(self.temp.name) / "handoffs")
+        store.create(handoff_id="h-ffffffffff", team="T", requester=MAYA, origin_channel="C1",
+                     origin_thread_ts="1.0", question="q", task="t",
+                     targets=[{"name": "Tag B", "user_id": TAG_B}], request_ts="2.0", wait_minutes=30, now=1000)
+        (store.root / "h-old.json").write_text("{}", encoding="utf-8")
+        (store.root / "h-0000000000.json").write_text(json.dumps({"state": "waiting"}), encoding="utf-8")
+        self.assertEqual(["h-ffffffffff"], [r["id"] for r in store.claim_expired(now=1000 + 31 * 60)])
+
     def test_each_wait_combines_once_even_with_duplicate_or_late_replies(self) -> None:
         store = HandoffStore(Path(self.temp.name) / "handoffs")
         targets = [{"name": "Tag B", "user_id": TAG_B}, {"name": "Tag C", "user_id": TAG_C}]

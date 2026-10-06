@@ -3945,12 +3945,12 @@ def create_app(
             origin_thread_ts=thread_ts, question=question, task=request["task"], targets=targets,
             request_ts="", wait_minutes=wait_minutes,
         )
-        status = client.chat_postMessage(
-            channel=channel, thread_ts=thread_ts,
-            text=tag_handoff.status_text(handoff_store.get(handoff_id) or {}),
-        )
-        handoff_store.set_field(handoff_id, "status_ts", status["ts"])
         try:
+            status = client.chat_postMessage(
+                channel=channel, thread_ts=thread_ts,
+                text=tag_handoff.status_text(handoff_store.get(handoff_id) or {}),
+            )
+            handoff_store.set_field(handoff_id, "status_ts", status["ts"])
             posted = client.chat_postMessage(
                 channel=channel, text=tag_handoff.request_text(handoff_id, targets, request["task"], requester),
             )

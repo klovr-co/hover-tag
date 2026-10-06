@@ -228,8 +228,12 @@ class HandoffStore:
         moment = time.time() if now is None else now
         claimed = []
         for path in sorted(self.root.glob("h-*.json")):
+            if not re.fullmatch(HANDOFF_ID, path.stem):
+                continue  # A stray file must not stop the other waits.
+
             def change(record: dict[str, Any]) -> bool:
-                if record["state"] == "waiting" and record["deadline"] <= moment:
+                deadline = record.get("deadline")
+                if record.get("state") == "waiting" and isinstance(deadline, (int, float)) and deadline <= moment:
                     record["state"] = "combining"
                     return True
                 return False

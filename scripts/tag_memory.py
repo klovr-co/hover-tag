@@ -143,7 +143,10 @@ def read_document(path: Path) -> dict[str, Any]:
         raw = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return empty_document()
-    document = json.loads(raw)
+    try:
+        document = json.loads(raw)
+    except json.JSONDecodeError:
+        raise MemoryRefused("unreadable", f"Memory file is damaged: {path}") from None
     if not isinstance(document, dict) or document.get("schema") != SCHEMA_VERSION:
         raise MemoryRefused("unreadable", f"Memory file has an unsupported format: {path}")
     for name in ("entries", "history", "forgotten"):

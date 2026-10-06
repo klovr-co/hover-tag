@@ -155,6 +155,17 @@ class WriteRuleTests(MemoryTestCase):
         self.assertNotIn('"value 0"', self.raw_files())
 
 
+class DamagedFileTests(MemoryTestCase):
+    def test_a_damaged_file_is_refused_with_its_path(self) -> None:
+        self.store().save("deadline", "Reports are due Friday.")
+        damaged = next(self.root.rglob("*.json"))
+        damaged.write_text("{not json", encoding="utf-8")
+        with self.assertRaises(MemoryRefused) as refused:
+            self.store().save("pricing", "Launch pricing is 49 per seat.")
+        self.assertEqual("unreadable", refused.exception.code)
+        self.assertIn(str(damaged), str(refused.exception))
+
+
 class ForgetTests(MemoryTestCase):
     def test_forget_makes_current_and_old_values_unreachable(self) -> None:
         store = self.store()
