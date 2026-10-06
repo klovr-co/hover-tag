@@ -213,6 +213,21 @@ class ThreeTagTests(unittest.TestCase):
         self.assertEqual({1}, {run[2]["handoff_depth"] for run in peer_runs})
         self.assertEqual({None}, {run[2]["handoff_requests"] for run in peer_runs})
 
+    def test_replies_that_arrive_before_the_request_ts_is_saved_still_count(self) -> None:
+        original = HandoffStore.set_field
+
+        def slow_set_field(store: HandoffStore, handoff_id: str, name: str, value: str) -> None:
+            if name == "request_ts":
+                time.sleep(0.5)  # Peers reply while Tag A is still saving the request.
+            original(store, handoff_id, name, value)
+
+        with patch.object(HandoffStore, "set_field", slow_set_field):
+            origin = self.bus.human_mention(TAG_A, f"<@{TAG_A}> ask Tag B and Tag C, then write the launch report")
+            self.bus.settle()
+        combine_runs = [run for run in self.runs if run[0] == TAG_A and run[2]["handoff_depth"] == 1]
+        self.assertEqual(1, len(combine_runs))
+        self.assertIn("Launch day is 12 November", self.origin_replies(origin)[-1])
+
     def test_deadline_combines_what_arrived_and_names_the_missing_tag(self) -> None:
         self.bus.apps.pop(TAG_C)  # Tag C is offline.
         origin = self.bus.human_mention(TAG_A, f"<@{TAG_A}> ask Tag B and Tag C, then write the launch report")

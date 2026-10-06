@@ -4000,9 +4000,13 @@ def create_app(
             if (
                 record is None
                 or record["origin_channel"] != event.get("channel")
-                or event.get("thread_ts") != record["request_ts"]
+                or not event.get("thread_ts")
+                # A fast peer can reply before request_ts is saved; the handoff id still ties it to this wait.
+                or (record["request_ts"] and event["thread_ts"] != record["request_ts"])
             ):
                 return
+            if not record["request_ts"]:
+                handoff_store.set_field(handoff_id, "request_ts", event["thread_ts"])
             record, ready = handoff_store.record_reply(handoff_id, sender, outcome, event.get("ts", ""))
             update_handoff_status(client, logger, handoff_id)
             if ready and record is not None:
