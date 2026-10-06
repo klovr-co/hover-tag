@@ -510,8 +510,8 @@ def start_development_slack(home: Path) -> None:
         "--process-id",
         instance_id,
     ]
-    with LifecycleLock(tag_home() / "state/ai-connection.lock"), \
-            LifecycleLock(tag_home() / "state/ai-start.lock"), LifecycleLock(home / "state/start.lock"):
+    with LifecycleLock(tag_home() / "state/ai-connection.lock", shared=True), \
+            LifecycleLock(tag_home() / "state/ai-start.lock", shared=True), LifecycleLock(home / "state/start.lock"):
         start_process(
             home,
             "slack",
@@ -3003,11 +3003,13 @@ def _run_cli() -> int:
             display.header("Start", selected_target(home, context.tag_id))
             display.section("Readiness")
         display.info_row("Runtime", "Dependencies available", good=True)
-        # Serialize starts so concurrent invocations cannot create orphan services.
+        # Serialize starts of this Tag so concurrent invocations cannot create orphan services.
+        # Other Tags may start in parallel: the shared AI locks only exclude account changes.
         # Wait briefly for a setup, start or stop that already holds them rather than failing at once.
+        shared_locks = (installation_root / "state/ai-connection.lock", installation_root / "state/ai-start.lock")
         (connection_lock, ai_lock, lock), waited = tag_locks.acquire_all(
-            [installation_root / "state/ai-connection.lock", installation_root / "state/ai-start.lock",
-             home / "state/start.lock"],
+            [*shared_locks, home / "state/start.lock"],
+            shared=shared_locks,
             wait=START_LOCK_WAIT_SECONDS,
             waiting=lambda: display.pending_row("Start", "Waiting for another start, stop or setup to finish…"))
         if waited and slack_ready(home):

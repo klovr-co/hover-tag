@@ -11,8 +11,11 @@ class LockBusy(RuntimeError):
 
 
 class LifecycleLock:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, shared: bool = False):
         self.path = path
+        # Shared holders exclude exclusive holders but not each other. Windows
+        # has no shared byte-range lock in msvcrt, so it stays exclusive there.
+        self.shared = shared and os.name != "nt"
         self.handle = None
 
     def acquire(self):
@@ -29,11 +32,14 @@ class LifecycleLock:
                 msvcrt.locking(self.handle.fileno(), msvcrt.LK_NBLCK, 1)
             else:
                 import fcntl
-                fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(self.handle.fileno(), (fcntl.LOCK_SH if self.shared else fcntl.LOCK_EX) | fcntl.LOCK_NB)
         except OSError:
             self.handle.close()
             self.handle = None
             raise LockBusy("Another lifecycle operation is in progress; retry when it finishes") from None
+        if self.shared:
+            # The marker directory and legacy recovery belong to exclusive owners.
+            return self
         try:
             self.handle.seek(0)
             managed = self.handle.read() == b"tag-lifecycle-lock-v1"
@@ -78,7 +84,8 @@ class LifecycleLock:
 
     def release(self):
         try:
-            self.path.rmdir()
+            if not self.shared:
+                self.path.rmdir()
         finally:
             self._unlock()
 
@@ -89,10 +96,10 @@ class LifecycleLock:
         self.release()
 
 
-def acquire_all(paths, *, wait: float = 0.0, waiting=None, sleep=time.sleep, clock=time.monotonic):
+def acquire_all(paths, *, shared=(), wait: float = 0.0, waiting=None, sleep=time.sleep, clock=time.monotonic):
     """Take every lock in order, all or none, waiting up to `wait` seconds while another operation holds one.
 
-    Returns the held locks and whether this call had to wait. `waiting` is called once, when waiting starts.
+    Paths in `shared` are taken in shared mode. Returns the held locks and whether this call had to wait. `waiting` is called once, when waiting starts.
     """
     deadline = clock() + wait
     waited = False
@@ -100,7 +107,7 @@ def acquire_all(paths, *, wait: float = 0.0, waiting=None, sleep=time.sleep, clo
         held = []
         try:
             for path in paths:
-                held.append(LifecycleLock(path).acquire())
+                held.append(LifecycleLock(path, shared=path in shared).acquire())
             return held, waited
         except LockBusy:
             for lock in reversed(held):
