@@ -53,6 +53,10 @@ All notable changes to Tag are documented here.
 
 ### Added
 
+- Let one Tag ask other Tags for help and combine their answers. Tag posts one
+  request that mentions every Tag, shows their progress in your thread, and
+  writes the final answer once all have replied or the deadline passes. Each
+  owner lists trusted Tags in `OPENTAG_PEER_TAGS`; handoffs stay off until then.
 - Ask Tag to remember, change, or forget facts for the current channel or for
   all channels. Saved facts load before every request in that channel, work
   the same with Codex and Claude, and each reply states exactly what changed.

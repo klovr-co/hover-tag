@@ -27,6 +27,26 @@ connected accounts available to Tag. If a teammate only needs to add context,
 review an answer, or take a task from the result, they can do that in the
 thread without being authorized to invoke Tag.
 
+## Letting other Tags ask your Tag
+
+Tags can ask each other for help in a channel they share. Your Tag accepts a
+request from another Tag only when both of these are true:
+
+- You listed that Tag in `OPENTAG_PEER_TAGS`.
+- The person who asked the other Tag is also authorized to use your Tag.
+
+Your Tag then works for that person, with your Tag's environment and accounts,
+exactly as if they had asked it directly. Listing a peer also lets your Tag ask
+that Tag. Ask the other Tag's owner to list your Tag too.
+
+To find a Tag's bot member ID, open the Tag's profile in Slack, select **More**,
+and choose **Copy member ID**. Then run:
+
+```bash
+tag config set OPENTAG_PEER_TAGS "Research Tag=U0123ABCD,Writer Tag=U0456EFGH"
+tag restart
+```
+
 To add a caller, append their Slack member ID to the comma-separated
 `SLACK_ALLOWED_USER_IDS` setting. See the
 [Slack adapter reference](../../references/slack-adapter.md#environment)

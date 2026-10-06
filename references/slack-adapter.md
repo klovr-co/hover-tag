@@ -207,6 +207,12 @@ allowlist does not apply to DMs, but `SLACK_ALLOWED_USER_IDS` still does. Set
 fresh backend task, while replies reuse only that DM thread's bounded context
 (up to 30 messages).
 
+`OPENTAG_PEER_TAGS` lists other Tags this Tag may ask for help and accept
+requests from, as comma-separated `Name=MEMBERID` pairs that use each Tag's bot
+member ID, for example `Research Tag=U0123ABCD,Writer Tag=U0456EFGH`. It is
+empty by default, which turns handoffs off. Mentions from bots that are not
+listed are ignored. See `references/handoffs.md`.
+
 The bridge does not need a model API key. The selected CLI backend handles model
 auth and tool execution.
 

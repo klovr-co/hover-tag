@@ -76,6 +76,8 @@ def backend_environment(
     channel_labels: str | None = None,
     slack_search_grant: str | None = None,
     memory_receipts: str | None = None,
+    handoff_requests: str | None = None,
+    handoff_depth: int = 0,
 ) -> dict[str, str]:
     clean = without_telemetry_environment(
         isolated_environment(source, transport=transport)
@@ -104,4 +106,9 @@ def backend_environment(
         clean["OPENTAG_MEMORY_RECEIPTS"] = memory_receipts
     else:
         clean.pop("OPENTAG_MEMORY_RECEIPTS", None)
+    if handoff_requests:
+        clean["OPENTAG_HANDOFF_REQUESTS"] = handoff_requests
+    else:
+        clean.pop("OPENTAG_HANDOFF_REQUESTS", None)
+    clean["OPENTAG_HANDOFF_DEPTH"] = str(handoff_depth)
     return clean

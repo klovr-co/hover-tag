@@ -71,6 +71,25 @@ Tag does not save a note after every conversation. For a longer document, ask
 Tag to write it to a workspace file. To make that file searchable through MFS,
 the operator must include it in an indexed, permitted source.
 
+## Get help from other Tags
+
+When the owners have connected their Tags, one Tag can ask others for help and
+combine their answers:
+
+> @Maya's Tag ask Research Tag for Acme's Q3 revenue and Writer Tag for the
+> approved launch headline, then write a two-line launch report.
+
+Maya's Tag posts one new message in the channel that asks both Tags, and keeps
+a status line in your thread, such as "Research Tag: replied ✓ · Writer Tag:
+waiting". Each Tag answers in the thread under that message. When every Tag
+has replied, or after the deadline (30 minutes unless you ask for a different
+time), Maya's Tag writes the final answer in your thread. If a Tag doesn't
+reply or can't help, the answer says so.
+
+The other Tags see only the request message, not your thread, and they work
+with their own files, memory, and accounts. A Tag that is answering another Tag
+cannot pass the work on again.
+
 ## Use the tools already available to the agent
 
 Tag runs your local Codex agent. Claude support is coming soon.
