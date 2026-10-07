@@ -153,7 +153,9 @@ class ClaudeEventMapper:
     buffered per message and released once the stop reason is known.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, resuming: bool = False) -> None:
+        # A resumed run reports its session only from the result, once the resume has worked.
+        self.resuming = resuming
         self.current_message: str | None = None
         self.pending_deltas: dict[str, list[str]] = {}
         self.final_ids: list[str] = []
@@ -182,7 +184,7 @@ class ClaudeEventMapper:
                 return events
             return [*self._session(payload), *events]
         self._track_task(payload)
-        return self._session(payload)
+        return [] if self.resuming else self._session(payload)
 
     def _session(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         """Report the conversation id once so a Slack thread can resume it."""
@@ -665,7 +667,7 @@ class ClaudeAgentRun:
         options = self.options(model=model, reasoning_effort=reasoning_effort, fast_mode=fast_mode,
                                emit=emit, deadline=max_deadline)
         self.client = client_factory(options)
-        mapper = ClaudeEventMapper()
+        mapper = ClaudeEventMapper(resuming=bool(self.resume_session_id))
         terminal: dict[str, Any] | None = None
         next_message: asyncio.Task[Any] | None = None
         try:

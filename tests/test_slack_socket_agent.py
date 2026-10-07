@@ -141,6 +141,19 @@ class SlackTextAttachmentTests(unittest.TestCase):
         self.assertTrue(text[0].endswith("[Attachment text truncated]"))
 
 
+class ThreadReservationTests(unittest.TestCase):
+    def test_a_thread_runs_one_request_until_it_is_released(self) -> None:
+        key = slack_socket_agent.RunKey("T1", "C1", "1.0")
+        self.addCleanup(slack_socket_agent.release_thread, key)
+
+        self.assertTrue(slack_socket_agent.reserve_thread(key))
+        self.assertFalse(slack_socket_agent.reserve_thread(key))
+        self.assertTrue(slack_socket_agent.reserve_thread(slack_socket_agent.RunKey("T1", "C1", "2.0")))
+        slack_socket_agent.release_thread(key)
+        self.assertTrue(slack_socket_agent.reserve_thread(key))
+        slack_socket_agent.release_thread(slack_socket_agent.RunKey("T1", "C1", "2.0"))
+
+
 class SlackBinaryAttachmentTests(unittest.TestCase):
     def test_downloads_binary_attachment_to_invocation_directory(self) -> None:
         messages = [{"files": [{

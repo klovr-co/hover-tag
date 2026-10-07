@@ -2137,6 +2137,24 @@ ACTIVE_RUNS: dict[RunKey, ActiveBackendRun] = {}
 ACTIVE_RUNS_LOCK = threading.Lock()
 
 
+THREAD_BUSY_MESSAGE = "I'm still working on an earlier request in this thread. Mention me again when I finish."
+BUSY_THREADS: set[RunKey] = set()
+
+
+def reserve_thread(key: RunKey) -> bool:
+    """Claim a Slack thread for one request; False while an earlier request still runs."""
+    with ACTIVE_RUNS_LOCK:
+        if key in BUSY_THREADS:
+            return False
+        BUSY_THREADS.add(key)
+        return True
+
+
+def release_thread(key: RunKey) -> None:
+    with ACTIVE_RUNS_LOCK:
+        BUSY_THREADS.discard(key)
+
+
 def register_active_run(key: RunKey, run: ActiveBackendRun) -> None:
     with ACTIVE_RUNS_LOCK:
         ACTIVE_RUNS[key] = run
@@ -4083,6 +4101,17 @@ def create_app(
 
         session_workdir = str(default_workdir())
 
+        # Hold the thread until this request ends so two mentions cannot resume one conversation.
+        thread_key = RunKey(team, channel, thread_ts)
+        if not reserve_thread(thread_key):
+            indicator.clear()
+            client.chat_postMessage(
+                channel=channel,
+                thread_ts=thread_ts,
+                text=THREAD_BUSY_MESSAGE,
+            )
+            return
+
         continued = thread_sessions.get(team, channel, thread_ts, request_backend,
                                         workdir=session_workdir, requester=user_id)
         current_session: str | None = None
@@ -4456,6 +4485,7 @@ def create_app(
                 footer_blocks,
             )
         finally:
+            release_thread(thread_key)
             output_manifest.unlink(missing_ok=True)
 
     @app.action(RETRY_ACTION_ID)

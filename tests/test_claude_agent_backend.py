@@ -488,6 +488,25 @@ class ClaudeAgentRunTests(unittest.TestCase):
         self.assertEqual([{"type": "session", "session_id": "s-1"}],
                          [event for event in events if event["type"] == "session"])
 
+    def test_missing_resume_does_not_report_the_stale_session_from_init(self) -> None:
+        async def script(client):
+            if getattr(client.options, "resume", None):
+                yield SystemMessage("init", {"session_id": "gone"})
+                yield ResultMessage(subtype="error_during_execution", is_error=True, num_turns=0,
+                                    session_id="gone",
+                                    errors=["No conversation found with session ID: gone"])
+                return
+            yield SystemMessage("init", {"session_id": "new"})
+            yield ResultMessage(result="ok", session_id="new")
+
+        FakeClient.script = script
+        events: list[dict[str, Any]] = []
+        agent = ClaudeAgentRun(cwd=self.root, timeout=30, resume_session_id="gone")
+        agent.run("prompt", model=None, reasoning_effort=None, emit=events.append)
+
+        self.assertEqual([{"type": "session", "session_id": "new"}],
+                         [event for event in events if event["type"] == "session"])
+
     def test_standing_instructions_are_the_system_prompt_and_resumes_get_new_messages(self) -> None:
         async def script(client):
             yield ResultMessage(result="ok", session_id="s-1")
