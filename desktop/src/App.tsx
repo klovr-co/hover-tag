@@ -176,7 +176,7 @@ export function App() {
     }
   }, [api, info, tags, track, telemetry.reload]);
 
-  // The window always fits its content, and Tag detail is wider.
+  // The window fits its content; most screens hold one fixed height (see `fixed` below), and Tag detail is wider.
   const width = screen.name === "tag" ? WIDE : WIDTH;
   useLayoutEffect(() => {
     if (!api || !root) return;
@@ -240,8 +240,8 @@ export function App() {
   }
   // The usage data notice comes before Home and setup, so it's seen before anything is recorded.
   if (screen.name === "home" || screen.name === "connect") {
-    if (!telemetry.loaded) return <main ref={setRoot} className="app"><Starting retry={telemetry.reload} /></main>;
-    if (telemetry.asking) return <main ref={setRoot} className="app"><TelemetryNotice api={api} telemetry={telemetry} /></main>;
+    if (!telemetry.loaded) return <main ref={setRoot} className="app fixed"><Starting retry={telemetry.reload} /></main>;
+    if (telemetry.asking) return <main ref={setRoot} className="app fixed"><TelemetryNotice api={api} telemetry={telemetry} /></main>;
   }
   const home = () => { setScreen({ name: "home" }); void tags.refresh(); watch.recheck(); };
   // A reinstall keeps existing Tags: return to them instead of setting up a first Tag again.
@@ -254,9 +254,12 @@ export function App() {
     if (empty) setScreen({ name: "connect", args: ["setup"] }); else home();
   };
   const add = () => setScreen({ name: "connect", args: tags.rows.length ? ["add"] : ["setup"] });
+  // These screens are always --flow-h tall and scroll inside, so moving between them never resizes the window.
+  const fixed = screen.name === "home" || screen.name === "settings" || screen.name === "ai"
+    || (screen.name === "replay" && screen.step === "telemetry");
   return (
     <TrackContext.Provider value={track}>
-      <main ref={setRoot} className={`app${info.platform === "macos" ? " overlay" : ""}${screen.name === "home" ? " home" : ""}${screen.name === "tag" ? " wide" : ""}`}>
+      <main ref={setRoot} className={`app${info.platform === "macos" ? " overlay" : ""}${screen.name === "home" ? " home" : ""}${fixed ? " fixed" : ""}${screen.name === "tag" ? " wide" : ""}`}>
         {screen.name === "replay" && screen.step === "telemetry" && <TelemetryNotice api={api} telemetry={telemetry} preview={() => setScreen({ name: "replay", step: "welcome" })} />}
         {screen.name === "replay" && screen.step === "welcome" && <Welcome api={api} platform={info.platform} preview={() => setScreen({ name: "settings", tab: "about" })} />}
         {screen.name === "welcome" && <Welcome api={api} platform={info.platform} install={() => setScreen({ name: "installing", attempt: 0 })} />}

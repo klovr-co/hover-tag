@@ -34,6 +34,7 @@
   --sky-top: #1489dd; --sky-bottom: #3fb4f3;
   --sky: linear-gradient(180deg, #1489dd 0%, #23a0ea 40%, #4fbcf4 100%);
   --glass: rgba(248, 252, 255, .94); --glass-line: rgba(255, 255, 255, .42);
+  --river-top: #d9eefb; --river-bottom: #c4e3f6; --river-glint: rgba(255, 255, 255, .95);
   --glass-shadow: 0 8px 24px rgba(7, 65, 112, .16), 0 1px 0 rgba(255, 255, 255, .8) inset;
   --ok-text: #2b7f37; --warn-text: #a86200; --bad-text: #d1373c; --pop: #ffffff;
   --tint-water: #cfe9fb;
@@ -62,6 +63,7 @@
     --sky-top: #061322; --sky-bottom: #0f2c48;
     --sky: linear-gradient(180deg, #061322 0%, #0b2338 55%, #143654 100%);
     --glass: rgba(10, 24, 38, .84); --glass-line: rgba(255, 255, 255, .1);
+    --river-top: rgba(90, 160, 220, .14); --river-bottom: rgba(90, 160, 220, .24); --river-glint: rgba(190, 225, 255, .3);
     --glass-shadow: 0 8px 24px rgba(0, 0, 0, .35), 0 1px 0 rgba(255, 255, 255, .06) inset;
     --ok-text: #6bd178; --warn-text: #f5a524; --bad-text: #ff7a7e; --pop: #10233a;
     --tint-water: #1b3a55;
@@ -80,6 +82,7 @@
     --sky-top: #061322; --sky-bottom: #0f2c48;
     --sky: linear-gradient(180deg, #061322 0%, #0b2338 55%, #143654 100%);
     --glass: rgba(10, 24, 38, .84); --glass-line: rgba(255, 255, 255, .1);
+    --river-top: rgba(90, 160, 220, .14); --river-bottom: rgba(90, 160, 220, .24); --river-glint: rgba(190, 225, 255, .3);
     --glass-shadow: 0 8px 24px rgba(0, 0, 0, .35), 0 1px 0 rgba(255, 255, 255, .06) inset;
     --ok-text: #6bd178; --warn-text: #f5a524; --bad-text: #ff7a7e; --pop: #10233a;
     --tint-water: #1b3a55;
@@ -106,8 +109,6 @@ input, textarea, select { font: inherit; }
 /* The window: the sky on top, the frosted panel below. */
 .app { width: 520px; max-width: 100%; display: flex; flex-direction: column; position: relative; background: var(--sky); }
 .app.wide { width: 800px; }
-.app.home { min-height: 560px; }
-.app.home > .body { flex: 1; }
 
 /* ── Sky header, in several heights ── */
 .sky { position: relative; height: 104px; overflow: hidden; color: #fff; flex: none; }
@@ -314,7 +315,10 @@ button.opt:hover:not(:disabled) { background: var(--fill); }
 
 /* Home */
 .home-foot { margin-top: auto; display: flex; flex-direction: column; align-items: center; gap: 4px; padding-top: 8px; }
-.tags-row { width: 260px; image-rendering: pixelated; opacity: .95; }
+.tags-row { width: 260px; height: 61px; image-rendering: pixelated; opacity: .95; }
+/* Less room: a small row of Tags beside the link instead of above it. */
+.home-foot.inline { flex-direction: row; justify-content: center; gap: 10px; }
+.home-foot.inline .tags-row { width: auto; height: 32px; aspect-ratio: 640 / 149; }
 .hello { display: flex; align-items: center; gap: 9px; width: 100%; padding: 0 4px; text-align: left; font-size: 13.5px; color: var(--muted); min-height: 24px; }
 .hello img { width: 20px; height: 20px; border-radius: 6px; image-rendering: pixelated; flex: none; object-fit: cover; }
 .hello b { color: var(--ink); font-weight: 600; }
@@ -407,6 +411,63 @@ button.hello:hover b { text-decoration: underline; text-underline-offset: 2px; }
 .st .st-time { margin-left: 8px; font-size: 12.5px; font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
 .logbox { background: #0b1621; color: #cfe0ef; border-radius: 10px; padding: 10px 14px; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; overflow: auto; border: 1px solid rgba(255, 255, 255, .06); max-height: 150px; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .logbox .err { color: #ff8d90; }
+
+/* One canvas for every install and Add a Tag screen: the window is always --flow-h tall,
+   and each panel fills what its sky leaves, so moving between steps never resizes it. */
+:root { --flow-h: 616px; }
+.body.install { height: calc(var(--flow-h) - 190px); gap: 16px; }
+.flow-panel { height: calc(var(--flow-h) - 136px); flex: none; display: flex; flex-direction: column; }
+.flow-panel.ready { height: calc(var(--flow-h) - 170px); }
+.flow-panel > .body { flex: 1; min-height: 0; overflow-y: auto; }
+.flow-panel > .body > .foot { margin-top: auto; }
+/* A long channel list scrolls inside its card instead of pushing the buttons out of the panel. */
+.flow-panel > .body > .card:has(> .chan-list) { flex: 0 1 auto; min-height: 120px; display: flex; flex-direction: column; overflow: hidden; }
+.flow-panel > .body > .card:has(> .chan-list) > * { flex: none; }
+.flow-panel > .body > .card > .chan-list { flex: 0 1 auto; min-height: 0; max-height: none; }
+/* Home, Settings, AI connections and the usage data notice are --flow-h tall too:
+   long content scrolls inside the panel, short content leaves room above the buttons. */
+.app.fixed { height: var(--flow-h); }
+.app.fixed > .body { flex: 1; min-height: 0; overflow-y: auto; }
+.app.fixed > .body > .foot { margin-top: auto; }
+/* Settings: a long tab scrolls under the tab bar. */
+.app.fixed > .body.settings { overflow: hidden; }
+/* Short screens end with a quiet pixel river along the bottom of the panel, and the credit above it. */
+.body.river { padding-bottom: 0; }
+.river-foot { margin-top: auto; display: flex; flex-direction: column; align-items: center; gap: 10px; padding-top: 8px; }
+.river-foot > span { color: var(--muted); font-size: 12.5px; }
+.river-foot .heart { font-style: normal; color: var(--red); }
+.river-foot .credit { color: inherit; font-weight: 600; border-radius: 4px; }
+.river-foot .credit:hover { color: var(--link); text-decoration: underline; text-underline-offset: 2px; }
+.river-foot .water {
+  position: relative; align-self: stretch; margin: 0 -16px; height: 30px; flex: none;
+  background: linear-gradient(var(--river-top), var(--river-bottom));
+  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='30' shape-rendering='crispEdges'><path d='M0 6h8V4h8v2h8v2h8v22H0z'/></svg>") repeat-x bottom left;
+  mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='30' shape-rendering='crispEdges'><path d='M0 6h8V4h8v2h8v2h8v22H0z'/></svg>") repeat-x bottom left;
+}
+.river-foot .water::before {
+  content: ""; position: absolute; inset: 0; background: var(--river-glint);
+  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='56' height='30' shape-rendering='crispEdges'><rect x='4' y='12' width='8' height='2'/><rect x='30' y='19' width='10' height='2'/><rect x='16' y='25' width='6' height='2'/><rect x='44' y='10' width='4' height='2'/></svg>") repeat-x 0 0;
+  mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='56' height='30' shape-rendering='crispEdges'><rect x='4' y='12' width='8' height='2'/><rect x='30' y='19' width='10' height='2'/><rect x='16' y='25' width='6' height='2'/><rect x='44' y='10' width='4' height='2'/></svg>") repeat-x 0 0;
+  animation: flow 7s steps(14) infinite;
+}
+@keyframes flow { to { -webkit-mask-position: 56px 0; mask-position: 56px 0; } }
+@media (prefers-reduced-motion: reduce) { .river-foot .water::before { animation: none; } }
+/* Home: the update banner stays put and the Tag list scrolls (pagination can replace this later). */
+.app.fixed > .body.home-body { overflow: hidden; }
+.home-body > .home-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; margin: 0 -16px; padding: 0 16px 2px; }
+.body.settings > .settings-pane { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; margin: 0 -16px; padding: 0 16px; }
+.install .facts { gap: 14px; margin-top: 4px; }
+.install .install-main { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; }
+.install .install-main > .steps { overflow: auto; }
+.install .install-main > .steps .st { padding: 7px 14px; }
+.install .install-main > .logbox { flex: 1; max-height: none; }
+.install .foot { margin-top: auto; }
+.install .sprite.small { width: 44px; height: 44px; }
+.install-pct { font-weight: 700; font-size: 15px; color: var(--ink); font-variant-numeric: tabular-nums; align-self: flex-end; }
+.install-bar { height: 10px; flex: none; }
+.install-bar i { background: var(--line); }
+.install-bar i.on { background: var(--blue); }
+.install-bar.bad i.on { background: var(--red); }
 
 /* Ready */
 .confetti { position: absolute; width: 6px; height: 6px; }

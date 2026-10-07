@@ -52,6 +52,8 @@ export function Connect({ api, args, done, paused, openAI, start }: Props) {
   // Answers waiting for a question to come back, such as a workspace picked while an organization was open.
   const pending = useRef<{ id: string; answer: unknown } | null>(null);
   const approve = useRef<SetupQuestion | null>(null);
+  // "Create in Slack" was clicked: show the installation straight away, before Slack reports its first step.
+  const [launched, setLaunched] = useState(false);
   // Usage data reads only where the step track stands, never the answers.
   const track = useTrack();
   const latestTrack = useRef(track);
@@ -97,6 +99,7 @@ export function Connect({ api, args, done, paused, openAI, start }: Props) {
   }, [state.outcome, state.tag, openAI, args]);
   const q = state.question;
   if (q?.id === "approve_setup") approve.current = q;
+  useEffect(() => { if (q) setLaunched(false); }, [q]);
   useEffect(() => {
     if (q && pending.current?.id === q.id) {
       const { answer } = pending.current;
@@ -139,6 +142,7 @@ export function Connect({ api, args, done, paused, openAI, start }: Props) {
           foot={<><Quiet title="Back to Home" onClick={done} /><span className="spacer" />
             <Primary title="Try again" onClick={() => {
               retryTag.current = state.tag || retryTag.current;
+              setLaunched(false);
               dispatch({ type: "restart" });
               setAttempt((value) => value + 1);
             }} autoFocus /></>}>
@@ -146,7 +150,7 @@ export function Connect({ api, args, done, paused, openAI, start }: Props) {
         </FlowBody>
       );
     }
-    if (state.creating && approve.current) return <Create question={approve.current} state={state} send={send} picture={picture} />;
+    if ((state.creating || (launched && !q)) && approve.current) return <Create question={approve.current} state={state} running send={send} picture={picture} />;
     if (!q) return <FlowBody title={state.lastQuestion ? "Getting the next step ready" : "Meet your new Tag"}
       lead={state.lastQuestion ? "Your choices are saved as you go." : "Give it a name, choose its AI, and connect it to Slack."}
       art={keyArt}>
@@ -164,7 +168,7 @@ export function Connect({ api, args, done, paused, openAI, start }: Props) {
         if (state.workspaces?.workspaces) return <Workspaces state={state} question={q} send={send} back={back} backThen={backThen}
           signIn={() => { dispatch({ type: "addWorkspace" }); send(answerFor(state.workspaces!, "sign_in")); }} />;
         break;
-      case "approve_setup": if (q.recap) return <Create question={q} state={state} send={send} picture={picture} />; break;
+      case "approve_setup": if (q.recap) return <Create question={q} state={state} running={false} send={send} picture={picture} launch={() => setLaunched(true)} />; break;
       case "existing_app": case "app_id": case "app_checks": return <ExistingApp state={state} question={q} send={send} back={back} />;
       case "channels": if (q.channels) return <Channels question={q} name={state.profile?.name || q.tag_name || "Tag"} send={send} back={back} />; break;
     }
@@ -179,8 +183,11 @@ export function Connect({ api, args, done, paused, openAI, start }: Props) {
   return (
     <>
       <FlowSky state={state} picture={picture} cancel={state.outcome ? undefined : cancel} />
-      {body()}
-      {state.error && !state.outcome && q?.id !== "profile" && <div style={{ margin: "-4px 24px 16px" }}><ErrorLine>{state.error}</ErrorLine></div>}
+      {/* One canvas for every step: a fixed panel, so the window never resizes between them. */}
+      <div className="flow-panel">
+        {body()}
+        {state.error && !state.outcome && q?.id !== "profile" && <div style={{ margin: "-4px 24px 16px" }}><ErrorLine>{state.error}</ErrorLine></div>}
+      </div>
     </>
   );
 }
@@ -458,9 +465,10 @@ function Workspaces({ state, question, send, back, backThen, signIn }: {
 
 const CREATE_STEPS = ["create", "picture", "install", "connect"];
 
-function Create({ question, state, send, picture }: { question: SetupQuestion; state: SetupState; send: (a: unknown) => void; picture: string | null }) {
+function Create({ question, state, running, send, picture, launch }: {
+  question: SetupQuestion; state: SetupState; running: boolean; send: (a: unknown) => void; picture: string | null; launch?: () => void;
+}) {
   const recap = question.recap!;
-  const running = !!state.creating;
   const where = recap.workspace.organization ? recap.workspace.name : recap.workspace.name;
   const reported = state.creating ?? [];
   const labels: Record<string, string> = {
@@ -469,19 +477,44 @@ function Create({ question, state, send, picture }: { question: SetupQuestion; s
   };
   const at = Math.max(...reported.map((s) => CREATE_STEPS.indexOf(s.step)), 0);
   const pick = (id: string) => send(answerFor(question, id));
+  const image = source(recap.picture, recap.picture_revision ?? state.profile?.revision) ?? picture ?? tagIcon;
+  // Once it's running, the choices are made: show only the installation, step by step.
+  if (running) {
+    return (
+      <FlowBody title={`Adding ${recap.name} to Slack…`}
+        lead={recap.approval ? "If an organization admin needs to approve, setup pauses here and picks up where it left off."
+          : "Takes about a minute. Slack may ask a workspace admin to approve."}>
+        <div className="card">
+          <div className="recap-top">
+            <img src={image} alt="" />
+            <div className="txt"><span className="name"><span className="nm">{recap.name}</span></span>
+              <span className="sub" style={{ display: "flex", alignItems: "center", gap: 6 }}><WorkspaceMark label={recap.workspace.name} icon={recap.workspace.icon ?? null} />{where}</span></div>
+          </div>
+          <div className="steps" style={{ borderTop: "1px solid var(--line)" }} aria-label="Installation progress">
+            {CREATE_STEPS.map((step, i) => {
+              const st = i < at ? "done" : i === at ? "running" : "pending";
+              return (
+                <div key={step} className={`st ${st}`} aria-current={st === "running" ? "step" : undefined}>
+                  <span className={`sicon ${st}`}>{st === "done" ? <Icon name="check" size={12} /> : st === "running" ? <span className="spin" /> : null}</span>
+                  <div className="stt">{labels[step]}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </FlowBody>
+    );
+  }
   return (
-    <FlowBody title={running ? "Creating it in Slack…" : `Ready to create it in ${where}?`}
-      lead={running ? undefined : "Slack creates the app with this name and picture, then installs it."}
-      foot={running
-        ? <span className="meta">{recap.approval ? "If an organization admin needs to approve, setup pauses here and picks up where it left off."
-          : "Takes about a minute. Slack may ask a workspace admin to approve."}</span>
-        : <>{question.can_go_back && <Back onClick={() => pick("back")} />}<span className="spacer" /><Primary title="Create in Slack" onClick={() => pick("create")} autoFocus /></>}>
+    <FlowBody title={`Ready to create it in ${where}?`}
+      lead="Slack creates the app with this name and picture, then installs it."
+      foot={<>{question.can_go_back && <Back onClick={() => pick("back")} />}<span className="spacer" /><Primary title="Create in Slack" onClick={() => { launch?.(); pick("create"); }} autoFocus /></>}>
       <div className="card">
         <div className="recap-top">
-          <img src={source(recap.picture, recap.picture_revision ?? state.profile?.revision) ?? picture ?? tagIcon} alt="" />
+          <img src={image} alt="" />
           <div className="txt"><span className="name"><span className="nm">{recap.name}</span></span>
             <span className="sub wrap">{recap.description || "New Slack app"}</span></div>
-          <button className="link" disabled={running} onClick={() => pick("edit")}>Edit</button>
+          <button className="link" onClick={() => pick("edit")}>Edit</button>
         </div>
         <dl className="summary">
           <dt>Workspace</dt>
@@ -490,24 +523,11 @@ function Create({ question, state, send, picture }: { question: SetupQuestion; s
           <dt>Owner</dt>
           <dd><span className="owner"><OwnerMark icon={recap.owner.icon} />You{recap.owner.name ? ` · @${recap.owner.name}` : ""}</span></dd>
           {recap.ai && <><dt>AI</dt><dd><AgentMark backend={recap.ai.backend} size={20} />{recap.ai.backend_name} · {recap.ai.label}
-            <button className="link" disabled={running} onClick={() => pick("edit_ai")}>Edit</button></dd></>}
+            <button className="link" onClick={() => pick("edit_ai")}>Edit</button></dd></>}
           <dt>Who can ask it</dt>
           <dd>Only you <span style={{ fontWeight: 400, color: "var(--muted)" }}>· people in the channel see its replies</span></dd>
           {recap.approval && <><dt>Approval</dt><dd style={{ fontWeight: 500, color: "var(--muted)" }}>An org admin may need to approve. Setup waits and resumes.</dd></>}
         </dl>
-        {running && (
-          <div className="steps" style={{ borderTop: "1px solid var(--line)" }}>
-            {CREATE_STEPS.map((step, i) => {
-              const st = i < at ? "done" : i === at ? "running" : "pending";
-              return (
-                <div key={step} className={`st ${st}`}>
-                  <span className={`sicon ${st}`}>{st === "done" ? <Icon name="check" size={12} /> : st === "running" ? <span className="spin" /> : null}</span>
-                  <div className="stt">{labels[step]}</div>
-                </div>
-              );
-            })}
-          </div>
-        )}
       </div>
     </FlowBody>
   );
@@ -781,6 +801,7 @@ function Ready({ api, state, done, start }: { api: Bridge; state: SetupState; do
         {CONFETTI.map(([left, top, background], i) => <span key={i} className="confetti" style={{ left, top, background }} />)}
         <img className="big-av" src={picture ?? tagIcon} alt="" />
       </Sky>
+      <div className="flow-panel ready">
       <div className="body roomy">
         <div style={{ textAlign: "center" }}>
           <div className="eyebrow" style={{ color: "var(--green)" }}>Setup complete</div>
@@ -822,6 +843,7 @@ function Ready({ api, state, done, start }: { api: Bridge; state: SetupState; do
               <Primary title="Open Slack" icon="external" onClick={() => void openSlack()} /></>
             : <><button className="link" onClick={done}>Skip to Home</button><span className="spacer" /></>}
         </div>
+      </div>
       </div>
     </>
   );

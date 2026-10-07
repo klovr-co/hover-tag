@@ -1,6 +1,7 @@
 // Copyright 2026 klovr.co
 // SPDX-License-Identifier: Apache-2.0
 // Every Tag on this computer, grouped by Slack workspace, under the sky.
+import { useLayoutEffect, useRef, useState } from "react";
 import type { AIStatus } from "../lib/ai";
 import type { Bridge } from "../lib/bridge";
 import {
@@ -44,6 +45,41 @@ interface Props {
   now?: Date;
 }
 
+/** The five-Tags art under a short list: stacked above the link (61px tall, plus its gap) when
+ *  there's room, a small copy beside the link (32px) when there's less, and none rather than cut off. */
+const ART_FULL = 65;
+const ART_INLINE = 32;
+const GAP = 18;
+type ArtSize = "full" | "inline" | "none";
+
+function useArtFits() {
+  const ref = useRef<HTMLDivElement>(null);
+  const [size, setSize] = useState<ArtSize>("full");
+  useLayoutEffect(() => {
+    const el = ref.current;
+    // Nothing to measure until the scroll area is laid out (never, in tests).
+    if (!el?.clientHeight) return;
+    const check = () => {
+      const foot = el.querySelector<HTMLElement>(".home-foot");
+      if (!foot) return;
+      const kids = [...el.children] as HTMLElement[];
+      const link = foot.querySelector<HTMLElement>(".link")?.offsetHeight ?? 0;
+      const inlineExtra = Math.max(0, ART_INLINE - link);
+      const art = foot.classList.contains("full") ? ART_FULL : foot.classList.contains("inline") ? inlineExtra : 0;
+      // Measure the children themselves: the scroll area's own height is the window's, not the content's.
+      const content = kids.reduce((sum, kid) => sum + kid.offsetHeight, 0) + GAP * Math.max(0, kids.length - 1) - art;
+      const room = el.clientHeight - content;
+      setSize(room >= ART_FULL ? "full" : room >= inlineExtra ? "inline" : "none");
+    };
+    check();
+    const observer = new ResizeObserver(check);
+    observer.observe(el);
+    for (const kid of el.children) observer.observe(kid);
+    return () => observer.disconnect();
+  });
+  return { ref, size };
+}
+
 export function Home(props: Props) {
   const { api, tags, problems, activity, firstName, update, outdated, add, finishSetup, open, showSettings } = props;
   const rows = tags.rows;
@@ -56,6 +92,7 @@ export function Home(props: Props) {
   const { order, setWorkspaces, setTags } = useOrder();
   const cards = ordered(groups(live), order);
   const reorder = useReorder(cards.map((g) => g.key), setWorkspaces);
+  const art = useArtFits();
   return (
     <>
       <Sky kind="home">
@@ -76,8 +113,10 @@ export function Home(props: Props) {
           </button>
         </div>
       </Sky>
-      <div className="body">
+      <div className="body home-body">
         <UpdateNotice state={update} outdated={outdated} run={props.runUpdate} settings={() => props.showSettings("updates")} />
+        {/* The window stays one height; a long Tag list scrolls here, under the update banner. */}
+        <div className="home-scroll" ref={art.ref}>
         {rows.length > 2 && (
           <Quiet line={quietLine(rows, problems, activity, props.now ?? new Date(), firstName)} open={open} rows={rows}
             fix={props.fixAI} />
@@ -135,12 +174,13 @@ export function Home(props: Props) {
               <span className="gi"><Icon name="plus" /></span>
               <span><b>Add another Tag</b><span className="meta">Connect another workspace, or add a second Tag to {live[0]?.workspace_name || "the same one"}.</span></span>
             </button>
-            <div className="home-foot">
-              <img className="tags-row" src={fiveTags} alt="" />
+            <div className={`home-foot ${art.size}`}>
+              {art.size !== "none" && <img className="tags-row" src={fiveTags} alt="" />}
               <button className="link" onClick={() => void api.open(HOW_TAG_WORKS)}>New to Tag? Read how Tag works <Icon name="arrow" /></button>
             </div>
           </>
         )}
+        </div>
         {tags.error && <ErrorLine>{tags.error}</ErrorLine>}
       </div>
     </>
