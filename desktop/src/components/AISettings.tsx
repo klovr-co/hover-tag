@@ -8,6 +8,7 @@ import type { Tags } from "../lib/tags";
 import { failureLine } from "../lib/tags";
 import { ChangeAccount, ConnectionRow, type RowAction } from "./AI";
 import { CompactSky, ErrorLine, Icon, Spinner } from "./ui";
+import { AccountsPrototype } from "./AISettings.prototype"; // PROTOTYPE
 
 /** Installation-wide accounts. Models belong to each Tag's Details tab. */
 export function AISettings({ api, tags, close }: { api: Bridge; tags: Tags; close: () => void }) {
@@ -66,9 +67,9 @@ export function AISettings({ api, tags, close }: { api: Bridge; tags: Tags; clos
   };
   const busy = !!signIn.step;
   return <>
-    <CompactSky title="AI connections" sub="Shared by all your Tags" back={close} />
+    <CompactSky title="AI connections" sub={import.meta.env.DEV ? "Codex and Claude Code connections for your Tags" : "Shared by all your Tags"} back={close} />{/* PROTOTYPE sub */}
     <div className="body">
-      <div className="section">
+      {!import.meta.env.DEV && <div className="section">{/* PROTOTYPE: hidden; merged into accounts */}
         <div className="sec-head"><h3>Connections</h3><span className="spacer" />
           {checking ? <span className="meta"><Spinner small />Checking…</span>
             : <button className="p-btn soft sm" disabled={busy} onClick={() => void reload()}>Check connections</button>}
@@ -82,7 +83,8 @@ export function AISettings({ api, tags, close }: { api: Bridge; tags: Tags; clos
         </div>
         <p className="mcap">Connect once for all Tags. Choose each Tag's model and thinking level in its Details tab.</p>
         {report?.running && <p className="mcap">Running Tags pause while you sign in and start again afterwards.</p>}
-      </div>
+      </div>}
+      {import.meta.env.DEV && <AccountsPrototype />}{/* PROTOTYPE */}
       {toast && <div className="savebar" role="status"><span className="t"><Icon name="check" size={12} />{toast}</span></div>}
       {error && <ErrorLine>{error}</ErrorLine>}
     </div>

@@ -89,7 +89,7 @@ export function App() {
       if (!live) return;
       setApi(b);
       setInfo(i);
-      setScreen(i.cli ? { name: "home" } : { name: "welcome" });
+      setScreen(import.meta.env.DEV && new URLSearchParams(location.search).get("screen") === "ai" ? { name: "ai" } : import.meta.env.DEV && new URLSearchParams(location.search).get("tag") ? { name: "tag", id: new URLSearchParams(location.search).get("tag")! } : i.cli ? { name: "home" } : { name: "welcome" }); // PROTOTYPE deep link
     }).catch((error) => { if (live) setBootError(String(error)); });
     return () => { live = false; };
   }, [bootAttempt]);
