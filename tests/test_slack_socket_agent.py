@@ -1172,6 +1172,38 @@ class SlackGeneratedImageTests(unittest.TestCase):
             title="launch-card",
         )
 
+    def test_keeps_copies_without_overwriting_earlier_results(self) -> None:
+        client = MagicMock()
+        with tempfile.TemporaryDirectory() as raw_dir:
+            results_dir, keep_dir = Path(raw_dir) / "results", Path(raw_dir) / "images"
+            results_dir.mkdir()
+            (results_dir / "say-hi.png").write_bytes(b"new")
+            keep_dir.mkdir()
+            (keep_dir / "say-hi.png").write_bytes(b"old")
+
+            errors = slack_socket_agent.upload_generated_images(
+                client, "C123", "1.23", results_dir, keep_dir=keep_dir,
+            )
+
+            self.assertEqual([], errors)
+            self.assertEqual((keep_dir / "say-hi.png").read_bytes(), b"old")
+            self.assertEqual((keep_dir / "say-hi-2.png").read_bytes(), b"new")
+        client.files_upload_v2.assert_called_once()
+
+    def test_upload_continues_when_copy_cannot_be_kept(self) -> None:
+        client = MagicMock()
+        with tempfile.TemporaryDirectory() as raw_dir:
+            results_dir = Path(raw_dir) / "results"
+            results_dir.mkdir()
+            (results_dir / "card.png").write_bytes(b"png")
+            blocker = Path(raw_dir) / "blocker"
+            blocker.write_text("file, not a folder")
+            errors = slack_socket_agent.upload_generated_images(
+                client, "C123", "1.23", results_dir, keep_dir=blocker / "images",
+            )
+        self.assertEqual([], errors)
+        client.files_upload_v2.assert_called_once()
+
     def test_rejects_unsupported_oversized_and_symlinked_results(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
             results_dir = Path(raw_dir)

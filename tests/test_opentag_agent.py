@@ -94,6 +94,8 @@ class OpenTagAgentPromptTests(unittest.TestCase):
         self.assertIn("slack_post_message.py", prompt)
         self.assertIn("new top-level channel message", prompt)
         self.assertIn("only when the user", prompt)
+        self.assertIn("slack_thread_file.py", prompt)
+        self.assertIn("Never comment on a file you have not opened", prompt)
 
     def test_slack_prompt_registers_only_explicitly_requested_output_files(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
