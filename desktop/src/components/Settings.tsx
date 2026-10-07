@@ -18,8 +18,20 @@ import { CommunityLinks } from "./CommunityLinks";
 import { CompactSky, ErrorLine, Icon, Primary, Secondary, Spinner, Switch, tagIcon } from "./ui";
 
 const DOCS = "https://www.hover.team/tag/";
+const HOVER = "https://hover.team";
 
 export type SettingsTab = "general" | "updates" | "about";
+/** Closes a short screen with a quiet river along the bottom of its panel, so the space above reads as finished. */
+export function RiverFoot({ api }: { api?: Bridge }) {
+  return (
+    <div className="river-foot">
+      {api && <span>Built with <i className="heart" aria-label="love">♥</i> by{" "}
+        <button className="credit" onClick={() => void api.open(HOVER)}>hover.team</button></span>}
+      <div className="water" aria-hidden="true" />
+    </div>
+  );
+}
+
 const SETTINGS_TABS: SettingsTab[] = ["general", "updates", "about"];
 const TAB_LABEL: Record<SettingsTab, string> = { general: "General", updates: "Updates", about: "About" };
 
@@ -191,7 +203,7 @@ export function Settings({ api, info, tags, telemetry, close, replay, initialTab
   return (
     <>
       <CompactSky title="Settings" sub={`Tag ${version}`} back={close} />
-      <div className="body">
+      <div className={tab === "general" ? "body settings" : "body settings river"}>
         <div className="segc tabs" role="tablist" aria-label="Settings">
           {SETTINGS_TABS.map((t) => (
             <button key={t} role="tab" aria-selected={tab === t} onClick={() => setTab(t)}>
@@ -199,6 +211,8 @@ export function Settings({ api, info, tags, telemetry, close, replay, initialTab
             </button>
           ))}
         </div>
+        {/* Tabs differ in length; they scroll here so the window stays one height. */}
+        <div className="settings-pane">
         {tab === "general" && <>
         <div className="section">
           <div className="sec-head"><h3>General</h3></div>
@@ -259,6 +273,8 @@ export function Settings({ api, info, tags, telemetry, close, replay, initialTab
             <div className="txt"><span className="label" style={{ fontSize: 14.5 }}>Enjoying Tag?</span><CommunityLinks api={api} /></div>
           </div>
         </div>}
+        {tab !== "general" && <RiverFoot api={api} />}
+        </div>
         {(error || update.error || tags.error) && <ErrorLine>{error || update.error || tags.error}</ErrorLine>}
       </div>
     </>

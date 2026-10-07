@@ -6,6 +6,13 @@ All notable changes to Tag are documented here.
 
 ### Fixed
 
+- Tag.app's window no longer changes size as you move between screens.
+  Installing Tag, adding a Tag, Home, Settings, AI connections and the usage
+  data notice are all 616 pixels tall. Longer content scrolls inside the window:
+  the Tag list on Home, and the General tab in Settings. Shorter screens end
+  with a quiet pixel river, and Settings › Updates and About also show
+  "Built with ♥ by hover.team".
+
 - Slack messages that send you to Tag.app no longer link to the unrelated
   tag.app website. "the Tag app" now opens that Tag's Details in Tag.app on
   the computer where it is installed, through the new `hover-tag://` link.

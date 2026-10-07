@@ -189,6 +189,11 @@ describe("Add a Tag", () => {
     expect(screen.getByText(/You · @maya/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Create in Slack" }));
     expect(answers[4]).toBe("create");
+    // Creating shows only the installation, straight away: no recap, no choices.
+    expect(screen.getByText("Adding Maya's Tag to Slack…")).toBeTruthy();
+    expect(screen.getByLabelText("Installation progress")).toBeTruthy();
+    expect(screen.queryByText("Who can ask it")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
 
     expect(await screen.findByText("Where should Maya's Tag start?")).toBeTruthy();
     expect(step()).toBe("Channels");

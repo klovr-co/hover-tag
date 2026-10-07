@@ -8,6 +8,7 @@ import type { Tags } from "../lib/tags";
 import { failureLine } from "../lib/tags";
 import { ChangeAccount, ConnectionRow, type RowAction } from "./AI";
 import { CompactSky, ErrorLine, Icon, Spinner } from "./ui";
+import { RiverFoot } from "./Settings";
 
 /** Installation-wide accounts. Models belong to each Tag's Details tab. */
 export function AISettings({ api, tags, close }: { api: Bridge; tags: Tags; close: () => void }) {
@@ -67,7 +68,7 @@ export function AISettings({ api, tags, close }: { api: Bridge; tags: Tags; clos
   const busy = !!signIn.step;
   return <>
     <CompactSky title="AI connections" sub="Shared by all your Tags" back={close} />
-    <div className="body">
+    <div className="body river">
       <div className="section">
         <div className="sec-head"><h3>Connections</h3><span className="spacer" />
           {checking ? <span className="meta"><Spinner small />Checking…</span>
@@ -85,6 +86,7 @@ export function AISettings({ api, tags, close }: { api: Bridge; tags: Tags; clos
       </div>
       {toast && <div className="savebar" role="status"><span className="t"><Icon name="check" size={12} />{toast}</span></div>}
       {error && <ErrorLine>{error}</ErrorLine>}
+      <RiverFoot />
     </div>
     {changing && !busy && <ChangeAccount connection={changing} running={report?.running ?? false}
       cancel={() => setChanging(null)} choose={(method) => void start(changing.backend, method)} />}
