@@ -3,7 +3,7 @@
 // Add a Tag: draws the questions Tag's own setup asks over JSON lines, in the
 // onboarding order (Your Tag · AI · Workspace · Create · Channels). It holds no
 // setup logic; every choice is an answer to `tag setup --json`.
-import { useCallback, useEffect, useReducer, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import type { Bridge, Session } from "../lib/bridge";
 import type { AIModels, AIStatus } from "../lib/ai";
 import { findModel } from "../lib/ai";
@@ -97,6 +97,11 @@ export function Connect({ api, args, done, paused, openAI, start }: Props) {
       openAI?.(state.tag ? [state.tag, "setup"] : args);
     }
   }, [state.outcome, state.tag, openAI, args]);
+  // Steps slide in from the side they come from: forward from the right, Back from the left.
+  const at = trackStep(state);
+  const lastAt = useRef(at);
+  const direction = useRef<"forward" | "backward">("forward");
+  if (at !== lastAt.current) { direction.current = at < lastAt.current ? "backward" : "forward"; lastAt.current = at; }
   const q = state.question;
   if (q?.id === "approve_setup") approve.current = q;
   useEffect(() => { if (q) setLaunched(false); }, [q]);
@@ -182,9 +187,9 @@ export function Connect({ api, args, done, paused, openAI, start }: Props) {
   };
   return (
     <>
-      <FlowSky state={state} picture={picture} cancel={state.outcome ? undefined : cancel} />
+      <FlowSky state={state} picture={picture} direction={direction.current} cancel={state.outcome ? undefined : cancel} />
       {/* One canvas for every step: a fixed panel, so the window never resizes between them. */}
-      <div className="flow-panel">
+      <div className={`flow-panel ${direction.current}`}>
         {body()}
         {state.error && !state.outcome && q?.id !== "profile" && <div style={{ margin: "-4px 24px 16px" }}><ErrorLine>{state.error}</ErrorLine></div>}
       </div>
@@ -193,7 +198,7 @@ export function Connect({ api, args, done, paused, openAI, start }: Props) {
 }
 
 /** The sky with the step track; the marker is the Tag being made, so it travels with you. */
-function FlowSky({ state, picture, cancel }: { state: SetupState; picture: string | null; cancel?: () => void }) {
+function FlowSky({ state, picture, direction, cancel }: { state: SetupState; picture: string | null; direction: "forward" | "backward"; cancel?: () => void }) {
   const steps = state.existing ? EXISTING_FLOW : FLOW;
   const at = trackStep(state);
   const id = state.question?.id;
@@ -203,7 +208,7 @@ function FlowSky({ state, picture, cancel }: { state: SetupState; picture: strin
     <Sky kind="flow" clouds="clear" stars={50}>
       {cancel && <div className="sky-top"><button className="sky-btn small" onClick={cancel}>Cancel</button></div>}
       <div className="flow-head"><h2>Add a Tag</h2><span>{sub}</span></div>
-      <div className="track" aria-label="Setup progress">
+      <div className={`track ${direction}`} aria-label="Setup progress" style={{ "--steps": steps.length } as CSSProperties}>
         {steps.map((label, i) => (
           <div key={label} className={`tstep${i < at ? " done" : i === at ? " now" : ""}`} aria-current={i === at ? "step" : undefined}>
             <span className="tnode">{i === at ? <img src={picture ?? tagIcon} alt="" /> : <i />}</span>
@@ -242,8 +247,9 @@ function Meet({ api, question, send, sendInPlace, existing }: {
   const [description, setDescription] = useState(question.description ?? "");
   const [dragging, setDragging] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [rolling, setRolling] = useState(false);
   const preview = source(question.preview, question.preview_revision ?? question.picture_label);
-  useEffect(() => { setBusy(false); }, [question]);
+  useEffect(() => { setBusy(false); setRolling(false); }, [question]);
   useEffect(() => api.onFileDrop((paths) => { if (paths[0]) { setBusy(true); sendInPlace({ picture: paths[0] }); } }, setDragging), [api, sendInPlace]);
   const limit = question.name_limit ?? 35;
   const max = question.description_limit ?? 140;
@@ -258,7 +264,7 @@ function Meet({ api, question, send, sendInPlace, existing }: {
         <p className="lead">{question.editing ? EDIT_LEAD : "Name it, give it a look, and say what it does. Nothing is created in Slack yet."}</p>
       </div>
       <div className="card mrow">
-        <span className={dragging ? "avw2 dragging" : "avw2"}>
+        <span className={`avw2${dragging ? " dragging" : ""}${rolling ? " rolling" : ""}`}>
           <img key={preview ?? ""} className="pic fresh" src={preview ?? tagIcon} alt={`${name || "Tag"}'s picture`}
             style={question.picture === "custom" ? { background: "#fff" } : undefined} />
         </span>
@@ -278,7 +284,7 @@ function Meet({ api, question, send, sendInPlace, existing }: {
             {description.length > max - 30 && <span className="desc-count">{max - description.length}</span>}
           </div>
           <div className="pic-acts">
-            <button className="p-btn soft sm" disabled={busy} onClick={() => { setBusy(true); sendInPlace("shuffle"); }}><Icon name="dice" size={16} />Shuffle picture</button>
+            <button className="p-btn soft sm" disabled={busy} onClick={() => { setBusy(true); setRolling(true); sendInPlace("shuffle"); }}><Icon name="dice" size={16} />Shuffle picture</button>
             <button className="p-btn quiet sm" disabled={busy} onClick={() => void upload()}><Icon name="upload" size={16} />Upload your own</button>
           </div>
         </div>
@@ -798,7 +804,9 @@ function Ready({ api, state, done, start }: { api: Bridge; state: SetupState; do
   return (
     <>
       <Sky kind="ready" stars={90}>
-        {CONFETTI.map(([left, top, background], i) => <span key={i} className="confetti" style={{ left, top, background }} />)}
+        {/* Confetti bursts out of the new Tag's picture, then twinkles in place. */}
+        {CONFETTI.map(([left, top, background], i) => <span key={i} className="confetti"
+          style={{ left, top, background, "--dx": `${260 - left}px`, "--dy": `${100 - top}px`, animationDelay: `${0.25 + (i % 5) * 0.03}s, ${1.2 + i * 0.17}s` } as CSSProperties} />)}
         <img className="big-av" src={picture ?? tagIcon} alt="" />
       </Sky>
       <div className="flow-panel ready">

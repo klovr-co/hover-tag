@@ -1,7 +1,7 @@
 // Copyright 2026 klovr.co
 // SPDX-License-Identifier: Apache-2.0
 // Every Tag on this computer, grouped by Slack workspace, under the sky.
-import { useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import type { AIStatus } from "../lib/ai";
 import type { Bridge } from "../lib/bridge";
 import {
@@ -15,6 +15,7 @@ import teamArt from "../assets/art/tag-team.png";
 import fiveTags from "../assets/art/five-tags.png";
 import { useNight } from "../lib/appearance";
 import { ordered, useOrder, useReorder } from "../lib/order";
+import { useFresh, useListMotion } from "../lib/motion";
 import { Avatar, ErrorLine, Icon, MOON, Primary, Sky, Switch, tagIcon, WorkspaceMark } from "./ui";
 import { UpdateNotice } from "./UpdateNotice";
 
@@ -93,13 +94,17 @@ export function Home(props: Props) {
   const cards = ordered(groups(live), order);
   const reorder = useReorder(cards.map((g) => g.key), setWorkspaces);
   const art = useArtFits();
+  const quiet = rows.length > 2 ? quietLine(rows, problems, activity, props.now ?? new Date(), firstName) : null;
+  // A new reply hops its Tag in the header.
+  const replyKey = quiet?.kind === "reply" ? `${quiet.tag}@${quiet.when}` : null;
+  const replied = useFresh(replyKey) && quiet?.kind === "reply" ? quiet.tag : null;
   return (
     <>
       <Sky kind="home">
         <div className="sky-row">
           {shown.length > 0 && (
             <span className="roster" aria-hidden="true">
-              {shown.map((row) => <Avatar key={row.id} row={row} size={36} badge={false} className="" />)}
+              {shown.map((row) => <Avatar key={row.id} row={row} size={36} badge={false} className={row.id === replied ? "hop" : ""} />)}
               {extra > 0 && <span className="more-n">+{extra}</span>}
             </span>
           )}
@@ -117,10 +122,7 @@ export function Home(props: Props) {
         <UpdateNotice state={update} outdated={outdated} run={props.runUpdate} settings={() => props.showSettings("updates")} />
         {/* The window stays one height; a long Tag list scrolls here, under the update banner. */}
         <div className="home-scroll" ref={art.ref}>
-        {rows.length > 2 && (
-          <Quiet line={quietLine(rows, problems, activity, props.now ?? new Date(), firstName)} open={open} rows={rows}
-            fix={props.fixAI} />
-        )}
+        {quiet && <Quiet key={replyKey ?? quiet.kind} line={quiet} fresh={!!replied} open={open} rows={rows} fix={props.fixAI} />}
         {tags.loaded && rows.length === 0 && (
           <div className="card empty">
             <img src={teamArt} alt="The Tag characters" />
@@ -188,7 +190,7 @@ export function Home(props: Props) {
 }
 
 /** The one quiet line between the header and the cards. */
-export function Quiet({ line, rows, open, fix }: { line: QuietLine; rows: TagRow[]; open: (row: TagRow) => void; fix: (tag: string) => void }) {
+export function Quiet({ line, rows, open, fix, fresh }: { line: QuietLine; rows: TagRow[]; open: (row: TagRow) => void; fix: (tag: string) => void; fresh?: boolean }) {
   const night = useNight();
   if (line.kind === "ai") {
     return (
@@ -202,7 +204,7 @@ export function Quiet({ line, rows, open, fix }: { line: QuietLine; rows: TagRow
   if (line.kind === "reply") {
     const row = rows.find((r) => r.id === line.tag)!;
     return (
-      <button className="hello" onClick={() => open(row)}>
+      <button className={fresh ? "hello fresh" : "hello"} onClick={() => open(row)}>
         <Avatar row={line.avatar} size={20} badge={false} className="" />
         <span><b>{line.name}</b> {line.today ? "just" : "last"} replied in <span className="chan">{line.place}</span></span>
         <span className="when">{line.when}</span>
@@ -226,6 +228,7 @@ function WorkspaceCard({ group, tags, drag, movable, setTags, ...props }: Props 
   const all = running >= group.rows.length;
   const reorder = useReorder(group.rows.map((row) => row.id), setTags);
   const { ref, onPointerDown, onKeyDown, onClickCapture, ...state } = drag;
+  const listed = useListMotion(group.rows, (row) => row.id);
   return (
     <div className={reorder.dragging ? "card sorting" : "card"} ref={ref} {...state}>
       <div className={movable ? "ws-head movable" : "ws-head"} onPointerDown={onPointerDown} onKeyDown={onKeyDown}
@@ -243,10 +246,31 @@ function WorkspaceCard({ group, tags, drag, movable, setTags, ...props }: Props 
           </button>
         )}
       </div>
-      {group.rows.map((row) => <TagRowView key={row.id} row={row} tags={tags} report={props.reports[row.id]}
-        problem={props.problems[row.id] ?? null} open={() => props.open(row)} drag={reorder.props(row.id)} />)}
+      {listed.map(({ item: row, state: motion }) => motion === "leave"
+        ? <div key={row.id} className="r-leave" aria-hidden="true" inert><TagRowView row={row} tags={tags} problem={null} open={() => {}} /></div>
+        : <TagRowView key={row.id} row={row} tags={tags} report={props.reports[row.id]} entering={motion === "enter"}
+          problem={props.problems[row.id] ?? null} open={() => props.open(row)} drag={reorder.props(row.id)} />)}
     </div>
   );
+}
+
+/** One line that, when it's cut off, scrolls to show the rest while its row is hovered. */
+function Marquee({ text }: { text: string }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const [overflow, setOverflow] = useState(0);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const check = () => setOverflow(Math.max(0, el.scrollWidth - el.clientWidth));
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, [text]);
+  // About 40px a second, so it reads at a calm pace; the row's hover starts it (styles.css).
+  const style = overflow ? { "--marquee": `-${overflow}px`, "--marquee-time": `${Math.max(0.6, overflow / 40)}s` } as CSSProperties : undefined;
+  return <span ref={ref} className={overflow ? "desc-line marquee" : "desc-line"} title={overflow ? text : undefined} style={style}>
+    <span>{text}</span>
+  </span>;
 }
 
 /** Six dots that appear on hover to say "this can be dragged". */
@@ -261,18 +285,22 @@ function Grip() {
 const STATE_WORD = { online: "online", offline: "offline", attention: "stopped", setup: "not in Slack yet" };
 
 /** Two lines: the name and its model, then what it's for, unless something needs you. */
-export function TagRowView({ row, tags, report, problem, open, drag }: {
-  row: TagRow; tags: Tags; report?: AIStatus; problem: string | null; open: () => void; drag?: Drag;
+export function TagRowView({ row, tags, report, problem, open, drag, entering }: {
+  row: TagRow; tags: Tags; report?: AIStatus; problem: string | null; open: () => void; drag?: Drag; entering?: boolean;
 }) {
   const state = status(row);
   const on = row.state === "running";
+  // Starting shows amber and says so; coming online hops the avatar and ripples its status.
+  const starting = tags.busy.has(row.id) && !on;
+  const justOn = useFresh(on) && on;
+  const motion = `${starting ? " starting" : ""}${justOn ? " just-on" : ""}${entering ? " entering" : ""}`;
   const model = modelText(row, report);
   const line = rowLine(row, problem, problemText(row));
   const backend = report?.default_model.backend_name ?? row.default_model_label?.split(" · ")[0] ?? "";
   const effort = model?.effort ? effortLabel(model.effort) : "";
   const label = [`Open ${title(row)}`, STATE_WORD[state], model?.model, effort && `${effort} thinking`].filter(Boolean).join(", ");
   return (
-    <div className="r click" role="button" tabIndex={0} aria-label={label} onClick={open} {...drag}
+    <div className={`r click${motion}`} role="button" tabIndex={0} aria-label={label} onClick={open} {...drag}
       onKeyDown={(e) => {
         drag?.onKeyDown(e);
         if (!e.defaultPrevented && e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); open(); }
@@ -286,10 +314,12 @@ export function TagRowView({ row, tags, report, problem, open, drag }: {
             <span className={problem ? "mname bad" : "mname"}
               title={problem ?? `Default model${backend ? ` · ${backend}` : ""}${effort ? ` · ${effort} thinking` : ""}`}>{model.text}</span>
           )}
+          {starting && <span className="mname live">Starting…</span>}
+          {justOn && <span className="mname now-on">Online</span>}
         </span>
         {line.kind === "error" && <span className="sub bad"><Icon name="warn" /><span>{line.text}</span></span>}
         {line.kind === "ai" && <span className="sub warnline"><Icon name="warn" /><span>{line.text}</span></span>}
-        {line.kind === "description" && <span className="desc-line">{line.text}</span>}
+        {line.kind === "description" && <Marquee text={line.text} />}
       </div>
       <Switch on={on} busy={tags.busy.has(row.id)} label={`${on ? "Stop" : "Start"} ${title(row)}`} onClick={() => void tags.toggle(row)} />
       <span className="chev" aria-hidden="true"><Icon name="right" size={13} /></span>

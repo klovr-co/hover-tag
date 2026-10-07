@@ -16,7 +16,7 @@ import teamArt from "../assets/art/tag-team.png";
 import keyArt from "../assets/art/tag-key.png";
 import { workingFolder } from "./Home";
 import { ModelMenu, ModelWarning, SaveBar, ThinkingRow } from "./AI";
-import { Avatar, dragWindow, ErrorLine, fitText, Icon, Primary, Switch, workspaceColor, WorkspaceMark, source, tagIcon } from "./ui";
+import { Avatar, dragWindow, ErrorLine, fitText, Icon, Primary, Switch, useCopied, workspaceColor, WorkspaceMark, source, tagIcon } from "./ui";
 
 export type Selection = { kind: "tag"; id: string } | { kind: "channel"; id: string };
 export type Tab = "activity" | "channels" | "logs" | "details";
@@ -490,7 +490,7 @@ function ActivityFeed({ api, rows, entries, hideErrors, hasMore, loading, loadOl
     const at = new Date(item.at);
     const key = activityKey({ tag, item });
     return (
-      <div className="sl-msg">
+      <div className={item.kind === "working" ? "sl-msg working" : "sl-msg"}>
         <Avatar row={row} size={34} badge={false} className="" />
         <div>
           <div className="who">{title(row)}<span>{clock(at)}</span>{item.model && <span title={`${item.backend ?? "Agent"} · ${item.model}${item.reasoning_effort ? ` · ${effortLabel(item.reasoning_effort)} thinking` : ""}`}>· {item.model_name || item.model}{item.reasoning_effort && ` ${effortShort(item.reasoning_effort)}`}</span>}
@@ -552,10 +552,11 @@ function ActivityFeed({ api, rows, entries, hideErrors, hasMore, loading, loadOl
 }
 
 function Logs({ text, copyLog }: { text: string; copyLog: () => void }) {
+  const copy = useCopied();
   return <>
     <div className="row" style={{ marginBottom: 8 }}>
       <p className="lead" style={{ margin: 0, flex: 1 }}>Recent entries from this Tag's services, newest last.</p>
-      <button className="p-btn soft sm" onClick={copyLog}>Copy full log</button>
+      <button className="p-btn soft sm" onClick={() => { copyLog(); copy.mark(); }}>{copy.label("Copy full log")}</button>
     </div>
     <pre className="logbox selectable" aria-label="Tag log" style={{ maxHeight: "none" }}>{text.trim() || "No log entries yet."}</pre>
   </>;
@@ -596,6 +597,8 @@ function Details({ api, tags, row, copyLog, openAI, say, canDescribe }: {
   });
   const [renaming, setRenaming] = useState(false);
   const [newName, setNewName] = useState(row.slack_name ?? "");
+  const copyMention = useCopied();
+  const copyFullLog = useCopied();
   const folder = workingFolder(row as TagRow & { home?: string });
   const running = row.state === "running";
   const saved = choice.report?.default_model;
@@ -631,7 +634,7 @@ function Details({ api, tags, row, copyLog, openAI, say, canDescribe }: {
         ) : (
           <dd>
             <span className="mention">@{name}</span>
-            <button className="link" onClick={() => { void api.copy(`@${name}`); say("Copied mention"); }}>Copy</button>
+            <button className="link" onClick={() => { void api.copy(`@${name}`); say("Copied mention"); copyMention.mark(); }}>{copyMention.label("Copy")}</button>
             {row.slack_name && <button className="link" onClick={() => { setNewName(row.slack_name ?? ""); setRenaming(true); }}>Rename</button>}
           </dd>
         )}
@@ -682,7 +685,7 @@ function Details({ api, tags, row, copyLog, openAI, say, canDescribe }: {
         <dt>Working folder</dt>
         <dd><span className="mono selectable">{shortPath(folder)}</span><button className="link" onClick={() => void api.open(folder)}>Show</button></dd>
         <dt>Log</dt>
-        <dd><span className="meta">For troubleshooting</span><button className="link" onClick={copyLog}>Copy full log</button></dd>
+        <dd><span className="meta">For troubleshooting</span><button className="link" onClick={() => { copyLog(); copyFullLog.mark(); }}>{copyFullLog.label("Copy full log")}</button></dd>
       </dl>
       <hr className="sl-sep" />
       <RemoveTag tags={tags} row={row} say={say} />

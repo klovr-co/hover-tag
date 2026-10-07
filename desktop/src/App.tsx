@@ -9,6 +9,7 @@ import { useTags } from "./lib/tags";
 import { TrackContext, useTelemetry, type AppEvents } from "./lib/telemetry";
 import { useWatch } from "./lib/watch";
 import { deepLinkTarget } from "./lib/deeplink";
+import { glide } from "./lib/motion";
 import { Connect } from "./components/Connect";
 import { Home } from "./components/Home";
 import { Installing, Starting, Welcome } from "./components/Install";
@@ -82,6 +83,8 @@ export function App() {
   const telemetry = useTelemetry(api, !!info?.cli);
   const { track } = telemetry;
   const [root, setRoot] = useState<HTMLElement | null>(null);
+  // Segmented controls and tab bars slide their highlight to the new choice.
+  useEffect(() => root ? glide(root) : undefined, [root]);
 
   useEffect(() => {
     let live = true;
