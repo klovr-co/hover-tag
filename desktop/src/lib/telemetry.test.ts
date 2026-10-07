@@ -42,20 +42,27 @@ describe("recording", () => {
       .toEqual(["telemetry", "record", "app_setup_step_completed", "step=ai", "elapsed_seconds=13"]);
   });
 
-  it("records nothing until usage data is turned on, then records through the CLI", async () => {
+  it("turns usage data on at first run, says so once, then records through the CLI", async () => {
     const { api, tag } = fakeTag(status());
     const { result } = renderHook(() => useTelemetry(api, true));
-    await waitFor(() => expect(result.current.loaded).toBe(true));
-    expect(result.current.asking).toBe(true);
-    result.current.track("app_screen_viewed", { screen: "home" });
-    expect(recorded(tag)).toEqual([]);
-
-    await act(() => result.current.choose(true));
+    await waitFor(() => expect(result.current.announced).toBe(true));
     expect(tag).toHaveBeenCalledWith(["telemetry", "on", "--json"]);
-    expect(result.current.asking).toBe(false);
     expect(result.current.recording).toBe(true);
     result.current.track("app_screen_viewed", { screen: "home" });
     expect(recorded(tag)).toEqual([["telemetry", "record", "app_screen_viewed", "screen=home"]]);
+
+    act(() => result.current.acknowledge());
+    expect(result.current.announced).toBe(false);
+  });
+
+  it("keeps an earlier choice to turn usage data off", async () => {
+    const { api, tag } = fakeTag(status({ saved_preference: "off", enabled: false }));
+    const { result } = renderHook(() => useTelemetry(api, true));
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    expect(tag).not.toHaveBeenCalledWith(["telemetry", "on", "--json"]);
+    expect(result.current.announced).toBe(false);
+    result.current.track("app_screen_viewed", { screen: "home" });
+    expect(recorded(tag)).toEqual([]);
   });
 
   it("never records with a Tag that doesn't accept app events", async () => {
@@ -67,15 +74,14 @@ describe("recording", () => {
     expect(recorded(tag)).toEqual([]);
   });
 
-  it("closes the notice for this run without saving a choice when Tag can't save it", async () => {
+  it("records nothing and says nothing when Tag can't save the first-run choice", async () => {
     const { api, tag } = fakeTag(status());
     tag.mockImplementation(async (args) => args[1] === "on" ? { code: 1, stdout: "", stderr: "Error: disk full" }
-      : args[0] === "version" ? json({ capabilities: [] }) : json(status()));
+      : args[0] === "version" ? json({ capabilities: ["telemetry-events"] }) : json(status()));
     const { result } = renderHook(() => useTelemetry(api, true));
-    await waitFor(() => expect(result.current.asking).toBe(true));
-    await expect(result.current.choose(true)).rejects.toThrow("Error: disk full");
-    act(() => result.current.dismiss());
-    expect(result.current.asking).toBe(false);
+    await waitFor(() => expect(tag).toHaveBeenCalledWith(["telemetry", "on", "--json"]));
+    expect(result.current.announced).toBe(false);
+    expect(result.current.recording).toBe(false);
     expect(result.current.status?.saved_preference).toBe("not_set");
   });
 

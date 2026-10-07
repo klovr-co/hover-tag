@@ -302,6 +302,9 @@ button.opt:hover:not(:disabled) { background: var(--fill); }
 .notice:has(> .act > :nth-child(2)) > .act { flex-basis: 100%; justify-content: flex-end; }
 .bar { position: absolute; left: 0; bottom: 0; height: 3px; background: var(--amber); transition: width .25s linear; }
 .notice.info .bar { background: var(--blue); }
+/* The first-run usage data note: one quiet footer line under the Tags, not a banner. */
+.usage-note { display: flex; gap: 6px; align-items: baseline; justify-content: center; flex-wrap: wrap; flex: none; font-size: 12px; color: var(--muted); padding: 8px 2px 0; border-top: 1px solid var(--line); text-align: center; }
+.usage-note .link { font-size: inherit; padding: 0; }
 .spin { width: 14px; height: 14px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .9s linear infinite; flex: none; display: inline-block; }
 .spin.sm { width: 12px; height: 12px; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -427,7 +430,7 @@ button.hello:hover b { text-decoration: underline; text-underline-offset: 2px; }
 .flow-panel > .body > .card:has(> .chan-list) { flex: 0 1 auto; min-height: 120px; display: flex; flex-direction: column; overflow: hidden; }
 .flow-panel > .body > .card:has(> .chan-list) > * { flex: none; }
 .flow-panel > .body > .card > .chan-list { flex: 0 1 auto; min-height: 0; max-height: none; }
-/* Home, Settings, AI connections and the usage data notice are --flow-h tall too:
+/* Home, Settings and AI connections are --flow-h tall too:
    long content scrolls inside the panel, short content leaves room above the buttons. */
 .app.fixed { height: var(--flow-h); }
 .app.fixed > .body { flex: 1; min-height: 0; overflow-y: auto; }
@@ -964,6 +967,7 @@ button.list-item:hover { background: var(--fill); }
 .notice.info .bar { background: linear-gradient(90deg, var(--blue) 40%, color-mix(in srgb, var(--blue) 45%, white) 50%, var(--blue) 60%) 0 0 / 250% 100%; animation: sheen 1.4s linear infinite; }
 @keyframes sheen { from { background-position: 100% 0; } to { background-position: 0 0; } }
 .notice.ok { animation: rise2 .24s var(--ease), flash .9s ease-out .1s; }
+.usage-note { animation: rise2 .24s var(--ease); }
 .notice.ok .ic { animation: check-in .4s var(--spring) .1s backwards; }
 @keyframes flash { from { box-shadow: 0 0 0 0 color-mix(in srgb, var(--green) 45%, transparent); } to { box-shadow: 0 0 0 8px transparent; } }
 /* Copying: a check and "Copied" for a moment. */
@@ -992,7 +996,7 @@ button.list-item:hover { background: var(--fill); }
 .tags-row { animation: bob 1.4s steps(2) infinite; }
 
 @media (prefers-reduced-motion: reduce) {
-  .sky .sum .sq, .flow-panel > .body > *, .r.starting .badge, .confetti, .notice.info .bar, .avw2.rolling .pic,
+  .sky .sum .sq, .flow-panel > .body > *, .r.starting .badge, .confetti, .notice.info .bar, .usage-note, .avw2.rolling .pic,
   .empty img, .tags-row, .r.click:hover .av, .sl-item:hover img, .track .tnode img { animation: none !important; }
   .sl-msg.working > div > p { animation: none; background: none; color: inherit; }
   .desc-line.marquee { text-overflow: ellipsis; -webkit-mask: none; mask: none; }

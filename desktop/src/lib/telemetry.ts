@@ -2,14 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // Usage telemetry: the same installation-wide choice and fixed events as the
 // CLI. The app sends nothing itself; it asks `tag telemetry record` to queue
-// one of the events below, and only after the person has seen the notice.
+// one of the events below. Like the CLI, it turns usage data on at first run
+// and says so once on Home.
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import type { Bridge } from "./bridge";
 import { parseJSON, type VersionInfo } from "./protocol";
 import { trackStep, type SetupState } from "./setup";
 
-export const USAGE_DATA_SUMMARY = "Tag collects minimal anonymous usage data to improve setup and reliability.";
-export const USAGE_DATA_NEVER = "It never includes prompts, Slack messages, agent output, Tag or workspace names, paths, logs, credentials, or configuration values.";
+export const USAGE_DATA_NOTE = "Tag shares anonymous usage data to improve setup and reliability.";
 
 /** `tag telemetry record` and the app events below. */
 export const TELEMETRY_CAPABILITY = "telemetry-events";
@@ -45,7 +45,7 @@ export function recordArgs<E extends keyof AppEvents>(event: E, fields: AppEvent
     ...Object.entries(fields).map(([name, value]) => `${name}=${typeof value === "number" ? Math.max(0, Math.round(value)) : value}`)];
 }
 
-/** Whether to show the first-run notice: collection is possible and nobody has chosen yet. */
+/** Whether this is the first run: collection is possible and nobody has chosen yet. */
 export function needsNotice(status: TelemetryStatus | null): boolean {
   return !!status && status.available !== false && !!status.privacy_notice
     && status.saved_preference === "not_set" && !status.process_override;
@@ -55,14 +55,14 @@ export interface Telemetry {
   status: TelemetryStatus | null;
   /** The first status check finished, even if it failed. */
   loaded: boolean;
-  /** Show the notice before anything else. */
-  asking: boolean;
+  /** Usage data was turned on this run; Home says so once. */
+  announced: boolean;
   /** Events are recorded: the person turned usage data on and this Tag accepts app events. */
   recording: boolean;
   /** Save the installation-wide choice; throws with Tag's message when it can't. */
   choose(on: boolean): Promise<void>;
-  /** Close the notice for this run without saving a choice. Nothing is recorded. */
-  dismiss(): void;
+  /** The person has seen the first-run note. */
+  acknowledge(): void;
   /** Read the status and capabilities again, such as after an update. */
   reload(): void;
   track: Track;
@@ -72,7 +72,7 @@ export function useTelemetry(api: Bridge | null, installed: boolean): Telemetry 
   const [status, setStatus] = useState<TelemetryStatus | null>(null);
   const [canRecord, setCanRecord] = useState(false);
   const [loaded, setLoaded] = useState(false);
-  const [dismissed, setDismissed] = useState(false);
+  const [announced, setAnnounced] = useState(false);
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
@@ -102,9 +102,16 @@ export function useTelemetry(api: Bridge | null, installed: boolean): Telemetry 
     setStatus(parseJSON<TelemetryStatus>(result.stdout));
   }, [api]);
 
+  // First run: on by default. If Tag can't save it, nothing is recorded and the next launch tries again.
+  const first = needsNotice(status);
+  useEffect(() => {
+    if (!first) return;
+    choose(true).then(() => setAnnounced(true), () => {});
+  }, [first, choose]);
+
   return {
-    status, loaded: loaded || !installed, asking: !dismissed && needsNotice(status), recording, choose,
-    dismiss: useCallback(() => setDismissed(true), []),
+    status, loaded: loaded || !installed, announced, recording, choose,
+    acknowledge: useCallback(() => setAnnounced(false), []),
     reload: useCallback(() => setAttempt((value) => value + 1), []),
     track,
   };

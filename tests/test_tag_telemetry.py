@@ -194,7 +194,7 @@ class TagTelemetryTests(unittest.TestCase):
         self.assertFalse(telemetry.queue_path(self.home).exists())
         worker.assert_not_called()
 
-    def test_first_run_notice_persists_one_installation_wide_choice(self) -> None:
+    def test_first_run_turns_usage_data_on_with_a_one_line_notice(self) -> None:
         class TerminalOutput(StringIO):
             def isatty(self) -> bool:
                 return True
@@ -202,7 +202,7 @@ class TagTelemetryTests(unittest.TestCase):
         output = TerminalOutput()
         with patch.object(os.sys.stdin, "isatty", return_value=True), redirect_stdout(
             output
-        ), patch.object(setup_ui, "choose", return_value=0) as choose, patch.object(
+        ), patch.object(setup_ui, "choose") as choose, patch.object(
             telemetry, "_launch_flush_worker"
         ):
             tag_cli._offer_first_run_telemetry(self.home)
@@ -210,31 +210,28 @@ class TagTelemetryTests(unittest.TestCase):
 
         self.assertIs(telemetry.saved_preference(self.home), True)
         self.assertTrue(telemetry.identifier_path(self.home).is_file())
-        choose.assert_called_once()
-        self.assertIn("Turn telemetry off", choose.call_args.args[1])
-        self.assertIn("Privacy notice:", output.getvalue())
-
-    def test_noninteractive_first_run_does_not_create_installation_state(self) -> None:
-        with patch.object(os.sys.stdin, "isatty", return_value=False), patch.object(
-            setup_ui, "choose"
-        ) as choose:
-            tag_cli._offer_first_run_telemetry(self.home)
-
-        self.assertFalse(self.home.exists())
         choose.assert_not_called()
+        self.assertEqual(output.getvalue().count("tag telemetry off"), 1)
 
-    def test_interrupted_notice_leaves_no_preference_and_is_retryable(self) -> None:
+    def test_first_run_keeps_an_earlier_off_choice(self) -> None:
+        telemetry.disable(self.home)
+
         class TerminalOutput(StringIO):
             def isatty(self) -> bool:
                 return True
 
-        with patch.object(os.sys.stdin, "isatty", return_value=True), redirect_stdout(
-            TerminalOutput()
-        ), patch.object(setup_ui, "choose", side_effect=setup_ui.Paused()):
+        output = TerminalOutput()
+        with patch.object(os.sys.stdin, "isatty", return_value=True), redirect_stdout(output):
+            tag_cli._offer_first_run_telemetry(self.home)
+
+        self.assertIs(telemetry.saved_preference(self.home), False)
+        self.assertEqual(output.getvalue(), "")
+
+    def test_noninteractive_first_run_does_not_create_installation_state(self) -> None:
+        with patch.object(os.sys.stdin, "isatty", return_value=False):
             tag_cli._offer_first_run_telemetry(self.home)
 
         self.assertFalse(self.home.exists())
-        self.assertIsNone(telemetry.saved_preference(self.home))
 
     def test_setup_session_emits_only_closed_stage_values(self) -> None:
         with patch.object(telemetry, "setup_started") as started, patch.object(

@@ -152,6 +152,22 @@ describe("Tag rows", () => {
     expect(finish).toHaveBeenCalledWith(setup);
     expect(screen.getByText("2 of 3 online · 1 to finish")).toBeTruthy();
   });
+
+  it("say once that usage data is on, with Learn more opening Settings", async () => {
+    const { Home } = await import("./Home");
+    const tags = { rows: [maya], loaded: true, busy: new Set<string>(), error: "" } as unknown as Tags;
+    const showSettings = vi.fn();
+    const props = { api: demoBridge(), tags, reports: {}, problems: {}, activity: {}, firstName: "Maya",
+      update: { status: "current", update: null, phase: null, error: "" } as const, outdated: false, runUpdate: vi.fn(),
+      add: vi.fn(), finishSetup: vi.fn(), open: vi.fn(), fixAI: vi.fn(), showSettings, now: noon };
+    const { rerender } = render(<Home {...props} usageNote />);
+    expect(screen.getByText(/anonymous usage data/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Turn off/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Learn more" }));
+    expect(showSettings).toHaveBeenCalledWith("general", true);
+    rerender(<Home {...props} />);
+    expect(screen.queryByText(/anonymous usage data/)).toBeNull();
+  });
 });
 
 describe("Reordering Tags", () => {

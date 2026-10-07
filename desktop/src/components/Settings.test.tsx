@@ -81,7 +81,7 @@ describe("Usage data", () => {
     enabled: true, available: true, saved_preference: "on", process_override: null, privacy_notice: "https://example.invalid/privacy", ...overrides,
   });
   const telemetry = (value: TelemetryStatus | null): Telemetry => ({
-    status: value, loaded: true, asking: false, recording: false, choose: vi.fn(async () => {}), dismiss: vi.fn(), reload: vi.fn(), track: vi.fn(),
+    status: value, loaded: true, announced: false, recording: false, choose: vi.fn(async () => {}), acknowledge: vi.fn(), reload: vi.fn(), track: vi.fn(),
   });
 
   it("turns the installation-wide choice off and on, and links the privacy notice", async () => {
