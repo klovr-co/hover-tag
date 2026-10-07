@@ -315,7 +315,10 @@ function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, sa
   const channels = row.channels ?? [];
   const model = modelText(row)?.model ?? "";
   const effort = row.default_effort ? ` · ${effortShort(row.default_effort)}` : "";
-  const copyLog = () => { void api.copy(logText); say("Copied the full log"); };
+  const copyLog = async () => {
+    try { await api.copy(logText); say("Copied the full log"); return true; }
+    catch { say("Could not copy the log"); return false; }
+  };
   return (
     <>
       <div className="sl-mhead">
@@ -551,19 +554,19 @@ function ActivityFeed({ api, rows, entries, hideErrors, hasMore, loading, loadOl
   </>;
 }
 
-function Logs({ text, copyLog }: { text: string; copyLog: () => void }) {
+function Logs({ text, copyLog }: { text: string; copyLog: () => Promise<boolean> }) {
   const copy = useCopied();
   return <>
     <div className="row" style={{ marginBottom: 8 }}>
       <p className="lead" style={{ margin: 0, flex: 1 }}>Recent entries from this Tag's services, newest last.</p>
-      <button className="p-btn soft sm" onClick={() => { copyLog(); copy.mark(); }}>{copy.label("Copy full log")}</button>
+      <button className="p-btn soft sm" onClick={() => void copyLog().then((ok) => ok && copy.mark())}>{copy.label("Copy full log")}</button>
     </div>
     <pre className="logbox selectable" aria-label="Tag log" style={{ maxHeight: "none" }}>{text.trim() || "No log entries yet."}</pre>
   </>;
 }
 
 function Activity({ api, row, items, showLogs, problem, openAI, hideErrors, hasMore, loading, loadOlder }: Pick<FilterProps, "hideErrors"> & HistoryProps & {
-  api: Bridge; row: TagRow; items: ActivityItem[] | null; copyLog: () => void; showLogs: () => void; problem: string | null; openAI: () => void;
+  api: Bridge; row: TagRow; items: ActivityItem[] | null; copyLog: () => Promise<boolean>; showLogs: () => void; problem: string | null; openAI: () => void;
 }) {
   const attention = status(row) === "attention";
   return <>
@@ -589,7 +592,7 @@ function Activity({ api, row, items, showLogs, problem, openAI, hideErrors, hasM
 const DESCRIPTION_LIMIT = 140;
 
 function Details({ api, tags, row, copyLog, openAI, say, canDescribe }: {
-  api: Bridge; tags: Tags; row: TagRow; copyLog: () => void; openAI: () => void; say: (text: string) => void; canDescribe: boolean;
+  api: Bridge; tags: Tags; row: TagRow; copyLog: () => Promise<boolean>; openAI: () => void; say: (text: string) => void; canDescribe: boolean;
 }) {
   const name = title(row);
   const choice = useModelChoice(api, row.id, {
@@ -634,7 +637,7 @@ function Details({ api, tags, row, copyLog, openAI, say, canDescribe }: {
         ) : (
           <dd>
             <span className="mention">@{name}</span>
-            <button className="link" onClick={() => { void api.copy(`@${name}`); say("Copied mention"); copyMention.mark(); }}>{copyMention.label("Copy")}</button>
+            <button className="link" onClick={() => void api.copy(`@${name}`).then(() => { say("Copied mention"); copyMention.mark(); }, () => say("Could not copy the mention"))}>{copyMention.label("Copy")}</button>
             {row.slack_name && <button className="link" onClick={() => { setNewName(row.slack_name ?? ""); setRenaming(true); }}>Rename</button>}
           </dd>
         )}
@@ -685,7 +688,7 @@ function Details({ api, tags, row, copyLog, openAI, say, canDescribe }: {
         <dt>Working folder</dt>
         <dd><span className="mono selectable">{shortPath(folder)}</span><button className="link" onClick={() => void api.open(folder)}>Show</button></dd>
         <dt>Log</dt>
-        <dd><span className="meta">For troubleshooting</span><button className="link" onClick={() => { copyLog(); copyFullLog.mark(); }}>{copyFullLog.label("Copy full log")}</button></dd>
+        <dd><span className="meta">For troubleshooting</span><button className="link" onClick={() => void copyLog().then((ok) => ok && copyFullLog.mark())}>{copyFullLog.label("Copy full log")}</button></dd>
       </dl>
       <hr className="sl-sep" />
       <RemoveTag tags={tags} row={row} say={say} />

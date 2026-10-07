@@ -44,6 +44,9 @@ export function useListMotion<T>(items: T[], key: (item: T) => string, ms = 220)
   const known = useRef<Set<string> | null>(null);
   const last = useRef<T[]>(items);
   const [leaving, setLeaving] = useState<{ item: T; at: number }[]>([]);
+  // Removal timers outlive list changes, so a reorder cannot strand a leaving row.
+  const timers = useRef(new Set<ReturnType<typeof setTimeout>>());
+  useEffect(() => () => { for (const timer of timers.current) clearTimeout(timer); }, []);
   if (known.current === null) known.current = new Set(items.map(key));
   // Callers often rebuild the array each render; only a change in which items are listed counts.
   const ids = items.map(key).join("\n");
@@ -53,8 +56,11 @@ export function useListMotion<T>(items: T[], key: (item: T) => string, ms = 220)
     last.current = items;
     if (!gone.length || reducedMotion()) return;
     setLeaving((all) => [...all.filter((g) => !now.has(key(g.item))), ...gone]);
-    const timer = setTimeout(() => setLeaving((all) => all.filter((g) => !gone.some((x) => key(x.item) === key(g.item)))), ms);
-    return () => clearTimeout(timer);
+    const timer = setTimeout(() => {
+      timers.current.delete(timer);
+      setLeaving((all) => all.filter((g) => !gone.some((x) => key(x.item) === key(g.item))));
+    }, ms);
+    timers.current.add(timer);
     // `key` is a pure accessor and `ids` stands for `items`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ids, ms]);
