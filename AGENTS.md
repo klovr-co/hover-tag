@@ -96,6 +96,49 @@ experiences. Update the other interface where applicable and validate the
 affected flows in both the CLI and Tag.app. If no corresponding change is
 needed, briefly explain why in the change summary or PR description.
 
+### Tag.app microanimations
+
+Tag.app animates at the level of its current Microinteractions section in
+`desktop/src/styles.css`. Every new or changed control, list, flow step, or
+state change must ship with motion at that level, in the same change. Reuse the
+`--ease` and `--spring` tokens, and do not add new easing curves. For motion
+that CSS cannot do alone, use the helpers in `desktop/src/lib/motion.ts`:
+`useFresh` (react to a change), `usePresence` (exit animations),
+`useListMotion` (list items enter and leave), and `glide` (sliding selection
+indicators).
+
+Cover each of these:
+
+- **Press and hover:** every clickable element gives on press (scale about
+  `.96`–`.985`) and fades its hover state. Rows nudge their chevron, and
+  avatars react to hover.
+- **Appearing and leaving:** menus, details, toasts, and dialogs animate in
+  and out, about 120–280 ms. Errors give one small shake.
+- **State changes:** switches, checks, radios, completed steps, status colors,
+  and progress bars transition instead of snapping. A selection highlight
+  glides to the new choice.
+- **Life events:** starting a Tag, a new reply, adding or removing a Tag,
+  finishing setup, live work, and finishing an update each get a visible
+  moment, such as a hop, ripple, confetti, shimmer, or flash.
+- **Overflow:** cut-off text that matters, such as a Tag's description,
+  scrolls to show the rest only while its row is hovered or focused, then
+  eases back. Never autoplay it on every row.
+
+Keep it calm:
+
+- **No flashing:** do not fade whole screens or panels in on mount. Animate
+  the contents, not the sky or the frosted panel. Do not replay entrance
+  animations each time a screen opens; use `useFresh` so only real changes
+  animate.
+- **Cheap properties:** animate only `opacity` and `transform`, except for the
+  list height animations.
+- **No lasting transform on containers:** it breaks `position: fixed` dialogs
+  and tooltips inside them. Avoid `animation-fill-mode` on containers.
+- **Reduced motion:** `prefers-reduced-motion: reduce` must turn the new
+  motion off, including loops, marquees, and hover movement. Helpers must not
+  delay unmounting when motion is reduced.
+- **Tests:** add tests for new helpers or state-driven motion classes.
+
 ### Agent backend parity
 
 Tag supports two agent backends: Codex (`scripts/codex_agent_backend.py`, App

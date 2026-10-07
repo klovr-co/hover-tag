@@ -9,7 +9,7 @@ import welcomeArt from "../assets/art/welcome-maya.png";
 import building from "../assets/art/tag-building.png";
 import celebrate from "../assets/art/tag-celebrate.png";
 import puzzled from "../assets/art/tag-puzzled.png";
-import { ErrorLine, Icon, Primary, Quiet, Sky, Spinner } from "./ui";
+import { ErrorLine, Icon, Primary, Quiet, Sky, Spinner, useCopied } from "./ui";
 
 /** Keep startup in the same shell as setup, including a recoverable failure. */
 export function Starting({ error, retry }: { error?: string; retry: () => void }) {
@@ -91,6 +91,7 @@ export function Installing({ api, done, retry, cancel }: {
 }) {
   const [state, dispatch] = useReducer(installReducer, initialInstall);
   const [showLog, setShowLog] = useState(false);
+  const copy = useCopied();
   const [now, setNow] = useState(Date.now());
   const stepStart = useRef(Date.now());
   const session = useRef<Session | null>(null);
@@ -134,7 +135,7 @@ export function Installing({ api, done, retry, cancel }: {
         <span className="spacer" />
         {!state.finished && !failed && <Quiet title="Cancel" onClick={() => { session.current?.stop(); cancel(); }} />}
         {failed && <>
-          <Quiet title="Copy details" icon="copy" onClick={() => void api.copy(state.log)} />
+          <Quiet title={copy.label("Copy details")} icon={copy.copied ? undefined : "copy"} onClick={() => { void api.copy(state.log); copy.mark(); }} />
           <Quiet title="Quit" onClick={() => void api.quit()} />
           <Primary title="Try again" onClick={retry} autoFocus />
         </>}

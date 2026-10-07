@@ -13,8 +13,9 @@ export function StepsToggle({ item, open, controls, onToggle }: { item: Activity
   const steps = item.step_count ?? 0;
   const outcome = item.kind === "failed" ? "Failed" : item.kind === "working" ? "Working" : "";
   if (!item.run_id || (!steps && !outcome)) return null;
-  const count = steps ? `${steps} ${steps === 1 ? "step" : "steps"}` : "";
-  const text = [outcome, count].filter(Boolean).join(" · ");
+  // The count ticks up in place as a running request takes more steps.
+  const count = steps ? <span key={steps} className="tick">{steps} {steps === 1 ? "step" : "steps"}</span> : null;
+  const text = outcome && count ? <>{outcome} · {count}</> : outcome || count;
   return <span className="activity-steps-wrap">· <button className={`activity-steps${item.kind === "failed" ? " activity-steps-failed" : ""}`} aria-expanded={open} aria-controls={controls}
     onClick={onToggle}>
     {item.kind === "failed" && <Icon name="warn" size={12} />}{text}<Icon name="right" size={11} />

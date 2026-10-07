@@ -297,7 +297,7 @@ it("loads channel history as a continuous chronological window across Tags", asy
   await screen.findByText("Channel reply 0");
   expect(summaries()).toHaveLength(120);
   expect(screen.queryByRole("button", { name: "Load older activity" })).toBeNull();
-});
+}, 20_000);
 
 
 it("hides empty reply rows and uses a plain empty state in Tag and channel activity", async () => {

@@ -1,10 +1,11 @@
 // Copyright 2026 klovr.co
 // SPDX-License-Identifier: Apache-2.0
 // Small building blocks shared by every screen, in the Hover look.
-import { useState, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useState, type MouseEvent, type ReactNode } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import icon from "../../../assets/branding/tag-icon.png";
 import { status, type Status, type TagRow } from "../lib/protocol";
+import { usePresence } from "../lib/motion";
 
 export const tagIcon = icon;
 
@@ -264,5 +265,18 @@ export function ErrorLine({ children }: { children: ReactNode }) {
 
 /** A short message at the bottom of the window. */
 export function Toast({ text }: { text: string | null }) {
-  return text ? <div className="toast" role="status">{text}</div> : null;
+  const { shown, leaving } = usePresence(text);
+  return shown ? <div className={leaving ? "toast leaving" : "toast"} role="status">{shown}</div> : null;
+}
+
+/** "Copied" with a check for a moment after copying, in place of the button's own label. */
+export function useCopied(ms = 1400) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), ms);
+    return () => clearTimeout(timer);
+  }, [copied, ms]);
+  const label = (title: ReactNode) => copied ? <span className="copied"><Icon name="check" size={12} />Copied</span> : title;
+  return { copied, mark: () => setCopied(true), label };
 }
