@@ -61,6 +61,7 @@ const css = `
 .pr-line.muted { color: var(--muted); }
 .pr-line img { width: 18px; height: 18px; border-radius: 5px; flex: none; }
 .pr-me.sm { flex: 0 0 18px; width: 18px; height: 18px; border-radius: 5px; font-size: 10px; }
+.pr-row .t .pr-dot { margin: 6px 0 0; flex: none; }
 .pr-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--amber, #e0a020); margin-right: 6px; vertical-align: 1px; }
 .app.pr-extended { width: 1240px; }
 .pr-row .s { color: var(--muted); font-size: 12px; margin-top: 3px; }
@@ -145,11 +146,11 @@ function useSelection(onEmpty: boolean) {
 function SessionRow({ row, s, active, onClick }: { row: TagRow; s: Session; active: boolean; onClick: () => void }) {
   const r = last(s);
   const working = r.state === "working";
+  // Two lines: what the conversation is about, then where it stands now.
   return <button className="pr-row" data-active={active} onClick={onClick}>
-    <div className="t">{s.title}<span>{r.at}</span></div>
-    <div className="pr-line"><div className="pr-me sm">{ME.initial}</div><span>{r.ask}</span></div>
+    <div className="t">{working && <i className="pr-dot" aria-label="Working" />}{s.title}
+      <span>{s.place}{s.rounds.length > 1 && ` · ${s.rounds.length}`} · {r.at}</span></div>
     <div className="pr-line muted"><Avatar row={row} size={18} badge={false} className="" /><span>{working ? "Working on it…" : r.reply}</span></div>
-    <div className="s">{working && <i className="pr-dot" />}{s.place} · {s.rounds.length} {s.rounds.length === 1 ? "round" : "rounds"}</div>
   </button>;
 }
 
