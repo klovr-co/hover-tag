@@ -350,7 +350,7 @@ function SignIn({ api, question, state, setStep, send }: {
   const items = [
     { title: "Copy your sign-in line", detail: "A one-time line that tells Slack this computer is yours.",
       act: <div className="ticket"><span className="mono">{line}</span>
-        <Primary small title="Copy" icon="copy" autoFocus onClick={() => { void api.copy(line); setStep(1); }} /></div>,
+        <Primary small title="Copy" icon="copy" autoFocus onClick={() => { void api.copy(line).catch(() => {}); setStep(1); }} /></div>,
       redo: <button className="link redo" onClick={() => setStep(0)}>Copy again</button> },
     { title: "Send it in Slack, then click Confirm",
       detail: "Paste it into any message box in the workspace you want, and send it. Slack asks you to confirm.",
@@ -795,7 +795,7 @@ function Ready({ api, state, done, start }: { api: Bridge; state: SetupState; do
     return () => clearInterval(timer);
   }, [api, state.tag, step]);
   const openSlack = async () => {
-    await api.copy(text);
+    await api.copy(text).catch(() => {});
     if (ready) void api.open(slackLink(ready, place.id));
     setStep("waiting");
   };

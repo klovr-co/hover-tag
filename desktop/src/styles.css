@@ -998,6 +998,12 @@ button.list-item:hover { background: var(--fill); }
   .desc-line.marquee { text-overflow: ellipsis; -webkit-mask: none; mask: none; }
   .desc-line.marquee > span, .r.click:hover .desc-line.marquee > span, .r.click:focus-visible .desc-line.marquee > span { display: inline; transform: none; transition: none; }
   .r.click:hover .chev, button.opt:hover .chev, .ghost-add:hover .gi, .avw2:hover .pic { transform: none; }
+  .p-btn:active:not(:disabled), .sky-btn:active:not(:disabled), .add:active:not(:disabled), .link:active:not(:disabled), .back:active,
+  .community button:active, .chan-chip button:active, .activity-toggle:active, .activity-thread:active, button.activity-artifact:active,
+  .segc button:active:not(:disabled), .sl-ws:active, .ghost-add:active, .sl-item:active, .mpick:active:not(:disabled),
+  .opt:active .box, .opt:active .radio { transform: none !important; }
+  .sw:active:not(:disabled) > i { width: 18px !important; }
+  .sw.on:active:not(:disabled) > i { transform: translateX(16px) !important; }
   *, *::before, *::after { animation-duration: 0s !important; transition-duration: 0s !important; }
   .star, .sky .cloud, .sky .sprite, .big-av, .tnode img { animation: none !important; }
   .slk .veil { animation: none !important; opacity: 1; }

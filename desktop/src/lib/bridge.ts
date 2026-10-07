@@ -370,7 +370,7 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
       })();
       return { send: () => {}, stop: () => { cancelled = true; onExit(130); } };
     },
-    copy: async (text) => { await navigator.clipboard?.writeText(text).catch(() => {}); },
+    copy: async (text) => { await navigator.clipboard?.writeText(text); },
     paste: async () => "NwrFLzAy",
     open: async (target) => { console.info("open", target); },
     updateTray: async () => {},

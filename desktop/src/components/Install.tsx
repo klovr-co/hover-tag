@@ -135,7 +135,7 @@ export function Installing({ api, done, retry, cancel }: {
         <span className="spacer" />
         {!state.finished && !failed && <Quiet title="Cancel" onClick={() => { session.current?.stop(); cancel(); }} />}
         {failed && <>
-          <Quiet title={copy.label("Copy details")} icon={copy.copied ? undefined : "copy"} onClick={() => { void api.copy(state.log); copy.mark(); }} />
+          <Quiet title={copy.label("Copy details")} icon={copy.copied ? undefined : "copy"} onClick={() => void api.copy(state.log).then(copy.mark, () => {})} />
           <Quiet title="Quit" onClick={() => void api.quit()} />
           <Primary title="Try again" onClick={retry} autoFocus />
         </>}
