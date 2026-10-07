@@ -17,6 +17,7 @@ import tempfile
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from collections.abc import Callable
@@ -398,7 +399,7 @@ def retired_settings_modal() -> dict[str, Any]:
         "close": {"type": "plain_text", "text": "Close"},
         "blocks": [{"type": "section", "text": {
             "type": "mrkdwn",
-            "text": "Choose this Tag's model and thinking level in Tag.app → Details, or with `tag NAME settings ai`. All Slack requests use those settings.",
+            "text": tag_app_link("Choose this Tag's model and thinking level in the Tag app → Details, or with `tag NAME settings ai`. All Slack requests use those settings."),
         }}],
     }
 
@@ -2928,6 +2929,12 @@ def failure_action_blocks(
     return blocks
 
 
+def tag_app_link(text: str) -> str:
+    """Link "the Tag app" to this Tag's Details; plain "Tag.app" would link the tag.app website."""
+    tag_id = urllib.parse.quote(os.getenv("TAG_ID", "default"), safe="")
+    return text.replace("the Tag app", f"the <hover-tag://tag/{tag_id}|Tag app>")
+
+
 def user_facing_failure(
     detail: str,
     timeout: int,
@@ -2949,7 +2956,7 @@ def user_facing_failure(
         cause = f"The coding backend timed out after {timeout} seconds."
     return (
         "Tag couldn't complete this request.\n"
-        f"*Cause:* {cause}\n\n"
+        f"*Cause:* {tag_app_link(cause)}\n\n"
         "Please retry, troubleshoot with your coding agent, or report this in "
         f"<{COMMUNITY_INVITE_URL}|Hover Community> so the developers can help.\n\n"
         f"Error reference: `{error_reference}`"

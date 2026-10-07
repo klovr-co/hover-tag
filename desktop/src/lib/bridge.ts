@@ -65,6 +65,8 @@ export interface Bridge {
   open(target: string): Promise<void>;
   updateTray(tags: TrayTag[], keepRunning: boolean): Promise<void>;
   onTray(handler: (action: string, tag?: string) => void): () => void;
+  /** `hover-tag://` links: the one that opened the app, then each one opened while it runs. */
+  onDeepLink(handler: (url: string) => void): () => void;
   openAtLogin(enabled?: boolean): Promise<boolean>;
   notify(title: string, body: string): Promise<void>;
   showWindow(): Promise<void>;
@@ -100,6 +102,7 @@ async function tauriBridge(): Promise<Bridge> {
   const opener = await import("@tauri-apps/plugin-opener");
   const autostart = await import("@tauri-apps/plugin-autostart");
   const notification = await import("@tauri-apps/plugin-notification");
+  const deepLink = await import("@tauri-apps/plugin-deep-link");
   const { getCurrentWindow, LogicalSize } = await import("@tauri-apps/api/window");
 
   type Output = { event: "line"; data: string } | { event: "exit"; data: { code: number; stderr: string } };
@@ -130,6 +133,11 @@ async function tauriBridge(): Promise<Bridge> {
     updateTray: (tags, keepRunning) => invoke("update_tray", { tags, keepRunning }),
     onTray: (handler) => {
       const unlisten = listen<{ action: string; tag?: string }>("tray", (e) => handler(e.payload.action, e.payload.tag));
+      return () => void unlisten.then((stop) => stop());
+    },
+    onDeepLink: (handler) => {
+      void deepLink.getCurrent().then((urls) => urls?.forEach(handler), () => {});
+      const unlisten = deepLink.onOpenUrl((urls) => urls.forEach(handler));
       return () => void unlisten.then((stop) => stop());
     },
     openAtLogin: async (enabled) => {
@@ -367,6 +375,7 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
     open: async (target) => { console.info("open", target); },
     updateTray: async () => {},
     onTray: () => () => {},
+    onDeepLink: () => () => {},
     openAtLogin: async (enabled) => { if (enabled !== undefined) loginItem = enabled; return loginItem; },
     notify: async (title, body) => console.info("notify", title, body),
     showWindow: async () => {},

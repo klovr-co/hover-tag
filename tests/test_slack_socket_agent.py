@@ -1392,12 +1392,14 @@ class SlackFailureReplyTests(unittest.TestCase):
         self.assertIn("Please retry", reply)
 
     def test_unsupported_chatgpt_model_copy_identifies_safe_cause(self) -> None:
-        reply = slack_socket_agent.user_facing_failure(
-            "The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.",
-            420, "ABC12345", backend_code="invalid_request_error",
-        )
+        with patch.dict(os.environ, {"TAG_ID": "default"}):
+            reply = slack_socket_agent.user_facing_failure(
+                "The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.",
+                420, "ABC12345", backend_code="invalid_request_error",
+            )
 
-        self.assertIn("Choose another model in Tag.app → Details", reply)
+        self.assertIn("Choose another model in the <hover-tag://tag/default|Tag app> → Details", reply)
+        self.assertNotIn("Tag.app", reply)
         self.assertIn("The 'gpt-6.1-sol' model is not supported", reply)
 
     def test_failure_actions_keep_report_content_out_of_slack_metadata(self) -> None:
@@ -2421,7 +2423,8 @@ class SlackUserAllowlistTests(unittest.TestCase):
         view = client.views_open.call_args.kwargs["view"]
         self.assertEqual("Model settings moved", view["title"]["text"])
         self.assertNotIn("submit", view)
-        self.assertIn("Tag.app", view["blocks"][0]["text"]["text"])
+        self.assertIn("|Tag app> → Details", view["blocks"][0]["text"]["text"])
+        self.assertNotIn("Tag.app", view["blocks"][0]["text"]["text"])
 
 class SlackDirectMessageTests(unittest.TestCase):
     def test_direct_messages_default_on_and_can_be_disabled(self) -> None:

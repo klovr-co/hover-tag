@@ -8,13 +8,14 @@ import { checkUpdate, initialUpdate, installUpdate, updateReducer } from "./lib/
 import { useTags } from "./lib/tags";
 import { TrackContext, useTelemetry, type AppEvents } from "./lib/telemetry";
 import { useWatch } from "./lib/watch";
+import { deepLinkTarget } from "./lib/deeplink";
 import { Connect } from "./components/Connect";
 import { Home } from "./components/Home";
 import { Installing, Starting, Welcome } from "./components/Install";
 import { AI_CAPABILITY, SHARED_AI_CAPABILITY } from "./lib/ai";
 import { AISettings } from "./components/AISettings";
 import { Settings, type SettingsTab } from "./components/Settings";
-import { TagDetail } from "./components/TagDetail";
+import { TagDetail, type Tab as TagTab } from "./components/TagDetail";
 import { TelemetryNotice } from "./components/TelemetryNotice";
 import { Toast } from "./components/ui";
 
@@ -26,7 +27,8 @@ type Screen =
   | { name: "connect"; args: string[] }
   | { name: "settings"; tab?: SettingsTab }
   | { name: "ai"; resume?: string[] }
-  | { name: "tag"; id: string }
+  /** `opened` counts Slack links, so a second link resets an open Tag screen. */
+  | { name: "tag"; id: string; tab?: TagTab; opened?: number }
   /** Settings > Replay onboarding: the first-run screens again, changing nothing. */
   | { name: "replay"; step: "telemetry" | "welcome" };
 
@@ -201,6 +203,20 @@ export function App() {
     });
   }, [api, tags]);
 
+  // Links from Slack, such as "Choose another model in the Tag app", open that Tag's Details.
+  const ready = installed && tags.loaded;
+  const [link, setLink] = useState<string | null>(null);
+  const links = useRef(0);
+  useEffect(() => api?.onDeepLink(setLink), [api]);
+  useEffect(() => {
+    if (!api || !link || !ready) return;
+    setLink(null);
+    const id = deepLinkTarget(link);
+    if (id && tags.rows.some((r) => r.id === id)) setScreen({ name: "tag", id, tab: "details", opened: ++links.current });
+    else if (id) say("That Tag isn't on this computer.");
+    void api.showWindow();
+  }, [api, link, ready, tags.rows, say]);
+
   // Tag was removed after this app started, even while Home is showing: offer to install it again.
   useEffect(() => {
     if (!api || screen.name !== "home" || !tags.error) return;
@@ -273,7 +289,7 @@ export function App() {
           <AISettings api={api} tags={tags} close={() => { watch.recheck(); setScreen(screen.resume ? { name: "connect", args: screen.resume } : { name: "settings" }); }} />
         )}
         {screen.name === "tag" && (
-          <TagDetail api={api} tags={tags} initial={screen.id} problems={watch.problems} back={home} add={add}
+          <TagDetail key={screen.opened ?? 0} api={api} tags={tags} initial={screen.id} initialTab={screen.tab} problems={watch.problems} back={home} add={add}
             canDescribe={capabilities.includes("describe")}
             showSettings={() => setScreen({ name: "settings" })}
             finishSetup={(row) => setScreen({ name: "connect", args: [row.id, "setup"] })}

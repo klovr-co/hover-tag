@@ -13,6 +13,7 @@
     "autostart:allow-disable",
     "autostart:allow-is-enabled",
     "notification:default",
+    "deep-link:default",
     "dialog:allow-open",
     {
       "identifier": "opener:allow-open-url",

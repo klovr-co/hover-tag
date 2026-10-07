@@ -291,6 +291,9 @@ in Tag.app → Details or `tag NAME settings ai`. This applies to Codex and
 Claude. Slack replies have no Configure control or per-user preferences.
 Startup archives legacy preferences before accepting requests; historic
 Configure buttons explain where settings moved and cannot save overrides.
+Slack copy says "the Tag app" rather than "Tag.app", because Slack turns
+`Tag.app` into a link to the tag.app website. The bridge links that phrase to
+`hover-tag://tag/TAG_ID`, which Tag.app registers to open that Tag's Details.
 Backend-supported Fast Mode defaults still apply. Restart Tag after changing
 its local backend configuration; app model changes restart it automatically.
 

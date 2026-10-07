@@ -307,7 +307,7 @@ def _classification_for_category(category: str, *, code: str | None, detail: str
         FailureCategory.IDLE_TIMEOUT: "The coding backend timed out before completing the request.",
         FailureCategory.MAXIMUM_RUNTIME: "The coding backend reached Tag's maximum runtime.",
         FailureCategory.UNEXPECTED_EXIT: "The coding backend exited unexpectedly.",
-        FailureCategory.MODEL_UNAVAILABLE: "The selected model is unavailable for this ChatGPT account. Choose another model in Tag.app → Details.",
+        FailureCategory.MODEL_UNAVAILABLE: "The selected model is unavailable for this ChatGPT account. Choose another model in the Tag app → Details, or with `tag NAME settings ai`.",
         FailureCategory.UNKNOWN: "The backend failed without returning an error message. Retry or open the error report for diagnostics.",
         FailureCategory.UNSUPPORTED_TOOL: "The API gateway rejected a tool type. It accepts only function or custom tools; hosted tools and tool namespaces may be unsupported.",
     }
@@ -331,7 +331,7 @@ def _classification_for_category(category: str, *, code: str | None, detail: str
         if match:
             explanations[category] = (
                 f"The '{match.group(1)}' model is not supported when using Codex "
-                "with a ChatGPT account. Choose another model in Tag.app → Details."
+                "with a ChatGPT account. Choose another model in the Tag app → Details, or with `tag NAME settings ai`."
             )
     if category == FailureCategory.UNKNOWN:
         message = _backend_error_message(detail)
