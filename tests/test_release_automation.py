@@ -686,13 +686,23 @@ class ReleaseArtifactTests(unittest.TestCase):
 
 
 class ReleasePreflightTests(unittest.TestCase):
-    def test_beta_guidance_uses_a_complete_source_version(self) -> None:
+    def test_beta_guidance_names_the_line_not_a_candidate(self) -> None:
         root = Path(__file__).resolve().parents[1]
         for relative_path in ("RELEASE.md", ".agents/skills/tag-release/SKILL.md"):
             guidance = (root / relative_path).read_text(encoding="utf-8")
-            self.assertIn("<major>.<minor>.<patch>-beta.1", guidance)
+            self.assertIn("<major>.<minor>.<patch>-beta`", guidance)
+            self.assertNotIn("<major>.<minor>.<patch>-beta.1", guidance)
             self.assertNotIn("`VERSION` set to\n`beta.1`", guidance)
             self.assertNotIn("update `VERSION` to `beta.1`", guidance)
+
+    def test_unnumbered_beta_line_continues_numbering_from_tags(self) -> None:
+        from scripts.release_automation import select_auto_prerelease, validate_release_tag
+
+        tags = ["v0.3.0-alpha.4", "v0.3.0-beta.1", "v0.3.0-beta.8"]
+        self.assertEqual("0.3.0-beta.9", str(select_auto_prerelease("0.3.0-beta", tags, [])))
+        self.assertEqual([], validate_release_tag("0.3.0-beta", "v0.3.0-beta.9"))
+        source = (Path(__file__).resolve().parents[1] / "VERSION").read_text(encoding="utf-8").strip()
+        self.assertRegex(source, r"^\d+\.\d+\.\d+(?:-(?:alpha|beta))?$")
 
     def test_main_gates_preserve_every_push_and_cancel_stale_pr_runs(self) -> None:
         root = Path(__file__).resolve().parents[1]

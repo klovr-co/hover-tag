@@ -62,6 +62,7 @@ try:
     )
     from .slack_mrkdwn import to_mrkdwn
     from .slack_search_scope import ScopePlan, SearchIntent, plan_search_scopes
+    from .agent_sessions import ThreadSessions
     from .tag_activity import ACTIVITY_DETAIL_ACTION_ID, PUBLIC_LABELS, ActivityStore, activity_detail_modal, activity_modal
     from .agent_summary import queue_reply_summary
     from .tag_activity_details import sanitize_activity_details
@@ -101,6 +102,7 @@ except ImportError:  # Direct script execution does not create a package context
     )
     from slack_mrkdwn import to_mrkdwn
     from slack_search_scope import ScopePlan, SearchIntent, plan_search_scopes
+    from agent_sessions import ThreadSessions
     from tag_activity import ACTIVITY_DETAIL_ACTION_ID, PUBLIC_LABELS, ActivityStore, activity_detail_modal, activity_modal
     from agent_summary import queue_reply_summary
     from tag_activity_details import sanitize_activity_details
@@ -845,6 +847,18 @@ def build_thread_text(
     client: Any, channel: str, thread_ts: str, attachment_dir: Path,
     *, request: dict[str, Any] | None = None,
 ) -> str:
+    return build_thread_texts(client, channel, thread_ts, attachment_dir, request=request)[0]
+
+
+def build_thread_texts(
+    client: Any, channel: str, thread_ts: str, attachment_dir: Path,
+    *, request: dict[str, Any] | None = None, since_ts: str | None = None, own_user: str | None = None,
+) -> tuple[str, str]:
+    """The thread excerpt, and only what was posted after ``since_ts`` by others.
+
+    A continued conversation already holds earlier messages and Tag's own
+    replies, so it receives the second text. Selected files appear in both.
+    """
     messages: list[dict[str, Any]] = []
     cursor = ""
     seen_cursors: set[str] = set()
@@ -879,20 +893,26 @@ def build_thread_text(
     validate_attachment_metadata(files)
     selected_ids = {file["id"] for file in files}
     budget = AttachmentBudget()
-    lines = []
+    lines: list[str] = []
+    new_lines: list[str] = []
+    since = float(since_ts) if since_ts else None
     for message in messages[-30:]:
         user = message.get("user") or message.get("bot_id") or "unknown"
         text = message.get("text", "")
-        lines.append(f"{user}: {text}")
-        lines.extend(format_message_attachments(message))
+        message_lines = [f"{user}: {text}", *format_message_attachments(message)]
         for file in message_files(message):
             if file.get("id") not in selected_ids:
-                lines.append(f"[Historical attachment, not downloaded: {file.get('name', 'unnamed')} ({file.get('id', 'unknown')})]")
+                message_lines.append(f"[Historical attachment, not downloaded: {file.get('name', 'unnamed')} ({file.get('id', 'unknown')})]")
+        lines.extend(message_lines)
+        if since is not None and float(message.get("ts", "0")) > since and not (own_user and message.get("user") == own_user):
+            new_lines.extend(message_lines)
     selected_messages = [{"files": files}]
-    lines.extend(download_thread_text_files(selected_messages, budget))
-    lines.extend(download_thread_images(selected_messages, attachment_dir, budget))
-    lines.extend(download_thread_binary_files(selected_messages, attachment_dir, budget))
-    return "\n".join(lines)
+    file_lines = [
+        *download_thread_text_files(selected_messages, budget),
+        *download_thread_images(selected_messages, attachment_dir, budget),
+        *download_thread_binary_files(selected_messages, attachment_dir, budget),
+    ]
+    return "\n".join(lines + file_lines), "\n".join(new_lines + file_lines)
 
 
 def split_reply(text: str, max_chars: int = MAX_REPLY_CHARS) -> list[str]:
@@ -2118,6 +2138,24 @@ ACTIVE_RUNS: dict[RunKey, ActiveBackendRun] = {}
 ACTIVE_RUNS_LOCK = threading.Lock()
 
 
+THREAD_BUSY_MESSAGE = "I'm still working on an earlier request in this thread. Mention me again when I finish."
+BUSY_THREADS: set[RunKey] = set()
+
+
+def reserve_thread(key: RunKey) -> bool:
+    """Claim a Slack thread for one request; False while an earlier request still runs."""
+    with ACTIVE_RUNS_LOCK:
+        if key in BUSY_THREADS:
+            return False
+        BUSY_THREADS.add(key)
+        return True
+
+
+def release_thread(key: RunKey) -> None:
+    with ACTIVE_RUNS_LOCK:
+        BUSY_THREADS.discard(key)
+
+
 def register_active_run(key: RunKey, run: ActiveBackendRun) -> None:
     with ACTIVE_RUNS_LOCK:
         ACTIVE_RUNS[key] = run
@@ -2283,6 +2321,10 @@ def run_backend_events(
     on_error: Callable[[str | None, str], None] | None = None,
     on_trace_event: Callable[[dict[str, Any]], None] | None = None,
     on_run_info: Callable[[dict[str, str]], None] | None = None,
+    resume_session: str | None = None,
+    on_session: Callable[[str], None] | None = None,
+    thread_new_text: str | None = None,
+    on_context: Callable[[int], None] | None = None,
 ) -> tuple[str, bool]:
     """Consume normalized lifecycle events and forward only final-answer text."""
     if max_timeout is None:
@@ -2323,6 +2365,16 @@ def run_backend_events(
     if reasoning_effort:
         cmd.extend(["--reasoning-effort", reasoning_effort])
     cmd.extend(["--fast-mode", "on" if fast_mode else "off"])
+    thread_new_file: Path | None = None
+    if resume_session:
+        cmd.extend(["--resume-session", resume_session])
+        if thread_new_text is not None:
+            with tempfile.NamedTemporaryFile(
+                "w", suffix=".txt", encoding="utf-8", delete=False, dir=tag_temp_dir()
+            ) as f:
+                f.write(thread_new_text)
+                thread_new_file = Path(f.name)
+            cmd.extend(["--thread-new-file", str(thread_new_file)])
     run_id = uuid.uuid4().hex
     with tempfile.NamedTemporaryFile(
         "w", suffix=".control", delete=False, dir=tag_temp_dir()
@@ -2366,6 +2418,8 @@ def run_backend_events(
         )
     except BaseException:
         thread_file.unlink(missing_ok=True)
+        if thread_new_file is not None:
+            thread_new_file.unlink(missing_ok=True)
         control_file.unlink(missing_ok=True)
         approval_dir_context.cleanup()
         raise
@@ -2430,6 +2484,14 @@ def run_backend_events(
                     on_run_info(info)
             elif event_type == "status" and isinstance(text, str) and on_status:
                 on_status(text)
+            elif event_type == "session":
+                session_id = event.get("session_id")
+                if isinstance(session_id, str) and session_id and on_session:
+                    on_session(session_id)
+            elif event_type == "context":
+                tokens = event.get("tokens")
+                if isinstance(tokens, int) and tokens >= 0 and on_context:
+                    on_context(tokens)
             elif event_type == "approval_expired":
                 approval_id = event.get("approval_id")
                 if isinstance(approval_id, str):
@@ -2485,6 +2547,8 @@ def run_backend_events(
         active_run.finish()
         unregister_active_run(run_key, active_run)
         thread_file.unlink(missing_ok=True)
+        if thread_new_file is not None:
+            thread_new_file.unlink(missing_ok=True)
         control_file.unlink(missing_ok=True)
         approval_dir_context.cleanup()
 
@@ -3291,6 +3355,7 @@ def create_app(
         app = App(token=token, before_authorize=workspace_boundary)
     report_store = report_store or default_report_store()
     activity_store = activity_store or ActivityStore()
+    thread_sessions = ThreadSessions(activity_store.root.parent / "agent-sessions.json")
     fallback_reports: dict[str, ErrorReport] = {}
 
     def stored_report(reference: str) -> ErrorReport | None:
@@ -4041,6 +4106,43 @@ def create_app(
                 except OSError:
                     logger.warning("Could not save the activity model")
 
+        session_workdir = str(default_workdir())
+
+        # Hold the thread until this request ends so two mentions cannot resume one conversation.
+        thread_key = RunKey(team, channel, thread_ts)
+        if not reserve_thread(thread_key):
+            indicator.clear()
+            client.chat_postMessage(
+                channel=channel,
+                thread_ts=thread_ts,
+                text=THREAD_BUSY_MESSAGE,
+            )
+            return
+
+        continued = thread_sessions.get(team, channel, thread_ts, request_backend,
+                                        workdir=session_workdir, requester=user_id)
+        current_session: str | None = None
+
+        def save_session(context_tokens: int | None = None) -> None:
+            if current_session is None:
+                return
+            try:
+                thread_sessions.save(team, channel, thread_ts, request_backend, workdir=session_workdir,
+                                     requester=user_id, session_id=current_session,
+                                     request_ts=event["ts"], context_tokens=context_tokens)
+            except OSError as exc:
+                logger.warning("Could not save the Slack thread's conversation: %s", exc)
+
+        def capture_session(session_id: str) -> None:
+            nonlocal current_session
+            current_session = session_id
+            save_session()
+            if activity_run_id is not None:
+                try:
+                    activity_store.save_session(activity_run_id, session_id)
+                except OSError as exc:
+                    logger.warning("Could not save the activity conversation: %s", exc)
+
         def finish_activity(outcome: str) -> None:
             nonlocal activity_run_id
             if activity_run_id is None:
@@ -4082,7 +4184,16 @@ def create_app(
                 image_results_dir = generated_images_dir(attachment_dir)
                 image_results_dir.mkdir(parents=True)
                 (attachment_dir / "results" / "artifacts").mkdir()
-                thread_text = build_thread_text(client, channel, thread_ts, attachment_dir, request=event)
+                own_user = next((item.get("user_id") for item in body.get("authorizations") or []
+                                 if isinstance(item, dict) and item.get("is_bot")), None)
+                if continued:
+                    thread_text, thread_new_text = build_thread_texts(
+                        client, channel, thread_ts, attachment_dir, request=event,
+                        since_ts=continued[1], own_user=own_user,
+                    )
+                else:
+                    thread_text = build_thread_text(client, channel, thread_ts, attachment_dir, request=event)
+                    thread_new_text = None
                 failure_stage = "backend execution"
                 stream_available = (
                     env_enabled("OPENTAG_SLACK_STREAMING", default=True)
@@ -4143,6 +4254,10 @@ def create_app(
                         on_error=capture_backend_error,
                         on_trace_event=trace_activity if app_server_selected else None,
                         on_run_info=capture_run_info,
+                        resume_session=continued[0] if continued and app_server_selected else None,
+                        thread_new_text=thread_new_text,
+                        on_session=capture_session if app_server_selected else None,
+                        on_context=save_session if app_server_selected else None,
                     )
                 else:
                     answer, succeeded = run_backend(
@@ -4377,6 +4492,7 @@ def create_app(
                 footer_blocks,
             )
         finally:
+            release_thread(thread_key)
             output_manifest.unlink(missing_ok=True)
 
     @app.action(RETRY_ACTION_ID)

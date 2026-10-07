@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-20
+- Amended: 2026-10-07 — task threads are saved and continued per Slack thread; see [ADR 0009](0009-thread-scoped-agent-conversations.md).
 - Tracking: [Response streaming #24](https://github.com/klovr-co/hover-tag/issues/24),
   [Task cancellation #29](https://github.com/klovr-co/hover-tag/issues/29)
 

@@ -141,6 +141,19 @@ class SlackTextAttachmentTests(unittest.TestCase):
         self.assertTrue(text[0].endswith("[Attachment text truncated]"))
 
 
+class ThreadReservationTests(unittest.TestCase):
+    def test_a_thread_runs_one_request_until_it_is_released(self) -> None:
+        key = slack_socket_agent.RunKey("T1", "C1", "1.0")
+        self.addCleanup(slack_socket_agent.release_thread, key)
+
+        self.assertTrue(slack_socket_agent.reserve_thread(key))
+        self.assertFalse(slack_socket_agent.reserve_thread(key))
+        self.assertTrue(slack_socket_agent.reserve_thread(slack_socket_agent.RunKey("T1", "C1", "2.0")))
+        slack_socket_agent.release_thread(key)
+        self.assertTrue(slack_socket_agent.reserve_thread(key))
+        slack_socket_agent.release_thread(slack_socket_agent.RunKey("T1", "C1", "2.0"))
+
+
 class SlackBinaryAttachmentTests(unittest.TestCase):
     def test_downloads_binary_attachment_to_invocation_directory(self) -> None:
         messages = [{"files": [{
@@ -332,6 +345,24 @@ class RequestAttachmentSelectionTests(unittest.TestCase):
             [{"files": files}], {"text": "use all files in this thread"})
         with self.assertRaisesRegex(slack_socket_agent.AttachmentLimitError, "at most 10"):
             slack_socket_agent.validate_attachment_metadata(selected)
+
+    def test_continued_thread_text_holds_only_others_messages_after_the_last_request(self):
+        client = MagicMock()
+        client.conversations_replies.return_value = {"messages": [
+            {"ts": "1", "user": "U1", "text": "first request"},
+            {"ts": "2", "user": "UBOT", "bot_id": "B1", "text": "Tag's earlier answer"},
+            {"ts": "3", "user": "U2", "text": "a teammate adds context"},
+        ]}
+        request = {"ts": "4", "user": "U1", "text": "follow-up"}
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"SLACK_BOT_TOKEN": "test"}):
+            full, new = slack_socket_agent.build_thread_texts(
+                client, "C1", "1", Path(directory), request=request, since_ts="1", own_user="UBOT")
+        self.assertIn("first request", full)
+        self.assertIn("Tag's earlier answer", full)
+        self.assertNotIn("first request", new)
+        self.assertNotIn("Tag's earlier answer", new)
+        self.assertIn("U2: a teammate adds context", new)
+        self.assertIn("U1: follow-up", new)
 
     def test_paginated_thread_downloads_only_current_upload_and_excludes_future(self):
         client = MagicMock()
@@ -3436,6 +3467,58 @@ class BackendEventRunnerTests(unittest.TestCase):
                 on_status=on_status,
                 on_trace_event=on_trace_event,
             )
+
+    def test_continued_conversation_gets_new_thread_messages_and_reports_its_size(self) -> None:
+        process = MagicMock()
+        process.stdout = iter(json.dumps(event) + "\n" for event in [
+            {"type": "context", "tokens": 4200},
+            {"type": "turn_complete", "status": "completed"},
+        ])
+        process.wait.return_value = 0
+        process.poll.return_value = None
+        sizes: list[int] = []
+        written: list[str] = []
+        with tempfile.TemporaryDirectory() as raw_dir, patch.object(
+            slack_socket_agent.subprocess, "Popen", return_value=process
+        ) as popen, patch.object(slack_socket_agent.threading, "Timer"), patch.object(
+            slack_socket_agent, "register_active_run"
+        ):
+            def capture(*args, **kwargs):
+                command = args[0]
+                written.append(Path(command[command.index("--thread-new-file") + 1]).read_text(encoding="utf-8"))
+                return process
+            popen.side_effect = capture
+            slack_socket_agent.run_backend_events(
+                "claude", "T123", "C123", "1.23", "U123", "question", "thread", Path(raw_dir), 30,
+                MagicMock(), resume_session="s-1", thread_new_text="U2: only this", on_context=sizes.append,
+            )
+            new_file = Path(popen.call_args.args[0][popen.call_args.args[0].index("--thread-new-file") + 1])
+        self.assertEqual(["U2: only this"], written)
+        self.assertFalse(new_file.exists())
+        self.assertEqual([4200], sizes)
+
+    def test_resumes_the_threads_conversation_and_reports_the_new_one(self) -> None:
+        process = MagicMock()
+        process.stdout = iter(json.dumps(event) + "\n" for event in [
+            {"type": "session", "session_id": "thread-9"},
+            {"type": "message_complete", "phase": "final_answer", "text": "Done"},
+            {"type": "turn_complete", "status": "completed"},
+        ])
+        process.wait.return_value = 0
+        process.poll.return_value = None
+        sessions: list[str] = []
+        with tempfile.TemporaryDirectory() as raw_dir, patch.object(
+            slack_socket_agent.subprocess, "Popen", return_value=process
+        ) as popen, patch.object(slack_socket_agent.threading, "Timer"), patch.object(
+            slack_socket_agent, "register_active_run"
+        ):
+            slack_socket_agent.run_backend_events(
+                "codex", "T123", "C123", "1.23", "U123", "question", "thread", Path(raw_dir), 30,
+                MagicMock(), resume_session="thread-8", on_session=sessions.append,
+            )
+        command = popen.call_args.args[0]
+        self.assertEqual("thread-8", command[command.index("--resume-session") + 1])
+        self.assertEqual(["thread-9"], sessions)
 
     def test_forwards_lifecycle_activity_to_private_record(self) -> None:
         callback = MagicMock()

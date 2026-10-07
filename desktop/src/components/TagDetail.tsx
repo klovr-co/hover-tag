@@ -425,6 +425,8 @@ type FilterProps = { hideErrors: boolean; setHideErrors: (hide: boolean) => void
 type ActivityEntry = { tag: string; item: ActivityItem };
 type HistoryProps = { hasMore: boolean; loading: boolean; loadOlder: () => void };
 const activityKey = ({ tag, item }: ActivityEntry) => `${tag}:${item.run_id ?? item.at}`;
+/** Older Tags report no thread, so each of their runs stays its own entry. */
+const threadKey = (entry: ActivityEntry) => entry.item.thread ? `${entry.tag}:thread:${entry.item.thread}` : activityKey(entry);
 function mergeActivity(previous: ActivityEntry[] | null, incoming: ActivityEntry[]) {
   const merged = new Map((previous ?? []).map((entry) => [activityKey(entry), entry]));
   for (const entry of incoming) merged.set(activityKey(entry), entry);
@@ -444,9 +446,17 @@ function ActivityFeed({ api, rows, entries, hideErrors, hasMore, loading, loadOl
     .filter(({ item }) => item.kind !== "replied" || item.reply_summary?.trim() || item.reply_preview?.trim() || item.artifacts?.length)
     .sort((a, b) => new Date(a.item.at).getTime() - new Date(b.item.at).getTime());
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [openThreads, setOpenThreads] = useState<Record<string, boolean>>({});
+  // Every reply in one Slack thread continues one conversation, so it is one entry.
+  const threads = [...sorted.reduce((groups, entry) => {
+    const group = groups.get(threadKey(entry)) ?? [];
+    group.push(entry);
+    return groups.set(threadKey(entry), group);
+  }, new Map<string, ActivityEntry[]>()).values()]
+    .sort((a, b) => new Date(a[a.length - 1].item.at).getTime() - new Date(b[b.length - 1].item.at).getTime());
   const feed = useRef<HTMLDivElement>(null);
   const viewport = useRef({ initialized: false, bottom: true, height: 0, first: "", top: 0 });
-  const first = sorted[0] ? activityKey(sorted[0]) : "";
+  const first = threads[0] ? threadKey(threads[0][0]) : "";
   useLayoutEffect(() => {
     const scroller = feed.current?.closest<HTMLElement>(".sl-body");
     if (!scroller || entries === null) return;
@@ -469,6 +479,37 @@ function ActivityFeed({ api, rows, entries, hideErrors, hasMore, loading, loadOl
     scroller.addEventListener("scroll", scroll);
     return () => scroller.removeEventListener("scroll", scroll);
   }, [hasMore, loading, loadOlder]);
+  const message = ({ tag, item }: ActivityEntry) => {
+    const row = rows.find((row) => row.id === tag);
+    if (!row) return null;
+    const preview = item.reply_summary?.trim() || item.reply_preview?.trim();
+    const at = new Date(item.at);
+    const key = activityKey({ tag, item });
+    return (
+      <div className="sl-msg">
+        <Avatar row={row} size={34} badge={false} className="" />
+        <div>
+          <div className="who">{title(row)}<span>{clock(at)}</span>{item.model && <span title={`${item.backend ?? "Agent"} · ${item.model}${item.reasoning_effort ? ` · ${effortLabel(item.reasoning_effort)} thinking` : ""}`}>· {item.model_name || item.model}{item.reasoning_effort && ` ${effortShort(item.reasoning_effort)}`}</span>}
+            {item.duration_seconds != null && Number.isFinite(item.duration_seconds) && item.duration_seconds > 0 && <span title="Generation time, including tool work">· {generationTime(item.duration_seconds)}</span>}
+            {item.usage && <ActivityTokens usage={item.usage} />}
+            <StepsToggle item={item} open={!!expanded[key]} controls={`${key}:work`} onToggle={() => setExpanded((all) => ({ ...all, [key]: !all[key] }))} />
+          </div>
+          {item.kind === "replied" ?
+            preview && <p className="activity-reply-preview">{preview}</p>
+            : <p>{ACTIVITY_TEXT[item.kind] ?? "Worked in"} <span className={item.dm ? undefined : "sl-chan"}>{placeText(item)}</span>{item.kind === "working" ? "…" : ""}</p>}
+          <ActivityArtifacts api={api} item={item} />
+          <ActivityDetails api={api} tag={row.id} item={item} open={!!expanded[key]} id={`${key}:work`}>
+            {item.kind === "replied" && (showReplyPlace || (preview && !item.reply_summary?.trim())) &&
+            <div className="activity-reply-place">
+              {showReplyPlace && <>Replied{(item.dm || item.channel_name) && <> in <span className={item.dm ? undefined : "sl-chan"}>{placeText(item)}</span></>}</>}
+              {preview && !item.reply_summary?.trim() && <span>{showReplyPlace && " · "}{item.reply_summary_status === "pending" ? "Summarizing…" : item.reply_summary_status === "unavailable" ? "Summary unavailable · Reply excerpt" : "Reply excerpt"}</span>}
+            </div>
+            }
+          </ActivityDetails>
+        </div>
+      </div>
+    );
+  };
   let day = "";
   return <>
     <div ref={feed} className="activity-history">
@@ -478,40 +519,24 @@ function ActivityFeed({ api, rows, entries, hideErrors, hasMore, loading, loadOl
       <img src={tagIcon} alt="" style={{ width: 48, borderRadius: 12 }} />
       <div className="label">{empty}</div>
     </div>}
-      {sorted.map(({ tag, item }, i) => {
-        const row = rows.find((row) => row.id === tag);
-        if (!row) return null;
-        const preview = item.reply_summary?.trim() || item.reply_preview?.trim();
-        const at = new Date(item.at);
-        const label = dayLabel(at, now);
+      {threads.map((thread) => {
+        const latest = thread[thread.length - 1];
+        const earlier = thread.slice(0, -1);
+        const label = dayLabel(new Date(latest.item.at), now);
         const divider = label !== day;
-        const key = `${row.id}:${item.run_id ?? `${item.at}-${i}`}`;
+        const group = threadKey(latest);
         day = label;
         return (
-          <div key={key}>
+          <div key={group}>
             {divider && <div className="sl-day"><span>{label}</span></div>}
-            <div className="sl-msg">
-              <Avatar row={row} size={34} badge={false} className="" />
-              <div>
-                <div className="who">{title(row)}<span>{clock(at)}</span>{item.model && <span title={`${item.backend ?? "Agent"} · ${item.model}${item.reasoning_effort ? ` · ${effortLabel(item.reasoning_effort)} thinking` : ""}`}>· {item.model_name || item.model}{item.reasoning_effort && ` ${effortShort(item.reasoning_effort)}`}</span>}
-                  {item.duration_seconds != null && Number.isFinite(item.duration_seconds) && item.duration_seconds > 0 && <span title="Generation time, including tool work">· {generationTime(item.duration_seconds)}</span>}
-                  {item.usage && <ActivityTokens usage={item.usage} />}
-                  <StepsToggle item={item} open={!!expanded[key]} controls={`${key}:work`} onToggle={() => setExpanded((all) => ({ ...all, [key]: !all[key] }))} />
-                </div>
-                {item.kind === "replied" ?
-                  preview && <p className="activity-reply-preview">{preview}</p>
-                  : <p>{ACTIVITY_TEXT[item.kind] ?? "Worked in"} <span className={item.dm ? undefined : "sl-chan"}>{placeText(item)}</span>{item.kind === "working" ? "…" : ""}</p>}
-                <ActivityArtifacts api={api} item={item} />
-                <ActivityDetails api={api} tag={row.id} item={item} open={!!expanded[key]} id={`${key}:work`}>
-                  {item.kind === "replied" && (showReplyPlace || (preview && !item.reply_summary?.trim())) &&
-                  <div className="activity-reply-place">
-                    {showReplyPlace && <>Replied{(item.dm || item.channel_name) && <> in <span className={item.dm ? undefined : "sl-chan"}>{placeText(item)}</span></>}</>}
-                    {preview && !item.reply_summary?.trim() && <span>{showReplyPlace && " · "}{item.reply_summary_status === "pending" ? "Summarizing…" : item.reply_summary_status === "unavailable" ? "Summary unavailable · Reply excerpt" : "Reply excerpt"}</span>}
-                  </div>
-                  }
-                </ActivityDetails>
-              </div>
-            </div>
+            {message(latest)}
+            {earlier.length > 0 && <div className="activity-thread">
+              <button className="link activity-thread-toggle" aria-expanded={!!openThreads[group]}
+                onClick={() => setOpenThreads((all) => ({ ...all, [group]: !all[group] }))}>
+                {openThreads[group] ? "Hide" : "Show"} {earlier.length} earlier {earlier.length === 1 ? "reply" : "replies"} in this thread
+              </button>
+              {openThreads[group] && earlier.map((entry) => <div key={activityKey(entry)}>{message(entry)}</div>)}
+            </div>}
           </div>
         );
       })}

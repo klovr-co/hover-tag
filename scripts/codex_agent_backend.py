@@ -55,6 +55,11 @@ MAX_REQUEST_LINE_BYTES = 1024 * 1024
 MAX_RESPONSE_LINE_BYTES = 32 * 1024 * 1024
 MAX_STDERR_BYTES = 64 * 1024
 REQUEST_TIMEOUT_SECONDS = 60.0
+SUBAGENT_FOLLOW_UP_PROMPT = (
+    "Your background sub-agents have finished. Use their results to complete the original "
+    "request and give your final answer."
+)
+TERMINAL_SUBAGENT_KINDS = frozenset({"completed", "interrupted"})
 AUTO_REVIEW_RETRY_LABEL = "retry an action denied by automatic review"
 MAX_AUTO_REVIEW_APPROVALS = 10
 
@@ -104,9 +109,20 @@ class JsonLineDecoder:
 
 
 class CodexEventMapper:
-    """Map native lifecycle notifications to Tag's Slack-safe event contract."""
+    """Map native lifecycle notifications to Tag's Slack-safe event contract.
 
-    def __init__(self) -> None:
+    Only the request's main thread is mapped; sub-agent threads are private.
+    Codex does not wake the main thread when a background sub-agent finishes,
+    so a turn that ends with sub-agents still running sets
+    ``awaiting_subagents`` instead of completing, and its answer is demoted to
+    commentary. The run then starts a follow-up turn once they finish.
+    """
+
+    def __init__(self, thread_id: str | None = None) -> None:
+        self.thread_id = thread_id
+        self.subagents: set[str] = set()
+        self.awaiting_subagents = False
+        self.interim_ids: set[str] = set()
         self.message_phases: dict[str, str | None] = {}
         self.pending_deltas: dict[str, list[str]] = {}
         self.completed_messages: list[tuple[str, str | None, str]] = []
@@ -118,8 +134,11 @@ class CodexEventMapper:
         params = message.get("params")
         if not isinstance(method, str) or not isinstance(params, dict):
             return []
+        thread_id = params.get("threadId")
+        if self.thread_id and isinstance(thread_id, str) and thread_id != self.thread_id:
+            return []
         if method == "thread/tokenUsage/updated":
-            return agent_usage.codex_event(params)
+            return [*agent_usage.codex_event(params), *self._context(params)]
         if method == "item/started":
             return self._item_started(params)
         if method == "item/agentMessage/delta":
@@ -145,8 +164,15 @@ class CodexEventMapper:
         item_id = item.get("id")
         if not isinstance(item_id, str) or not item_id:
             return []
+        if item.get("type") == "subAgentActivity":
+            self._track_subagent(item)
+            return []
         if item.get("type") == "agentMessage":
             phase = item.get("phase") if item.get("phase") in {"commentary", "final_answer"} else None
+            if self.subagents:
+                # Written while sub-agents still run: an interim note, not the answer.
+                self.interim_ids.add(item_id)
+                phase = "commentary"
             self.message_phases[item_id] = phase
             events = [{"type": "message_start", "message_id": item_id, "phase": phase}]
             if phase == "final_answer":
@@ -192,9 +218,14 @@ class CodexEventMapper:
         item_id = item.get("id")
         if not isinstance(item_id, str) or not item_id:
             return []
+        if item.get("type") == "subAgentActivity":
+            self._track_subagent(item)
+            return []
         if item.get("type") == "agentMessage":
             raw_phase = item.get("phase")
             phase = raw_phase if raw_phase in {"commentary", "final_answer"} else self.message_phases.get(item_id)
+            if item_id in self.interim_ids:
+                phase = "commentary"
             text = item.get("text")
             if not isinstance(text, str):
                 text = ""
@@ -224,16 +255,42 @@ class CodexEventMapper:
             }]
         return []
 
+    @staticmethod
+    def _context(params: dict[str, Any]) -> list[dict[str, Any]]:
+        """The conversation's size as of its latest model call, for deciding whether to continue it."""
+        usage = params.get("tokenUsage")
+        last = usage.get("last") if isinstance(usage, dict) else None
+        if not isinstance(last, dict):
+            return []
+        tokens = [last.get("inputTokens"), last.get("outputTokens")]
+        if not all(isinstance(value, int) and value >= 0 for value in tokens):
+            return []
+        return [{"type": "context", "tokens": sum(tokens)}]
+
+    def _track_subagent(self, item: dict[str, Any]) -> None:
+        agent_thread = item.get("agentThreadId")
+        if not isinstance(agent_thread, str) or not agent_thread:
+            return
+        if item.get("kind") == "started":
+            self.subagents.add(agent_thread)
+        elif item.get("kind") in TERMINAL_SUBAGENT_KINDS:
+            self.subagents.discard(agent_thread)
+
     def _turn_completed(self, params: dict[str, Any]) -> list[dict[str, Any]]:
         turn = params.get("turn")
         if not isinstance(turn, dict):
             return []
         status = turn.get("status")
+        if status == "completed" and self.subagents:
+            self.awaiting_subagents = True
+            return []
         events: list[dict[str, Any]] = []
         if not self.emitted_final_ids:
+            # An interim note stands as the answer if its sub-agents finished
+            # before the turn ended, since nothing will wake the thread again.
             fallback = next(
                 ((item_id, text) for item_id, phase, text in reversed(self.completed_messages)
-                 if phase is None and text),
+                 if (phase is None or item_id in self.interim_ids) and text),
                 None,
             )
             if fallback:
@@ -270,8 +327,10 @@ class CodexAppServer:
         run_id: str | None = None,
         approval_dir: Path | None = None,
         text_only_instructions: str | None = None,
+        resume_thread_id: str | None = None,
     ) -> None:
         self.command = command
+        self.resume_thread_id = resume_thread_id
         self.chatgpt_token = ""
         self.gateway_proxy: agent_gateway.GatewayProxy | None = None
         self.auth_identity: tuple | None = None
@@ -296,6 +355,7 @@ class CodexAppServer:
         self.auto_review_denials: list[dict[str, Any]] = []
         self.seen_auto_reviews: set[str] = set()
         self.held_auto_review_messages: list[dict[str, Any]] = []
+        self.waiting_for_subagents = False
 
     def model_catalog(self) -> list[dict[str, Any]]:
         """Read models for the signed-in account without creating a thread or turn."""
@@ -333,7 +393,14 @@ class CodexAppServer:
         model: str | None,
         reasoning_effort: str | None,
         emit: Callable[[dict[str, Any]], None],
+        instructions: str | None = None,
+        continued_prompt: str | None = None,
     ) -> tuple[str, str]:
+        """Answer ``prompt``; a resumed conversation receives ``continued_prompt`` when given.
+
+        Standing ``instructions`` become the thread's developer instructions, so
+        they are not repeated in the conversation history on every request.
+        """
         self._start()
         mapper = CodexEventMapper()
         max_deadline = time.monotonic() + self.max_timeout
@@ -347,13 +414,17 @@ class CodexAppServer:
                 max_deadline,
             )
             self._notify("initialized", {})
+            # Saved threads let sub-agents load their parent's context and let a
+            # Slack thread resume its conversation; summaries stay out of history.
             thread_params: dict[str, Any] = {
                 "cwd": str(self.cwd),
                 "sandbox": "workspace-write",
                 "approvalsReviewer": "auto_review",
-                "ephemeral": not bool(self.chatgpt_token),
+                "ephemeral": self.text_only_instructions is not None,
                 "serviceName": "tag_slack_bridge",
             }
+            if instructions:
+                thread_params["developerInstructions"] = instructions
             if model:
                 thread_params["model"] = model
             if self.text_only_instructions is not None:
@@ -384,11 +455,16 @@ class CodexAppServer:
                 thread_params.update(sandbox="read-only", approvalPolicy="never",
                     approvalsReviewer="user", baseInstructions=self.text_only_instructions,
                     developerInstructions="", config=overrides)
-            thread_result = self._request("thread/start", thread_params, mapper, emit, max_deadline)
+            thread_result = self._resume_thread(model, instructions, mapper, emit, max_deadline)
+            if thread_result is not None and continued_prompt:
+                prompt = continued_prompt
+            if thread_result is None:
+                thread_result = self._request("thread/start", thread_params, mapper, emit, max_deadline)
             thread = thread_result.get("thread") if isinstance(thread_result, dict) else None
             if not isinstance(thread, dict) or not isinstance(thread.get("id"), str):
                 raise CodexAppServerError("Codex returned an invalid thread/start response")
             self.thread_id = thread["id"]
+            mapper.thread_id = self.thread_id
             resolved_model = thread_result.get("model") or thread.get("model")
             if isinstance(resolved_model, str) and resolved_model:
                 info: dict[str, Any] = {"type": "run_info", "model": resolved_model}
@@ -396,6 +472,8 @@ class CodexAppServer:
                 if isinstance(resolved_effort, str) and resolved_effort:
                     info["reasoning_effort"] = resolved_effort
                 emit(info)
+            if self.text_only_instructions is None:
+                emit({"type": "session", "session_id": self.thread_id})
             turn_params: dict[str, Any] = {
                 "threadId": self.thread_id,
                 "input": [{"type": "text", "text": prompt}],
@@ -451,6 +529,43 @@ class CodexAppServer:
                 emit({"type": "status", "text": "ChatGPT connection renewed; continuing the task."})
         finally:
             self.close()
+
+    def set_thread_name(self, thread_id: str, name: str) -> None:
+        """Title a saved thread in the operator's Codex history without starting a turn."""
+        mapper = CodexEventMapper(thread_id)
+        deadline = time.monotonic() + self.timeout
+        try:
+            self._start()
+            self._request("initialize", {"clientInfo": self._client_info()},
+                          mapper, lambda event: None, deadline)
+            self._notify("initialized", {})
+            self._request("thread/name/set", {"threadId": thread_id, "name": name},
+                          mapper, lambda event: None, deadline)
+        finally:
+            self.close()
+
+    def _resume_thread(
+        self, model: str | None, instructions: str | None, mapper: CodexEventMapper,
+        emit: Callable[[dict[str, Any]], None], deadline: float,
+    ) -> Any:
+        """Resume this Slack thread's saved conversation, or return None to start fresh."""
+        if not self.resume_thread_id or self.text_only_instructions is not None:
+            return None
+        params: dict[str, Any] = {"threadId": self.resume_thread_id, "cwd": str(self.cwd),
+                                  "sandbox": "workspace-write", "approvalsReviewer": "auto_review"}
+        if model:
+            params["model"] = model
+        if instructions:
+            params["developerInstructions"] = instructions
+        try:
+            result = self._request("thread/resume", params, mapper, emit, deadline)
+        except CodexAppServerError:
+            # A deleted, archived, or incompatible conversation is replaced, not fatal.
+            return None
+        thread = result.get("thread") if isinstance(result, dict) else None
+        if not isinstance(thread, dict) or thread.get("id") != self.resume_thread_id:
+            return None
+        return result
 
     @staticmethod
     def _client_info() -> dict[str, str]:
@@ -584,6 +699,8 @@ class CodexAppServer:
     def _next_message(self, deadline: float) -> dict[str, Any]:
         while True:
             self._check_control()
+            if self.interrupt_sent and self.waiting_for_subagents:
+                return {}  # No turn is running to confirm the stop; let the caller end the run.
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise CodexAppServerError("Codex App Server request timed out")
@@ -628,8 +745,18 @@ class CodexAppServer:
         timeout_detail = ""
         interrupt_deadline = float("inf")
         while True:
+            self.waiting_for_subagents = mapper.awaiting_subagents
+            if self.waiting_for_subagents and self.interrupt_sent:
+                # The main turn already ended; closing the server stops its sub-agents.
+                return "interrupted", ""
             try:
-                deadline = min(idle_deadline, max_deadline, self.token_renewal_deadline) if not timed_out else interrupt_deadline
+                if timed_out:
+                    deadline = interrupt_deadline
+                elif mapper.subagents:
+                    # Sub-agents may run silently for long stretches; only the maximum runtime applies.
+                    deadline = max_deadline
+                else:
+                    deadline = min(idle_deadline, max_deadline, self.token_renewal_deadline)
                 message = self._next_message(deadline)
             except CodexAppServerError as exc:
                 now = time.monotonic()
@@ -652,7 +779,7 @@ class CodexAppServer:
             if "method" in message and "id" not in message:
                 self._remember_auto_review(message)
                 events = mapper.map(message)
-                if self._is_progress_notification(message) and not timed_out:
+                if (self._is_progress_notification(message) or mapper.subagents) and not timed_out:
                     idle_deadline = time.monotonic() + self.timeout
                 for event in events:
                     if event.get("type") == "turn_complete":
@@ -662,7 +789,7 @@ class CodexAppServer:
                                 and event.get("status") == "completed"
                                 and self._approve_auto_review_denials(mapper, emit, max_deadline)):
                             held_messages.clear()
-                            mapper = CodexEventMapper()
+                            mapper = CodexEventMapper(self.thread_id)
                             self.turn_id = None
                             result = self._request("turn/start", {
                                 "threadId": self.thread_id,
@@ -693,9 +820,29 @@ class CodexAppServer:
                         held_messages.append(event)
                     else:
                         emit(event)
+                if mapper.awaiting_subagents and not timed_out and not self.interrupt_sent:
+                    if not mapper.subagents:
+                        mapper = self._start_subagent_follow_up(emit, max_deadline)
+                        idle_deadline = time.monotonic() + self.timeout
                 continue
             if self._dispatch(message, mapper, emit, max_deadline) and not timed_out:
                 idle_deadline = time.monotonic() + self.timeout
+
+    def _start_subagent_follow_up(
+        self, emit: Callable[[dict[str, Any]], None], deadline: float,
+    ) -> CodexEventMapper:
+        """Wake the main thread to use its finished sub-agents' results."""
+        mapper = CodexEventMapper(self.thread_id)
+        self.turn_id = None
+        result = self._request("turn/start", {
+            "threadId": self.thread_id,
+            "input": [{"type": "text", "text": SUBAGENT_FOLLOW_UP_PROMPT}],
+        }, mapper, emit, deadline)
+        turn = result.get("turn") if isinstance(result, dict) else None
+        if not isinstance(turn, dict) or not isinstance(turn.get("id"), str):
+            raise CodexAppServerError("Codex returned an invalid sub-agent follow-up turn")
+        self.turn_id = turn["id"]
+        return mapper
 
     def _remember_auto_review(self, message: dict[str, Any]) -> None:
         """Retain exact denials locally; Slack receives only a separate redacted preview."""

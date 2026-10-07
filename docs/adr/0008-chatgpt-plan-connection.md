@@ -3,6 +3,7 @@
 - Status: Accepted
 - Date: 2026-10-02
 - Amended: 2026-10-05 — shared provider accounts for all Tags.
+- Amended: 2026-10-07 — task threads are saved and continued per Slack thread; see [ADR 0009](0009-thread-scoped-agent-conversations.md).
 - Tracking: [ChatGPT plan connection #153](https://github.com/klovr-co/hover-tag/issues/153)
 - Extends: ADR 0004's inherited authentication and ephemeral-thread defaults.
 
