@@ -131,6 +131,10 @@ Generated file delivery:
 - Do not mention the manifest helper, its exit code, or manifest state; those
   are internal transport details.
 """
+    try:
+        kept_images_dir = str(channel_artifact_directory(workdir, channel_id) / "images")
+    except ValueError:
+        kept_images_dir = "(unavailable)"
     canvas_instructions = f"""
 Canvas capability:
 - When the user asks to create a Canvas in this Slack channel, you may create
@@ -151,11 +155,28 @@ Channel-post capability:
   expressly requested the channel message. State in your final answer whether
   the post succeeded.
 
+Earlier-attachment capability:
+- Only the current message's files, or the latest attachment group, are
+  downloaded automatically. Other thread files appear as
+  `[Historical attachment, not downloaded: NAME (FILE_ID)]`.
+- When the request depends on one of those files (for example "both", "these",
+  or an earlier screenshot), run
+  `{helper_command(skill_dir / "scripts" / "slack_thread_file.py")}`
+  with `--attachments-dir {shlex.quote(str(attachments_dir)) if attachments_dir else "(unavailable)"}`
+  and one `--file-id FILE_ID` per file, then inspect the printed paths.
+- Images you returned in earlier requests are also kept in
+  `{kept_images_dir}`; look there
+  first for your own earlier results.
+- The helper only downloads files shared in this channel, up to 15 MB each.
+  Never comment on a file you have not opened; if a download fails, say which
+  file you could not see.
+
 Generated-image result capability:
 - When the user asks you to create or return an image, save each final PNG,
   JPEG, GIF, or WebP file directly in `{image_results_dir or "(unavailable)"}`.
 - The Slack bridge uploads supported files from that directory to the current
-  thread after your final answer. Do not call Slack's API to upload them.
+  thread after your final answer and keeps a copy in this channel's `images`
+  folder. Do not call Slack's API to upload them.
 - Put only final images there, use descriptive filenames, and still describe
   the result concisely in your final answer.
 
@@ -186,6 +207,7 @@ Available helper scripts:
 - {skill_dir / "scripts" / "mfs_cat.py"}
 - {skill_dir / "scripts" / "slack_history_search.py"}
 - {skill_dir / "scripts" / "slack_post_message.py"}
+- {skill_dir / "scripts" / "slack_thread_file.py"}
 {canvas_instructions}
 {artifact_instructions}
 

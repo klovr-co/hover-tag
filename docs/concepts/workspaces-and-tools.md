@@ -83,6 +83,18 @@ keeps the local file, reports the failure, and continues with other files. Ask
 Tag to attach it again after resolving the failure, or to create a smaller copy
 for an oversized file.
 
+## Use earlier files in a thread
+
+Tag automatically opens the files on your current message. If your message has
+none, it opens the most recent message with files. When a request depends on
+other files earlier in the thread, such as "what do you think about both?",
+Tag opens those files too, up to 15 MB each. It can open only files shared in
+the current channel. If it cannot open a file, it says so instead of
+commenting on it.
+
+Images Tag returns in a thread are also kept in the channel's `images` folder
+under `artifacts/` in the workspace, so Tag can reopen its own earlier results.
+
 ## Use a forwarded Slack file
 
 Tag can read supported files attached to forwarded Slack messages, as well as

@@ -37,6 +37,7 @@ COMMAND_LABELS = {
     "mfs_ls.py": "Browsing connected knowledge…",
     "slack_canvas.py": "Creating a Slack canvas…",
     "slack_post_message.py": "Posting to Slack…",
+    "slack_thread_file.py": "Opening an earlier attachment…",
 }
 DOCUMENT_HELPER_RE = re.compile(
     r"(?:create|generate|render|build|export)[-_].*(?:docx|document|pdf|pptx|xlsx)"

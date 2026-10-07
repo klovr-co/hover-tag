@@ -65,6 +65,7 @@
     "scripts/slack_mrkdwn.py",
     "scripts/slack_permissions.py",
     "scripts/slack_post_message.py",
+    "scripts/slack_thread_file.py",
     "scripts/slack_search_scope.py",
     "scripts/slack_socket_agent.py",
     "scripts/slack_workspace_icon.py",

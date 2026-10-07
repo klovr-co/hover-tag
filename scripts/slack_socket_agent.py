@@ -9,6 +9,7 @@ import json
 import mimetypes
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -66,6 +67,7 @@ try:
     from .tag_approval_choices import sanitize_review_details
     from .tag_activity_labels import activity_title_for_status, readable_activity_title
     from .tag_paths import tag_temp_dir
+    from .record_output_artifact import channel_artifact_directory
     from . import slack_channels
 except ImportError:  # Direct script execution does not create a package context.
     import slack_identity
@@ -103,6 +105,7 @@ except ImportError:  # Direct script execution does not create a package context
     from tag_activity_details import sanitize_activity_details
     from tag_approval_choices import sanitize_review_details
     from tag_activity_labels import activity_title_for_status, readable_activity_title
+    from record_output_artifact import channel_artifact_directory
     from tag_paths import tag_temp_dir
     import slack_channels
 
@@ -675,6 +678,14 @@ def download_thread_binary_files(
     return lines
 
 
+def kept_images_directory(channel: str) -> Path | None:
+    """Return the channel folder that keeps generated images between requests."""
+    try:
+        return channel_artifact_directory(default_workdir(), channel) / "images"
+    except (OSError, ValueError):
+        return None
+
+
 def generated_images_dir(attachment_dir: Path) -> Path:
     """Return the backend/bridge handoff directory for generated images."""
     return attachment_dir / "results" / "images"
@@ -717,9 +728,19 @@ def upload_generated_images(
     results_dir: Path,
     *,
     artifacts: list[dict[str, str]] | None = None,
+    keep_dir: Path | None = None,
 ) -> list[str]:
-    """Upload validated backend image results into the originating Slack thread."""
+    """Upload validated backend image results into the originating Slack thread.
+
+    A copy of each image is kept in ``keep_dir`` so later requests in the
+    channel can reopen it after the invocation directory is removed.
+    """
     images, errors = collect_generated_images(results_dir)
+    if keep_dir is not None and images:
+        try:
+            keep_generated_images(images, keep_dir)
+        except OSError:
+            pass  # Keeping a copy is best effort; the Slack upload still proceeds.
     for path in images:
         artifact = {"name": path.name, "kind": "image", "delivery": "upload_failed"}
         if artifacts is not None:
@@ -738,6 +759,27 @@ def upload_generated_images(
         except Exception as exc:  # noqa: BLE001 - upload failures must not hide the text answer
             errors.append(f"{path.name}: {exc}")
     return errors
+
+
+def keep_generated_images(images: list[Path], keep_dir: Path) -> None:
+    """Copy images without overwriting earlier results that share a name."""
+    if keep_dir.is_symlink():
+        raise OSError(f"Refusing to keep images in a symlinked folder: {keep_dir}")
+    keep_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    for path in images:
+        target = keep_dir / path.name
+        counter = 2
+        while True:
+            try:
+                # O_EXCL reserves the name atomically and never follows a (dangling) symlink.
+                fd = os.open(target, flags, 0o600)
+                break
+            except FileExistsError:
+                target = keep_dir / f"{path.stem}-{counter}{path.suffix}"
+                counter += 1
+        with os.fdopen(fd, "wb") as destination, path.open("rb") as source:
+            shutil.copyfileobj(source, destination)
 
 
 def uploaded_file_permalink(response: Any) -> str | None:
@@ -4230,6 +4272,7 @@ def create_app(
                         thread_ts,
                         image_results_dir,
                         artifacts=delivered_artifacts,
+                        keep_dir=kept_images_directory(channel),
                     )
                     if activity_run_id is not None:
                         try:
