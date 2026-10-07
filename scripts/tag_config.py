@@ -25,6 +25,7 @@ DEFAULTS = {
     "OPENTAG_BACKEND_ATTEMPTS": "3", "OPENTAG_SLACK_STREAMING": "1",
     "OPENTAG_SLACK_DM_ENABLED": "1",
     "OPENTAG_FILE_DELIVERY": "local+slack",
+    "OPENTAG_THREAD_MAX_CONTEXT_TOKENS": "150000", "OPENTAG_THREAD_IDLE_HOURS": "4",
     "MFS_URL": "http://127.0.0.1:13619", "MFS_SLACK_HISTORY_DAYS": "30",
 }
 BACKENDS = frozenset({"codex", "claude"})
@@ -70,6 +71,8 @@ LABELS = {
     "OPENTAG_SLACK_DM_ENABLED": "Direct messages (1 on, 0 off)",
     "OPENTAG_FILE_DELIVERY": "File delivery (local or local+slack)",
     "OPENTAG_TRANSPORT": "Chat service",
+    "OPENTAG_THREAD_MAX_CONTEXT_TOKENS": "Continue a Slack thread's conversation up to this many tokens (0 never continues)",
+    "OPENTAG_THREAD_IDLE_HOURS": "Continue a Slack thread's conversation within this many idle hours (0 never continues)",
 }
 
 
@@ -190,6 +193,8 @@ def validation_error(key: str, value: str) -> str | None:
         return "Only slack is supported"
     if key in {"OPENTAG_TIMEOUT_SECONDS", "OPENTAG_MAX_TIMEOUT_SECONDS", "OPENTAG_BACKEND_ATTEMPTS"} and (not value.isascii() or not value.isdigit() or int(value) < 1):
         return "Use a positive integer"
+    if key in {"OPENTAG_THREAD_MAX_CONTEXT_TOKENS", "OPENTAG_THREAD_IDLE_HOURS"} and (not value.isascii() or not value.isdigit()):
+        return "Use 0 or a positive integer"
     if key == "MFS_SLACK_HISTORY_DAYS" and value not in {"7", "30", "90"}:
         return "Choose 7, 30, or 90 days"
     if key == "MFS_SLACK_CONNECTOR_URI" and value and not value.startswith("slack://"):

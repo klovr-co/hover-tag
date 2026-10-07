@@ -9,6 +9,8 @@ import { status, title, type TagRow } from "./protocol";
 /** One thing a Tag did, from `tag NAME logs --json` → `activity`. */
 export interface ActivityItem {
   run_id?: string;
+  /** Opaque key shared by every run in one Slack thread. */
+  thread?: string;
   reply_preview?: string;
   reply_summary?: string;
   reply_summary_status?: "pending" | "ready" | "unavailable";

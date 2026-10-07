@@ -91,9 +91,10 @@ ran the required workflows, failed them, or finished its edge build
 unsuccessfully does not block later merges; rerun its edge build only if that
 commit still needs its own prerelease.
 
-Moving from alpha to beta is a source change: update `VERSION` to the complete
-semantic beta version `<major>.<minor>.<patch>-beta.1` (for example,
-`0.2.0-beta.1`) and merge it normally. After the standard CI and clean-install
+Moving from alpha to beta is a source change: update `VERSION` to the beta
+line `<major>.<minor>.<patch>-beta` (for example, `0.2.0-beta`) and merge it
+normally. `VERSION` names the line, never a candidate number; the automation
+numbers each beta from the published tags. After the standard CI and clean-install
 gates pass, the edge workflow publishes the beta automatically from the
 retained artifact. Later eligible merges on that source line publish `beta.2`,
 `beta.3`, and so on. Betas do not require a live Slack probe, evidence-only

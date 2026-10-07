@@ -97,6 +97,20 @@ def summarize_reply(answer: str, backend: str, model: str | None, *, artifacts: 
     return reply_preview(final)
 
 
+def name_session(backend: str, session_id: str, summary: str) -> None:
+    """Title the Slack thread's backend conversation with its latest TL;DR."""
+    if backend == "codex":
+        try:
+            from .opentag_agent import executable_command
+        except ImportError:
+            from opentag_agent import executable_command
+        with tempfile.TemporaryDirectory(prefix="tag-session-name-") as directory:
+            CodexAppServer(executable_command(["codex", "app-server", "-c", "features.hooks=false"]),
+                           cwd=Path(directory), timeout=SUMMARY_TIMEOUT).set_thread_name(session_id, summary)
+    elif backend == "claude":
+        ClaudeAgentRun.set_session_title(session_id, summary)
+
+
 class ReplySummaryWorker:
     """One background consumer with bounded memory and per-run deduplication."""
 
@@ -137,6 +151,12 @@ class ReplySummaryWorker:
                     summary = summarize_reply(answer, backend, model, **metadata)
                     if summary:
                         store.save_reply_summary(run_id, summary)
+                        if isinstance(record.get("session_id"), str):
+                            try:
+                                name_session(backend, record["session_id"], summary)
+                            except Exception as exc:  # noqa: BLE001 - naming is cosmetic
+                                logging.getLogger(__name__).warning(
+                                    "Could not name the backend conversation (%s)", type(exc).__name__)
                     else:
                         store.summary_status(run_id, "unavailable")
             except Exception as exc:

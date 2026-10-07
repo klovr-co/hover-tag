@@ -32,6 +32,7 @@
     "scripts/agent_connection.py",
     "scripts/agent_gateway.py",
     "scripts/agent_models.py",
+    "scripts/agent_sessions.py",
     "scripts/agent_summary.py",
     "scripts/agent_usage.py",
     "scripts/claude_agent_backend.py",

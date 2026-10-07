@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 import time
 import unittest
@@ -52,6 +53,21 @@ class ActivityStoreTests(unittest.TestCase):
                 record["reply_summary_updated_at"] = "2000-01-01T00:00:00+00:00"
                 store._write(record)
                 self.assertEqual("unavailable", tag_activity.recent_activity(store.root)[0]["reply_summary_status"])
+
+    def test_runs_in_one_slack_thread_share_an_opaque_activity_thread(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = ActivityStore(Path(directory))
+            first = store.create(team="T1", channel="C1", thread_ts="1.1", request_ts="1.1", requester="U")
+            second = store.create(team="T1", channel="C1", thread_ts="1.1", request_ts="1.5", requester="U")
+            other = store.create(team="T1", channel="C1", thread_ts="2.2", request_ts="2.2", requester="U")
+            store.save_session(first, "thread-1")
+            store.save_session(second, "../not-an-id")
+            threads = {item["run_id"]: item["thread"] for item in tag_activity.recent_activity(store.root)}
+            self.assertEqual(threads[first], threads[second])
+            self.assertNotEqual(threads[first], threads[other])
+            self.assertNotIn("1.1", threads[first])
+            self.assertEqual("thread-1", store.get(first)["session_id"])
+            self.assertNotIn("session_id", store.get(second))
 
     def test_short_command_names_keep_code_arguments_and_directories_private(self) -> None:
         cases = {
@@ -205,6 +221,7 @@ class RecentActivityTests(unittest.TestCase):
         self.record("C0UNKNOWN", "running", "2026-10-04T10:00:00+00:00")
         items = tag_activity.recent_activity(self.root, self.SCOPES)
         self.assertTrue(all(tag_activity.RUN_ID_RE.fullmatch(item.pop("run_id")) for item in items))
+        self.assertTrue(all(re.fullmatch(r"[a-f0-9]{16}", item.pop("thread")) for item in items))
         self.assertEqual([
             {"at": "2026-10-04T10:00:00+00:00", "kind": "working", "channel": "C0UNKNOWN",
              "channel_name": None, "dm": False},

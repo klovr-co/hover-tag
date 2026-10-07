@@ -55,6 +55,13 @@ AGENT_TOOLS = frozenset({"Task", "Agent", "Skill", "ToolSearch"})
 # Planning and bookkeeping tools are private model state, not workspace activity.
 SILENT_TOOLS = frozenset({"TodoWrite", "TodoRead", "EnterPlanMode", "ExitPlanMode", "AskUserQuestion"})
 INTERACTIVE_TOOLS = frozenset({"AskUserQuestion", "ExitPlanMode"})
+# The CLI reports a resumed conversation it cannot find with this error.
+MISSING_SESSION_ERROR = "No conversation found with session ID"
+RESUME_FAILED = "resume_failed"
+# Background agent work whose completion wakes Claude for a follow-up turn.
+# Background shells are excluded: they may never finish. Mirrors the SDK.
+DEFERRING_TASK_TYPES = frozenset({"local_agent", "local_workflow"})
+TERMINAL_TASK_STATUSES = frozenset({"completed", "failed", "stopped", "killed"})
 
 APPROVAL_LABEL_COMMAND = "run a command that requires approval"
 APPROVAL_LABEL_FILE = "apply a file change that requires approval"
@@ -154,10 +161,12 @@ class ClaudeEventMapper:
         self.tools: dict[str, tuple[str, dict[str, Any] | None]] = {}
         self.completed = False
         self.reported_model: str | None = None
+        self.background_tasks: set[str] = set()
+        self.session_id: str | None = None
 
     @property
     def tools_running(self) -> bool:
-        return bool(self.tools)
+        return bool(self.tools or self.background_tasks)
 
     def map(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         kind = payload.get("kind")
@@ -168,8 +177,37 @@ class ClaudeEventMapper:
         if kind == "UserMessage":
             return self._user_message(payload)
         if kind == "ResultMessage":
-            return self._result(payload)
-        return []
+            events = self._result(payload)
+            if events and events[-1].get("status") == RESUME_FAILED:
+                return events
+            return [*self._session(payload), *events]
+        self._track_task(payload)
+        return self._session(payload)
+
+    def _session(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
+        """Report the conversation id once so a Slack thread can resume it."""
+        session_id = payload.get("session_id")
+        data = payload.get("data")
+        if session_id is None and payload.get("subtype") == "init" and isinstance(data, dict):
+            session_id = data.get("session_id")
+        if not isinstance(session_id, str) or not session_id or session_id == self.session_id:
+            return []
+        self.session_id = session_id
+        return [{"type": "session", "session_id": session_id}]
+
+    def _track_task(self, payload: dict[str, Any]) -> None:
+        task_id = payload.get("task_id")
+        if not isinstance(task_id, str) or not task_id:
+            return
+        subtype = payload.get("subtype")
+        if subtype == "task_started" and payload.get("task_type") in DEFERRING_TASK_TYPES:
+            self.background_tasks.add(task_id)
+        elif subtype == "task_notification":
+            self.background_tasks.discard(task_id)
+        elif subtype == "task_updated":
+            patch = payload.get("patch")
+            if isinstance(patch, dict) and patch.get("status") in TERMINAL_TASK_STATUSES:
+                self.background_tasks.discard(task_id)
 
     def _stream_event(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         if payload.get("parent_tool_use_id") is not None:
@@ -200,7 +238,7 @@ class ClaudeEventMapper:
                 return []
             message_id = self.current_message
             pending = self.pending_deltas.pop(message_id, [])
-            if stop_reason not in FINAL_STOP_REASONS:
+            if stop_reason not in FINAL_STOP_REASONS or self.background_tasks:
                 return [{"type": "message_start", "message_id": message_id, "phase": "commentary"}]
             if not pending:
                 return []
@@ -225,6 +263,13 @@ class ClaudeEventMapper:
             # Synthetic error messages use placeholder names such as <synthetic>.
             self.reported_model = model
             events.append({"type": "run_info", "model": model})
+        usage = payload.get("usage")
+        if payload.get("parent_tool_use_id") is None and isinstance(usage, dict):
+            # Input includes cached prefix tokens; output joins the next call's input.
+            parts = [usage.get(key, 0) for key in ("input_tokens", "cache_read_input_tokens",
+                                                    "cache_creation_input_tokens", "output_tokens")]
+            if all(isinstance(value, int) and value >= 0 for value in parts) and sum(parts):
+                events.append({"type": "context", "tokens": sum(parts)})
         error = payload.get("error")
         if isinstance(error, str) and error and payload.get("parent_tool_use_id") is None:
             events.append({"type": "error", "text": f"Claude reported {error.replace('_', ' ')}", "code": error})
@@ -299,14 +344,22 @@ class ClaudeEventMapper:
     def _result(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         if self.completed:
             return []
-        self.completed = True
+        errors = payload.get("errors")
+        if (payload.get("is_error") and not payload.get("num_turns") and isinstance(errors, list)
+                and any(isinstance(item, str) and item.startswith(MISSING_SESSION_ERROR) for item in errors)):
+            self.completed = True
+            return [{"type": "turn_complete", "status": RESUME_FAILED}]
         events: list[dict[str, Any]] = agent_usage.claude_event(payload)
+        terminal_reason = payload.get("terminal_reason")
+        interrupted = isinstance(terminal_reason, str) and terminal_reason.startswith("aborted")
+        if self.background_tasks and not payload.get("is_error") and not interrupted:
+            # Background agents will wake Claude for another turn; keep reading.
+            return events
+        self.completed = True
         for tool_use_id, (label, _item) in list(self.tools.items()):
             events.append({"type": "activity_complete", "activity_id": tool_use_id, "label": label,
                            "status": "interrupted", "details": {}})
         self.tools.clear()
-        terminal_reason = payload.get("terminal_reason")
-        interrupted = isinstance(terminal_reason, str) and terminal_reason.startswith("aborted")
         if payload.get("is_error") and not interrupted:
             errors = payload.get("errors")
             detail = payload.get("result") if isinstance(payload.get("result"), str) else ""
@@ -384,8 +437,12 @@ class ClaudeAgentRun:
         run_id: str | None = None,
         approval_dir: Path | None = None,
         text_only_instructions: str | None = None,
+        resume_session_id: str | None = None,
+        instructions: str | None = None,
     ) -> None:
+        self.instructions = instructions
         self.cwd = cwd
+        self.resume_session_id = resume_session_id
         self.add_dirs = add_dirs or []
         self.timeout = timeout
         self.max_timeout = max_timeout if max_timeout is not None else timeout
@@ -483,12 +540,18 @@ class ClaudeAgentRun:
             kwargs["effort"] = reasoning_effort
         if fast_mode:
             kwargs["settings"] = json.dumps({"fastMode": True})
+        if self.resume_session_id:
+            kwargs["resume"] = self.resume_session_id
+        if self.instructions:
+            # Sent as the system prompt each run, so it never accumulates in the session.
+            kwargs["system_prompt"] = self.instructions
         if self.text_only_instructions is not None:
             kwargs.update(tools=[], mcp_servers={}, setting_sources=[], add_dirs=[],
                           permission_mode="dontAsk", max_turns=1,
                           system_prompt=self.text_only_instructions,
                           env=text_only_environment(os.environ),
-                          extra_args={"strict-mcp-config": None, "disable-slash-commands": None},
+                          extra_args={"strict-mcp-config": None, "disable-slash-commands": None,
+                                      "no-session-persistence": None},
                           settings=json.dumps({"disableAllHooks": True}))
         return options_factory(**kwargs)
 
@@ -517,6 +580,15 @@ class ClaudeAgentRun:
             return self.control_file.read_text(encoding="utf-8").strip() == self.run_id
         except OSError:
             return False
+
+    @staticmethod
+    def set_session_title(session_id: str, title: str, *, directory: Path | None = None) -> None:
+        """Title a saved session in the operator's Claude history without starting a turn."""
+        try:
+            from claude_agent_sdk import rename_session
+        except ImportError as exc:
+            raise ClaudeAgentError("The Claude Agent SDK cannot rename sessions; run tag upgrade") from exc
+        rename_session(session_id, title, directory=str(directory) if directory else None)
 
     def model_catalog(self) -> list[dict[str, Any]]:
         """Read the signed-in account's models without starting a turn."""
@@ -556,7 +628,24 @@ class ClaudeAgentRun:
         reasoning_effort: str | None,
         fast_mode: bool = False,
         emit: Callable[[dict[str, Any]], None],
+        continued_prompt: str | None = None,
     ) -> tuple[str, str]:
+        """Answer ``prompt``; a resumed session receives ``continued_prompt`` when given."""
+        first = continued_prompt if self.resume_session_id and continued_prompt else prompt
+        try:
+            result = asyncio.run(self._run(first, model=model, reasoning_effort=reasoning_effort,
+                                           fast_mode=fast_mode, emit=emit))
+        except ClaudeAgentError as exc:
+            # The SDK reports the missing conversation as an error result or as an exception.
+            if not self.resume_session_id or MISSING_SESSION_ERROR not in str(exc):
+                raise
+            result = (RESUME_FAILED, "")
+        if result[0] != RESUME_FAILED:
+            return result
+        # The saved conversation is gone; answer in a fresh one instead.
+        self.resume_session_id = None
+        self.interrupt_sent = False
+        self.stderr.clear()
         return asyncio.run(self._run(prompt, model=model, reasoning_effort=reasoning_effort,
                                      fast_mode=fast_mode, emit=emit))
 
@@ -587,7 +676,9 @@ class ClaudeAgentRun:
                 raise ClaudeAgentError("Claude Agent SDK did not start before the deadline") from exc
             except Exception as exc:  # noqa: BLE001 - SDK raises several connection error types
                 raise ClaudeAgentError(self._failure_message(exc)) from exc
-            stream = self.client.receive_response().__aiter__()
+            # receive_messages spans follow-up turns woken by background agents;
+            # the mapper's turn_complete decides when the request is done.
+            stream = self.client.receive_messages().__aiter__()
             timed_out = False
             timeout_detail = ""
             interrupt_deadline = float("inf")
@@ -625,6 +716,9 @@ class ClaudeAgentRun:
                 if not timed_out:
                     self.last_activity = now
                 for event in mapper.map(message_payload(message)):
+                    if event.get("status") == RESUME_FAILED:
+                        terminal = event
+                        continue
                     emit(event)
                     if event.get("type") == "turn_complete":
                         terminal = event

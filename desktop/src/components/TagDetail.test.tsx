@@ -151,6 +151,26 @@ const entry = (summary: string, at: string, kind = "replied", channel = "C0LAUNC
   run_id: summary, reply_summary: summary, at, kind, channel, channel_name: "launch", dm: false, step_count: 2,
 });
 
+it("groups replies in one Slack thread into one entry led by the latest reply", async () => {
+  await open(undefined, false, (api) => {
+    const run = api.tag;
+    api.tag = async (args) => args[1] === "logs" ? { code: 0, stderr: "", stdout: JSON.stringify({ services: {}, activity: [
+      { ...entry("Started the issue review", "2026-10-05T01:00:00Z"), thread: "a1" },
+      { ...entry("Separate question", "2026-10-05T01:30:00Z"), thread: "b2" },
+      { ...entry("Closed 12 of 67 issues", "2026-10-05T02:00:00Z"), thread: "a1" },
+      entry("Older Tag without threads", "2026-10-05T00:30:00Z"),
+    ] }) } : run(args);
+  });
+  await screen.findByText("Closed 12 of 67 issues");
+  const messages = () => [...document.querySelectorAll(".sl-msg p")].map((el) => el.textContent);
+  expect(messages()).toEqual(["Older Tag without threads", "Separate question", "Closed 12 of 67 issues"]);
+  const toggle = screen.getByRole("button", { name: "Show 1 earlier reply in this thread" });
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  fireEvent.click(toggle);
+  expect(messages()).toEqual(["Older Tag without threads", "Separate question", "Closed 12 of 67 issues", "Started the issue review"]);
+  expect(screen.getByRole("button", { name: "Hide 1 earlier reply in this thread" }).getAttribute("aria-expanded")).toBe("true");
+});
+
 it("shows chronological history, hides failures by default, and remembers Show errors", async () => {
   const { calls } = await open(undefined, false, (api) => {
     const run = api.tag;
