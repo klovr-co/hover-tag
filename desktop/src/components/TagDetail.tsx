@@ -325,7 +325,7 @@ function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, sa
           <span className={state === "attention" ? "sub bad" : "sub"}>
             <span>{state === "attention" ? problemText(row) : WORD[state]}{model && " · "}
               {model && <span style={problem ? { color: "var(--amber)", fontWeight: 600 } : undefined} title={problem ?? undefined}>{model}{effort}</span>}
-              {channels.length > 0 && ` · in ${channels.map((c) => `#${channelName(c)}`).join(", ")}`}</span>
+              {channels.length > 0 && ` · in ${channels.length === 1 ? `#${channelName(channels[0])}` : `${channels.length} channels`}`}</span>
           </span>
         </div>
         <Switch on={on} busy={tags.busy.has(row.id)} label={`${on ? "Stop" : "Start"} ${title(row)}`} onClick={() => void tags.toggle(row)} />

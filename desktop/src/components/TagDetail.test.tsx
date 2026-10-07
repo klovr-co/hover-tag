@@ -322,3 +322,13 @@ it("retains excerpts and artifact-only replies without unavailable metadata", as
   expect(screen.queryByTitle("Generation time, including tool work")).toBeNull();
   expect(screen.queryByText(/Tokens unavailable/)).toBeNull();
 });
+
+it("counts a Tag's channels instead of listing them in the header", async () => {
+  await open(undefined, false, (_api, rows) => {
+    rows[0].channels = [{ id: "C1", name: "launch" }, { id: "C2", name: "general" }, { id: "C3", name: "ops" }];
+  });
+  expect(document.querySelector(".sl-mhead .sub")?.textContent).toMatch(/ · in 3 channels$/);
+  cleanup();
+  await open(undefined, false, (_api, rows) => { rows[0].channels = [{ id: "C1", name: "launch" }]; });
+  expect(document.querySelector(".sl-mhead .sub")?.textContent).toMatch(/ · in #launch$/);
+});
