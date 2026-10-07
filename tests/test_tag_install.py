@@ -1053,6 +1053,30 @@ class TagHomeTests(unittest.TestCase):
                 upgrade_command(home, json_output=True, dependencies=False)
             self.assertEqual(2, run.call_count)
 
+    def test_upgrade_reports_only_the_restart_error_for_each_tag(self):
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            tag_instances.ensure_default(home)
+            (home / "current.json").write_text(json.dumps({
+                "installed_version": "0.2.0-beta.1", "installed_commit": "a" * 40,
+                "channel": "beta", "selection": "channel",
+            }), encoding="utf-8")
+            target = FetchedRelease(ROOT, ReleaseSelection("beta", "0.2.0-beta.2", "b" * 40))
+            screen = "STARTING\n  ✓  Slack  Connected\n  ────\n  ✓  Tag restarted\n"
+            with patch("scripts.tag_install.fetch_release", return_value=target), patch(
+                "scripts.tag_install.install"
+            ), patch("scripts.tag_cli.bridge_processes", return_value=["default"]), patch(
+                "scripts.tag_cli.process_for", return_value=None
+            ), patch("scripts.tag_cli.subprocess.run", return_value=subprocess.CompletedProcess(
+                [], 1, screen, "Error: Another lifecycle operation is in progress; retry when it finishes\n",
+            )) as run, self.assertRaises(RuntimeError) as raised:
+                upgrade_command(home, json_output=True, dependencies=False)
+            self.assertEqual("1", run.call_args.kwargs["env"]["TAG_PLAIN_ERRORS"])
+            message = str(raised.exception)
+            self.assertIn("default: Another lifecycle operation is in progress; retry when it finishes", message)
+            self.assertNotIn("Tag restarted", message)
+            self.assertNotIn("[alias]", message)
+
     def test_upgrade_blocks_older_exact_version_without_opt_in(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

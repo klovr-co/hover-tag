@@ -1661,17 +1661,21 @@ def upgrade_command(
         result["restarted"] = False
         if running and not no_restart:
             failures = []
+            # Captured restarts report only their error, not the whole progress screen.
+            environment = {**os.environ, PLAIN_ERRORS_ENV: "1"} if json_output else None
             for tag_id in running_tags:
                 arguments = [] if tag_id == "default" else [tag_id]
                 command = [sys.executable, str(home / "bin/tag-launch.py"), *arguments, "restart"]
-                completed = subprocess.run(command, capture_output=json_output, text=True, check=False)
+                completed = subprocess.run(command, capture_output=json_output, text=True, check=False, env=environment)
                 if completed.returncode:
-                    detail = redact_log_text((completed.stderr or completed.stdout or "").strip())
+                    lines = (completed.stdout or "").strip().splitlines()
+                    detail = (completed.stderr or "").strip() or (lines[-1].strip() if lines else "")
+                    detail = redact_log_text(detail.removeprefix("Error: "))
                     failures.append(tag_id + (f": {detail}" if detail else ""))
             if failures:
                 raise RuntimeError(
-                    "Tag was upgraded, but these Tags need attention: " + "\n".join(failures)
-                    + ". Run tag [alias] doctor, resolve the reported requirement, then retry start."
+                    "Tag was upgraded, but these Tags need attention:\n" + "\n".join(failures)
+                    + "\nRun tag NAME doctor, resolve the reported requirement, then retry tag NAME start."
                 )
             result["restarted"] = True
 
@@ -1688,6 +1692,10 @@ def upgrade_command(
 
 
 SETUP_PROTOCOL_ENV = "TAG_SETUP_PROTOCOL"
+
+
+# Set by a parent command that captures output: report failures as one Error line.
+PLAIN_ERRORS_ENV = "TAG_PLAIN_ERRORS"
 
 
 DEFER_RENAME_ENV = "TAG_DEFER_RENAME"
@@ -3200,18 +3208,32 @@ def _run_cli() -> int:
             lock.release()
             ai_lock.release()
             connection_lock.release()
-        try:
-            import tag_chatgpt
-        except ImportError:
-            from scripts import tag_chatgpt
-        checkpoint = installation_root / "shared/ai/migration-v1.json"
-        with nullcontext() if os.getenv("TAG_AI_MIGRATION_RESTART") == "1" else LifecycleLock(installation_root / "state/ai-migration.lock"):
-            record = tag_chatgpt.read_object(checkpoint)
-            if os.getenv("TAG_AI_MIGRATION_RESTART") != "1" and context.tag_id in record.get("restart", []):
-                record["restart"].remove(context.tag_id)
-                tag_chatgpt.atomic_write(checkpoint, record)
+        _clear_pending_restart(installation_root, context.tag_id)
         show_upgrade_reminder(installation_root)
     return 0
+
+
+def _clear_pending_restart(installation_root, tag_id):
+    """Drop a running Tag from the shared AI migration's restart list."""
+    # The migration that started this Tag holds the lock and owns the list.
+    if os.getenv("TAG_AI_MIGRATION_RESTART") == "1":
+        return
+    try:
+        import tag_chatgpt
+    except ImportError:
+        from scripts import tag_chatgpt
+    checkpoint = installation_root / "shared/ai/migration-v1.json"
+    try:
+        # Another Tag may be starting at the same time: wait for its migration check.
+        with _waiting_lock(installation_root / "state/ai-migration.lock"):
+            record = tag_chatgpt.read_object(checkpoint)
+            if tag_id in record.get("restart", []):
+                record["restart"].remove(tag_id)
+                tag_chatgpt.atomic_write(checkpoint, record)
+    except tag_locks.LockBusy:
+        # This Tag is already running. The next migration check skips running
+        # Tags and clears the entry, so this bookkeeping must not fail the start.
+        pass
 
 
 def _show_telemetry_scope(installation_root: Path) -> None:
@@ -3378,7 +3400,7 @@ if __name__ == "__main__":
             display.progress_result(1, str(exc))
         elif "--json" in sys.argv:
             print(json.dumps({"schema_version": 1, "ok": False, "error": str(exc)}))
-        elif len(sys.argv) > 1 and sys.argv[1] in {"start", "restart", "dev"}:
+        elif len(sys.argv) > 1 and sys.argv[1] in {"start", "restart", "dev"} and os.getenv(PLAIN_ERRORS_ENV) != "1":
             title = "Dev" if sys.argv[1] == "dev" else (
                 "Restart" if os.getenv("TAG_RESTART_FLOW") == "1" or sys.argv[1] == "restart" else "Start"
             )
