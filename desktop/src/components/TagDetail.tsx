@@ -456,16 +456,20 @@ function ActivityFeed({ api, rows, entries, hideErrors, hasMore, loading, loadOl
     .sort((a, b) => new Date(a[a.length - 1].item.at).getTime() - new Date(b[b.length - 1].item.at).getTime());
   const feed = useRef<HTMLDivElement>(null);
   const viewport = useRef({ initialized: false, bottom: true, height: 0, first: "", top: 0 });
+  // Older activity can join existing threads, so the first thread doesn't always change.
+  const olderRequested = useRef(false);
+  const requestOlder = useCallback(() => { olderRequested.current = true; loadOlder(); }, [loadOlder]);
   const first = threads[0] ? threadKey(threads[0][0]) : "";
   useLayoutEffect(() => {
     const scroller = feed.current?.closest<HTMLElement>(".sl-body");
     if (!scroller || entries === null) return;
     const previous = viewport.current;
     if (!previous.initialized || previous.bottom) scroller.scrollTop = scroller.scrollHeight;
-    else if (previous.first !== first) scroller.scrollTop += scroller.scrollHeight - previous.height;
+    else if (previous.first !== first || olderRequested.current) scroller.scrollTop += scroller.scrollHeight - previous.height;
+    if (!loading) olderRequested.current = false;
     viewport.current = { initialized: true, first, height: scroller.scrollHeight, top: scroller.scrollTop,
       bottom: scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop < 40 };
-  }, [entries, first]);
+  }, [entries, first, loading]);
   useEffect(() => {
     const scroller = feed.current?.closest<HTMLElement>(".sl-body");
     if (!scroller) return;
@@ -474,11 +478,11 @@ function ActivityFeed({ api, rows, entries, hideErrors, hasMore, loading, loadOl
       const upwards = scroller.scrollTop < previous.top;
       viewport.current = { ...previous, top: scroller.scrollTop, height: scroller.scrollHeight,
         bottom: scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop < 40 };
-      if (upwards && scroller.scrollTop < 80 && hasMore && !loading) loadOlder();
+      if (upwards && scroller.scrollTop < 80 && hasMore && !loading) requestOlder();
     };
     scroller.addEventListener("scroll", scroll);
     return () => scroller.removeEventListener("scroll", scroll);
-  }, [hasMore, loading, loadOlder]);
+  }, [hasMore, loading, requestOlder]);
   const message = ({ tag, item }: ActivityEntry) => {
     const row = rows.find((row) => row.id === tag);
     if (!row) return null;
@@ -513,7 +517,7 @@ function ActivityFeed({ api, rows, entries, hideErrors, hasMore, loading, loadOl
   let day = "";
   return <>
     <div ref={feed} className="activity-history">
-    {hasMore && <button className="link activity-older" disabled={loading} onClick={loadOlder}>{loading ? "Loading older activity…" : "Load older activity"}</button>}
+    {hasMore && <button className="link activity-older" disabled={loading} onClick={requestOlder}>{loading ? "Loading older activity…" : "Load older activity"}</button>}
     {entries === null && <div className="sl-empty"><span className="spin" /></div>}
     {entries !== null && !sorted.length && <div className="sl-empty">
       <img src={tagIcon} alt="" style={{ width: 48, borderRadius: 12 }} />
@@ -529,14 +533,17 @@ function ActivityFeed({ api, rows, entries, hideErrors, hasMore, loading, loadOl
         return (
           <div key={group}>
             {divider && <div className="sl-day"><span>{label}</span></div>}
+            <div className="activity-group">
             {message(latest)}
-            {earlier.length > 0 && <div className="activity-thread">
+            {earlier.length > 0 && <div className="activity-thread-group">
               <button className="link activity-thread-toggle" aria-expanded={!!openThreads[group]}
+                aria-label={`${openThreads[group] ? "Hide" : "Show"} ${earlier.length} earlier ${earlier.length === 1 ? "reply" : "replies"} in this thread`}
                 onClick={() => setOpenThreads((all) => ({ ...all, [group]: !all[group] }))}>
-                {openThreads[group] ? "Hide" : "Show"} {earlier.length} earlier {earlier.length === 1 ? "reply" : "replies"} in this thread
+                {openThreads[group] ? "Hide earlier" : `${earlier.length} earlier ${earlier.length === 1 ? "reply" : "replies"}`}
               </button>
               {openThreads[group] && earlier.map((entry) => <div key={activityKey(entry)}>{message(entry)}</div>)}
             </div>}
+            </div>
           </div>
         );
       })}
