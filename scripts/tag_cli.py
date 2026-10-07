@@ -3261,12 +3261,13 @@ def _offer_first_run_telemetry(installation_root: Path) -> None:
         or not sys.stdout.isatty()
     ):
         return
-    # Non-interactive runs never reach here, so nobody is opted in unseen.
-    if tag_telemetry.enable(installation_root):
-        display.paragraph(
-            "Tag shares anonymous usage data to improve setup and reliability. "
-            "Turn it off with 'tag telemetry off'."
-        )
+    # Show the notice before saving: if it can't be shown, nothing is saved and
+    # the next interactive run tries again. Non-interactive runs never get here.
+    display.paragraph(
+        "Tag shares anonymous usage data to improve setup and reliability. "
+        "Turn it off with 'tag telemetry off'."
+    )
+    tag_telemetry.enable(installation_root)
 
 
 def _command_name(arguments: list[str]) -> str:

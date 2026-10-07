@@ -213,6 +213,20 @@ class TagTelemetryTests(unittest.TestCase):
         choose.assert_not_called()
         self.assertEqual(output.getvalue().count("tag telemetry off"), 1)
 
+    def test_first_run_saves_nothing_when_the_notice_cannot_show(self) -> None:
+        class TerminalOutput(StringIO):
+            def isatty(self) -> bool:
+                return True
+
+        with patch.object(os.sys.stdin, "isatty", return_value=True), redirect_stdout(
+            TerminalOutput()
+        ), patch.object(
+            tag_cli.display, "paragraph", side_effect=BrokenPipeError
+        ), self.assertRaises(BrokenPipeError):
+            tag_cli._offer_first_run_telemetry(self.home)
+
+        self.assertIsNone(telemetry.saved_preference(self.home))
+
     def test_first_run_keeps_an_earlier_off_choice(self) -> None:
         telemetry.disable(self.home)
 

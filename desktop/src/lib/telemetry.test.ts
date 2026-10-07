@@ -42,12 +42,17 @@ describe("recording", () => {
       .toEqual(["telemetry", "record", "app_setup_step_completed", "step=ai", "elapsed_seconds=13"]);
   });
 
-  it("turns usage data on at first run, says so once, then records through the CLI", async () => {
+  it("turns usage data on only once the first-run note is seen, then records through the CLI", async () => {
     const { api, tag } = fakeTag(status());
     const { result } = renderHook(() => useTelemetry(api, true));
     await waitFor(() => expect(result.current.announced).toBe(true));
-    expect(tag).toHaveBeenCalledWith(["telemetry", "on", "--json"]);
-    expect(result.current.recording).toBe(true);
+    expect(tag).not.toHaveBeenCalledWith(["telemetry", "on", "--json"]);
+    expect(result.current.recording).toBe(false);
+
+    act(() => { result.current.seen(); result.current.seen(); });
+    await waitFor(() => expect(result.current.recording).toBe(true));
+    expect(tag.mock.calls.filter(([args]) => args[1] === "on")).toHaveLength(1);
+    expect(result.current.announced).toBe(true);
     result.current.track("app_screen_viewed", { screen: "home" });
     expect(recorded(tag)).toEqual([["telemetry", "record", "app_screen_viewed", "screen=home"]]);
 
@@ -74,13 +79,14 @@ describe("recording", () => {
     expect(recorded(tag)).toEqual([]);
   });
 
-  it("records nothing and says nothing when Tag can't save the first-run choice", async () => {
+  it("records nothing when Tag can't save the first-run choice", async () => {
     const { api, tag } = fakeTag(status());
     tag.mockImplementation(async (args) => args[1] === "on" ? { code: 1, stdout: "", stderr: "Error: disk full" }
       : args[0] === "version" ? json({ capabilities: ["telemetry-events"] }) : json(status()));
     const { result } = renderHook(() => useTelemetry(api, true));
+    await waitFor(() => expect(result.current.announced).toBe(true));
+    act(() => result.current.seen());
     await waitFor(() => expect(tag).toHaveBeenCalledWith(["telemetry", "on", "--json"]));
-    expect(result.current.announced).toBe(false);
     expect(result.current.recording).toBe(false);
     expect(result.current.status?.saved_preference).toBe("not_set");
   });

@@ -128,9 +128,9 @@ export function App() {
   // The first-run usage data note shows once: at the end of setup, or on Home for people who skip setup.
   // It goes away when the person leaves the screen where they first saw it.
   const notedOn = useRef<Screen["name"] | null>(null);
-  const { announced, acknowledge } = telemetry;
-  const sawOnHome = useCallback(() => { notedOn.current ??= "home"; }, []);
-  const sawOnSetup = useCallback(() => { notedOn.current ??= "connect"; }, []);
+  const { announced, acknowledge, seen } = telemetry;
+  const sawOnHome = useCallback(() => { notedOn.current ??= "home"; seen(); }, [seen]);
+  const sawOnSetup = useCallback(() => { notedOn.current ??= "connect"; seen(); }, [seen]);
   useEffect(() => {
     if (announced && notedOn.current && screen.name !== notedOn.current) acknowledge();
   }, [screen.name, announced, acknowledge]);

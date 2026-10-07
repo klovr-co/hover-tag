@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Usage telemetry: the same installation-wide choice and fixed events as the
 // CLI. The app sends nothing itself; it asks `tag telemetry record` to queue
-// one of the events below. Like the CLI, it turns usage data on at first run
-// and says so once on Home.
-import { createContext, useCallback, useContext, useEffect, useState } from "react";
+// one of the events below. Like the CLI, it turns usage data on at first run,
+// and only once the person sees the note that says so.
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { Bridge } from "./bridge";
 import { parseJSON, type VersionInfo } from "./protocol";
 import { trackStep, type SetupState } from "./setup";
@@ -55,13 +55,15 @@ export interface Telemetry {
   status: TelemetryStatus | null;
   /** The first status check finished, even if it failed. */
   loaded: boolean;
-  /** Usage data was turned on this run; Home says so once. */
+  /** First run: show the usage data note until the person leaves it. */
   announced: boolean;
   /** Events are recorded: the person turned usage data on and this Tag accepts app events. */
   recording: boolean;
   /** Save the installation-wide choice; throws with Tag's message when it can't. */
   choose(on: boolean): Promise<void>;
-  /** The person has seen the first-run note. */
+  /** The note is on screen: turn usage data on. */
+  seen(): void;
+  /** The person has left the first-run note. */
   acknowledge(): void;
   /** Read the status and capabilities again, such as after an update. */
   reload(): void;
@@ -102,15 +104,19 @@ export function useTelemetry(api: Bridge | null, installed: boolean): Telemetry 
     setStatus(parseJSON<TelemetryStatus>(result.stdout));
   }, [api]);
 
-  // First run: on by default. If Tag can't save it, nothing is recorded and the next launch tries again.
+  // First run: on by default, saved only once the note is on screen. Until then nothing is
+  // saved, so a run closed before the note shows asks again next launch. A failed save does too.
   const first = needsNotice(status);
-  useEffect(() => {
-    if (!first) return;
-    choose(true).then(() => setAnnounced(true), () => {});
-  }, [first, choose]);
+  useEffect(() => { if (first) setAnnounced(true); }, [first]);
+  const saving = useRef(false);
+  const seen = useCallback(() => {
+    if (saving.current) return;
+    saving.current = true;
+    choose(true).catch(() => { saving.current = false; });
+  }, [choose]);
 
   return {
-    status, loaded: loaded || !installed, announced, recording, choose,
+    status, loaded: loaded || !installed, announced, recording, choose, seen,
     acknowledge: useCallback(() => setAnnounced(false), []),
     reload: useCallback(() => setAttempt((value) => value + 1), []),
     track,
