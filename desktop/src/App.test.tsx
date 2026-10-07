@@ -225,3 +225,25 @@ it("never offers an update in a development build, whose version names a release
   expect(vi.mocked(api.tag).mock.calls.some(([args]) => args[0] === "upgrade")).toBe(false);
   expect(screen.queryByText(/is ready/)).toBeNull();
 });
+
+it("opens a linked Tag's Details from Slack and ignores Tags that aren't here", async () => {
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  const api = demoBridge();
+  const demo = api.tag;
+  api.tag = vi.fn(async (args: string[]) => args[0] === "telemetry" && args[1] !== "record"
+    ? { code: 0, stderr: "", stdout: JSON.stringify({ schema_version: 1, enabled: false, available: true,
+      saved_preference: "off", process_override: null, privacy_notice: "" }) }
+    : demo(args));
+  let open: (url: string) => void = () => {};
+  api.onDeepLink = (handler) => { open = handler; handler("hover-tag://tag/t0klovr1-a0rese02"); return () => {}; };
+  api.showWindow = vi.fn(async () => {});
+  vi.mocked(bridge).mockResolvedValue(api);
+  render(<App />);
+  expect((await screen.findByRole("tab", { name: "Details" })).getAttribute("aria-selected")).toBe("true");
+  expect(api.showWindow).toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("tab", { name: "Activity" }));
+  act(() => open("hover-tag://tag/t0klovr1-a0rese02"));
+  await vi.waitFor(() => expect(screen.getByRole("tab", { name: "Details" }).getAttribute("aria-selected")).toBe("true"));
+  act(() => open("hover-tag://tag/missing"));
+  expect(await screen.findByText("That Tag isn't on this computer.")).toBeTruthy();
+});

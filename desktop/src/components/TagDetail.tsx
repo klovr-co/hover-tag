@@ -19,13 +19,15 @@ import { ModelMenu, ModelWarning, SaveBar, ThinkingRow } from "./AI";
 import { Avatar, dragWindow, ErrorLine, fitText, Icon, Primary, Switch, workspaceColor, WorkspaceMark, source, tagIcon } from "./ui";
 
 export type Selection = { kind: "tag"; id: string } | { kind: "channel"; id: string };
-type Tab = "activity" | "channels" | "logs" | "details";
+export type Tab = "activity" | "channels" | "logs" | "details";
 
 interface Props {
   api: Bridge;
   tags: Tags;
   /** The Tag that was opened from Home. */
   initial: string;
+  /** The tab to show first; a Slack link opens Details. */
+  initialTab?: Tab;
   problems: Record<string, string | null>;
   back: () => void;
   add: () => void;
@@ -46,12 +48,12 @@ export const shortPath = (path: string) => path.replace(/^(\/Users\/[^/]+|\/home
 /** A channel's name for people, or its ID while Tag hasn't recorded one. */
 const channelName = (channel: { id: string; name: string | null }) => channel.name ?? channel.id;
 
-export function TagDetail({ api, tags, initial, problems, back, add, showSettings, finishSetup, openAI, say, canDescribe = false }: Props) {
+export function TagDetail({ api, tags, initial, initialTab = "activity", problems, back, add, showSettings, finishSetup, openAI, say, canDescribe = false }: Props) {
   const rows = tags.rows;
   const start = rows.find((row) => row.id === initial);
   const [workspace, setWorkspace] = useState(start?.slack_workspace ?? "");
   const [selected, setSelected] = useState<Selection>({ kind: "tag", id: initial });
-  const [tab, setTab] = useState<Tab>("activity");
+  const [tab, setTab] = useState<Tab>(initialTab);
   const [query, setQuery] = useState("");
   const [hideErrors, setHideErrors] = useState(true);
   const all = groups(rows);
