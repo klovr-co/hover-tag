@@ -23,8 +23,9 @@ class OpenTagAgentPromptTests(unittest.TestCase):
         self.assertNotIn("inv-7", instructions)
         self.assertNotIn("Summarize the plan", instructions)
         self.assertIn("record_output_artifact.py", instructions)
-        for value in ("inv-7/attachments", "inv-7/attachments/results/images",
-                      "inv-7/attachments/results/artifacts", "inv-7/manifest.json",
+        attachments = root / "inv-7/attachments"
+        for value in (str(attachments), str(attachments / "results/images"),
+                      str(attachments / "results/artifacts"), str(root / "inv-7/manifest.json"),
                       "file://local/tag/workspace", "Summarize the plan", "Slack thread context:"):
             self.assertIn(value, request)
 

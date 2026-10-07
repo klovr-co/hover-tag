@@ -111,10 +111,14 @@ class ThreadSessions:
             previous = sessions.get(key) if isinstance(sessions.get(key), dict) else {}
             if context_tokens is None and previous.get("session_id") == session_id:
                 context_tokens = previous.get("context_tokens")
+            # Coarse clocks (Windows) can repeat a timestamp; keep the newest save newest.
+            now = max([time.time(), *(value["updated_at"] + 1e-6 for value in sessions.values()
+                                      if isinstance(value, dict)
+                                      and isinstance(value.get("updated_at"), (int, float)))])
             sessions[key] = {
                 "session_id": session_id, "workdir": workdir, "requester": requester, "request_ts": request_ts,
                 "context_tokens": context_tokens if isinstance(context_tokens, int) and context_tokens >= 0 else 0,
-                "updated_at": time.time()}
+                "updated_at": now}
             cutoff = time.time() - RETENTION_SECONDS
             kept = sorted(
                 ((key, value) for key, value in sessions.items()
