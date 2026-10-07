@@ -3252,7 +3252,7 @@ def _show_telemetry_scope(installation_root: Path) -> None:
 
 
 def _offer_first_run_telemetry(installation_root: Path) -> None:
-    """Persist a choice only after the notice is visible in an interactive TUI."""
+    """Turn usage data on with a one-line notice on the first interactive run."""
     if (
         tag_telemetry.hard_disabled()
         or not tag_telemetry.collection_available()
@@ -3261,25 +3261,13 @@ def _offer_first_run_telemetry(installation_root: Path) -> None:
         or not sys.stdout.isatty()
     ):
         return
-    _show_telemetry_scope(installation_root)
-    try:
-        import setup_ui as ui
-    except ImportError:
-        from scripts import setup_ui as ui
-    try:
-        choice = ui.choose(
-            "Help support Tag’s development",
-            ["Continue", "Turn telemetry off"],
-            default=0,
-        )
-    except ui.Paused:
-        # An interrupted notice is not consent. Continue this command without
-        # collection and offer the same notice on a later interactive run.
-        return
-    if choice == 0:
-        tag_telemetry.enable(installation_root)
-    else:
-        tag_telemetry.disable(installation_root)
+    # Show the notice before saving: if it can't be shown, nothing is saved and
+    # the next interactive run tries again. Non-interactive runs never get here.
+    display.paragraph(
+        "Tag shares anonymous usage data to improve setup and reliability. "
+        "Turn it off with 'tag telemetry off'."
+    )
+    tag_telemetry.enable(installation_root)
 
 
 def _command_name(arguments: list[str]) -> str:

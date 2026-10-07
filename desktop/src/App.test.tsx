@@ -121,7 +121,7 @@ it("offers to install Tag again when it is removed while Home is open", async ()
   expect(await screen.findByRole("button", { name: "Install Tag" })).toBeTruthy();
 });
 
-it("asks about usage data before Home, then records only after the choice", async () => {
+it("turns usage data on at first run and notes it on Home until the person leaves", async () => {
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
   const api = demoBridge();
   const demo = api.tag;
@@ -134,14 +134,16 @@ it("asks about usage data before Home, then records only after the choice", asyn
   });
   vi.mocked(bridge).mockResolvedValue(api);
   render(<StrictMode><App /></StrictMode>);
-  expect(await screen.findByText("Help support Tag's development")).toBeTruthy();
+  expect(await screen.findByText(/anonymous usage data/)).toBeTruthy();
   const records = () => vi.mocked(api.tag).mock.calls.map(([args]) => args).filter((args) => args[1] === "record");
-  expect(records()).toEqual([]);
-  fireEvent.click(screen.getByRole("button", { name: "Happy to help" }));
   await vi.waitFor(() => expect(records().map((args) => args[2])).toEqual(expect.arrayContaining(["app_opened", "app_screen_viewed"])));
   expect(api.tag).toHaveBeenCalledWith(["telemetry", "on", "--json"]);
-  expect(screen.queryByText("Help support Tag's development")).toBeNull();
   expect(records().filter((args) => args[2] === "app_opened")).toHaveLength(1);
+  fireEvent.click(screen.getByRole("button", { name: "Learn more" }));
+  expect(await screen.findByText("Share usage data")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: /Back|Done|Close/ }));
+  expect(await screen.findByRole("heading", { name: "Your Tags" })).toBeTruthy();
+  expect(screen.queryByText(/anonymous usage data/)).toBeNull();
 });
 
 
@@ -156,7 +158,6 @@ it("replays onboarding from Settings without saving, installing, or quitting", a
   fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
   fireEvent.click(await screen.findByRole("tab", { name: "About" }));
   fireEvent.click(await screen.findByRole("button", { name: "Replay" }));
-  fireEvent.click(await screen.findByRole("button", { name: "No thanks" }));
   expect(await screen.findByRole("button", { name: "Done" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Install Tag" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Quit" })).toBeNull();
