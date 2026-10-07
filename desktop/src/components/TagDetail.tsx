@@ -9,13 +9,14 @@ import { effortLabel, effortShort, generationTime, liveRows, modelText, placeTex
 import { ActivityDetails, StepsToggle } from "./ActivityDetails";
 import { ActivityArtifacts } from "./ActivityArtifacts";
 import { ActivityTokens } from "./ActivityTokens";
+import { PANEL_WIDTH, WIDE, fitsBeside, useWindowPanel } from "../lib/panel";
 import { useModelChoice } from "../lib/model";
 import { collapseRepeats, groups, parseJSON, problemHelp, problemText, status, title, type Group, type TagRow } from "../lib/protocol";
 import type { Tags } from "../lib/tags";
 import teamArt from "../assets/art/tag-team.png";
 import keyArt from "../assets/art/tag-key.png";
 import { workingFolder } from "./Home";
-import { ModelMenu, ModelWarning, SaveBar, ThinkingRow } from "./AI";
+import { ModelMenu, ModelWarning, SaveBar, SummaryModelRow, ThinkingRow } from "./AI";
 import { Avatar, dragWindow, ErrorLine, fitText, Icon, Primary, Switch, workspaceColor, WorkspaceMark, source, tagIcon } from "./ui";
 
 export type Selection = { kind: "tag"; id: string } | { kind: "channel"; id: string };
@@ -446,26 +447,34 @@ function ActivityFeed({ api, rows, entries, hideErrors, hasMore, loading, loadOl
     .filter(({ item }) => item.kind !== "replied" || item.reply_summary?.trim() || item.reply_preview?.trim() || item.artifacts?.length)
     .sort((a, b) => new Date(a.item.at).getTime() - new Date(b.item.at).getTime());
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-  const [openThreads, setOpenThreads] = useState<Record<string, boolean>>({});
-  // Every reply in one Slack thread continues one conversation, so it is one entry.
-  const threads = [...sorted.reduce((groups, entry) => {
+  // Every round in one Slack thread continues one conversation: one session,
+  // placed by its latest activity, so a new round moves it to the bottom.
+  const sessions = [...sorted.reduce((groups, entry) => {
     const group = groups.get(threadKey(entry)) ?? [];
     group.push(entry);
     return groups.set(threadKey(entry), group);
   }, new Map<string, ActivityEntry[]>()).values()]
     .sort((a, b) => new Date(a[a.length - 1].item.at).getTime() - new Date(b[b.length - 1].item.at).getTime());
+  const [selected, setSelected] = useState<string | null>(null);
+  const open = sessions.find((session) => threadKey(session[0]) === selected) ?? null;
+  const beside = fitsBeside(WIDE, PANEL_WIDTH);
+  useWindowPanel(!!open && beside);
   const feed = useRef<HTMLDivElement>(null);
   const viewport = useRef({ initialized: false, bottom: true, height: 0, first: "", top: 0 });
-  const first = threads[0] ? threadKey(threads[0][0]) : "";
+  // Older activity can join existing sessions, so the first session doesn't always change.
+  const olderRequested = useRef(false);
+  const requestOlder = useCallback(() => { olderRequested.current = true; loadOlder(); }, [loadOlder]);
+  const first = sessions[0] ? threadKey(sessions[0][0]) : "";
   useLayoutEffect(() => {
     const scroller = feed.current?.closest<HTMLElement>(".sl-body");
     if (!scroller || entries === null) return;
     const previous = viewport.current;
     if (!previous.initialized || previous.bottom) scroller.scrollTop = scroller.scrollHeight;
-    else if (previous.first !== first) scroller.scrollTop += scroller.scrollHeight - previous.height;
+    else if (previous.first !== first || olderRequested.current) scroller.scrollTop += scroller.scrollHeight - previous.height;
+    if (!loading) olderRequested.current = false;
     viewport.current = { initialized: true, first, height: scroller.scrollHeight, top: scroller.scrollTop,
       bottom: scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop < 40 };
-  }, [entries, first]);
+  }, [entries, first, loading]);
   useEffect(() => {
     const scroller = feed.current?.closest<HTMLElement>(".sl-body");
     if (!scroller) return;
@@ -474,12 +483,31 @@ function ActivityFeed({ api, rows, entries, hideErrors, hasMore, loading, loadOl
       const upwards = scroller.scrollTop < previous.top;
       viewport.current = { ...previous, top: scroller.scrollTop, height: scroller.scrollHeight,
         bottom: scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop < 40 };
-      if (upwards && scroller.scrollTop < 80 && hasMore && !loading) loadOlder();
+      if (upwards && scroller.scrollTop < 80 && hasMore && !loading) requestOlder();
     };
     scroller.addEventListener("scroll", scroll);
     return () => scroller.removeEventListener("scroll", scroll);
-  }, [hasMore, loading, loadOlder]);
-  const message = ({ tag, item }: ActivityEntry) => {
+  }, [hasMore, loading, requestOlder]);
+  // Esc closes the conversation; ↑/↓ move between sessions while it is open.
+  const keys = sessions.map((session) => threadKey(session[0])).join("\n");
+  useEffect(() => {
+    if (!selected) return;
+    const order = keys.split("\n");
+    const key = (event: KeyboardEvent) => {
+      if ((event.target as HTMLElement | null)?.closest?.("input, textarea, select, [contenteditable]")) return;
+      if (event.key === "Escape") { setSelected(null); return; }
+      if ((event.key === "ArrowDown" || event.key === "ArrowUp") && !event.shiftKey && !event.metaKey) {
+        event.preventDefault();
+        const index = order.indexOf(selected);
+        const next = order[Math.min(order.length - 1, Math.max(0, index + (event.key === "ArrowDown" ? 1 : -1)))];
+        setSelected(next);
+        document.querySelector<HTMLElement>(`[data-session="${CSS.escape(next)}"]`)?.scrollIntoView({ block: "nearest" });
+      }
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [selected, keys]);
+  const reply = ({ tag, item }: ActivityEntry) => {
     const row = rows.find((row) => row.id === tag);
     if (!row) return null;
     const preview = item.reply_summary?.trim() || item.reply_preview?.trim();
@@ -487,7 +515,7 @@ function ActivityFeed({ api, rows, entries, hideErrors, hasMore, loading, loadOl
     const key = activityKey({ tag, item });
     return (
       <div className="sl-msg">
-        <Avatar row={row} size={34} badge={false} className="" />
+        <Avatar row={row} size={30} badge={false} className="" />
         <div>
           <div className="who">{title(row)}<span>{clock(at)}</span>{item.model && <span title={`${item.backend ?? "Agent"} · ${item.model}${item.reasoning_effort ? ` · ${effortLabel(item.reasoning_effort)} thinking` : ""}`}>· {item.model_name || item.model}{item.reasoning_effort && ` ${effortShort(item.reasoning_effort)}`}</span>}
             {item.duration_seconds != null && Number.isFinite(item.duration_seconds) && item.duration_seconds > 0 && <span title="Generation time, including tool work">· {generationTime(item.duration_seconds)}</span>}
@@ -510,38 +538,99 @@ function ActivityFeed({ api, rows, entries, hideErrors, hasMore, loading, loadOl
       </div>
     );
   };
+  const ask = ({ item }: ActivityEntry) => {
+    const at = new Date(item.started_at ?? item.at);
+    const text = askText(item);
+    return (
+      <div className="sl-msg">
+        <Person item={item} size={30} />
+        <div>
+          <div className="who">{item.requester_name ?? "Someone"}<span>{clock(at)}</span></div>
+          <p className={text.summary ? "activity-request" : "activity-request muted"}>{text.text}</p>
+        </div>
+      </div>
+    );
+  };
   let day = "";
   return <>
     <div ref={feed} className="activity-history">
-    {hasMore && <button className="link activity-older" disabled={loading} onClick={loadOlder}>{loading ? "Loading older activity…" : "Load older activity"}</button>}
+    {hasMore && <button className="link activity-older" disabled={loading} onClick={requestOlder}>{loading ? "Loading older activity…" : "Load older activity"}</button>}
     {entries === null && <div className="sl-empty"><span className="spin" /></div>}
     {entries !== null && !sorted.length && <div className="sl-empty">
       <img src={tagIcon} alt="" style={{ width: 48, borderRadius: 12 }} />
       <div className="label">{empty}</div>
     </div>}
-      {threads.map((thread) => {
-        const latest = thread[thread.length - 1];
-        const earlier = thread.slice(0, -1);
+      {sessions.map((session) => {
+        const latest = session[session.length - 1];
         const label = dayLabel(new Date(latest.item.at), now);
         const divider = label !== day;
         const group = threadKey(latest);
+        const row = rows.find((row) => row.id === latest.tag);
         day = label;
         return (
           <div key={group}>
             {divider && <div className="sl-day"><span>{label}</span></div>}
-            {message(latest)}
-            {earlier.length > 0 && <div className="activity-thread">
-              <button className="link activity-thread-toggle" aria-expanded={!!openThreads[group]}
-                onClick={() => setOpenThreads((all) => ({ ...all, [group]: !all[group] }))}>
-                {openThreads[group] ? "Hide" : "Show"} {earlier.length} earlier {earlier.length === 1 ? "reply" : "replies"} in this thread
-              </button>
-              {openThreads[group] && earlier.map((entry) => <div key={activityKey(entry)}>{message(entry)}</div>)}
-            </div>}
+            <SessionRow session={session} row={row ?? null} active={group === selected}
+              onClick={() => setSelected(group === selected ? null : group)} />
           </div>
         );
       })}
     </div>
+    {open && (
+      <aside className={beside ? "activity-panel" : "activity-panel over"} aria-label="Conversation">
+        <div className="activity-panel-head">
+          {!beside && <button className="activity-panel-back" aria-label="Back to activity" onClick={() => setSelected(null)}><Icon name="left" size={16} /></button>}
+          <h2>{sessionTitle(open)}</h2>
+          {beside && <button className="activity-panel-close" aria-label="Close conversation" onClick={() => setSelected(null)}>✕</button>}
+        </div>
+        <div className="activity-panel-body">
+          {open.map((entry) => <div key={activityKey(entry)} className="activity-round">{ask(entry)}{reply(entry)}</div>)}
+        </div>
+      </aside>
+    )}
   </>;
+}
+
+/** The whole conversation's summary, or, until one exists, its latest request. */
+export function sessionTitle(session: ActivityEntry[]) {
+  const latest = session[session.length - 1].item;
+  const asked = [...session].reverse().find(({ item }) => item.request_summary?.trim())?.item.request_summary?.trim();
+  return latest.session_summary?.trim() || asked || `Conversation in ${placeText(latest)}`;
+}
+
+/** What was asked: its summary, or who asked when no summary was saved. */
+function askText(item: ActivityItem): { text: string; summary: boolean } {
+  if (item.request_summary?.trim()) return { text: item.request_summary.trim(), summary: true };
+  if (item.request_summary_status === "pending") return { text: "Summarizing the request…", summary: false };
+  return { text: item.request_summary_status === "unavailable" ? "Request summary unavailable" : `${item.requester_name ?? "Someone"} asked in ${placeText(item)}`, summary: false };
+}
+
+/** The requester's Slack picture, or their initial until Tag has it. */
+function Person({ item, size }: { item: ActivityItem; size: number }) {
+  const [failed, setFailed] = useState(false);
+  const name = item.requester_name ?? "";
+  const style = { width: size, height: size, borderRadius: size * 0.26, flex: "none" as const };
+  if (item.requester_avatar?.startsWith("https://") && !failed) {
+    return <img className="person" src={item.requester_avatar} alt="" style={{ ...style, imageRendering: "auto" }} onError={() => setFailed(true)} />;
+  }
+  const hue = [...(item.requester ?? name)].reduce((sum, c) => sum + c.charCodeAt(0), 0) % 360;
+  return <span className="person initial" aria-hidden="true" style={{ ...style, fontSize: size * 0.45, background: `hsl(${hue} 45% 58%)` }}>{(name[0] ?? "?").toUpperCase()}</span>;
+}
+
+function SessionRow({ session, row, active, onClick }: { session: ActivityEntry[]; row: TagRow | null; active: boolean; onClick: () => void }) {
+  const latest = session[session.length - 1].item;
+  const working = latest.kind === "working";
+  const replyText = working ? "Working on it…" : latest.kind === "failed" ? "Couldn't finish this request"
+    : latest.kind === "stopped" ? "Stopped" : latest.reply_summary?.trim() || latest.reply_preview?.trim() || "Replied";
+  const rounds = session.length;
+  return (
+    <button className="activity-session" data-active={active} data-session={threadKey(session[0])} aria-expanded={active} onClick={onClick}>
+      <span className="activity-session-title"><b>{sessionTitle(session)}</b><span>{clock(new Date(latest.at))}</span></span>
+      <span className="activity-session-line"><Person item={latest} size={18} /><span>{askText(latest).text}</span></span>
+      <span className="activity-session-line muted"><Avatar row={row} size={18} badge={false} className="" /><span>{replyText}</span></span>
+      <span className="activity-session-foot">{working && <i className="activity-session-dot" aria-label="Working" />}{placeText(latest)} · {rounds} {rounds === 1 ? "round" : "rounds"}</span>
+    </button>
+  );
 }
 
 function Logs({ text, copyLog }: { text: string; copyLog: () => void }) {
@@ -665,6 +754,7 @@ function Details({ api, tags, row, copyLog, openAI, say, canDescribe }: {
               <ThinkingRow entry={choice.entry} value={choice.level} onChange={choice.pickEffort} disabled={choice.save === "saving" || choice.save === "restarting"} />
               <p className="mcap">Applies to all requests to this Tag.</p>
               <SaveBar choice={choice} tagName={name} running={running} />
+              <SummaryModelRow api={api} tag={row.id} models={choice.models} report={choice.report} />
             </>
           )}
           {choice.error && <ErrorLine>{choice.error}</ErrorLine>}

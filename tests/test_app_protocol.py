@@ -17,7 +17,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts import agent_models, slack_channel_names, tag_activity, tag_autostart, tag_cli, tag_config, tag_install, tag_instances
+from scripts import agent_models, slack_channel_names, slack_people, tag_activity, tag_autostart, tag_cli, tag_config, tag_install, tag_instances
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = ROOT / "protocol/examples"
@@ -100,8 +100,12 @@ class ProtocolTests(unittest.TestCase):
         tag_config.save_config(home / "config/settings.json", {
             "MFS_ALLOWED_SCOPES": "slack://tag-t1-a1/channels/launch__C0LAUNCH1"})
         store = tag_activity.ActivityStore(home / "state/activity")
-        store.finish(store.create(team="T1", channel="C0LAUNCH1", thread_ts="1.0", request_ts="1.0",
-                                  requester="U1"), "completed")
+        run_id = store.create(team="T1", channel="C0LAUNCH1", thread_ts="1.0", request_ts="1.0", requester="U1")
+        store.save_request_summary(run_id, "Draft the launch checklist")
+        store.finish(run_id, "completed")
+        store.save_session_summary("T1", "C0LAUNCH1", "1.0", "Plan the October launch")
+        tag_config.update_config(home / "config/settings.json", {"SLACK_TEAM_ID": "T1"})
+        slack_people.remember(home, "T1", "U1", {"name": "Maya", "avatar": "https://avatars.slack-edge.com/m.png"})
         activity = self.cli("t1-a1", "logs", "--json")["activity"]
         self.assertProvides(activity[0], example("logs.json")["activity"][0], "tag logs --json activity")
         self.assertEqual(("replied", "launch", False), (activity[0]["kind"], activity[0]["channel_name"], activity[0]["dm"]))

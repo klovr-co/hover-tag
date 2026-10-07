@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "ok": true,
+  "summary_model": {
+    "value": "codex:gpt-5.5-mini",
+    "backend": "codex",
+    "model": "gpt-5.5-mini",
+    "label": "GPT-5.5 mini",
+    "backend_name": "Codex"
+  },
+  "restart_required": false
+}

@@ -489,6 +489,33 @@ class CommandTests(Fixture):
         self.assertIn("Maya's Tag uses it next time it starts.", output)
         self.assertEqual([], calls)
 
+    def test_summary_model_saves_without_a_restart(self) -> None:
+        self.machine()
+        target, calls = self.target(running=True)
+        code, output = self.run_cli([], target, json_output=True)
+        self.assertEqual("auto", json.loads(output)["summary_model"]["value"])
+        with patch.object(tag_ai.agent_models, "discover_models", side_effect=lambda name: {
+                "codex": ModelTests.CODEX, "claude": ModelTests.CLAUDE}[name]):
+            code, output = self.run_cli(["summary-model", "codex:gpt-5.5-mini"], target, json_output=True)
+            result = json.loads(output)
+            promised = json.loads((EXAMPLES / "ai-summary-model.json").read_text(encoding="utf-8"))
+            self.assertEqual(set(promised), set(result))
+            self.assertEqual(set(promised["summary_model"]), set(result["summary_model"]))
+            self.assertEqual(("codex:gpt-5.5-mini", "GPT-5.5 mini", False), (
+                result["summary_model"]["value"], result["summary_model"]["label"], result["restart_required"]))
+            self.assertEqual("codex:gpt-5.5-mini", tag_config.load_config(self.config)["OPENTAG_SUMMARY_MODEL"])
+            with self.assertRaisesRegex(ValueError, "isn't available"):
+                self.run_cli(["summary-model", "codex:gpt-0"], target, json_output=True)
+            with self.assertRaisesRegex(ValueError, "Use auto"):
+                self.run_cli(["summary-model", "haiku"], target, json_output=True)
+        code, output = self.run_cli(["summary-model", "auto"], target)
+        self.assertIn("Summary model · Automatic (smallest available)", output)
+        self.assertIn("No restart needed", output)
+        self.assertEqual("", tag_config.load_config(self.config)["OPENTAG_SUMMARY_MODEL"])
+        code, output = self.run_cli([], target)
+        self.assertIn("Summary model · Automatic (smallest available)", output)
+        self.assertEqual([], calls)
+
     def test_sign_in_streams_json_lines_and_restarts_around_a_plan_change(self) -> None:
         plan = {"id": "oaiapp_one", "email": "one@example.test", "signed_in": True, "plan_enabled": True,
                 "usage_paused": False}

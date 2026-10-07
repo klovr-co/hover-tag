@@ -64,7 +64,8 @@ try:
     from .slack_search_scope import ScopePlan, SearchIntent, plan_search_scopes
     from .agent_sessions import ThreadSessions
     from .tag_activity import ACTIVITY_DETAIL_ACTION_ID, PUBLIC_LABELS, ActivityStore, activity_detail_modal, activity_modal
-    from .agent_summary import queue_reply_summary
+    from .agent_summary import queue_reply_summary, queue_request_summary
+    from . import slack_people
     from .tag_activity_details import sanitize_activity_details
     from .tag_approval_choices import sanitize_review_details
     from .tag_activity_labels import activity_title_for_status, readable_activity_title
@@ -104,7 +105,8 @@ except ImportError:  # Direct script execution does not create a package context
     from slack_search_scope import ScopePlan, SearchIntent, plan_search_scopes
     from agent_sessions import ThreadSessions
     from tag_activity import ACTIVITY_DETAIL_ACTION_ID, PUBLIC_LABELS, ActivityStore, activity_detail_modal, activity_modal
-    from agent_summary import queue_reply_summary
+    from agent_summary import queue_reply_summary, queue_request_summary
+    import slack_people
     from tag_activity_details import sanitize_activity_details
     from tag_approval_choices import sanitize_review_details
     from tag_activity_labels import activity_title_for_status, readable_activity_title
@@ -3597,6 +3599,19 @@ def create_app(
                 except OSError as exc:
                     logger.warning("Could not record the orphaned Slack session: %s", exc)
     models = discover_tag_models(backend)
+
+    def remember_requester(team: str, user: str) -> None:
+        """Cache who asked, for Activity; the lookup never delays the request."""
+        try:
+            from .tag_paths import instance_home
+        except ImportError:
+            from tag_paths import instance_home
+        home = instance_home()
+        if slack_people.fresh(home, team, user):
+            return
+        threading.Thread(target=slack_people.look_up, name="tag-requester-name", daemon=True,
+                         args=(home, team, user, lambda user: app.client.users_info(user=user).data)).start()
+
     if os.getenv("TAG_INSTANCE_HOME"):
         remember_model_names(models, model_names_path(os.environ["TAG_INSTANCE_HOME"]))
     default_settings = default_agent_settings(models)
@@ -4210,6 +4225,10 @@ def create_app(
                         )
                     except OSError as exc:
                         logger.warning("Could not start Tag activity record: %s", exc)
+                    if activity_run_id is not None:
+                        queue_request_summary(activity_store, activity_run_id, question, request_backend,
+                                              agent_settings.model, models)
+                        remember_requester(team, user_id)
                 if stream_available:
                     answer_stream = SlackAnswerStream(
                         client,
@@ -4405,7 +4424,8 @@ def create_app(
                                 summary_answer += "\n\nSome generated images could not be attached to Slack."
                             queue_reply_summary(activity_store, activity_run_id, summary_answer,
                                                 request_backend,
-                                                reported_runs[-1]["model"] if reported_runs else agent_settings.model)
+                                                reported_runs[-1]["model"] if reported_runs else agent_settings.model,
+                                                models)
                         except OSError:
                             logger.warning("Could not save the reply preview to Tag activity")
                     if upload_errors:

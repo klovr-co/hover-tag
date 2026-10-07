@@ -42,7 +42,7 @@ PUBLIC = frozenset((*DEFAULTS, "MFS_ALLOWED_SCOPES", "OPENTAG_WORKDIR",
                     "MFS_SLACK_CONNECTOR_URI", "MFS_SLACK_CONNECTOR_CONFIG",
                     "OPENTAG_CODEX_MODELS", "OPENTAG_CODEX_REASONING_EFFORTS",
                     "OPENTAG_CLAUDE_MODELS", "OPENTAG_DEFAULT_MODEL", "OPENTAG_BACKENDS",
-                    "OPENTAG_DEFAULT_EFFORT", "OPENTAG_BOT_DESCRIPTION"))
+                    "OPENTAG_DEFAULT_EFFORT", "OPENTAG_SUMMARY_MODEL", "OPENTAG_BOT_DESCRIPTION"))
 EDITABLE = PUBLIC - {"OPENTAG_WORKDIR"} | {
     "SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "MFS_TOKEN", "MFS_SLACK_TOKEN", "MFS_HOME"
 }
@@ -50,6 +50,7 @@ LABELS = {
     "OPENTAG_BACKEND": "Agent", "OPENTAG_BOT_NAME": "Bot name",
     "OPENTAG_DEFAULT_MODEL": "Default model (codex:MODEL, claude:MODEL, or a backend)",
     "OPENTAG_DEFAULT_EFFORT": "Default thinking level",
+    "OPENTAG_SUMMARY_MODEL": "Summary model (auto, codex:MODEL, or claude:MODEL)",
     "OPENTAG_BOT_DESCRIPTION": "Description",
     "OPENTAG_BACKENDS": "Backends users can choose (codex,claude)",
     "OPENTAG_CODEX_TRANSPORT": "Codex transport (exec or app-server)",
@@ -166,6 +167,8 @@ def validation_error(key: str, value: str) -> str | None:
         return "Choose codex or claude"
     if key == "OPENTAG_DEFAULT_MODEL" and value and not DEFAULT_MODEL_RE.fullmatch(value):
         return "Use codex, claude, codex:MODEL, or claude:MODEL"
+    if key == "OPENTAG_SUMMARY_MODEL" and value and value != "auto" and not DEFAULT_MODEL_RE.fullmatch(value):
+        return "Use auto, codex:MODEL, or claude:MODEL"
     if key == "OPENTAG_BACKENDS" and value and not set(value.split(",")) <= BACKENDS:
         return "Use a comma-separated list of codex and claude"
     if key == "OPENTAG_BOT_NAME" and (

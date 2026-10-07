@@ -61,8 +61,12 @@ export interface AIStatus {
   effort_levels?: string[];
   /** Whether a thinking level was chosen for this Tag, rather than the model's default. */
   effort_chosen?: boolean;
+  /** The model that writes Activity summaries; `auto` is the smallest one the account offers. Absent from older Tags. */
+  summary_model?: { value: string; backend: string | null; model: string | null; label: string; backend_name: string | null };
   checked_at?: string;
 }
+
+export const SUMMARY_AUTO = "Automatic (smallest available)";
 
 export interface ModelEntry {
   value: string;

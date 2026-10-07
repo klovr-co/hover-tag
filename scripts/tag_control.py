@@ -107,6 +107,7 @@ def inspect(home: Path, lifecycle, *, offline: bool = False, tag_id: str = "defa
                     "executable_found": installed,
                     "authentication": "not_checked", "task_execution": "not_checked",
                     "default_model": values.get("OPENTAG_DEFAULT_MODEL") or backend,
+                    "summary_model": values.get("OPENTAG_SUMMARY_MODEL") or "auto",
                     "offered": agent_models.allowed_backends(backend)},
         "services": services, "managed_process_running": managed,
         "runtime": {"mfs_executable_found": mfs_installed, "error": dependency_error},
@@ -161,6 +162,12 @@ def show_status(report: dict) -> None:
         report.get("slack_app") or "",
         report.get("slack_app_name") or "",
     ))
+    if report["configuration"]["exists"] and backend["selected"]:
+        summary = backend.get("summary_model", "auto")
+        print("  Summary model: " + ("Automatic (smallest available)" if summary == "auto" else
+              agent_models.describe_model_choice(summary, backend["selected"],
+                  names=agent_models.load_model_names(agent_models.model_names_path(report["home"]))
+                  if report.get("home") else None)))
     if report.get("memory_sync", {}).get("state") == "rate_limited":
         ui.message(f"Indexing paused by Slack; retrying in {report['memory_sync']['retry_in_seconds']} seconds.")
     elif report.get("memory_sync", {}).get("policy") == "invited":

@@ -599,8 +599,35 @@ button.activity-artifact:hover { border-color: var(--link); color: var(--link); 
 .sl-msg .activity-artifact-error { color: var(--bad-text); font-size: 12px; }
 .activity-reply-preview { white-space: normal; overflow-wrap: anywhere; }
 .activity-reply-place { color: var(--muted); font-size: 12px; }
-.activity-thread { margin-left: 44px; }
-.activity-thread-toggle { font-size: 12px; padding: 2px 0; }
+/* One row per Slack thread; selecting it opens the conversation in a panel beside the feed. */
+.activity-session { display: flex; flex-direction: column; gap: 4px; width: 100%; text-align: left; border-radius: 10px; padding: 8px 10px; margin-top: 6px; border: 1px solid var(--line); background: var(--paper-2); color: var(--text); }
+.activity-session:hover { background: var(--canvas); }
+.activity-session[data-active="true"] { border-color: var(--link); background: var(--sky-soft); }
+.activity-session-title { display: flex; gap: 8px; font-size: 13.5px; color: var(--ink); }
+.activity-session-title b { font-weight: 700; overflow-wrap: anywhere; }
+.activity-session-title > span { margin-left: auto; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.activity-session-line { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 13.5px; }
+.activity-session-line > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.activity-session-line.muted { color: var(--muted); }
+.activity-session-line img { image-rendering: auto; }
+.activity-session-foot { color: var(--muted); font-size: 12px; }
+.activity-session-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--amber, #e0a020); margin-right: 6px; vertical-align: 1px; }
+.person { display: block; object-fit: cover; }
+.person.initial { display: grid; place-items: center; color: #fff; font-weight: 700; line-height: 1; }
+.activity-request { overflow-wrap: anywhere; }
+.activity-request.muted { color: var(--muted); }
+.activity-panel { position: fixed; top: 0; right: 0; bottom: 0; width: 440px; z-index: 20; display: flex; flex-direction: column; background: var(--lift); border-left: 1px solid var(--line); }
+/* Without room to widen the window, the panel slides over the feed. */
+.activity-panel.over { left: 0; width: auto; border-left: 0; box-shadow: -8px 0 24px rgba(0, 0, 0, .08); animation: activity-panel-in .18s ease-out; }
+@keyframes activity-panel-in { from { transform: translateX(24px); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .activity-panel.over { animation: none; } }
+.activity-panel-head { display: flex; align-items: center; gap: 8px; padding: 14px 14px 10px; border-bottom: 1px solid var(--line); }
+.activity-panel-head h2 { margin: 0; flex: 1; font-size: 14px; font-weight: 700; color: var(--ink); overflow-wrap: anywhere; }
+.activity-panel-close, .activity-panel-back { flex: none; width: 26px; height: 26px; display: grid; place-items: center; border-radius: 6px; color: var(--muted); }
+.activity-panel-back { color: var(--link); }
+.activity-panel-close:hover, .activity-panel-back:hover { background: var(--fill); color: var(--ink); }
+.activity-panel-body { flex: 1; overflow: hidden auto; padding: 6px 12px 16px; user-select: text; -webkit-user-select: text; }
+.activity-round + .activity-round { border-top: 1px dashed var(--line); margin-top: 4px; padding-top: 4px; }
 .activity-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
 .activity-toggle, .activity-thread, .activity-refresh { display: inline-flex; align-items: center; gap: 5px; padding: 3px 0; font-size: 12.5px; color: var(--muted); }
 .activity-toggle, .activity-thread { justify-content: center; width: 24px; height: 24px; padding: 0; border-radius: 4px; flex: none; }

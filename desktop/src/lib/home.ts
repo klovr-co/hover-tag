@@ -26,6 +26,17 @@ export interface ActivityItem {
   artifacts?: { name: string; kind: "file" | "image"; delivery: "uploaded" | "local" | "upload_failed";
     url?: string; local_path?: string }[];
   artifact_thread_url?: string;
+  /** Who asked: their Slack user ID, and a cached name and picture when Tag has looked them up. */
+  requester?: string;
+  requester_name?: string;
+  requester_avatar?: string;
+  started_at?: string;
+  /** What was asked, summarized; the request text itself is never stored. */
+  request_summary?: string;
+  request_summary_status?: "pending" | "ready" | "unavailable";
+  /** The Slack thread's rolling summary of the whole conversation, shared by its rounds. */
+  session_summary?: string;
+  session_summary_at?: string;
 
   at: string;
   kind: "replied" | "failed" | "stopped" | "working" | string;

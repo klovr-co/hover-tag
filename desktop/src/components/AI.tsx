@@ -4,9 +4,12 @@
 // checks and signs in; these only draw what it reports.
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
-  ACTION_LABEL, CLAUDE_SHARED_NOTE, CODEX_METHODS, isUrgent, primaryAction, statusLine,
+  ACTION_LABEL, CLAUDE_SHARED_NOTE, CODEX_METHODS, SUMMARY_AUTO, aiArgs, isUrgent, primaryAction, statusLine,
   findModel, type AIModels, type AIStatus, type Connection, type ModelEntry, type SignInState,
 } from "../lib/ai";
+import type { Bridge } from "../lib/bridge";
+import { parseJSON } from "../lib/protocol";
+import { failureLine } from "../lib/tags";
 import { useNight } from "../lib/appearance";
 import { effortLabel } from "../lib/home";
 import { choiceText, type ModelChoice } from "../lib/model";
@@ -161,9 +164,13 @@ export function ChangeAccount({ connection, running, choose, cancel }: {
 // ---- The model picker, thinking level and save bar, shared by Tag detail and AI & models ----
 
 /** Every connected account's models, grouped by agent; picking a model picks its agent. */
-export function ModelMenu({ models, report, value, onChange, below, inline, disabled }: {
+export function ModelMenu({ models, report, value, onChange, below, inline, disabled, name = "Default model", automatic }: {
   models: AIModels | null; report: AIStatus | null; value: string | null; onChange: (value: string) => void;
   below?: boolean; inline?: boolean; disabled?: boolean;
+  /** The menu's accessible name. */
+  name?: string;
+  /** Offer `auto` first, with this label. */
+  automatic?: string;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -179,22 +186,28 @@ export function ModelMenu({ models, report, value, onChange, below, inline, disa
   if (!models) {
     return <div className="mpick loading" aria-busy="true"><span className="spin" />Loading models from your accounts…</div>;
   }
-  const hit = value ? findModel(models.groups, value) : null;
-  const saved = report?.default_model;
-  const label = hit?.entry.label ?? (saved && saved.value === value ? saved.label : value ?? "");
+  const auto = !!automatic && value === "auto";
+  const hit = value && !auto ? findModel(models.groups, value) : null;
+  const saved = automatic ? report?.summary_model : report?.default_model;
+  const label = auto ? automatic : hit?.entry.label ?? (saved && saved.value === value ? saved.label : value ?? "");
   const backend = hit?.group.backend ?? (value ?? "").split(":")[0];
-  const offered = !!hit;
+  const offered = auto || !!hit;
   const connections = report?.connections ?? [];
   return (
     <div className="mpick-wrap" ref={ref}>
       <button className={value && !offered ? "mpick bad" : "mpick"} aria-haspopup="listbox" aria-expanded={open}
-        aria-label="Default model" disabled={disabled} onClick={() => setOpen(!open)}>
-        {value ? <><AgentMark backend={backend} size={20} /><span className="mv">{label}</span>
+        aria-label={name} disabled={disabled} onClick={() => setOpen(!open)}>
+        {value ? <>{!auto && <AgentMark backend={backend} size={20} />}<span className="mv">{label}</span>
           {!offered && <span className="mna">Not available</span>}</> : <span className="mb">Choose a model</span>}
         <span className="caret"><Icon name="updown" /></span>
       </button>
       {open && (
-        <div className={inline ? "mmenu inline" : below ? "mmenu below" : "mmenu"} role="listbox" aria-label="Default model">
+        <div className={inline ? "mmenu inline" : below ? "mmenu below" : "mmenu"} role="listbox" aria-label={name}>
+          {automatic && (
+            <button className="mopt" role="option" aria-selected={auto} onClick={() => { onChange("auto"); setOpen(false); }}>
+              <span className="mck">{auto && <Icon name="check" size={12} />}</span>{automatic}
+            </button>
+          )}
           {connections.filter((c) => c.allowed !== false && (models.groups.some((g) => g.backend === c.backend) || (value && !offered && backend === c.backend))).map((c) => {
             const group = models.groups.find((g) => g.backend === c.backend);
             return (
@@ -248,6 +261,38 @@ export function ThinkingRow({ entry, value, onChange, disabled }: {
           </button>
         ))}
       </div>
+    </div>
+  );
+}
+
+/** The model that writes Activity's summaries; it saves on pick, and a running Tag uses it next time. */
+export function SummaryModelRow({ api, tag, models, report, disabled }: {
+  api: Bridge; tag: string; models: AIModels | null; report: AIStatus | null; disabled?: boolean;
+}) {
+  const [choice, setChoice] = useState<AIStatus["summary_model"] | null>(null);
+  const [state, setState] = useState<"idle" | "saving" | "saved">("idle");
+  const [error, setError] = useState("");
+  useEffect(() => { setChoice(null); setState("idle"); setError(""); }, [tag, report]);
+  const current = choice ?? report?.summary_model;
+  // Tags from before summary models don't report one.
+  if (!current) return null;
+  const pick = async (value: string) => {
+    if (value === current.value) return;
+    setState("saving");
+    setError("");
+    const result = await api.tag(aiArgs(tag, "summary-model", value, "--json"));
+    if (result.code !== 0) { setState("idle"); setError(failureLine(result, "Couldn't save the summary model.")); return; }
+    setChoice(parseJSON<{ summary_model: NonNullable<AIStatus["summary_model"]> }>(result.stdout).summary_model);
+    setState("saved");
+    setTimeout(() => setState((s) => (s === "saved" ? "idle" : s)), 2600);
+  };
+  return (
+    <div className="think summary-model">
+      <span className="tlab">Summary model</span>
+      <ModelMenu models={models} report={report && { ...report, summary_model: current }} value={current.value} onChange={(value) => void pick(value)}
+        below name="Summary model" automatic={SUMMARY_AUTO} disabled={disabled || state === "saving"} />
+      <p className="mcap">{state === "saving" ? "Saving…" : state === "saved" ? "Saved · used for the next summary" : "Writes Activity's short summaries. Falls back to the model above."}</p>
+      {error && <p className="mcap" role="alert">{error}</p>}
     </div>
   );
 }

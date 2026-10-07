@@ -1,6 +1,7 @@
 """Bounded, private records of Slack request activity.
 
-Tag stores public activity labels, bounded reply excerpts, and redacted tool-item previews.
+Tag stores public activity labels, bounded reply excerpts, redacted tool-item previews,
+and generated one-sentence summaries of each request, reply, and Slack thread.
 Raw App Server items, prompts, and reasoning never enter this store.
 """
 from __future__ import annotations
@@ -327,6 +328,72 @@ class ActivityStore:
                 record.update(reply_summary_status=status, reply_summary_updated_at=_timestamp())
                 self._write(record)
 
+    def request_summary_status(self, run_id: str, status: str) -> None:
+        if status not in {"pending", "unavailable"}:
+            return
+        with self.lock:
+            record = self.get(run_id)
+            if record and not record.get("request_summary"):
+                record.update(request_summary_status=status, request_summary_updated_at=_timestamp())
+                self._write(record)
+
+    def save_request_summary(self, run_id: str, summary: str) -> None:
+        """Keep only a generated one-sentence summary of what was asked, never the prompt."""
+        clean = reply_preview(summary)
+        if not clean:
+            return
+        with self.lock:
+            record = self.get(run_id)
+            if record is not None and not record.get("request_summary"):
+                record["request_summary"] = clean
+                record["request_summary_status"] = "ready"
+                self._write(record)
+
+    def _session_path(self, team: str, channel: str, thread_ts: str) -> Path:
+        return self.root / "sessions" / f"{thread_id({'team': team, 'channel': channel, 'thread_ts': thread_ts})}.json"
+
+    def session(self, team: str, channel: str, thread_ts: str) -> dict[str, Any] | None:
+        """The Slack thread's rolling conversation summary, when one was generated."""
+        path = self._session_path(team, channel, thread_ts)
+        try:
+            if time.time() - path.stat().st_mtime > RETENTION_SECONDS:
+                return None
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, UnicodeError):
+            return None
+        if (not isinstance(record, dict) or record.get("schema_version") != SCHEMA_VERSION
+                or (record.get("team"), record.get("channel"), record.get("thread_ts")) != (team, channel, thread_ts)
+                or not isinstance(record.get("session_summary"), str) or not record["session_summary"]
+                or not isinstance(record.get("updated_at"), str)):
+            return None
+        return record
+
+    def save_session_summary(self, team: str, channel: str, thread_ts: str, summary: str) -> None:
+        """Replace the thread's rolling summary of the whole conversation."""
+        clean = reply_preview(summary)
+        if not clean:
+            return
+        record = {"schema_version": SCHEMA_VERSION, "team": team, "channel": channel, "thread_ts": thread_ts,
+                  "session_summary": clean, "updated_at": _timestamp()}
+        directory = self.root / "sessions"
+        with self.lock:
+            directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+            restrict_windows_acl(directory)
+            path = self._session_path(team, channel, thread_ts)
+            temporary = directory / f".{path.stem}.{uuid.uuid4().hex}.tmp"
+            descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            try:
+                with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                    json.dump(record, stream, separators=(",", ":"))
+                    stream.write("\n")
+                os.replace(temporary, path)
+            finally:
+                temporary.unlink(missing_ok=True)
+            cutoff = time.time() - RETENTION_SECONDS
+            for old in directory.glob("*.json"):
+                if old.stat().st_mtime < cutoff:
+                    old.unlink(missing_ok=True)
+
     def save_reply(self, run_id: str, answer: str) -> None:
         """Save only a redacted preview after successful Slack delivery."""
         with self.lock:
@@ -363,9 +430,9 @@ def channel_names(scopes: str) -> dict[str, str]:
     return names
 
 
-def _summary_expired(record: dict) -> bool:
+def _summary_expired(record: dict, field: str = "reply_summary_updated_at") -> bool:
     try:
-        at = datetime.fromisoformat(record["reply_summary_updated_at"])
+        at = datetime.fromisoformat(record[field])
         return (datetime.now(timezone.utc) - at).total_seconds() > 30 * 60
     except (KeyError, TypeError, ValueError):
         return True
@@ -399,14 +466,18 @@ def thread_id(record: dict) -> str:
 
 def recent_activity(root: Path, scopes: str = "", limit: int = MAX_RECENT, *,
                     cached_names: dict[str, dict[str, str]] | None = None,
-                    channel: str | None = None, hide_errors: bool = False) -> list[dict[str, Any]]:
+                    channel: str | None = None, hide_errors: bool = False,
+                    people: dict[str, dict[str, dict[str, str]]] | None = None) -> list[dict[str, Any]]:
     """What a Tag did recently, with a short excerpt when a delivered reply was saved.
 
     Records are read through ``ActivityStore.get`` validation, so invalid or
-    expired ones are skipped, and nothing is written or pruned. Prompts,
-    requesters, and tool steps are never included; only how many steps ran.
+    expired ones are skipped, and nothing is written or pruned. Prompts and
+    tool steps are never included; only who asked, generated summaries of the
+    request and the Slack thread, and how many steps ran. ``people`` holds
+    cached requester names and pictures per workspace.
     """
     store = ActivityStore(root)
+    sessions: dict[tuple[str, str, str], dict[str, Any] | None] = {}
     names = channel_names(scopes)
     items: list[tuple[datetime, dict[str, Any]]] = []
     try:
@@ -430,6 +501,11 @@ def recent_activity(root: Path, scopes: str = "", limit: int = MAX_RECENT, *,
         at = at.replace(tzinfo=timezone.utc) if at.tzinfo is None else at.astimezone(timezone.utc)
         record_channel = record["channel"]
         dm = record_channel.startswith("D")
+        place = (record["team"], record_channel, record["thread_ts"])
+        if place not in sessions:
+            sessions[place] = store.session(*place)
+        session = sessions[place]
+        person = (people or {}).get(record["team"], {}).get(record["requester"], {})
         items.append((at, {
             "run_id": record["run_id"],
             "thread": thread_id(record),
@@ -437,6 +513,17 @@ def recent_activity(root: Path, scopes: str = "", limit: int = MAX_RECENT, *,
             "channel": record_channel,
             "channel_name": None if dm else (cached_names or {}).get(record["team"], {}).get(record_channel, names.get(record_channel)),
             "dm": dm,
+            "requester": record["requester"], "started_at": record["started_at"],
+            **({"requester_name": person["name"]} if person.get("name") else {}),
+            **({"requester_avatar": person["avatar"]} if person.get("avatar") else {}),
+            **({"request_summary": reply_preview(record["request_summary"])}
+               if record.get("request_summary") else {}),
+            **({"request_summary_status": (
+                "unavailable" if record.get("request_summary_status") == "pending"
+                and _summary_expired(record, "request_summary_updated_at") else record["request_summary_status"])}
+               if record.get("request_summary_status") in {"pending", "unavailable", "ready"} else {}),
+            **({"session_summary": session["session_summary"], "session_summary_at": session["updated_at"]}
+               if session else {}),
             **({"step_count": steps} if (steps := len(record["events"]) + record["omitted"]) else {}),
             **({"duration_seconds": duration} if (duration := generation_seconds(record)) is not None else {}),
             **({"reasoning_effort": effort} if (effort := record.get("reasoning_effort")) in SUPPORTED_REASONING_EFFORTS else {}),

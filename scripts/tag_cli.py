@@ -64,7 +64,7 @@ CAPABILITIES = (
     "list", "setup-jsonl", "setup-back", "rename", "workspace-lifecycle",
     "autostart", "autostart-keep", "logs-json", "upgrade-json", "install-progress",
     "ai-connections", "shared-ai-connections", "thinking-level", "logs-activity", "activity-details", "setup-v2", "abandon-setup", "remove-tag",
-    "describe", "telemetry-events", "start-progress",
+    "describe", "telemetry-events", "start-progress", "summary-model", "activity-sessions",
 )
 UPDATE_CHECK_INTERVAL_SECONDS = 24 * 60 * 60
 COMMANDS = tuple(sorted(tag_instances.RESERVED_NAMES))
@@ -1301,15 +1301,26 @@ def wait_for_configured_mfs_scopes(*, attempts: int | None = None) -> list[str]:
 
 
 def doctor(home: Path, offline: bool, json_output: bool = False, *, tag_id: str = "default") -> int:
+    try:
+        import tag_ai
+    except ImportError:
+        from scripts import tag_ai
+    try:
+        values = read_config(home / "config/settings.json")
+    except (OSError, ValueError):
+        values = {}
+    summary = tag_ai.summary_choice(home, values)
     if json_output:
         result, report = doctor_report(offline)
         report.setdefault("schema_version", 1)
         report["tag"] = tag_id
+        report["summary_model"] = summary
         print(json.dumps(report, indent=2))
         return result
     result, report = doctor_report(offline)
     display.doctor_summary(report)
     display.info_row("Target", selected_target(home, tag_id))
+    display.info_row("Summary model", tag_ai.summary_text(summary).removeprefix("Summary model · "))
     return result
 
 
@@ -2920,9 +2931,9 @@ def _run_cli() -> int:
         return result
     if args.command == "logs":
         try:
-            import tag_activity, slack_channel_names
+            import tag_activity, slack_channel_names, slack_people
         except ImportError:
-            from scripts import tag_activity, slack_channel_names
+            from scripts import tag_activity, slack_channel_names, slack_people
         if args.activity:
             details = tag_activity.activity_details(home / "state/activity", args.activity,
                 report_directory=Path(os.getenv("OPENTAG_ERROR_REPORTS_DIR", str(home / "state/error-reports"))).expanduser())
@@ -2949,7 +2960,8 @@ def _run_cli() -> int:
             activity_limit = args.activity_limit or tag_activity.MAX_RECENT
             activity = tag_activity.recent_activity(home / "state/activity", scopes, limit=activity_limit + 1,
                 channel=args.activity_channel, hide_errors=args.hide_errors,
-                cached_names={team: slack_channel_names.read(home, team)})
+                cached_names={team: slack_channel_names.read(home, team)},
+                people={team: slack_people.read(home, team)})
             print(json.dumps({"schema_version": 1, "tag": context.tag_id, "services": {
                 log.stem: log_tail(home, log.stem, args.limit or 200).splitlines() for log in logs
             }, "activity": activity[:activity_limit], "activity_has_more": len(activity) > activity_limit},
@@ -3086,13 +3098,14 @@ def _run_cli() -> int:
                 }[avatar], good=avatar in {"saved", "current"})
             _refresh_workspace_name(home, values)
             try:
-                import slack_channel_names
+                import slack_channel_names, slack_people
             except ImportError:
-                from scripts import slack_channel_names
-            try:
-                slack_channel_names.migrate(home, values)
-            except (OSError, ValueError):
-                pass  # Display metadata retries on the next start; it cannot block service readiness.
+                from scripts import slack_channel_names, slack_people
+            for migrate_labels in (slack_channel_names.migrate, slack_people.migrate):
+                try:
+                    migrate_labels(home, values)
+                except (OSError, ValueError):
+                    pass  # Display metadata retries on the next start; it cannot block service readiness.
             icon = _refresh_workspace_icon(home, values)
             if icon != "skipped":
                 # team:read is optional: without it the workspace shows as a letter, and the start continues.

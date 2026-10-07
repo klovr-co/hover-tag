@@ -4,6 +4,19 @@ All notable changes to Tag are documented here.
 
 ## Unreleased
 
+### Added
+
+- Activity in Tag.app shows who asked and what they asked, not only Tag's
+  reply. Each Slack thread is one row with a summary of the whole
+  conversation, the requester's Slack name and picture, and their latest
+  request and Tag's latest reply. Select a row to read the full conversation in
+  a side panel; the window widens to fit it. Summaries run on a new **summary
+  model** (Details → Model, or `tag settings ai summary-model`), which by
+  default is the smallest model your account offers, in throwaway sessions that
+  don't appear in the ChatGPT, Codex, or Claude apps. Request text is never
+  stored, only its summary. `tag status` and `tag doctor` show the summary model.
+  On start, Tag looks up the names of people in older activity.
+
 ### Fixed
 
 - Slack messages that send you to Tag.app no longer link to the unrelated

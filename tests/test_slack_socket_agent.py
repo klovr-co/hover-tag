@@ -21,9 +21,13 @@ from scripts.tag_activity import ActivityStore
 
 
 def setUpModule() -> None:
-    summary = patch.object(slack_socket_agent, "queue_reply_summary")
-    summary.start()
-    unittest.addModuleCleanup(summary.stop)
+    for name in ("queue_reply_summary", "queue_request_summary"):
+        summary = patch.object(slack_socket_agent, name)
+        summary.start()
+        unittest.addModuleCleanup(summary.stop)
+    people = patch.object(slack_socket_agent.slack_people, "look_up")
+    people.start()
+    unittest.addModuleCleanup(people.stop)
 
 
 class FakeApp:
@@ -3944,6 +3948,9 @@ class SlackAgentSettingsTests(unittest.TestCase):
         summary = patch.object(slack_socket_agent, "queue_reply_summary")
         self.queue_summary = summary.start()
         self.addCleanup(summary.stop)
+        request_summary = patch.object(slack_socket_agent, "queue_request_summary")
+        self.queue_request_summary = request_summary.start()
+        self.addCleanup(request_summary.stop)
         # Legacy Codex fixtures must not read the operator's ChatGPT account.
         auth = patch("scripts.tag_chatgpt.enabled", return_value=False)
         auth.start()
@@ -4104,6 +4111,9 @@ class SlackAgentSettingsTests(unittest.TestCase):
                 self.assertEqual(backend, record["backend"])
                 self.assertEqual("actual-model", self.queue_summary.call_args.args[4])
                 self.assertEqual((store, run_id, "Done.", backend), self.queue_summary.call_args.args[:4])
+                # What was asked is summarized from memory while the run works; it is never saved.
+                self.assertEqual((store, run_id, "do it", backend), self.queue_request_summary.call_args.args[:4])
+                self.assertNotIn("do it", json.dumps(record))
                 client.chat_postEphemeral.assert_not_called()
                 self.assertNotIn("refund policy", json.dumps(footer))
 

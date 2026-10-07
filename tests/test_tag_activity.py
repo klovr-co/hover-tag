@@ -222,18 +222,53 @@ class RecentActivityTests(unittest.TestCase):
         items = tag_activity.recent_activity(self.root, self.SCOPES)
         self.assertTrue(all(tag_activity.RUN_ID_RE.fullmatch(item.pop("run_id")) for item in items))
         self.assertTrue(all(re.fullmatch(r"[a-f0-9]{16}", item.pop("thread")) for item in items))
+        self.assertEqual(["2026-10-04T10:00:00+00:00", "2026-10-04T09:00:00+00:00", "2026-10-03T09:00:00+00:00",
+                          "2026-10-02T09:00:00+00:00"], [item.pop("started_at") for item in items])
         self.assertEqual([
             {"at": "2026-10-04T10:00:00+00:00", "kind": "working", "channel": "C0UNKNOWN",
-             "channel_name": None, "dm": False},
+             "channel_name": None, "dm": False, "requester": "U0PRIVATE"},
             {"at": "2026-10-04T09:01:00+00:00", "kind": "replied", "channel": "C0LAUNCH",
-             "channel_name": "launch", "dm": False, "duration_seconds": 60.0},
+             "channel_name": "launch", "dm": False, "duration_seconds": 60.0, "requester": "U0PRIVATE"},
             {"at": "2026-10-03T09:02:00+00:00", "kind": "failed", "channel": "G0DESIGN",
-             "channel_name": "design-review", "dm": False, "duration_seconds": 120.0},
+             "channel_name": "design-review", "dm": False, "duration_seconds": 120.0, "requester": "U0PRIVATE"},
             {"at": "2026-10-02T09:00:30+00:00", "kind": "stopped", "channel": "D0MAYA",
-             "channel_name": None, "dm": True, "duration_seconds": 30.0},
+             "channel_name": None, "dm": True, "duration_seconds": 30.0, "requester": "U0PRIVATE"},
         ], items)
-        # Prompts, requesters, and tool steps never leave the store.
-        self.assertNotIn("U0PRIVATE", json.dumps(items))
+
+    def test_requester_names_and_summaries_of_the_request_and_thread(self) -> None:
+        older = self.record("C0LAUNCH", "completed", "2026-10-04T09:00:00+00:00", "2026-10-04T09:01:00+00:00")
+        newer = self.record("C0LAUNCH", "running", "2026-10-04T10:00:00+00:00")
+        # Records from before #185 show who asked with no request or session summary.
+        people = {"T1": {"U0PRIVATE": {"name": "Maxine", "avatar": "https://avatars.slack-edge.com/m.png"}}}
+        items = {item["run_id"]: item for item in tag_activity.recent_activity(self.root, people=people)}
+        self.assertEqual("Maxine", items[older]["requester_name"])
+        self.assertEqual("https://avatars.slack-edge.com/m.png", items[older]["requester_avatar"])
+        self.assertNotIn("request_summary", items[older])
+        self.assertNotIn("session_summary", items[older])
+        self.store.request_summary_status(newer, "pending")
+        self.store.save_request_summary(newer, "Make the empty space at the bottom feel less empty")
+        self.store.save_request_summary(newer, "Overwrite attempt")
+        self.store.save_session_summary("T1", "C0LAUNCH", "1.0", "Polish Home's empty space")
+        self.store.save_session_summary("T1", "C0LAUNCH", "1.0", "Polish Home and its hint row")
+        items = {item["run_id"]: item for item in tag_activity.recent_activity(self.root)}
+        self.assertEqual("Make the empty space at the bottom feel less empty", items[newer]["request_summary"])
+        self.assertEqual("ready", items[newer]["request_summary_status"])
+        # Every round of the thread shares its rolling summary; the newest replaces the last.
+        self.assertEqual({"Polish Home and its hint row"},
+                         {items[older]["session_summary"], items[newer]["session_summary"]})
+        self.assertNotIn("requester_name", items[older])
+        # Session records live beside runs without being mistaken for one.
+        self.assertEqual(2, len(list(self.root.glob("*.json"))))
+        self.assertIsNone(self.store.session("T1", "C0OTHER", "1.0"))
+
+    def test_stale_pending_request_summary_reads_as_unavailable(self) -> None:
+        run_id = self.record("C0LAUNCH", "running", "2026-10-04T10:00:00+00:00")
+        self.store.request_summary_status(run_id, "pending")
+        path = self.root / f"{run_id}.json"
+        record = json.loads(path.read_text(encoding="utf-8"))
+        record["request_summary_updated_at"] = "2026-01-01T00:00:00+00:00"
+        path.write_text(json.dumps(record), encoding="utf-8")
+        self.assertEqual("unavailable", tag_activity.recent_activity(self.root)[0]["request_summary_status"])
 
     def test_step_count_includes_omitted_steps(self) -> None:
         run_id = self.record("C0LAUNCH", "completed", "2026-10-04T09:00:00+00:00", "2026-10-04T09:01:00+00:00")

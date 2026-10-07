@@ -46,5 +46,12 @@
   "default_effort": "medium",
   "effort_levels": ["low", "medium", "high", "xhigh"],
   "effort_chosen": false,
+  "summary_model": {
+    "value": "auto",
+    "backend": null,
+    "model": null,
+    "label": "Automatic (smallest available)",
+    "backend_name": null
+  },
   "checked_at": "2026-10-04T09:30:00+00:00"
 }

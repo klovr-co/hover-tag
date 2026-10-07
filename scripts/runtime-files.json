@@ -64,6 +64,7 @@
     "scripts/slack_manifest_hook.py",
     "scripts/slack_manifest_migrations.py",
     "scripts/slack_mrkdwn.py",
+    "scripts/slack_people.py",
     "scripts/slack_permissions.py",
     "scripts/slack_post_message.py",
     "scripts/slack_thread_file.py",

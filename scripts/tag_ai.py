@@ -3,8 +3,9 @@
 Tag.app and the terminal share this module. ``tag [TAG] settings ai --json``
 reports each backend's connection, ``models`` lists the signed-in accounts'
 models grouped by backend, ``sign-in`` runs the browser sign-in with progress
-and cancellation, ``model`` saves the Tag's default model, and ``effort`` its
-default thinking level. Guided setup asks the same questions through
+and cancellation, ``model`` saves the Tag's default model, ``effort`` its
+default thinking level, and ``summary-model`` the model that writes Activity's
+summaries (``auto`` picks the smallest one the account offers). Guided setup asks the same questions through
 ``setup_step``.
 """
 
@@ -244,6 +245,48 @@ def default_choice(home: Path, values: dict[str, str], *, available: bool | None
             "backend_name": agent_models.backend_display_name(backend), "available": available}
 
 
+SUMMARY_AUTO_LABEL = "Automatic (smallest available)"
+
+
+def summary_choice(home: Path, values: dict[str, str]) -> dict[str, Any]:
+    """The model that writes Activity summaries; ``auto`` is the account's smallest one."""
+    value = values.get("OPENTAG_SUMMARY_MODEL") or "auto"
+    if value == "auto":
+        return {"value": "auto", "backend": None, "model": None, "label": SUMMARY_AUTO_LABEL, "backend_name": None}
+    backend, model = agent_models.parse_model_choice(value, values.get("OPENTAG_BACKEND") or "codex")
+    names = agent_models.load_model_names(agent_models.model_names_path(home))
+    return {"value": value, "backend": backend, "model": model,
+            "label": names.get(f"{backend}:{model}", model) if model else "Account default",
+            "backend_name": agent_models.backend_display_name(backend)}
+
+
+def summary_text(choice: dict[str, Any]) -> str:
+    return "Summary model · " + (choice["label"] if choice["value"] == "auto"
+                                 else f"{choice['backend_name']} · {choice['label']}")
+
+
+def save_summary_model(home: Path, value: str, *, ready: list[str] | None = None,
+                       values: dict[str, str] | None = None) -> dict[str, Any]:
+    """Save the summary model; the running Tag reads it at its next summary, so no restart."""
+    if error := settings.validation_error("OPENTAG_SUMMARY_MODEL", value):
+        raise ValueError(error)
+    path = settings.config_path(home)
+    values = values if values is not None else settings.load_config(path)
+    if value != "auto":
+        backend, model = agent_models.parse_model_choice(value, values.get("OPENTAG_BACKEND") or "codex")
+        if ready is None:
+            ready = usable([connection(home, backend)], values)
+        name = agent_models.backend_display_name(backend)
+        if backend not in ready:
+            raise ValueError(f"Connect {name} before choosing its models.")
+        if model and value not in agent_models.load_model_names(agent_models.model_names_path(home)):
+            offered = {entry["value"] for group in models(home, values, ready)["groups"] for entry in group["models"]}
+            if value not in offered:
+                raise ValueError(f"{model} isn't available from your connected {name} account. Pick another model.")
+    saved = settings.update_config(path, {"OPENTAG_SUMMARY_MODEL": "" if value == "auto" else value})
+    return summary_choice(home, saved)
+
+
 def thinking(home: Path, values: dict[str, str]) -> dict[str, Any]:
     """The Tag's thinking level from the saved catalog: no backend is started."""
     backend = values.get("OPENTAG_BACKEND") or "codex"
@@ -273,6 +316,7 @@ def report(home: Path, values: dict[str, str], *, tag_id: str, running: bool) ->
         choice["available"] = False
     return {"schema_version": 1, "tag": tag_id, "running": running, "connections": found,
             "usable": ready, "default_model": choice, **thinking(home, values),
+            "summary_model": summary_choice(home, values),
             "checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
 
 
@@ -700,7 +744,7 @@ def _choose_model(home: Path, values: dict[str, str], found: list[dict[str, Any]
 USAGE = ("tag settings ai connections | sign-in codex|claude [--method chatgpt|codex] "
          "[--account ID] | resume [--restart] [--json]; "
          "tag [TAG] settings ai status | models | model VALUE [--effort LEVEL|default] | "
-         "effort LEVEL|default [--restart] [--json]")
+         "effort LEVEL|default [--restart] | summary-model VALUE|auto [--json]")
 
 
 @dataclass
@@ -746,6 +790,7 @@ def cli(arguments: list[str], target: Target, *, json_output: bool = False, rest
         choice = result["default_model"]
         ui.message(f"Default model · {choice['backend_name']} · {choice['label']}")
         ui.message(thinking_text(target.home, values))
+        ui.message(summary_text(result["summary_model"]))
         if not result["usable"]:
             ui.message("No AI is connected. Run tag settings ai sign-in codex or claude.")
         return 0 if result["usable"] else 1
@@ -791,6 +836,15 @@ def cli(arguments: list[str], target: Target, *, json_output: bool = False, rest
             ui.message("✓ " + thinking_text(target.home, settings.load_config(settings.config_path(target.home))))
             ui.message("People who picked their own thinking level in Slack keep it.")
             ui.message(f"{target.name} restarted." if restarted else _restart_note(target))
+        return 0
+    if action == "summary-model" and len(arguments) == 2:
+        choice = save_summary_model(target.home, arguments[1], values=values)
+        if json_output:
+            print(json.dumps({"schema_version": 1, "ok": True, "summary_model": choice,
+                              "restart_required": False}, indent=2))
+        else:
+            ui.message("✓ " + summary_text(choice))
+            ui.message(f"{target.name} uses it for its next summary. No restart needed.")
         return 0
     if action in {"sign-in", "resume"} and len(arguments) == (2 if action == "sign-in" else 1):
         backend = arguments[1] if action == "sign-in" else "codex"
@@ -880,7 +934,9 @@ def settings_menu(target: Target) -> None:
         ui.message(f"Default model · {choice['backend_name']} · {choice['label']}"
                    + ("" if choice["available"] is not False else " · not available"))
         ui.message(thinking_text(target.home, values))
-        options = [("model", "Change default model"), ("effort", "Change thinking level")]
+        ui.message(summary_text(result["summary_model"]))
+        options = [("model", "Change default model"), ("effort", "Change thinking level"),
+                   ("summary", "Change summary model")]
         ui.message("Manage shared accounts with tag settings ai connections or tag settings ai sign-in codex|claude --restart.")
         options += [("check", "Check connections"), ("back", "Back")]
         selected = options[ui.choose("AI & models", [label for _, label in options])][0]
@@ -914,6 +970,9 @@ def settings_menu(target: Target) -> None:
             if _choose_effort(target, values, choice, result["usable"]):
                 _offer_restart(target)
             continue
+        if selected == "summary":
+            _choose_summary_model(target, values, result)
+            continue
 
 
 def _choose_effort(target: Target, values: dict[str, str], choice: dict[str, Any], ready: list[str]) -> bool:
@@ -944,6 +1003,29 @@ def _choose_effort(target: Target, values: dict[str, str], choice: dict[str, Any
     ui.message("✓ " + thinking_text(target.home, settings.load_config(settings.config_path(target.home))))
     ui.message("People who picked their own thinking level in Slack keep it.")
     return True
+
+
+def _choose_summary_model(target: Target, values: dict[str, str], result: dict[str, Any]) -> None:
+    """Pick the model that writes Activity summaries; it applies without a restart."""
+    entries = [("auto", SUMMARY_AUTO_LABEL)]
+    if result["usable"]:
+        ui.message("Loading models from your accounts…")
+        catalog = models(target.home, values, result["usable"])
+        entries += [(entry["value"], f"{group['name']} · {entry['label']}")
+                    for group in catalog["groups"] for entry in group["models"]]
+    ids = [value for value, _ in entries]
+    current = result["summary_model"]["value"]
+    picked = ui.choose("Summary model", [label for _, label in entries] + ["Cancel"],
+                       default=ids.index(current) if current in ids else 0)
+    if picked == len(entries):
+        return
+    try:
+        saved = save_summary_model(target.home, ids[picked], ready=result["usable"], values=values)
+    except ValueError as exc:
+        ui.message(str(exc))
+        return
+    ui.message("✓ " + summary_text(saved))
+    ui.message(f"{target.name} uses it for its next summary. No restart needed.")
 
 
 def _offer_restart(target: Target) -> None:

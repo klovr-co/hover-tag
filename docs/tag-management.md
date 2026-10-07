@@ -199,6 +199,7 @@ tag settings ai models              # models from connected accounts
 tag settings ai model claude:opus   # save the default model
 tag settings ai effort high         # save the default thinking level
 tag settings ai effort default      # use the model's own thinking level
+tag settings ai summary-model auto  # Activity summaries on the smallest model
 tag settings ai sign-in claude      # sign in, reconnect, or change account
 tag settings ai sign-in codex --method chatgpt --restart
 ```
@@ -225,6 +226,16 @@ works; leave it empty for the model's default. Both Codex and Claude use the
 Tag's level, and people who chose their own thinking level in Slack keep it.
 A Tag without a saved level, including every Tag set up before this setting
 existed, keeps using the model's own default.
+
+The **summary model** writes Activity's short summaries of each request, each
+reply, and each Slack thread. `auto` (the default) uses the smallest model your
+account offers, such as Claude Haiku or a Codex mini model, at its lowest
+thinking level; if that model isn't available, summaries use the reply's model.
+Choose another with `tag settings ai summary-model codex:MODEL`, in Tag.app →
+Details → Model, or `tag config set OPENTAG_SUMMARY_MODEL claude:MODEL`. It
+applies to the next summary without a restart. `tag status` and `tag doctor`
+show it. Summary runs are throwaway sessions that don't appear in the ChatGPT,
+Codex, or Claude apps.
 
 `OPENTAG_BOT_DESCRIPTION` holds a one-line description of the Tag, up to 140
 characters. Tag stores and shows it (`tag list --json` reports it as

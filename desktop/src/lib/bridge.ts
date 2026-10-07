@@ -12,7 +12,7 @@ import setupExample from "../../../protocol/examples/setup.jsonl?raw";
 import startExample from "../../../protocol/examples/start-progress.jsonl?raw";
 import aiStatusExample from "../../../protocol/examples/ai-status.json";
 import aiModelsExample from "../../../protocol/examples/ai-models.json";
-import type { AIStatus, Connection } from "./ai";
+import { SUMMARY_AUTO, type AIStatus, type Connection } from "./ai";
 import type { ActivityItem } from "./home";
 import { windowFitter } from "./fit";
 
@@ -199,8 +199,13 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
   // Sample data shows only what Tag itself would report: replies come from its activity records.
   const today = (hours: number, minutes: number) => { const d = new Date(); d.setHours(hours, minutes, 0, 0); return d.toISOString(); };
   const activity: Record<string, ActivityItem[]> = {
-    [rows[0].id]: [{ run_id: "a".repeat(32), reply_preview: "I reviewed the launch notes and prepared the following checklist.", reply_summary: "Created a launch checklist with owners and next steps.", artifacts: [{ name: "launch-checklist.md", kind: "file", delivery: "uploaded", url: "https://example.slack.com/files/F123/launch-checklist.md" }], model: "gpt-5.5", model_name: "GPT-5.5", reasoning_effort: "medium", backend: "codex", duration_seconds: 43, step_count: 7, usage: {input_tokens: 11900, output_tokens: 440, total_tokens: 12340, cache_read_input_tokens: 9000, reasoning_output_tokens: 180}, at: today(9, 20), kind: "replied", channel: "C0LAUNCH1", channel_name: "launch", dm: false }],
-    "t0acme01-a0ops003": [{ run_id: "b".repeat(32), at: today(10, 12), kind: "replied", channel: "C0LAUNCHOPS", channel_name: "launch-ops", dm: false }],
+    [rows[0].id]: [{ run_id: "c".repeat(32), thread: "launch-thread", requester: "U0MAYA001", requester_name: "Maya", started_at: today(8, 58),
+      request_summary: "Which launch tasks still have no owner?", session_summary: "Plan the launch checklist and owners",
+      reply_summary: "Four launch tasks have no owner yet, mostly in support.", model: "gpt-5.5", model_name: "GPT-5.5", reasoning_effort: "medium", backend: "codex",
+      duration_seconds: 21, step_count: 3, at: today(9, 0), kind: "replied", channel: "C0LAUNCH1", channel_name: "launch", dm: false },
+    { run_id: "a".repeat(32), thread: "launch-thread", requester: "U0MAYA001", requester_name: "Maya", started_at: today(9, 19),
+      request_summary: "Read launch-plan.md and create launch-checklist.md", session_summary: "Plan the launch checklist and owners", reply_preview: "I reviewed the launch notes and prepared the following checklist.", reply_summary: "Created a launch checklist with owners and next steps.", artifacts: [{ name: "launch-checklist.md", kind: "file", delivery: "uploaded", url: "https://example.slack.com/files/F123/launch-checklist.md" }], model: "gpt-5.5", model_name: "GPT-5.5", reasoning_effort: "medium", backend: "codex", duration_seconds: 43, step_count: 7, usage: {input_tokens: 11900, output_tokens: 440, total_tokens: 12340, cache_read_input_tokens: 9000, reasoning_output_tokens: 180}, at: today(9, 20), kind: "replied", channel: "C0LAUNCH1", channel_name: "launch", dm: false }],
+    "t0acme01-a0ops003": [{ run_id: "b".repeat(32), requester: "U0MAYA001", requester_name: "Maya", at: today(10, 12), kind: "replied", channel: "C0LAUNCHOPS", channel_name: "launch-ops", dm: false }],
   };
   // ?tags=N shows only the first N sample Tags, for checking Home with one or two.
   const shown = typeof location === "undefined" ? null : new URLSearchParams(location.search).get("tags");
@@ -237,7 +242,7 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
       }
       if (first === "version") {
         return json({ ...versionExample, version: runtimeVersion,
-          capabilities: [...new Set([...versionExample.capabilities, "ai-connections", "shared-ai-connections", "logs-activity", "thinking-level", "describe", "telemetry-events"])] });
+          capabilities: [...new Set([...versionExample.capabilities, "ai-connections", "shared-ai-connections", "logs-activity", "thinking-level", "describe", "telemetry-events", "summary-model", "activity-sessions"])] });
       }
       if (second === "settings" && args[2] === "ai") {
         const ai = aiFor(first, rows.find((r) => r.id === first));
@@ -247,6 +252,14 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
           await sleep(900);
           return json({ ...aiModelsExample, default: { ...ai.default_model, available: true, chosen: true },
             groups: aiModelsExample.groups.filter((g) => ai.usable.includes(g.backend)) });
+        }
+        if (action === "summary-model" && value) {
+          const entry = aiModelsExample.groups.flatMap((g) => g.models.map((m) => ({ ...m, group: g })))
+            .find((m) => m.value === value);
+          if (value !== "auto" && !entry) return { code: 1, stdout: JSON.stringify({ schema_version: 1, ok: false, error: `${value} isn't available` }), stderr: "" };
+          ai.summary_model = entry ? { value, backend: entry.group.backend, model: entry.model, label: entry.label, backend_name: entry.group.name }
+            : { value: "auto", backend: null, model: null, label: SUMMARY_AUTO, backend_name: null };
+          return json({ schema_version: 1, ok: true, summary_model: ai.summary_model, restart_required: false });
         }
         if (action === "model" && value) {
           const entry = aiModelsExample.groups.flatMap((g) => g.models.map((m) => ({ ...m, group: g })))

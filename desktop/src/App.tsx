@@ -9,6 +9,7 @@ import { useTags } from "./lib/tags";
 import { TrackContext, useTelemetry, type AppEvents } from "./lib/telemetry";
 import { useWatch } from "./lib/watch";
 import { deepLinkTarget } from "./lib/deeplink";
+import { WIDE, WIDTH, WindowPanel } from "./lib/panel";
 import { Connect } from "./components/Connect";
 import { Home } from "./components/Home";
 import { Installing, Starting, Welcome } from "./components/Install";
@@ -42,9 +43,7 @@ const NEEDED = ["list", "setup-jsonl"];
 /** How often Tag checks for a complete product update. */
 const APP_UPDATE_HOURS = 6;
 const DEVELOPMENT_UPDATES = "Updates are off in development builds. Use the installed Tag.app to update.";
-/** Window widths: everyday screens, and Tag detail's Slack layout. */
-export const WIDTH = 520;
-export const WIDE = 800;
+export { WIDTH, WIDE } from "./lib/panel";
 
 /** Keep the Tags the Swift app restored at login, then let the login service do it. */
 export async function migrateFromSwiftApp(api: Bridge, legacy: string[], existing: string[]) {
@@ -176,8 +175,10 @@ export function App() {
     }
   }, [api, info, tags, track, telemetry.reload]);
 
-  // The window always fits its content, and Tag detail is wider.
-  const width = screen.name === "tag" ? WIDE : WIDTH;
+  // The window always fits its content, and Tag detail is wider. Its
+  // conversation panel widens the window further while it is open.
+  const [panel, setPanel] = useState(0);
+  const width = screen.name === "tag" ? WIDE + panel : WIDTH;
   useLayoutEffect(() => {
     if (!api || !root) return;
     const observer = new ResizeObserver(([entry]) => void api.fitWindow(width, Math.ceil(entry.target.getBoundingClientRect().height)));
@@ -289,11 +290,13 @@ export function App() {
           <AISettings api={api} tags={tags} close={() => { watch.recheck(); setScreen(screen.resume ? { name: "connect", args: screen.resume } : { name: "settings" }); }} />
         )}
         {screen.name === "tag" && (
+          <WindowPanel.Provider value={setPanel}>
           <TagDetail key={screen.opened ?? 0} api={api} tags={tags} initial={screen.id} initialTab={screen.tab} problems={watch.problems} back={home} add={add}
             canDescribe={capabilities.includes("describe")}
             showSettings={() => setScreen({ name: "settings" })}
             finishSetup={(row) => setScreen({ name: "connect", args: [row.id, "setup"] })}
             openAI={() => capabilities.includes(SHARED_AI_CAPABILITY) ? setScreen({ name: "ai" }) : say("Update Tag to manage shared AI accounts in Settings.")} say={say} />
+          </WindowPanel.Provider>
         )}
         <Toast text={toast} />
       </main>

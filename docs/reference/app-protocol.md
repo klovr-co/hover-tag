@@ -36,6 +36,8 @@ it shows is listed in `capabilities`; otherwise it offers to upgrade Tag.
 | `shared-ai-connections` | Global `tag settings ai connections\|sign-in\|resume --json`; shared accounts, model-only setup |
 | `thinking-level` | `tag NAME settings ai effort LEVEL --json`, `model VALUE --effort LEVEL`; thinking-level fields in `settings ai`, `models`, and `tag list` |
 | `logs-activity` | `activity` in `tag NAME logs --json` |
+| `activity-sessions` | `requester`, `requester_name`, `requester_avatar`, `request_summary`, and `session_summary` in `logs --json` activity |
+| `summary-model` | `tag NAME settings ai summary-model VALUE\|auto --json`; `summary_model` in `settings ai --json` |
 | `activity-details` | `tag NAME logs --activity RUN_ID --json` |
 | `telemetry-events` | `tag telemetry record EVENT FIELD=VALUE...`, `available` in `tag telemetry status\|on\|off --json`; see [Usage data](#usage-data) |
 | `setup-v2` | Setup order Your Tag → AI → Workspace → Create → Channels; `profile`, `org_workspace`, `existing_app`, and `app_checks` questions; `recap`; creation `progress`; `ready` in the result |
@@ -102,9 +104,26 @@ Each item has `at` (an ISO 8601 UTC time: when the request finished, or when
 it started while it's still running), `kind` (`replied`, `failed`, `stopped`,
 or `working`; treat unknown kinds as finished), `channel` (the Slack channel
 ID), `channel_name` (from the channels the Tag remembers, or `null` when
-unknown or for a direct message), `dm`, and `run_id`. Items come only from Tag's
-own activity records, which it keeps for 30 days. The summary omits prompts,
-people, and tool steps. See `protocol/examples/logs.json`.
+unknown or for a direct message), `dm`, `run_id`, `started_at` (when the request
+started), and `requester` (the Slack user ID of the person who asked). Items come only from Tag's own activity
+records, which it keeps for 30 days. The summary omits prompts and tool steps.
+See `protocol/examples/logs.json`.
+
+`requester_name` and `requester_avatar` (an `https` picture URL) come from a
+cache the bridge fills with the bot token's `users.info` when someone asks; on
+start, Tag also names the requesters of retained older records. They are absent
+until the person is looked up. `request_summary` is a cached AI-written
+sentence saying what was asked, generated from the request when the run starts;
+the request text itself is never stored. `request_summary_status` is `pending`,
+`ready`, or `unavailable`, with the same 30-minute rule as replies.
+`session_summary` (with `session_summary_at`) is the rolling title of the whole
+Slack thread: after each finished round, Tag rewrites it from the previous title
+and that round's request and reply summaries, so every item in one `thread`
+shares it. Older records show the requester with no request
+summary, and a thread has no session summary until its next finished round.
+All summaries use the summary model (see [AI connections](#ai-connections)).
+Tag.app shows one row per thread, placed by its latest activity, and opens the
+full conversation in a side panel that widens the window.
 
 Successful delivered replies can include `reply_summary`: a cached AI-written,
 redacted, plain-text TL;DR of the delivered answer. New summaries use a natural
@@ -382,6 +401,18 @@ level in the same change, or `--effort default` for the model's own; the level
 must be one the model offers. Without `--effort`, the Tag's level is kept if
 the new model offers it and otherwise cleared. The result's `default_effort` is
 the level now in effect.
+
+`summary_model` in `tag NAME settings ai --json` (`value`, `backend`, `model`,
+`label`, `backend_name`) is the model that writes Activity's request, reply,
+and session summaries. `value` is `auto` (the default: the smallest model the
+connected account offers, such as Claude Haiku or a Codex mini model) or a
+model choice such as `codex:gpt-5.5-mini`. Summaries run at the model's lowest
+thinking level, in throwaway sessions that never appear in the ChatGPT, Codex,
+or Claude apps; when the summary model fails, the reply's own model is used.
+`tag NAME settings ai summary-model VALUE|auto --json` saves it and returns
+`ok`, `summary_model`, and `restart_required: false`: a running Tag reads it at
+its next summary. A model the connected account doesn't offer is refused. See
+`protocol/examples/ai-summary-model.json`.
 
 `tag NAME settings ai effort LEVEL --json` saves the Tag's thinking level for
 its default model; `effort default` clears it so the model's own default
