@@ -599,7 +599,12 @@ button.activity-artifact:hover { border-color: var(--link); color: var(--link); 
 .sl-msg .activity-artifact-error { color: var(--bad-text); font-size: 12px; }
 .activity-reply-preview { white-space: normal; overflow-wrap: anywhere; }
 .activity-reply-place { color: var(--muted); font-size: 12px; }
-.activity-thread { margin-left: 44px; }
+.activity-thread-group { margin-left: 48px; padding-bottom: 6px; }
+/* A message and its "Show earlier replies" link highlight together, as one thread. */
+.activity-group { border-radius: 8px; padding-bottom: 2px; }
+.activity-history > div + div > .activity-group, .activity-history > div + div > .sl-day { margin-top: 10px; }
+.activity-group:hover { background: var(--canvas); }
+.activity-group .sl-msg:hover { background: none; }
 .activity-thread-toggle { font-size: 12px; padding: 2px 0; }
 .activity-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
 .activity-toggle, .activity-thread, .activity-refresh { display: inline-flex; align-items: center; gap: 5px; padding: 3px 0; font-size: 12.5px; color: var(--muted); }
