@@ -445,6 +445,7 @@ mod tests {
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_window_now(app)))
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec![AUTOSTART_FLAG]),
@@ -463,6 +464,14 @@ pub fn run() {
         ])
         .setup(|app| {
             tray::create(app.handle())?;
+            // hover-tag:// links bring the window forward; the page opens the linked Tag.
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                #[cfg(any(windows, target_os = "linux"))]
+                let _ = app.deep_link().register_all();
+                let handle = app.handle().clone();
+                app.deep_link().on_open_url(move |_| show_window_now(&handle));
+            }
             // Opened by the login item: stay in the tray, no window or Dock icon.
             if std::env::args().any(|a| a == AUTOSTART_FLAG) {
                 #[cfg(target_os = "macos")]

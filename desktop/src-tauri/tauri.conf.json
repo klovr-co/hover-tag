@@ -90,6 +90,13 @@
       "windows": {
         "installMode": "passive"
       }
+    },
+    "deep-link": {
+      "desktop": {
+        "schemes": [
+          "hover-tag"
+        ]
+      }
     }
   }
 }

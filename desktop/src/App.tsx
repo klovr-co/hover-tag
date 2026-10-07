@@ -8,6 +8,7 @@ import { checkUpdate, initialUpdate, installUpdate, updateReducer } from "./lib/
 import { useTags } from "./lib/tags";
 import { TrackContext, useTelemetry, type AppEvents } from "./lib/telemetry";
 import { useWatch } from "./lib/watch";
+import { deepLinkTarget } from "./lib/deeplink";
 import { Connect } from "./components/Connect";
 import { Home } from "./components/Home";
 import { Installing, Starting, Welcome } from "./components/Install";
@@ -200,6 +201,19 @@ export function App() {
       if (action === "settings") setScreen({ name: "settings" });
     });
   }, [api, tags]);
+
+  // Links from Slack, such as "Choose another model in the Tag app", open that Tag's Details.
+  const ready = installed && tags.loaded;
+  const [link, setLink] = useState<string | null>(null);
+  useEffect(() => api?.onDeepLink(setLink), [api]);
+  useEffect(() => {
+    if (!api || !link || !ready) return;
+    setLink(null);
+    const id = deepLinkTarget(link);
+    if (id && tags.rows.some((r) => r.id === id)) setScreen({ name: "tag", id });
+    else if (id) say("That Tag isn't on this computer.");
+    void api.showWindow();
+  }, [api, link, ready, tags.rows, say]);
 
   // Tag was removed after this app started, even while Home is showing: offer to install it again.
   useEffect(() => {

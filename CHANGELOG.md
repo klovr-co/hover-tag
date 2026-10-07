@@ -6,6 +6,10 @@ All notable changes to Tag are documented here.
 
 ### Fixed
 
+- Slack messages that send you to Tag.app no longer link to the unrelated
+  tag.app website. "the Tag app" now opens that Tag's Details in Tag.app on
+  the computer where it is installed, through the new `hover-tag://` link.
+  The model error also names `tag NAME settings ai` for use without the app.
 - Tag.app starts your new Tag as soon as setup finishes and greets it by the
   name you gave it, with your Slack name and picture on the example message.
   While it starts, Tag.app shows each step (Slack app, memory, reading its
