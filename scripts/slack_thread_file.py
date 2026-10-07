@@ -18,6 +18,16 @@ MAX_FILE_BYTES = 15 * 1024 * 1024
 FILE_ID_RE = re.compile(r"^F[A-Z0-9]{2,}$")
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse redirects so the bot token is never forwarded to another host."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise RuntimeError("Slack returned an unexpected redirect.")
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 def require_env(name: str) -> str:
     value = os.getenv(name)
     if not value:
@@ -32,7 +42,7 @@ def slack_request(url: str, token: str) -> urllib.request.Request:
 def file_info(file_id: str, token: str) -> dict:
     query = urllib.parse.urlencode({"file": file_id})
     try:
-        with urllib.request.urlopen(slack_request(f"{API_URL}?{query}", token), timeout=30) as response:
+        with _OPENER.open(slack_request(f"{API_URL}?{query}", token), timeout=30) as response:
             result = json.load(response)
     except urllib.error.HTTPError as exc:
         raise RuntimeError(f"Slack file lookup failed ({exc.code})") from exc
@@ -68,11 +78,12 @@ def download(file_id: str, attachments_dir: Path) -> dict:
     if not shared_in_channel(file, channel):
         raise PermissionError("That file was not shared in this channel.")
     url = file.get("url_private_download") or file.get("url_private") or ""
-    if urllib.parse.urlsplit(url).hostname not in SLACK_FILE_HOSTS:
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme != "https" or parts.hostname not in SLACK_FILE_HOSTS:
         raise RuntimeError("Slack did not return a downloadable file URL.")
     chunks: list[bytes] = []
     total = 0
-    with urllib.request.urlopen(slack_request(url, token), timeout=30) as response:
+    with _OPENER.open(slack_request(url, token), timeout=30) as response:
         while chunk := response.read(1024 * 1024):
             total += len(chunk)
             if total > MAX_FILE_BYTES:

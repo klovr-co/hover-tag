@@ -1190,6 +1190,26 @@ class SlackGeneratedImageTests(unittest.TestCase):
             self.assertEqual((keep_dir / "say-hi-2.png").read_bytes(), b"new")
         client.files_upload_v2.assert_called_once()
 
+    @unittest.skipIf(os.name == "nt", "symlinks need extra privileges on Windows")
+    def test_keeping_images_never_follows_symlinks(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            image, outside = root / "say-hi.png", root / "outside"
+            image.write_bytes(b"new")
+            outside.mkdir()
+            linked = root / "linked-images"
+            linked.symlink_to(outside, target_is_directory=True)
+            with self.assertRaises(OSError):
+                slack_socket_agent.keep_generated_images([image], linked)
+            self.assertEqual([], list(outside.iterdir()))
+
+            keep_dir = root / "images"
+            keep_dir.mkdir()
+            (keep_dir / "say-hi.png").symlink_to(outside / "escaped.png")
+            slack_socket_agent.keep_generated_images([image], keep_dir)
+            self.assertFalse((outside / "escaped.png").exists())
+            self.assertEqual((keep_dir / "say-hi-2.png").read_bytes(), b"new")
+
     def test_upload_continues_when_copy_cannot_be_kept(self) -> None:
         client = MagicMock()
         with tempfile.TemporaryDirectory() as raw_dir:

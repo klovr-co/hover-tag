@@ -763,14 +763,23 @@ def upload_generated_images(
 
 def keep_generated_images(images: list[Path], keep_dir: Path) -> None:
     """Copy images without overwriting earlier results that share a name."""
+    if keep_dir.is_symlink():
+        raise OSError(f"Refusing to keep images in a symlinked folder: {keep_dir}")
     keep_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
     for path in images:
         target = keep_dir / path.name
         counter = 2
-        while target.exists():
-            target = keep_dir / f"{path.stem}-{counter}{path.suffix}"
-            counter += 1
-        shutil.copyfile(path, target)
+        while True:
+            try:
+                # O_EXCL reserves the name atomically and never follows a (dangling) symlink.
+                fd = os.open(target, flags, 0o600)
+                break
+            except FileExistsError:
+                target = keep_dir / f"{path.stem}-{counter}{path.suffix}"
+                counter += 1
+        with os.fdopen(fd, "wb") as destination, path.open("rb") as source:
+            shutil.copyfileobj(source, destination)
 
 
 def uploaded_file_permalink(response: Any) -> str | None:
