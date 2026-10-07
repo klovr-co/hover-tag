@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import threading
 import unittest
 from contextlib import redirect_stdout
 from unittest.mock import patch
@@ -87,6 +88,28 @@ class SharedAITests(unittest.TestCase):
             self.assertEqual(["one"], tag_chatgpt.read_object(checkpoint)["restart"])
             self.assertEqual("1", start.call_args.kwargs["env"]["TAG_AI_MIGRATION_RESTART"])
         self.assertTrue((store.path.parent / "migration-v1.json").exists())
+
+    def test_started_tag_waits_for_another_start_before_clearing_its_restart(self):
+        checkpoint = self.root / "shared/ai/migration-v1.json"
+        tag_chatgpt.atomic_write(checkpoint, {"version": 1, "restart": ["one", "two"]})
+        other = LifecycleLock(self.root / "state/ai-migration.lock").acquire()
+        # Another Tag's start finishes its migration check shortly after.
+        finished = threading.Timer(0.2, other.release)
+        finished.start()
+        self.addCleanup(finished.cancel)
+        with patch.object(tag_cli, "START_LOCK_WAIT_SECONDS", 10):
+            tag_cli._clear_pending_restart(self.root, "one")
+        self.assertEqual(["two"], tag_chatgpt.read_object(checkpoint)["restart"])
+
+    def test_started_tag_does_not_fail_when_another_start_keeps_the_migration_lock(self):
+        checkpoint = self.root / "shared/ai/migration-v1.json"
+        tag_chatgpt.atomic_write(checkpoint, {"version": 1, "restart": ["one"]})
+        other = LifecycleLock(self.root / "state/ai-migration.lock").acquire()
+        self.addCleanup(other.release)
+        with patch.object(tag_cli, "START_LOCK_WAIT_SECONDS", 0):
+            tag_cli._clear_pending_restart(self.root, "one")
+        # Left for the next migration check, which skips running Tags and clears it.
+        self.assertEqual(["one"], tag_chatgpt.read_object(checkpoint)["restart"])
 
     def test_cli_rejects_named_tag_connections_before_reading_any_tag(self):
         for args in (["missing", "settings", "ai", "sign-in", "claude"], ["missing", "chatgpt", "use-codex"]):
