@@ -1197,7 +1197,7 @@ class SlackGeneratedImageTests(unittest.TestCase):
             results_dir.mkdir()
             (results_dir / "card.png").write_bytes(b"png")
             blocker = Path(raw_dir) / "blocker"
-            blocker.write_text("file, not a folder")
+            blocker.write_text("file, not a folder", encoding="utf-8")
             errors = slack_socket_agent.upload_generated_images(
                 client, "C123", "1.23", results_dir, keep_dir=blocker / "images",
             )
