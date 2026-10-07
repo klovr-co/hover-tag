@@ -1,6 +1,6 @@
 [package]
 name = "tag-desktop"
-version = "0.3.0-beta.1"
+version = "0.3.0-beta"
 description = "Tag: install, run, and add Tags"
 license = "Apache-2.0"
 edition = "2021"
