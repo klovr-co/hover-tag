@@ -797,6 +797,11 @@ def uploaded_file_permalink(response: Any) -> str | None:
                  and isinstance(item.get("permalink"), str) and item["permalink"]), None)
 
 
+def is_oversized_attachment(file: dict[str, Any]) -> bool:
+    size = file.get("size")
+    return isinstance(size, int) and not isinstance(size, bool) and size > MAX_ATTACHMENT_BYTES
+
+
 def select_request_files(
     messages: list[dict[str, Any]], request: dict[str, Any]
 ) -> list[dict[str, Any]]:
@@ -826,6 +831,14 @@ def select_request_files(
         if not re.search(r"(?<![\w.-])" + re.escape(name) + r"(?![\w.-])", text, re.I):
             continue
         preferred = [file for file in matches if file["id"] in selected]
+        # An earlier oversized file is skipped later with a note, so it must not
+        # make a same-named eligible file ambiguous. It stays selected for the note.
+        skipped = [file for file in matches if file["id"] not in current and is_oversized_attachment(file)]
+        eligible = [file for file in matches if file not in skipped]
+        if eligible and skipped:
+            for file in skipped:
+                selected[file["id"]] = file
+            matches = eligible
         if len(matches) > 1 and not preferred:
             raise AttachmentLimitError(
                 f"More than one attachment is named {name}. Please share the Slack file link "
@@ -851,12 +864,7 @@ def skip_oversized_earlier_files(
     kept: list[dict[str, Any]] = []
     lines: list[str] = []
     for index, file in enumerate(files, start=1):
-        size = file.get("size")
-        if (
-            file.get("id") not in current_ids
-            and isinstance(size, int) and not isinstance(size, bool)
-            and size > MAX_ATTACHMENT_BYTES
-        ):
+        if file.get("id") not in current_ids and is_oversized_attachment(file):
             lines.append(
                 f"[Earlier attachment not downloaded: {attachment_name(file, index)} "
                 "exceeds Tag’s 15 MB attachment limit. Use a local path or link "

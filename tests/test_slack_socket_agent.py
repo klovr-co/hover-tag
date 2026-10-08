@@ -416,6 +416,24 @@ class RequestAttachmentSelectionTests(unittest.TestCase):
                 self.assertIn("15 MB attachment limit", thread)
                 self.assertIn(text, thread)
 
+    def test_oversized_earlier_file_does_not_make_same_name_ambiguous(self):
+        big = {**self.file(1, "launch.mp4"), "size": slack_socket_agent.MAX_ATTACHMENT_BYTES + 1}
+        small = {**self.file(2, "launch.mp4"), "size": 1024}
+        client = MagicMock()
+        client.conversations_replies.return_value = {"messages": [
+            {"ts": "1", "user": "U1", "files": [big]},
+            {"ts": "2", "user": "U1", "files": [small]},
+        ]}
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"SLACK_BOT_TOKEN": "test"}), patch.object(
+            slack_socket_agent, "download_file_bytes", return_value=b"x"
+        ) as download:
+            thread = slack_socket_agent.build_thread_text(
+                client, "C1", "1", Path(directory),
+                request={"ts": "3", "user": "U1", "text": "<@BOT> summarize launch.mp4"})
+        self.assertEqual(download.call_count, 1)
+        self.assertEqual(download.call_args.args[0], "https://files.slack.com/F2")
+        self.assertIn("15 MB attachment limit", thread)
+
     def test_oversized_current_upload_still_rejects_the_request(self):
         client = MagicMock()
         client.conversations_replies.return_value = {"messages": [{"ts": "1", "text": "start"}]}
