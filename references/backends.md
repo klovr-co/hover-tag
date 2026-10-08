@@ -6,7 +6,8 @@ answer. Choose the backend explicitly for each deployment.
 
 ## Built-In Backend: Claude Agent SDK
 
-Use this backend when the operator has a working `claude` CLI session:
+Use this backend when the operator has a working `claude` CLI session or a
+Claude [API connection](../docs/reference/api-connections.md):
 
 ```bash
 python scripts/opentag_agent.py \
@@ -18,8 +19,9 @@ python scripts/opentag_agent.py \
   --workdir /path/to/repo
 ```
 
-The Slack bridge runs one Claude Agent SDK session per request
-(`scripts/claude_agent_backend.py`). It uses the operator's `claude` executable
+The Slack bridge runs each request as a Claude Agent SDK session
+(`scripts/claude_agent_backend.py`) and resumes the same session for later
+mentions in that Slack thread (see the event contract below). It uses the operator's `claude` executable
 when present, `--add-dir` access to the skill and attachment directories, the
 `auto` permission mode, and the workspace `.mcp.json` servers. The session
 emits the same normalized events as Codex App Server: final-answer deltas,

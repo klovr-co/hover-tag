@@ -116,7 +116,7 @@ normal installations keep default configuration in `~/Tag/default/.tag/config/se
 not a checkout `.env`.
 
 For Windows requests, use the checkout's `install.ps1` and platform instructions
-in `docs/installation.md`; do not adapt POSIX shell commands blindly.
+in `docs/reference/installation-details.md`; do not adapt POSIX shell commands blindly.
 
 ## Agree on the setup once
 
@@ -316,7 +316,7 @@ Repair invalid configuration JSON without silently replacing it. Do not use
 `tag reset`, upgrades, or additional data sources as routine onboarding fixes.
 
 For version-specific details, consult the installed CLI's `--help` and the
-matching Tag release's `docs/tag-management.md` and `docs/installation.md`.
+matching Tag release's `docs/tag-management.md`, `docs/reference/cli-operations.md`, and `docs/reference/installation-details.md`.
 These are product references, not files bundled with this skill. In a checkout,
 read them locally; otherwise obtain them from the matching revision in
 https://github.com/klovr-co/hover-tag. Keep setup mechanics in Tag rather than copying

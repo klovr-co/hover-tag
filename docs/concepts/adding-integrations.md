@@ -1,8 +1,9 @@
 # Adding integrations
 
 Integrations let Tag use services such as Gmail from Slack. You make them
-available through the agent running Tag's tasks. Tag supports Codex and Claude Code;
-if users switch models between them, add an integration for both.
+available through the agent running Tag's tasks. Each Tag uses Codex or
+Claude, chosen with its AI model; if you switch a Tag to the other backend, or
+run Tags with both, add the integration for each.
 
 ## Commands, skills, and MCP
 
@@ -47,7 +48,8 @@ Follow the skill's setup instructions for any required tools. Make sure any
 required command works from the terminal you use to start Tag.
 
 If you change the command search path or environment, run `tag restart` from
-that terminal so Tag receives the changes.
+that terminal so Tag receives the changes. A thread continues its
+earlier agent conversation, so try a new integration in a new Slack thread.
 
 Each tool or connector handles its own authentication. Follow its authentication
 instructions. If it's already authenticated and that login is available to Tag,

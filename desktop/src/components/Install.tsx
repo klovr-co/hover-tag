@@ -59,7 +59,7 @@ export function Welcome({ api, platform, install, preview }: { api: Bridge; plat
   ({ install: () => void; preview?: never } | { preview: () => void; install?: never })) {
   const machine = platform === "macos" ? "Mac" : "computer";
   return (
-    <InstallCanvas title="Install Tag" lead="Your personal assistant, in Slack."
+    <InstallCanvas title="Install Tag" lead="Multiplayer AI, right in Slack."
       foot={<>
         <span className="spacer" />
         {preview ? <Primary title="Done" onClick={preview} autoFocus /> : <>

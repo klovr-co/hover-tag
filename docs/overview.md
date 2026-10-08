@@ -3,12 +3,14 @@
 ## Who it's for
 
 Bring your own Tag to work. Tag is for people who want to use their Codex
-or Claude agent in Slack, with context from Slack threads and integrations already
+or Claude Code agent in Slack, with context from Slack threads and integrations already
 connected to their agent. Requests, updates, and results stay in the thread,
 where teammates can follow the work.
 
-You don’t need to code to use Tag. Follow the
-[setup guide](getting-started/first-task.md) to connect your agent to Slack.
+You don’t need to code to use Tag. Download Tag for macOS and follow
+its steps (Windows and Linux: coming soon), or see the
+[setup guide](getting-started/first-task.md) for other ways to connect your
+agent to Slack.
 
 By default, only you can ask your Tag to work, because it uses your agent's
 available files, tools, and connected accounts. Teammates can still see the
@@ -42,7 +44,9 @@ its workspace, and the sources and tools made available to it. See
 | I want to… | Read |
 | --- | --- |
 | Set up Tag and try a first task | [Set up Tag](getting-started/first-task.md) |
-| Understand why I’d bring my assistant into Slack | [Why Tag](index.md) |
+| Install, update, change release channel, or uninstall | [Install Tag](installation.md) |
+| Manage Tags in the app or the CLI | [Set up and manage Tag](tag-management.md) |
+| Understand why I’d bring AI into my Slack threads | [Why Tag](index.md) |
 | Know who can use my Tag and see its replies | [Your own Tag](concepts/access.md) |
 | Let someone else make requests to my Tag | [Sharing access to your Tag](concepts/sharing-access.md) |
 | Approve actions, stop tasks, and understand permissions | [Control your Tag](concepts/control-your-tag.md) |

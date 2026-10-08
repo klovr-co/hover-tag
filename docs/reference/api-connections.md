@@ -1,60 +1,117 @@
-# API connections and monthly usage
+# Models
+
+Any model that works in Codex or Claude Code works in Tag. Pick one for each
+Tag, switch whenever you like, and pay with a plan you already have or your own
+API key.
+
+## Choose and switch a model
+
+In the app, click a Tag and open its **Details** tab. Choose a **Model**, then
+a **Thinking** level. The levels you see depend on the model.
+
+![A Tag's Details tab, with the Model menu set to GPT-5.5 and Thinking set to Medium](../assets/screenshots/tag-details.png)
+
+In the terminal:
+
+```sh
+tag settings ai models                          # what your accounts can use
+tag settings ai model codex:gpt-5.5 --effort medium
+```
+
+The list comes from the accounts you've connected. Tag saves your choice and
+restarts the Tag if it's running, and every request uses that model.
+
+## Use a plan you already have
+
+Sign in with your ChatGPT plan (for Codex) or your Claude plan (for Claude Code)
+in **Settings** → **General** → **AI connections**, or with `tag settings ai`
+in the terminal. All your Tags share these sign-ins. Choose **Check
+connections** to test them. If a sign-in has expired, choose **Reconnect**.
+
+![The AI connections screen: Codex connected with a ChatGPT sign-in, Claude's sign-in expired with Reconnect, Check connections, and Add your own API](../assets/screenshots/ai.png)
+
+See [Use your ChatGPT plan](chatgpt-connection.md) for details.
+
+## Use your own API
+
+A compatible API is any service that speaks the same language as Codex or
+Claude Code, so Tag can send requests to it instead of to OpenAI or Anthropic
+directly. That could be your company's AI gateway, a provider proxy, or your own
+OpenAI or Anthropic API key.
+
+- **For Codex**, the service must support the OpenAI **Responses** API.
+  Chat Completions-only endpoints don't work. Azure OpenAI works too.
+- **For Claude**, the service must support the Anthropic **Messages** API.
+
+### In the app
+
+1. Open **Settings → General → AI connections** and choose **Add your own API**
+   (or **Add** next to **Your own API**).
+2. Choose the agent: **Codex** or **Claude**.
+3. Enter the base URL (leave it empty to use OpenAI or Anthropic directly), your
+   models separated by commas, and the API key. The first model is the default.
+   For an Azure OpenAI URL, Tag asks for the API version; the models are your
+   deployment names.
+4. Choose **Save**. The API applies to all your Tags. Running Tags restart, and
+   any Tag that can't start keeps its previous connection.
+
+![The Add your own API form: Codex or Claude, a base URL, models, and a write-only API key](../assets/api-connections/add-api.png)
+
+Your API then appears under **Your own API**, for example
+`Claude · API (gateway.example.com)`, with its models. Open it to change the URL,
+models or key, to **Check connection**, or to **Switch back to my plan**.
+**Check connection** sends nothing to the provider, so it spends no tokens; your
+first real request confirms the key and model work. The key is stored on your
+Mac and never shown again.
+
+![AI connections with Your own API: a Claude API on gateway.example.com and its models](../assets/api-connections/api-list.png)
+
+### Then pick the model
+
+Open a Tag, go to **Details**, and choose one of your API's models under
+**Model**. It works the same way whether a model comes from your plan or from
+your API. A Tag whose model runs on the other agent keeps its model until you
+pick one of the API's models.
+
+![The Model picker in a Tag's Details, listing the models the Tag can use](../assets/screenshots/tag-model-picker.png)
+
+### In the terminal
+
+Copy your key, then run one command. `pbpaste` sends the key straight from your
+clipboard, so it never appears in your shell history.
+
+```sh
+# An OpenAI-compatible gateway, for Codex
+pbpaste | tag settings ai api set --backend codex --kind openai \
+  --base-url https://gateway.example.com/v1 --models gpt-5.5,gpt-5.5-mini --restart
+
+# An Anthropic-compatible gateway, for Claude
+pbpaste | tag settings ai api set --backend claude --kind anthropic \
+  --base-url https://gateway.example.com --models claude-opus-5-5 --restart
+
+tag settings ai api check --backend codex              # check without spending tokens
+tag settings ai api clear --backend codex --restart    # back to your plan
+```
+
+Leave out `--base-url` to use OpenAI or Anthropic directly. Add the Tag's name
+after `tag` to set up one Tag instead of your main one, for example
+`tag research-tag settings ai api set …`. `set` checks every input before it
+stops anything, saves everything at once, and restores your previous settings
+if the Tag can't start. Use the model IDs your gateway expects.
+
+## API connection reference
 
 Each Tag can use an explicit API connection for Codex or Claude. Existing Tags
 continue to inherit their CLI sign-in unless you select an API connection.
 The CLI binaries are still required; Claude also requires Tag's bundled Agent SDK.
-
-## Use your own API
-
-### In Tag.app
-
-1. Open **Settings → AI connections** and choose **Add your own API**.
-2. Choose the agent. Codex works with OpenAI-compatible APIs, including Azure
-   OpenAI. Claude works with Anthropic-compatible APIs. Tag recognizes an Azure
-   OpenAI endpoint from its URL and asks for its API version; the models are
-   then your deployment names.
-3. Enter the base URL (optional), the models, and the API key. The first model
-   is the default. The key field is write-only: Tag never shows a saved key
-   again.
-4. Choose **Save**. Like the sign-ins above it, the API applies to all your
-   Tags, which save at the same time. Running Tags stop, switch, and start
-   again. A Tag that can't start keeps its previous connection, and **Save**
-   again retries only that Tag. A Tag whose default model runs on the other
-   agent keeps its model; choose one of the API's models in its Details tab to
-   use the API.
-
-![Add your own API in Tag.app](../assets/api-connections/add-api.png)
-
-Each API is listed under **Your own API**, as `Claude · API (gateway.example.com)`,
-with its models. Open it to change the URL, models or key, to
-**Check connection** (the same checks as `tag doctor`; nothing is sent to the
-provider, so no tokens are spent), or to **Switch back to my plan**.
-
-![Your own API in Tag.app](../assets/api-connections/api-list.png)
-
-### In a terminal
-
-```sh
-op read op://Private/Gateway/key | tag settings ai api set --backend codex --kind openai \
-  --base-url https://gateway.example.com/v1 --models gpt-5.5,gpt-5.5-mini --restart
-tag settings ai api check --backend codex
-tag settings ai api clear --backend codex --restart
-```
-
-Prefix with `tag NAME` for another Tag. The key is read from stdin (or a hidden
-prompt in a terminal), so it stays out of command arguments and shell history.
-`set` checks every input before stopping anything, writes all settings in one
-atomic update. A Tag on that agent keeps its model if the API lists it and
-otherwise uses the first one; a Tag on the other agent keeps its model. A running Tag needs `--restart`. `clear` removes the
-saved key and returns to the shared sign-in. `tag settings ai api` shows the
-Tag's API connections. Add `--json` for the JSON-lines contract Tag.app uses;
-see [App protocol](app-protocol.md#api-connections).
+Set them up in the app or with `tag settings ai api` as described above; the
+underlying settings are per Tag.
 
 The sections below describe each provider and the underlying settings. The
 `tag config set` commands still work. With them, stop the Tag first and select
 the authentication mode last.
 
-## Azure OpenAI with Codex
+### Azure OpenAI with Codex
 
 Configure a Responses-compatible Azure deployment. The model name is your Azure
 **deployment name**, which may differ from the underlying model name.
@@ -70,7 +127,7 @@ Use the API version supported by your Azure deployment. For Azure's versionless
 `--api-version`. Tag sends the resource key in the `api-key` header. Microsoft
 Entra token acquisition/renewal is not implemented by this connection mode.
 
-## OpenAI or a compatible Codex gateway
+### OpenAI or a compatible Codex gateway
 
 Use `--kind openai`. The default URL is `https://api.openai.com/v1`; optionally
 set `--base-url` to the full API base of a Responses-compatible gateway. API mode
@@ -97,10 +154,10 @@ override does not apply. Claude gateway tool support depends on that gateway.
 Explicit API mode takes precedence over a saved Tag ChatGPT plan connection and
 global Codex sign-in. Failure never switches to another billing account.
 `tag settings ai api clear --backend codex` (**Switch back to my plan** in
-Tag.app) returns to the saved plan connection or inherited Codex
+the app) returns to the saved plan connection or inherited Codex
 authentication. Tag does not modify global CLI credentials.
 
-## Claude API or an Anthropic-compatible gateway
+### Claude API or an Anthropic-compatible gateway
 
 Claude gateway provider-routing fields are not supported. Claude uses the native
 Anthropic protocol; Codex's optional `provider.only` adapter does not apply.
@@ -119,7 +176,7 @@ cloud-provider switches for that child connection.
 authentication. Azure support here is for Codex; Claude's explicit API mode
 does not provision a Foundry connection.
 
-## Models, readiness, and credentials
+### Models, readiness, and credentials
 
 Explicit connections require a nonempty model list. These operator-declared
 models populate settings without consulting another account's model catalog.
@@ -140,7 +197,7 @@ from `tag config show`, and redacted from diagnostics and emitted events.
 The existing [trusted sandbox credential boundary](../adr/0001-credential-boundary.md)
 still applies: local agents with shell access can access inherited credentials.
 
-## Usage and advisory budgets
+### Usage and advisory budgets
 
 ```sh
 tag config set OPENTAG_MONTHLY_BUDGET_USD 50
@@ -195,11 +252,11 @@ Codex provider configuration follows the [official configuration documentation](
 Live provider inference requires account-specific qualification; mocked transport
 checks do not establish Azure deployment or Anthropic account access.
 
-## Optional Codex gateway provider routing
+### Optional Codex gateway provider routing
 
 Some gateways choose among upstream providers separately from the model ID.
 For a gateway supporting the `provider.only` request field, configure both
-routing settings in **API connections** or use:
+routing settings:
 
 ```sh
 tag config set OPENTAG_CODEX_GATEWAY_FORMAT provider.only
@@ -235,7 +292,7 @@ fresh temporary resources. Repeated startups do not rewrite operator settings;
 no completion marker or credential migration is needed. Connections without
 routing configured keep their existing direct path.
 
-### Temporary chat-only gateway testing
+#### Temporary chat-only gateway testing
 
 For a routed Codex connection whose upstream rejects tool declarations, set
 `OPENTAG_CODEX_GATEWAY_DISABLE_TOOLS=1` and restart the selected Tag. The adapter
@@ -244,4 +301,4 @@ it can only respond with text. Search, file access, commands, and other agent
 actions are unavailable. This is a diagnostic mode, not a tool compatibility fix.
 Set the value back to `0` and restart to restore tools. It defaults to off and
 requires explicit Codex gateway routing; inherited connections, Azure, and Claude
-are unsupported. Use `tag ALIAS config set` for a named Tag.
+are unsupported. Use `tag NAME config set` for another Tag.
