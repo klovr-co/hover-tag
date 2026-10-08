@@ -2,7 +2,7 @@
 
 All notable changes to Tag are documented here.
 
-## Unreleased
+## [0.3.0] - 2026-10-08
 
 The 0.3 line introduces **Tag** as a desktop app for macOS. The
 app for Windows and Linux is coming soon; the terminal installer works there now.
