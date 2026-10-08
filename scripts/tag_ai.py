@@ -30,12 +30,13 @@ from typing import Any
 try:
     import agent_models
     import setup_ui as ui
+    import tag_api
     import tag_chatgpt
     import tag_config as settings
     from opentag_process_env import without_telemetry_environment
     from tag_paths import default_workspace
 except ImportError:
-    from scripts import agent_models, setup_ui as ui, tag_chatgpt, tag_config as settings
+    from scripts import agent_models, setup_ui as ui, tag_api, tag_chatgpt, tag_config as settings
     from scripts.opentag_process_env import without_telemetry_environment
     from scripts.tag_paths import default_workspace
 
@@ -220,6 +221,16 @@ def connection(home: Path, backend_key: str) -> dict[str, Any]:
     return _claude_connection(home, executable, version)
 
 
+def api_connection(item: dict[str, Any], values: dict[str, str]) -> dict[str, Any]:
+    """A Tag with its own API uses it instead of the shared sign-in, so its row says so."""
+    api = tag_api.summary(item["backend"], values)
+    if not api:
+        return item
+    state = item["state"] if not item["installed"] else "misconfigured" if api["problem"] else "connected"
+    return {**item, "state": state, "method": "api", "account": tag_api.account(api),
+            "detail": api["problem"], "shared": False, "actions": ["install"] if not item["installed"] else [], "api": api}
+
+
 def connections(home: Path) -> list[dict[str, Any]]:
     """Check every backend at once; each check runs the backend's own status command."""
     with ThreadPoolExecutor(max_workers=len(BACKENDS)) as pool:
@@ -263,7 +274,7 @@ def thinking_text(home: Path, values: dict[str, str]) -> str:
 
 
 def report(home: Path, values: dict[str, str], *, tag_id: str, running: bool) -> dict[str, Any]:
-    found = connections(home)
+    found = [api_connection(item, values) for item in connections(home)]
     permitted = allowed(values)
     for item in found:
         item["allowed"] = item["backend"] in permitted
@@ -280,7 +291,10 @@ def report(home: Path, values: dict[str, str], *, tag_id: str, running: bool) ->
 def tag_environment(home: Path, values: dict[str, str]):
     """Run model discovery with this Tag's settings, then restore the process environment."""
     keys = ("OPENTAG_WORKDIR", "OPENTAG_BACKENDS", "OPENTAG_DEFAULT_MODEL", "OPENTAG_CODEX_MODELS",
-            "OPENTAG_CLAUDE_MODELS", "OPENTAG_CLAUDE_TRANSPORT", "OPENTAG_CODEX_TRANSPORT")
+            "OPENTAG_CLAUDE_MODELS", "OPENTAG_CLAUDE_TRANSPORT", "OPENTAG_CODEX_TRANSPORT",
+            # A Tag's own API serves its declared models instead of the account's catalog.
+            "OPENTAG_CODEX_AUTH", "OPENTAG_CODEX_BASE_URL", "OPENTAG_CODEX_API_KEY", "OPENTAG_CODEX_API_VERSION",
+            "OPENTAG_CLAUDE_AUTH", "OPENTAG_CLAUDE_BASE_URL", "OPENTAG_CLAUDE_API_KEY")
     previous = {key: os.environ.get(key) for key in keys}
     os.environ.update({key: values[key] for key in keys if values.get(key)})
     os.environ.setdefault("OPENTAG_WORKDIR", str(default_workspace(home)))
@@ -600,7 +614,8 @@ def status_line(item: dict[str, Any]) -> str:
     if state == "connected":
         return f"Connected · {item['account'] or 'signed in'}"
     label = {"signed_out": "Not signed in", "expired": "Sign-in expired", "limited": "Usage limit reached",
-             "not_installed": "Not installed", "unsupported": "Update needed"}.get(state, state)
+             "not_installed": "Not installed", "unsupported": "Update needed",
+             "misconfigured": "API needs attention"}.get(state, state)
     return f"{label} · {item['detail']}" if item.get("detail") else label
 
 
@@ -700,7 +715,7 @@ def _choose_model(home: Path, values: dict[str, str], found: list[dict[str, Any]
 USAGE = ("tag settings ai connections | sign-in codex|claude [--method chatgpt|codex] "
          "[--account ID] | resume [--restart] [--json]; "
          "tag [TAG] settings ai status | models | model VALUE [--effort LEVEL|default] | "
-         "effort LEVEL|default [--restart] [--json]")
+         "effort LEVEL|default [--restart] [--json]; " + tag_api.USAGE)
 
 
 @dataclass
@@ -711,6 +726,8 @@ class Target:
     running: Callable[[], bool]
     restart: Callable[[str], int]
     name: str = "Tag"
+    # Installation-wide only: each Tag's (id, name, settings), to list Tags using their own API.
+    tags: Callable[[], list[tuple[str, str, dict[str, str]]]] | None = None
 
 
 def _restart_note(target: Target) -> str:
@@ -718,8 +735,13 @@ def _restart_note(target: Target) -> str:
 
 
 def cli(arguments: list[str], target: Target, *, json_output: bool = False, restart: bool = False,
-        method: str | None = None, account: str | None = None, effort: str | None = None) -> int:
+        method: str | None = None, account: str | None = None, effort: str | None = None,
+        api: dict[str, Any] | None = None) -> int:
     action = arguments[0] if arguments else "status"
+    if action == "api":
+        if not target.tag_id:
+            raise ValueError("Each Tag has its own API connection. Use tag NAME settings ai api …")
+        return tag_api.cli(arguments[1:], target, json_output=json_output, restart=restart, **(api or {}))
     values = settings.load_config(settings.config_path(target.home))
     if effort is not None and action != "model":
         raise ValueError("--effort is only for tag settings ai model VALUE")
@@ -727,12 +749,17 @@ def cli(arguments: list[str], target: Target, *, json_output: bool = False, rest
         found = connections(target.home)
         result = {"schema_version": 1, "connections": found,
                   "usable": [c["backend"] for c in found if c["state"] == "connected"],
-                  "running": target.running(), "scope": "installation"}
+                  "running": target.running(), "scope": "installation",
+                  "api_connections": [{"tag": tag_id, "tag_name": name, **item}
+                                      for tag_id, name, tag_values in (target.tags() if target.tags else [])
+                                      for item in tag_api.summaries(tag_values)]}
         if json_output:
             print(json.dumps(result, indent=2))
         else:
             ui.display.header("AI connections", "Shared by all Tags")
             show_connections(found)
+            for item in result["api_connections"]:
+                ui.message(f"{item['tag_name']} · {tag_api.label(item)}")
             ui.message("Sign in: tag settings ai sign-in codex|claude --restart")
             ui.message("Choose a model: tag NAME settings ai model VALUE")
         return 0

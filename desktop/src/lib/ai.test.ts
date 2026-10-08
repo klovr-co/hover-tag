@@ -92,3 +92,54 @@ describe("setup's AI step", () => {
     expect(lines.some((line) => JSON.parse(line).type === "sign_in")).toBe(false);
   });
 });
+
+import apiSet from "../../../protocol/examples/ai-api-set.jsonl?raw";
+import { apiClearArgs, apiFormProblem, apiKind, apiLabel, apiSetArgs, groupApis, isAzureUrl, modelList, parseApiLine, type ApiConnection, type ApiForm } from "./ai";
+
+describe("Your own API", () => {
+  const azure: ApiForm = { backend: "codex", baseUrl: " https://acme.openai.azure.com/openai ", models: "dep-a, dep-b,,dep-a", apiVersion: "2025-04-01-preview" };
+
+  it("finds Azure from the URL, so there are only two agents to choose", () => {
+    expect(isAzureUrl("https://acme.openai.azure.com/openai")).toBe(true);
+    expect(isAzureUrl("https://acme.cognitiveservices.azure.com/openai/v1")).toBe(true);
+    expect(isAzureUrl("https://gateway.example.com/azure.com")).toBe(false);
+    expect(apiKind(azure)).toBe("azure");
+    expect(apiKind({ backend: "codex", baseUrl: "" })).toBe("openai");
+    expect(apiKind({ backend: "claude", baseUrl: "https://acme.openai.azure.com" })).toBe("anthropic");
+  });
+
+  it("builds the CLI arguments without the key", () => {
+    expect(apiSetArgs("maya", azure)).toEqual(["maya", "settings", "ai", "api", "set", "--backend", "codex", "--kind", "azure",
+      "--base-url", "https://acme.openai.azure.com/openai", "--models", "dep-a,dep-b", "--api-version", "2025-04-01-preview", "--restart"]);
+    expect(apiSetArgs("maya", { ...azure, baseUrl: "https://gw.example.com/v1" })).not.toContain("--api-version");
+    expect(apiClearArgs("maya", "claude")).toEqual(["maya", "settings", "ai", "api", "clear", "--backend", "claude", "--restart"]);
+    expect(modelList(" a ,b, a,")).toEqual(["a", "b"]);
+  });
+
+  it("says what the form still needs", () => {
+    expect(apiFormProblem(azure, "sk", false, 0)).toMatch(/Add a Tag/);
+    expect(apiFormProblem({ ...azure, baseUrl: "http://gateway.example.com" }, "sk", false, 1)).toMatch(/https/);
+    expect(apiFormProblem({ ...azure, baseUrl: "http://localhost:4000/v1" }, "sk", false, 1)).toBeNull();
+    expect(apiFormProblem({ ...azure, models: " , " }, "sk", false, 1)).toMatch(/deployment/);
+    expect(apiFormProblem(azure, "", false, 1)).toMatch(/key/);
+    expect(apiFormProblem(azure, "", true, 1)).toBeNull();
+  });
+
+  it("shows Tags sharing one API as one row", () => {
+    const base = { backend: "codex", kind: "openai", kind_name: "", base_url: "https://gw.example.com/v1", host: "gw.example.com",
+      models: ["gpt-5.5"], api_version: "", key_set: true, problem: "" };
+    const items: ApiConnection[] = [{ ...base, tag: "a", tag_name: "A" }, { ...base, tag: "b", tag_name: "B" },
+      { ...base, tag: "c", tag_name: "C", models: ["other"] }];
+    expect(groupApis(items).map((g) => g.tags.map((t) => t.id))).toEqual([["a", "b"], ["c"]]);
+  });
+
+  it("reads the CLI's progress and result lines", () => {
+    const events = apiSet.trim().split("\n").map(parseApiLine);
+    expect(events.slice(0, 3)).toEqual([{ text: "Stopping Maya's Tag…" }, { text: "Saving the connection…" }, { text: "Starting Maya's Tag again…" }]);
+    const result = events[3] as { status: string; in_use: boolean; api: { backend: string; kind: string; host: string } };
+    expect([result.status, result.in_use]).toEqual(["saved", true]);
+    expect(apiLabel(result.api)).toBe("Claude · API (gateway.example.com)");
+    expect(parseApiLine('{"schema_version": 1, "ok": false, "error": "Nope"}')).toMatchObject({ status: "failed", error: "Nope" });
+    expect(parseApiLine("Saving…")).toBeNull();
+  });
+});

@@ -96,6 +96,19 @@ All notable changes to Tag are documented here.
 
 ### Added
 
+- Add your own API from Tag.app: **Settings → AI connections → Add your own
+  API** takes the agent (Codex or Claude), a base URL, models, and a
+  write-only key, and applies it to all your Tags at once. Azure OpenAI is
+  recognized from its URL. Each API is listed as `Codex · API (host)` with its
+  models; open it to edit, **Check connection** (no tokens spent), or
+  **Switch back to my plan**.
+- `tag [NAME] settings ai api set|check|clear` replaces the ordered
+  `tag config set OPENTAG_*` calls. It reads the key from stdin, checks every
+  input before stopping the Tag, writes the settings in one update, restarts
+  the Tag with `--restart`, and restores the previous settings if the Tag
+  can't start. `--json` reports progress as JSON lines. Existing API
+  connections keep working unchanged; no migration is needed.
+
 - Optionally pin a Codex gateway provider with `provider.only` routing. A
   task-scoped authenticated loopback adapter adds the provider field while
   preserving streamed responses and upstream errors. Direct connections are

@@ -13,7 +13,7 @@ import { glide } from "./lib/motion";
 import { Connect } from "./components/Connect";
 import { Home } from "./components/Home";
 import { Installing, Starting, Welcome } from "./components/Install";
-import { AI_CAPABILITY, SHARED_AI_CAPABILITY } from "./lib/ai";
+import { AI_CAPABILITY, API_CAPABILITY, SHARED_AI_CAPABILITY } from "./lib/ai";
 import { AISettings } from "./components/AISettings";
 import { Settings, type SettingsTab } from "./components/Settings";
 import { TagDetail, type Tab as TagTab } from "./components/TagDetail";
@@ -295,7 +295,7 @@ export function App() {
             openAI={capabilities.includes(SHARED_AI_CAPABILITY) ? () => setScreen({ name: "ai" }) : undefined} />
         )}
         {screen.name === "ai" && (
-          <AISettings api={api} tags={tags} close={() => { watch.recheck(); setScreen(screen.resume ? { name: "connect", args: screen.resume } : { name: "settings" }); }} />
+          <AISettings api={api} tags={tags} apiConnections={capabilities.includes(API_CAPABILITY)} close={() => { watch.recheck(); setScreen(screen.resume ? { name: "connect", args: screen.resume } : { name: "settings" }); }} />
         )}
         {screen.name === "tag" && (
           <TagDetail key={screen.opened ?? 0} api={api} tags={tags} initial={screen.id} initialTab={screen.tab} problems={watch.problems} back={home} add={add}
