@@ -20,7 +20,7 @@ Works with any model that runs in Codex or Claude Code. Free and open source.
 
 ## Want to try it without another pricey subscription?
 
-*A Dots or Grok alternative*
+*A Dots or Grok bot alternative*
 
 You don’t need one. Use the ChatGPT or Claude plan you already have, or your own
 API key. Any model that works in Codex or Claude Code works in Tag, and you can
