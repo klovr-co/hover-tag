@@ -271,8 +271,10 @@ flowchart LR
 3. Tag downloads the files on the request, up to 10 files, 15 MB each and 30 MB
    in total. Text content is limited to 12,000 characters per file.
 4. Earlier files in the thread are listed by name. The agent can open one that
-   was shared in this channel when the request needs it. Images Tag generated
-   are also kept in the Tag's folder under `artifacts/<channel>/images`.
+   was shared in this channel when the request needs it. An earlier file over
+   15 MB is skipped and named in the prompt instead of blocking the request.
+   Images Tag generated are also kept in the Tag's folder under
+   `artifacts/<channel>/images`.
 5. Temporary downloads are removed when the request finishes. A file Tag could
    not open is named in the prompt, so the agent says what it could not see.
 

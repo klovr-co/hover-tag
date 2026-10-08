@@ -90,7 +90,8 @@ none, it opens the most recent message with files. When a request depends on
 other files earlier in the thread, such as "what do you think about both?",
 Tag opens those files too, up to 15 MB each. It can open only files shared in
 the current channel. If it cannot open a file, it says so instead of
-commenting on it.
+commenting on it. An earlier file over 15 MB is skipped rather than blocking
+the request, so you can give Tag a local path or link to it instead.
 
 Images Tag returns in a thread are also kept in the channel's `images` folder
 under `artifacts/` in the workspace, so Tag can reopen its own earlier results.

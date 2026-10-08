@@ -843,6 +843,30 @@ def select_request_files(
     return list(selected.values())
 
 
+def skip_oversized_earlier_files(
+    files: list[dict[str, Any]], request: dict[str, Any]
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Drop earlier-message files whose declared size exceeds the limit, with a prompt note."""
+    current_ids = {file.get("id") for file in message_files(request)}
+    kept: list[dict[str, Any]] = []
+    lines: list[str] = []
+    for index, file in enumerate(files, start=1):
+        size = file.get("size")
+        if (
+            file.get("id") not in current_ids
+            and isinstance(size, int) and not isinstance(size, bool)
+            and size > MAX_ATTACHMENT_BYTES
+        ):
+            lines.append(
+                f"[Earlier attachment not downloaded: {attachment_name(file, index)} "
+                "exceeds Tag’s 15 MB attachment limit. Use a local path or link "
+                "from the request if one was given; otherwise ask for one.]"
+            )
+            continue
+        kept.append(file)
+    return kept, lines
+
+
 def build_thread_text(
     client: Any, channel: str, thread_ts: str, attachment_dir: Path,
     *, request: dict[str, Any] | None = None,
@@ -889,7 +913,11 @@ def build_thread_texts(
         messages = [message for message in messages if message.get("ts") != request["ts"]]
         messages.append(request)
     messages.sort(key=lambda message: float(message.get("ts", "0")))
-    files = select_request_files(messages, request or (messages[-1] if messages else {}))
+    request = request or (messages[-1] if messages else {})
+    files = select_request_files(messages, request)
+    # An oversized file from an earlier message must not block every later
+    # mention in the thread. Only the current upload is rejected outright.
+    files, oversized_lines = skip_oversized_earlier_files(files, request)
     validate_attachment_metadata(files)
     selected_ids = {file["id"] for file in files}
     budget = AttachmentBudget()
@@ -908,6 +936,7 @@ def build_thread_texts(
             new_lines.extend(message_lines)
     selected_messages = [{"files": files}]
     file_lines = [
+        *oversized_lines,
         *download_thread_text_files(selected_messages, budget),
         *download_thread_images(selected_messages, attachment_dir, budget),
         *download_thread_binary_files(selected_messages, attachment_dir, budget),
