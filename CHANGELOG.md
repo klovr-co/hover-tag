@@ -174,7 +174,8 @@ anything up again.
 - Slack: forwarded files are included, attachments with the same name stay
   separate, explicit channel mentions resolve correctly, and Tag recovers
   better from rate limits. Files too large for Slack keep their local Open
-  button.
+  button. A file over 15 MB earlier in a thread no longer blocks every later
+  mention: Tag skips it, says so, and can use a local path or link instead.
 - Security: Basic authorization credentials are redacted from error messages,
   and the gateway no longer passes the upstream API key to Codex.
 

@@ -396,6 +396,37 @@ class RequestAttachmentSelectionTests(unittest.TestCase):
         self.assertEqual(download.call_count, 1)
         self.assertEqual(download.call_args.args[0], "https://files.slack.com/F2")
 
+    def test_oversized_earlier_file_is_noted_instead_of_blocking_followups(self):
+        video = {"id": "FVID", "name": "launch.MP4", "mimetype": "video/mp4",
+                 "size": slack_socket_agent.MAX_ATTACHMENT_BYTES + 1,
+                 "url_private": "https://files.slack.com/FVID"}
+        for text in ("<@BOT> this is a local path", "<@BOT> how about /Users/me/Downloads/launch.mp4"):
+            with self.subTest(text=text):
+                client = MagicMock()
+                client.conversations_replies.return_value = {"messages": [
+                    {"ts": "1", "user": "U1", "text": "launch video", "files": [video]},
+                ]}
+                with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"SLACK_BOT_TOKEN": "test"}), patch.object(
+                    slack_socket_agent, "download_file_bytes"
+                ) as download:
+                    thread = slack_socket_agent.build_thread_text(
+                        client, "C1", "1", Path(directory), request={"ts": "2", "user": "U1", "text": text})
+                download.assert_not_called()
+                self.assertIn("launch.MP4", thread)
+                self.assertIn("15 MB attachment limit", thread)
+                self.assertIn(text, thread)
+
+    def test_oversized_current_upload_still_rejects_the_request(self):
+        client = MagicMock()
+        client.conversations_replies.return_value = {"messages": [{"ts": "1", "text": "start"}]}
+        request = {"ts": "2", "text": "look", "files": [{
+            "id": "FVID", "name": "launch.mp4", "mimetype": "video/mp4",
+            "size": slack_socket_agent.MAX_ATTACHMENT_BYTES + 1}]}
+        with patch.dict(os.environ, {"SLACK_BOT_TOKEN": "test"}), self.assertRaisesRegex(
+            slack_socket_agent.AttachmentLimitError, "launch.mp4.*15 MB attachment limit"
+        ):
+            slack_socket_agent.build_thread_text(client, "C1", "1", Path("unused"), request=request)
+
     def test_image_with_text_filetype_is_downloaded_once(self):
         file = {**self.file(1), "filetype": "text"}
         client = MagicMock()
