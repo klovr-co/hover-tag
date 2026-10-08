@@ -113,7 +113,7 @@ flowchart LR
 | Step | App | Terminal |
 | --- | --- | --- |
 | Install | Download Tag from the GitHub release (macOS DMG; Windows and Linux: coming soon, use the terminal installer). On first run it installs the `tag` runtime and shows progress. | Run `install.sh` (macOS, Linux) or `install.ps1` (Windows). It installs a pinned Python with `uv` and the Slack CLI; you don't need Python yourself. |
-| Usage data | A notice asks once whether to share anonymous usage data. | The terminal shows the same notice on first interactive use. |
+| Usage data | Turned on at first run with a short note; **Learn more** opens Settings → Privacy to turn it off. | The terminal shows the same note on first interactive use; `tag telemetry off` turns it off. |
 | Add the Tag | **Add your first Tag** | `tag setup` (or `tag add` for another Tag) |
 | Your Tag | Name, one-line description (up to 140 characters), and a picture: shuffle Tag's waterdrops or choose your own. Or use an existing Slack app. | The same questions in the terminal. |
 | AI | Pick the default model from your connected Codex and Claude accounts. If none is connected, the app opens Settings → AI connections, then returns. | Pick the model. With nothing connected, sign in with `tag settings ai sign-in codex\|claude` in another terminal, then choose **Check again**. |

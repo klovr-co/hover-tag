@@ -71,7 +71,7 @@ Click the gear to open **Settings**. It has three tabs:
 **AI connections** shows your Codex and Claude accounts. Click **Check
 connections** to make sure they work, or sign in again.
 
-![The AI connections screen: Codex and Claude accounts with Check connections](assets/screenshots/ai.png)
+![The AI connections screen: Codex and Claude sign-ins with Check connections, and Add your own API](assets/screenshots/ai.png)
 
 ## Add a Tag
 

@@ -302,6 +302,9 @@ button.opt:hover:not(:disabled) { background: var(--fill); }
 .notice:has(> .act > :nth-child(2)) > .act { flex-basis: 100%; justify-content: flex-end; }
 .bar { position: absolute; left: 0; bottom: 0; height: 3px; background: var(--amber); transition: width .25s linear; }
 .notice.info .bar { background: var(--blue); }
+/* The first-run usage data note: one quiet footer line under the Tags, not a banner. */
+.usage-note { display: flex; gap: 6px; align-items: baseline; justify-content: center; flex-wrap: wrap; flex: none; font-size: 12px; color: var(--muted); padding: 8px 2px 0; border-top: 1px solid var(--line); text-align: center; }
+.usage-note .link { font-size: inherit; padding: 0; }
 .spin { width: 14px; height: 14px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .9s linear infinite; flex: none; display: inline-block; }
 .spin.sm { width: 12px; height: 12px; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -427,7 +430,7 @@ button.hello:hover b { text-decoration: underline; text-underline-offset: 2px; }
 .flow-panel > .body > .card:has(> .chan-list) { flex: 0 1 auto; min-height: 120px; display: flex; flex-direction: column; overflow: hidden; }
 .flow-panel > .body > .card:has(> .chan-list) > * { flex: none; }
 .flow-panel > .body > .card > .chan-list { flex: 0 1 auto; min-height: 0; max-height: none; }
-/* Home, Settings, AI connections and the usage data notice are --flow-h tall too:
+/* Home, Settings and AI connections are --flow-h tall too:
    long content scrolls inside the panel, short content leaves room above the buttons. */
 .app.fixed { height: var(--flow-h); }
 .app.fixed > .body { flex: 1; min-height: 0; overflow-y: auto; }
@@ -496,6 +499,46 @@ button.hello:hover b { text-decoration: underline; text-underline-offset: 2px; }
 .cstat.busy { color: var(--link); font-weight: 600; }
 .cver { display: block; font-size: 12.5px; color: var(--muted); line-height: 1.4; }
 .cact { display: flex; align-items: center; gap: 4px; flex: none; }
+.api-row { align-items: center; }
+.api-row .txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.api-row .label { font-size: 14.5px; font-weight: 600; color: var(--ink); }
+.api-row .cstat .acct { color: inherit; font-weight: 600; }
+.api-row .models { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dlg.api-dlg { max-width: 460px; max-height: calc(100vh - 44px); padding: 0; gap: 0; overflow: hidden; }
+.api-dlg > * { padding-left: 18px; padding-right: 18px; }
+.api-dlg > .api-head { display: flex; gap: 11px; align-items: center; padding-top: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.api-dlg > .api-head .txt { min-width: 0; }
+.api-dlg > .api-head p { font-size: 13px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.api-dlg > .api-body { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 13px; padding-top: 14px; padding-bottom: 14px; }
+.api-dlg > .dlg-note, .api-dlg > .api-progress, .api-dlg > .err-line { margin-bottom: 10px; }
+.api-dlg > .foot { padding-top: 12px; padding-bottom: 14px; border-top: 1px solid var(--line); }
+.api-back { color: var(--muted); padding-left: 4px; }
+.api-field { display: flex; flex-direction: column; gap: 6px; }
+.api-field > span { font-size: 13px; font-weight: 600; color: var(--ink); margin: 0 2px; }
+.api-field em { font-style: normal; font-weight: 400; color: var(--muted); }
+.api-field .field { height: 36px; font-size: 13.5px; }
+.api-kinds { display: flex; }
+.api-kinds button { flex: 1 1 0; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 6px 8px; }
+.api-kinds button img { border-radius: 3px !important; }
+.api-field > .api-hint { font-size: 12.5px; font-weight: 400; color: var(--muted); margin: 0 2px; }
+.api-models { display: flex; flex-wrap: wrap; gap: 5px; margin-top: -6px; }
+.api-chip { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border-radius: 6px; background: var(--fill); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; color: var(--text); }
+.api-chip.first { background: color-mix(in srgb, var(--blue) 12%, transparent); color: var(--ink); }
+.api-chip em { font-family: inherit; font-style: normal; font-size: 10.5px; color: var(--link); font-family: system-ui, sans-serif; font-weight: 600; }
+.api-saved { display: flex; align-items: center; gap: 7px; height: 36px; padding: 0 10px 0 12px; border-radius: 7px; background: var(--fill); font-size: 13.5px; color: var(--text); }
+.api-saved svg { color: var(--ok-text); }
+.api-saved .link { margin-left: auto; padding: 0; font-size: 13px; }
+.api-azure { display: flex; align-items: center; gap: 8px; margin: -6px 2px 0; font-size: 12.5px; color: var(--muted); }
+.api-badge { display: inline-flex; align-items: center; height: 20px; padding: 0 7px; border-radius: 5px; background: color-mix(in srgb, var(--blue) 12%, transparent); color: var(--link); font-size: 11.5px; font-weight: 700; }
+.api-row .sub { font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.api-checkrow { display: flex; align-items: center; gap: 10px; }
+.api-checkrow .spin { width: 11px; height: 11px; margin-right: 6px; }
+.api-check { display: flex; flex-direction: column; gap: 4px; padding: 9px 11px; border-radius: 8px; font-size: 13px; line-height: 1.4; }
+.api-check span { display: flex; gap: 6px; align-items: flex-start; }
+.api-check svg { flex: none; margin-top: 2px; }
+.api-check.ok { background: color-mix(in srgb, var(--green) 10%, transparent); color: var(--ok-text); }
+.api-check.bad { background: color-mix(in srgb, var(--red) 9%, transparent); color: var(--bad-text); }
+.ghost-add:disabled { opacity: .6; }
 .mcard { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
 .madd { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 13.5px; color: var(--muted); }
 .madd .link { margin-left: auto; padding: 0; }
@@ -930,6 +973,18 @@ button.list-item:hover { background: var(--fill); }
 @keyframes row-in { from { max-height: 0; padding-top: 0; padding-bottom: 0; opacity: 0; } to { max-height: 72px; } }
 .r-leave { overflow: hidden; pointer-events: none; animation: row-out .22s var(--ease) forwards; }
 @keyframes row-out { from { max-height: 72px; } to { max-height: 0; opacity: 0; } }
+/* Your own API: a Tag that starts using one slides in and its agent mark hops; switching back closes its row.
+   Check results grow out of the row. */
+.api-row.entering { overflow: hidden; animation: api-in .32s var(--ease); }
+.api-row.entering > img { animation: hop .5s var(--spring) .2s; }
+@keyframes api-in { from { max-height: 0; padding-top: 0; padding-bottom: 0; opacity: 0; } to { max-height: 96px; } }
+.api-leave { overflow: hidden; pointer-events: none; animation: api-out .22s var(--ease) forwards; }
+@keyframes api-out { from { max-height: 96px; } to { max-height: 0; padding-top: 0; padding-bottom: 0; opacity: 0; } }
+.api-check, .api-models, .api-saved, .api-azure { animation: rise2 .2s var(--ease); }
+.api-hint { animation: fadein .2s ease-out; }
+.api-chip { animation: check-in .22s var(--spring); }
+.api-progress { display: flex; flex-direction: column; gap: 4px; }
+.api-progress span:last-child { animation: tick .3s var(--spring); }
 /* Add a Tag: steps slide in from the side they come from, and the sprite walks along the track. */
 .flow-panel.forward > .body > * { animation: from-right .26s var(--ease); }
 .flow-panel.backward > .body > * { animation: from-left .26s var(--ease); }
@@ -964,6 +1019,7 @@ button.list-item:hover { background: var(--fill); }
 .notice.info .bar { background: linear-gradient(90deg, var(--blue) 40%, color-mix(in srgb, var(--blue) 45%, white) 50%, var(--blue) 60%) 0 0 / 250% 100%; animation: sheen 1.4s linear infinite; }
 @keyframes sheen { from { background-position: 100% 0; } to { background-position: 0 0; } }
 .notice.ok { animation: rise2 .24s var(--ease), flash .9s ease-out .1s; }
+.usage-note { animation: rise2 .24s var(--ease); }
 .notice.ok .ic { animation: check-in .4s var(--spring) .1s backwards; }
 @keyframes flash { from { box-shadow: 0 0 0 0 color-mix(in srgb, var(--green) 45%, transparent); } to { box-shadow: 0 0 0 8px transparent; } }
 /* Copying: a check and "Copied" for a moment. */
@@ -992,7 +1048,9 @@ button.list-item:hover { background: var(--fill); }
 .tags-row { animation: bob 1.4s steps(2) infinite; }
 
 @media (prefers-reduced-motion: reduce) {
-  .sky .sum .sq, .flow-panel > .body > *, .r.starting .badge, .confetti, .notice.info .bar, .avw2.rolling .pic,
+  .api-row.entering, .api-row.entering > img, .api-leave, .api-check, .api-models, .api-saved, .api-azure, .api-hint, .api-chip,
+  .api-progress span:last-child,
+  .sky .sum .sq, .flow-panel > .body > *, .r.starting .badge, .confetti, .notice.info .bar, .usage-note, .avw2.rolling .pic,
   .empty img, .tags-row, .r.click:hover .av, .sl-item:hover img, .track .tnode img { animation: none !important; }
   .sl-msg.working > div > p { animation: none; background: none; color: inherit; }
   .desc-line.marquee { text-overflow: ellipsis; -webkit-mask: none; mask: none; }

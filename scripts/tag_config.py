@@ -281,6 +281,27 @@ def save_config(path: Path, values: dict[str, str]) -> None:
         Path(temporary).unlink(missing_ok=True)
 
 
+def restore_keys(path: Path, keys: set[str], before: dict[str, str]) -> None:
+    """Put back only these keys, under the settings lock. A key absent from ``before`` is removed."""
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    lock = path.with_name(path.name + ".lock")
+    try:
+        descriptor = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        raise RuntimeError("Another settings update is in progress; retry after it finishes") from None
+    os.close(descriptor)
+    try:
+        values = load_config(path)
+        for key in keys:
+            if key in before:
+                values[key] = before[key]
+            else:
+                values.pop(key, None)
+        save_config(path, values)
+    finally:
+        lock.unlink(missing_ok=True)
+
+
 def update_config(path: Path, changes: dict[str, str], *, only_missing: bool = False) -> dict[str, str]:
     """Apply only requested keys. A short lock prevents lost concurrent updates."""
     for key, value in changes.items():

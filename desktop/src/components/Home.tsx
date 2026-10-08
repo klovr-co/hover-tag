@@ -1,7 +1,7 @@
 // Copyright 2026 klovr.co
 // SPDX-License-Identifier: Apache-2.0
 // Every Tag on this computer, grouped by Slack workspace, under the sky.
-import { useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import type { AIStatus } from "../lib/ai";
 import type { Bridge } from "../lib/bridge";
 import {
@@ -10,6 +10,7 @@ import {
 import { groups, problemText, status, title, type Group, type TagRow } from "../lib/protocol";
 import type { Tags } from "../lib/tags";
 import type { UpdateState } from "../lib/updates";
+import { USAGE_DATA_NOTE } from "../lib/telemetry";
 import type { SettingsTab } from "./Settings";
 import teamArt from "../assets/art/tag-team.png";
 import fiveTags from "../assets/art/five-tags.png";
@@ -42,7 +43,11 @@ interface Props {
   finishSetup: (row: TagRow) => void;
   open: (row: TagRow) => void;
   fixAI: (row: string) => void;
-  showSettings: (tab?: SettingsTab) => void;
+  /** With `privacy`, Settings opens scrolled to Privacy. */
+  showSettings: (tab?: SettingsTab, privacy?: boolean) => void;
+  /** Usage data was turned on at first run: say so once. */
+  usageNote?: boolean;
+  seenUsageNote?: () => void;
   now?: Date;
 }
 
@@ -184,6 +189,7 @@ export function Home(props: Props) {
         )}
         </div>
         {tags.error && <ErrorLine>{tags.error}</ErrorLine>}
+        {props.usageNote && <UsageNote seen={props.seenUsageNote} learnMore={() => props.showSettings("general", true)} />}
       </div>
     </>
   );
@@ -323,6 +329,17 @@ export function TagRowView({ row, tags, report, problem, open, drag, entering }:
       </div>
       <Switch on={on} busy={tags.busy.has(row.id)} label={`${on ? "Stop" : "Start"} ${title(row)}`} onClick={() => void tags.toggle(row)} />
       <span className="chev" aria-hidden="true"><Icon name="right" size={13} /></span>
+    </div>
+  );
+}
+
+/** The first-run usage data note, at the end of setup or on Home. Learn more opens Settings, where the switch is. */
+export function UsageNote({ learnMore, seen }: { learnMore: () => void; seen?: () => void }) {
+  useEffect(() => { seen?.(); }, [seen]);
+  return (
+    <div className="usage-note" role="status">
+      <span>{USAGE_DATA_NOTE}</span>
+      <button className="link" onClick={learnMore}>Learn more</button>
     </div>
   );
 }

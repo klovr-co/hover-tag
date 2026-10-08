@@ -95,7 +95,8 @@ plan, or connect your own API key, and switch models whenever you want. See
 
 Tag runs on your Mac. We don’t host your conversations or working files. Your AI
 provider and any connected services process what each request needs, under their
-own policies. [Usage data](reference/telemetry.md) is optional.
+own policies. [Usage data](reference/telemetry.md) is anonymous, and you can
+turn it off.
 
 ### Does my team need anything?
 

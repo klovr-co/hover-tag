@@ -95,6 +95,12 @@ anything up again.
   gateways, including Azure OpenAI for Codex. You can also pin a gateway
   provider. `tag usage` shows token usage, estimated cost and
   optional monthly budgets.
+- **Add your own API in the app.** Settings → AI connections → **Add your own
+  API** takes Codex or Claude, a base URL, models and a write-only key, and
+  applies it to all your Tags. Each API shows as `Codex · API (host)`; open it to
+  edit, **Check connection** without spending tokens, or **Switch back to my
+  plan**. In the terminal, `tag settings ai api set|check|clear` does the same
+  in one step and restores the old settings if the Tag can't start.
 - **ChatGPT plans.** Connect a ChatGPT plan with `tag chatgpt login`. Tag
   renews the token automatically and offers the models that account can use.
 - **Your account's models.** Model pickers list the models your signed-in
@@ -146,8 +152,10 @@ anything up again.
 - **Apps can drive Tag.** `tag setup --json`, `tag list --json` and
   `tag NAME logs --json` give apps and agents the same flows that people use.
   The protocol is described in `docs/reference/app-protocol.md`.
-- **Usage data.** The app and the CLI share one optional, privacy-bounded
-  usage data choice. See [telemetry](docs/reference/telemetry.md).
+- **Usage data.** Tag shares anonymous, privacy-bounded usage data to improve
+  setup and reliability. At the first run it turns this on and shows one short
+  note; turn it off in Settings → Privacy or with `tag telemetry off`. Earlier
+  opt-outs are kept. See [usage data](docs/reference/telemetry.md).
 
 ### Fixed
 

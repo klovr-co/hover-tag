@@ -7,9 +7,10 @@ import { parseJSON } from "./protocol";
 
 export const AI_CAPABILITY = "ai-connections";
 export const SHARED_AI_CAPABILITY = "shared-ai-connections";
+export const API_CAPABILITY = "api-connections";
 
 export type ConnectionState =
-  | "connected" | "signed_out" | "expired" | "limited" | "not_installed" | "unsupported" | string;
+  | "connected" | "signed_out" | "expired" | "limited" | "not_installed" | "unsupported" | "misconfigured" | string;
 export type ConnectionAction = "sign_in" | "reconnect" | "change_account" | "install" | "resume" | "update" | string;
 
 export interface Connection {
@@ -19,8 +20,8 @@ export interface Connection {
   state: ConnectionState;
   installed: boolean;
   version?: string | null;
-  /** codex: the computer's Codex sign-in; chatgpt: a ChatGPT plan shared by all Tags. */
-  method?: "codex" | "chatgpt" | "claude" | string | null;
+  /** codex: the computer's Codex sign-in; chatgpt: a ChatGPT plan shared by all Tags; api: this Tag's own API. */
+  method?: "codex" | "chatgpt" | "claude" | "api" | string | null;
   account?: string | null;
   detail?: string;
   /** True when the sign-in is shared by all Tags. */
@@ -28,6 +29,29 @@ export interface Connection {
   actions: ConnectionAction[];
   install_url: string;
   allowed?: boolean;
+  api?: ApiSummary;
+}
+
+export type ApiKind = "openai" | "anthropic" | "azure";
+
+/** A Tag's own API connection, as `tag … settings ai api` reports it. It never includes the key. */
+export interface ApiSummary {
+  backend: "codex" | "claude" | string;
+  kind: ApiKind | string;
+  kind_name: string;
+  base_url: string;
+  host: string;
+  models: string[];
+  api_version: string;
+  key_set: boolean;
+  /** Why the Tag can't use it yet, or "". */
+  problem: string;
+}
+
+/** One Tag using its own API, from `tag settings ai connections`. */
+export interface ApiConnection extends ApiSummary {
+  tag: string;
+  tag_name: string;
 }
 
 export interface ModelChoice {
@@ -45,6 +69,8 @@ export interface AIConnections {
   usable: string[];
   running: boolean;
   scope: "installation";
+  /** Tags using their own API instead of the shared sign-in; absent before api-connections. */
+  api_connections?: ApiConnection[];
 }
 
 export const parseConnections = (output: string) => parseJSON<AIConnections>(output);
@@ -132,6 +158,7 @@ const LABEL: Record<string, string> = {
   limited: "Usage limit reached",
   not_installed: "Not installed",
   unsupported: "Update needed",
+  misconfigured: "API needs attention",
 };
 
 /** The status line under a backend's name, e.g. "Connected · ChatGPT sign-in". */
@@ -250,4 +277,111 @@ export function resultLine(result: SignInResult, name: string) {
   if (result.status === "connected") return `${name} connected.${result.error ? ` ${result.error}` : ""}`;
   if (result.status === "cancelled") return "Sign-in cancelled.";
   return `Sign-in didn't finish. ${result.error ?? ""}`.trim();
+}
+
+// ---- A Tag's own API ---------------------------------------------------------------
+
+/** Tag's two agents, and the API each one speaks. Azure OpenAI is Codex on an Azure endpoint, found from its URL. */
+export const API_AGENTS = {
+  codex: { name: "Codex", speaks: "OpenAI-compatible APIs, including Azure OpenAI", url: "https://api.openai.com/v1", model: "gpt-5.5" },
+  claude: { name: "Claude", speaks: "Anthropic-compatible APIs", url: "https://api.anthropic.com", model: "claude-sonnet-5-5" },
+} as const;
+
+/** Azure OpenAI resource endpoints, which take a resource key, deployment names, and an API version. */
+export const isAzureUrl = (url: string) => /^https:\/\/[^/]+\.(openai\.azure\.com|cognitiveservices\.azure\.com)(\/|$)/i.test(url.trim());
+
+/** The provider kind Tag expects for this form. */
+export const apiKind = (form: Pick<ApiForm, "backend" | "baseUrl">): ApiKind =>
+  form.backend === "claude" ? "anthropic" : isAzureUrl(form.baseUrl) ? "azure" : "openai";
+
+export const hostOf = (url: string) => { try { return new URL(url).host; } catch { return url; } };
+
+/** `Codex · API (gateway.example.com)`, the same words as the CLI. */
+export const apiLabel = (api: Pick<ApiSummary, "backend" | "kind" | "host">) =>
+  `${api.backend === "codex" ? "Codex" : "Claude"} · ${api.kind === "azure" ? "Azure" : "API"} (${api.host})`;
+
+export interface ApiForm {
+  backend: "codex" | "claude";
+  baseUrl: string;
+  models: string;
+  apiVersion: string;
+}
+
+/** Splits "a, b,,a" into ["a", "b"], as Tag does. */
+export const modelList = (text: string) => [...new Set(text.split(",").map((m) => m.trim()).filter(Boolean))];
+
+/** What the form still needs before it can be sent; Tag checks the rest. */
+export function apiFormProblem(form: ApiForm, key: string, keySaved: boolean, tags: number): string | null {
+  if (!tags) return "Add a Tag first.";
+  const url = form.baseUrl.trim();
+  if (url && !/^https:\/\//i.test(url) && !/^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/i.test(url)) {
+    return "Use an https:// address.";
+  }
+  if (!modelList(form.models).length) return apiKind(form) === "azure" ? "Enter at least one deployment name." : "Enter at least one model.";
+  if (!key.trim() && !keySaved) return "Paste the API key.";
+  return null;
+}
+
+/** `tag TAG settings ai api set …`; the key goes over stdin, never here. */
+export function apiSetArgs(tag: string, form: ApiForm) {
+  const kind = apiKind(form);
+  return [tag, "settings", "ai", "api", "set", "--backend", form.backend, "--kind", kind,
+    "--base-url", form.baseUrl.trim(), "--models", modelList(form.models).join(","),
+    ...(kind === "azure" && form.apiVersion.trim() ? ["--api-version", form.apiVersion.trim()] : []),
+    "--restart"];
+}
+
+export const apiClearArgs = (tag: string, backend: string) =>
+  [tag, "settings", "ai", "api", "clear", "--backend", backend, "--restart"];
+export const apiCheckArgs = (tag: string, backend: string) =>
+  [tag, "settings", "ai", "api", "check", "--backend", backend, "--json"];
+
+export interface ApiResult {
+  type: "api";
+  action: "set" | "clear" | string;
+  backend: string;
+  status: "saved" | "failed" | string;
+  api?: ApiSummary | null;
+  error?: string;
+  restarted?: boolean;
+  /** False when the Tag's default model runs on the other agent, so it doesn't use this API yet. */
+  in_use?: boolean;
+}
+
+export interface ApiCheck {
+  ok: boolean;
+  checks: { name: string; ok: boolean; text: string }[];
+}
+
+/** One stdout line from `api set|clear`: a progress text, the result, or nothing. */
+export function parseApiLine(line: string): { text: string } | ApiResult | null {
+  const text = line.trim();
+  if (!text.startsWith("{")) return null;
+  try {
+    const event = JSON.parse(text);
+    if (event?.type === "progress" && typeof event.text === "string") return { text: event.text };
+    if (event?.type === "api") return event as ApiResult;
+    if (event?.ok === false && typeof event.error === "string") return { type: "api", action: "", backend: "", status: "failed", error: event.error };
+  } catch {
+    // Not one of ours.
+  }
+  return null;
+}
+
+/** One API shared by several Tags: the same agent, endpoint and models. */
+export interface ApiGroup extends ApiSummary {
+  tags: { id: string; name: string }[];
+}
+
+/** Tags with the same API become one row; a Tag whose API differs gets its own. */
+export function groupApis(items: ApiConnection[]): ApiGroup[] {
+  const groups = new Map<string, ApiGroup>();
+  for (const item of items) {
+    const key = [item.backend, item.kind, item.base_url, item.api_version, item.models.join(","), item.problem].join("|");
+    const { tag, tag_name, ...summary } = item;
+    const group = groups.get(key) ?? { ...summary, tags: [] };
+    group.tags.push({ id: tag, name: tag_name });
+    groups.set(key, group);
+  }
+  return [...groups.values()];
 }

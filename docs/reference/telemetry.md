@@ -1,17 +1,19 @@
 # Usage data
 
 Tag can share a little anonymous usage data, such as whether setup finished,
-to help us make installing and running Tag more reliable. It's optional, and
-it never includes your prompts, Slack messages, agent output, Tag or workspace
+to help us make installing and running Tag more reliable. You can turn it off
+at any time, and it never includes your prompts, Slack messages, agent output, Tag or workspace
 names, paths, logs, credentials, or configuration values.
 
 ## Your choice
 
-The first time you open the Tag app, it asks before anything is sent. Choose
-**Happy to help** to share usage data, or **No thanks** to keep it off. **Read
-the privacy notice** opens this page.
+The first time you use Tag, it turns usage data on and tells you with one short
+note: "Tag shares anonymous usage data to improve setup and reliability." In the
+app, the note appears at the end of setup, or on Home if you skip setup, and
+goes away when you move to another screen. **Learn more** opens Settings at
+**Privacy**, where you can turn it off.
 
-![Usage data: Help support Tag's development, with what's never included, No thanks, and Happy to help](../assets/screenshots/usage-data.png)
+![Home with the note: Tag shares anonymous usage data to improve setup and reliability, and Learn more](../assets/screenshots/usage-note.png)
 
 To change your mind later, open **Settings** → **General** and turn **Share
 usage data** on or off. It's under **Privacy**. In the terminal:
@@ -23,6 +25,7 @@ tag telemetry off
 ```
 
 One choice covers the app, the `tag` command, and every Tag on this computer.
+If you turned usage data off in an earlier version, Tag keeps it off.
 
 ## How the choice works
 
@@ -34,9 +37,10 @@ release builds use the dedicated destination and collection boundary described
 on this page. Source checkouts have no telemetry destination unless they are
 packaged by the release workflow.
 
-Before an interactive installation can send its first event, Tag shows a notice
-describing the collection boundary, either in the terminal or as the first
-screen in the app. Continuing saves an installation-wide enabled preference. Turning telemetry off saves a disabled preference, deletes
+At the first interactive run, Tag saves an installation-wide enabled
+preference and shows a one-line note, in the terminal or in the app, that says
+how to turn it off. Non-interactive runs and runs with telemetry disabled don't
+change the setting, and a saved opt-out is never overridden. Turning telemetry off saves a disabled preference, deletes
 the local pseudonymous identifier and queued events, and sends no opt-out event.
 Non-interactive runs do not choose on the operator's behalf.
 

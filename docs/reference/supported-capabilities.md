@@ -115,6 +115,7 @@ commands, use the [Slack adapter](../../references/slack-adapter.md) and
 | Capability | Codex | Claude |
 | --- | --- | --- |
 | Explicit per-Tag API key and base URL | Responses-compatible providers | Anthropic-compatible providers via Agent SDK |
+| Set, check, and clear from Tag.app or `tag settings ai api` | OpenAI-compatible and Azure OpenAI | Anthropic-compatible; Azure is rejected |
 | Temporary gateway chat-only mode | Opt-in `OPENTAG_CODEX_GATEWAY_DISABLE_TOOLS=1`; requires provider routing; all tools unavailable | Unsupported; setting is rejected |
 | Optional gateway provider pinning | `provider.only` through a task-scoped adapter in API mode; requires explicit base URL | Unsupported; routing settings are rejected |
 | Azure OpenAI resource key | Responses endpoint and deployment name | Not supported by this connection mode |

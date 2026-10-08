@@ -727,6 +727,9 @@ and starts them again afterwards. See
 
 Use [Models](api-connections.md) to configure
 Codex/Azure or Claude API keys, endpoints, model lists, and advisory budgets.
+In the app, open **Settings → General → AI connections → Add your own API**. In a
+terminal, run `tag [NAME] settings ai api set|check|clear`; the key is read
+from stdin.
 `tag usage` and `tag NAME usage --json` report the current UTC month.
 
 Existing Tags named `usage` remain addressable after upgrading: use

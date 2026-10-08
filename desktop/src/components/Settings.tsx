@@ -1,7 +1,7 @@
 // Copyright 2026 klovr.co
 // SPDX-License-Identifier: Apache-2.0
 // App settings, the one Tag update, and a Tag's recent logs.
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { APPEARANCES, APPEARANCE_LABEL, setAppearance, useAppearance } from "../lib/appearance";
 import type { AppInfo, Bridge } from "../lib/bridge";
 import { parseConnections } from "../lib/ai";
@@ -147,6 +147,8 @@ interface SettingsProps {
   replay: () => void;
   /** The tab to open on; General if left out. */
   initialTab?: SettingsTab;
+  /** Open scrolled to Privacy, such as from Home's usage data note. */
+  showPrivacy?: boolean;
   update: UpdateState;
   check: () => void;
   runUpdate: () => void;
@@ -156,7 +158,13 @@ interface SettingsProps {
   openAI?: () => void;
 }
 
-export function Settings({ api, info, tags, telemetry, close, replay, initialTab, update, check, runUpdate, switched, openAI }: SettingsProps) {
+export function Settings({ api, info, tags, telemetry, close, replay, initialTab, showPrivacy, update, check, runUpdate, switched, openAI }: SettingsProps) {
+  const privacy = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!showPrivacy) return;
+    const still = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+    privacy.current?.scrollIntoView?.({ block: "start", behavior: still ? "auto" : "smooth" });
+  }, [showPrivacy]);
   const appearance = useAppearance();
   const [login, setLogin] = useState(false);
   const [keepBusy, setKeepBusy] = useState(false);
@@ -241,7 +249,7 @@ export function Settings({ api, info, tags, telemetry, close, replay, initialTab
             <div className="card"><AISummaryRow api={api} tags={tags} open={openAI} /></div>
           </div>
         )}
-        <div className="section">
+        <div className="section" ref={privacy}>
           <div className="sec-head"><h3>Privacy</h3></div>
           <div className="card"><UsageDataRow api={api} telemetry={telemetry} setError={setError} /></div>
         </div>

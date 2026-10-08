@@ -3,6 +3,7 @@
 // Add a Tag: draws the questions Tag's own setup asks over JSON lines, in the
 // onboarding order (Your Tag · AI · Workspace · Create · Channels). It holds no
 // setup logic; every choice is an answer to `tag setup --json`.
+import { UsageNote } from "./Home";
 import { useCallback, useEffect, useReducer, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import type { Bridge, Session } from "../lib/bridge";
 import type { AIModels, AIStatus } from "../lib/ai";
@@ -35,6 +36,8 @@ interface Props {
   openAI?: (resume: string[]) => void;
   /** Start the finished Tag where Home can see it; returns what went wrong, or "". */
   start?: StartTag;
+  /** Usage data was turned on at first run: the finished screen says so, with Learn more. */
+  usageNote?: { learnMore: () => void; seen: () => void };
 }
 
 /** What a choose question's answer is: its stable ID when Tag gave them, else its index. */
@@ -43,7 +46,7 @@ const answerFor = (question: SetupQuestion, id: string) => {
   return index >= 0 ? id : (question.options ?? []).indexOf(id);
 };
 
-export function Connect({ api, args, done, paused, openAI, start }: Props) {
+export function Connect({ api, args, done, paused, openAI, start, usageNote }: Props) {
   const [state, dispatch] = useReducer(setupReducer, initialSetup);
   const session = useRef<Session | null>(null);
   const [attempt, setAttempt] = useState(0);
@@ -134,7 +137,7 @@ export function Connect({ api, args, done, paused, openAI, start }: Props) {
     session.current?.send({ answer: null, pause: true });
     paused();
   };
-  if (state.outcome === "complete") return <Ready api={api} state={state} done={done} start={start ?? startHere} />;
+  if (state.outcome === "complete") return <Ready api={api} state={state} done={done} start={start ?? startHere} usageNote={usageNote} />;
   const picture = source(state.profile?.preview, state.profile?.revision);
   const body = (): ReactNode => {
     if (state.outcome === "paused") {
@@ -743,7 +746,7 @@ function StartSteps({ progress, name, channels, seconds, failed, error, detailed
   );
 }
 
-function Ready({ api, state, done, start }: { api: Bridge; state: SetupState; done: () => void; start: StartTag }) {
+function Ready({ api, state, done, start, usageNote }: { api: Bridge; state: SetupState; done: () => void; start: StartTag; usageNote?: Props["usageNote"] }) {
   const ready = state.ready;
   const name = ready?.name || state.profile?.name || "your Tag";
   const places = tryPlaces(ready);
@@ -851,6 +854,7 @@ function Ready({ api, state, done, start }: { api: Bridge; state: SetupState; do
               <Primary title="Open Slack" icon="external" onClick={() => void openSlack()} /></>
             : <><button className="link" onClick={done}>Skip to Home</button><span className="spacer" /></>}
         </div>
+        {usageNote && <UsageNote {...usageNote} />}
       </div>
       </div>
     </>

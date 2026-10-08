@@ -13,11 +13,10 @@ import { glide } from "./lib/motion";
 import { Connect } from "./components/Connect";
 import { Home } from "./components/Home";
 import { Installing, Starting, Welcome } from "./components/Install";
-import { AI_CAPABILITY, SHARED_AI_CAPABILITY } from "./lib/ai";
+import { AI_CAPABILITY, API_CAPABILITY, SHARED_AI_CAPABILITY } from "./lib/ai";
 import { AISettings } from "./components/AISettings";
 import { Settings, type SettingsTab } from "./components/Settings";
 import { TagDetail, type Tab as TagTab } from "./components/TagDetail";
-import { TelemetryNotice } from "./components/TelemetryNotice";
 import { Toast } from "./components/ui";
 
 type Screen =
@@ -26,12 +25,12 @@ type Screen =
   | { name: "installing"; attempt: number }
   | { name: "home" }
   | { name: "connect"; args: string[] }
-  | { name: "settings"; tab?: SettingsTab }
+  | { name: "settings"; tab?: SettingsTab; privacy?: boolean }
   | { name: "ai"; resume?: string[] }
   /** `opened` counts Slack links, so a second link resets an open Tag screen. */
   | { name: "tag"; id: string; tab?: TagTab; opened?: number }
   /** Settings > Replay onboarding: the first-run screens again, changing nothing. */
-  | { name: "replay"; step: "telemetry" | "welcome" };
+  | { name: "replay" };
 
 /** What each screen counts as in usage data. */
 const SCREEN_EVENT: Partial<Record<Screen["name"], AppEvents["app_screen_viewed"]["screen"]>> = {
@@ -119,13 +118,23 @@ export function App() {
     }, () => setOutdated(true));
   }, [api, info?.cli, screen.name]);
 
-  // Usage data: once per run, then each screen. Nothing is recorded until the person has chosen.
+  // Usage data: once per run, then each screen, while it is on.
   const opened = useRef(false);
   useEffect(() => {
     if (!info || !telemetry.recording || opened.current) return;
     opened.current = true;
     track("app_opened", { app_version: info.version });
   }, [info, track, telemetry.recording]);
+  // The first-run usage data note shows once: at the end of setup, or on Home for people who skip setup.
+  // It goes away when the person leaves the screen where they first saw it.
+  const notedOn = useRef<Screen["name"] | null>(null);
+  const { announced, acknowledge, seen } = telemetry;
+  const sawOnHome = useCallback(() => { notedOn.current ??= "home"; seen(); }, [seen]);
+  const sawOnSetup = useCallback(() => { notedOn.current ??= "connect"; seen(); }, [seen]);
+  useEffect(() => {
+    if (announced && notedOn.current && screen.name !== notedOn.current) acknowledge();
+  }, [screen.name, announced, acknowledge]);
+  const learnUsage = useCallback(() => setScreen({ name: "settings", tab: "general", privacy: true }), []);
   useEffect(() => {
     const viewed = SCREEN_EVENT[screen.name];
     if (viewed) track("app_screen_viewed", { screen: viewed });
@@ -241,11 +250,6 @@ export function App() {
   if (!api || !info || screen.name === "loading") {
     return <main ref={setRoot} className="app"><Starting error={bootError} retry={() => setBootAttempt((value) => value + 1)} /></main>;
   }
-  // The usage data notice comes before Home and setup, so it's seen before anything is recorded.
-  if (screen.name === "home" || screen.name === "connect") {
-    if (!telemetry.loaded) return <main ref={setRoot} className="app fixed"><Starting retry={telemetry.reload} /></main>;
-    if (telemetry.asking) return <main ref={setRoot} className="app fixed"><TelemetryNotice api={api} telemetry={telemetry} /></main>;
-  }
   const home = () => { setScreen({ name: "home" }); void tags.refresh(); watch.recheck(); };
   // A reinstall keeps existing Tags: return to them instead of setting up a first Tag again.
   const afterInstall = async (command: string) => {
@@ -258,13 +262,11 @@ export function App() {
   };
   const add = () => setScreen({ name: "connect", args: tags.rows.length ? ["add"] : ["setup"] });
   // These screens are always --flow-h tall and scroll inside, so moving between them never resizes the window.
-  const fixed = screen.name === "home" || screen.name === "settings" || screen.name === "ai"
-    || (screen.name === "replay" && screen.step === "telemetry");
+  const fixed = screen.name === "home" || screen.name === "settings" || screen.name === "ai";
   return (
     <TrackContext.Provider value={track}>
       <main ref={setRoot} className={`app${info.platform === "macos" ? " overlay" : ""}${screen.name === "home" ? " home" : ""}${fixed ? " fixed" : ""}${screen.name === "tag" ? " wide" : ""}`}>
-        {screen.name === "replay" && screen.step === "telemetry" && <TelemetryNotice api={api} telemetry={telemetry} preview={() => setScreen({ name: "replay", step: "welcome" })} />}
-        {screen.name === "replay" && screen.step === "welcome" && <Welcome api={api} platform={info.platform} preview={() => setScreen({ name: "settings", tab: "about" })} />}
+        {screen.name === "replay" && <Welcome api={api} platform={info.platform} preview={() => setScreen({ name: "settings", tab: "about" })} />}
         {screen.name === "welcome" && <Welcome api={api} platform={info.platform} install={() => setScreen({ name: "installing", attempt: 0 })} />}
         {screen.name === "installing" && (
           <Installing key={screen.attempt} api={api}
@@ -276,23 +278,24 @@ export function App() {
         {screen.name === "home" && tags.loaded && (
           <Home api={api} tags={tags} reports={watch.reports} problems={watch.problems} activity={watch.activity}
             firstName={info.firstName ?? null} update={update} outdated={outdated} runUpdate={() => void runUpdate()}
-            add={add}
+            add={add} usageNote={telemetry.announced} seenUsageNote={sawOnHome}
             finishSetup={(row) => setScreen({ name: "connect", args: [row.id, "setup"] })}
             open={(row) => setScreen({ name: "tag", id: row.id })}
             fixAI={() => capabilities.includes(SHARED_AI_CAPABILITY) ? setScreen({ name: "ai" }) : say("Update Tag to manage shared AI accounts in Settings.")}
-            showSettings={(tab) => setScreen({ name: "settings", tab })} />
+            showSettings={(tab, privacy) => setScreen({ name: "settings", tab, privacy })} />
         )}
         {screen.name === "connect" && (
           <Connect api={api} args={screen.args} start={(id, onLine) => tags.start(id, capabilities.includes("start-progress") ? onLine : undefined)} openAI={capabilities.includes(SHARED_AI_CAPABILITY) ? (resume) => setScreen({ name: "ai", resume }) : undefined} done={home}
-            paused={() => { home(); say("Progress saved. Finish setup from Home any time."); }} />
+            paused={() => { home(); say("Progress saved. Finish setup from Home any time."); }}
+            usageNote={telemetry.announced ? { learnMore: learnUsage, seen: sawOnSetup } : undefined} />
         )}
         {screen.name === "settings" && (
-          <Settings key={screen.tab} initialTab={screen.tab} api={api} info={info} tags={tags} telemetry={telemetry} close={home} update={update} check={() => void check()}
-            runUpdate={() => void runUpdate()} replay={() => setScreen({ name: "replay", step: "telemetry" })} switched={(done) => dispatchUpdate({ type: "updated", update: done })}
+          <Settings key={screen.tab} initialTab={screen.tab} showPrivacy={screen.privacy} api={api} info={info} tags={tags} telemetry={telemetry} close={home} update={update} check={() => void check()}
+            runUpdate={() => void runUpdate()} replay={() => setScreen({ name: "replay" })} switched={(done) => dispatchUpdate({ type: "updated", update: done })}
             openAI={capabilities.includes(SHARED_AI_CAPABILITY) ? () => setScreen({ name: "ai" }) : undefined} />
         )}
         {screen.name === "ai" && (
-          <AISettings api={api} tags={tags} close={() => { watch.recheck(); setScreen(screen.resume ? { name: "connect", args: screen.resume } : { name: "settings" }); }} />
+          <AISettings api={api} tags={tags} apiConnections={capabilities.includes(API_CAPABILITY)} close={() => { watch.recheck(); setScreen(screen.resume ? { name: "connect", args: screen.resume } : { name: "settings" }); }} />
         )}
         {screen.name === "tag" && (
           <TagDetail key={screen.opened ?? 0} api={api} tags={tags} initial={screen.id} initialTab={screen.tab} problems={watch.problems} back={home} add={add}
