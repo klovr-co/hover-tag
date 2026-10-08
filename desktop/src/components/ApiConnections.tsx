@@ -101,7 +101,9 @@ export function ApiDialog({ api, tags, initial, running, close, saved }: {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [dismiss]);
-  const set = (patch: Partial<ApiForm>) => { setForm((f) => ({ ...f, ...patch })); setError(""); setCheck(null); };
+  // A changed form goes to every Tag again, so no Tag keeps older values after a partial failure.
+  const allTargets = () => setTargets(initial ? initial.tags : tags);
+  const set = (patch: Partial<ApiForm>) => { setForm((f) => ({ ...f, ...patch })); setError(""); setCheck(null); allTargets(); };
   const fail = (text: string) => { setError(text); setAttempt((n) => n + 1); };
   const step = (tag: ApiTag, text: string) => setProgress((all) => ({ ...all, [tag.id]: `${tag.name}: ${text}` }));
 
@@ -193,7 +195,7 @@ export function ApiDialog({ api, tags, initial, running, close, saved }: {
           {replacing
             ? <Field label="API key" hint={keySaved ? "replaces the saved key" : "stored on this computer, never shown again"}>
               <input className="field mono" type="password" value={key} placeholder="Paste key" autoComplete="new-password"
-                spellCheck={false} disabled={sending} autoFocus={keySaved} onChange={(e) => { setKey(e.target.value); setError(""); }} />
+                spellCheck={false} disabled={sending} autoFocus={keySaved} onChange={(e) => { setKey(e.target.value); setError(""); allTargets(); }} />
             </Field>
             : <div className="api-field"><span>API key</span>
               <div className="api-saved"><Icon name="lock" size={13} /><span>Saved on this computer</span>

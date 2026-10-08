@@ -238,7 +238,7 @@ def apply(target, backend: str, action: str, changes: dict[str, str], *, emit: E
             raise ApiError(f"Couldn't stop {target.name}. Nothing changed.")
     _progress(emit, "saving", target)
     try:
-        settings.update_config(path, changes)
+        written = settings.update_config(path, changes)
     except (ValueError, RuntimeError, OSError) as exc:
         if running:
             target.restart("start")
@@ -249,8 +249,14 @@ def apply(target, backend: str, action: str, changes: dict[str, str], *, emit: E
         restarted = target.restart("start") == 0
         if not restarted:
             _progress(emit, "restoring", target)
-            # Exactly the previous file: nothing else writes settings while the Tag is stopped here.
-            settings.save_config(path, before)
+            # Put back only the keys this command changed (including ones the backend alignment moved),
+            # under the settings lock, so a concurrent update to other keys isn't overwritten.
+            touched = {key for key in written.keys() | before.keys() if written.get(key) != before.get(key)}
+            try:
+                settings.restore_keys(path, touched, before)
+            except (RuntimeError, OSError) as exc:
+                raise ApiError(f"{target.name} didn't start with the new connection, and the previous one couldn't "
+                               f"be put back: {exc} Run tag doctor for details.") from None
             back = target.restart("start") == 0
             raise ApiError(f"{target.name} didn't start with the new connection, so the previous one was kept"
                            + ("." if back else f", but {target.name} didn't start either. Start it from Tag.")

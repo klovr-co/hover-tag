@@ -106,6 +106,24 @@ describe("Your own API", () => {
     expect(setup.mock.calls[2][0][0]).toBe("t0klovr1-a0maya01");
   });
 
+  it("sends an edited form to every Tag again after a partial failure", async () => {
+    const api = demoBridge();
+    const setup = vi.spyOn(api, "setup").mockImplementation(async (args, onLine, onExit) => {
+      setTimeout(() => { onLine(reply(args, (tag) => tag === "t0ops")); onExit(0, ""); }, 10);
+      return { send: vi.fn(), stop: vi.fn() };
+    });
+    render(<AISettings api={api} tags={tags()} close={vi.fn()} apiConnections />);
+    fireEvent.click(await screen.findByRole("button", { name: /Add your own API/ }));
+    fireEvent.change(screen.getByPlaceholderText("gpt-5.5"), { target: { value: "gpt-5.5" } });
+    fireEvent.change(screen.getByPlaceholderText("Paste key"), { target: { value: "sk-x" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByRole("alert");
+    expect(setup).toHaveBeenCalledTimes(2);
+    fireEvent.change(screen.getByPlaceholderText("gpt-5.5"), { target: { value: "gpt-5.6" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await vi.waitFor(() => expect(setup).toHaveBeenCalledTimes(4));
+  });
+
   it("opens an API to check it and switch its Tags back to the plan", async () => {
     history.replaceState(null, "", "?api=1");
     const api = demoBridge();

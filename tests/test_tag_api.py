@@ -141,6 +141,30 @@ class SetTests(ApiFixture):
         self.assertEqual(after, before)
         self.assertNotIn(KEY, self.output)
 
+    def test_a_failed_start_keeps_a_concurrent_change_and_removes_new_keys(self) -> None:
+        self.running = True
+        before = self.saved()
+        self.failing = {"start"}
+        original = tag_config.update_config
+
+        def update_then_other_change(path, changes, **kwargs):
+            values = original(path, changes, **kwargs)
+            original(path, {"OPENTAG_DEFAULT_MODEL": values["OPENTAG_DEFAULT_MODEL"]})
+            current = tag_config.load_config(path)
+            current["OPENTAG_OTHER_NOTE"] = "kept"
+            tag_config.save_config(path, current)
+            return values
+
+        with patch.object(tag_config, "update_config", update_then_other_change):
+            code, _ = self.run_cli("set", backend="codex", kind="openai", models="gpt-5.5")
+        self.assertEqual(code, 1)
+        after = self.saved()
+        self.assertEqual(after.get("OPENTAG_OTHER_NOTE"), "kept")
+        for key in set(after) - {"OPENTAG_OTHER_NOTE"}:
+            self.assertEqual(after[key], before.get(key), key)
+        for key in set(before) - set(after):
+            self.fail(f"{key} was lost")
+
     def test_a_failed_stop_changes_nothing(self) -> None:
         self.running = True
         self.failing = {"stop"}
