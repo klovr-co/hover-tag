@@ -34,6 +34,7 @@ it shows is listed in `capabilities`; otherwise it offers to upgrade Tag.
 | `install-progress` | `TAG_INSTALL_PROGRESS=jsonl` for `install.sh` and `install.ps1` |
 | `ai-connections` | Per-Tag AI status and model controls; AI setup questions |
 | `shared-ai-connections` | Global `tag settings ai connections\|sign-in\|resume --json`; shared accounts, model-only setup |
+| `api-connections` | `tag NAME settings ai api [set\|clear\|check] --json`: a Tag's own API connection; `api_connections` in `tag settings ai connections --json`; see [API connections](#api-connections) |
 | `thinking-level` | `tag NAME settings ai effort LEVEL --json`, `model VALUE --effort LEVEL`; thinking-level fields in `settings ai`, `models`, and `tag list` |
 | `logs-activity` | `activity` in `tag NAME logs --json` |
 | `activity-details` | `tag NAME logs --activity RUN_ID --json` |
@@ -403,6 +404,39 @@ sign-in and restore them afterwards, even if sign-in fails. Previously stopped
 Tags stay stopped. `tag settings ai resume --restart` resumes a paused plan.
 Named-Tag connection commands are rejected. See `protocol/examples/ai-*.json`
 and `ai-sign-in.jsonl`.
+
+### API connections
+
+A Tag can use its own API (OpenAI-compatible, Anthropic-compatible, or Azure
+OpenAI) instead of the shared sign-in. Each Tag has its own; `tag settings ai
+connections --json` lists them in `api_connections`, one object per Tag and
+backend with `tag` and `tag_name` added. While a Tag uses one, its connection
+in `tag NAME settings ai --json` has `method: "api"`, `shared: false`, no
+actions, `account` such as `API (gateway.example.com)`, and the `api` summary.
+A configuration Tag can't use has `state: "misconfigured"` and the reason in
+`detail`.
+
+`tag NAME settings ai api --json` returns `api` (a list of summaries) and
+`kinds` (`codex`: `openai`, `azure`; `claude`: `anthropic`). A summary has
+`backend`, `kind`, `kind_name`, `base_url`, `host`, `models`, `api_version`,
+`key_set`, and `problem`. It never contains the key.
+
+`tag NAME settings ai api set --backend codex|claude --kind openai|anthropic|azure
+[--base-url URL] --models A,B [--api-version V] --json` reads one stdin line,
+`{"api_key": "…"}` or the bare key; an empty key keeps the saved one. Inputs
+are checked before anything stops. A running Tag needs `--restart`. It writes
+JSON lines: `progress` events with `step` (`stopping`, `saving`,
+`restarting`, `restoring`) and `text`, then one `{"type": "api", "action",
+"backend", "status": "saved"|"failed", "api"?, "default_model"?, "restarted"?,
+"unchanged"?, "in_use"?, "error"?}`. `in_use` is false when the Tag's
+default model runs on the other agent: its model is kept, and it uses the API
+once a model of this agent is chosen. When nothing would change, `unchanged` is true and
+the Tag isn't stopped. Settings are written in one atomic update, and a Tag on this agent
+keeps its model if the API lists it, else uses the first listed model. If
+the Tag doesn't start again, the previous settings are restored and the result
+is `failed`. `clear --backend B` goes back to the shared sign-in and removes the
+saved key. `check --backend B --json` returns `ok` and `checks` (`name`, `ok`,
+`text`) without contacting the provider.
 
 During `tag setup --json`, the AI step uses `choose` questions. When an agent is
 connected, `default_model` has model-only `option_ids`, `groups`, `connections`,

@@ -76,6 +76,7 @@
     "scripts/tag_activity_details.py",
     "scripts/tag_activity_labels.py",
     "scripts/tag_ai.py",
+    "scripts/tag_api.py",
     "scripts/tag_approval_choices.py",
     "scripts/tag_autostart.py",
     "scripts/tag_chatgpt.py",
