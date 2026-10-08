@@ -1,206 +1,165 @@
 # How Tag works
 
-This is a map of what happens after someone mentions Tag. Operators can use
-it to set up or demo the bot. Contributors can use it to find where a feature
-belongs. It also tells teammates what the bot can and cannot do today.
+This is a map of what happens from installing Tag to a reply in Slack.
+Operators can use it to set up or demo Tag. Contributors can use it to find
+where a feature belongs. It also tells teammates what Tag can and cannot do
+today.
 
-> **Launch scope:** `main` is intentionally Slack-only for v0.1 alpha. The
-> unfinished Zulip implementation is preserved on the `feature/zulip` branch
-> and is not included in the installer, runtime, or supported flow below.
+> **Scope:** Tag is Slack-only. The unfinished Zulip implementation is kept on
+> the `feature/zulip` branch and is not part of the installer, runtime, or the
+> flows below.
 
-Examples use `@<bot-name>` because the Slack display name is configurable. A
-mention must target the same Slack app whose tokens are used by the running
-bridge.
+Examples use `@<bot-name>` because each Tag has its own Slack display name. A
+mention must target the Slack app of a Tag that is running on this computer.
 
 ## Product at a glance
 
-Tag brings a locally authenticated Codex or Claude Code agent into a shared
-Slack conversation. Slack supplies the request and a
-bounded slice of the conversation, the CLI backend performs the work, and MFS
-supplies retrieval from sources approved by the operator. A working deployment
-requires MFS and at least one allowed source, although any individual task may
-finish without performing retrieval.
+Tag brings a Codex or Claude agent, signed in on your computer, into a shared
+Slack conversation. Slack supplies the request and the thread. The agent does
+the work on your computer. Memory (the bundled MFS server) supplies search over
+the channels and sources you approved. Each Tag is a separate Slack app with its
+own folder, model, and channels. You run Tags from the **Tag app** or the `tag`
+command; both use the same settings.
 
 ```mermaid
 flowchart TD
     Ask["1 · Ask<br/>Mention Tag in Slack"]
-    Gate{"2 · Check access<br/>Is this person and location allowed?"}
-    Stop["Stop here<br/>Deny or ignore the request"]
+    Gate{"2 · Check access<br/>Allowed person and channel?"}
+    Stop["Stop here<br/>Deny or ignore"]
     Context["3 · Read the conversation<br/>Thread plus attachments"]
-    Brain["4 · Do the work<br/>Codex or Claude Code"]
-    Extra["Only when needed<br/>MFS memory, workspace, and local tools"]
-    Reply["5 · Reply<br/>Return to the same thread"]
+    Brain["4 · Do the work<br/>Codex or Claude"]
+    Extra["Only when needed<br/>Memory, files, local tools"]
+    Reply["5 · Reply<br/>In the same thread"]
 
     Ask --> Gate
     Gate -->|No| Stop
     Gate -->|Yes| Context
     Context --> Brain
-    Brain -.->|Needs more context or an action| Extra
+    Brain -.->|Needs context or an action| Extra
     Extra -.-> Brain
     Brain --> Reply
 ```
 
 Read the solid line from top to bottom. The dashed branch is optional: simple
-questions can go straight from the agent to the reply.
+questions go straight from the agent to the reply.
 
 ### Example: summarize a Slack thread
 
-1. Maxine writes `@<bot-name> summarize this thread and list the open questions.`
+1. Maxine writes:
+
+   > @Tag summarize this thread and list the open questions.
+
 2. Tag confirms that Maxine and the channel are allowed.
-3. It reads up to 30 messages from the thread.
-4. Codex or Claude writes the summary. It can search MFS if the request refers
-   to older material outside the thread.
-5. Tag posts the answer back in the same Slack thread.
+3. It reads the thread, up to the latest 30 messages.
+4. Codex or Claude writes the summary. It can search memory if the request
+   refers to older material outside the thread.
+5. Tag posts the answer in the same thread.
 
 A few rules matter:
 
-- **Chat** is the shared interface, not the source of model authentication.
-- **Brain** is a fresh CLI run for each Slack mention.
-- **Memory** setup is required for deployment. At runtime it contains only
-  sources already indexed by MFS and allowed by `MFS_ALLOWED_SCOPES`; retrieval
-  is used only when a request needs it.
-- **Tools** are inherited from the local backend environment and keep their own
-  credentials and authorization rules.
+- **Chat** is the shared interface. It is not where the agent signs in.
+- **Brain** is one agent conversation per Slack thread. A later mention in the
+  same thread continues it, for the person who started it.
+- **Memory** holds only channels and sources that are indexed and allowed.
+  Tag uses it only when a request needs it.
+- **Tools** come from the agent's environment on your computer and keep their
+  own credentials and permissions.
 
 ## Actors
 
 | Actor | Responsibility |
 |---|---|
-| Workspace operator | Installs Tag, connects the chat app, chooses the backend and workspace, approves data scopes, and starts/stops the service. |
-| Authorized teammate | Mentions the bot, supplies thread context or attachments, requests work, and reviews the shared result. |
-| Unauthorized teammate | Receives a denial; their request does not read the thread or start the backend. |
-| Slack | Delivers the conversation and displays progress and results. |
-| Codex or Claude Code | Reasons, retrieves context, uses permitted local tools, and performs workspace tasks. |
-| MFS | Searches and reads previously indexed, operator-approved sources. |
-
-## Connected lifecycle
-
-```mermaid
-flowchart LR
-    A["1 · Install<br/>Tag + prerequisites"]
-    B["2 · Connect Slack<br/>Create or approve the app"]
-    C["3 · App connected<br/>Tag + workspace"]
-    D["4 · Choose destination<br/>Visual channel picker"]
-    E["5 · Choose the agent<br/>Codex or Claude"]
-    F["6 · Set boundaries<br/>Users, workspace, MFS"]
-    G{"7 · Run doctor<br/>All checks pass?"}
-    H["8 · Start<br/>Launch MFS + chat bridge"]
-    I["9 · Test<br/>Mention Tag in the channel"]
-
-    A --> B --> C --> D --> E --> F --> G
-    G -->|No: fix the first failure| F
-    G -->|Yes| H --> I
-```
-
-Once this path works, normal use is much shorter: mention, work, reply. Return
-to configuration and `doctor` only when you change the setup or diagnose a
-failure.
+| Operator (owner) | Installs Tag, adds Tags, connects the AI, chooses channels and the model, and starts or stops Tags. Setup makes the person signed in to Slack the owner. |
+| Authorized teammate | Mentions Tag, supplies thread context or attachments, and reviews the result. |
+| Unauthorized teammate | Receives a denial. Tag does not read the thread or start the agent. |
+| Slack | Delivers the conversation and shows progress and results. |
+| Codex or Claude | Reasons, searches, uses permitted local tools, and works in the Tag's folder. |
+| Memory (MFS) | Searches and reads indexed, approved sources. |
+| Tag app / `tag` | Install, set up, run, watch, and change Tags on this computer. |
 
 ## How to read the levels
 
 | Depth | Read this when you need | What it shows |
 |---|---|---|
-| **Level 1 · Journey** | A fast orientation | The happy path and its main outcome. |
-| **Level 2 · Task flow** | To perform or demonstrate the workflow | Exact user steps, choices, limits, and visible recovery paths. |
-| **Level 3 · Service blueprint** | To implement, operate, or debug it | Handoffs among Slack, Tag, the backend, MFS, files, and persistent state. |
+| **Level 1 · Journey** | A fast orientation | The happy path and its outcome. |
+| **Level 2 · Task flow** | To perform or demonstrate the flow | Exact steps in the app and the CLI, choices, limits, and recovery. |
+| **Level 3 · Service blueprint** | To implement, operate, or debug it | Handoffs between Slack, Tag, the agent, memory, and files. |
 
-Start with Level 1. Continue only as deep as the job requires; Level 3 appears
-only where understanding the system boundary materially helps.
+Start with Level 1. Go only as deep as the job needs.
 
-## Flow 1: First-time setup
+## Flow 1: Install and set up the first Tag
 
-The first setup connects one Slack identity to one Tag worker. The terminal menu
-and admin skill share the same commands, inspect current state first, and resume
-missing answers. See [setup and management](tag-management.md) for the current
-CLI contract and recovery flow.
+See [Set up and manage Tag](tag-management.md) for every option and recovery
+step.
 
 ### Level 1 · Journey
 
 ```mermaid
 flowchart LR
-    Install["Install<br/>Tag + prerequisites"]
-    Slack["Connect Slack<br/>Create or approve app"]
-    Connected["App connected<br/>Tag + workspace"]
-    Channel["Choose destination<br/>Visual channel picker"]
-    Agent["Review settings<br/>Default agent and model"]
-    Guardrails["Set boundaries<br/>Users, workspace, MFS roots"]
-    Doctor{"Run doctor<br/>Checks pass?"}
-    Start["Start services<br/>MFS + Slack bridge"]
-    Test["Mention Tag<br/>in the selected channel"]
+    Install["Install<br/>Tag app or installer"]
+    Name["Your Tag<br/>name, description, picture"]
+    AI["AI<br/>model and agent"]
+    Workspace["Slack workspace"]
+    Create["Recap<br/>create the app"]
+    Channels["Channels<br/>(optional)"]
+    Start["Start<br/>Tag connects"]
+    Test["Mention Tag<br/>in Slack"]
 
-    Install --> Slack --> Connected --> Channel --> Agent --> Guardrails --> Doctor
-    Doctor -->|No| Guardrails
-    Doctor -->|Yes| Start --> Test
+    Install --> Name --> AI --> Workspace --> Create --> Channels --> Start --> Test
 ```
 
 ### Level 2 · Task flow
 
-1. Install Python 3.10+, `uv`, and an authenticated Codex or Claude Code CLI. Run `./install.sh` (or `./install.ps1` on Windows) for Tag's runtime.
-2. Open `tag` for the menu or ask the admin skill to inspect with `tag inspect --json`.
-3. Use `tag setup` to resume missing answers, or let the skill seed defaults with
-   `tag config init --json` and apply targeted `tag config set` operations.
-   Timeouts and retry options stay under advanced settings; Tag manages a stable
-   workspace in its application home.
-4. `tag setup` starts with the Tag itself: a name, a one-line description, and
-   a picture (shuffle Tag's waterdrops or upload a PNG, JPEG, or GIF; uploads
-   need Slack CLI 4.7 or newer). Then it asks for the default model, then the
-   Slack workspace, reusing Slack CLI sign-ins (or launching its real login
-   handoff). The signed-in member becomes the owner. One recap approves
-   creating the app; an existing app is linked and updated only with approval.
-   Slack CLI hands credentials off privately; hidden prompts are an explicit
-   fallback.
-5. The operator selects channels by name, or none: new Tags follow
-   invitations. Setup validates the Slack-history credential and writes an MFS
-   connector limited to those channel IDs and the history window, without
-   indexing.
-6. `tag doctor --json` diagnoses configuration, backend executable availability,
-   MFS access, and Slack API access. A stopped MFS server must be started to pass
-   these live checks; `tag start` handles the local server before its preflight.
-7. `tag start` starts MFS, runs preflight, and launches the Slack bridge.
-8. `tag status --json` and `tag logs` provide the first operational check;
-   `tag logs --limit N --follow` keeps a bounded initial history and then
-   streams new service output.
-   `tag restart` is a single user-facing flow rather than two complete stop and
-   start screens.
+| Step | App | Terminal |
+| --- | --- | --- |
+| Install | Download Tag from the GitHub release (macOS DMG; Windows and Linux: coming soon, use the terminal installer). On first run it installs the `tag` runtime and shows progress. | Run `install.sh` (macOS, Linux) or `install.ps1` (Windows). It installs a pinned Python with `uv` and the Slack CLI; you don't need Python yourself. |
+| Usage data | A notice asks once whether to share anonymous usage data. | The terminal shows the same notice on first interactive use. |
+| Add the Tag | **Add your first Tag** | `tag setup` (or `tag add` for another Tag) |
+| Your Tag | Name, one-line description (up to 140 characters), and a picture: shuffle Tag's waterdrops or choose your own. Or use an existing Slack app. | The same questions in the terminal. |
+| AI | Pick the default model from your connected Codex and Claude accounts. If none is connected, the app opens Settings → AI connections, then returns. | Pick the model. With nothing connected, sign in with `tag settings ai sign-in codex\|claude` in another terminal, then choose **Check again**. |
+| Workspace | Choose a Slack sign-in, or sign in to another workspace. The signed-in person becomes the owner. | Same. Nothing changes in Slack before this step. |
+| Recap | One recap approves creating the app. Tag creates it, adds the picture, installs it, and connects it. | Same, with **Create in Slack**, **Edit**, **Edit AI**, or **Back**. |
+| Channels | Choose channels, or none: the Tag follows invitations, so `/invite` it later. | Same. |
+| Start | The Tag starts by itself and shows each start step. | Setup saves and stops. Run the `tag NAME start` command it prints. |
+| Check | Home shows the Tag online. **Try it in Slack** opens Slack. | `tag NAME status`, then `tag NAME logs`. |
 
-Verify the complete journey by mentioning the bot in the permitted Slack channel
-and observing its reply. Executable discovery does not prove agent sign-in, and
-service readiness does not prove that a mention received a response.
+The Tag's folder is `~/Tag/<team>-<app>`, named after its Slack workspace and
+app IDs. After its first successful start, the Tag sends its owner a welcome
+DM.
+
+Verify the whole journey by mentioning the Tag in an allowed channel and
+reading its reply. A running service does not prove that a mention gets a
+reply.
 
 ### Level 3 · Service blueprint
 
 ```mermaid
 sequenceDiagram
     participant O as Operator
-    participant I as Installer/config
+    participant A as Tag app or CLI
     participant S as Slack
-    participant D as Doctor
-    participant M as MFS
+    participant M as Memory
     participant B as Tag bridge
 
-    O->>I: Run installer and choose backend/workspace
-    I-->>O: Save private configuration and Slack manifest
-    I->>S: Run Slack CLI authorization and approved app create/link
-    O->>S: Approve app, scopes, events, and private credential handoff
-    S-->>I: Return connected app identity and visible channels
-    I-->>O: Show app connected + visual channel picker
-    O->>I: Select one or more destination channels
-    I->>S: Verify Tag is invited to every channel
-    S-->>I: Confirm channel memberships
-    O->>I: Approve selected-channel history indexing
-    I->>M: Register the bounded Slack connector on start
-    O->>D: Run ./tag doctor
-    D->>S: Verify bot identity and channel access
-    D->>M: Verify health and allowed scopes
-    D->>D: Verify backend and required configuration
-    D-->>O: Report the first failed check or readiness
-    O->>B: Run ./tag start
-    B->>M: Start or connect to local MFS
-    B->>S: Open Socket Mode connection
-    O->>S: Send a realistic bot mention
-    S->>B: Deliver app_mention event
-    B-->>S: Post the threaded result
+    O->>A: Install, then Add Tag
+    A-->>O: Ask name, picture, model, workspace
+    O->>A: Approve the recap
+    A->>S: Create, install, and connect the app (Slack CLI)
+    S-->>A: App ID, credentials, visible channels
+    O->>A: Choose channels or none
+    A->>A: Save settings and memory connector
+    A->>B: tag NAME start (the app does this itself)
+    B->>S: Apply Slack app migrations if needed
+    B->>M: Start memory and register the channels
+    B->>S: Connect over Socket Mode
+    B->>S: Send the owner a welcome DM
+    O->>S: Mention the Tag
+    S->>B: app_mention event
+    B-->>S: Threaded reply
 ```
+
+The Tag connects before memory finishes importing channel history. It can
+answer right away; history search covers each channel once it is indexed.
 
 ## Flow 2: Delegate a task from Slack
 
@@ -209,8 +168,8 @@ sequenceDiagram
 ```mermaid
 flowchart LR
     Ask["Mention Tag<br/>with a clear task"]
-    Check["Confirm caller and<br/>channel are allowed"]
-    Work["Agent works with<br/>thread context"]
+    Check["Check caller<br/>and channel"]
+    Work["Agent works,<br/>live activity in thread"]
     Reply["Review the result<br/>in the same thread"]
 
     Ask --> Check --> Work --> Reply
@@ -220,22 +179,27 @@ flowchart LR
 
 Try this:
 
-> `@<bot-name> summarize this thread and list decisions, owners, and open questions.`
+> @Tag summarize this thread and list decisions, owners, and open questions.
 
-1. Mention the bot in a new channel message to start a fresh Slack thread, or
-   inside an existing thread to continue that conversation. By default, an
-   authorized user may instead send a top-level message from Tag's Messages
-   tab without an `@mention`.
-2. Keep the request explicit about the deliverable, evidence, and whether any
-   side effect such as posting or editing is intended.
-3. Watch Slack's loading state while the bounded backend run is active.
-4. Review the answer in the invoking thread. Long results may arrive as
-   multiple readable replies.
-5. For a Codex App Server task, follow readable tool steps in **Agent activity**
-   directly in the thread. Repeated work is grouped; the card shows complete when
-   the task succeeds. See [Watch Tag work](reference/supported-capabilities.md#watch-tag-work).
-6. If the result needs refinement, mention the bot again in the same thread so
-   the next run receives the recent discussion.
+1. Mention the Tag in a channel message to start a thread, or inside a thread to
+   continue it. An authorized user can also message the Tag directly in its
+   Messages tab without a mention.
+2. Say what you want back, what evidence to use, and whether Tag should post or
+   change anything.
+3. Watch **Agent activity** in the thread: short steps such as reading a file
+   or running a script. Repeated steps are grouped. See
+   [Watch Tag work](reference/supported-capabilities.md#watch-tag-work).
+4. If the agent asks to do something outside its sandbox, only you see the
+   approval. Codex offers **Allow once**, **Allow for this task**, **Deny**, and
+   **Deny and stop**; Claude offers **Approve once** and **Deny**.
+5. Review the answer. It ends with the agent, model, thinking level, and how
+   long it took. Long answers arrive as several replies. Use Slack's **Stop**
+   button to stop a running task.
+6. To refine it, mention the Tag again in the same thread. The agent continues
+   the same conversation.
+
+The operator can see every request in the Tag app: open the Tag, then **Activity**, or with
+`tag NAME logs --json` and `tag NAME logs --activity RUN_ID`.
 
 ### Level 3 · Service blueprint
 
@@ -244,36 +208,31 @@ sequenceDiagram
     participant U as Authorized teammate
     participant S as Slack
     participant T as Tag bridge
-    participant B as CLI backend
-    participant M as MFS/tools
+    participant B as Codex or Claude
+    participant M as Memory and tools
 
-    U->>S: Mention bot with task
+    U->>S: Mention Tag with a task
     S->>T: app_mention event
-    T->>T: Check channel and caller allowlists
-    T->>S: Start native loading indicator
-    T->>S: Read current thread and permitted attachments
-    T->>B: Start bounded run with request + thread context
-    B->>M: Optional scoped retrieval or tool use
-    M-->>B: Evidence or task result
-    B-->>T: Normalized status/delta/final events
-    T->>S: Stream or post formatted threaded answer
-    T->>S: Show model, thinking level, and duration
+    T->>T: Check channel and caller
+    T->>S: Show the loading indicator
+    T->>S: Read the thread and the request's files
+    T->>B: Start or resume the thread's conversation
+    B->>M: Optional search or tool use
+    M-->>B: Evidence or result
+    B-->>T: Activity, answer text, files
+    T->>S: Stream the answer and activity
+    T->>S: Upload requested files
+    T->>T: Save the activity record and summary
 ```
 
 Runtime behavior:
 
-- A top-level mention starts a new Slack thread; a mention inside an existing
-  thread continues with that thread's context.
-- The bridge strips the mention before sending the request to the backend.
-- Slack's native loading indicator is used while work is in progress.
-- Codex (App Server) and Claude (Agent SDK) stream
-  final-answer deltas and show compact **Agent activity** rows with readable
-  command and file descriptions. Repeated steps are grouped, and successful
-  tasks finish with a completed card. Shared replies omit
-  raw commentary, reasoning, and tool output. The separate Activity button is
-  hidden; bounded diagnostic records remain stored for future developer tooling.
-- Long answers are split into readable threaded replies.
-- Failures are returned in the same thread with a bounded error message.
+- The bridge removes the mention before it sends the request to the agent.
+- Codex (App Server) and Claude (Agent SDK) stream answer text and show
+  **Agent activity**. Private reasoning and raw tool output stay out of Slack.
+- One Slack thread runs one request at a time.
+- A failed request sends the requester a private message with the cause and
+  recovery choices. See [Error reporting](reference/error-reporting.md).
 
 ## Flow 3: Continue work with thread context and attachments
 
@@ -281,46 +240,44 @@ Runtime behavior:
 
 For example:
 
-> `@<bot-name> compare that proposal with the earlier recommendation.`
+> @Tag compare that proposal with the earlier recommendation.
 
-> `@<bot-name> review the attached screenshot and explain the failure.`
+> @Tag review the attached screenshot and explain the failure.
 
 ```mermaid
 flowchart LR
-    Mention["Mention in thread<br/>with a follow-up request"]
-    Collect["Collect context<br/>Up to 30 messages"]
-    Normalize["Normalize inputs<br/>Text + bounded attachments"]
-    Inspect["Backend resolves references<br/>and inspects available files"]
-    Cleanup["Remove temporary files"]
-    Reply["Reply in the<br/>same Slack thread"]
+    Mention["Mention in thread<br/>with a follow-up"]
+    Resume{"Conversation<br/>still current?"}
+    New["Send new messages<br/>since the last request"]
+    Fresh["Send the thread<br/>up to 30 messages"]
+    Files["Download this<br/>request's files"]
+    Reply["Reply in the<br/>same thread"]
 
-    Mention --> Collect --> Normalize --> Inspect --> Cleanup --> Reply
+    Mention --> Resume
+    Resume -->|Yes| New --> Files
+    Resume -->|No| Fresh --> Files
+    Files --> Reply
 ```
 
 ### Level 2 · Task flow
 
-1. Tag fetches one Slack replies page containing up to 30 messages from the
-   current thread rather than only the newest message. It does not currently
-   paginate longer threads or separately guarantee that a triggering message
-   beyond Slack's returned page is retained.
-2. Plain message text, legacy attachment fields, and bounded text-file content
-   are normalized into the prompt.
-3. Image attachments are downloaded into a per-invocation directory under
-   `TAG_HOME/tmp`; generated images, HTML, and other disposable artifacts use
-   the same private temporary subtree. Images are exposed to the backend for
-   inspection. Each downloaded file is limited to
-   15 MB; a larger file is skipped with a retrieval-failure marker rather than
-   truncated. Embedded text is limited to 12,000 characters per value/file.
-   There is no separate aggregate attachment-byte limit beyond the single
-   30-message page and per-file limit.
-4. The backend resolves references such as “that”, “the previous answer”, or
-   “use the screenshot” from the collected thread.
-5. Temporary attachment files are removed when the invocation finishes. A
-   failed download is represented in the prompt so the backend can explain what
-   it could not inspect instead of silently inventing content.
+1. Tag saves one agent conversation per Slack thread, for Codex and Claude. A
+   later mention by the same person continues it, so earlier tool results carry
+   forward. It receives only the messages posted since its last request.
+2. A fresh conversation starts when the conversation reaches
+   `OPENTAG_THREAD_MAX_CONTEXT_TOKENS` (default 150000), after
+   `OPENTAG_THREAD_IDLE_HOURS` without activity (default 4), or for a different
+   requester. It receives the latest 30 messages of the thread.
+3. Tag downloads the files on the request, up to 10 files, 15 MB each and 30 MB
+   in total. Text content is limited to 12,000 characters per file.
+4. Earlier files in the thread are listed by name. The agent can open one that
+   was shared in this channel when the request needs it. Images Tag generated
+   are also kept in the Tag's folder under `artifacts/<channel>/images`.
+5. Temporary downloads are removed when the request finishes. A file Tag could
+   not open is named in the prompt, so the agent says what it could not see.
 
-Attachments are treated as untrusted input. Instructions embedded in an image
-or document do not override the teammate's request or the runtime policy.
+Attachments are untrusted input. Instructions inside an image or document do
+not override the teammate's request or Tag's rules.
 
 ### Level 3 · Service blueprint
 
@@ -330,224 +287,201 @@ sequenceDiagram
     participant S as Slack
     participant T as Tag bridge
     participant F as Temporary files
-    participant B as CLI backend
+    participant B as Codex or Claude
 
-    U->>S: Mention bot in a thread with optional attachments
-    S->>T: Deliver event and thread identifier
-    T->>S: Fetch one replies page, up to 30 messages
-    T->>S: Download permitted text and image files
-    T->>F: Store bounded images for this invocation
-    T->>B: Send normalized text, markers, and file paths
-    B-->>T: Return grounded result and declare requested output files
-    T->>S: Upload validated requested outputs to this thread
-    T->>F: Remove invocation files
-    T-->>S: Post result in the same thread
+    U->>S: Mention Tag in a thread, with files
+    S->>T: Event and thread ID
+    T->>S: Read the thread
+    T->>S: Download the request's files
+    T->>F: Store them for this request
+    T->>B: Resume the thread's conversation with new messages and file paths
+    B-->>T: Answer and declared output files
+    T->>S: Upload outputs to the thread
+    T->>F: Remove request files
+    T-->>S: Post the answer
 ```
 
-## Flow 4: Retrieve durable context through MFS
+## Flow 4: Search memory
 
-Thread history is short-term conversational context. MFS provides durable,
-searchable context from approved sources.
+Thread history is short-term context. Memory gives durable, searchable context
+from approved sources.
 
 ### Level 1 · Journey
 
-For a cross-source task:
-
-> `@<bot-name> find the original decision, compare it with the current code, and explain what changed.`
+> @Tag find the original decision, compare it with the current code, and explain what changed.
 
 ```mermaid
 flowchart TD
     Request["Request needs older<br/>or cross-source context"]
-    Decide{"Is durable context needed?"}
-    Thread["Use current thread<br/>and workspace context"]
-    Search["Search allowed<br/>MFS roots only"]
+    Decide{"Durable context needed?"}
+    Thread["Use the thread<br/>and the Tag's folder"]
+    Search["Search allowed<br/>memory scopes only"]
     Reopen["Open the most<br/>relevant records"]
-    Synthesize["Combine evidence<br/>with current state"]
-    Answer["Answer with provenance<br/>when it improves trust"]
+    Answer["Answer, with sources<br/>when they help"]
 
     Request --> Decide
     Decide -->|No| Thread --> Answer
-    Decide -->|Yes| Search --> Reopen --> Synthesize --> Answer
+    Decide -->|Yes| Search --> Reopen --> Answer
 ```
 
 ### Level 2 · Task flow
 
-1. The backend decides that external context is needed.
-2. It searches only roots listed in `MFS_ALLOWED_SCOPES`.
-3. It reopens relevant hits when precise lines or records are needed.
-4. It combines retrieved evidence with the current thread and workspace state.
-5. It cites paths/records when requested or when provenance materially improves
-   the answer.
+1. The agent decides that it needs outside context.
+2. It searches only the scopes in `MFS_ALLOWED_SCOPES`. A Slack request gets
+   only its own channel's history.
+3. It reopens the best results when it needs exact lines or records.
+4. It combines that evidence with the thread and the Tag's folder.
+5. It cites sources when asked or when they make the answer more trustworthy.
+
+New Tags follow invitations: every channel the Tag joins, including later
+invitations, is answered in and indexed. Leaving a channel stops search there
+after about a minute; data already indexed is not erased.
 
 ### Level 3 · Service blueprint
 
 ```mermaid
 sequenceDiagram
     participant S as Slack thread
-    participant B as CLI backend
-    participant H as MFS helper
-    participant M as MFS server
+    participant B as Codex or Claude
+    participant H as Memory helper
+    participant M as Memory server
     participant X as Indexed sources
 
-    S->>B: Request requiring durable context
-    B->>H: Search with an allowed root
-    H->>H: Reject roots outside MFS_ALLOWED_SCOPES
-    H->>M: Submit scoped search
-    M->>X: Query already-indexed records
-    X-->>M: Matching records
-    M-->>B: Bounded search hits
-    B->>H: Read the strongest records when needed
-    H->>M: Submit scoped read
-    M-->>B: Precise evidence
-    B-->>S: Synthesize thread, workspace, and retrieved context
+    S->>B: Request that needs durable context
+    B->>H: Search an allowed scope
+    H->>H: Refuse scopes outside MFS_ALLOWED_SCOPES
+    H->>M: Scoped search
+    M->>X: Query indexed records
+    X-->>M: Matches
+    M-->>B: Bounded results
+    B->>H: Read the strongest records
+    H->>M: Scoped read
+    M-->>B: Exact evidence
+    B-->>S: Answer from thread, folder, and memory
 ```
 
-Supported MFS source types can include Slack history, local files, GitHub, Jira,
-Linear, databases, object stores, and other configured connectors. Indexing a
-source and allowing its root are separate operator decisions; both are required.
+Memory can index Slack history, local files, GitHub, Jira, Linear, databases,
+object stores, and other connectors. Indexing a source and allowing its scope
+are separate decisions; both are needed.
 
 For a channel summary:
 
-> `@<bot-name> summarize this channel and identify unresolved action items.`
+> @Tag summarize this channel and identify unresolved action items.
 
-For a channel-level request, the backend looks up the current channel inside an
-allowed indexed Slack source. It does not mistake the current thread for the
-whole channel. If no matching indexed Slack source exists, it says that channel
-history is unavailable.
+The agent looks up the current channel in the indexed Slack history. It does
+not mistake the thread for the whole channel. If the channel isn't indexed yet,
+it says so.
 
-## Flow 5: Perform workspace work
+## Flow 5: Work in the Tag's folder
 
 ### Level 1 · Journey
 
-Try this:
-
-> `@<bot-name> fix the failing parser test, run the focused suite, and summarize the changed files.`
+> @Tag fix the failing parser test, run the focused suite, and summarize the changed files.
 
 ```mermaid
 flowchart LR
     Request["Slack request"]
-    Inspect["Inspect the configured<br/>workspace"]
+    Inspect["Inspect the<br/>Tag's folder"]
     Work["Edit files or<br/>run commands"]
-    Verify["Run proportionate<br/>verification"]
-    Report["Report changes and<br/>observed results in Slack"]
+    Verify["Run checks"]
+    Report["Report changes<br/>and results"]
 
     Request --> Inspect --> Work --> Verify --> Report
 ```
 
 ### Level 2 · Task flow
 
-1. The backend receives the configured working directory and runtime contract.
-2. It inspects files, runs commands, or edits code with the local account's
-   permissions.
-3. It uses installed skills and commands when they match the task and are
-   available to that backend process.
-4. It runs proportionate verification.
-5. It reports changed files and observed test/command results in Slack.
+1. The agent works in the Tag's folder, `~/Tag/<team>-<app>`.
+2. It reads files, runs commands, or edits code with your account's
+   permissions, within the agent's own sandbox and approvals.
+3. It uses installed skills and commands when they fit the task.
+4. It runs checks that fit the change.
+5. It reports changed files and results in Slack.
 
-Tag does not add a hardened sandbox. The operator should use a trusted
-workspace for demos and an external sandbox for stronger production isolation.
+Tag is not a hardened sandbox. Use a trusted folder for demos, and an external
+sandbox for stronger isolation.
 
-## Flow 6: Create shared Slack outputs
+## Flow 6: Share outputs in Slack
 
-The default result is a reply in the invoking Slack thread. Two explicit output
-flows are also available:
+The default result is a reply in the thread. Files and two explicit outputs are
+also available.
 
 ### Level 1 · Journey
 
 ```mermaid
 flowchart TD
-    Result["Backend produces<br/>the requested content"]
-    Destination{"What did the teammate<br/>explicitly request?"}
-    Thread["Thread reply<br/>Default path"]
-    Channel["Top-level message<br/>Invoking channel only"]
-    Canvas["Slack Canvas<br/>Invoking channel only"]
+    Result["Agent produces<br/>the requested content"]
+    Destination{"What did the<br/>teammate ask for?"}
+    Thread["Thread reply<br/>Default"]
+    Files["Saved files<br/>attached in the thread"]
+    Channel["Top-level message<br/>This channel only"]
+    Canvas["Slack Canvas<br/>This channel only"]
 
     Result --> Destination
-    Destination -->|No special destination| Thread
+    Destination -->|Nothing special| Thread
+    Destination -->|A file| Files
     Destination -->|Post or announce| Channel
-    Destination -->|Create a Canvas| Canvas
+    Destination -->|A Canvas| Canvas
 ```
 
 ### Level 2 · Task flow
 
+#### Get a file
+
+> @Tag read launch-plan.md and create launch-checklist.md.
+
+Tag keeps the file in its folder and attaches it in the thread, up to 15 MB per
+file. Say "keep it local" to skip the upload. The app shows the file under the
+request in Activity.
+
 #### Post a top-level channel message
 
-Try this:
+> @Tag turn the agreed release notes into a short announcement and post it in this channel.
 
-> `@<bot-name> turn the agreed release notes into a short announcement and post it in this channel.`
-
-When the request explicitly says to post, send, or share, the backend can call
-the channel-post helper. The helper is restricted to the channel that invoked
-Tag; the backend cannot select an arbitrary destination.
+When the request says to post, send, or share, the agent can post a top-level
+message, but only in the channel that asked.
 
 #### Create a Slack Canvas
 
-Try this:
+> @Tag create a Canvas called “Launch Checklist” from the decisions in this thread.
 
-> `@<bot-name> create a Canvas called “Launch Checklist” from the decisions in this thread.`
+The agent writes Markdown in the Tag's folder and creates a Canvas in the
+channel that asked, up to 500 KB.
 
-The backend writes Markdown in the configured workspace and calls the Canvas
-helper. The helper creates a Canvas only in the invoking channel and enforces a
-500 KB content limit.
+## Flow 7: Choose the Tag's model and thinking level
 
-## Flow 7: Change a user's Codex settings
-
-After a successful Codex reply, an authorized teammate can open the compact
-overflow menu and select **Codex settings…**.
+Each Tag has one default model and thinking level. Every request uses them.
+Slack has no per-user model setting.
 
 ### Level 1 · Journey
 
 ```mermaid
 flowchart LR
-    Reply["Successful Codex reply"]
-    Choose["Open Codex settings<br/>from the overflow menu"]
-    Save["Save a valid choice<br/>for this user"]
-    Next["Future mentions use<br/>the saved setting"]
+    Open["App Details<br/>or tag settings ai"]
+    Model["Pick a model<br/>Codex or Claude"]
+    Level["Pick a thinking level"]
+    Restart["Restart the Tag<br/>if running"]
+    Next["Next requests<br/>use it"]
 
-    Reply --> Choose --> Save --> Next
+    Open --> Model --> Level --> Restart --> Next
 ```
 
 ### Level 2 · Task flow
 
-1. Tag shows only available Codex models, their native reasoning levels,
-   and Fast Mode availability, narrowed by operator allowlists when configured.
-2. The teammate selects a model, a reasoning level or **Default**, and whether
-   Fast Mode is on or off.
-3. Validation prevents unsupported combinations from being saved.
-4. An ephemeral confirmation identifies the saved choices.
-5. The user's future mentions use the saved setting across channels and threads.
+| Step | App | Terminal |
+| --- | --- | --- |
+| See choices | The Tag → **Details** → **Model** lists models from connected accounts, grouped by agent. | `tag NAME settings ai models` |
+| Choose a model | Pick one. The agent follows the model. | `tag NAME settings ai model claude:opus` |
+| Choose a thinking level | Pick one the model offers, or the model's default. | `tag NAME settings ai effort high` (or `default`) |
+| Apply | The app restarts a running Tag. | Add `--restart`, or confirm when asked. |
+| Connect accounts | Settings → General → **AI connections** | `tag settings ai sign-in codex\|claude` |
 
-### Level 3 · Service blueprint
+Accounts are shared by all Tags on the computer. If the saved model is no longer
+offered, the app and Slack's error message say so; pick another model.
 
-```mermaid
-sequenceDiagram
-    participant U as Authorized teammate
-    participant S as Slack modal
-    participant T as Tag bridge
-    participant N as Next Codex run
-
-    U->>S: Select Codex settings from overflow menu
-    S->>T: Submit model, reasoning, and Fast Mode choices
-    T->>T: Validate against configured allowlists
-    T-->>U: Confirm settings for this user
-    U->>T: Send a later mention in any allowed channel
-    T->>N: Start run with saved user settings
-```
-
-Settings are user-specific, so each authorized teammate can choose a model,
-reasoning level, and Fast Mode without changing another teammate's settings.
-Saved choices follow that user across channels and threads and survive bridge
-restarts. Reasoning levels retain the names reported by the selected backend;
-Fast Mode is an independent latency setting that uses increased usage.
-“Default” delegates model or reasoning selection to the backend CLI. If a saved
-choice is no longer available, Tag normalizes it back to the applicable default.
-When both Codex and Claude are allowed, installed, and signed in, the picker groups
-their models and the chosen model decides which backend runs that user's next
-request. Switching mid-thread is safe: every request is a fresh run that
-receives the Slack thread (up to 30 messages, including Tag's replies), so the
-new model continues from what is visible in Slack. It does not inherit the
-previous model's private reasoning or tool output; files it saved remain in
-the workspace. A running task keeps its model until it finishes or is stopped.
+Old Slack **Configure** buttons and per-user choices are retired. Startup
+archives the old preferences. An old button only explains where the setting
+moved, with a link to the Tag app.
 
 ## Flow 8: Denials, failures, and recovery
 
@@ -555,11 +489,11 @@ the workspace. A running task keeps its model until it finishes or is stopped.
 
 ```mermaid
 flowchart LR
-    Symptom["Observe the symptom"]
+    Symptom["See the symptom"]
     Delivery{"Did the mention<br/>reach Tag?"}
-    Slack["Check identity, app install,<br/>channel, and event delivery"]
-    Runtime["Check caller access,<br/>doctor, MFS, and backend"]
-    Verify["Retry one realistic mention"]
+    Slack["Check the app, Tag running,<br/>channel, and invitation"]
+    Runtime["Check access, AI sign-in,<br/>doctor, and logs"]
+    Verify["Retry one<br/>realistic mention"]
 
     Symptom --> Delivery
     Delivery -->|No| Slack --> Verify
@@ -570,159 +504,156 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    A[Mention arrives] --> B{Correct running bot?}
-    B -->|no| C[No event reaches this worker]
-    B -->|yes| D{Allowed channel?}
-    D -->|no| E[Slack logs and ignores the request]
-    D -->|yes| F{Authorized caller?}
-    F -->|no| G[Post denial; do not read thread or invoke backend]
-    F -->|yes| H{Preflight and runtime healthy?}
-    H -->|no| I[Return bounded error and inspect logs/doctor]
-    H -->|yes| J[Run task]
-    J --> K{Backend succeeds before timeout?}
-    K -->|no| L[Retry eligible Codex capacity errors, then report failure]
-    K -->|yes| M[Post result]
+    A[Mention arrives] --> B{Correct running Tag?}
+    B -->|No| C[No event reaches this Tag]
+    B -->|Yes| D{Allowed channel?}
+    D -->|No| E[Logged and ignored]
+    D -->|Yes| F{Authorized caller?}
+    F -->|No| G[Denial; thread not read]
+    F -->|Yes| H{AI and services ready?}
+    H -->|No| I[Private error with recovery choices]
+    H -->|Yes| J[Run task]
+    J --> K{Agent finishes?}
+    K -->|No| L[Retry eligible errors, then report privately]
+    K -->|Yes| M[Post result]
 ```
 
 ### Level 3 · Operator runbook
 
-Recommended recovery order:
+For a silent mention, check delivery first:
 
-For a completely silent mention, debug event delivery first:
+| Check | App | Terminal |
+| --- | --- | --- |
+| The right Tag is running | Home shows it **Online**. | `tag list`, `tag NAME status` |
+| It is in the channel | The Tag → **Channels** | `tag list --json` (`channels`) |
+| The event arrived | The Tag → **Logs** | `tag NAME logs` |
 
-1. Confirm the mentioned Slack identity matches the running worker.
-2. Run `./tag status` and confirm the Slack bridge is running.
-3. Confirm the bot is invited and has the required scopes/events.
-4. Confirm the channel policy allows that location.
-5. Run `./tag logs` and look for a received, ignored, or rejected event.
+If the event arrives but the task fails:
 
-If the event arrives but the task fails, debug runtime dependencies next:
+1. Read the private error message in Slack, or the request in Activity
+   (**Show errors**). `tag NAME logs --activity RUN_ID` shows its steps.
+2. Run `tag NAME doctor` and fix the first failed check. The app's **Fix**
+   notice points to the same fix.
+3. Check the AI connection in Settings → AI connections or with
+   `tag settings ai`.
+4. For search failures, check that memory is healthy and the source is indexed
+   and allowed.
+5. Restart the Tag only after a change that needs a new process.
 
-1. Run `./tag doctor` and correct the first failed check.
-   If a source checkout reports an incomplete runtime, run
-   `./install.sh --dependencies-only`; a managed installation should be repaired
-   by rerunning its installer. Startup never installs packages implicitly.
-2. Confirm the caller allowlist. An unauthorized Slack caller receives a
-   threaded denial before Tag reads the thread or invokes the backend.
-3. Inspect the transport/backend error in `./tag logs`.
-4. For retrieval failures, confirm MFS is healthy and the requested source root
-   is both indexed and allowed. MFS cannot cause Slack to omit the original
-   mention event.
-5. Restart only after configuration changes that require a new process.
-
-## Flow 9: Operate, update, and remove Tag
+## Flow 9: Run, update, and remove Tags
 
 ### Level 1 · Journey
 
 ```mermaid
 flowchart LR
-    Observe["Observe<br/>status → doctor → logs"]
-    Change{"What needs to change?"}
-    Config["Configuration<br/>Stop → edit → doctor"]
-    Upgrade["Upgrade<br/>Stop → pull → install"]
-    Remove["Uninstall<br/>Stop → remove clone"]
-    Start["Start services"]
-    Smoke["Run a realistic<br/>Slack mention test"]
+    Observe["Observe<br/>Home, status, logs"]
+    Change{"What changes?"}
+    Settings["Settings<br/>model, name, channels"]
+    Upgrade["Update<br/>app and runtime"]
+    Remove["Remove a Tag<br/>keep the Slack app"]
+    Smoke["Mention test"]
 
     Observe --> Change
-    Change -->|Config or Slack app| Config --> Start --> Smoke
-    Change -->|Tag version| Upgrade --> Start
-    Change -->|Remove Tag| Remove
+    Change -->|Settings| Settings --> Smoke
+    Change -->|New version| Upgrade --> Smoke
+    Change -->|Remove| Remove
 ```
 
 ### Level 2 · Task flow
 
-| Operator intent | User flow |
-|---|---|
-| Check health | `./tag status` → `./tag doctor` → `./tag logs` when needed. |
-| Start | Preflight succeeds → MFS starts → Slack bridge starts. |
-| Stop | Slack bridge stops → local MFS process stops. |
-| Change configuration | Stop → edit private `.env`/rerun guided setup → doctor → start → realistic mention test. |
-| Change Slack scopes/interactivity | Ship a versioned additive manifest migration → `tag start` syncs it → Slack requests approval only for new OAuth permissions → Tag refreshes credentials → mention/DM test. |
-| Upgrade | Stop → pull the intended release → rerun installer → doctor → start → smoke test. Existing private `.env` is preserved. |
-| Uninstall | Stop → remove the clone; optionally remove MFS binaries/data separately. |
+| Intent | App | Terminal |
+| --- | --- | --- |
+| Check health | Home: *N of M online*; the Tag's Logs tab | `tag NAME status`, `tag NAME doctor`, `tag NAME logs` |
+| Start or stop | The Tag's switch; **Start all** / **Stop all** per workspace; the menu bar | `tag NAME start` / `stop`; `tag start --workspace TEAM` |
+| Keep running after login | Settings → General → **Keep Tags running** and **Open Tag at login** | `tag autostart on` |
+| Rename or describe | Details → **Rename** / description **Edit** | `tag NAME rename "Name"`, `tag NAME describe "…"` |
+| Change the model | Details → **Model** | `tag NAME settings ai model VALUE` |
+| Update | Settings → **Updates** → **Update Tag** updates the app and the runtime together; choose Stable, Beta, or Alpha | `tag upgrade`; `tag upgrade --channel beta` |
+| Remove a Tag | Details → **Remove this Tag…** (keeps the Slack app) | `tag NAME remove` |
+| Also delete the Slack app | **Also delete the Slack app…**, then type the App ID | `tag NAME remove --delete-app --confirm-app A…` |
+| Start setup over | No app action | `tag NAME reset` (keeps the Slack app unless you choose to delete it) |
+
+An update restarts the Tags that were running and runs any migrations before
+they connect. Removing a Tag moves its folder to `abandoned/` under `~/Tag`
+and removes its Slack history from memory; it never deletes files. Deleting a
+Slack app is permanent and can't be undone.
 
 ### Level 3 · Service blueprint
 
 ```mermaid
 sequenceDiagram
     participant O as Operator
-    participant T as ./tag
-    participant M as MFS process
-    participant B as Slack bridge
+    participant A as Tag app or CLI
+    participant B as Tag bridge
+    participant M as Memory
     participant S as Slack
 
-    O->>T: status / doctor / logs
-    T-->>O: Health, first failure, or recent events
-    O->>T: stop before config or upgrade work
-    T->>B: Stop accepting new Slack events
-    T->>M: Stop the managed local process
-    O->>T: Apply configuration or upgrade
-    O->>T: doctor, then start
-    T->>M: Start and verify MFS
-    T->>B: Start bridge after preflight
-    B->>S: Connect through Socket Mode
-    O->>S: Run a realistic mention smoke test
-    S-->>B: Deliver event
-    B-->>S: Post result
+    O->>A: Update
+    A->>A: Verify and install the release
+    A->>B: Stop running Tags
+    A->>B: Start them again
+    B->>B: Run migrations (settings, data, credentials)
+    B->>S: Update the Slack app manifest if needed
+    B->>M: Start memory
+    B->>S: Connect
+    O->>S: Mention test
+    S-->>B: Event
+    B-->>S: Reply
 ```
 
 ## A demo that covers the product
 
-Use this 10-step script for a product demo. Run it in a sandbox workspace and an
-isolated chat location. Skip an optional step when its dependency is not set up.
+Run it in a test workspace and a quiet channel. Skip a step if its dependency is
+not set up.
 
-1. Show `./tag status`, `./tag doctor`, and the startup summary. Confirm that the
-   displayed bot identity matches the mention.
-2. Mention `@<bot-name>` and ask it to summarize a short discussion.
-3. In that thread, reply with `@<bot-name> turn that into three next actions.`
-   Channel invocations require a mention; DMs from authorized users do not.
-4. Attach a supported screenshot or text file and mention `@<bot-name>` for an
-   explanation grounded in the attachment. Use an image-capable backend/model
-   for the screenshot path.
-5. With an indexed and allowed MFS root, mention the bot and ask for a fact or
-   decision stored there.
-6. With an indexed and allowed Slack source, mention the bot and ask for a
-   summary of that channel.
-7. Request a small code or documentation change and focused verification in the
-   sandbox workspace.
-8. Explicitly request a top-level channel announcement. To demonstrate a Canvas
-   instead, confirm the installed bot has the
-   `canvases:write` scope; reinstall the app if that scope was newly added.
-9. With the Codex backend, reinstall the updated manifest with Slack
-   interactivity enabled. Change the model, reasoning, and Fast Mode choices,
-   then invoke a later task as that user.
-10. If a separate non-allowlisted test account is available, mention the bot and
-    show that the backend is not invoked.
+1. Open the app. Show Home and the Tag online. In a terminal, show
+   `tag list` and `tag NAME status`.
+2. Mention the Tag and ask it to summarize a short discussion.
+3. In that thread, reply with this follow-up. The Tag continues the same
+   conversation:
+
+   > @Tag turn that into three next actions.
+
+4. Attach a screenshot or text file and ask about it. Use a model that reads
+   images for the screenshot.
+5. With channel history indexed, ask for a summary of the channel.
+6. Ask for a file, for example a checklist, and show it attached in the thread.
+7. Ask for a small code or documentation change and a focused check in the
+   Tag's folder. Show **Agent activity**, and an approval if one appears.
+8. Ask for a top-level announcement or a Canvas in the channel.
+9. In the Tag app, open the request in Activity and its steps. Change the model in
+   Details and ask again.
+10. With a second test account that is not allowed, mention the Tag and show
+    that the agent does not run.
 
 ## Capability coverage and current boundaries
 
-| Capability | Current path | Important condition or boundary |
+| Capability | Status | Condition or boundary |
 |---|---|---|
-| Slack mentions and threaded replies | Implemented | Mention must target the installed app used by the running tokens. |
-| Caller authorization | Implemented | `SLACK_ALLOWED_USER_IDS` is required and fails closed. |
-| Explicit channel restriction | Implemented | Setup requires one or more joined channel IDs and the bridge fails closed when none are configured. |
-| Thread text and text attachments | Implemented | Content is bounded and treated as untrusted. |
-| Image attachment understanding | Implemented bridge path | Images up to 15 MB are downloaded temporarily; successful interpretation still depends on the selected backend/model. |
-| Generated-file delivery | Implemented | Only explicitly declared regular files inside the workspace are uploaded to the invoking thread and returned as private Slack file links; each file is limited to 15 MB. |
-| Generated-image upload to Slack | Implemented bridge path | The backend saves up to 10 final PNG, JPEG, GIF, or WebP files in the invocation's dedicated result directory; the bridge validates files up to 15 MB and uploads them to the requesting thread. |
-| Slack loading state and answers | Implemented | Codex App Server and the Claude Agent SDK stream final-answer deltas and observed activity. |
-| Long-answer splitting | Implemented | Results remain in the invoking thread. |
-| Model/reasoning/Fast Mode settings | Implemented for Codex and Claude | Requires Slack interactivity and a reinstalled updated manifest; Fast Mode uses increased usage. |
-| Top-level channel posts | Implemented on explicit request | Restricted to the invoking channel. |
-| Slack Canvas creation | Implemented on explicit request | Restricted to the invoking channel; `canvases:write` required. |
-| Slack MFS search/read | Implemented; live acceptance pending | Setup creates selected-channel scopes; each reply receives only its current channel's Slack scope. ADR 0001 still applies. |
-| Workspace commands and edits | Implemented through backend | Uses local account permissions; not a hardened sandbox. |
-| Slack durable session | Not provided | Each invocation launches a fresh agent; thread text and MFS restore context. |
-| Slack direct messages | Implemented, enabled by default | Requires an allowlisted sender. `tag start` migrates existing linked apps to `message.im` + `im:history` and opens Slack approval when needed. Set `OPENTAG_SLACK_DM_ENABLED=0` to disable it. Top-level DMs are separate tasks; thread replies provide bounded context. |
-| Duplicate-event idempotency | Not implemented | Avoid concurrent mentions in the same thread. |
-| Codex cancellation | Implemented with App Server | Slack's native Stop button interrupts the active Codex turn; the legacy exec transport remains a rollback path. |
-| Codex action approval | Automatic review with App Server fallback | Codex normally reviews sandbox-boundary actions automatically. Supported approval requests delivered to Tag appear as private, one-time Approve and Deny buttons for the initiating user; unsupported or stale requests fail closed. |
-| Connected-tool confirmation layer | Not provided by Tag | Connected-tool actions follow the selected backend/tool's permissions and confirmation behavior. |
-| Enterprise governance/audit/approvals | Not provided | Add external sandboxing and policy systems for production use. |
+| Mentions and threaded replies | Implemented | The mention must target a running Tag's app. |
+| Direct messages | Implemented, on by default | Allowed senders only. `OPENTAG_SLACK_DM_ENABLED=0` turns it off. |
+| Caller authorization | Implemented | `SLACK_ALLOWED_USER_IDS` is required and fails closed. Setup sets the owner. |
+| Channel restriction | Implemented | Channels the Tag joined (invitation policy) or a saved list. |
+| One conversation per thread | Implemented for Codex and Claude | Per requester; bounded by token and idle limits. Legacy transports start fresh. |
+| Thread text and attachments | Implemented | Bounded and untrusted. Earlier thread files can be reopened. |
+| Live activity and streamed answers | Implemented with App Server or Agent SDK | No private reasoning or raw tool output in Slack. |
+| Approvals | Codex: several choices; Claude: approve once or deny | Private to the requester; unanswered requests are denied. |
+| Stop a task | Implemented with App Server or Agent SDK | Slack's Stop button. |
+| Saved files | Implemented | Kept locally and attached in Slack by default; 15 MB per file. |
+| Generated images | Implemented | Up to 10 per request, uploaded and kept in the Tag's folder. |
+| Top-level posts and Canvases | On explicit request | This channel only; Canvases need `canvases:write`. |
+| Memory search | Implemented | Allowed scopes only; each reply gets its own channel's history. |
+| Model and thinking level | Per Tag | The app's Details tab or `tag settings ai`. No per-user overrides. |
+| Failure reports | Implemented | Private to the requester; sharing is manual. |
+| Activity history | Implemented | The app's Activity tab or `tag NAME logs --json`; kept 30 days. |
+| Work in the Tag's folder | Through the agent | Your account's permissions; not a hardened sandbox. |
+| Duplicate-event protection | Partial | One request per thread at a time. |
+| Organization governance and audit | Not provided | Add external sandboxing and policy for production use. |
 
 ## Related documentation
 
+- [Set up and manage Tag](tag-management.md)
+- [Supported capabilities](reference/supported-capabilities.md)
 - [Slack setup and behavior](../references/slack-adapter.md)
 - [Backend behavior](../references/backends.md)
 - [Runtime agent contract](../references/runtime-agent.md)

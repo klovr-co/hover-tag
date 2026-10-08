@@ -1,6 +1,7 @@
 # Sharing access to your Tag
 
-Your Tag starts with you as its only authorized caller. You can deliberately
+Your Tag starts with you as its only authorized caller: the Slack account you
+signed in with during setup. You can deliberately
 authorize additional Slack members when you want them to ask your Tag for work.
 
 ## What sharing access means
@@ -12,7 +13,10 @@ caller as granting access to ask that environment to act, not merely permission
 to read a Slack conversation.
 
 People who are not authorized cannot start a task. Tag rejects their request
-before reading the thread or invoking the backend.
+before reading the thread or starting Codex or Claude.
+
+Each authorized caller gets their own agent conversation in a thread, and only
+the person who started a task sees its approval prompts and failure messages.
 
 ## Sharing a caller is separate from sharing a reply
 
@@ -28,6 +32,13 @@ review an answer, or take a task from the result, they can do that in the
 thread without being authorized to invoke Tag.
 
 To add a caller, append their Slack member ID to the comma-separated
-`SLACK_ALLOWED_USER_IDS` setting. See the
+`SLACK_ALLOWED_USER_IDS` setting. Keep your own ID first, then restart:
+
+```sh
+tag config set SLACK_ALLOWED_USER_IDS U0OWNER123,U0TEAMMATE45
+tag restart
+```
+
+For a named Tag, use `tag NAME config set …` and `tag NAME restart`. See the
 [Slack adapter reference](../../references/slack-adapter.md#environment)
 for the setting and its fail-closed behavior.

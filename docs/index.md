@@ -1,102 +1,118 @@
-# Tag
+# Multiplayer AI, right in Slack.
 
-## @Tag in Slack
+Bring your Codex or Claude Code agent into the thread. Mention @Tag, and it reads the
+conversation, does the work, and replies where the whole team can follow along.
 
-Your personal assistant, in your workspace.
+[Download Tag for macOS](installation.md#1-download-tag)
 
-[Install Tag](getting-started/first-task.md)
+Works with any model that runs in Codex or Claude Code. Free and open source.
 
-**Ask your agent to set up Tag**
-
-Copy this prompt into your coding agent:
-
-```text
-Install the hover-tag-setup skill from https://github.com/klovr-co/hover-tag, then use it to set up Tag for me.
-Help me connect Tag to Slack and guide me through any login or authorization steps I need to complete myself.
-```
-
-Jules and Maya discuss the launch, then Maya asks their Tag to pull it
-together:
-
-> **Maya:** I’ll finish the FAQ by Tuesday.
+> **Jules:** Signup testing is done. Two small bugs, both fixed.
 >
-> **Jules:** I’ll test signup on Wednesday. Support still needs a briefing.
+> **Iris:** Support still needs a briefing before Monday.
 >
 > **Maya:** @Maya's Tag pull this into a launch checklist with owners.
 >
-> **Maya's Tag:** Here’s the shared checklist:
-> - **Maya:** Finish the FAQ by Tuesday.
-> - **Jules:** Test signup on Wednesday.
-> - **Unassigned:** Brief support before launch. Who can take this?
+> **Maya's Tag:** Here’s the launch checklist:
+> - [x] **Jules:** Signup tested, bugs fixed
+> - [ ] **Maya:** Finish the FAQ by Tuesday
+> - [ ] **Unassigned:** Brief support before Monday. Who can take this?
 
-## Work already happens in Slack
+## Want to try it without another pricey subscription?
 
-Most work doesn’t begin as a tidy brief. It starts in a Slack thread: a question,
-a few links, some back-and-forth, and eventually a decision someone needs to act on.
+*A Dots or Grok alternative*
 
-Take that discussion into a private AI chat and you’ve given yourself a relay job.
-Copy over the context, work through the answer, then bring it back to Slack. If
-someone questions it, you’re explaining a conversation they never saw.
+You don’t need one. Use the ChatGPT or Claude plan you already have, or your own
+API key. Any model that works in Codex or Claude Code works in Tag, and you can
+switch whenever you want. Honestly, models get better every few weeks. Why lock
+yourself into one? See [Models](reference/api-connections.md).
 
-Tag brings your personal Codex or Claude assistant into that thread. You ask for help where
-the discussion is already happening, and your teammates can follow the work,
-add a missing detail, or take on the next step.
+## Skip the copy-and-paste relay
 
-## A little help working together
+Most work starts in a Slack thread. Taking it to a private AI chat means copying
+the context out and the answer back, then explaining a conversation nobody else
+saw. With Tag, you ask in the thread, and everyone sees the answer.
 
-A thread has gone back and forth all morning. Are we agreed? Who’s doing what?
-Did anyone answer the question about support?
+## Ask for what the thread needs
 
-Ask your Tag to pull it together.
+### Find a decision
 
-Your teammates don’t need to set up an assistant to follow the conversation.
-They can question the answer, volunteer for a task, or point out what’s missing.
+> **Iris:** @Iris's Tag find the launch decision in #product and compare it with
+> the plan in your workspace. Show me which messages support the decision.
+>
+> **Iris's Tag:** The thread says **launch on Monday**, but the workspace plan
+> still says Friday. The plan needs its launch date updated.
 
-## Your assistant, your own environment
+### Check your inbox
 
-Tag runs on a computer you control, using your Codex or Claude Code setup. You choose its skills,
-connect your accounts, and give it a place to work. Add your weekly report template
-or the checklist you use before a launch. Make it yours.
+> **Zara:** @Zara's Tag find the latest email about the launch schedule and
+> summarize what changed.
+>
+> **Zara's Tag:** The launch moved from Friday to **Monday** so support has time
+> to prepare. Nothing else in the schedule changed.
 
-By default, only you can ask your Tag to work. Your teammates can bring their own,
-with their own setup. You share the conversation and the results; each assistant
-stays personal. See [Your own Tag](concepts/access.md) for access details.
+### Save a note
 
-We don’t host your conversations or working files. Your agent provider and connected services
-still process the information needed for your requests, under their own data policies.
-Tag’s optional telemetry for the CLI and Tag.app has a separate, privacy-bounded collection policy;
-you can [review or disable it](reference/telemetry.md) at any time.
+> **Rowan:** @Rowan's Tag save our Friday report deadline in reporting-notes.md.
+>
+> **Rowan's Tag:** Saved in reporting-notes.md: Our weekly report is due Friday.
 
-## The missing detail might be in your inbox
+Checking your inbox needs your email connected, for example
+[Gmail](tutorials/use-gmail-from-slack.md). See [what Tag knows](concepts/what-tag-knows.md).
 
-You remember an email about the launch moving to Monday. Everyone in Slack is
-still talking about Friday.
+## Ready in a few minutes
 
-With your email connected, you can ask Tag to find that update and share the
-relevant details. The team gets the context it needs without needing access to
-your inbox. You choose what to bring into the channel, where the people there
-can read it.
+1. **Download Tag.** Open it and click Install Tag. No administrator password.
+   See the [install guide](installation.md).
+2. **Make your Tag.** Give it a name and a picture, pick a Codex or Claude Code
+   model, and choose your Slack workspace.
+3. **Mention it in a thread.** Your Tag starts on its own. Type @ and its name in
+   any channel it’s in.
 
-That’s one less “hang on, let me find it” between a question and a decision.
-Try it with [Gmail](tutorials/use-gmail-from-slack.md), or explore
-[what Tag knows](concepts/what-tag-knows.md).
+## Yours, not ours
 
-## Leave with something you can use
+- **Runs on your Mac.** Tag uses your own AI account or API key. We don’t host
+  your conversations or files.
+- **Only you can ask it.** Teammates see the replies and can join in. They don’t
+  need to install anything. See [Your own Tag](concepts/access.md).
+- **Files stay yours.** Plans and checklists are ordinary files in your folder,
+  ready for any tool. See [Working with files](concepts/workspaces-and-tools.md).
 
-Once you’ve worked it out, ask Tag to save the plan. It could be a checklist in
-your working folder or, with Canvas access enabled, a reference the team can
-open in Slack.
+## Questions
 
-The files are ordinary files. Open them yourself, edit them in another tool,
-or ask your assistant to pick them up again when things change. They stay in
-place when you upgrade. See [Working with files](concepts/workspaces-and-tools.md).
+### Do I need to code?
+
+No. The app walks you through every step. If you prefer, your coding agent or the
+terminal can set it up instead.
+
+### Which AI does it use?
+
+Any model that works in Codex or Claude Code. Sign in with your ChatGPT or Claude
+plan, or connect your own API key, and switch models whenever you want. See
+[Models](reference/api-connections.md).
+
+### Where does my data go?
+
+Tag runs on your Mac. We don’t host your conversations or working files. Your AI
+provider and any connected services process what each request needs, under their
+own policies. [Usage data](reference/telemetry.md) is optional.
+
+### Does my team need anything?
+
+No. Teammates see the replies in Slack and can add to the thread. If your
+workspace restricts apps, a Slack admin may need to approve Tag once.
+
+### Is it Mac only?
+
+For now, yes. Windows and Linux are coming soon.
+
+### What does it cost?
+
+Tag is free and open source. Requests use the ChatGPT or Claude plan you already
+have, or your own API key. There’s no Tag subscription.
 
 ## Bring your Tag to work
 
-You don’t need to code to use Tag. Follow the setup guide to connect your agent
-to Slack and complete your first useful task.
+Your next long thread can end with a plan.
 
-[Install Tag](getting-started/first-task.md)
-
-Want to understand what happens after a mention? Read
-[How Tag works](concepts/mental-model.md).
+[Download Tag for macOS](installation.md#1-download-tag)
