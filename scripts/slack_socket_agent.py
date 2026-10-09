@@ -3313,7 +3313,13 @@ def print_live_summary(backend: str, allowed_user_ids: frozenset[str]) -> None:
     channel = ", ".join(
         slack_channels.channel_label(require_env("SLACK_BOT_TOKEN"), channel_id)
         for channel_id in slack_channels.parse_channel_ids(channel_ids)
-    ) or "(none configured)"
+    )
+    if channel:
+        slack_status = f"listening for @mentions in channel {channel}"
+    elif os.getenv("SLACK_CHANNEL_POLICY") == "invited":
+        slack_status = "no channels yet; listening in channels Tag is invited to"
+    else:
+        slack_status = "channel mentions disabled (no channels configured)"
     invoke = {
         "claude": (
             "Claude Agent SDK"
@@ -3334,7 +3340,7 @@ def print_live_summary(backend: str, allowed_user_ids: frozenset[str]) -> None:
     for scope in scopes or ["(none — set MFS_ALLOWED_SCOPES)"]:
         print(f"            - {scope}")
     dm_status = "enabled" if direct_messages_enabled() else "disabled"
-    print(f"  Slack   : listening for @mentions in channel {channel}")
+    print(f"  Slack   : {slack_status}")
     print(f"  DMs     : {dm_status}")
     print(f"  Access  : {len(allowed_user_ids)} authorized Slack user(s)")
     print("")
