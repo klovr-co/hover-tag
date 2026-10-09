@@ -4735,7 +4735,10 @@ def create_app(
                         # Editing a placeholder does not notify the other Tag; post anew.
                         post_final_reply(client, channel, thread_ts, answer, None, footer_blocks)
                         if indicator.message_ts is not None:
-                            client.chat_delete(channel=channel, ts=indicator.message_ts)
+                            try:
+                                client.chat_delete(channel=channel, ts=indicator.message_ts)
+                            except Exception as exc:  # noqa: BLE001 - the reply is already posted
+                                logger.warning("Could not delete Tag progress placeholder: %s", exc)
                     elif succeeded or stopped:
                         post_final_reply(client, channel, thread_ts, answer, indicator.message_ts, footer_blocks)
                     else:

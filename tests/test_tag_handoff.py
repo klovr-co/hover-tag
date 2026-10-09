@@ -261,6 +261,17 @@ class ThreeTagTests(unittest.TestCase):
         self.assertEqual({1}, {run[2]["handoff_depth"] for run in peer_runs})
         self.assertEqual({None}, {run[2]["handoff_requests"] for run in peer_runs})
 
+    def test_a_failed_placeholder_delete_still_counts_the_peer_reply(self) -> None:
+        self.bus.clients[TAG_B].chat_delete.side_effect = RuntimeError("message_not_found")
+        origin = self.bus.human_mention(TAG_A, f"<@{TAG_A}> ask Tag B and Tag C, then write the launch report")
+        self.bus.settle()
+
+        self.assertTrue(self.bus.clients[TAG_B].chat_delete.called)
+        self.bus.clients[TAG_B].chat_postEphemeral.assert_not_called()
+        final = self.origin_replies(origin)[-1]
+        self.assertIn("Acme Q3 revenue was $1.2M", final)
+        self.assertIn("Launch day is 12 November", final)
+
     def plan_steps(self, message: dict[str, Any]) -> dict[str, tuple[str, str]]:
         latest: dict[str, tuple[str, str]] = {}
         for chunk in message["chunks"]:
