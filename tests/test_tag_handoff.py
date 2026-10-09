@@ -285,6 +285,25 @@ class ThreeTagTests(unittest.TestCase):
         self.assertNotIn("<@", json.dumps(card["chunks"]))
         self.assertIn("Launch day is 12 November", self.origin_replies(origin)[-1])
 
+    def test_steps_get_the_request_link_once_even_when_it_arrives_late(self) -> None:
+        client = self.bus.clients[TAG_A]
+        failed: set[str] = set()
+
+        def permalink_fails_once_per_message(channel: str, message_ts: str) -> dict[str, Any]:
+            # Simulates the link not being saved yet when the first update runs.
+            if message_ts not in failed:
+                failed.add(message_ts)
+                raise RuntimeError("ratelimited")
+            return {"ok": True, "permalink": f"https://slack.test/{channel}/p{message_ts}"}
+        client.chat_getPermalink.side_effect = permalink_fails_once_per_message
+        with patch.dict(os.environ, {"OPENTAG_SLACK_STREAMING": "1"}):
+            origin = self.bus.human_mention(TAG_A, f"<@{TAG_A}> ask Tag B and Tag C, then write the launch report")
+            self.bus.settle()
+        card = next(m for m in self.bus.thread(origin["ts"]) if "chunks" in m)
+        links = [c for c in card["chunks"] if c["type"] == "markdown_text"]
+        self.assertEqual(1, len(links), card["chunks"])
+        self.assertIn("[a new message](https://slack.test/C123/p", links[0]["text"])
+
     def test_steps_fall_back_to_a_status_line_when_slack_ends_them(self) -> None:
         client = self.bus.clients[TAG_A]
         client.chat_appendStream.side_effect = RuntimeError("message_not_in_streaming_state")

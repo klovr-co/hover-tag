@@ -4102,7 +4102,7 @@ def create_app(
         return text
 
 
-    def update_handoff_status(client: Any, logger: Any, handoff_id: str, *, link_added: bool = False) -> None:
+    def update_handoff_status(client: Any, logger: Any, handoff_id: str) -> None:
         # One writer at a time, so an older update cannot overwrite a newer one.
         with handoff_status_lock:
             record = handoff_store.get(handoff_id)
@@ -4112,13 +4112,22 @@ def create_app(
             done = record["state"] in tag_handoff.FINISHED
             if record.get("status_mode") == "plan":
                 chunks = tag_handoff.plan_chunks(record)
-                if link_added:
-                    chunks.append({"type": "markdown_text", "text": tag_handoff.plan_link_text(record)})
+                # Peers can finish before the request link is saved; add it once, whichever update comes first.
+                if not record.get("link_shown") and record.get("request_ts"):
+                    if not record.get("request_link") and (
+                        link := message_link(client, logger, channel, record["request_ts"])
+                    ):
+                        handoff_store.set_field(handoff_id, "request_link", link)
+                        record["request_link"] = link
+                    if record.get("request_link"):
+                        chunks.append({"type": "markdown_text", "text": tag_handoff.plan_link_text(record)})
                 try:
                     if done:
                         client.chat_stopStream(channel=channel, ts=ts, chunks=chunks)
                     else:
                         client.chat_appendStream(channel=channel, ts=ts, chunks=chunks)
+                    if any(chunk["type"] == "markdown_text" for chunk in chunks):
+                        handoff_store.set_field(handoff_id, "link_shown", "1")
                     return
                 except Exception as exc:  # noqa: BLE001 - fall back to a plain status line
                     logger.warning("Tag handoff steps stopped updating for %s: %s", handoff_id, exc)
@@ -4207,7 +4216,7 @@ def create_app(
         handoff_store.set_field(handoff_id, "request_ts", posted["ts"])
         if request_link := message_link(client, logger, channel, posted["ts"]):
             handoff_store.set_field(handoff_id, "request_link", request_link)
-            update_handoff_status(client, logger, handoff_id, link_added=True)
+            update_handoff_status(client, logger, handoff_id)
 
     def combine_handoff(record: dict[str, Any], client: Any, logger: Any) -> None:
         try:

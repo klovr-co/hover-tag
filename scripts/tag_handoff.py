@@ -245,7 +245,7 @@ class HandoffStore:
             return record, result
 
     def set_field(self, handoff_id: str, name: str, value: str) -> None:
-        if name not in {"status_ts", "status_mode", "request_ts", "request_link", "origin_link"}:
+        if name not in {"status_ts", "status_mode", "request_ts", "request_link", "origin_link", "link_shown"}:
             raise ValueError(f"cannot set {name}")
         self._update(handoff_id, lambda record: record.__setitem__(name, value))
 
