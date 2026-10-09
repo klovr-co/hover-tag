@@ -498,6 +498,24 @@ class HandoffHelperTests(unittest.TestCase):
         self.assertFalse(store.fail_if_combining("h-0123456789"))
         self.assertEqual("completed", store.get("h-0123456789")["state"])
 
+    def test_a_read_during_a_windows_replace_waits_instead_of_losing_the_record(self) -> None:
+        store = HandoffStore(Path(self.temp.name) / "handoffs")
+        store.create(handoff_id="h-0123456789", team="T1", requester=MAYA, origin_channel="C123",
+                     origin_thread_ts="1.0", question="q", task="t", targets=[{"name": "Tag B", "user_id": TAG_B}],
+                     request_ts="", wait_minutes=5)
+        real = Path.read_text
+        calls = {"n": 0}
+
+        def busy_once(path: Path, *args: Any, **kwargs: Any) -> str:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise PermissionError(13, "The process cannot access the file")
+            return real(path, *args, **kwargs)
+        with patch.object(tag_handoff.os, "name", "nt"), patch.object(Path, "read_text", busy_once):
+            record = store.get("h-0123456789")
+        self.assertEqual("h-0123456789", record["id"])
+        self.assertEqual(2, calls["n"])
+
     def test_request_marker_round_trip(self) -> None:
         text = tag_handoff.request_text("h-0123456789", [{"name": "Tag B", "user_id": TAG_B}], "Check *this*.", MAYA)
         self.assertEqual(("h-0123456789", MAYA), tag_handoff.REQUEST_RE.search(text).groups())

@@ -204,10 +204,17 @@ class HandoffStore:
         return self.root / f"{handoff_id}.json"
 
     def get(self, handoff_id: str) -> dict[str, Any] | None:
-        try:
-            record = json.loads(self.path(handoff_id).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return None
+        for attempt in range(20):
+            try:
+                record = json.loads(self.path(handoff_id).read_text(encoding="utf-8"))
+                break
+            except PermissionError:
+                # Windows refuses to read a file while another thread replaces it; that is not "missing".
+                if os.name != "nt" or attempt == 19:
+                    return None
+                time.sleep(0.05)
+            except (OSError, ValueError):
+                return None
         return record if isinstance(record, dict) and record.get("schema") == SCHEMA_VERSION else None
 
     def create(self, *, handoff_id: str, team: str, requester: str, origin_channel: str,
