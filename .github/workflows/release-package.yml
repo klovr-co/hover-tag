@@ -30,11 +30,23 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.12'
-      - name: Validate release tag belongs to main
+      - name: Validate release tag belongs to main or a maintenance branch
+        id: source
         run: |
           [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)(\.[0-9]+)?)?$ ]]
           git fetch origin main "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
-          git merge-base --is-ancestor "$RELEASE_TAG^{commit}" origin/main
+          # A stable patch lives on release/vX.Y.x, matching its own version line.
+          line=${RELEASE_TAG#v}
+          line=${line%.*}
+          git fetch origin "+refs/heads/release/v$line.x:refs/remotes/origin/release/v$line.x" || true
+          if git merge-base --is-ancestor "$RELEASE_TAG^{commit}" origin/main; then
+            source_ref=refs/heads/main
+          else
+            git merge-base --is-ancestor "$RELEASE_TAG^{commit}" "origin/release/v$line.x"
+            [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+            source_ref="refs/heads/release/v$line.x"
+          fi
+          echo "source_ref=$source_ref" >> "$GITHUB_OUTPUT"
           git checkout --detach "$RELEASE_TAG^{commit}"
       - name: Verify or create release archive
         id: archive
@@ -69,7 +81,7 @@ jobs:
               )
             fi
             python scripts/package_release.py --commit-sha "$(git rev-parse HEAD)" \
-              --source-ref refs/heads/main --version "$version" \
+              --source-ref "${{ steps.source.outputs.source_ref }}" --version "$version" \
               "${telemetry_arguments[@]}"
             gh release upload "$RELEASE_TAG" \
               out/*.zip out/SHA256SUMS out/BUILD-PROVENANCE.json
