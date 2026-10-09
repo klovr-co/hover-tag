@@ -34,9 +34,12 @@
   --sky-top: #1489dd; --sky-bottom: #3fb4f3;
   --sky: linear-gradient(180deg, #1489dd 0%, #23a0ea 40%, #4fbcf4 100%);
   --glass: rgba(248, 252, 255, .94); --glass-line: rgba(255, 255, 255, .42);
+  --river-top: #d9eefb; --river-bottom: #c4e3f6; --river-glint: rgba(255, 255, 255, .95);
   --glass-shadow: 0 8px 24px rgba(7, 65, 112, .16), 0 1px 0 rgba(255, 255, 255, .8) inset;
   --ok-text: #2b7f37; --warn-text: #a86200; --bad-text: #d1373c; --pop: #ffffff;
   --tint-water: #cfe9fb;
+  /* Motion: settle quickly with no overshoot; --spring overshoots a little, for things that appear. */
+  --ease: cubic-bezier(.22, 1, .36, 1); --spring: cubic-bezier(.22, 1.4, .36, 1);
   /* Older names, for screens that haven't moved to the Hover vocabulary yet. */
   --accent: var(--link); --orange: var(--amber); --secondary: var(--muted); --tertiary: var(--faint);
   color-scheme: light dark;
@@ -62,6 +65,7 @@
     --sky-top: #061322; --sky-bottom: #0f2c48;
     --sky: linear-gradient(180deg, #061322 0%, #0b2338 55%, #143654 100%);
     --glass: rgba(10, 24, 38, .84); --glass-line: rgba(255, 255, 255, .1);
+    --river-top: rgba(90, 160, 220, .14); --river-bottom: rgba(90, 160, 220, .24); --river-glint: rgba(190, 225, 255, .3);
     --glass-shadow: 0 8px 24px rgba(0, 0, 0, .35), 0 1px 0 rgba(255, 255, 255, .06) inset;
     --ok-text: #6bd178; --warn-text: #f5a524; --bad-text: #ff7a7e; --pop: #10233a;
     --tint-water: #1b3a55;
@@ -80,6 +84,7 @@
     --sky-top: #061322; --sky-bottom: #0f2c48;
     --sky: linear-gradient(180deg, #061322 0%, #0b2338 55%, #143654 100%);
     --glass: rgba(10, 24, 38, .84); --glass-line: rgba(255, 255, 255, .1);
+    --river-top: rgba(90, 160, 220, .14); --river-bottom: rgba(90, 160, 220, .24); --river-glint: rgba(190, 225, 255, .3);
     --glass-shadow: 0 8px 24px rgba(0, 0, 0, .35), 0 1px 0 rgba(255, 255, 255, .06) inset;
     --ok-text: #6bd178; --warn-text: #f5a524; --bad-text: #ff7a7e; --pop: #10233a;
     --tint-water: #1b3a55;
@@ -106,8 +111,6 @@ input, textarea, select { font: inherit; }
 /* The window: the sky on top, the frosted panel below. */
 .app { width: 520px; max-width: 100%; display: flex; flex-direction: column; position: relative; background: var(--sky); }
 .app.wide { width: 800px; }
-.app.home { min-height: 560px; }
-.app.home > .body { flex: 1; }
 
 /* ── Sky header, in several heights ── */
 .sky { position: relative; height: 104px; overflow: hidden; color: #fff; flex: none; }
@@ -270,6 +273,7 @@ button.opt:hover:not(:disabled) { background: var(--fill); }
   transition: background .2s ease, transform .2s cubic-bezier(.22, 1, .36, 1);
 }
 .p-btn.ink:hover:not(:disabled) { background: var(--primary-hover); transform: translateY(-1px); }
+.p-btn.ink:active:not(:disabled) { transform: scale(.985); transition-duration: .06s; }
 @media (prefers-color-scheme: dark) {
 :where(:root:not([data-theme="light"])) .p-btn.ink { border-color: rgba(255, 255, 255, .42); box-shadow: 0 1px 0 rgba(255, 255, 255, .8) inset, 0 4px 12px rgba(0, 0, 0, .35); }
 }
@@ -290,12 +294,17 @@ button.opt:hover:not(:disabled) { background: var(--fill); }
 .notice.info .ic { background: var(--blue); } .notice.ok .ic { background: var(--green); } .notice.bad .ic { background: var(--red); }
 .notice .t { font-weight: 600; color: var(--ink); font-size: 14.5px; }
 .notice .d { font-size: 13px; color: var(--muted); margin-top: 1px; }
+/* Reported errors keep their line breaks, and long Tag IDs wrap instead of running off the edge. */
+.notice .d.selectable { white-space: pre-line; overflow-wrap: anywhere; }
 .notice .act { align-self: center; display: flex; gap: 8px; align-items: center; }
 /* With two or more actions, the message keeps the full width and the actions sit under it on the right. */
 .notice:has(> .act > :nth-child(2)) { flex-wrap: wrap; row-gap: 10px; }
 .notice:has(> .act > :nth-child(2)) > .act { flex-basis: 100%; justify-content: flex-end; }
 .bar { position: absolute; left: 0; bottom: 0; height: 3px; background: var(--amber); transition: width .25s linear; }
 .notice.info .bar { background: var(--blue); }
+/* The first-run usage data note: one quiet footer line under the Tags, not a banner. */
+.usage-note { display: flex; gap: 6px; align-items: baseline; justify-content: center; flex-wrap: wrap; flex: none; font-size: 12px; color: var(--muted); padding: 8px 2px 0; border-top: 1px solid var(--line); text-align: center; }
+.usage-note .link { font-size: inherit; padding: 0; }
 .spin { width: 14px; height: 14px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .9s linear infinite; flex: none; display: inline-block; }
 .spin.sm { width: 12px; height: 12px; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -312,7 +321,10 @@ button.opt:hover:not(:disabled) { background: var(--fill); }
 
 /* Home */
 .home-foot { margin-top: auto; display: flex; flex-direction: column; align-items: center; gap: 4px; padding-top: 8px; }
-.tags-row { width: 260px; image-rendering: pixelated; opacity: .95; }
+.tags-row { width: 260px; height: 61px; image-rendering: pixelated; opacity: .95; }
+/* Less room: a small row of Tags beside the link instead of above it. */
+.home-foot.inline { flex-direction: row; justify-content: center; gap: 10px; }
+.home-foot.inline .tags-row { width: auto; height: 32px; aspect-ratio: 640 / 149; }
 .hello { display: flex; align-items: center; gap: 9px; width: 100%; padding: 0 4px; text-align: left; font-size: 13.5px; color: var(--muted); min-height: 24px; }
 .hello img { width: 20px; height: 20px; border-radius: 6px; image-rendering: pixelated; flex: none; object-fit: cover; }
 .hello b { color: var(--ink); font-weight: 600; }
@@ -400,8 +412,68 @@ button.hello:hover b { text-decoration: underline; text-underline-offset: 2px; }
 .st.running .stt { font-weight: 600; }
 .st .std { font-size: 13px; color: var(--muted); }
 .st .std.bad { color: var(--red); }
+.start-steps { margin-top: 4px; }
+.start-steps .std { margin-top: 2px; line-height: 1.45; }
+.st .st-time { margin-left: 8px; font-size: 12.5px; font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
 .logbox { background: #0b1621; color: #cfe0ef; border-radius: 10px; padding: 10px 14px; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; overflow: auto; border: 1px solid rgba(255, 255, 255, .06); max-height: 150px; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .logbox .err { color: #ff8d90; }
+
+/* One canvas for every install and Add a Tag screen: the window is always --flow-h tall,
+   and each panel fills what its sky leaves, so moving between steps never resizes it. */
+:root { --flow-h: 616px; }
+.body.install { height: calc(var(--flow-h) - 190px); gap: 16px; }
+.flow-panel { height: calc(var(--flow-h) - 136px); flex: none; display: flex; flex-direction: column; }
+.flow-panel.ready { height: calc(var(--flow-h) - 170px); }
+.flow-panel > .body { flex: 1; min-height: 0; overflow-y: auto; }
+.flow-panel > .body > .foot { margin-top: auto; }
+/* A long channel list scrolls inside its card instead of pushing the buttons out of the panel. */
+.flow-panel > .body > .card:has(> .chan-list) { flex: 0 1 auto; min-height: 120px; display: flex; flex-direction: column; overflow: hidden; }
+.flow-panel > .body > .card:has(> .chan-list) > * { flex: none; }
+.flow-panel > .body > .card > .chan-list { flex: 0 1 auto; min-height: 0; max-height: none; }
+/* Home, Settings and AI connections are --flow-h tall too:
+   long content scrolls inside the panel, short content leaves room above the buttons. */
+.app.fixed { height: var(--flow-h); }
+.app.fixed > .body { flex: 1; min-height: 0; overflow-y: auto; }
+.app.fixed > .body > .foot { margin-top: auto; }
+/* Settings: a long tab scrolls under the tab bar. */
+.app.fixed > .body.settings { overflow: hidden; }
+/* Short screens end with a quiet pixel river along the bottom of the panel, and the credit above it. */
+.body.river { padding-bottom: 0; }
+.river-foot { margin-top: auto; display: flex; flex-direction: column; align-items: center; gap: 10px; padding-top: 8px; }
+.river-foot > span { color: var(--muted); font-size: 12.5px; }
+.river-foot .heart { font-style: normal; color: var(--red); }
+.river-foot .credit { color: inherit; font-weight: 600; border-radius: 4px; }
+.river-foot .credit:hover { color: var(--link); text-decoration: underline; text-underline-offset: 2px; }
+.river-foot .water {
+  position: relative; align-self: stretch; margin: 0 -16px; height: 30px; flex: none;
+  background: linear-gradient(var(--river-top), var(--river-bottom));
+  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='30' shape-rendering='crispEdges'><path d='M0 6h8V4h8v2h8v2h8v22H0z'/></svg>") repeat-x bottom left;
+  mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='30' shape-rendering='crispEdges'><path d='M0 6h8V4h8v2h8v2h8v22H0z'/></svg>") repeat-x bottom left;
+}
+.river-foot .water::before {
+  content: ""; position: absolute; inset: 0; background: var(--river-glint);
+  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='56' height='30' shape-rendering='crispEdges'><rect x='4' y='12' width='8' height='2'/><rect x='30' y='19' width='10' height='2'/><rect x='16' y='25' width='6' height='2'/><rect x='44' y='10' width='4' height='2'/></svg>") repeat-x 0 0;
+  mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='56' height='30' shape-rendering='crispEdges'><rect x='4' y='12' width='8' height='2'/><rect x='30' y='19' width='10' height='2'/><rect x='16' y='25' width='6' height='2'/><rect x='44' y='10' width='4' height='2'/></svg>") repeat-x 0 0;
+  animation: flow 7s steps(14) infinite;
+}
+@keyframes flow { to { -webkit-mask-position: 56px 0; mask-position: 56px 0; } }
+@media (prefers-reduced-motion: reduce) { .river-foot .water::before { animation: none; } }
+/* Home: the update banner stays put and the Tag list scrolls (pagination can replace this later). */
+.app.fixed > .body.home-body { overflow: hidden; }
+.home-body > .home-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; margin: 0 -16px; padding: 0 16px 2px; }
+.body.settings > .settings-pane { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; margin: 0 -16px; padding: 0 16px; }
+.install .facts { gap: 14px; margin-top: 4px; }
+.install .install-main { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; }
+.install .install-main > .steps { overflow: auto; }
+.install .install-main > .steps .st { padding: 7px 14px; }
+.install .install-main > .logbox { flex: 1; max-height: none; }
+.install .foot { margin-top: auto; }
+.install .sprite.small { width: 44px; height: 44px; }
+.install-pct { font-weight: 700; font-size: 15px; color: var(--ink); font-variant-numeric: tabular-nums; align-self: flex-end; }
+.install-bar { height: 10px; flex: none; }
+.install-bar i { background: var(--line); }
+.install-bar i.on { background: var(--blue); }
+.install-bar.bad i.on { background: var(--red); }
 
 /* Ready */
 .confetti { position: absolute; width: 6px; height: 6px; }
@@ -427,6 +499,46 @@ button.hello:hover b { text-decoration: underline; text-underline-offset: 2px; }
 .cstat.busy { color: var(--link); font-weight: 600; }
 .cver { display: block; font-size: 12.5px; color: var(--muted); line-height: 1.4; }
 .cact { display: flex; align-items: center; gap: 4px; flex: none; }
+.api-row { align-items: center; }
+.api-row .txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.api-row .label { font-size: 14.5px; font-weight: 600; color: var(--ink); }
+.api-row .cstat .acct { color: inherit; font-weight: 600; }
+.api-row .models { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dlg.api-dlg { max-width: 460px; max-height: calc(100vh - 44px); padding: 0; gap: 0; overflow: hidden; }
+.api-dlg > * { padding-left: 18px; padding-right: 18px; }
+.api-dlg > .api-head { display: flex; gap: 11px; align-items: center; padding-top: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.api-dlg > .api-head .txt { min-width: 0; }
+.api-dlg > .api-head p { font-size: 13px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.api-dlg > .api-body { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 13px; padding-top: 14px; padding-bottom: 14px; }
+.api-dlg > .dlg-note, .api-dlg > .api-progress, .api-dlg > .err-line { margin-bottom: 10px; }
+.api-dlg > .foot { padding-top: 12px; padding-bottom: 14px; border-top: 1px solid var(--line); }
+.api-back { color: var(--muted); padding-left: 4px; }
+.api-field { display: flex; flex-direction: column; gap: 6px; }
+.api-field > span { font-size: 13px; font-weight: 600; color: var(--ink); margin: 0 2px; }
+.api-field em { font-style: normal; font-weight: 400; color: var(--muted); }
+.api-field .field { height: 36px; font-size: 13.5px; }
+.api-kinds { display: flex; }
+.api-kinds button { flex: 1 1 0; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 6px 8px; }
+.api-kinds button img { border-radius: 3px !important; }
+.api-field > .api-hint { font-size: 12.5px; font-weight: 400; color: var(--muted); margin: 0 2px; }
+.api-models { display: flex; flex-wrap: wrap; gap: 5px; margin-top: -6px; }
+.api-chip { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border-radius: 6px; background: var(--fill); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; color: var(--text); }
+.api-chip.first { background: color-mix(in srgb, var(--blue) 12%, transparent); color: var(--ink); }
+.api-chip em { font-family: inherit; font-style: normal; font-size: 10.5px; color: var(--link); font-family: system-ui, sans-serif; font-weight: 600; }
+.api-saved { display: flex; align-items: center; gap: 7px; height: 36px; padding: 0 10px 0 12px; border-radius: 7px; background: var(--fill); font-size: 13.5px; color: var(--text); }
+.api-saved svg { color: var(--ok-text); }
+.api-saved .link { margin-left: auto; padding: 0; font-size: 13px; }
+.api-azure { display: flex; align-items: center; gap: 8px; margin: -6px 2px 0; font-size: 12.5px; color: var(--muted); }
+.api-badge { display: inline-flex; align-items: center; height: 20px; padding: 0 7px; border-radius: 5px; background: color-mix(in srgb, var(--blue) 12%, transparent); color: var(--link); font-size: 11.5px; font-weight: 700; }
+.api-row .sub { font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.api-checkrow { display: flex; align-items: center; gap: 10px; }
+.api-checkrow .spin { width: 11px; height: 11px; margin-right: 6px; }
+.api-check { display: flex; flex-direction: column; gap: 4px; padding: 9px 11px; border-radius: 8px; font-size: 13px; line-height: 1.4; }
+.api-check span { display: flex; gap: 6px; align-items: flex-start; }
+.api-check svg { flex: none; margin-top: 2px; }
+.api-check.ok { background: color-mix(in srgb, var(--green) 10%, transparent); color: var(--ok-text); }
+.api-check.bad { background: color-mix(in srgb, var(--red) 9%, transparent); color: var(--bad-text); }
+.ghost-add:disabled { opacity: .6; }
 .mcard { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
 .madd { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 13.5px; color: var(--muted); }
 .madd .link { margin-left: auto; padding: 0; }
@@ -594,6 +706,13 @@ button.activity-artifact:hover { border-color: var(--link); color: var(--link); 
 .sl-msg .activity-artifact-error { color: var(--bad-text); font-size: 12px; }
 .activity-reply-preview { white-space: normal; overflow-wrap: anywhere; }
 .activity-reply-place { color: var(--muted); font-size: 12px; }
+.activity-thread-group { margin-left: 48px; padding-bottom: 6px; }
+/* A message and its "Show earlier replies" link highlight together, as one thread. */
+.activity-group { border-radius: 8px; padding-bottom: 2px; }
+.activity-history > div + div > .activity-group, .activity-history > div + div > .sl-day { margin-top: 10px; }
+.activity-group:hover { background: var(--canvas); }
+.activity-group .sl-msg:hover { background: none; }
+.activity-thread-toggle { font-size: 12px; padding: 2px 0; }
 .activity-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
 .activity-toggle, .activity-thread, .activity-refresh { display: inline-flex; align-items: center; gap: 5px; padding: 3px 0; font-size: 12.5px; color: var(--muted); }
 .activity-toggle, .activity-thread { justify-content: center; width: 24px; height: 24px; padding: 0; border-radius: 4px; flex: none; }
@@ -649,6 +768,7 @@ button.activity-artifact:hover { border-color: var(--link); color: var(--link); 
 .sl-kv dd.desc-edit { flex-direction: column; align-items: stretch; }
 .sl-kv dd.desc-edit .desc-wrap { margin-top: 0; }
 .desc-acts { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.sl-kv dd .edit-err { flex-basis: 100%; }
 .sl-kv dd.mdd { display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
 .sl-kv dd.mdd .mpick-wrap { max-width: 360px; }
 .sl-kv dd.mdd .mcap { margin: 0; font-size: 13px; } .sl-kv dd.mdd .mcap .link { padding: 0; }
@@ -757,6 +877,7 @@ button.activity-artifact:hover { border-color: var(--link); color: var(--link); 
 .place-now { font-size: 13px; font-weight: 400; }
 .try-foot { padding: 2px 14px 12px 58px; font-size: 12.5px; color: var(--muted); min-height: 30px; display: flex; align-items: center; gap: 6px; }
 .try-foot .link { font-size: 12.5px; padding: 0; }
+.try-thread .import-note { margin: 0; padding: 0 14px 4px 58px; font-size: 12.5px; line-height: 1.45; }
 .try-foot .replied { display: inline-flex; gap: 5px; align-items: center; color: var(--green); font-weight: 600; }
 
 /* Helpers kept for screens that still use them */
@@ -781,7 +902,166 @@ button.list-item:hover { background: var(--fill); }
 .illustration { height: 150px; display: grid; place-items: center; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 
+/* ── Microinteractions: one easing, short durations, a press for everything you click,
+   and things that appear settle in instead of popping. Reduced motion turns all of it off below. */
+/* Screens don't fade in: the sky and the frosted panel stay put, so moving between screens never flashes.
+   Only Add a Tag's steps move, and only their contents (below). */
+/* Press: a slight give on buttons that have no press of their own. */
+.sky-btn, .add, .sl-ws, .link, .back, .community button, .chan-chip button, .activity-toggle, .activity-thread, .activity-artifact, .ghost-add, .sl-item, .segc button, .sl-tabs button, .mpick {
+  transition-property: transform, background-color, color, border-color, box-shadow, opacity;
+  transition-duration: .16s; transition-timing-function: var(--ease);
+}
+.sky-btn:active:not(:disabled), .add:active:not(:disabled), .link:active:not(:disabled), .back:active, .community button:active,
+.chan-chip button:active, .activity-toggle:active, .activity-thread:active, button.activity-artifact:active, .segc button:active:not(:disabled) { transform: scale(.96); transition-duration: .06s; }
+.sl-ws:active, .ghost-add:active, .sl-item:active, .mpick:active:not(:disabled) { transform: scale(.985); transition-duration: .06s; }
+.r.click:active:not([data-dragging]), button.opt:active:not(:disabled) { filter: brightness(.97); }
+/* Rows: the chevron nudges toward where the row goes. */
+.r .chev, .opt .chev { transition: transform .16s var(--ease), color .16s; }
+.r.click:hover .chev, button.opt:hover:not(:disabled) .chev:not(.turn) { transform: translateX(2px); }
+.ghost-add .gi { transition: transform .2s var(--spring), background-color .16s; }
+.ghost-add:hover .gi { transform: scale(1.06); background: color-mix(in srgb, var(--blue) 12%, transparent); }
+.sl-msg, .activity-group { transition: background-color .12s; }
+/* Disclosure arrows turn instead of jumping. */
+.activity-toggle > svg, .activity-step .activity-step-heading > svg, .activity-error summary > svg:last-child, .r .chev.turn svg { transition: transform .18s var(--ease); }
+/* Opened details, menus and tooltips grow out of what opened them. */
+.activity-detail-panel, .activity-detail-body, .activity-step[open] > .activity-step-content, .activity-error[open] > pre, .ck .ca, .opt.sub-opt, .sub-manual, .ex-checks, .ch-confirm { animation: rise2 .2s var(--ease); }
+.menu { animation: menu-in .14s var(--ease); transform-origin: top right; }
+@keyframes menu-in { from { opacity: 0; transform: scale(.97) translateY(-3px); } }
+.mmenu { transform-origin: bottom center; } .mmenu.below { transform-origin: top center; }
+.activity-token-tooltip { animation: fadein .12s ease-out; }
+/* Notices appear without a fade, so they don't flash each time a screen opens;
+   a new error gives one small shake so it's noticed. */
+.err-line, .field-err, .edit-err { animation: nudge .32s var(--ease); }
+@keyframes nudge { 0% { opacity: 0; transform: translateX(0); } 25% { opacity: 1; transform: translateX(-3px); } 55% { transform: translateX(2px); } 100% { transform: none; } }
+.toast { animation: rise .28s var(--spring); }
+/* Choices: checks, radios and the switch respond like physical controls. */
+.box { transition: background-color .14s, border-color .14s, transform .14s var(--ease); }
+.box.on > svg { animation: check-in .22s var(--spring); }
+@keyframes check-in { from { transform: scale(.4); opacity: 0; } }
+.opt:active .box, .opt:active .radio { transform: scale(.9); }
+.radio { transition: border .18s var(--spring), transform .14s var(--ease); }
+.sw { transition: background-color .2s var(--ease), box-shadow .2s; }
+.sw > i { transition: transform .22s var(--ease), width .16s var(--ease); }
+.sw:active:not(:disabled) > i { width: 22px; }
+.sw.on:active:not(:disabled) > i { transform: translateX(12px); }
+.segc button[aria-checked="true"], .segc button[aria-selected="true"] { transition-duration: .2s; }
+.sl-tabs .tcount { transition: background-color .16s, color .16s; }
+/* Progress: finished steps and checklist numbers pop green as they complete. */
+.sicon.done, .sicon.failed, .ck.done .num { animation: check-in .28s var(--spring); }
+.ck .num, .tnode i, .pixbar i, .badge, .cstat .dot, .sl-item .pd { transition: background-color .24s var(--ease), color .24s; }
+.bar, .upd-bar i { transition: width .3s var(--ease); }
+/* Online: the sky's status square breathes slowly. */
+.sky .sum .sq:not(.off) { animation: breathe 2.8s ease-in-out infinite; }
+@keyframes breathe { 50% { box-shadow: 0 0 0 4px rgba(126, 224, 138, .12); } }
+.pic { transition: transform .2s var(--spring); }
+.avw2:hover .pic { transform: scale(1.03); }
+
+/* Starting a Tag: amber and "Starting…" while it starts; then the avatar hops, the status ripples green, and "Online" fades. */
+.r.starting .badge { background: var(--amber) !important; animation: blink 1s ease-in-out infinite; }
+@keyframes blink { 50% { opacity: .35; } }
+.mname.live { color: var(--warn-text); }
+.mname.now-on { color: var(--ok-text); animation: linger .9s ease-in forwards; }
+@keyframes linger { 0%, 60% { opacity: 1; } 100% { opacity: 0; } }
+.r.just-on .av, .roster img.hop { animation: hop .5s var(--spring); }
+@keyframes hop { 30% { transform: translateY(-5px); } 60% { transform: translateY(0) scaleY(.94); } }
+.r.just-on .badge { animation: ripple .8s ease-out; }
+@keyframes ripple { from { box-shadow: 0 0 0 0 color-mix(in srgb, var(--green) 60%, transparent); } to { box-shadow: 0 0 0 8px transparent; } }
+/* A new reply line slides in under the header, only when it's new (not each time Home opens). */
+.hello.fresh { animation: rise2 .24s var(--ease); }
+/* Tags added on Home open a gap and slide in; removed ones close theirs. */
+.r.entering { overflow: hidden; animation: row-in .32s var(--ease); }
+@keyframes row-in { from { max-height: 0; padding-top: 0; padding-bottom: 0; opacity: 0; } to { max-height: 72px; } }
+.r-leave { overflow: hidden; pointer-events: none; animation: row-out .22s var(--ease) forwards; }
+@keyframes row-out { from { max-height: 72px; } to { max-height: 0; opacity: 0; } }
+/* Your own API: a Tag that starts using one slides in and its agent mark hops; switching back closes its row.
+   Check results grow out of the row. */
+.api-row.entering { overflow: hidden; animation: api-in .32s var(--ease); }
+.api-row.entering > img { animation: hop .5s var(--spring) .2s; }
+@keyframes api-in { from { max-height: 0; padding-top: 0; padding-bottom: 0; opacity: 0; } to { max-height: 96px; } }
+.api-leave { overflow: hidden; pointer-events: none; animation: api-out .22s var(--ease) forwards; }
+@keyframes api-out { from { max-height: 96px; } to { max-height: 0; padding-top: 0; padding-bottom: 0; opacity: 0; } }
+.api-check, .api-models, .api-saved, .api-azure { animation: rise2 .2s var(--ease); }
+.api-hint { animation: fadein .2s ease-out; }
+.api-chip { animation: check-in .22s var(--spring); }
+.api-progress { display: flex; flex-direction: column; gap: 4px; }
+.api-progress span:last-child { animation: tick .3s var(--spring); }
+/* Add a Tag: steps slide in from the side they come from, and the sprite walks along the track. */
+.flow-panel.forward > .body > * { animation: from-right .26s var(--ease); }
+.flow-panel.backward > .body > * { animation: from-left .26s var(--ease); }
+@keyframes from-right { from { opacity: .2; transform: translateX(14px); } }
+@keyframes from-left { from { opacity: .2; transform: translateX(-14px); } }
+.track.forward .tnode img { animation: walk-fwd .45s var(--ease), bob 1.1s steps(2) .45s infinite; }
+.track.backward .tnode img { animation: walk-back .45s var(--ease), bob 1.1s steps(2) .45s infinite; }
+@keyframes walk-fwd { from { transform: translateX(calc(-492px / var(--steps))); } }
+@keyframes walk-back { from { transform: translateX(calc(492px / var(--steps))); } }
+/* Ready: confetti bursts out of the new Tag's picture, then twinkles. */
+.confetti { animation: burst .7s cubic-bezier(.2, .9, .3, 1) backwards, twinkle 2.4s steps(2) infinite; }
+@keyframes burst { from { transform: translate(var(--dx), var(--dy)) scale(.2) rotate(-90deg); opacity: 0; } 30% { opacity: 1; } }
+/* Segmented controls and tab bars: the highlight glides to the new choice (lib/motion.ts places it). */
+.segc, .sl-tabs { position: relative; }
+.segc.glide::before { content: ""; position: absolute; left: 0; top: 0; width: var(--gw); height: var(--gh); transform: translate(var(--gx), var(--gy)); border-radius: 7px; background: var(--paper-2); box-shadow: 0 1px 2px rgba(0, 0, 0, .1); pointer-events: none; }
+.segc.glide > button { background: none !important; box-shadow: none !important; z-index: 1; }
+.sl-tabs.glide::after { content: ""; position: absolute; left: 0; bottom: -1px; width: var(--gw); height: 2px; transform: translateX(var(--gx)); background: var(--primary-bg); pointer-events: none; }
+.sl-tabs.glide > button { border-bottom-color: transparent !important; }
+.segc.gliding::before, .sl-tabs.gliding::after { transition: transform .26s var(--ease), width .26s var(--ease), height .26s var(--ease); }
+@media (prefers-color-scheme: dark) {
+:where(:root:not([data-theme="light"])) .segc.glide::before { background: rgba(255, 255, 255, .14); }
+:where(:root:not([data-theme="light"])) .sl-tabs.glide::after { background: #f8fcff; }
+}
+:where(:root[data-theme="dark"]) .segc.glide::before { background: rgba(255, 255, 255, .14); }
+:where(:root[data-theme="dark"]) .sl-tabs.glide::after { background: #f8fcff; }
+/* Live work: a working request shimmers, and its step count ticks up. */
+.sl-msg.working > div > p { background: linear-gradient(90deg, var(--muted) 40%, var(--ink) 50%, var(--muted) 60%) 0 0 / 300% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: shimmer 1.8s linear infinite; }
+@keyframes shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
+.activity-steps .tick { display: inline-block; animation: tick .3s var(--spring); }
+@keyframes tick { from { opacity: 0; transform: translateY(-4px); } }
+/* Updating: a sheen runs along the bar; finishing flashes green. */
+.notice.info .bar { background: linear-gradient(90deg, var(--blue) 40%, color-mix(in srgb, var(--blue) 45%, white) 50%, var(--blue) 60%) 0 0 / 250% 100%; animation: sheen 1.4s linear infinite; }
+@keyframes sheen { from { background-position: 100% 0; } to { background-position: 0 0; } }
+.notice.ok { animation: rise2 .24s var(--ease), flash .9s ease-out .1s; }
+.usage-note { animation: rise2 .24s var(--ease); }
+.notice.ok .ic { animation: check-in .4s var(--spring) .1s backwards; }
+@keyframes flash { from { box-shadow: 0 0 0 0 color-mix(in srgb, var(--green) 45%, transparent); } to { box-shadow: 0 0 0 8px transparent; } }
+/* Copying: a check and "Copied" for a moment. */
+.copied { display: inline-flex; align-items: center; gap: 4px; color: var(--ok-text); animation: check-in .22s var(--spring); }
+/* Leaving: toasts sink, menus and dialogs fade out instead of vanishing. */
+.toast.leaving { animation: sink .18s var(--ease) forwards; }
+@keyframes sink { to { opacity: 0; transform: translate(-50%, 6px); } }
+.mmenu.leaving { pointer-events: none; animation: menu-out .12s ease-in forwards; }
+@keyframes menu-out { to { opacity: 0; transform: translateY(3px) scale(.98); } }
+.veil2.leaving { pointer-events: none; animation: fade-away .16s ease-in forwards; }
+.veil2.leaving .dlg { animation: dlg-out .16s ease-in forwards; }
+@keyframes fade-away { to { opacity: 0; } }
+@keyframes dlg-out { to { opacity: 0; transform: translateY(6px) scale(.98); } }
+/* Play: avatars wiggle on hover, Shuffle rolls through looks, and the empty Home's Tags bob. */
+.r.click:hover .av, .sl-item:hover img { animation: wiggle .45s steps(4); }
+@keyframes wiggle { 25% { transform: rotate(-6deg); } 50% { transform: rotate(5deg); } 75% { transform: rotate(-3deg); } }
+.avw2.rolling .pic { animation: roll .36s steps(3) infinite; }
+@keyframes roll { 33% { filter: hue-rotate(120deg); transform: translateY(-3px); } 66% { filter: hue-rotate(240deg); transform: translateY(2px); } }
+/* A cut-off Tag description: hovering or focusing its row scrolls it once to the end and holds there;
+   leaving eases it back to the start. Other rows stay still. */
+.desc-line.marquee { text-overflow: clip; -webkit-mask: linear-gradient(90deg, #000 calc(100% - 18px), transparent); mask: linear-gradient(90deg, #000 calc(100% - 18px), transparent); }
+.desc-line.marquee > span { display: inline-block; transition: transform .35s var(--ease); }
+.r.click:hover .desc-line.marquee > span, .r.click:focus-visible .desc-line.marquee > span { transform: translateX(var(--marquee)); transition: transform var(--marquee-time) ease-in-out .4s; }
+.r.click:hover .desc-line.marquee, .r.click:focus-visible .desc-line.marquee { -webkit-mask: none; mask: none; }
+.empty img { animation: bob 1.6s steps(2) infinite; }
+.tags-row { animation: bob 1.4s steps(2) infinite; }
+
 @media (prefers-reduced-motion: reduce) {
+  .api-row.entering, .api-row.entering > img, .api-leave, .api-check, .api-models, .api-saved, .api-azure, .api-hint, .api-chip,
+  .api-progress span:last-child,
+  .sky .sum .sq, .flow-panel > .body > *, .r.starting .badge, .confetti, .notice.info .bar, .usage-note, .avw2.rolling .pic,
+  .empty img, .tags-row, .r.click:hover .av, .sl-item:hover img, .track .tnode img { animation: none !important; }
+  .sl-msg.working > div > p { animation: none; background: none; color: inherit; }
+  .desc-line.marquee { text-overflow: ellipsis; -webkit-mask: none; mask: none; }
+  .desc-line.marquee > span, .r.click:hover .desc-line.marquee > span, .r.click:focus-visible .desc-line.marquee > span { display: inline; transform: none; transition: none; }
+  .r.click:hover .chev, button.opt:hover .chev, .ghost-add:hover .gi, .avw2:hover .pic { transform: none; }
+  .p-btn:active:not(:disabled), .sky-btn:active:not(:disabled), .add:active:not(:disabled), .link:active:not(:disabled), .back:active,
+  .community button:active, .chan-chip button:active, .activity-toggle:active, .activity-thread:active, button.activity-artifact:active,
+  .segc button:active:not(:disabled), .sl-ws:active, .ghost-add:active, .sl-item:active, .mpick:active:not(:disabled),
+  .opt:active .box, .opt:active .radio { transform: none !important; }
+  .sw:active:not(:disabled) > i { width: 18px !important; }
+  .sw.on:active:not(:disabled) > i { transform: translateX(16px) !important; }
   *, *::before, *::after { animation-duration: 0s !important; transition-duration: 0s !important; }
   .star, .sky .cloud, .sky .sprite, .big-av, .tnode img { animation: none !important; }
   .slk .veil { animation: none !important; opacity: 1; }

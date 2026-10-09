@@ -2,12 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // AI connections, shared by setup's AI step and Settings → AI & models. Tag
 // checks and signs in; these only draw what it reports.
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ACTION_LABEL, CLAUDE_SHARED_NOTE, CODEX_METHODS, isUrgent, primaryAction, statusLine,
   findModel, type AIModels, type AIStatus, type Connection, type ModelEntry, type SignInState,
 } from "../lib/ai";
 import { useNight } from "../lib/appearance";
+import { reducedMotion, usePresence } from "../lib/motion";
 import { effortLabel } from "../lib/home";
 import { choiceText, type ModelChoice } from "../lib/model";
 import claude from "../assets/agents/claude.png";
@@ -127,13 +128,20 @@ export function ChangeAccount({ connection, running, choose, cancel }: {
   const codex = connection.backend === "codex";
   const stops = running;
   const back = codex && method === "codex" && connection.method === "chatgpt";
+  // Cancelling fades the dialog out before it closes.
+  const [leaving, setLeaving] = useState(false);
+  const dismiss = useCallback(() => {
+    if (reducedMotion()) { cancel(); return; }
+    setLeaving(true);
+    setTimeout(cancel, 160);
+  }, [cancel]);
   useEffect(() => {
-    const close = (e: KeyboardEvent) => { if (e.key === "Escape") cancel(); };
+    const close = (e: KeyboardEvent) => { if (e.key === "Escape") dismiss(); };
     window.addEventListener("keydown", close);
     return () => window.removeEventListener("keydown", close);
-  }, [cancel]);
+  }, [dismiss]);
   return (
-    <div className="veil2" onClick={cancel}>
+    <div className={leaving ? "veil2 leaving" : "veil2"} onClick={dismiss}>
       <div className="dlg" role="dialog" aria-modal="true" aria-labelledby="dlg-t" onClick={(e) => e.stopPropagation()}>
         <h3 id="dlg-t">Change {connection.name} account</h3>
         {codex ? (
@@ -150,7 +158,7 @@ export function ChangeAccount({ connection, running, choose, cancel }: {
         {stops && <div className="dlg-note"><Icon name="restart" /><span>Running Tags pause while you sign in and start again afterwards.</span></div>}
         <div className="foot">
           <span className="spacer" />
-          <button className="p-btn quiet" onClick={cancel}>Cancel</button>
+          <button className="p-btn quiet" onClick={dismiss}>Cancel</button>
           <Primary title={back ? "Use Codex sign-in" : "Continue in browser"} onClick={() => choose(codex ? method : undefined)} autoFocus />
         </div>
       </div>
@@ -166,6 +174,7 @@ export function ModelMenu({ models, report, value, onChange, below, inline, disa
   below?: boolean; inline?: boolean; disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const menu = usePresence(open ? true : null, 120);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
@@ -193,8 +202,8 @@ export function ModelMenu({ models, report, value, onChange, below, inline, disa
           {!offered && <span className="mna">Not available</span>}</> : <span className="mb">Choose a model</span>}
         <span className="caret"><Icon name="updown" /></span>
       </button>
-      {open && (
-        <div className={inline ? "mmenu inline" : below ? "mmenu below" : "mmenu"} role="listbox" aria-label="Default model">
+      {menu.shown && (
+        <div className={`mmenu${inline ? " inline" : below ? " below" : ""}${menu.leaving ? " leaving" : ""}`} role="listbox" aria-label="Default model">
           {connections.filter((c) => c.allowed !== false && (models.groups.some((g) => g.backend === c.backend) || (value && !offered && backend === c.backend))).map((c) => {
             const group = models.groups.find((g) => g.backend === c.backend);
             return (

@@ -1,15 +1,50 @@
-# Connect your ChatGPT plan
+# Use your ChatGPT plan
+
+Already pay for ChatGPT? Your Tags can run Codex on that plan. You don't need
+an API key or a separate Codex sign-in. You connect once, and all your Tags
+share the connection.
+
+## Connect in the app
+
+1. Make sure Codex is installed on your Mac.
+2. Open **Settings** → **General** → **AI connections**.
+3. Next to Codex, choose **Change account**.
+4. Choose **ChatGPT account for all Tags**, then **Continue in browser**.
+5. In your browser, choose **Continue with ChatGPT** and allow Tag to use your
+   plan.
+
+![AI connections: Codex connected with Change account, Claude showing Sign-in expired with Reconnect, and Check connections](../assets/screenshots/ai.png)
+
+When it works, Codex shows **Connected · ChatGPT plan**. Running Tags pause
+while you sign in and start again afterwards, even if sign-in doesn't finish.
+Then choose each Tag's model in its **Details** tab.
+
+If Codex shows **Sign in** or **Reconnect** instead of **Change account**, use
+the terminal command below.
+
+### If you reach a usage limit
+
+Codex shows **Usage limit reached**. Choose **Review usage** to check your plan
+at [ChatGPT Settings → Usage](https://chatgpt.com/settings/usage). When you're
+ready, choose **Resume**.
+
+## Connect in the terminal
+
+Install Codex, then run this in a local terminal:
+
+```sh
+tag settings ai sign-in codex --method chatgpt --restart
+```
+
+`--restart` stops running Tags while you sign in and starts them again
+afterwards, including if sign-in fails.
+
+## How the connection works
 
 Tag can use an explicitly connected ChatGPT account to run its Codex backend.
 This optional connection is available for eligible open-source and locally hosted
 apps. Your account, workspace policy, plan limits, and provider availability
 still determine which requests succeed. See [OpenAI's integration documentation](https://developers.openai.com/siwc/token-sharing-open-source).
-
-Install Codex, then connect from a local interactive terminal:
-
-```sh
-tag settings ai sign-in codex --method chatgpt --restart
-```
 
 New registrations send **Tag** as the display-name hint. The browser displays
 **Continue with ChatGPT** and asks permission for Tag to use your plan. OpenAI
@@ -17,11 +52,9 @@ controls this page; its documented dynamic-registration flow has no custom-icon
 parameter. Returning sign-ins reuse the saved registration, so a local name
 change does not rename an existing registration. Tag verifies your identity and the returned grant before making the
 connection active. A connection does not import ChatGPT conversation history.
-You do not need to sign in to Codex separately for this mode. Settings → AI
-connections manages one shared connection per provider for all Tags. Choose a
-model and thinking level in each Tag's Details tab or during setup. In a terminal,
-run `tag settings ai sign-in codex --method chatgpt --restart`. Running Tags pause
-while you sign in and start again afterwards, including if sign-in fails.
+You do not need to sign in to Codex separately for this mode. AI connections
+holds one shared connection per provider for all Tags. Choose a model and
+thinking level in each Tag's Details tab or during setup.
 
 Existing installations using native Codex sign-in retain it until you explicitly
 connect. Every authorized Slack requester uses the installation's selected
@@ -65,7 +98,7 @@ the same for the selected account.
 For automation, `status --json` is read-only and includes no tokens. Mutating
 commands support `--dry-run`. Browser login fails promptly without an interactive
 terminal; complete consent locally first. `tag chatgpt login --json` is
-intentionally unavailable. Tag.app uses `tag settings ai sign-in codex
+intentionally unavailable. The app uses `tag settings ai sign-in codex
 --method chatgpt --json`, which opens the browser on this computer, reports
 progress as JSON lines, and can be cancelled. Refresh runs automatically without a terminal during startup and
 before tasks.
@@ -109,8 +142,9 @@ and prints the command to retry that registration.
 - Long tasks renew their connection by interrupting, restarting App Server, and
   resuming the same local thread. If interruption cannot be confirmed, Tag stops
   rather than rerunning the task. The original maximum task duration still applies.
-- These threads are saved in local Codex history for renewal. They are separate
-  for each Slack request; global Codex sign-in and configuration are not modified.
+- These threads are saved in local Codex history for renewal. Each Slack thread
+  keeps one Codex thread (see [Supported capabilities](supported-capabilities.md));
+  global Codex sign-in and configuration are not modified.
 
 ## Manual qualification
 

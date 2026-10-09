@@ -2,54 +2,7 @@
 
 All notable changes to Tag are documented here.
 
-## Unreleased
-
-### Fixed
-
-- Tag.app no longer says "Couldn't check for updates" for the few minutes
-  after a release is published. Release channels for `tag upgrade` and the
-  installers now move to a new release only after Tag.app has been built for
-  every platform, so the app and your Tags update together. The channel now
-  moves as soon as those builds are attached, instead of staying on the
-  previous release. If a channel is still ahead of Tag.app, Settings says the
-  release is being prepared and keeps your current version.
-
-- Tag.app activity shows how many steps each request took (for example
-  "7 steps") next to its time and model, and flags failed requests there. Click
-  it to see the steps, replacing the separate "Request details" link.
-
-- Slack replies no longer include Configure. Every requester uses the Tag's
-  model and thinking level from Tag.app or the CLI; legacy per-user model,
-  thinking, and Fast Mode overrides are archived automatically on startup.
-  Historic buttons and open forms explain where settings moved.
-
-- Tag.app activity now opens saved tool steps and matching error reports, with
-  a link to the Slack thread and a cached AI-written, one-sentence summary of new delivered
-  replies. The same details are available through
-  `tag NAME logs --activity RUN_ID [--json]` for Codex and Claude. Channel names
-  persist independently of memory settings and backfill automatically on startup
-  for existing installations; successful lookups are reused across restarts.
-- Tag.app now uses the connected bot's Slack profile picture, including for
-  existing Tags without a locally saved setup picture. Startup backfills a
-  versioned cache, running Tags refresh it hourly, and `tag list --json`
-  reports the same cached image for both Codex and Claude. Failed downloads
-  preserve the last good picture and retry automatically.
-
-- Tags set up before Tag saved the Slack workspace's name now learn it on
-  their next `tag start`, so Tag.app and `tag list` show "Klovr" instead of the
-  workspace's Team ID.
-
-- Preserve existing Tags named `usage` while reserving the alias for new Tags.
-- Report invalid API setup settings without a traceback or environment mutation.
-- Redact Basic authorization credentials in backend failure messages and omit
-  the upstream API key from the gateway's Codex child environment.
-- Record Codex cache-write tokens and price them separately when a cache-write
-  rate is configured; otherwise report the estimate as unknown.
-
-- Show bounded, redacted backend error messages when a failure does not match
-  a known category, instead of “Cause not identified.” Extract messages from
-  JSON errors without copying unrelated fields, and explicitly report when the
-  backend provides no error message. This applies to both Codex and Claude.
+## [Unreleased]
 
 ### Added
 
@@ -63,258 +16,182 @@ All notable changes to Tag are documented here.
   Tag now turns off Claude auto memory and Codex memories for its runs so that
   everything it remembers can be listed, corrected, and forgotten.
 
-- Optionally pin a Codex gateway provider with `provider.only` routing. A
-  task-scoped authenticated loopback adapter adds the provider field while
-  preserving streamed responses and upstream errors. Direct connections are
-  unchanged when routing is unset; Claude and Azure routing are unsupported.
+## [0.3.0] - 2026-10-08
 
-- Configure private API keys and custom base URLs for Codex and Claude, including
-  Azure OpenAI Responses deployments for Codex. Record local token usage and
-  estimated costs with `tag usage`, plus advisory monthly budgets per Tag.
+The 0.3 line introduces **Tag** as a desktop app for macOS. The
+app for Windows and Linux is coming soon; the terminal installer works there now.
+It also adds shared AI connections, Claude as a full agent backend, and Slack
+threads that remember their conversation. Existing installations upgrade
+automatically on their next `tag start` or `tag upgrade`. You don't need to set
+anything up again.
 
-- Tag.app shares the CLI's optional, privacy-bounded usage data. It shows the
-  same notice before recording anything, and **Settings → Privacy → Share usage
-  data** changes the one installation-wide choice that `tag telemetry` also
-  controls. The app records a fixed set of events through
-  `tag telemetry record`: opening, screens, setup steps, updates, and release
-  channel switches. Background calls the app makes to the CLI no longer count as
-  terminal use. See [telemetry](docs/reference/telemetry.md).
+### Desktop app
 
-- Change a Tag's one-line Slack description after setup with
-  `tag NAME describe "…" [--json]` (`""` clears it), or with **Edit** next to the
-  description in Tag.app's Details tab. Slack is changed and verified first, so
-  nothing changes locally if Slack needs a fresh sign-in. Tag details now show
-  the description, and the Details tab is regrouped with Remove at the bottom.
+- **A desktop home for your Tags.** The app installs Tag, then lists, starts,
+  stops, renames and adds Tags from the menu bar. It can open at
+  login, keep your Tags running, and tell you when a Tag goes offline. It looks
+  like hover.team: sky, frosted panel and Source Sans 3, by day and by night.
+  The window stays one height on every screen.
+- **Home** shows your Tags grouped by Slack workspace, each with its picture,
+  model, thinking level and what it's for. A line at the top shows the latest
+  reply or a Tag that needs attention. You can drag workspaces and Tags into
+  your own order.
+- **Tag detail is laid out like Slack.** Your workspaces are in a rail and
+  their Tags and channels are in a sidebar. There are four tabs:
+  - **Activity** shows each recorded reply, grouped by Slack thread, with the
+    number of steps it took and an AI-written one-sentence summary. Open the
+    steps to see what the Tag did.
+  - **Channels** lists the channels the Tag is in, with Open in Slack.
+  - **Logs** shows recent service logs that you can copy.
+  - **Details** has the model, thinking level, description, mention, working
+    folder, Rename and Remove.
+- **Settings** has three tabs: General, Updates and About. General holds
+  Appearance (Auto, Light or Dark), the usage data choice and a row that opens
+  **AI connections**. Updates holds the release channel. You can replay
+  onboarding from About.
+- **Choose a release channel** (Stable, Beta or Alpha). The app shows what
+  switching will do before it changes anything. It then moves the app and your
+  Tags to the new channel together. Updates run from the notice on Home and
+  show their progress there.
+- **Open the app from Slack.** When a Slack message mentions "the Tag app", the
+  link opens that Tag's Details in the app on the computer where the Tag runs.
+- **Clear errors that tell you what to do next.** If the Tag list can't load,
+  the app shows the real reason and clears the error once a retry succeeds. A
+  Tag that can't reach Slack or memory says so and links to its Logs. If Tag is
+  removed while the app is open, the app offers to install it again, then goes
+  back to your existing Tags.
+- **Microanimations.** Buttons give when you press them, lists slide, switches
+  and progress bars move smoothly, and starting a Tag or getting a reply has a
+  small moment of its own. All of this turns off when your system asks for
+  reduced motion.
 
-- AI accounts are shared by all Tags and managed only in Settings → AI connections.
-  Tag details and setup keep model choices per Tag. Existing per-Tag ChatGPT
-  credentials migrate automatically; conflicting selections wait for an explicit
-  shared account choice. CLI connection commands now have the same global scope.
+### Setting up a Tag
 
-- Tag.app has an Appearance setting (Auto, Light or Dark) in Settings. Auto
-  follows the Mac, as before. The terminal has no appearance to set.
-- Setting up a Tag starts with the Tag itself: its name, a one-line
-  description, and its picture. Shuffle draws another waterdrop from any of
-  the five elements, one your other Tags don't use, or you can upload your own.
-  Then pick the AI, then the Slack workspace from the sign-ins you already
-  have; Tag signs in to Slack only when it needs to. One recap shows what will
-  be created, with Edit and Edit AI, before anything changes in Slack. The
-  description appears on the app's Slack profile and in Slack's agent view.
-  Choosing channels is optional: new Tags pick up channels they're invited to.
-  `tag setup` in a terminal and Tag.app follow the same steps, and a setup
-  paused in the old order picks up where it stopped.
+- **Setup starts with the Tag itself.** Choose its name, a one-line
+  description and its picture. Shuffle draws a waterdrop that your other Tags
+  don't use, or you can upload your own. Then pick the AI model and the Slack
+  workspace. One recap shows everything before anything changes in Slack.
+  Choosing channels is optional, because Tags also pick up channels they're
+  invited to. The app and `tag setup` follow the same steps, and you can go
+  back a step.
+- **Your new Tag starts on its own.** When setup finishes, the Tag starts and
+  the app greets it by name. The app shows each start step (Slack app, memory,
+  reading channels, connecting to Slack), how long the current step has taken,
+  and which step failed. `tag NAME start --json` reports the same steps.
+- **Faster starts.** A new Tag answers within seconds, while it imports Slack
+  history in the background. Two different Tags can start at the same time.
+- **Reuse an existing Slack app** by picking it from the apps Tag knows, or by
+  pasting its link. **Update app** adds only the settings that are missing.
+- **Choose who can use Tag** from a searchable list of Slack people.
+- **Channels you're already in** are included automatically. After the first
+  successful start, Tag sends you a welcome DM with a first task to try.
+- **Developer sandboxes and Enterprise organizations.** Pick an organization
+  sign-in, then the workspace the Tag should work in. If an admin must approve
+  the app, setup pauses and picks up where it left off.
+- **Descriptions.** You can change a Tag's Slack description later with
+  `tag NAME describe "…"` or with **Edit** in the app.
+- **Workspace icons.** The app shows each Slack workspace's icon.
 
-- In Tag.app, Add a Tag shows these steps as a track in the sky with your new
-  Tag as the marker: the picture, an @mention name and the description on one
-  screen (Upload or drop an image), the model, your workspaces with
-  organizations opening in place, one recap, and channels with search. Ready
-  starts the Tag, copies a first message and opens the right place in Slack,
-  and ticks only once the Tag has really replied. Settings → **AI & models**
-  gets the same model picker and thinking level as Tag detail, and Change
-  account opens as a dialog.
+### AI connections and models
 
-- Use an existing Slack app by picking it from the apps Tag knows (apps linked
-  to this Tag, the Slack CLI's apps, and apps your other Tags use, which can't
-  be picked twice), or paste its link. Tag shows what the app is missing, and
-  **Update app** adds only those settings, keeping the rest.
+- **Shared AI connections.** All Tags share the same AI accounts, which you
+  manage in Settings → General → AI connections. Each Tag keeps its own model choice.
+  Existing per-Tag ChatGPT sign-ins move over automatically.
+- **Claude is a full backend.** Claude runs through the Claude Agent SDK, with
+  the same Slack behavior as Codex: streamed answers, live activity, private
+  approvals, Stop and timeouts.
+- **Thinking levels.** Choose a default thinking level for each Tag in the app
+  or with `tag settings ai effort high`. Settings now belong to the Tag, so
+  Slack replies no longer show Configure. Older per-person overrides are
+  archived automatically.
+- **API keys and gateways.** You can use your own API keys and custom base
+  URLs for Codex and Claude, so Tags can use other AI providers and API
+  gateways, including Azure OpenAI for Codex. You can also pin a gateway
+  provider. `tag usage` shows token usage, estimated cost and
+  optional monthly budgets.
+- **Add your own API in the app.** Settings → AI connections → **Add your own
+  API** takes Codex or Claude, a base URL, models and a write-only key, and
+  applies it to all your Tags. Each API shows as `Codex · API (host)`; open it to
+  edit, **Check connection** without spending tokens, or **Switch back to my
+  plan**. In the terminal, `tag settings ai api set|check|clear` does the same
+  in one step and restores the old settings if the Tag can't start.
+- **ChatGPT plans.** Connect a ChatGPT plan with `tag chatgpt login`. Tag
+  renews the token automatically and offers the models that account can use.
+- **Your account's models.** Model pickers list the models your signed-in
+  account can use. Finished replies show the agent, model, thinking level and
+  how long the request took.
 
-- Tag.app has a new look: hover.team's sky and frosted panel, its navy main
-  button, and Source Sans 3, by day and by night. Clouds, stars and the pixel
-  Tags stand still when the system asks for less motion. First run greets you
-  with Maya, shows install progress in the sky, and goes straight on to setting
-  up your first Tag. Home shows your Tags' pictures in the header, one quiet
-  line (a Tag whose AI can't answer and why, otherwise the latest reply, or a
-  greeting), and two lines per Tag: its name with its model and thinking level,
-  then what it's for. Updates run from the notice on Home, show their progress
-  there, and offer Try again if one stops halfway. Settings is grouped into
-  General, AI & models, Updates and About.
+### In Slack
 
-- Click a Tag on Home to open it, laid out like Slack: your workspaces in a
-  rail, that workspace's Tags and channels in a sidebar, and the Tag's
-  Activity (its recorded replies in each channel), Channels (with Open in
-  Slack), and Details: its model and thinking level, which ask before
-  restarting a running Tag, its mention, terminal command, working folder,
-  Rename, and whether it's the main Tag. This replaces Logs and Home's ···
-  menu. `tag list --json` adds each Tag's `channels`.
+- **Threads remember the conversation.** Each Slack thread keeps one agent
+  conversation, so follow-up mentions continue where the last reply stopped.
+  This works for both Codex and Claude. A thread starts fresh after about four
+  hours idle or when its context gets large. You can change both limits.
+- **Earlier files stay reachable.** Tag can reopen files that were shared
+  earlier in a thread, instead of guessing what they contained. It also keeps
+  a copy of every image it generates in `artifacts/CHANNEL/images`.
+- **Live activity in the thread.** While a Codex or Claude task runs, the
+  thread shows short steps such as "Reading launch-plan.md", grouped and
+  updated in place. Reasoning and full tool output stay private.
+- **Approvals in Slack.** When Codex needs permission, the requester gets
+  private choices: Allow once, Allow for this task, Deny, or Deny and stop.
+  If Codex's automatic review blocks an action, you can approve one retry.
+  Claude asks with Approve once or Deny.
+- **Files arrive in Slack.** Files Tag saves for you are kept locally and also
+  attached to the thread by default. Choose local-only for one request or with
+  `tag config set OPENTAG_FILE_DELIVERY local`.
+- **Private failure messages.** When a request fails in a channel, only the
+  requester sees the cause, an error reference, and Retry, Fix with coding
+  agent and Report issue. Reports stay on your computer. See
+  [error reporting](docs/reference/error-reporting.md).
+- **Background sub-agents.** A request finishes only after the sub-agents it
+  started report back, so you get one complete answer.
+- **Clearer failures.** When a failure has no known cause, Tag shows a short,
+  redacted error message instead of "Cause not identified". When Slack refuses
+  a rename or description change, Tag says what Slack reported.
 
-- Choose a Tag's default thinking level. `tag settings ai effort high` (or
-  Settings → **AI & models** → **Change thinking level** in `tag settings`)
-  saves it for the Tag's default model, and
-  `tag settings ai model codex:gpt-5.5 --effort medium` saves a model and level
-  together. Only levels the model offers are accepted. Codex and Claude both
-  use it, and people's own choices in Slack still win. Changing the model keeps
-  the level when the new model offers it and otherwise uses the new model's
-  default. Existing Tags have no saved level and keep using each model's own
-  default, so nothing changes until you choose one.
+### Running Tags
 
-- Give a Tag a one-line description of up to 140 characters with
-  `tag config set OPENTAG_BOT_DESCRIPTION "…"`. It's stored and shown in
-  `tag list --json`; existing Tags and their Slack apps are unchanged.
-
-- `tag list --json` adds each Tag's `description`, `default_model_name`, and
-  `default_effort`, and `tag NAME logs --json` adds `activity`: the Tag's 50
-  most recent Slack requests with when, where, and how each ended, from the
-  activity records Tag already keeps. Prompts and people are never included.
-
-- Connect an AI during setup, and manage it in Settings → **AI & models**.
-  After the Tag's name and picture, setup asks for the Tag's default model
-  from the models of the Codex and Claude accounts on this computer, grouped
-  by agent, and offers to sign in to an agent that isn't connected. Only when
-  nothing is connected does it list the agents, with sign-in or the install
-  guide. One connected agent is required; both are optional. Settings shows each Tag's connections, Check connections, Sign in /
-  Reconnect / Change account, and the default model, and asks before restarting
-  a running Tag. Tag.app and `tag settings` offer the same choices, and
-  `tag NAME settings ai … --json` gives apps browser sign-in with progress,
-  cancel, and retry. Existing Tags keep their connections, default model, and
-  people's own model choices in Slack.
-
-- Choose the release channel in Tag.app: Settings now has **Release channel**
-  (Stable, Beta, or Alpha). It shows what switching will do before anything
-  changes, then moves the app and your Tags to that channel together and saves
-  the choice for `tag upgrade` too. Switching to a channel that's behind your
-  installed release keeps what you have until the channel catches up.
-
-- Tag.app shows each Slack workspace's icon beside its name. Tag saves a local
-  copy when setup finishes and on each `tag start`, and `tag list --json`
-  reports it as `workspace_icon`. This uses Slack's `team:read` permission,
-  which existing Tags request automatically on their next `tag start`. It's
-  optional: if the workspace needs an admin to approve it, the Tag still
-  starts, `tag start` says what to approve, and Tag asks again at most once a
-  day. Until it's granted, and for workspaces without a custom icon, Tag.app
-  shows just the workspace name.
-
-- Install on Windows without Python. `install.ps1` now prepares Tag's own
-  pinned Python with a checksum-verified uv, like `install.sh`, and installs
-  the Slack CLI for Windows. Existing Windows installations move to the private
-  Python automatically on the next `tag start`; the system Python is no longer
-  used.
-
-- Index Slack history through the MFS server's HTTP API instead of the `mfs`
-  command-line client. Tag no longer downloads or needs the client on any
-  platform, which also lets Windows finish setup; the separate check for it is
-  gone from setup. Nothing changes for existing installations: their indexed
-  memory and connectors stay as they are.
-
-- Tag.app for macOS, Windows, and Linux, built with Tauri
-  (`desktop/`). It installs Tag with the installer bundled in the app,
-  showing structured progress, then lists, starts, renames, and adds Tags,
-  shows each Tag's logs, upgrades Tag, and stays in the menu bar or system
-  tray. Settings turn on **Open Tag at login** and **Keep Tags running**, and
-  Tag.app notifies you when a Tag goes offline unexpectedly. It updates itself
-  from signed releases on its own release line, when you choose **Restart to
-  update**.
-
-- Keep Tags running after login with `tag autostart on`. Tag remembers which
-  Tags you started or stopped, and a per-user login service (launchd on macOS,
-  systemd or XDG autostart on Linux, the Run key on Windows) starts them and
-  restarts any that stop. `tag list --json` reports `keep_running`.
-
-- Document the contract between the CLI and desktop apps
-  (`docs/reference/app-protocol.md`). `tag version --json` reports the app
-  protocol and capabilities, `tag NAME logs --json` returns recent service
-  output, and `TAG_INSTALL_PROGRESS=jsonl` makes the installer report each
-  step as structured progress.
-
-- Choose who can use Tag from a searchable Slack people list during setup.
-  Tag.app shows names, usernames, and profile photos; the CLI offers the same
-  search with text labels. Manual member-ID entry remains available.
-
-- Name every Tag after its Slack team and app IDs, for example
-  `~/Tag/t0abc123-a0xyz789`, so several Tags can share a workspace or a Slack
-  name without collisions. `tag add` no longer asks for an alias. Commands
-  without a name use the main Tag. Existing installations rename their
-  `default` Tag automatically on the next `tag start` or `tag setup`;
-  `tag default …` keeps working.
-
-- Rename a Tag in Slack with `tag NAME rename "New name"`, which also gives it a
-  nickname for commands. Start, stop, or restart every Tag in a Slack workspace
-  with `--workspace`, and see Tags grouped by workspace in `tag list`.
-
-- Go back to the previous setup question in Tag.app or with
-  `tag setup --step --back`, with the earlier answer selected. Back stops at
-  steps that already changed something in Slack.
-
-- Let apps drive guided setup without a terminal. `tag setup --json` and
-  `tag add --json` ask the same questions as JSON lines, including a Slack
-  sign-in step that shows the one-time line to send in Slack and accepts the
-  code Slack returns.
-  Every question has a stable `id`. Agents and scripts can instead run
-  `tag setup --step`, `--answer`, and `--stop`, one question per command,
-  while setup keeps running in the background.
-
-- Connect a ChatGPT plan directly to each Tag with `tag chatgpt login`, including
-  account selection, automatic token renewal, sign-out, and account-specific
-  model choices. Existing installations retain their Codex sign-in until opted in.
-- Run the Claude backend through the Claude Agent SDK with the same Slack
-  behavior as Codex App Server: final-answer streaming, live activity rows,
-  private one-time approvals, Stop, idle and maximum deadlines, and per-user
-  model, thinking, and Fast Mode settings from the signed-in Claude account.
-  `OPENTAG_CLAUDE_TRANSPORT=print` keeps the previous `claude -p` path as a
-  rollback. Upgrades install the SDK automatically.
-- Switch models between Codex and Claude from Slack's Configure control. The
-  chosen model selects the backend for that user's next request, including
-  mid-thread. `OPENTAG_DEFAULT_MODEL` sets each Tag's default model and
-  `OPENTAG_BACKENDS` limits which signed-in backends are offered. Claude is no
-  longer experimental.
-- Show the agent, model, thinking level, and task duration above Configure
-  on finished Slack replies, including stopped and failed requests.
-
-- Deliver saved files as local copies plus Slack attachments by default.
-  `OPENTAG_FILE_DELIVERY` and individual requests can select local-only delivery.
-  Existing installations adopt the default automatically unless explicitly configured.
-  Successful attachments keep one Open folder button and omit individual file buttons.
-
-- Keep each Tag's working files and private settings, credentials, and state
-  together in `~/Tag/NAME`, with automatic migration from older layouts. New
-  saved deliverables default to `artifacts/CHANNEL_ID/`.
-- Route supported Codex action approvals to private, one-time Slack controls for
-  the original requester.
-- Show failed requests privately with an error reference, retry, a sanitized
-  report preview, and a local coding-agent repair prompt.
-- Let requesters inspect bounded, redacted Codex tool activity through private
-  Slack views after successful, failed, or stopped tasks.
-- Offer optional, privacy-bounded CLI telemetry with an installation-wide
-  preference and `tag telemetry` controls.
-- Prepare pinned Python, uv, and Slack CLI dependencies during installation
-  and upgrade without changing system Python or requiring a preinstalled CLI.
+- **Keep Tags running** with `tag autostart on` or the matching setting in
+  the app. A login service starts your Tags and restarts any that stop.
+- **One folder per Tag.** Each Tag is named after its Slack team and app, for
+  example `~/Tag/t0abc123-a0xyz789`, and keeps all its files there. Several
+  Tags can share a workspace. You can control them together with
+  `--workspace`.
+- **No Python or Slack CLI to install.** The installers prepare a private,
+  pinned Python and the Slack CLI on every platform, so Windows no longer
+  needs Python.
+- **No `mfs` client needed.** Tag indexes Slack history through the memory
+  server's API on every platform.
+- **Apps can drive Tag.** `tag setup --json`, `tag list --json` and
+  `tag NAME logs --json` give apps and agents the same flows that people use.
+  The protocol is described in `docs/reference/app-protocol.md`.
+- **Usage data.** Tag shares anonymous, privacy-bounded usage data to improve
+  setup and reliability. At the first run it turns this on and shows one short
+  note; turn it off in Settings → Privacy or with `tag telemetry off`. Earlier
+  opt-outs are kept. See [usage data](docs/reference/telemetry.md).
 
 ### Fixed
 
-- Setup no longer asks who you are from a list of everyone in the workspace:
-  the person signed in to Slack becomes the Tag's owner, and if Slack can't
-  say who that is, setup asks you to sign in to Slack again. Owners already
-  saved are kept.
-
-- Setup recognises an app that already has Slack's agent view, instead of
-  reporting it missing every time.
-
-- Read and write Tag's files as UTF-8 on Windows. Windows used a legacy code
-  page, so a saved Slack memory connector containing "—" never matched, and
-  setup kept treating memory as unconfigured. Tag's launcher also runs Python
-  in UTF-8 mode, which existing installations adopt on their next upgrade.
-
-- Fix several Windows-only problems found by running the full test suite on
-  Windows: renaming a Tag's folder failed while its start lock was open; the
-  layout migration and upgrades misread untouched files written with CRLF
-  line endings; `tag autostart` failed on accounts without a Run registry
-  key; two agents recording output files at once could fail; and commands
-  started without a terminal treated the null device as one and waited for
-  input.
-
-- Decode large Codex image events without repeatedly scanning the accumulated
-  buffer, preventing avoidable transport timeouts.
-
-- Keep local Open buttons for oversized output files and explain how to access
-  them when they exceed the Slack upload limit.
-
-- Include forwarded Slack files in attachment handling and keep downloaded
-  filenames distinct when attachments share a name.
-- Resolve explicit Slack channel mentions by ID when searching authorized,
-  indexed channel history.
-- Include already joined channels in setup and make Slack startup and indexing
-  recover from rate limits more clearly.
-- Resume automatic edge and prerelease publishing after a merge whose release
-  processing failed or never ran, and start the `0.3.0` alpha line.
+- Upgrades: when a restart fails during `tag upgrade`, Tag shows one clear
+  error with `tag NAME doctor` for each failed Tag. Removing a Tag no longer
+  fails with "MFS client is unavailable".
+- The app: it no longer says "Couldn't check for updates" just after a
+  release, because release channels move only after every app build is
+  published. Development builds don't offer to update themselves. Rename and
+  description errors show under the field you were editing.
+- Setup: the person signed in to Slack becomes the Tag's owner. Setup now
+  recognizes apps that already have Slack's agent view.
+- Windows: Tag reads and writes its files as UTF-8, and several Windows-only
+  problems with renaming, upgrades, autostart and terminal detection are
+  fixed.
+- Slack: forwarded files are included, attachments with the same name stay
+  separate, explicit channel mentions resolve correctly, and Tag recovers
+  better from rate limits. Files too large for Slack keep their local Open
+  button. A file over 15 MB earlier in a thread no longer blocks every later
+  mention: Tag skips it, says so, and can use a local path or link instead.
+- Security: Basic authorization credentials are redacted from error messages,
+  and the gateway no longer passes the upstream API key to Codex.
 
 ## [0.2.0] - 2026-09-22
 

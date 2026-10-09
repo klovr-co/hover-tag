@@ -89,32 +89,53 @@ approved automatically by Tag.
 
 ## Respond to a Claude approval request
 
-Claude runs in its automatic permission mode, so most actions proceed without a
-prompt. When Claude would still ask, Tag privately shows **Claude needs
-approval** with **Approve** and **Deny**. These are one-time decisions: Claude
-requests do not offer task-scoped, persistent-rule, or **Approve retry**
-choices. The same requester and expiry rules apply, and unanswered or
-unavailable requests are denied.
+Claude runs in its `auto` permission mode by default, so most actions proceed
+without a prompt. When Claude would still ask, Tag privately shows **Claude
+needs approval** with **Approve once** and **Deny**. These are one-time
+decisions: Claude requests do not offer task-scoped, persistent-rule, or
+**Approve retry** choices. The same requester and expiry rules apply, and
+unanswered or unavailable requests are denied. The operator can choose another
+mode with `OPENTAG_CLAUDE_PERMISSION_MODE`; see the
+[backend reference](../../references/backends.md).
 
 ## Follow a task as it works
 
-With Codex App Server, **Agent activity** shows readable tool steps in the Slack thread,
-such as reading a file or reviewing changes. Repeated steps are grouped, and
-the card shows complete when the task succeeds. See the
+With Codex or Claude, **Agent activity** shows readable tool steps in the Slack
+thread, such as reading a file or reviewing changes. Repeated steps are grouped,
+and the card shows complete when the task succeeds. See the
 [live activity example](../reference/supported-capabilities.md#watch-tag-work).
 Short activity descriptions are shared with the thread; full tool inputs and
-results are not shown. The separate Activity button is currently hidden.
+results are not shown. The separate Activity button in Slack is currently hidden.
+
+On the computer running Tag, the Tag's **Activity** tab in the app keeps a
+summary of each reply, grouped by Slack thread, with its saved steps. From the
+terminal, `tag logs --json` lists the same records, and
+`tag logs --activity RUN_ID` shows one request's saved steps.
 
 ## Stop a task
 
-Use Slack's **Stop** control to interrupt an active Codex task. Stopping a task
-does not undo files it already changed or actions it already completed. Check
-the result before asking Tag to try again.
+Use Slack's **Stop** control to interrupt an active Codex or Claude task.
+Stopping a task does not undo files it already changed or actions it already
+completed. Check the result before asking Tag to try again.
 
-Approval buttons and Stop require Codex App Server, Tag's default Codex
-connection. They are not available with the legacy Codex exec or Claude backends.
-After a successful run, review the completed activity card and final answer in
-the thread. For failed or stopped requests, review the private recovery message.
+```mermaid
+flowchart LR
+    Ask["You mention<br/>your Tag"] --> Work["Agent activity<br/>in the thread"]
+    Work -->|needs a decision| Approve["Private approval<br/>prompt for you"]
+    Approve --> Work
+    Work -->|Stop| Stopped["Stopped"]
+    Work --> Done["Answer in<br/>the thread"]
+    Work -->|fails| Failed["Private failure<br/>message with Retry"]
+```
+
+Approval buttons, live activity, and Stop require Codex App Server or the Claude
+Agent SDK, Tag's default connections. They are not available with the legacy
+Codex exec or Claude print transports.
+
+If a request fails, only you see the failure message. It explains what went
+wrong and offers **Retry**, **Fix with coding agent**, which copies a short
+handoff for a coding agent, and **Report issue**, which helps you copy an error
+report to review before sharing. See [Error reports](../reference/error-reporting.md).
 
 ## Choose who and what Tag can access
 

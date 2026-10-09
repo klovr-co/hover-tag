@@ -9,6 +9,7 @@ import json
 import mimetypes
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -16,6 +17,7 @@ import tempfile
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from collections.abc import Callable
@@ -60,12 +62,14 @@ try:
     )
     from .slack_mrkdwn import to_mrkdwn
     from .slack_search_scope import ScopePlan, SearchIntent, plan_search_scopes
+    from .agent_sessions import ThreadSessions
     from .tag_activity import ACTIVITY_DETAIL_ACTION_ID, PUBLIC_LABELS, ActivityStore, activity_detail_modal, activity_modal
     from .agent_summary import queue_reply_summary
     from .tag_activity_details import sanitize_activity_details
     from .tag_approval_choices import sanitize_review_details
     from .tag_activity_labels import activity_title_for_status, readable_activity_title
     from .tag_paths import instance_home, tag_temp_dir
+    from .record_output_artifact import channel_artifact_directory
     from . import slack_channels
     from . import tag_memory
     from . import tag_handoff
@@ -100,11 +104,13 @@ except ImportError:  # Direct script execution does not create a package context
     )
     from slack_mrkdwn import to_mrkdwn
     from slack_search_scope import ScopePlan, SearchIntent, plan_search_scopes
+    from agent_sessions import ThreadSessions
     from tag_activity import ACTIVITY_DETAIL_ACTION_ID, PUBLIC_LABELS, ActivityStore, activity_detail_modal, activity_modal
     from agent_summary import queue_reply_summary
     from tag_activity_details import sanitize_activity_details
     from tag_approval_choices import sanitize_review_details
     from tag_activity_labels import activity_title_for_status, readable_activity_title
+    from record_output_artifact import channel_artifact_directory
     from tag_paths import instance_home, tag_temp_dir
     import slack_channels
     import tag_memory
@@ -399,7 +405,7 @@ def retired_settings_modal() -> dict[str, Any]:
         "close": {"type": "plain_text", "text": "Close"},
         "blocks": [{"type": "section", "text": {
             "type": "mrkdwn",
-            "text": "Choose this Tag's model and thinking level in Tag.app → Details, or with `tag NAME settings ai`. All Slack requests use those settings.",
+            "text": tag_app_link("Choose this Tag's model and thinking level in the Tag app → Details, or with `tag NAME settings ai`. All Slack requests use those settings."),
         }}],
     }
 
@@ -679,6 +685,14 @@ def download_thread_binary_files(
     return lines
 
 
+def kept_images_directory(channel: str) -> Path | None:
+    """Return the channel folder that keeps generated images between requests."""
+    try:
+        return channel_artifact_directory(default_workdir(), channel) / "images"
+    except (OSError, ValueError):
+        return None
+
+
 def generated_images_dir(attachment_dir: Path) -> Path:
     """Return the backend/bridge handoff directory for generated images."""
     return attachment_dir / "results" / "images"
@@ -721,9 +735,19 @@ def upload_generated_images(
     results_dir: Path,
     *,
     artifacts: list[dict[str, str]] | None = None,
+    keep_dir: Path | None = None,
 ) -> list[str]:
-    """Upload validated backend image results into the originating Slack thread."""
+    """Upload validated backend image results into the originating Slack thread.
+
+    A copy of each image is kept in ``keep_dir`` so later requests in the
+    channel can reopen it after the invocation directory is removed.
+    """
     images, errors = collect_generated_images(results_dir)
+    if keep_dir is not None and images:
+        try:
+            keep_generated_images(images, keep_dir)
+        except OSError:
+            pass  # Keeping a copy is best effort; the Slack upload still proceeds.
     for path in images:
         artifact = {"name": path.name, "kind": "image", "delivery": "upload_failed"}
         if artifacts is not None:
@@ -744,6 +768,27 @@ def upload_generated_images(
     return errors
 
 
+def keep_generated_images(images: list[Path], keep_dir: Path) -> None:
+    """Copy images without overwriting earlier results that share a name."""
+    if keep_dir.is_symlink():
+        raise OSError(f"Refusing to keep images in a symlinked folder: {keep_dir}")
+    keep_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    for path in images:
+        target = keep_dir / path.name
+        counter = 2
+        while True:
+            try:
+                # O_EXCL reserves the name atomically and never follows a (dangling) symlink.
+                fd = os.open(target, flags, 0o600)
+                break
+            except FileExistsError:
+                target = keep_dir / f"{path.stem}-{counter}{path.suffix}"
+                counter += 1
+        with os.fdopen(fd, "wb") as destination, path.open("rb") as source:
+            shutil.copyfileobj(source, destination)
+
+
 def uploaded_file_permalink(response: Any) -> str | None:
     """Use the provider's file link, never a temporary authenticated download URL."""
     if not hasattr(response, "get"):
@@ -754,6 +799,11 @@ def uploaded_file_permalink(response: Any) -> str | None:
         files.append(response.get("file"))
     return next((item["permalink"] for item in files if isinstance(item, dict)
                  and isinstance(item.get("permalink"), str) and item["permalink"]), None)
+
+
+def is_oversized_attachment(file: dict[str, Any]) -> bool:
+    size = file.get("size")
+    return isinstance(size, int) and not isinstance(size, bool) and size > MAX_ATTACHMENT_BYTES
 
 
 def select_request_files(
@@ -785,6 +835,14 @@ def select_request_files(
         if not re.search(r"(?<![\w.-])" + re.escape(name) + r"(?![\w.-])", text, re.I):
             continue
         preferred = [file for file in matches if file["id"] in selected]
+        # An earlier oversized file is skipped later with a note, so it must not
+        # make a same-named eligible file ambiguous. It stays selected for the note.
+        skipped = [file for file in matches if file["id"] not in current and is_oversized_attachment(file)]
+        eligible = [file for file in matches if file not in skipped]
+        if eligible and skipped:
+            for file in skipped:
+                selected[file["id"]] = file
+            matches = eligible
         if len(matches) > 1 and not preferred:
             raise AttachmentLimitError(
                 f"More than one attachment is named {name}. Please share the Slack file link "
@@ -802,10 +860,41 @@ def select_request_files(
     return list(selected.values())
 
 
+def skip_oversized_earlier_files(
+    files: list[dict[str, Any]], request: dict[str, Any]
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Drop earlier-message files whose declared size exceeds the limit, with a prompt note."""
+    current_ids = {file.get("id") for file in message_files(request)}
+    kept: list[dict[str, Any]] = []
+    lines: list[str] = []
+    for index, file in enumerate(files, start=1):
+        if file.get("id") not in current_ids and is_oversized_attachment(file):
+            lines.append(
+                f"[Earlier attachment not downloaded: {attachment_name(file, index)} "
+                "exceeds Tag’s 15 MB attachment limit. Use a local path or link "
+                "from the request if one was given; otherwise ask for one.]"
+            )
+            continue
+        kept.append(file)
+    return kept, lines
+
+
 def build_thread_text(
     client: Any, channel: str, thread_ts: str, attachment_dir: Path,
     *, request: dict[str, Any] | None = None,
 ) -> str:
+    return build_thread_texts(client, channel, thread_ts, attachment_dir, request=request)[0]
+
+
+def build_thread_texts(
+    client: Any, channel: str, thread_ts: str, attachment_dir: Path,
+    *, request: dict[str, Any] | None = None, since_ts: str | None = None, own_user: str | None = None,
+) -> tuple[str, str]:
+    """The thread excerpt, and only what was posted after ``since_ts`` by others.
+
+    A continued conversation already holds earlier messages and Tag's own
+    replies, so it receives the second text. Selected files appear in both.
+    """
     messages: list[dict[str, Any]] = []
     cursor = ""
     seen_cursors: set[str] = set()
@@ -836,24 +925,35 @@ def build_thread_text(
         messages = [message for message in messages if message.get("ts") != request["ts"]]
         messages.append(request)
     messages.sort(key=lambda message: float(message.get("ts", "0")))
-    files = select_request_files(messages, request or (messages[-1] if messages else {}))
+    request = request or (messages[-1] if messages else {})
+    files = select_request_files(messages, request)
+    # An oversized file from an earlier message must not block every later
+    # mention in the thread. Only the current upload is rejected outright.
+    files, oversized_lines = skip_oversized_earlier_files(files, request)
     validate_attachment_metadata(files)
     selected_ids = {file["id"] for file in files}
     budget = AttachmentBudget()
-    lines = []
+    lines: list[str] = []
+    new_lines: list[str] = []
+    since = float(since_ts) if since_ts else None
     for message in messages[-30:]:
         user = message.get("user") or message.get("bot_id") or "unknown"
         text = message.get("text", "")
-        lines.append(f"{user}: {text}")
-        lines.extend(format_message_attachments(message))
+        message_lines = [f"{user}: {text}", *format_message_attachments(message)]
         for file in message_files(message):
             if file.get("id") not in selected_ids:
-                lines.append(f"[Historical attachment, not downloaded: {file.get('name', 'unnamed')} ({file.get('id', 'unknown')})]")
+                message_lines.append(f"[Historical attachment, not downloaded: {file.get('name', 'unnamed')} ({file.get('id', 'unknown')})]")
+        lines.extend(message_lines)
+        if since is not None and float(message.get("ts", "0")) > since and not (own_user and message.get("user") == own_user):
+            new_lines.extend(message_lines)
     selected_messages = [{"files": files}]
-    lines.extend(download_thread_text_files(selected_messages, budget))
-    lines.extend(download_thread_images(selected_messages, attachment_dir, budget))
-    lines.extend(download_thread_binary_files(selected_messages, attachment_dir, budget))
-    return "\n".join(lines)
+    file_lines = [
+        *oversized_lines,
+        *download_thread_text_files(selected_messages, budget),
+        *download_thread_images(selected_messages, attachment_dir, budget),
+        *download_thread_binary_files(selected_messages, attachment_dir, budget),
+    ]
+    return "\n".join(lines + file_lines), "\n".join(new_lines + file_lines)
 
 
 def split_reply(text: str, max_chars: int = MAX_REPLY_CHARS) -> list[str]:
@@ -2079,6 +2179,24 @@ ACTIVE_RUNS: dict[RunKey, ActiveBackendRun] = {}
 ACTIVE_RUNS_LOCK = threading.Lock()
 
 
+THREAD_BUSY_MESSAGE = "I'm still working on an earlier request in this thread. Mention me again when I finish."
+BUSY_THREADS: set[RunKey] = set()
+
+
+def reserve_thread(key: RunKey) -> bool:
+    """Claim a Slack thread for one request; False while an earlier request still runs."""
+    with ACTIVE_RUNS_LOCK:
+        if key in BUSY_THREADS:
+            return False
+        BUSY_THREADS.add(key)
+        return True
+
+
+def release_thread(key: RunKey) -> None:
+    with ACTIVE_RUNS_LOCK:
+        BUSY_THREADS.discard(key)
+
+
 def register_active_run(key: RunKey, run: ActiveBackendRun) -> None:
     with ACTIVE_RUNS_LOCK:
         ACTIVE_RUNS[key] = run
@@ -2253,6 +2371,10 @@ def run_backend_events(
     memory_receipts: Path | None = None,
     handoff_requests: Path | None = None,
     handoff_depth: int = 0,
+    resume_session: str | None = None,
+    on_session: Callable[[str], None] | None = None,
+    thread_new_text: str | None = None,
+    on_context: Callable[[int], None] | None = None,
 ) -> tuple[str, bool]:
     """Consume normalized lifecycle events and forward only final-answer text."""
     if max_timeout is None:
@@ -2293,6 +2415,16 @@ def run_backend_events(
     if reasoning_effort:
         cmd.extend(["--reasoning-effort", reasoning_effort])
     cmd.extend(["--fast-mode", "on" if fast_mode else "off"])
+    thread_new_file: Path | None = None
+    if resume_session:
+        cmd.extend(["--resume-session", resume_session])
+        if thread_new_text is not None:
+            with tempfile.NamedTemporaryFile(
+                "w", suffix=".txt", encoding="utf-8", delete=False, dir=tag_temp_dir()
+            ) as f:
+                f.write(thread_new_text)
+                thread_new_file = Path(f.name)
+            cmd.extend(["--thread-new-file", str(thread_new_file)])
     run_id = uuid.uuid4().hex
     with tempfile.NamedTemporaryFile(
         "w", suffix=".control", delete=False, dir=tag_temp_dir()
@@ -2339,6 +2471,8 @@ def run_backend_events(
         )
     except BaseException:
         thread_file.unlink(missing_ok=True)
+        if thread_new_file is not None:
+            thread_new_file.unlink(missing_ok=True)
         control_file.unlink(missing_ok=True)
         approval_dir_context.cleanup()
         raise
@@ -2403,6 +2537,14 @@ def run_backend_events(
                     on_run_info(info)
             elif event_type == "status" and isinstance(text, str) and on_status:
                 on_status(text)
+            elif event_type == "session":
+                session_id = event.get("session_id")
+                if isinstance(session_id, str) and session_id and on_session:
+                    on_session(session_id)
+            elif event_type == "context":
+                tokens = event.get("tokens")
+                if isinstance(tokens, int) and tokens >= 0 and on_context:
+                    on_context(tokens)
             elif event_type == "approval_expired":
                 approval_id = event.get("approval_id")
                 if isinstance(approval_id, str):
@@ -2458,6 +2600,8 @@ def run_backend_events(
         active_run.finish()
         unregister_active_run(run_key, active_run)
         thread_file.unlink(missing_ok=True)
+        if thread_new_file is not None:
+            thread_new_file.unlink(missing_ok=True)
         control_file.unlink(missing_ok=True)
         approval_dir_context.cleanup()
 
@@ -2902,6 +3046,12 @@ def failure_action_blocks(
     return blocks
 
 
+def tag_app_link(text: str) -> str:
+    """Link "the Tag app" to this Tag's Details; plain "Tag.app" would link the tag.app website."""
+    tag_id = urllib.parse.quote(os.getenv("TAG_ID", "default"), safe="")
+    return text.replace("the Tag app", f"the <hover-tag://tag/{tag_id}|Tag app>")
+
+
 def user_facing_failure(
     detail: str,
     timeout: int,
@@ -2923,7 +3073,7 @@ def user_facing_failure(
         cause = f"The coding backend timed out after {timeout} seconds."
     return (
         "Tag couldn't complete this request.\n"
-        f"*Cause:* {cause}\n\n"
+        f"*Cause:* {tag_app_link(cause)}\n\n"
         "Please retry, troubleshoot with your coding agent, or report this in "
         f"<{COMMUNITY_INVITE_URL}|Hover Community> so the developers can help.\n\n"
         f"Error reference: `{error_reference}`"
@@ -3270,6 +3420,7 @@ def create_app(
     handoff_store = handoff_store or tag_handoff.HandoffStore(instance_home() / "state" / "handoffs")
     handled_peer_requests: set[tuple[str, str]] = set()
     handled_peer_lock = threading.Lock()
+    thread_sessions = ThreadSessions(activity_store.root.parent / "agent-sessions.json")
     fallback_reports: dict[str, ErrorReport] = {}
 
     def stored_report(reference: str) -> ErrorReport | None:
@@ -4141,6 +4292,43 @@ def create_app(
                 except OSError:
                     logger.warning("Could not save the activity model")
 
+        session_workdir = str(default_workdir())
+
+        # Hold the thread until this request ends so two mentions cannot resume one conversation.
+        thread_key = RunKey(team, channel, thread_ts)
+        if not reserve_thread(thread_key):
+            indicator.clear()
+            client.chat_postMessage(
+                channel=channel,
+                thread_ts=thread_ts,
+                text=THREAD_BUSY_MESSAGE,
+            )
+            return
+
+        continued = thread_sessions.get(team, channel, thread_ts, request_backend,
+                                        workdir=session_workdir, requester=user_id)
+        current_session: str | None = None
+
+        def save_session(context_tokens: int | None = None) -> None:
+            if current_session is None:
+                return
+            try:
+                thread_sessions.save(team, channel, thread_ts, request_backend, workdir=session_workdir,
+                                     requester=user_id, session_id=current_session,
+                                     request_ts=event["ts"], context_tokens=context_tokens)
+            except OSError as exc:
+                logger.warning("Could not save the Slack thread's conversation: %s", exc)
+
+        def capture_session(session_id: str) -> None:
+            nonlocal current_session
+            current_session = session_id
+            save_session()
+            if activity_run_id is not None:
+                try:
+                    activity_store.save_session(activity_run_id, session_id)
+                except OSError as exc:
+                    logger.warning("Could not save the activity conversation: %s", exc)
+
         def finish_activity(outcome: str) -> None:
             nonlocal activity_run_id
             if activity_run_id is None:
@@ -4188,12 +4376,24 @@ def create_app(
                 image_results_dir = generated_images_dir(attachment_dir)
                 image_results_dir.mkdir(parents=True)
                 (attachment_dir / "results" / "artifacts").mkdir()
-                thread_text = build_thread_text(
-                    client, channel, thread_ts, attachment_dir, request=None if combine else event,
-                )
+                own_user = next((item.get("user_id") for item in body.get("authorizations") or []
+                                 if isinstance(item, dict) and item.get("is_bot")), None)
+                if continued:
+                    thread_text, thread_new_text = build_thread_texts(
+                        client, channel, thread_ts, attachment_dir, request=None if combine else event,
+                        since_ts=continued[1], own_user=own_user,
+                    )
+                else:
+                    thread_text = build_thread_text(
+                        client, channel, thread_ts, attachment_dir, request=None if combine else event,
+                    )
+                    thread_new_text = None
                 if combine:
                     replies = build_thread_text(client, channel, combine["request_ts"], attachment_dir)
-                    thread_text = f"{thread_text}\n\nHandoff thread with the other Tags' replies:\n{replies}"
+                    handoff_text = f"\n\nHandoff thread with the other Tags' replies:\n{replies}"
+                    thread_text += handoff_text
+                    if thread_new_text is not None:
+                        thread_new_text += handoff_text
                 failure_stage = "backend execution"
                 stream_available = (
                     env_enabled("OPENTAG_SLACK_STREAMING", default=True)
@@ -4259,6 +4459,10 @@ def create_app(
                         memory_receipts=memory_receipts,
                         handoff_requests=handoff_requests,
                         handoff_depth=handoff_depth,
+                        resume_session=continued[0] if continued and app_server_selected else None,
+                        thread_new_text=thread_new_text,
+                        on_session=capture_session if app_server_selected else None,
+                        on_context=save_session if app_server_selected else None,
                     )
                 else:
                     answer, succeeded = run_backend(
@@ -4430,6 +4634,7 @@ def create_app(
                         thread_ts,
                         image_results_dir,
                         artifacts=delivered_artifacts,
+                        keep_dir=kept_images_directory(channel),
                     )
                     if activity_run_id is not None:
                         try:
@@ -4527,6 +4732,7 @@ def create_app(
                 footer_blocks,
             )
         finally:
+            release_thread(thread_key)
             output_manifest.unlink(missing_ok=True)
             memory_receipts.unlink(missing_ok=True)
             if handoff_requests is not None:

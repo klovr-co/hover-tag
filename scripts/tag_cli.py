@@ -29,6 +29,7 @@ try:
     import tag_instances
     import tag_telemetry
     from tag_locks import LifecycleLock
+    import tag_locks
     from tag_config import read_config
     import tag_credentials
     import tag_welcome
@@ -41,6 +42,7 @@ except ImportError:
     from scripts.tag_paths import initialize_instance, initialize_workspace, runtime_environment, tag_home
     from scripts import tag_instances, tag_telemetry
     from scripts.tag_locks import LifecycleLock
+    from scripts import tag_locks
     from scripts import agent_models
     from scripts.tag_config import read_config
     from scripts import tag_credentials
@@ -52,6 +54,9 @@ except ImportError:
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_DEPENDENCIES = ("mfs_server", "psutil", "slack_bolt")
 UPGRADE_CHANNELS = ("stable", "beta", "alpha", "edge")
+# How long tag start waits for a setup, start or stop that holds the Tag's locks.
+START_LOCK_WAIT_SECONDS = 90
+APP_IDENTITY_WAIT_SECONDS = 10
 # Contract between this CLI and desktop apps; see docs/reference/app-protocol.md.
 # Bump only for incompatible changes; add a capability for anything new.
 APP_PROTOCOL = 1
@@ -59,7 +64,7 @@ CAPABILITIES = (
     "list", "setup-jsonl", "setup-back", "rename", "workspace-lifecycle",
     "autostart", "autostart-keep", "logs-json", "upgrade-json", "install-progress",
     "ai-connections", "shared-ai-connections", "thinking-level", "logs-activity", "activity-details", "setup-v2", "abandon-setup", "remove-tag",
-    "describe", "telemetry-events",
+    "describe", "telemetry-events", "start-progress", "api-connections",
 )
 UPDATE_CHECK_INTERVAL_SECONDS = 24 * 60 * 60
 COMMANDS = tuple(sorted(tag_instances.RESERVED_NAMES))
@@ -506,8 +511,8 @@ def start_development_slack(home: Path) -> None:
         "--process-id",
         instance_id,
     ]
-    with LifecycleLock(tag_home() / "state/ai-connection.lock"), \
-            LifecycleLock(tag_home() / "state/ai-start.lock"), LifecycleLock(home / "state/start.lock"):
+    with LifecycleLock(tag_home() / "state/ai-connection.lock", shared=True), \
+            LifecycleLock(tag_home() / "state/ai-start.lock", shared=True), LifecycleLock(home / "state/start.lock"):
         start_process(
             home,
             "slack",
@@ -705,7 +710,14 @@ def migrate_legacy_mfs_record(context: tag_instances.InstanceContext) -> None:
 def ensure_shared_memory(
     context: tag_instances.InstanceContext, environment: dict[str, str]
 ) -> None:
-    """Start the configured shared MFS if needed and wait until it is healthy."""
+    """Start the configured shared MFS if needed, wait until it is healthy, then finish queued removals."""
+    _ensure_shared_memory_running(context, environment)
+    finish_connector_removals(context.shared_mfs_home, environment)
+
+
+def _ensure_shared_memory_running(
+    context: tag_instances.InstanceContext, environment: dict[str, str]
+) -> None:
     url = environment.get("MFS_URL", "http://127.0.0.1:13619")
     local_mfs = local_mfs_endpoint(url)
     if local_mfs:
@@ -785,12 +797,18 @@ def assert_unique_slack_app(context: tag_instances.InstanceContext, values: dict
     shared = context.installation_root / "shared"
     shared.mkdir(parents=True, exist_ok=True, mode=0o700)
     lock = shared / "app-identity.lock"
-    try:
-        lock.mkdir()
-    except FileExistsError:
-        raise RuntimeError(
-            f"Another Tag is activating a Slack app. If interrupted, remove {lock} and retry."
-        ) from None
+    # The check is brief: let another Tag starting now finish it first.
+    deadline = time.monotonic() + APP_IDENTITY_WAIT_SECONDS
+    while True:
+        try:
+            lock.mkdir()
+            break
+        except FileExistsError:
+            if time.monotonic() >= deadline:
+                raise RuntimeError(
+                    f"Another Tag is activating a Slack app. If interrupted, remove {lock} and retry."
+                ) from None
+            time.sleep(0.2)
     try:
         for item in tag_instances.discover(context.installation_root):
             if not item.get("valid") or item["id"] == context.tag_id:
@@ -1052,17 +1070,23 @@ class MfsRequestError(RuntimeError):
         self.status, self.code, self.detail = status, code, detail
 
 
-def mfs_post_json(path: str, body: dict[str, object], environment: dict[str, str] | None = None,
-                  *, timeout: float = 120) -> dict[str, object]:
-    """POST to an authenticated MFS endpoint, under the same rules as mfs_request_json."""
+class MfsUnreachable(RuntimeError):
+    """Nothing answered at MFS_URL, for example because memory isn't running."""
+
+
+def _mfs_send(method: str, path: str, *, body: dict[str, object] | None = None,
+              query: dict[str, str] | None = None, environment: dict[str, str] | None = None,
+              timeout: float = 120) -> dict[str, object]:
+    """Call an authenticated MFS endpoint, enforcing its transport boundary and error envelope."""
     source = os.environ if environment is None else environment
     base = authenticated_mfs_url(source.get("MFS_URL"))
-    headers = {"Content-Type": "application/json"}
+    headers = {"Content-Type": "application/json"} if body is not None else {}
     token = mfs_token(source)
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    data = json.dumps(body, default=str).encode("utf-8")
-    request = urllib.request.Request(f"{base}{path}", data=data, headers=headers, method="POST")
+    data = json.dumps(body, default=str).encode("utf-8") if body is not None else None
+    url = f"{base}{path}" + (f"?{urllib.parse.urlencode(query)}" if query else "")
+    request = urllib.request.Request(url, data=data, headers=headers, method=method)
     opener = urllib.request.build_opener(RejectMfsRedirects())
     try:
         with opener.open(request, timeout=timeout) as response:  # noqa: S310
@@ -1076,8 +1100,78 @@ def mfs_post_json(path: str, body: dict[str, object], environment: dict[str, str
         raise MfsRequestError(error.code, str(envelope.get("code") or "error"),
                               str(envelope.get("detail") or error.reason)) from None
     except (OSError, ValueError, urllib.error.URLError) as error:
-        raise RuntimeError(f"Memory isn't reachable at {base}; run tag memory status") from error
+        raise MfsUnreachable(f"Memory isn't reachable at {base}; run tag memory status") from error
     return payload if isinstance(payload, dict) else {}
+
+
+def mfs_post_json(path: str, body: dict[str, object], environment: dict[str, str] | None = None,
+                  *, timeout: float = 120) -> dict[str, object]:
+    """POST to an authenticated MFS endpoint, under the same rules as mfs_request_json."""
+    return _mfs_send("POST", path, body=body, environment=environment, timeout=timeout)
+
+
+def mfs_remove_connector(uri: str, environment: dict[str, str] | None = None) -> None:
+    """Remove a registered connector and everything it indexed. Raises MfsUnreachable when memory is down."""
+    try:
+        _mfs_send("DELETE", "/v1/connectors", query={"target": uri}, environment=environment)
+    except MfsRequestError as error:
+        # Never registered, or already removed: nothing is left to delete.
+        if error.status == 404 or "remove_requires_connector_root" in (error.code, error.detail) \
+                or "not found" in error.detail.lower():
+            return
+        raise RuntimeError(f"Memory couldn't remove {uri} ({error.detail}); run tag memory status and retry") from None
+
+
+PENDING_REMOVALS = "pending-connector-removals.json"
+
+
+def queue_connector_removal(shared: Path, uri: str, url: str) -> None:
+    """Remember a connector to remove the next time memory at `url` is running."""
+    try:
+        from tag_config import save_config
+    except ImportError:
+        from scripts.tag_config import save_config
+    shared.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with LifecycleLock(shared / "removals.lock"):
+        pending = _pending_removals(shared)
+        entry = {"uri": uri, "url": url.rstrip("/")}
+        if entry not in pending:
+            save_config(shared / PENDING_REMOVALS, {"version": 1, "removals": [*pending, entry]})
+
+
+def _pending_removals(shared: Path) -> list[dict[str, str]]:
+    try:
+        record = json.loads((shared / PENDING_REMOVALS).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    rows = record.get("removals") if isinstance(record, dict) else None
+    return [row for row in rows or [] if isinstance(row, dict) and isinstance(row.get("uri"), str)
+            and isinstance(row.get("url"), str)]
+
+
+def finish_connector_removals(shared: Path, environment: dict[str, str]) -> None:
+    """Remove connectors of Tags removed while memory was down. Failures stay queued for the next start."""
+    if not (shared / PENDING_REMOVALS).is_file():
+        return
+    try:
+        from tag_config import save_config
+    except ImportError:
+        from scripts.tag_config import save_config
+    url = environment.get("MFS_URL", "http://127.0.0.1:13619").rstrip("/")
+    with LifecycleLock(shared / "removals.lock"):
+        remaining = []
+        for entry in _pending_removals(shared):
+            if entry["url"] != url:
+                remaining.append(entry)
+                continue
+            try:
+                mfs_remove_connector(entry["uri"], environment)
+            except RuntimeError:
+                remaining.append(entry)
+        if remaining:
+            save_config(shared / PENDING_REMOVALS, {"version": 1, "removals": remaining})
+        else:
+            (shared / PENDING_REMOVALS).unlink(missing_ok=True)
 
 
 def mfs_request_json(path: str, parameters: dict[str, str]) -> dict[str, object] | None:
@@ -1567,17 +1661,21 @@ def upgrade_command(
         result["restarted"] = False
         if running and not no_restart:
             failures = []
+            # Captured restarts report only their error, not the whole progress screen.
+            environment = {**os.environ, PLAIN_ERRORS_ENV: "1"} if json_output else None
             for tag_id in running_tags:
                 arguments = [] if tag_id == "default" else [tag_id]
                 command = [sys.executable, str(home / "bin/tag-launch.py"), *arguments, "restart"]
-                completed = subprocess.run(command, capture_output=json_output, text=True, check=False)
+                completed = subprocess.run(command, capture_output=json_output, text=True, check=False, env=environment)
                 if completed.returncode:
-                    detail = redact_log_text((completed.stderr or completed.stdout or "").strip())
+                    lines = (completed.stdout or "").strip().splitlines()
+                    detail = (completed.stderr or "").strip() or (lines[-1].strip() if lines else "")
+                    detail = redact_log_text(detail.removeprefix("Error: "))
                     failures.append(tag_id + (f": {detail}" if detail else ""))
             if failures:
                 raise RuntimeError(
-                    "Tag was upgraded, but these Tags need attention: " + "\n".join(failures)
-                    + ". Run tag [alias] doctor, resolve the reported requirement, then retry start."
+                    "Tag was upgraded, but these Tags need attention:\n" + "\n".join(failures)
+                    + "\nRun tag NAME doctor, resolve the reported requirement, then retry tag NAME start."
                 )
             result["restarted"] = True
 
@@ -1594,6 +1692,10 @@ def upgrade_command(
 
 
 SETUP_PROTOCOL_ENV = "TAG_SETUP_PROTOCOL"
+
+
+# Set by a parent command that captures output: report failures as one Error line.
+PLAIN_ERRORS_ENV = "TAG_PLAIN_ERRORS"
 
 
 DEFER_RENAME_ENV = "TAG_DEFER_RENAME"
@@ -1816,7 +1918,7 @@ def _remove_command(context: tag_instances.InstanceContext, args) -> int:
     config_path = home / "config/settings.json"
     values = read_config(config_path) if config_path.is_file() else {}
     stop_process(home, "slack")
-    tag_reset.unregister_connector(home, values)
+    memory = tag_reset.unregister_connector(home, values)
     backup = context.installation_root / "abandoned" / f"{context.tag_id}-{datetime.now():%Y%m%d-%H%M%S}"
     backup.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(home), str(backup))
@@ -1834,6 +1936,8 @@ def _remove_command(context: tag_instances.InstanceContext, args) -> int:
         display.header("Remove", f"Tag '{context.tag_id}'")
         display.info_row("Backup", display.short_path(backup), good=True)
         display.info_row("Slack app", f"{app['app_id']} deleted" if deleted else "Kept", good=True)
+        display.info_row("Memory", "Slack history removed" if memory == "removed"
+                         else "Slack history is removed the next time memory starts", good=True)
     return 0
 
 
@@ -1953,8 +2057,20 @@ def _setup_ready(home: Path, values: dict[str, str]) -> dict:
         import tag_ai
     except ImportError:
         from scripts import tag_ai
+    try:
+        import slack_setup_icons
+    except ImportError:
+        from scripts import slack_setup_icons
     choice = tag_ai.default_choice(home, values)
-    return {"team": values.get("SLACK_TEAM_ID") or None, "app_id": values.get("SLACK_APP_ID") or None,
+    try:
+        progress = json.loads((home / "config/setup-progress.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        progress = {}
+    owner = values.get("SLACK_ALLOWED_USER_IDS", "").split(",")[0] or None
+    return {"name": values.get("OPENTAG_BOT_NAME") or None,
+            "owner": {"id": owner, "name": (progress.get("owner_name") if isinstance(progress, dict) else None) or None,
+                      "icon": slack_setup_icons.pictures(tag_home(), home, values)["owner"]},
+            "team": values.get("SLACK_TEAM_ID") or None, "app_id": values.get("SLACK_APP_ID") or None,
             "channels": _channels(values, home),
             "ai": {key: choice[key] for key in ("backend", "backend_name", "label")}}
 
@@ -2075,8 +2191,31 @@ def _global_ai_target(installation_root):
                 failed = True
         return int(failed)
 
+    def tags():
+        rows = []
+        for row in tag_instances.discover(installation_root):
+            home = Path(str(row["home"]))
+            if row["valid"] and home.exists():
+                settings_file = home / "config/settings.json"
+                try:
+                    values = read_config(settings_file) if settings_file.exists() else {}
+                except (OSError, ValueError):
+                    continue
+                rows.append((str(row["id"]), _slack_name(home) or str(row["id"]), values))
+        return rows
+
     return tag_ai.Target(installation_root, "", lambda: any(t.running() for t in targets()),
-                         lifecycle, "Your Tags")
+                         lifecycle, "Your Tags", tags=tags)
+
+
+@contextlib.contextmanager
+def _waiting_lock(path):
+    """Hold one exclusive lifecycle lock, waiting while another start, stop or setup holds it."""
+    (lock,), _ = tag_locks.acquire_all([path], wait=START_LOCK_WAIT_SECONDS)
+    try:
+        yield lock
+    finally:
+        lock.release()
 
 
 def _migrate_shared_ai(installation_root, current_home, *, defer_current=True):
@@ -2090,10 +2229,11 @@ def _migrate_shared_ai(installation_root, current_home, *, defer_current=True):
     if os.getenv("TAG_AI_MIGRATION_RESTART") == "1":
         return
     pending = []
-    with LifecycleLock(installation_root / "state/ai-migration.lock"):
+    # Other Tags may be starting: wait for their migration check and shared AI locks.
+    with _waiting_lock(installation_root / "state/ai-migration.lock"):
         record = tag_chatgpt.read_object(checkpoint)
         pending = record.get("restart", [])
-        with LifecycleLock(installation_root / "state/ai-connection.lock"):
+        with _waiting_lock(installation_root / "state/ai-connection.lock"):
             if not store.path.exists():
                 # Validate before interrupting any service.
                 legacy = tag_chatgpt.legacy_accounts(current_home)
@@ -2132,8 +2272,10 @@ def _settings_ai(context, args) -> int:
     except ImportError:
         from scripts import tag_ai
     target = _ai_target(context)
+    api = {"backend": args.api_backend, "kind": args.api_kind, "base_url": args.base_url,
+           "models": args.api_models, "api_version": args.api_version}
     return tag_ai.cli(args.arguments[1:], target, json_output=args.json_output, restart=args.restart,
-                      method=args.method, account=args.account, effort=args.effort)
+                      method=args.method, account=args.account, effort=args.effort, api=api)
 
 
 def _run_cli() -> int:
@@ -2150,7 +2292,7 @@ def _run_cli() -> int:
                                      ),
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("command", nargs="?", choices=COMMANDS)
-    parser.add_argument("arguments", nargs="*", help="memory: start | status | stop; config: init | show | keys | set KEY VALUE; chatgpt: status | login [ACCOUNT] | use ACCOUNT | logout [ACCOUNT] | use-codex; settings: ai [status | models | sign-in codex|claude | resume | model VALUE | effort LEVEL|default]")
+    parser.add_argument("arguments", nargs="*", help="memory: start | status | stop; config: init | show | keys | set KEY VALUE; chatgpt: status | login [ACCOUNT] | use ACCOUNT | logout [ACCOUNT] | use-codex; settings: ai [status | models | sign-in codex|claude | resume | model VALUE | effort LEVEL|default | api [status | set | clear | check]]")
     parser.add_argument("--offline", action="store_true")
     parser.add_argument("--json", action="store_true", dest="json_output", help="structured output for inspect, status, doctor, config, paths, upgrade, usage, and chatgpt")
     parser.add_argument("--consent", action="store_true", help="chatgpt login: request plan permission again")
@@ -2158,6 +2300,11 @@ def _run_cli() -> int:
     parser.add_argument("--account", help="settings ai sign-in codex --method chatgpt: renew this saved account")
     parser.add_argument("--effort", metavar="LEVEL", help="settings ai model VALUE: also save this thinking level, or default for the model's own")
     parser.add_argument("--restart", action="store_true", help="settings ai: restart a running Tag to apply the change")
+    parser.add_argument("--backend", dest="api_backend", choices=("codex", "claude"), help="settings ai api: the agent that uses the API")
+    parser.add_argument("--kind", dest="api_kind", choices=("openai", "anthropic", "azure"), help="settings ai api set: the provider's API (azure is Codex only)")
+    parser.add_argument("--base-url", dest="base_url", metavar="URL", help="settings ai api set: the API base URL (HTTPS); empty for the provider's default")
+    parser.add_argument("--models", dest="api_models", metavar="A,B", help="settings ai api set: model IDs, or Azure deployment names, comma-separated")
+    parser.add_argument("--api-version", dest="api_version", metavar="VERSION", help="settings ai api set --kind azure: the Azure API version")
     parser.add_argument("--stdin", action="store_true", help="read a config value from stdin")
     parser.add_argument("--from", dest="source", type=Path)
     parser.add_argument("--no-start", action="store_true", help=argparse.SUPPRESS)
@@ -2209,12 +2356,15 @@ def _run_cli() -> int:
         parser.error("settings accepts only ai, for example tag settings ai --json")
     if (args.method or args.account or args.restart or args.effort is not None) and not settings_ai:
         parser.error("--method, --account, --effort and --restart are only for tag settings ai")
+    api_options = (args.api_backend, args.api_kind, args.base_url, args.api_models, args.api_version)
+    if any(option is not None for option in api_options) and not (settings_ai and args.arguments[1:2] == ["api"]):
+        parser.error("--backend, --kind, --base-url, --models and --api-version are only for tag settings ai api")
     if args.json_output and args.command not in {"list", "memory", "inspect", "status", "doctor", "config", "paths", "upgrade", "telemetry", "setup", "add", "rename", "describe", "abandon", "remove", "start", "stop", "restart", "autostart", "version", "logs", "chatgpt", "usage"} and not settings_ai:
-        parser.error("--json supports list, memory, inspect, status, doctor, config, paths, upgrade, telemetry, usage, chatgpt, settings ai, autostart, version, logs, setup, add, rename, describe, and start/stop/restart with --workspace")
+        parser.error("--json supports list, memory, inspect, status, doctor, config, paths, upgrade, telemetry, usage, chatgpt, settings ai, autostart, version, logs, setup, add, rename, describe, start, and stop/restart with --workspace")
     if args.json_output and args.follow:
         parser.error("--json cannot be combined with --follow")
-    if args.json_output and args.command in {"start", "stop", "restart"} and not args.workspace:
-        parser.error("--json for start, stop, and restart requires --workspace")
+    if args.json_output and args.command in {"stop", "restart"} and not args.workspace:
+        parser.error("--json for stop and restart requires --workspace")
     if (args.delete_app or args.confirm_app) and args.command != "remove":
         parser.error("--delete-app and --confirm-app are only for remove")
     if args.nickname and args.command != "rename":
@@ -2571,7 +2721,7 @@ def _run_cli() -> int:
             from scripts.tag_reset import reset_and_setup
         return reset_and_setup(home, sys.modules[__name__])
     if settings_ai:
-        if args.arguments[1:2] not in ([], ["status"], ["models"]):
+        if args.arguments[1:2] not in ([], ["status"], ["models"]) and args.arguments[1:3] not in (["api"], ["api", "status"], ["api", "check"]):
             initialize_instance(home)  # Only changes need the private home; checks don't create one.
         return _settings_ai(context, args)
     if args.command == "settings":
@@ -2888,6 +3038,9 @@ def _run_cli() -> int:
                 display.next_action("Stop memory too", "tag memory stop")
         return 0
     if args.command == "start":
+        if args.json_output:
+            # One JSON line per readiness step as it happens, then the outcome.
+            display.progress_events()
         restart_flow = os.getenv("TAG_RESTART_FLOW") == "1"
         supervised = os.getenv(autostart.SUPERVISED_ENV) == "1"
         if not supervised:
@@ -2899,19 +3052,23 @@ def _run_cli() -> int:
             display.header("Start", selected_target(home, context.tag_id))
             display.section("Readiness")
         display.info_row("Runtime", "Dependencies available", good=True)
-        # Serialize starts so concurrent invocations cannot create orphan services.
-        connection_lock = LifecycleLock(installation_root / "state/ai-connection.lock").acquire()
-        try:
-            ai_lock = LifecycleLock(installation_root / "state/ai-start.lock").acquire()
-        except Exception:
-            connection_lock.release()
-            raise
-        try:
-            lock = LifecycleLock(home / "state/start.lock").acquire()
-        except Exception:
-            ai_lock.release()
-            connection_lock.release()
-            raise
+        # Serialize starts of this Tag so concurrent invocations cannot create orphan services.
+        # Other Tags may start in parallel: the shared AI locks only exclude account changes.
+        # Wait briefly for a setup, start or stop that already holds them rather than failing at once.
+        shared_locks = (installation_root / "state/ai-connection.lock", installation_root / "state/ai-start.lock")
+        (connection_lock, ai_lock, lock), waited = tag_locks.acquire_all(
+            [*shared_locks, home / "state/start.lock"],
+            shared=shared_locks,
+            wait=START_LOCK_WAIT_SECONDS,
+            waiting=lambda: display.pending_row("Start", "Waiting for another start, stop or setup to finish…"))
+        if waited and slack_ready(home):
+            # The operation we waited for started this Tag; starting it again would only restart it.
+            for held in (lock, ai_lock, connection_lock):
+                held.release()
+            display.info_row("Slack", "Already connected", good=True)
+            if not restart_flow:
+                display.completion("Tag is running", "Another start finished first.")
+            return 0
         started = []
         try:
             if supervised and autostart.wanted(home) is not True:
@@ -2973,21 +3130,26 @@ def _run_cli() -> int:
             display.pending_row("Memory", "Waiting for the service to become healthy…")
             ensure_shared_memory(context, os.environ.copy())
             display.info_row("Memory", "Healthy", good=True)
-            display.pending_row(
-                "Channel memory", "Waiting for selected channels to become readable…"
-            )
+            display.pending_row("Channel memory", "Checking which channels are imported…")
             if os.getenv("SLACK_CHANNEL_POLICY") == "invited":
                 reconcile_invitation_memory(home)
             else:
                 sync_configured_slack_memory()
-            unavailable_scopes = wait_for_configured_mfs_scopes()
-            if unavailable_scopes:
-                raise RuntimeError(
-                    "MFS scope did not become readable after indexing: "
-                    + unavailable_scopes[0]
-                    + ". Run tag memory and tag doctor, then retry tag start."
-                )
-            display.info_row("Channel memory", "Ready", good=True)
+            # Don't wait for the first import: Tag answers now, and history search covers each
+            # channel once memory has imported it. One check still picks up renamed channels.
+            try:
+                importing = wait_for_configured_mfs_scopes(attempts=1)
+                paused = False
+            except RuntimeError:
+                importing, paused = [], True
+            if importing or paused:
+                names = [urllib.parse.unquote(scope.rstrip("/").rsplit("/", 1)[-1]).rpartition("__")[0] for scope in importing]
+                where = ", ".join(f"#{name}" for name in names if name) or "its channels"
+                display.info_row("Channel memory", (f"Importing {where} in the background"
+                                 if not paused else "Import paused by a Slack rate limit; it resumes in the background")
+                                 + " · history search covers it once done")
+            else:
+                display.info_row("Channel memory", "Ready", good=True)
             preflight_result, preflight = doctor_report(False)
             if preflight_result:
                 failed = [item for item in preflight.get("checks", []) if not item.get("ok")]
@@ -3069,18 +3231,32 @@ def _run_cli() -> int:
             lock.release()
             ai_lock.release()
             connection_lock.release()
-        try:
-            import tag_chatgpt
-        except ImportError:
-            from scripts import tag_chatgpt
-        checkpoint = installation_root / "shared/ai/migration-v1.json"
-        with nullcontext() if os.getenv("TAG_AI_MIGRATION_RESTART") == "1" else LifecycleLock(installation_root / "state/ai-migration.lock"):
-            record = tag_chatgpt.read_object(checkpoint)
-            if os.getenv("TAG_AI_MIGRATION_RESTART") != "1" and context.tag_id in record.get("restart", []):
-                record["restart"].remove(context.tag_id)
-                tag_chatgpt.atomic_write(checkpoint, record)
+        _clear_pending_restart(installation_root, context.tag_id)
         show_upgrade_reminder(installation_root)
     return 0
+
+
+def _clear_pending_restart(installation_root, tag_id):
+    """Drop a running Tag from the shared AI migration's restart list."""
+    # The migration that started this Tag holds the lock and owns the list.
+    if os.getenv("TAG_AI_MIGRATION_RESTART") == "1":
+        return
+    try:
+        import tag_chatgpt
+    except ImportError:
+        from scripts import tag_chatgpt
+    checkpoint = installation_root / "shared/ai/migration-v1.json"
+    try:
+        # Another Tag may be starting at the same time: wait for its migration check.
+        with _waiting_lock(installation_root / "state/ai-migration.lock"):
+            record = tag_chatgpt.read_object(checkpoint)
+            if tag_id in record.get("restart", []):
+                record["restart"].remove(tag_id)
+                tag_chatgpt.atomic_write(checkpoint, record)
+    except tag_locks.LockBusy:
+        # This Tag is already running. The next migration check skips running
+        # Tags and clears the entry, so this bookkeeping must not fail the start.
+        pass
 
 
 def _show_telemetry_scope(installation_root: Path) -> None:
@@ -3099,7 +3275,7 @@ def _show_telemetry_scope(installation_root: Path) -> None:
 
 
 def _offer_first_run_telemetry(installation_root: Path) -> None:
-    """Persist a choice only after the notice is visible in an interactive TUI."""
+    """Turn usage data on with a one-line notice on the first interactive run."""
     if (
         tag_telemetry.hard_disabled()
         or not tag_telemetry.collection_available()
@@ -3108,25 +3284,13 @@ def _offer_first_run_telemetry(installation_root: Path) -> None:
         or not sys.stdout.isatty()
     ):
         return
-    _show_telemetry_scope(installation_root)
-    try:
-        import setup_ui as ui
-    except ImportError:
-        from scripts import setup_ui as ui
-    try:
-        choice = ui.choose(
-            "Help support Tag’s development",
-            ["Continue", "Turn telemetry off"],
-            default=0,
-        )
-    except ui.Paused:
-        # An interrupted notice is not consent. Continue this command without
-        # collection and offer the same notice on a later interactive run.
-        return
-    if choice == 0:
-        tag_telemetry.enable(installation_root)
-    else:
-        tag_telemetry.disable(installation_root)
+    # Show the notice before saving: if it can't be shown, nothing is saved and
+    # the next interactive run tries again. Non-interactive runs never get here.
+    display.paragraph(
+        "Tag shares anonymous usage data to improve setup and reliability. "
+        "Turn it off with 'tag telemetry off'."
+    )
+    tag_telemetry.enable(installation_root)
 
 
 def _command_name(arguments: list[str]) -> str:
@@ -3228,7 +3392,10 @@ def main() -> int:
 
 if __name__ == "__main__":
     try:
-        raise SystemExit(main())
+        code = main()
+        if display.progress_active():
+            display.progress_result(code)
+        raise SystemExit(code)
     except KeyboardInterrupt:
         if len(sys.argv) > 1 and sys.argv[1] == "logs":
             print("\nStopped following logs.", file=sys.stderr)
@@ -3240,9 +3407,11 @@ if __name__ == "__main__":
     except (OSError, ValueError, RuntimeError, ImportError) as exc:
         if os.getenv(SETUP_PROTOCOL_ENV) == "jsonl":
             _setup_ui().emit({"type": "result", "status": "failed", "error": str(exc), "exit_code": 1})
+        elif display.progress_active():
+            display.progress_result(1, str(exc))
         elif "--json" in sys.argv:
             print(json.dumps({"schema_version": 1, "ok": False, "error": str(exc)}))
-        elif len(sys.argv) > 1 and sys.argv[1] in {"start", "restart", "dev"}:
+        elif len(sys.argv) > 1 and sys.argv[1] in {"start", "restart", "dev"} and os.getenv(PLAIN_ERRORS_ENV) != "1":
             title = "Dev" if sys.argv[1] == "dev" else (
                 "Restart" if os.getenv("TAG_RESTART_FLOW") == "1" or sys.argv[1] == "restart" else "Start"
             )

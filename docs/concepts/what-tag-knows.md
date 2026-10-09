@@ -10,13 +10,25 @@ Mention Tag in the same thread when you want to build on an answer:
 
 > @Maya's Tag turn that into a one-week action plan.
 
-Each mention starts a fresh agent run. Tag reads one page of up to 30 messages
-from the current thread and receives your new request separately. That lets
-the agent follow the discussion without you copying it into another chat.
+Each Slack thread keeps one agent conversation, with Codex or Claude. A later
+mention in the same thread continues it, so earlier tool results and reasoning
+carry forward. Tag sends only the thread messages posted since its last reply.
 
-This is thread context, not the whole channel. In a long thread, some messages
-may be missing from what Tag receives. Restate an important detail if the
-answer seems to have lost it.
+```mermaid
+flowchart LR
+    First["First mention<br/>in a thread"] --> Conversation["One agent conversation<br/>(Codex or Claude)"]
+    Later["Later mentions<br/>in the same thread"] --> Conversation
+    Conversation --> Files["Earlier thread files<br/>and images Tag made"]
+    Conversation -.->|4 idle hours or too large| Fresh["Fresh conversation"]
+```
+
+Only the person who started a conversation continues it; another requester in
+the same thread starts their own. A conversation starts fresh after 4 idle
+hours or when it grows too large. A fresh conversation reads one page of up to
+30 thread messages, so restate an important detail if it seems lost.
+
+Tag can also reopen files shared earlier in the thread and images it made
+before. See [Use earlier files in a thread](workspaces-and-tools.md#use-earlier-files-in-a-thread).
 
 ## Find a discussion in another channel
 
@@ -92,7 +104,7 @@ cannot pass the work on again.
 
 ## Use the tools already available to the agent
 
-Tag runs your local Codex agent. Claude support is coming soon.
+Tag runs your local Codex or Claude Code agent.
 The skills and MCP connections that
 the CLI loads can help it carry out a request, alongside installed commands.
 Availability depends on the account running Tag, the selected backend's

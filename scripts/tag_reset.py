@@ -88,37 +88,30 @@ def delete_slack_app(home: Path, backup: Path, app: dict, executable: str, *, so
     return confirmed
 
 
-def unregister_connector(home: Path, values: dict[str, str]) -> None:
-    """Remove only this instance's registered connector from shared MFS."""
+def unregister_connector(home: Path, values: dict[str, str]) -> str:
+    """Remove only this instance's registered connector from shared MFS.
+
+    Returns "removed", or "queued" when memory isn't running: Tag then removes it the next time memory starts.
+    """
     uri = values.get("MFS_SLACK_CONNECTOR_URI", "").strip()
     if not uri:
-        return
-    search_path = str(home / "integrations/bin") + os.pathsep + os.environ.get("PATH", "")
-    name = "mfs.exe" if os.name == "nt" else "mfs"
-    bundled = Path(sys.executable).parent / name
-    executable = str(bundled) if bundled.is_file() else shutil.which("mfs", path=search_path)
-    if not executable:
-        raise RuntimeError(
-            "MFS client is unavailable; the Slack history connector was not removed and setup was not reset."
-        )
-    environment = os.environ.copy()
-    environment.update(values)
-    completed = subprocess.run(
-        [executable, "connector", "remove", uri, "--yes"],
-        check=False,
-        text=True,
-        capture_output=True,
-        env=environment,
-        timeout=120,
-    )
-    if completed.returncode:
-        detail = (completed.stdout + completed.stderr).lower()
-        if "connector_not_found" in detail or "connector not found" in detail:
-            return
-        raise RuntimeError(
-            "The Slack history connector could not be removed; setup was not reset. "
-            "Check shared memory with tag memory status and retry."
-        )
+        return "removed"
+    try:
+        import tag_cli
+        from tag_paths import tag_home
+    except ImportError:
+        from scripts import tag_cli
+        from scripts.tag_paths import tag_home
+    environment = {**os.environ, **values}
+    try:
+        tag_cli.mfs_remove_connector(uri, environment)
+    except tag_cli.MfsUnreachable:
+        tag_cli.queue_connector_removal(tag_home() / "shared/mfs", uri,
+                                        environment.get("MFS_URL", "http://127.0.0.1:13619"))
+        return "queued"
+    except RuntimeError as error:
+        raise RuntimeError(f"The Slack history connector could not be removed; setup was not reset. {error}") from None
+    return "removed"
 
 
 def archive_setup(home: Path, lifecycle, *, expected_app: dict | None = None) -> Path:

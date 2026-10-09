@@ -1,8 +1,8 @@
 # Your own Tag
 
-Tag lets you work with your Codex agent from Slack. You ask it for help in
-a thread, and it replies there. It can use the tools and accounts connected
-to your Codex setup.
+Tag lets you work with your own AI agent, Codex or Claude Code, from Slack. You
+ask it for help in a thread, and it replies there. It can use the tools and
+accounts connected to the agent on your computer.
 
 You have your own Tag. Maya has Maya's Tag; Jules can have Jules's Tag.
 Each person asks their own Tag to work, in the conversations they share.
@@ -33,8 +33,10 @@ them back from a separate AI chat.
 
 ## Only you can give your Tag instructions
 
-By default, only the owner can ask their Tag to do work. Jules can reply to
-Maya in the thread, but he can't give Maya's Tag a task.
+By default, only the owner can ask their Tag to do work. The owner is the
+Slack account you sign in with during setup; the setup recap shows
+**Who can ask it: Only you**. Jules can reply to Maya in the thread, but he
+can't give Maya's Tag a task.
 
 If you need to let someone else make requests, see
 [Sharing access to your Tag](sharing-access.md).
@@ -54,16 +56,17 @@ Your Tag doesn't automatically see every Slack conversation or account.
 
 ## The work happens on your computer
 
-When you ask Tag for help in Slack, Codex runs the task on the computer
-where Tag is installed. It uses the local account running Tag, subject to
-Codex's permissions. Tools you've connected use their own logins: a Gmail
+When you ask Tag for help in Slack, the agent runs the task on the computer
+where Tag is installed. It uses the local account running Tag, subject to the
+agent's permissions: Codex's sandbox and approval policy, or Claude's
+permission mode. Tools you've connected use their own logins: a Gmail
 connection, for example, lets it work with the mail that login can access.
 
-Codex starts in Tag's workspace folder. That folder alone doesn't restrict
-it to the files inside; its permissions may also allow it to read or change
-files elsewhere on the computer.
+The agent starts in your Tag's folder, such as `~/Tag/t0abc123-a0xyz789`.
+That folder alone doesn't restrict it to the files inside; its permissions may
+also allow it to read or change files elsewhere on the computer.
 
-The owner-only default doesn't limit what Codex can do on the host computer. To
+The owner-only default doesn't limit what the agent can do on the host computer. To
 keep unrelated files and accounts out of reach, consider running Tag on a
 separate computer or under a separate local account with limited permissions.
 See the [security policy](../../SECURITY.md) for details.

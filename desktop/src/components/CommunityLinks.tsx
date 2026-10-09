@@ -22,7 +22,7 @@ function CommunityLogo({ brand }: { brand: keyof typeof BRAND_PATHS | "slack" })
 export const REPO = "https://github.com/klovr-co/hover-tag";
 const SLACK = "https://join.slack.com/t/hover-community/shared_invite/zt-4aghkshid-n7fRukS7_J5sR2jDLBXK9A";
 const SHARE = "https://twitter.com/intent/tweet?text="
-  + encodeURIComponent("I'm using Tag, a personal assistant that lives in Slack.") + "&url=" + encodeURIComponent(REPO);
+  + encodeURIComponent("I'm using Tag, multiplayer AI that lives in Slack.") + "&url=" + encodeURIComponent(REPO);
 
 /** Star, Join and Share as one line of links. */
 export function CommunityLinks({ api }: { api: Bridge }) {

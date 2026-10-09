@@ -1,8 +1,8 @@
 // When Tag can't be run at all, the window must say so and never stay busy.
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
-import { demoBridge } from "./bridge";
-import { useTags } from "./tags";
+import { describe, expect, it, vi } from "vitest";
+import { demoBridge, type Bridge } from "./bridge";
+import { startTag, useTags } from "./tags";
 
 describe("useTags", () => {
   it("reports a failed tag call and clears the busy state", async () => {
@@ -56,5 +56,29 @@ describe("useTags", () => {
     expect(result.current.error).toBe("Couldn't stop this Tag.");
     act(() => result.current.setError(""));
     expect(result.current.error).toBe("");
+  });
+});
+
+describe("startTag", () => {
+  it("follows start step by step and takes the outcome from its result line", async () => {
+    const follow = vi.fn(async (_args: string[], onLine: (line: string) => void, onExit: (code: number, stderr: string) => void) => {
+      onLine('{"type": "progress", "step": "memory", "label": "Memory", "state": "running", "text": "…"}');
+      onLine('{"type": "result", "status": "failed", "error": "Slack bridge did not become ready"}');
+      onExit(1, "");
+      return { send: () => {}, stop: () => {} };
+    });
+    const lines: string[] = [];
+    expect(await startTag({ follow } as unknown as Bridge, "t1", (line) => lines.push(line))).toBe("Slack bridge did not become ready");
+    expect(follow.mock.calls[0][0]).toEqual(["t1", "start"]);
+    expect(lines).toHaveLength(1);
+  });
+
+  it("starts once and says what went wrong", async () => {
+    const tag = vi.fn().mockResolvedValue({ code: 1, stdout: "", stderr: "Error: Slack token revoked" });
+    expect(await startTag({ tag } as unknown as Bridge, "t1")).toBe("Slack token revoked");
+    expect(tag).toHaveBeenCalledTimes(1);
+    expect(tag).toHaveBeenCalledWith(["t1", "start"]);
+    tag.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
+    expect(await startTag({ tag } as unknown as Bridge, "t1")).toBe("");
   });
 });

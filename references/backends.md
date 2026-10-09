@@ -6,7 +6,8 @@ answer. Choose the backend explicitly for each deployment.
 
 ## Built-In Backend: Claude Agent SDK
 
-Use this backend when the operator has a working `claude` CLI session:
+Use this backend when the operator has a working `claude` CLI session or a
+Claude [API connection](../docs/reference/api-connections.md):
 
 ```bash
 python scripts/opentag_agent.py \
@@ -18,8 +19,9 @@ python scripts/opentag_agent.py \
   --workdir /path/to/repo
 ```
 
-The Slack bridge runs one Claude Agent SDK session per request
-(`scripts/claude_agent_backend.py`). It uses the operator's `claude` executable
+The Slack bridge runs each request as a Claude Agent SDK session
+(`scripts/claude_agent_backend.py`) and resumes the same session for later
+mentions in that Slack thread (see the event contract below). It uses the operator's `claude` executable
 when present, `--add-dir` access to the skill and attachment directories, the
 `auto` permission mode, and the workspace `.mcp.json` servers. The session
 emits the same normalized events as Codex App Server: final-answer deltas,
@@ -93,7 +95,7 @@ complete response without a fake typewriter animation.
   `opentag_agent.py`, not in Slack event handling.
 - Keep the normalized event contract backend-neutral (`status`, `delta`,
   `final`, `error`, plus the richer `message_*`, `activity_*`,
-  `approval_request`, `run_info`, `usage`, and `turn_complete` events); chat transports
+  `approval_request`, `run_info`, `usage`, `session`, `context`, and `turn_complete` events); chat transports
   must never parse backend-native event payloads.
 - Receive the thinking level as the backend-neutral `reasoning_effort`. The
   Tag's default level (`OPENTAG_DEFAULT_EFFORT`) is applied once, in
@@ -109,6 +111,25 @@ complete response without a fake typewriter animation.
   `thread/tokenUsage/updated.tokenUsage.total`; Claude maps the SDK result's
   `usage`. The runner accumulates reported usage across retry attempts; duplicate
   snapshots replace earlier snapshots within an attempt. Missing usage is unknown.
+- Finish a request only when the agent's background sub-agents have finished.
+  A turn that ends with sub-agents still running is not the answer: its text is
+  commentary, the session stays open within the request's maximum runtime, and
+  `turn_complete` comes from a later turn that uses their results. Claude wakes
+  itself for that turn when each agent reports back (`task_*` system messages).
+  Codex never wakes the main thread, so the adapter tracks `subAgentActivity`
+  items and starts the follow-up turn itself once they all finish. Sub-agent
+  threads' own messages and turn events never reach Slack.
+- Emit `session` with the conversation id the request continued or started,
+  and accept it back as `--resume-session`. The bridge stores it per Slack
+  thread and backend, so later mentions resume the same Codex thread or Claude
+  session. A missing conversation is replaced, not fatal. Text-only reply
+  summaries never resume or report a session. Emit `context` with the
+  conversation's size at the latest main-thread model call; the bridge starts a
+  fresh conversation once it reaches `OPENTAG_THREAD_MAX_CONTEXT_TOKENS` or sits
+  idle `OPENTAG_THREAD_IDLE_HOURS`. Pass standing instructions outside the
+  conversation (Codex `developerInstructions`, Claude system prompt) and send a
+  continued conversation only the thread's new messages. See
+  [ADR 0009](../docs/adr/0009-thread-scoped-agent-conversations.md).
 
 Generated images use a file handoff rather than a new stream event. For each
 Slack invocation, the prompt names a temporary `results/images` directory. A

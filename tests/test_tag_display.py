@@ -34,6 +34,16 @@ class DisplayTests(unittest.TestCase):
         self.assertIn("@Tag by Hover  /  Setup", text)
         self.assertIn("https://hover.team/tag", text)
 
+    def test_paragraph_keeps_one_line_for_setup_protocol(self):
+        text = "An organization admin may need to approve the app. Setup waits and resumes."
+        with patch.object(tag_display.shutil, "get_terminal_size", return_value=os.terminal_size((40, 24))):
+            with redirect_stdout(StringIO()) as output:
+                tag_display.paragraph(text)
+            self.assertGreater(len(output.getvalue().splitlines()), 1)
+            with patch.dict(os.environ, {"TAG_SETUP_PROTOCOL": "jsonl"}), redirect_stdout(StringIO()) as output:
+                tag_display.paragraph(text)
+        self.assertEqual(output.getvalue(), f"  {text}\n")
+
     def test_header_renders_trimmed_version(self):
         with patch.object(tag_display.Path, "read_text", return_value="  1.2.3-beta.1 \n"), redirect_stdout(StringIO()) as output:
             tag_display.header("Setup")

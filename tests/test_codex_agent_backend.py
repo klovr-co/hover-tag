@@ -532,6 +532,258 @@ for line in sys.stdin:
                 self.assertIsNotNone(server.process.poll())
 
 
+class ThreadSessionTests(unittest.TestCase):
+    """One Slack thread continues one saved Codex thread."""
+
+    FAKE = r"""
+import json, sys
+mode = sys.argv[1]
+log = open(sys.argv[2], "a")
+def send(p): print(json.dumps(p), flush=True)
+for line in sys.stdin:
+    m = json.loads(line)
+    method = m.get("method")
+    if method:
+        log.write(json.dumps(m) + "\n"); log.flush()
+    if method == "initialize":
+        send({"id": m["id"], "result": {}})
+    elif method == "thread/resume":
+        if mode == "missing":
+            send({"id": m["id"], "error": {"code": -32600, "message": "no rollout found"}})
+        else:
+            send({"id": m["id"], "result": {"thread": {"id": m["params"]["threadId"]}}})
+    elif method == "thread/start":
+        send({"id": m["id"], "result": {"thread": {"id": "fresh"}}})
+    elif method == "thread/name/set":
+        send({"id": m["id"], "result": {}})
+    elif method == "config/read":
+        send({"id": m["id"], "result": {"config": {}}})
+    elif method == "turn/start":
+        tid = m["params"]["threadId"]
+        send({"id": m["id"], "result": {"turn": {"id": "turn-1"}}})
+        answer = {"id": "a", "type": "agentMessage", "phase": "final_answer", "text": "Answer in " + tid}
+        send({"method": "item/completed", "params": {"threadId": tid, "item": answer}})
+        send({"method": "turn/completed", "params": {"threadId": tid, "turn": {"id": "turn-1", "status": "completed"}}})
+"""
+
+    def run_server(self, mode: str, **kwargs) -> tuple[tuple[str, str], list[dict], list[dict]]:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            script, log = root / "server.py", root / "requests.jsonl"
+            script.write_text(self.FAKE, encoding="utf-8")
+            server = CodexAppServer([sys.executable, "-u", str(script), mode, str(log)], cwd=root,
+                                    timeout=5, max_timeout=10, **kwargs)
+            events: list[dict] = []
+            result = server.run("Next question", model=None, reasoning_effort=None, emit=events.append)
+            requests = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+        return result, events, requests
+
+    def test_resumes_the_slack_threads_saved_conversation(self) -> None:
+        result, events, requests = self.run_server("ok", resume_thread_id="saved")
+        methods = [request["method"] for request in requests]
+        self.assertEqual(("completed", ""), result)
+        self.assertIn("thread/resume", methods)
+        self.assertNotIn("thread/start", methods)
+        self.assertIn({"type": "session", "session_id": "saved"}, events)
+        self.assertEqual("Answer in saved", events[-2]["text"])
+
+    def test_resumed_thread_gets_the_continued_prompt_and_standing_instructions(self) -> None:
+        _result, _events, requests = self.run_server_with("ok", resume_thread_id="saved")
+        resume = next(request for request in requests if request["method"] == "thread/resume")
+        turn = next(request for request in requests if request["method"] == "turn/start")
+        self.assertEqual("Standing rules", resume["params"]["developerInstructions"])
+        self.assertEqual("Only new messages", turn["params"]["input"][0]["text"])
+
+    def test_fresh_thread_gets_the_full_prompt_after_a_failed_resume(self) -> None:
+        _result, _events, requests = self.run_server_with("missing", resume_thread_id="gone")
+        start = next(request for request in requests if request["method"] == "thread/start")
+        turn = next(request for request in requests if request["method"] == "turn/start")
+        self.assertEqual("Standing rules", start["params"]["developerInstructions"])
+        self.assertEqual("Next question", turn["params"]["input"][0]["text"])
+
+    def run_server_with(self, mode: str, **kwargs):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            script, log = root / "server.py", root / "requests.jsonl"
+            script.write_text(self.FAKE, encoding="utf-8")
+            server = CodexAppServer([sys.executable, "-u", str(script), mode, str(log)], cwd=root,
+                                    timeout=5, max_timeout=10, **kwargs)
+            events: list[dict] = []
+            result = server.run("Next question", model=None, reasoning_effort=None, emit=events.append,
+                                instructions="Standing rules", continued_prompt="Only new messages")
+            requests = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+        return result, events, requests
+
+    def test_missing_conversation_is_replaced_by_a_saved_fresh_one(self) -> None:
+        result, events, requests = self.run_server("missing", resume_thread_id="gone")
+        start = next(request for request in requests if request["method"] == "thread/start")
+        self.assertEqual(("completed", ""), result)
+        self.assertFalse(start["params"]["ephemeral"])
+        self.assertIn({"type": "session", "session_id": "fresh"}, events)
+
+    def test_new_conversations_are_saved_so_sub_agents_can_load_them(self) -> None:
+        _result, events, requests = self.run_server("ok")
+        start = next(request for request in requests if request["method"] == "thread/start")
+        self.assertFalse(start["params"]["ephemeral"])
+        self.assertIn({"type": "session", "session_id": "fresh"}, events)
+
+    def test_reply_summaries_stay_out_of_history_and_never_resume(self) -> None:
+        _result, events, requests = self.run_server("ok", resume_thread_id="saved",
+                                                    text_only_instructions="Summarize.")
+        start = next(request for request in requests if request["method"] == "thread/start")
+        self.assertTrue(start["params"]["ephemeral"])
+        self.assertNotIn("thread/resume", [request["method"] for request in requests])
+        self.assertNotIn("session", [event["type"] for event in events])
+
+    def test_names_a_saved_thread_without_starting_a_turn(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            script, log = root / "server.py", root / "requests.jsonl"
+            script.write_text(self.FAKE, encoding="utf-8")
+            server = CodexAppServer([sys.executable, "-u", str(script), "ok", str(log)], cwd=root, timeout=5)
+            server.set_thread_name("saved", "Closed 12 of 67 issues")
+            requests = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+        self.assertIn({"threadId": "saved", "name": "Closed 12 of 67 issues"},
+                      [request["params"] for request in requests if request["method"] == "thread/name/set"])
+        self.assertNotIn("turn/start", [request["method"] for request in requests])
+        self.assertIsNotNone(server.process is None or server.process.poll())
+
+
+class SubAgentTests(unittest.TestCase):
+    """Codex never wakes the main thread when a background sub-agent finishes."""
+
+    @staticmethod
+    def activity(kind: str, agent: str = "child-1", thread: str = "main") -> dict:
+        return {"method": "item/completed", "params": {"threadId": thread, "item": {
+            "id": f"{kind}-{agent}", "type": "subAgentActivity", "kind": kind, "agentThreadId": agent}}}
+
+    @staticmethod
+    def message(item_id: str, text: str, thread: str = "main") -> list[dict]:
+        item = {"id": item_id, "type": "agentMessage", "phase": "final_answer"}
+        return [
+            {"method": "item/started", "params": {"threadId": thread, "item": item}},
+            {"method": "item/completed", "params": {"threadId": thread, "item": {**item, "text": text}}},
+        ]
+
+    @staticmethod
+    def turn_completed(thread: str = "main") -> dict:
+        return {"method": "turn/completed", "params": {"threadId": thread,
+                                                       "turn": {"id": "t", "status": "completed"}}}
+
+    def mapped(self, mapper: CodexEventMapper, messages: list[dict]) -> list[dict]:
+        return [event for message in messages for event in mapper.map(message)]
+
+    def test_reports_the_conversation_size_from_the_latest_call(self) -> None:
+        mapper = CodexEventMapper("main")
+        events = mapper.map({"method": "thread/tokenUsage/updated", "params": {"threadId": "main", "tokenUsage": {
+            "total": {"inputTokens": 90000, "outputTokens": 900, "cachedInputTokens": 0},
+            "last": {"inputTokens": 30000, "outputTokens": 500}}}})
+        self.assertIn({"type": "context", "tokens": 30500}, events)
+        self.assertEqual([], mapper.map({"method": "thread/tokenUsage/updated", "params": {
+            "threadId": "child", "tokenUsage": {"total": {}, "last": {"inputTokens": 1, "outputTokens": 1}}}}))
+
+    def test_sub_agent_threads_never_reach_slack(self) -> None:
+        mapper = CodexEventMapper("main")
+        events = self.mapped(mapper, [*self.message("child-answer", "child text", thread="child-1"),
+                                      self.turn_completed(thread="child-1")])
+        self.assertEqual([], events)
+
+    def test_turn_ending_with_running_sub_agents_waits_and_demotes_its_note(self) -> None:
+        mapper = CodexEventMapper("main")
+        events = self.mapped(mapper, [self.activity("started"),
+                                      *self.message("note", "I'll report back."),
+                                      self.turn_completed()])
+        self.assertNotIn("I'll report back.", json.dumps(events))
+        self.assertTrue(mapper.awaiting_subagents)
+        self.mapped(mapper, [self.activity("completed")])
+        self.assertEqual(set(), mapper.subagents)
+
+    def test_interrupted_sub_agent_is_no_longer_running(self) -> None:
+        mapper = CodexEventMapper("main")
+        self.mapped(mapper, [self.activity("started"), self.activity("interrupted")])
+        self.assertEqual(set(), mapper.subagents)
+
+    def test_note_stands_as_answer_when_sub_agents_finish_within_the_turn(self) -> None:
+        mapper = CodexEventMapper("main")
+        events = self.mapped(mapper, [self.activity("started"), *self.message("note", "All done."),
+                                      self.activity("completed"), self.turn_completed()])
+        answers = [e["text"] for e in events if e["type"] == "message_complete"]
+        self.assertEqual(["All done."], answers)
+        self.assertEqual("turn_complete", events[-1]["type"])
+
+    FAKE = r"""
+import json, sys
+turn = 0
+def send(p): print(json.dumps(p), flush=True)
+for line in sys.stdin:
+    m = json.loads(line)
+    method = m.get("method")
+    if method == "initialize":
+        send({"id": m["id"], "result": {}})
+    elif method == "thread/start":
+        send({"id": m["id"], "result": {"thread": {"id": "main"}}})
+    elif method == "turn/interrupt":
+        send({"id": m["id"], "error": {"code": -32600, "message": "no active turn"}})
+    elif method == "turn/start":
+        turn += 1
+        tid = "turn-" + str(turn)
+        send({"id": m["id"], "result": {"turn": {"id": tid}}})
+        def item(kind, item, thread="main"):
+            send({"method": "item/" + kind, "params": {"threadId": thread, "turnId": tid, "item": item}})
+        if turn == 1:
+            spawn = {"id": "call-1", "type": "subAgentActivity", "kind": "started", "agentThreadId": "child-1"}
+            item("started", spawn); item("completed", spawn)
+            note = {"id": "note", "type": "agentMessage", "phase": "final_answer", "text": "I'll report back."}
+            item("started", note); item("completed", note)
+            send({"method": "turn/completed", "params": {"threadId": "main", "turn": {"id": tid, "status": "completed"}}})
+            if sys.argv[1] == "hang":
+                continue
+            child = {"id": "child-answer", "type": "agentMessage", "phase": "final_answer", "text": "child text"}
+            item("started", child, "child-1"); item("completed", child, "child-1")
+            send({"method": "turn/completed", "params": {"threadId": "child-1", "turn": {"id": "c", "status": "completed"}}})
+            done = {"id": "done-1", "type": "subAgentActivity", "kind": "completed", "agentThreadId": "child-1"}
+            item("started", done); item("completed", done)
+        else:
+            assert "sub-agents have finished" in m["params"]["input"][0]["text"]
+            answer = {"id": "answer", "type": "agentMessage", "phase": "final_answer", "text": "Closed 3 issues."}
+            item("started", answer); item("completed", answer)
+            send({"method": "turn/completed", "params": {"threadId": "main", "turn": {"id": tid, "status": "completed"}}})
+"""
+
+    def server(self, root: Path, mode: str, **kwargs) -> CodexAppServer:
+        script = root / "server.py"
+        script.write_text(self.FAKE, encoding="utf-8")
+        return CodexAppServer([sys.executable, "-u", str(script), mode], cwd=root,
+                              timeout=5, max_timeout=10, **kwargs)
+
+    def test_wire_starts_follow_up_turn_once_sub_agents_finish(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            events: list[dict] = []
+            server = self.server(Path(raw), "finish")
+            result = server.run("Review issues", model=None, reasoning_effort=None, emit=events.append)
+        self.assertEqual(("completed", ""), result)
+        answers = [e["text"] for e in events if e["type"] == "message_complete"]
+        self.assertEqual(["Closed 3 issues."], answers)
+        self.assertNotIn("child text", json.dumps(events))
+        self.assertEqual(1, sum(e["type"] == "turn_complete" for e in events))
+        self.assertEqual("turn-2", server.turn_id)
+
+    def test_wire_stop_while_waiting_for_sub_agents_ends_promptly(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            control = root / "control"
+            server = self.server(root, "hang", control_file=control, run_id="run-1")
+
+            def emit(event: dict) -> None:
+                if event.get("type") == "usage" or event.get("type") == "message_start":
+                    control.write_text("run-1", encoding="utf-8")
+
+            started = time.monotonic()
+            result = server.run("Review issues", model=None, reasoning_effort=None, emit=emit)
+        self.assertEqual(("interrupted", ""), result)
+        self.assertLess(time.monotonic() - started, 5)
+
+
 class AppServerWireTests(unittest.TestCase):
     FAKE_SERVER = r'''
 import json

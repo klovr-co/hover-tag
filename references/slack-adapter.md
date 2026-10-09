@@ -237,6 +237,8 @@ Optional:
 export OPENTAG_TIMEOUT_SECONDS=420      # stop after this much backend inactivity
 export OPENTAG_MAX_TIMEOUT_SECONDS=3600 # absolute task limit, even with activity
 export OPENTAG_BACKEND_ATTEMPTS=3   # codex backend: retries on capacity/rate-limit
+export OPENTAG_THREAD_MAX_CONTEXT_TOKENS=150000 # start a fresh thread conversation at this size (0: never continue)
+export OPENTAG_THREAD_IDLE_HOURS=4  # start a fresh thread conversation after this idle time (0: never continue)
 export OPENTAG_SLACK_STREAMING=0    # optional: disable default Slack response streaming
 export OPENTAG_CODEX_TRANSPORT=exec # optional legacy rollback; App Server is the default
 export OPENTAG_CODEX_MODELS=""      # optional comma-separated model allowlist
@@ -297,6 +299,9 @@ in Tag.app → Details or `tag NAME settings ai`. This applies to Codex and
 Claude. Slack replies have no Configure control or per-user preferences.
 Startup archives legacy preferences before accepting requests; historic
 Configure buttons explain where settings moved and cannot save overrides.
+Slack copy says "the Tag app" rather than "Tag.app", because Slack turns
+`Tag.app` into a link to the tag.app website. The bridge links that phrase to
+`hover-tag://tag/TAG_ID`, which Tag.app registers to open that Tag's Details.
 Backend-supported Fast Mode defaults still apply. Restart Tag after changing
 its local backend configuration; app model changes restart it automatically.
 

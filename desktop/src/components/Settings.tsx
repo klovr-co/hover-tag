@@ -1,7 +1,7 @@
 // Copyright 2026 klovr.co
 // SPDX-License-Identifier: Apache-2.0
 // App settings, the one Tag update, and a Tag's recent logs.
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { APPEARANCES, APPEARANCE_LABEL, setAppearance, useAppearance } from "../lib/appearance";
 import type { AppInfo, Bridge } from "../lib/bridge";
 import { parseConnections } from "../lib/ai";
@@ -18,8 +18,20 @@ import { CommunityLinks } from "./CommunityLinks";
 import { CompactSky, ErrorLine, Icon, Primary, Secondary, Spinner, Switch, tagIcon } from "./ui";
 
 const DOCS = "https://www.hover.team/tag/";
+const HOVER = "https://hover.team";
 
 export type SettingsTab = "general" | "updates" | "about";
+/** Closes a short screen with a quiet river along the bottom of its panel, so the space above reads as finished. */
+export function RiverFoot({ api }: { api?: Bridge }) {
+  return (
+    <div className="river-foot">
+      {api && <span>Built with <i className="heart" aria-label="love">♥</i> by{" "}
+        <button className="credit" onClick={() => void api.open(HOVER)}>hover.team</button></span>}
+      <div className="water" aria-hidden="true" />
+    </div>
+  );
+}
+
 const SETTINGS_TABS: SettingsTab[] = ["general", "updates", "about"];
 const TAB_LABEL: Record<SettingsTab, string> = { general: "General", updates: "Updates", about: "About" };
 
@@ -135,6 +147,8 @@ interface SettingsProps {
   replay: () => void;
   /** The tab to open on; General if left out. */
   initialTab?: SettingsTab;
+  /** Open scrolled to Privacy, such as from Home's usage data note. */
+  showPrivacy?: boolean;
   update: UpdateState;
   check: () => void;
   runUpdate: () => void;
@@ -144,7 +158,13 @@ interface SettingsProps {
   openAI?: () => void;
 }
 
-export function Settings({ api, info, tags, telemetry, close, replay, initialTab, update, check, runUpdate, switched, openAI }: SettingsProps) {
+export function Settings({ api, info, tags, telemetry, close, replay, initialTab, showPrivacy, update, check, runUpdate, switched, openAI }: SettingsProps) {
+  const privacy = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!showPrivacy) return;
+    const still = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+    privacy.current?.scrollIntoView?.({ block: "start", behavior: still ? "auto" : "smooth" });
+  }, [showPrivacy]);
   const appearance = useAppearance();
   const [login, setLogin] = useState(false);
   const [keepBusy, setKeepBusy] = useState(false);
@@ -191,7 +211,7 @@ export function Settings({ api, info, tags, telemetry, close, replay, initialTab
   return (
     <>
       <CompactSky title="Settings" sub={`Tag ${version}`} back={close} />
-      <div className="body">
+      <div className={tab === "general" ? "body settings" : "body settings river"}>
         <div className="segc tabs" role="tablist" aria-label="Settings">
           {SETTINGS_TABS.map((t) => (
             <button key={t} role="tab" aria-selected={tab === t} onClick={() => setTab(t)}>
@@ -199,6 +219,8 @@ export function Settings({ api, info, tags, telemetry, close, replay, initialTab
             </button>
           ))}
         </div>
+        {/* Tabs differ in length; they scroll here so the window stays one height. */}
+        <div className="settings-pane">
         {tab === "general" && <>
         <div className="section">
           <div className="sec-head"><h3>General</h3></div>
@@ -227,7 +249,7 @@ export function Settings({ api, info, tags, telemetry, close, replay, initialTab
             <div className="card"><AISummaryRow api={api} tags={tags} open={openAI} /></div>
           </div>
         )}
-        <div className="section">
+        <div className="section" ref={privacy}>
           <div className="sec-head"><h3>Privacy</h3></div>
           <div className="card"><UsageDataRow api={api} telemetry={telemetry} setError={setError} /></div>
         </div>
@@ -259,6 +281,8 @@ export function Settings({ api, info, tags, telemetry, close, replay, initialTab
             <div className="txt"><span className="label" style={{ fontSize: 14.5 }}>Enjoying Tag?</span><CommunityLinks api={api} /></div>
           </div>
         </div>}
+        {tab !== "general" && <RiverFoot api={api} />}
+        </div>
         {(error || update.error || tags.error) && <ErrorLine>{error || update.error || tags.error}</ErrorLine>}
       </div>
     </>

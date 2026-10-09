@@ -121,7 +121,7 @@ it("offers to install Tag again when it is removed while Home is open", async ()
   expect(await screen.findByRole("button", { name: "Install Tag" })).toBeTruthy();
 });
 
-it("asks about usage data before Home, then records only after the choice", async () => {
+it("turns usage data on at first run and notes it on Home until the person leaves", async () => {
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
   const api = demoBridge();
   const demo = api.tag;
@@ -134,14 +134,16 @@ it("asks about usage data before Home, then records only after the choice", asyn
   });
   vi.mocked(bridge).mockResolvedValue(api);
   render(<StrictMode><App /></StrictMode>);
-  expect(await screen.findByText("Help support Tag's development")).toBeTruthy();
+  expect(await screen.findByText(/anonymous usage data/)).toBeTruthy();
   const records = () => vi.mocked(api.tag).mock.calls.map(([args]) => args).filter((args) => args[1] === "record");
-  expect(records()).toEqual([]);
-  fireEvent.click(screen.getByRole("button", { name: "Happy to help" }));
   await vi.waitFor(() => expect(records().map((args) => args[2])).toEqual(expect.arrayContaining(["app_opened", "app_screen_viewed"])));
   expect(api.tag).toHaveBeenCalledWith(["telemetry", "on", "--json"]);
-  expect(screen.queryByText("Help support Tag's development")).toBeNull();
   expect(records().filter((args) => args[2] === "app_opened")).toHaveLength(1);
+  fireEvent.click(screen.getByRole("button", { name: "Learn more" }));
+  expect(await screen.findByText("Share usage data")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: /Back|Done|Close/ }));
+  expect(await screen.findByRole("heading", { name: "Your Tags" })).toBeTruthy();
+  expect(screen.queryByText(/anonymous usage data/)).toBeNull();
 });
 
 
@@ -156,7 +158,6 @@ it("replays onboarding from Settings without saving, installing, or quitting", a
   fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
   fireEvent.click(await screen.findByRole("tab", { name: "About" }));
   fireEvent.click(await screen.findByRole("button", { name: "Replay" }));
-  fireEvent.click(await screen.findByRole("button", { name: "No thanks" }));
   expect(await screen.findByRole("button", { name: "Done" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Install Tag" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Quit" })).toBeNull();
@@ -207,4 +208,43 @@ it("reports a missing feed as a check failure after retry and opens channel sett
   expect(vi.mocked(api.tag).mock.calls.filter(([args]) => args[0] === "upgrade").every(([args]) => args.includes("--dry-run"))).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: "Release channel settings" }));
   expect(await screen.findByRole("radio", { name: /Beta/ })).toBeTruthy();
+});
+
+it("never offers an update in a development build, whose version names a release line", async () => {
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  const api = demoBridge();
+  const info = api.info;
+  api.info = vi.fn(async () => ({ ...await info(), development: true }));
+  const tag = api.tag;
+  api.tag = vi.fn((args: string[]) => tag(args));
+  api.checkAppUpdate = vi.fn(async () => ({ version: "9.9.9", notes: "" }) as never);
+  vi.mocked(bridge).mockResolvedValue(api);
+  render(<App />);
+  expect(await screen.findByText("Your Tags")).toBeTruthy();
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+  expect(api.checkAppUpdate).not.toHaveBeenCalled();
+  expect(vi.mocked(api.tag).mock.calls.some(([args]) => args[0] === "upgrade")).toBe(false);
+  expect(screen.queryByText(/is ready/)).toBeNull();
+});
+
+it("opens a linked Tag's Details from Slack and ignores Tags that aren't here", async () => {
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  const api = demoBridge();
+  const demo = api.tag;
+  api.tag = vi.fn(async (args: string[]) => args[0] === "telemetry" && args[1] !== "record"
+    ? { code: 0, stderr: "", stdout: JSON.stringify({ schema_version: 1, enabled: false, available: true,
+      saved_preference: "off", process_override: null, privacy_notice: "" }) }
+    : demo(args));
+  let open: (url: string) => void = () => {};
+  api.onDeepLink = (handler) => { open = handler; handler("hover-tag://tag/t0klovr1-a0rese02"); return () => {}; };
+  api.showWindow = vi.fn(async () => {});
+  vi.mocked(bridge).mockResolvedValue(api);
+  render(<App />);
+  expect((await screen.findByRole("tab", { name: "Details" })).getAttribute("aria-selected")).toBe("true");
+  expect(api.showWindow).toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("tab", { name: "Activity" }));
+  act(() => open("hover-tag://tag/t0klovr1-a0rese02"));
+  await vi.waitFor(() => expect(screen.getByRole("tab", { name: "Details" }).getAttribute("aria-selected")).toBe("true"));
+  act(() => open("hover-tag://tag/missing"));
+  expect(await screen.findByText("That Tag isn't on this computer.")).toBeTruthy();
 });

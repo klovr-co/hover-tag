@@ -88,6 +88,33 @@ class SummaryTests(unittest.TestCase):
             store.save_reply_summary(run, "Overwrite attempt")
             self.assertEqual(store.get(run)["reply_summary"], reloaded["reply_summary"])
 
+    def test_summary_names_the_threads_backend_conversation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = ActivityStore(Path(directory))
+            run = store.create(team="T", channel="C", thread_ts="1", request_ts="1", requester="U")
+            store.save_session(run, "thread-1")
+            store.finish(run, "completed")
+            worker = agent_summary.ReplySummaryWorker()
+            with patch.object(agent_summary, "summarize_reply", return_value="Closed 12 issues."), \
+                    patch.object(agent_summary, "name_session") as name:
+                worker.submit(store, run, "Answer", "codex", None)
+                worker.jobs.join()
+            name.assert_called_once_with("codex", "thread-1", "Closed 12 issues.")
+            self.assertEqual("Closed 12 issues.", store.get(run)["reply_summary"])
+
+    def test_naming_failure_keeps_the_summary(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = ActivityStore(Path(directory))
+            run = store.create(team="T", channel="C", thread_ts="1", request_ts="1", requester="U")
+            store.save_session(run, "thread-1")
+            store.finish(run, "completed")
+            worker = agent_summary.ReplySummaryWorker()
+            with patch.object(agent_summary, "summarize_reply", return_value="Closed 12 issues."), \
+                    patch.object(agent_summary, "name_session", side_effect=RuntimeError("gone")):
+                worker.submit(store, run, "Answer", "claude", None)
+                worker.jobs.join()
+            self.assertEqual("ready", store.get(run)["reply_summary_status"])
+
     def test_worker_failure_preserves_reply_and_allows_retry(self):
         with tempfile.TemporaryDirectory() as directory:
             store = ActivityStore(Path(directory))
@@ -172,6 +199,7 @@ class SummaryBackendIsolationTests(unittest.TestCase):
             self.assertEqual(options.permission_mode, "dontAsk")
             self.assertTrue(json.loads(options.settings)["disableAllHooks"])
             self.assertIn("strict-mcp-config", options.extra_args)
+            self.assertIn("no-session-persistence", options.extra_args)
             denied = await options.can_use_tool("Bash", {"command": "touch file"}, None)
             self.assertEqual(denied.behavior, "deny")
             yield ResultMessage(result="Launch is ready for review.")

@@ -1,6 +1,6 @@
 # Tag app protocol
 
-Tag.app and other graphical clients do no Tag work themselves. They run the
+The Tag desktop app and other graphical clients do no Tag work themselves. They run the
 `tag` command with `--json` and read its output. This page lists the commands a
 client relies on. Example payloads live in `protocol/examples/`; the
 CLI and app tests both check against them, so a change that breaks a client
@@ -26,6 +26,7 @@ it shows is listed in `capabilities`; otherwise it offers to upgrade Tag.
 | `abandon-setup` | `tag NAME abandon --json`: moves a Tag that never reached Slack to `abandoned/` under the installation root; refuses a Tag that has a Slack app, a bot token, or a running bridge |
 | `remove-tag` | `tag NAME remove --json [--delete-app --confirm-app APP_ID]`: stops the Tag and moves its files to `abandoned/`. The Slack app is kept unless `--delete-app` is given with its exact App ID in `--confirm-app` |
 | `workspace-lifecycle` | `tag start\|stop\|restart --workspace TEAM --json` |
+| `start-progress` | `tag NAME start --json`: one `{"type": "progress", "step", "label", "state", "text"}` line per readiness step as it happens (`state` is `running`, `done`, `attention`, or `info`; a `running` step is followed by its outcome; `info` on `channel-memory` means channels are still importing in the background and the Tag starts without waiting), then `{"type": "result", "status": "complete"\|"failed", "error"?}` |
 | `autostart` | `tag autostart [status\|on\|off] --json`, `keep_running` in `tag list` |
 | `autostart-keep` | `tag autostart keep TAG... --json`: keep Tags running without starting them now |
 | `logs-json` | `tag NAME logs --json [--limit N]` |
@@ -33,6 +34,7 @@ it shows is listed in `capabilities`; otherwise it offers to upgrade Tag.
 | `install-progress` | `TAG_INSTALL_PROGRESS=jsonl` for `install.sh` and `install.ps1` |
 | `ai-connections` | Per-Tag AI status and model controls; AI setup questions |
 | `shared-ai-connections` | Global `tag settings ai connections\|sign-in\|resume --json`; shared accounts, model-only setup |
+| `api-connections` | `tag NAME settings ai api [set\|clear\|check] --json`: a Tag's own API connection; `api_connections` in `tag settings ai connections --json`; see [API connections](#api-connections) |
 | `thinking-level` | `tag NAME settings ai effort LEVEL --json`, `model VALUE --effort LEVEL`; thinking-level fields in `settings ai`, `models`, and `tag list` |
 | `logs-activity` | `activity` in `tag NAME logs --json` |
 | `activity-details` | `tag NAME logs --activity RUN_ID --json` |
@@ -89,7 +91,7 @@ change stored records or service logs. They require `logs --json` and cannot be
 combined with `--activity` or `--follow`. Stopped requests remain visible.
 `--activity-limit N` expands the recent window (default 50, maximum 10000),
 with `activity_has_more` indicating additional matching retained records.
-Tag.app displays chronological history with the latest request at the bottom and
+The app displays chronological history with the latest request at the bottom and
 scrolls there when Activity opens. Scrolling up loads older history in batches of
 50, preserving the reading position; Load older activity also works by keyboard.
 New arrivals follow the bottom only while the user is already there. Show errors
@@ -101,17 +103,20 @@ Each item has `at` (an ISO 8601 UTC time: when the request finished, or when
 it started while it's still running), `kind` (`replied`, `failed`, `stopped`,
 or `working`; treat unknown kinds as finished), `channel` (the Slack channel
 ID), `channel_name` (from the channels the Tag remembers, or `null` when
-unknown or for a direct message), `dm`, and `run_id`. Items come only from Tag's
+unknown or for a direct message), `dm`, `run_id`, `thread` (an opaque key shared
+by the runs of one Slack thread's agent conversation; the app groups runs that
+share it into one entry led by the latest reply, and older records omit it), and
+`step_count` when the run saved tool steps. Items come only from Tag's
 own activity records, which it keeps for 30 days. The summary omits prompts,
 people, and tool steps. See `protocol/examples/logs.json`.
 
 Successful delivered replies can include `reply_summary`: a cached AI-written,
 redacted, plain-text TL;DR of the delivered answer. New summaries use a natural
 8–14-word sentence capped at 110 characters; older cached summaries can contain
-up to 220 characters. Tag.app prefers it over `reply_preview`, the locally generated
+up to 220 characters. The app prefers it over `reply_preview`, the locally generated
 excerpt used while a summary is pending or unavailable. Both fields are exposed
 in the CLI's JSON activity feed, so reading either interface never starts a model call.
-`reply_summary_status` is `pending`, `ready`, or `unavailable`; Tag.app labels fallback
+`reply_summary_status` is `pending`, `ready`, or `unavailable`; the app labels fallback
 text as a reply excerpt and shows pending/unavailable state. A pending record older
 than 30 minutes is displayed as unavailable (including after an interrupted worker).
 Optional `backend`, `model`, and `model_name` record the backend's actual reported
@@ -119,7 +124,7 @@ model at execution time, for both Codex and Claude. Older records without model
 metadata do not inherit the Tag's current setting.
 Optional `reasoning_effort` snapshots the thinking level configured for each
 request; a supported level reported by the backend takes precedence. This works
-for Codex and Claude and is shown beside the model in Tag.app. Older entries
+for Codex and Claude and is shown beside the model in the app. Older entries
 without a saved level omit it rather than inheriting current settings.
 `duration_seconds` is elapsed backend request time, including tool work and retries,
 computed from retained start/finish timestamps. `usage` holds reported cumulative
@@ -127,9 +132,9 @@ computed from retained start/finish timestamps. `usage` holds reported cumulativ
 subsets (`cache_read_input_tokens`, `cache_creation_input_tokens`, and
 `reasoning_output_tokens`). Cache counts are included in input and reasoning
 counts in output, so they are not added again to the total. The separate summary
-pass is excluded. Tag.app shows the total beside the model; hovering or focusing
+pass is excluded. The app shows the total beside the model; hovering or focusing
 the token count opens the reported breakdown. Missing optional counts are omitted.
-Tag.app wraps the full summary. A small chevron beside the reply's channel opens
+The app wraps the full summary. A small chevron beside the reply's channel opens
 the saved details; its accessible label and tooltip explain the control. Missing token usage and missing, zero, or invalid durations are omitted from the feed.
 Finished reply rows without a saved summary, excerpt, or artifact are omitted from
 the feed. The compact Show errors control sits beside the Activity tabs; empty
@@ -143,7 +148,7 @@ New requests also retain optional `artifacts`, with up to 20 output records:
 images never expose their temporary path. Uploaded files can include a permanent
 Slack file `url`, with query strings and fragments removed. `artifact_thread_url`
 opens the original Slack thread when an upload succeeded without a file permalink.
-Tag.app renders compact filename chips below the summary, opening uploaded files
+The app renders compact filename chips below the summary, opening uploaded files
 in Slack and saved workspace files locally. Local-only and failed uploads are
 labeled; failed temporary images have no open action. The same metadata is
 available in CLI activity JSON. Older records omit it, without speculative
@@ -188,20 +193,29 @@ and redacted `details` (`tool`, `input`, `output`, when recorded). The command
 also works without `--json` for terminal inspection. Missing, invalid, or expired
 runs return exit code 1 with an `error` in JSON mode. Reads do not change records.
 
-Tag.app loads these details on demand and reuses finished results while the feed
+The app loads these details on demand and reuses finished results while the feed
 is open. Both Codex App Server and Claude Agent SDK use the same stored event
 contract. Older records work without a rewrite; missing input and result previews are omitted. Error reports match the exact saved reference and request routing;
 older runs without a reference show a report only when routing and the run's time
 window give one unambiguous match. Prompts and private reasoning are not added.
 
+### Starting a Tag
+
 Start or stop one Tag with `tag NAME start` or `tag NAME stop`; the exit code
-is the result. Starting records that the Tag should keep running; stopping
-records that it should stay off (see [Keeping Tags running](../tag-management.md#keeping-tags-running)).
+is the result. With `start-progress`, `tag NAME start --json` prints one
+`progress` line per readiness row, each with a `label` to show. `step` comes
+from the row, such as `runtime`, `slack-app`, `memory`, `channel-memory`,
+`checks`, and `slack`; other rows, such as the welcome DM, can appear, so treat
+an unknown step as part of the latest known one. The final `result` line
+has `status` and, when it failed, `error`. See
+`protocol/examples/start-progress.jsonl`. Two different Tags can start at the
+same time; a second start of the same Tag waits up to 90 seconds for the first. Starting records that the Tag should keep running; stopping
+records that it should stay off (see [Keeping Tags running](cli-operations.md#keeping-tags-running)).
 
 ## Setup
 
 `tag setup --json` and `tag add --json` run guided setup over JSON lines; see
-[Guided setup over JSON lines](../tag-management.md#guided-setup-over-json-lines)
+[Guided setup over JSON lines](cli-operations.md#guided-setup-over-json-lines)
 for the event types, answers, Back, and `--step`. With `setup-v2`, both the
 terminal and the JSON-lines setup follow the same order and use the same words.
 `protocol/examples/setup.jsonl` is a whole session.
@@ -339,7 +353,9 @@ channel Tag isn't in joins it. Memory setup follows without more questions.
 A complete `result` has `ready`: `team`, `app_id`, `channels` (`id`, `name`),
 and `ai` (`backend`, `backend_name`, `label`), for Slack links such as
 `slack://app?team=T…&id=A…&tab=messages` and `slack://channel?team=T…&id=C…`.
-Setup never starts services.
+Setup never starts services. The app runs `tag NAME start --json` next and
+shows its [start progress](#starting-a-tag); a terminal setup prints the
+`tag NAME start` command instead.
 
 ## AI connections
 
@@ -386,7 +402,7 @@ the level now in effect.
 its default model; `effort default` clears it so the model's own default
 applies. It returns `ok`, `default_effort`, `restart_required`, and
 `restarted`, and accepts `--restart` like `model`. A level the model doesn't
-offer is refused. People who chose their own thinking level in Slack keep it.
+offer is refused. Every request uses the Tag's level.
 See `protocol/examples/ai-effort.json`.
 
 `tag settings ai sign-in BACKEND --json` runs the backend's browser
@@ -402,6 +418,39 @@ sign-in and restore them afterwards, even if sign-in fails. Previously stopped
 Tags stay stopped. `tag settings ai resume --restart` resumes a paused plan.
 Named-Tag connection commands are rejected. See `protocol/examples/ai-*.json`
 and `ai-sign-in.jsonl`.
+
+### API connections
+
+A Tag can use its own API (OpenAI-compatible, Anthropic-compatible, or Azure
+OpenAI) instead of the shared sign-in. Each Tag has its own; `tag settings ai
+connections --json` lists them in `api_connections`, one object per Tag and
+backend with `tag` and `tag_name` added. While a Tag uses one, its connection
+in `tag NAME settings ai --json` has `method: "api"`, `shared: false`, no
+actions, `account` such as `API (gateway.example.com)`, and the `api` summary.
+A configuration Tag can't use has `state: "misconfigured"` and the reason in
+`detail`.
+
+`tag NAME settings ai api --json` returns `api` (a list of summaries) and
+`kinds` (`codex`: `openai`, `azure`; `claude`: `anthropic`). A summary has
+`backend`, `kind`, `kind_name`, `base_url`, `host`, `models`, `api_version`,
+`key_set`, and `problem`. It never contains the key.
+
+`tag NAME settings ai api set --backend codex|claude --kind openai|anthropic|azure
+[--base-url URL] --models A,B [--api-version V] --json` reads one stdin line,
+`{"api_key": "…"}` or the bare key; an empty key keeps the saved one. Inputs
+are checked before anything stops. A running Tag needs `--restart`. It writes
+JSON lines: `progress` events with `step` (`stopping`, `saving`,
+`restarting`, `restoring`) and `text`, then one `{"type": "api", "action",
+"backend", "status": "saved"|"failed", "api"?, "default_model"?, "restarted"?,
+"unchanged"?, "in_use"?, "error"?}`. `in_use` is false when the Tag's
+default model runs on the other agent: its model is kept, and it uses the API
+once a model of this agent is chosen. When nothing would change, `unchanged` is true and
+the Tag isn't stopped. Settings are written in one atomic update, and a Tag on this agent
+keeps its model if the API lists it, else uses the first listed model. If
+the Tag doesn't start again, the previous settings are restored and the result
+is `failed`. `clear --backend B` goes back to the shared sign-in and removes the
+saved key. `check --backend B --json` returns `ok` and `checks` (`name`, `ok`,
+`text`) without contacting the provider.
 
 During `tag setup --json`, the AI step uses `choose` questions. When an agent is
 connected, `default_model` has model-only `option_ids`, `groups`, `connections`,

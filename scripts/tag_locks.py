@@ -2,12 +2,20 @@
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 
 
+class LockBusy(RuntimeError):
+    """Another live process holds the lock; waiting may help."""
+
+
 class LifecycleLock:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, shared: bool = False):
         self.path = path
+        # Shared holders exclude exclusive holders but not each other. Windows
+        # has no shared byte-range lock in msvcrt, so it stays exclusive there.
+        self.shared = shared and os.name != "nt"
         self.handle = None
 
     def acquire(self):
@@ -24,11 +32,22 @@ class LifecycleLock:
                 msvcrt.locking(self.handle.fileno(), msvcrt.LK_NBLCK, 1)
             else:
                 import fcntl
-                fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(self.handle.fileno(), (fcntl.LOCK_SH if self.shared else fcntl.LOCK_EX) | fcntl.LOCK_NB)
         except OSError:
             self.handle.close()
             self.handle = None
-            raise RuntimeError("Another lifecycle operation is in progress; retry when it finishes") from None
+            raise LockBusy("Another lifecycle operation is in progress; retry when it finishes") from None
+        if self.shared:
+            # The marker directory and legacy recovery belong to exclusive owners,
+            # but an older CLI holds only the directory: never share with it.
+            try:
+                self.handle.seek(0)
+                if self.path.exists() and self.handle.read() != b"tag-lifecycle-lock-v1":
+                    self._check_legacy_owner()
+            except Exception:
+                self._unlock()
+                raise
+            return self
         try:
             self.handle.seek(0)
             managed = self.handle.read() == b"tag-lifecycle-lock-v1"
@@ -73,7 +92,8 @@ class LifecycleLock:
 
     def release(self):
         try:
-            self.path.rmdir()
+            if not self.shared:
+                self.path.rmdir()
         finally:
             self._unlock()
 
@@ -82,3 +102,31 @@ class LifecycleLock:
 
     def __exit__(self, *exc):
         self.release()
+
+
+def acquire_all(paths, *, shared=(), wait: float = 0.0, waiting=None, sleep=time.sleep, clock=time.monotonic):
+    """Take every lock in order, all or none, waiting up to `wait` seconds while another operation holds one.
+
+    Paths in `shared` are taken in shared mode. Returns the held locks and whether this call had to wait. `waiting` is called once, when waiting starts.
+    """
+    deadline = clock() + wait
+    waited = False
+    while True:
+        held = []
+        try:
+            for path in paths:
+                held.append(LifecycleLock(path, shared=path in shared).acquire())
+            return held, waited
+        except LockBusy:
+            for lock in reversed(held):
+                lock.release()
+            if clock() >= deadline:
+                raise
+            if not waited and waiting is not None:
+                waiting()
+            waited = True
+            sleep(0.5)
+        except BaseException:
+            for lock in reversed(held):
+                lock.release()
+            raise

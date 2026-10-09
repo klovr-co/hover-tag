@@ -25,9 +25,12 @@ npm test               # protocol and state tests
 npm run tauri -- dev          # the real app, driving your installed tag
 ```
 
-`npm run tauri -- dev` uses your real Tags. To try it against this checkout's CLI
-instead, point `TAG_CLI` at a wrapper script, and set `TAG_HOME` to a scratch
-folder to keep your real Tags out of it. `TAG_INSTALLER_SOURCE=/path/to/repo`
+`npm run tauri -- dev` uses your real Tags and your installed `tag`. To try the
+app and this checkout's CLI together, run `./tag app` from the repository root
+after `./install.sh --dependencies-only`. It installs the app's dependencies when
+needed and sets `TAG_CLI` to this checkout. Quit the installed Tag.app first;
+only one runs at a time. Set `TAG_HOME` to a scratch folder to keep your real
+Tags out of it. `TAG_INSTALLER_SOURCE=/path/to/repo`
 makes the first-run installer install that checkout. `TAG_INSTALLER_DEMO=1`
 plays sample data in the real app; nothing changes.
 

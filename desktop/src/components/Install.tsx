@@ -1,7 +1,7 @@
 // Copyright 2026 klovr.co
 // SPDX-License-Identifier: Apache-2.0
 // First run: install Tag with the installer bundled in this app.
-import { useEffect, useReducer, useRef, useState } from "react";
+import { useEffect, useReducer, useRef, useState, type ReactNode } from "react";
 import type { Bridge, Session } from "../lib/bridge";
 import { fraction, initialInstall, installReducer, type StepState } from "../lib/install";
 import { INSTALL_STEPS } from "../lib/protocol";
@@ -9,7 +9,7 @@ import welcomeArt from "../assets/art/welcome-maya.png";
 import building from "../assets/art/tag-building.png";
 import celebrate from "../assets/art/tag-celebrate.png";
 import puzzled from "../assets/art/tag-puzzled.png";
-import { ErrorLine, Icon, Primary, Quiet, Sky, Spinner } from "./ui";
+import { ErrorLine, Icon, Primary, Quiet, Sky, Spinner, useCopied } from "./ui";
 
 /** Keep startup in the same shell as setup, including a recoverable failure. */
 export function Starting({ error, retry }: { error?: string; retry: () => void }) {
@@ -27,35 +27,53 @@ export function Starting({ error, retry }: { error?: string; retry: () => void }
   </>;
 }
 
-/** Replay ends with Done; first-run welcome offers installation and quitting. */
-export function Welcome({ api, platform, install, preview }: { api: Bridge; platform: string } &
-  ({ install: () => void; preview?: never } | { preview: () => void; install?: never })) {
-  const machine = platform === "macos" ? "Mac" : "computer";
+/**
+ * Every first-run install screen shares one canvas: the same sky and art, and a
+ * panel of fixed height with its buttons pinned to the bottom. Moving from
+ * Welcome to Installing to Installed changes only what's inside the panel, so
+ * the window never resizes or jumps between them.
+ */
+function InstallCanvas({ title, lead, side, art, children, foot }: {
+  title: ReactNode; lead: ReactNode; side?: ReactNode; art?: string; children: ReactNode; foot: ReactNode;
+}) {
   return (
     <>
       <Sky kind="hero" stars={150}>
         <img className="welcome-art" src={welcomeArt} alt="Maya waving hello with her Water Tag" />
       </Sky>
-      <div className="body roomy">
-        <div>
-          <div className="h2" style={{ fontSize: 26 }}>Install Tag</div>
-          <p className="lead">Your personal assistant, in Slack.</p>
+      <div className="body roomy install">
+        <div className="title-row">
+          {art && <img className="sprite small" src={art} alt="" />}
+          <div style={{ flex: 1, minWidth: 0 }}><div className="h2" style={{ fontSize: 26 }}>{title}</div><p className="lead">{lead}</p></div>
+          {side}
         </div>
-        <div className="facts">
-          <div className="fact"><span className="fi"><Icon name="user" size={16} /></span>
-            <span><b>No administrator password.</b> Tag installs into your user folder and keeps your existing configuration.</span></div>
-          <div className="fact"><span className="fi"><Icon name="disk" size={16} /></span><span>About <b>650 MB</b> of disk space</span></div>
-          <div className="fact"><span className="fi"><Icon name="wifi" size={16} /></span><span>Keep this {machine} online until it finishes</span></div>
-        </div>
-        <div className="foot">
-          <span className="spacer" />
-          {preview ? <Primary title="Done" onClick={preview} autoFocus /> : <>
-            <Quiet title="Quit" onClick={() => void api.quit()} />
-            <Primary title="Install Tag" onClick={install} autoFocus />
-          </>}
-        </div>
+        <div className="install-main">{children}</div>
+        <div className="foot">{foot}</div>
       </div>
     </>
+  );
+}
+
+/** Replay ends with Done; first-run welcome offers installation and quitting. */
+export function Welcome({ api, platform, install, preview }: { api: Bridge; platform: string } &
+  ({ install: () => void; preview?: never } | { preview: () => void; install?: never })) {
+  const machine = platform === "macos" ? "Mac" : "computer";
+  return (
+    <InstallCanvas title="Install Tag" lead="Multiplayer AI, right in Slack."
+      foot={<>
+        <span className="spacer" />
+        {preview ? <Primary title="Done" onClick={preview} autoFocus /> : <>
+          <Quiet title="Quit" onClick={() => void api.quit()} />
+          <Primary title="Install Tag" onClick={install} autoFocus />
+        </>}
+      </>}>
+      <div className="facts">
+        <div className="fact"><span className="fi"><Icon name="user" size={16} /></span>
+          <span><b>No administrator password.</b> Tag installs into your user folder and keeps your existing configuration.</span></div>
+        <div className="fact"><span className="fi"><Icon name="disk" size={16} /></span><span>About <b>650 MB</b> of disk space</span></div>
+        <div className="fact"><span className="fi"><Icon name="wifi" size={16} /></span><span>Keep this {machine} online until it finishes</span></div>
+      </div>
+    </InstallCanvas>
   );
 }
 
@@ -73,6 +91,7 @@ export function Installing({ api, done, retry, cancel }: {
 }) {
   const [state, dispatch] = useReducer(installReducer, initialInstall);
   const [showLog, setShowLog] = useState(false);
+  const copy = useCopied();
   const [now, setNow] = useState(Date.now());
   const stepStart = useRef(Date.now());
   const session = useRef<Session | null>(null);
@@ -103,66 +122,47 @@ export function Installing({ api, done, retry, cancel }: {
   useEffect(() => { stepStart.current = Date.now(); }, [state.current]);
 
   const failed = state.states.includes("failed");
-  const [title, subtitle] = state.finished ? ["Tag is installed", "Ready to set up your first Tag."]
+  const [title, subtitle] = state.finished ? ["Tag is installed", "The tag command is ready. Next, set up your first Tag."]
     : failed ? ["Installation stopped", "You can safely try again."] : ["Installing Tag…", "This usually takes a few minutes."];
-  const progress = fraction(state, (now - stepStart.current) / 1000);
+  const progress = state.finished ? 1 : fraction(state, (now - stepStart.current) / 1000);
   const percent = Math.round(progress * 100);
-  const log = showLog || failed;
   return (
-    <>
-      <Sky kind="tall" clouds="clear" stars={50}>
-        <div className="sky-row" style={{ flexDirection: "column", alignItems: "stretch", gap: 10 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <img className="sprite" src={state.finished ? celebrate : failed ? puzzled : building} alt="" />
-            <div style={{ flex: 1 }}><h2>{title}</h2><div className="sum">{subtitle}</div></div>
-            <span style={{ fontWeight: 700, fontSize: 15, alignSelf: "flex-end" }}>{failed ? "Stopped" : `${percent}%`}</span>
-          </div>
-          <div className={failed ? "pixbar bad" : "pixbar"} role="progressbar" aria-label="Installing Tag"
-            aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100}>
-            {Array.from({ length: BLOCKS }, (_, i) => <i key={i} className={i < Math.round(progress * BLOCKS) ? "on" : ""} />)}
-          </div>
-        </div>
-      </Sky>
-      <div className="body">
-        {state.finished ? (
-          <div className="notice ok">
-            <span className="ic"><Icon name="check" size={16} /></span>
-            <div style={{ flex: 1 }}>
-              <div className="t">All {INSTALL_STEPS.length} steps finished</div>
-              <div className="d">The <span className="mono">tag</span> command is ready, and Tag.app will manage it for you.</div>
-            </div>
-          </div>
-        ) : (
-          <div className="card steps">
-            {INSTALL_STEPS.map((step, i) => {
-              const s = state.states[i];
-              return (
-                <div key={step.step} className={`st ${s}`}>
-                  <StepIcon state={s} />
-                  <div>
-                    <div className="stt">{step.title}</div>
-                    {s === "running" && <div className="std">{step.detail}</div>}
-                    {s === "failed" && <div className="std bad selectable">{state.failure}</div>}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-        {log && <pre className="logbox selectable" aria-label="Installer log">{state.log.trim() || "No output yet."}</pre>}
-        <div className="foot">
-          {!failed && <button className="link" onClick={() => setShowLog(!showLog)}>{showLog ? "Hide" : "Show"} details</button>}
-          {state.finished && state.version && <span className="ver selectable">Version {state.version}</span>}
-          <span className="spacer" />
-          {!state.finished && !failed && <Quiet title="Cancel" onClick={() => { session.current?.stop(); cancel(); }} />}
-          {failed && <>
-            <Quiet title="Copy details" icon="copy" onClick={() => void api.copy(state.log)} />
-            <Quiet title="Quit" onClick={() => void api.quit()} />
-            <Primary title="Try again" onClick={retry} autoFocus />
-          </>}
-          {state.finished && <Primary title="Set up your first Tag" after="arrow" onClick={() => done(state.command)} autoFocus />}
-        </div>
+    <InstallCanvas title={title} lead={subtitle} art={state.finished ? celebrate : failed ? puzzled : building}
+      side={<span className="install-pct">{failed ? "Stopped" : `${percent}%`}</span>}
+      foot={<>
+        <button className="link" onClick={() => setShowLog(!showLog)}>{showLog ? "Hide" : "Show"} details</button>
+        {state.finished && state.version && <span className="ver selectable">Version {state.version}</span>}
+        <span className="spacer" />
+        {!state.finished && !failed && <Quiet title="Cancel" onClick={() => { session.current?.stop(); cancel(); }} />}
+        {failed && <>
+          <Quiet title={copy.label("Copy details")} icon={copy.copied ? undefined : "copy"} onClick={() => void api.copy(state.log).then(copy.mark, () => {})} />
+          <Quiet title="Quit" onClick={() => void api.quit()} />
+          <Primary title="Try again" onClick={retry} autoFocus />
+        </>}
+        {state.finished && <Primary title="Set up your first Tag" after="arrow" onClick={() => done(state.command)} autoFocus />}
+      </>}>
+      <div className={failed ? "pixbar install-bar bad" : "pixbar install-bar"} role="progressbar" aria-label="Installing Tag"
+        aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100}>
+        {Array.from({ length: BLOCKS }, (_, i) => <i key={i} className={i < Math.round(progress * BLOCKS) ? "on" : ""} />)}
       </div>
-    </>
+      {/* Details take the checklist's place, so showing them never grows the window. */}
+      {showLog ? <pre className="logbox selectable" aria-label="Installer log">{state.log.trim() || "No output yet."}</pre> : (
+        <div className="card steps">
+          {INSTALL_STEPS.map((step, i) => {
+            const s = state.finished ? "done" : state.states[i];
+            return (
+              <div key={step.step} className={`st ${s}`}>
+                <StepIcon state={s} />
+                <div style={{ minWidth: 0 }}>
+                  <div className="stt">{step.title}</div>
+                  {s === "running" && <div className="std">{step.detail}</div>}
+                  {s === "failed" && <div className="std bad selectable">{state.failure}</div>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </InstallCanvas>
   );
 }

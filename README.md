@@ -8,7 +8,7 @@
 
 <h1 align="center">Tag</h1>
 <p align="center">by <a href="https://www.hover.team/">Hover</a></p>
-<p align="center"><strong>Your personal assistant, in Slack.</strong></p>
+<p align="center"><strong>Multiplayer AI, right in Slack.</strong></p>
 <p align="center">
   Powered by your Codex or Claude Code setup · Runs on a computer you control
 </p>
@@ -40,12 +40,12 @@ follow how you got there.
 
 Your Tag runs from your own agent environment, and only you can invoke it by
 default. Teammates can bring their own Tag with their own setup. You share the
-conversation and results; each assistant stays personal.
-[Learn how personal access works →](https://www.hover.team/tag/access/)
+conversation and results, and you decide who can ask your Tag.
+[Learn how access works →](https://www.hover.team/tag/access/)
 
 ## Runs locally, with clear boundaries
 
-Tag's Slack bridge and your Codex or Claude agent run on a computer you control, using the
+Tag's Slack bridge and your Codex or Claude Code agent run on a computer you control, using the
 files, tools, skills, and accounts you choose to make available.
 
 - **Hover does not host your conversations or working files.** Your agent
@@ -53,7 +53,8 @@ files, tools, skills, and accounts you choose to make available.
 - **Your files stay useful outside Tag.** They are ordinary files in your working
   folder, so you can open, edit, move, or reuse them with other tools.
 - **External services are still external.** Slack carries the team conversation;
-  OpenAI or Anthropic processes agent requests; and optional connected services process the
+  your AI provider, such as OpenAI, Anthropic, or an API gateway you choose, processes agent
+  requests; and optional connected services process the
   information required to use them, each under its own data policies.
 
 Tag is local by design, not offline.
@@ -61,11 +62,28 @@ Tag is local by design, not offline.
 
 ## Bring your Tag to work
 
-Start with a Mac or Linux computer that can stay awake and online, a working
-Codex CLI or Claude Code login, and permission to install a Slack app. Agent-guided setup also
-requires Node.js and npm.
+Start with a Mac, Windows, or Linux computer that can stay awake and online, an
+AI connection (Codex, Claude Code, a ChatGPT plan, or an API key), and
+permission to install a Slack app.
 
-Install the setup skill:
+**[Download Tag](https://www.hover.team/tag/)** for macOS, or get it from
+[GitHub releases](https://github.com/klovr-co/hover-tag/releases). The app for
+Windows and Linux is coming soon; until then, use the terminal installer below.
+On first run it installs Tag, then guides you through naming your Tag,
+choosing its AI model, connecting Slack, and picking channels. Your Tag starts
+when setup finishes.
+
+Prefer a terminal? Install the `tag` command, set up, and bring your Tag online:
+
+```bash
+curl -fsSL https://hover.team/tag/install | sh
+tag setup
+tag start
+tag status
+tag stop
+```
+
+Or let your coding agent do it. Install the setup skill (needs Node.js and npm):
 
 ```bash
 # Codex
@@ -74,26 +92,16 @@ npx skills add klovr-co/hover-tag --skill hover-tag-setup -a codex -g
 npx skills add klovr-co/hover-tag --skill hover-tag-setup -a claude-code -g
 ```
 
-Open a new Codex or Claude Code session and ask:
+Then open a new session and ask:
 
 > Use the hover-tag-setup skill to set up Tag for me.
 
-Your agent checks prerequisites, proposes the setup with recommended defaults, and
-drives installation locally. If Slack login is needed, it gives you a one-time
-connection to approve in Slack and return in one reply, with a private clipboard
-handoff available instead. Then bring your Tag online:
-
-```bash
-tag start
-tag status
-tag stop
-```
-
 **[Follow the setup guide and try your first Slack task →](https://www.hover.team/tag/getting-started/)**
 
-Prefer installing from a source checkout? Run `./install.sh`; the same guide
-covers the full manual path. For Windows installation details and qualification
-status, see [installation](docs/installation.md).
+From a source checkout, run `./install.sh` (Windows: `./install.ps1`). See
+[installation](docs/installation.md) for release channels, upgrades from v0.2,
+and uninstalling, and [installation details](docs/reference/installation-details.md)
+for terminal and source installs.
 
 ## More than a reply
 
@@ -112,17 +120,18 @@ remember, but not every conversation. [See how it works →](https://www.hover.t
 ## Early, open source, yours to run
 
 Tag is an early project for experimentation in a trusted environment. Codex and
-Claude Code are both supported, and users can switch models between them
-in Slack. Your agent runs with local
+Claude Code are both supported, as are other AI providers through compatible APIs
+and gateways; each Tag has one model, chosen in the Tag app or the
+CLI. Your agent runs with local
 account permissions and inherited bot/MFS credentials; Tag is not a hardened
 sandbox. Connected services process requests under their own data policies.
 Read the [security model](docs/adr/0001-credential-boundary.md) before connecting
 sensitive accounts or files.
 
 Tag includes privacy-bounded telemetry for setup and reliability in the CLI and
-Tag.app. It never collects prompts, Slack messages, agent output, workspace
+the desktop app. It never collects prompts, Slack messages, agent output, workspace
 paths, files, source code, logs, credentials, configuration values, or command
-arguments. Use **Settings → Privacy** in Tag.app, or `tag telemetry status`,
+arguments. Use **Share usage data** in the app's Settings → **General**, or `tag telemetry status`,
 `tag telemetry on`, or `tag telemetry off`, to manage it, or set
 `TAG_TELEMETRY=off` for an immediate process-level stop. Read the full
 [telemetry and privacy reference](docs/reference/telemetry.md).

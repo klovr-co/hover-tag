@@ -39,6 +39,7 @@ class AssistantMessage:
     model: str = "claude"
     parent_tool_use_id: str | None = None
     error: str | None = None
+    usage: dict[str, Any] | None = None
 
 
 @dataclass
@@ -48,14 +49,43 @@ class UserMessage:
 
 
 @dataclass
+class SystemMessage:
+    subtype: str
+    data: dict[str, Any]
+
+
+@dataclass
 class ResultMessage:
     subtype: str = "success"
     is_error: bool = False
     result: str | None = None
+    session_id: str | None = None
+    num_turns: int = 1
     terminal_reason: str | None = None
     errors: list[str] | None = None
     api_error_status: int | None = None
     usage: dict[str, Any] | None = None
+
+
+@dataclass
+class TaskStartedMessage:
+    task_id: str
+    task_type: str = "local_agent"
+    subtype: str = "task_started"
+
+
+@dataclass
+class TaskNotificationMessage:
+    task_id: str
+    status: str = "completed"
+    subtype: str = "task_notification"
+
+
+@dataclass
+class TaskUpdatedMessage:
+    task_id: str
+    patch: dict[str, Any]
+    subtype: str = "task_updated"
 
 
 def stream(message_id: str, *texts: str, stop_reason: str, tool: bool = False) -> list[StreamEvent]:
@@ -95,6 +125,45 @@ class ClaudeEventMapperTests(unittest.TestCase):
             events[-2],
         )
         self.assertEqual({"type": "turn_complete", "status": "completed"}, events[-1])
+
+    def test_waits_for_background_agents_before_completing(self) -> None:
+        events = mapped([
+            AssistantMessage([{"id": "t1", "name": "Agent", "input": {"run_in_background": True}}]),
+            TaskStartedMessage("a1"),
+            TaskStartedMessage("a2"),
+            TaskStartedMessage("shell", task_type="local_bash"),
+            UserMessage([{"tool_use_id": "t1", "content": "started"}]),
+            *stream("m1", "I'll report back.", stop_reason="end_turn"),
+            ResultMessage(result="I'll report back."),
+            TaskNotificationMessage("a1"),
+            TaskUpdatedMessage("a2", {"status": "killed"}),
+            *stream("m2", "Closed 3 issues.", stop_reason="end_turn"),
+            ResultMessage(result="Closed 3 issues."),
+        ])
+
+        self.assertNotIn("I'll report back.", json.dumps(events))
+        self.assertEqual(1, sum(event["type"] == "turn_complete" for event in events))
+        self.assertEqual(
+            {"type": "message_complete", "message_id": "m2", "phase": "final_answer", "text": "Closed 3 issues."},
+            events[-2],
+        )
+        self.assertEqual({"type": "turn_complete", "status": "completed"}, events[-1])
+
+    def test_reports_main_thread_conversation_size(self) -> None:
+        usage = {"input_tokens": 10, "cache_read_input_tokens": 20000, "cache_creation_input_tokens": 300,
+                 "output_tokens": 50}
+        events = mapped([
+            AssistantMessage([{"text": "hi"}], usage=usage),
+            AssistantMessage([{"text": "sub"}], parent_tool_use_id="t1", usage={**usage, "input_tokens": 999999}),
+        ])
+        self.assertEqual([20360], [event["tokens"] for event in events if event["type"] == "context"])
+
+    def test_failed_turn_completes_even_with_background_agents(self) -> None:
+        events = mapped([
+            TaskStartedMessage("a1"),
+            ResultMessage(is_error=True, result="API Error: 500"),
+        ])
+        self.assertEqual("failed", events[-1]["status"])
 
     def test_maps_tools_to_sanitized_activity_labels(self) -> None:
         events = mapped([
@@ -197,7 +266,7 @@ class FakeClient:
     async def query(self, prompt: str) -> None:
         self.prompt = prompt
 
-    async def receive_response(self):
+    async def receive_messages(self):
         async for message in FakeClient.script(self):
             yield message
 
@@ -392,6 +461,121 @@ class ClaudeAgentRunTests(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 5)
         self.assertEqual("timeout", status)
         self.assertIn("did not confirm interruption", detail)
+
+    def test_run_continues_until_background_agents_report_back(self) -> None:
+        async def script(_client):
+            yield TaskStartedMessage("a1")
+            for event in stream("m1", "Agents are working.", stop_reason="end_turn"):
+                yield event
+            yield ResultMessage(result="Agents are working.")
+            yield TaskNotificationMessage("a1")
+            for event in stream("m2", "All done.", stop_reason="end_turn"):
+                yield event
+            yield ResultMessage(result="All done.")
+
+        result, events = self.run_agent(script)
+
+        self.assertEqual(("completed", ""), result)
+        answers = [event["text"] for event in events if event["type"] == "message_complete"]
+        self.assertEqual(["All done."], answers)
+        self.assertTrue(FakeClient.instances[0].disconnected)
+
+    def test_resumes_the_slack_threads_session_and_reports_it(self) -> None:
+        async def script(_client):
+            yield SystemMessage("init", {"session_id": "s-1"})
+            yield ResultMessage(result="Next answer", session_id="s-1")
+
+        FakeClient.script = script
+        events: list[dict[str, Any]] = []
+        agent = ClaudeAgentRun(cwd=self.root, timeout=30, resume_session_id="s-1")
+        result = agent.run("prompt", model=None, reasoning_effort=None, emit=events.append)
+
+        self.assertEqual(("completed", ""), result)
+        self.assertEqual("s-1", FakeClient.instances[0].options.resume)
+        self.assertEqual([{"type": "session", "session_id": "s-1"}],
+                         [event for event in events if event["type"] == "session"])
+
+    def test_missing_resume_does_not_report_the_stale_session_from_init(self) -> None:
+        async def script(client):
+            if getattr(client.options, "resume", None):
+                yield SystemMessage("init", {"session_id": "gone"})
+                yield ResultMessage(subtype="error_during_execution", is_error=True, num_turns=0,
+                                    session_id="gone",
+                                    errors=["No conversation found with session ID: gone"])
+                return
+            yield SystemMessage("init", {"session_id": "new"})
+            yield ResultMessage(result="ok", session_id="new")
+
+        FakeClient.script = script
+        events: list[dict[str, Any]] = []
+        agent = ClaudeAgentRun(cwd=self.root, timeout=30, resume_session_id="gone")
+        agent.run("prompt", model=None, reasoning_effort=None, emit=events.append)
+
+        self.assertEqual([{"type": "session", "session_id": "new"}],
+                         [event for event in events if event["type"] == "session"])
+
+    def test_standing_instructions_are_the_system_prompt_and_resumes_get_new_messages(self) -> None:
+        async def script(client):
+            yield ResultMessage(result="ok", session_id="s-1")
+
+        FakeClient.script = script
+        agent = ClaudeAgentRun(cwd=self.root, timeout=30, resume_session_id="s-1", instructions="Standing rules")
+        agent.run("Full prompt", model=None, reasoning_effort=None, emit=lambda _event: None,
+                  continued_prompt="Only new messages")
+        self.assertEqual("Standing rules", FakeClient.instances[0].options.system_prompt)
+        self.assertEqual("Only new messages", FakeClient.instances[0].prompt)
+
+    def test_failed_resume_sends_the_full_prompt_to_the_fresh_session(self) -> None:
+        async def script(client):
+            if getattr(client.options, "resume", None):
+                raise RuntimeError("No conversation found with session ID: gone")
+            yield ResultMessage(result="ok", session_id="new")
+
+        FakeClient.script = script
+        agent = ClaudeAgentRun(cwd=self.root, timeout=30, resume_session_id="gone")
+        agent.run("Full prompt", model=None, reasoning_effort=None, emit=lambda _event: None,
+                  continued_prompt="Only new messages")
+        self.assertEqual("Full prompt", FakeClient.instances[-1].prompt)
+
+    def test_missing_session_starts_a_fresh_one_without_reporting_failure(self) -> None:
+        async def script(client):
+            if getattr(client.options, "resume", None):
+                yield ResultMessage(subtype="error_during_execution", is_error=True, num_turns=0,
+                                    session_id="gone",
+                                    errors=["No conversation found with session ID: gone"])
+                return
+            yield ResultMessage(result="Fresh answer", session_id="new")
+
+        FakeClient.script = script
+        events: list[dict[str, Any]] = []
+        agent = ClaudeAgentRun(cwd=self.root, timeout=30, resume_session_id="gone")
+        result = agent.run("prompt", model=None, reasoning_effort=None, emit=events.append)
+
+        self.assertEqual(("completed", ""), result)
+        self.assertEqual(2, len(FakeClient.instances))
+        self.assertFalse(hasattr(FakeClient.instances[1].options, "resume"))
+        self.assertNotIn("gone", json.dumps(events))
+        self.assertEqual(1, sum(event["type"] == "turn_complete" for event in events))
+        self.assertIn({"type": "session", "session_id": "new"}, events)
+
+    def test_missing_session_raised_by_the_sdk_also_starts_fresh(self) -> None:
+        async def script(client):
+            if getattr(client.options, "resume", None):
+                raise RuntimeError("Claude Code returned an error result: No conversation found with session ID: gone")
+            yield ResultMessage(result="Fresh answer", session_id="new")
+
+        FakeClient.script = script
+        events: list[dict[str, Any]] = []
+        agent = ClaudeAgentRun(cwd=self.root, timeout=30, resume_session_id="gone")
+        self.assertEqual(("completed", ""), agent.run("prompt", model=None, reasoning_effort=None, emit=events.append))
+        self.assertIn({"type": "session", "session_id": "new"}, events)
+
+    def test_session_title_uses_the_sdk_rename(self) -> None:
+        renamed = []
+        with patch.dict("sys.modules", {"claude_agent_sdk": types.SimpleNamespace(
+                rename_session=lambda *args, **kwargs: renamed.append((args, kwargs)))}):
+            ClaudeAgentRun.set_session_title("s-1", "Closed 12 issues")
+        self.assertEqual([(("s-1", "Closed 12 issues"), {"directory": None})], renamed)
 
     def test_stream_ending_without_result_is_a_bounded_failure(self) -> None:
         async def script(_client):

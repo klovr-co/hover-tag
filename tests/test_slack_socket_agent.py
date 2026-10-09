@@ -141,6 +141,19 @@ class SlackTextAttachmentTests(unittest.TestCase):
         self.assertTrue(text[0].endswith("[Attachment text truncated]"))
 
 
+class ThreadReservationTests(unittest.TestCase):
+    def test_a_thread_runs_one_request_until_it_is_released(self) -> None:
+        key = slack_socket_agent.RunKey("T1", "C1", "1.0")
+        self.addCleanup(slack_socket_agent.release_thread, key)
+
+        self.assertTrue(slack_socket_agent.reserve_thread(key))
+        self.assertFalse(slack_socket_agent.reserve_thread(key))
+        self.assertTrue(slack_socket_agent.reserve_thread(slack_socket_agent.RunKey("T1", "C1", "2.0")))
+        slack_socket_agent.release_thread(key)
+        self.assertTrue(slack_socket_agent.reserve_thread(key))
+        slack_socket_agent.release_thread(slack_socket_agent.RunKey("T1", "C1", "2.0"))
+
+
 class SlackBinaryAttachmentTests(unittest.TestCase):
     def test_downloads_binary_attachment_to_invocation_directory(self) -> None:
         messages = [{"files": [{
@@ -333,6 +346,24 @@ class RequestAttachmentSelectionTests(unittest.TestCase):
         with self.assertRaisesRegex(slack_socket_agent.AttachmentLimitError, "at most 10"):
             slack_socket_agent.validate_attachment_metadata(selected)
 
+    def test_continued_thread_text_holds_only_others_messages_after_the_last_request(self):
+        client = MagicMock()
+        client.conversations_replies.return_value = {"messages": [
+            {"ts": "1", "user": "U1", "text": "first request"},
+            {"ts": "2", "user": "UBOT", "bot_id": "B1", "text": "Tag's earlier answer"},
+            {"ts": "3", "user": "U2", "text": "a teammate adds context"},
+        ]}
+        request = {"ts": "4", "user": "U1", "text": "follow-up"}
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"SLACK_BOT_TOKEN": "test"}):
+            full, new = slack_socket_agent.build_thread_texts(
+                client, "C1", "1", Path(directory), request=request, since_ts="1", own_user="UBOT")
+        self.assertIn("first request", full)
+        self.assertIn("Tag's earlier answer", full)
+        self.assertNotIn("first request", new)
+        self.assertNotIn("Tag's earlier answer", new)
+        self.assertIn("U2: a teammate adds context", new)
+        self.assertIn("U1: follow-up", new)
+
     def test_paginated_thread_downloads_only_current_upload_and_excludes_future(self):
         client = MagicMock()
         client.conversations_replies.side_effect = [
@@ -364,6 +395,55 @@ class RequestAttachmentSelectionTests(unittest.TestCase):
             slack_socket_agent.build_thread_text(client, "C1", "1", Path(directory), request={"ts": "2", "text": "edit this"})
         self.assertEqual(download.call_count, 1)
         self.assertEqual(download.call_args.args[0], "https://files.slack.com/F2")
+
+    def test_oversized_earlier_file_is_noted_instead_of_blocking_followups(self):
+        video = {"id": "FVID", "name": "launch.MP4", "mimetype": "video/mp4",
+                 "size": slack_socket_agent.MAX_ATTACHMENT_BYTES + 1,
+                 "url_private": "https://files.slack.com/FVID"}
+        for text in ("<@BOT> this is a local path", "<@BOT> how about /Users/me/Downloads/launch.mp4"):
+            with self.subTest(text=text):
+                client = MagicMock()
+                client.conversations_replies.return_value = {"messages": [
+                    {"ts": "1", "user": "U1", "text": "launch video", "files": [video]},
+                ]}
+                with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"SLACK_BOT_TOKEN": "test"}), patch.object(
+                    slack_socket_agent, "download_file_bytes"
+                ) as download:
+                    thread = slack_socket_agent.build_thread_text(
+                        client, "C1", "1", Path(directory), request={"ts": "2", "user": "U1", "text": text})
+                download.assert_not_called()
+                self.assertIn("launch.MP4", thread)
+                self.assertIn("15 MB attachment limit", thread)
+                self.assertIn(text, thread)
+
+    def test_oversized_earlier_file_does_not_make_same_name_ambiguous(self):
+        big = {**self.file(1, "launch.mp4"), "size": slack_socket_agent.MAX_ATTACHMENT_BYTES + 1}
+        small = {**self.file(2, "launch.mp4"), "size": 1024}
+        client = MagicMock()
+        client.conversations_replies.return_value = {"messages": [
+            {"ts": "1", "user": "U1", "files": [big]},
+            {"ts": "2", "user": "U1", "files": [small]},
+        ]}
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"SLACK_BOT_TOKEN": "test"}), patch.object(
+            slack_socket_agent, "download_file_bytes", return_value=b"x"
+        ) as download:
+            thread = slack_socket_agent.build_thread_text(
+                client, "C1", "1", Path(directory),
+                request={"ts": "3", "user": "U1", "text": "<@BOT> summarize launch.mp4"})
+        self.assertEqual(download.call_count, 1)
+        self.assertEqual(download.call_args.args[0], "https://files.slack.com/F2")
+        self.assertIn("15 MB attachment limit", thread)
+
+    def test_oversized_current_upload_still_rejects_the_request(self):
+        client = MagicMock()
+        client.conversations_replies.return_value = {"messages": [{"ts": "1", "text": "start"}]}
+        request = {"ts": "2", "text": "look", "files": [{
+            "id": "FVID", "name": "launch.mp4", "mimetype": "video/mp4",
+            "size": slack_socket_agent.MAX_ATTACHMENT_BYTES + 1}]}
+        with patch.dict(os.environ, {"SLACK_BOT_TOKEN": "test"}), self.assertRaisesRegex(
+            slack_socket_agent.AttachmentLimitError, "launch.mp4.*15 MB attachment limit"
+        ):
+            slack_socket_agent.build_thread_text(client, "C1", "1", Path("unused"), request=request)
 
     def test_image_with_text_filetype_is_downloaded_once(self):
         file = {**self.file(1), "filetype": "text"}
@@ -1172,6 +1252,58 @@ class SlackGeneratedImageTests(unittest.TestCase):
             title="launch-card",
         )
 
+    def test_keeps_copies_without_overwriting_earlier_results(self) -> None:
+        client = MagicMock()
+        with tempfile.TemporaryDirectory() as raw_dir:
+            results_dir, keep_dir = Path(raw_dir) / "results", Path(raw_dir) / "images"
+            results_dir.mkdir()
+            (results_dir / "say-hi.png").write_bytes(b"new")
+            keep_dir.mkdir()
+            (keep_dir / "say-hi.png").write_bytes(b"old")
+
+            errors = slack_socket_agent.upload_generated_images(
+                client, "C123", "1.23", results_dir, keep_dir=keep_dir,
+            )
+
+            self.assertEqual([], errors)
+            self.assertEqual((keep_dir / "say-hi.png").read_bytes(), b"old")
+            self.assertEqual((keep_dir / "say-hi-2.png").read_bytes(), b"new")
+        client.files_upload_v2.assert_called_once()
+
+    @unittest.skipIf(os.name == "nt", "symlinks need extra privileges on Windows")
+    def test_keeping_images_never_follows_symlinks(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            root = Path(raw_dir)
+            image, outside = root / "say-hi.png", root / "outside"
+            image.write_bytes(b"new")
+            outside.mkdir()
+            linked = root / "linked-images"
+            linked.symlink_to(outside, target_is_directory=True)
+            with self.assertRaises(OSError):
+                slack_socket_agent.keep_generated_images([image], linked)
+            self.assertEqual([], list(outside.iterdir()))
+
+            keep_dir = root / "images"
+            keep_dir.mkdir()
+            (keep_dir / "say-hi.png").symlink_to(outside / "escaped.png")
+            slack_socket_agent.keep_generated_images([image], keep_dir)
+            self.assertFalse((outside / "escaped.png").exists())
+            self.assertEqual((keep_dir / "say-hi-2.png").read_bytes(), b"new")
+
+    def test_upload_continues_when_copy_cannot_be_kept(self) -> None:
+        client = MagicMock()
+        with tempfile.TemporaryDirectory() as raw_dir:
+            results_dir = Path(raw_dir) / "results"
+            results_dir.mkdir()
+            (results_dir / "card.png").write_bytes(b"png")
+            blocker = Path(raw_dir) / "blocker"
+            blocker.write_text("file, not a folder", encoding="utf-8")
+            errors = slack_socket_agent.upload_generated_images(
+                client, "C123", "1.23", results_dir, keep_dir=blocker / "images",
+            )
+        self.assertEqual([], errors)
+        client.files_upload_v2.assert_called_once()
+
     def test_rejects_unsupported_oversized_and_symlinked_results(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
             results_dir = Path(raw_dir)
@@ -1397,12 +1529,14 @@ class SlackFailureReplyTests(unittest.TestCase):
         self.assertIn("Please retry", reply)
 
     def test_unsupported_chatgpt_model_copy_identifies_safe_cause(self) -> None:
-        reply = slack_socket_agent.user_facing_failure(
-            "The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.",
-            420, "ABC12345", backend_code="invalid_request_error",
-        )
+        with patch.dict(os.environ, {"TAG_ID": "default"}):
+            reply = slack_socket_agent.user_facing_failure(
+                "The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.",
+                420, "ABC12345", backend_code="invalid_request_error",
+            )
 
-        self.assertIn("Choose another model in Tag.app → Details", reply)
+        self.assertIn("Choose another model in the <hover-tag://tag/default|Tag app> → Details", reply)
+        self.assertNotIn("Tag.app", reply)
         self.assertIn("The 'gpt-6.1-sol' model is not supported", reply)
 
     def test_failure_actions_keep_report_content_out_of_slack_metadata(self) -> None:
@@ -2099,6 +2233,7 @@ class SlackCrossChannelSearchTests(unittest.TestCase):
                     "slack://tag-t123/channels/support__C456"
                 ),
                 "OPENTAG_SLACK_STREAMING": "0",
+                "OPENTAG_CLAUDE_TRANSPORT": "print",
             },
             clear=True,
         ), patch(
@@ -2426,7 +2561,8 @@ class SlackUserAllowlistTests(unittest.TestCase):
         view = client.views_open.call_args.kwargs["view"]
         self.assertEqual("Model settings moved", view["title"]["text"])
         self.assertNotIn("submit", view)
-        self.assertIn("Tag.app", view["blocks"][0]["text"]["text"])
+        self.assertIn("|Tag app> → Details", view["blocks"][0]["text"]["text"])
+        self.assertNotIn("Tag.app", view["blocks"][0]["text"]["text"])
 
 class SlackDirectMessageTests(unittest.TestCase):
     def test_direct_messages_default_on_and_can_be_disabled(self) -> None:
@@ -3438,6 +3574,58 @@ class BackendEventRunnerTests(unittest.TestCase):
                 on_status=on_status,
                 on_trace_event=on_trace_event,
             )
+
+    def test_continued_conversation_gets_new_thread_messages_and_reports_its_size(self) -> None:
+        process = MagicMock()
+        process.stdout = iter(json.dumps(event) + "\n" for event in [
+            {"type": "context", "tokens": 4200},
+            {"type": "turn_complete", "status": "completed"},
+        ])
+        process.wait.return_value = 0
+        process.poll.return_value = None
+        sizes: list[int] = []
+        written: list[str] = []
+        with tempfile.TemporaryDirectory() as raw_dir, patch.object(
+            slack_socket_agent.subprocess, "Popen", return_value=process
+        ) as popen, patch.object(slack_socket_agent.threading, "Timer"), patch.object(
+            slack_socket_agent, "register_active_run"
+        ):
+            def capture(*args, **kwargs):
+                command = args[0]
+                written.append(Path(command[command.index("--thread-new-file") + 1]).read_text(encoding="utf-8"))
+                return process
+            popen.side_effect = capture
+            slack_socket_agent.run_backend_events(
+                "claude", "T123", "C123", "1.23", "U123", "question", "thread", Path(raw_dir), 30,
+                MagicMock(), resume_session="s-1", thread_new_text="U2: only this", on_context=sizes.append,
+            )
+            new_file = Path(popen.call_args.args[0][popen.call_args.args[0].index("--thread-new-file") + 1])
+        self.assertEqual(["U2: only this"], written)
+        self.assertFalse(new_file.exists())
+        self.assertEqual([4200], sizes)
+
+    def test_resumes_the_threads_conversation_and_reports_the_new_one(self) -> None:
+        process = MagicMock()
+        process.stdout = iter(json.dumps(event) + "\n" for event in [
+            {"type": "session", "session_id": "thread-9"},
+            {"type": "message_complete", "phase": "final_answer", "text": "Done"},
+            {"type": "turn_complete", "status": "completed"},
+        ])
+        process.wait.return_value = 0
+        process.poll.return_value = None
+        sessions: list[str] = []
+        with tempfile.TemporaryDirectory() as raw_dir, patch.object(
+            slack_socket_agent.subprocess, "Popen", return_value=process
+        ) as popen, patch.object(slack_socket_agent.threading, "Timer"), patch.object(
+            slack_socket_agent, "register_active_run"
+        ):
+            slack_socket_agent.run_backend_events(
+                "codex", "T123", "C123", "1.23", "U123", "question", "thread", Path(raw_dir), 30,
+                MagicMock(), resume_session="thread-8", on_session=sessions.append,
+            )
+        command = popen.call_args.args[0]
+        self.assertEqual("thread-8", command[command.index("--resume-session") + 1])
+        self.assertEqual(["thread-9"], sessions)
 
     def test_forwards_lifecycle_activity_to_private_record(self) -> None:
         callback = MagicMock()

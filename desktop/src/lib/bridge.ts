@@ -9,9 +9,10 @@ import type { TagRow } from "./protocol";
 import versionExample from "../../../protocol/examples/version.json";
 import progressExample from "../../../protocol/examples/install-progress.txt?raw";
 import setupExample from "../../../protocol/examples/setup.jsonl?raw";
+import startExample from "../../../protocol/examples/start-progress.jsonl?raw";
 import aiStatusExample from "../../../protocol/examples/ai-status.json";
 import aiModelsExample from "../../../protocol/examples/ai-models.json";
-import type { AIStatus, Connection } from "./ai";
+import type { AIStatus, ApiConnection, Connection } from "./ai";
 import type { ActivityItem } from "./home";
 import { windowFitter } from "./fit";
 
@@ -28,6 +29,8 @@ export interface AppInfo {
   legacyWantedTags: string[] | null;
   /** The person's first name from their computer account, for Home's greeting. */
   firstName?: string | null;
+  /** A development build, such as `./tag app`: it never offers or installs updates. */
+  development?: boolean;
 }
 
 export interface RunResult {
@@ -54,12 +57,16 @@ export interface Bridge {
   tag(args: string[]): Promise<RunResult>;
   /** `tag ARGS --json` setup conversation: one stdout line per callback. */
   setup(args: string[], onLine: (line: string) => void, onExit: (code: number, stderr: string) => void): Promise<Session>;
+  /** `tag ARGS --json` for a command that reports progress as it goes, such as start. */
+  follow(args: string[], onLine: (line: string) => void, onExit: (code: number, stderr: string) => void): Promise<Session>;
   install(channel: string, onLine: (line: string) => void, onExit: (code: number) => void): Promise<Session>;
   copy(text: string): Promise<void>;
   paste(): Promise<string>;
   open(target: string): Promise<void>;
   updateTray(tags: TrayTag[], keepRunning: boolean): Promise<void>;
   onTray(handler: (action: string, tag?: string) => void): () => void;
+  /** `hover-tag://` links: the one that opened the app, then each one opened while it runs. */
+  onDeepLink(handler: (url: string) => void): () => void;
   openAtLogin(enabled?: boolean): Promise<boolean>;
   notify(title: string, body: string): Promise<void>;
   showWindow(): Promise<void>;
@@ -95,6 +102,7 @@ async function tauriBridge(): Promise<Bridge> {
   const opener = await import("@tauri-apps/plugin-opener");
   const autostart = await import("@tauri-apps/plugin-autostart");
   const notification = await import("@tauri-apps/plugin-notification");
+  const deepLink = await import("@tauri-apps/plugin-deep-link");
   const { getCurrentWindow, LogicalSize } = await import("@tauri-apps/api/window");
 
   type Output = { event: "line"; data: string } | { event: "exit"; data: { code: number; stderr: string } };
@@ -116,6 +124,8 @@ async function tauriBridge(): Promise<Bridge> {
     info: () => invoke<AppInfo>("app_info"),
     tag: (args) => invoke<RunResult>("run_tag", { args }),
     setup: (args, onLine, onExit) => stream("setup_start", { args }, onLine, onExit),
+    // The same streamed `tag ARGS --json` session as setup; start never reads input.
+    follow: (args, onLine, onExit) => stream("setup_start", { args }, onLine, onExit),
     install: (channel, onLine, onExit) => stream("install_start", { channel }, onLine, (code) => onExit(code)),
     copy: (text) => clipboard.writeText(text),
     paste: async () => (await clipboard.readText()) ?? "",
@@ -123,6 +133,11 @@ async function tauriBridge(): Promise<Bridge> {
     updateTray: (tags, keepRunning) => invoke("update_tray", { tags, keepRunning }),
     onTray: (handler) => {
       const unlisten = listen<{ action: string; tag?: string }>("tray", (e) => handler(e.payload.action, e.payload.tag));
+      return () => void unlisten.then((stop) => stop());
+    },
+    onDeepLink: (handler) => {
+      void deepLink.getCurrent().then((urls) => urls?.forEach(handler), () => {});
+      const unlisten = deepLink.onOpenUrl((urls) => urls.forEach(handler));
       return () => void unlisten.then((stop) => stop());
     },
     openAtLogin: async (enabled) => {
@@ -196,6 +211,11 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
   let savedChannel = runtimeVersion.includes("-alpha") ? "alpha" : runtimeVersion.includes("-beta") ? "beta" : "stable";
   const targetVersion = new URLSearchParams(location.search).get("update") ? "0.4.0-alpha.1" : runtimeVersion;
   let keepRunning = false;
+  // ?api=1 starts with one Tag already using its own API.
+  const apiDemo: ApiConnection[] = typeof location !== "undefined" && new URLSearchParams(location.search).get("api") ? [{
+    tag: rows[0].id, tag_name: rows[0].slack_name ?? "Tag", backend: "codex", kind: "openai", kind_name: "OpenAI-compatible",
+    base_url: "https://gateway.example.com/v1", host: "gateway.example.com", models: ["gpt-5.5", "gpt-5.5-mini"],
+    api_version: "", key_set: true, problem: "" }] : [];
   let loginItem = false;
   // ?telemetry=ask shows the first-run usage data notice.
   let telemetry = new URLSearchParams(location.search).get("telemetry") === "ask" ? "not_set" : "on";
@@ -211,7 +231,7 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
       const [first, second] = args;
       if (first === "settings" && second === "ai" && args[2] === "connections") {
         return json({ connections: sharedAI.connections, usable: sharedAI.connections.filter((c) => c.state === "connected").map((c) => c.backend),
-          running: rows.some((r) => r.state === "running"), scope: "installation" });
+          running: rows.some((r) => r.state === "running"), scope: "installation", api_connections: structuredClone(apiDemo) });
       }
       if (first === "list") return json({ schema_version: 1, tags: rows });
       if (first === "telemetry") {
@@ -222,7 +242,13 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
       }
       if (first === "version") {
         return json({ ...versionExample, version: runtimeVersion,
-          capabilities: [...new Set([...versionExample.capabilities, "ai-connections", "shared-ai-connections", "logs-activity", "thinking-level", "describe", "telemetry-events"])] });
+          capabilities: [...new Set([...versionExample.capabilities, "ai-connections", "shared-ai-connections", "logs-activity", "thinking-level", "describe", "telemetry-events", "api-connections"])] });
+      }
+      if (second === "settings" && args[2] === "ai" && args[3] === "api" && args[4] === "check") {
+        await sleep(500);
+        return json({ schema_version: 1, type: "api", action: "check", backend: args[6], ok: true, checks: [
+          { name: "configuration", ok: true, text: "Configured. The key and models are checked on the first real request." },
+          { name: "agent", ok: true, text: `${args[6] === "codex" ? "Codex" : "Claude Code"} is installed.` }] });
       }
       if (second === "settings" && args[2] === "ai") {
         const ai = aiFor(first, rows.find((r) => r.id === first));
@@ -304,7 +330,20 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
       if (row && second === "describe") row.description = args[2] || null;
       return { code: 0, stdout: "", stderr: "" };
     },
+    follow: async (args, onLine, onExit) => {
+      const row = rows.find((r) => r.id === args[0]);
+      const lines = startExample.trim().split("\n");
+      lines.forEach((line, i) => setTimeout(() => {
+        onLine(line);
+        if (i === lines.length - 1) {
+          if (row) { row.state = "running"; row.keep_running = true; }
+          onExit(0, "");
+        }
+      }, 700 * (i + 1)));
+      return { send: () => {}, stop: () => {} };
+    },
     setup: async (args, onLine, onExit) => {
+      if (args[1] === "settings" && args[3] === "api") return demoApi(apiDemo, rows, args, onLine, onExit);
       if (args[0] === "settings" && args[1] === "ai") return demoSignIn(sharedAI, ["", ...args], onLine, onExit);
       if (args[1] === "settings" && args[2] === "ai") return demoSignIn(aiFor(args[0]), args, onLine, onExit);
       const script = setupExample.trim().split("\n");
@@ -343,11 +382,12 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
       })();
       return { send: () => {}, stop: () => { cancelled = true; onExit(130); } };
     },
-    copy: async (text) => { await navigator.clipboard?.writeText(text).catch(() => {}); },
+    copy: async (text) => { await navigator.clipboard?.writeText(text); },
     paste: async () => "NwrFLzAy",
     open: async (target) => { console.info("open", target); },
     updateTray: async () => {},
     onTray: () => () => {},
+    onDeepLink: () => () => {},
     openAtLogin: async (enabled) => { if (enabled !== undefined) loginItem = enabled; return loginItem; },
     notify: async (title, body) => console.info("notify", title, body),
     showWindow: async () => {},
@@ -378,6 +418,46 @@ function demoAIFor(aiDemo: Map<string, AIStatus>, shared: AIStatus, tag: string,
   ai.connections = shared.connections;
   ai.usable = shared.connections.filter((c) => c.state === "connected").map((c) => c.backend);
   return ai;
+}
+
+/** Plays `tag … settings ai api set|clear`: reads the key from the first message, saves, restarts. */
+function demoApi(store: ApiConnection[], rows: (TagRow & { home: string })[], args: string[],
+  onLine: (line: string) => void, onExit: (code: number, stderr: string) => void): Session {
+  const option = (name: string) => args.includes(name) ? args[args.indexOf(name) + 1] : "";
+  const row = rows.find((r) => r.id === args[0]);
+  const backend = option("--backend");
+  const say = (event: object) => onLine(JSON.stringify(event));
+  const play = async (key: string | null) => {
+    const at = store.findIndex((a) => a.tag === args[0] && a.backend === backend);
+    if (args[4] === "set" && !key && at < 0) {
+      say({ type: "api", action: "set", backend, status: "failed", error: "Enter the API key. Tag reads it from stdin, so it stays out of your shell history." });
+      onExit(1, "");
+      return;
+    }
+    const running = row?.state === "running";
+    for (const step of [...(running ? ["Stopping Tag…"] : []), "Saving the connection…", ...(running ? ["Starting Tag again…"] : [])]) {
+      say({ type: "progress", text: step });
+      await sleep(600);
+    }
+    if (args[4] === "clear") {
+      if (at >= 0) store.splice(at, 1);
+      say({ type: "api", action: "clear", backend, status: "saved", api: null, restarted: running });
+    } else {
+      const kind = option("--kind");
+      const url = option("--base-url") || (kind === "anthropic" ? "https://api.anthropic.com" : "https://api.openai.com/v1");
+      const api: ApiConnection = { tag: args[0], tag_name: row?.slack_name ?? "Tag", backend, kind,
+        kind_name: kind === "azure" ? "Azure OpenAI" : kind === "anthropic" ? "Anthropic-compatible" : "OpenAI-compatible",
+        base_url: url, host: new URL(url).host, models: option("--models").split(","), api_version: option("--api-version"),
+        key_set: true, problem: "" };
+      if (at >= 0) store[at] = api; else store.push(api);
+      say({ type: "api", action: "set", backend, status: "saved", api, restarted: running });
+    }
+    onExit(0, "");
+  };
+  let started = false;
+  const begin = (key: string | null) => { if (!started) { started = true; void play(key); } };
+  if (args[4] === "clear") begin(null);
+  return { send: (message) => begin(String((message as { api_key?: string }).api_key ?? "")), stop: () => {} };
 }
 
 /** Plays `tag … settings ai sign-in`: progress, then connected unless cancelled. */

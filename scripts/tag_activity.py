@@ -308,6 +308,16 @@ class ActivityStore:
                     record["reasoning_effort"] = reasoning_effort
                 self._write(record)
 
+    def save_session(self, run_id: str, session_id: str) -> None:
+        """Remember the backend conversation this run continued, for naming it later."""
+        if not isinstance(session_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", session_id):
+            return
+        with self.lock:
+            record = self.get(run_id)
+            if record is not None:
+                record["session_id"] = session_id
+                self._write(record)
+
     def summary_status(self, run_id: str, status: str) -> None:
         if status not in {"pending", "unavailable"}:
             return
@@ -381,6 +391,12 @@ def artifact_thread_url(record: dict) -> str | None:
     return None
 
 
+def thread_id(record: dict) -> str:
+    """Opaque key shared by every run in one Slack thread, for grouping Activity."""
+    raw = f"{record['team']}:{record['channel']}:{record['thread_ts']}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
 def recent_activity(root: Path, scopes: str = "", limit: int = MAX_RECENT, *,
                     cached_names: dict[str, dict[str, str]] | None = None,
                     channel: str | None = None, hide_errors: bool = False) -> list[dict[str, Any]]:
@@ -416,6 +432,7 @@ def recent_activity(root: Path, scopes: str = "", limit: int = MAX_RECENT, *,
         dm = record_channel.startswith("D")
         items.append((at, {
             "run_id": record["run_id"],
+            "thread": thread_id(record),
             "at": at.isoformat(timespec="seconds"), "kind": RECENT_KINDS[record["outcome"]],
             "channel": record_channel,
             "channel_name": None if dm else (cached_names or {}).get(record["team"], {}).get(record_channel, names.get(record_channel)),

@@ -3,7 +3,8 @@
 // Add a Tag: draws the questions Tag's own setup asks over JSON lines, in the
 // onboarding order (Your Tag · AI · Workspace · Create · Channels). It holds no
 // setup logic; every choice is an answer to `tag setup --json`.
-import { useEffect, useReducer, useRef, useState, type ReactNode } from "react";
+import { UsageNote } from "./Home";
+import { useCallback, useEffect, useReducer, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import type { Bridge, Session } from "../lib/bridge";
 import type { AIModels, AIStatus } from "../lib/ai";
 import { findModel } from "../lib/ai";
@@ -13,6 +14,11 @@ import {
   EXISTING_FLOW, EXIT_OPTION, FLOW, heading, initialSetup, setupReducer, trackStep, type SetupState, type SignInStep,
 } from "../lib/setup";
 import { SetupTracker, setupEntry, useTrack } from "../lib/telemetry";
+import { startTag } from "../lib/tags";
+import { initialStart, START_PHASES, startReducer, type Phase, type StartProgress, type StepState } from "../lib/start";
+
+/** Start a Tag; `onLine` follows its progress when Tag reports it. Returns what went wrong, or "". */
+type StartTag = (tag: string, onLine?: (line: string) => void) => Promise<string>;
 import { readActivity } from "../lib/watch";
 import keyArt from "../assets/art/tag-key.png";
 import puzzled from "../assets/art/tag-puzzled.png";
@@ -28,6 +34,10 @@ interface Props {
   /** Setup was cancelled; its progress is saved. */
   paused: () => void;
   openAI?: (resume: string[]) => void;
+  /** Start the finished Tag where Home can see it; returns what went wrong, or "". */
+  start?: StartTag;
+  /** Usage data was turned on at first run: the finished screen says so, with Learn more. */
+  usageNote?: { learnMore: () => void; seen: () => void };
 }
 
 /** What a choose question's answer is: its stable ID when Tag gave them, else its index. */
@@ -36,7 +46,7 @@ const answerFor = (question: SetupQuestion, id: string) => {
   return index >= 0 ? id : (question.options ?? []).indexOf(id);
 };
 
-export function Connect({ api, args, done, paused, openAI }: Props) {
+export function Connect({ api, args, done, paused, openAI, start, usageNote }: Props) {
   const [state, dispatch] = useReducer(setupReducer, initialSetup);
   const session = useRef<Session | null>(null);
   const [attempt, setAttempt] = useState(0);
@@ -45,6 +55,8 @@ export function Connect({ api, args, done, paused, openAI }: Props) {
   // Answers waiting for a question to come back, such as a workspace picked while an organization was open.
   const pending = useRef<{ id: string; answer: unknown } | null>(null);
   const approve = useRef<SetupQuestion | null>(null);
+  // "Create in Slack" was clicked: show the installation straight away, before Slack reports its first step.
+  const [launched, setLaunched] = useState(false);
   // Usage data reads only where the step track stands, never the answers.
   const track = useTrack();
   const latestTrack = useRef(track);
@@ -88,8 +100,14 @@ export function Connect({ api, args, done, paused, openAI }: Props) {
       openAI?.(state.tag ? [state.tag, "setup"] : args);
     }
   }, [state.outcome, state.tag, openAI, args]);
+  // Steps slide in from the side they come from: forward from the right, Back from the left.
+  const at = trackStep(state);
+  const lastAt = useRef(at);
+  const direction = useRef<"forward" | "backward">("forward");
+  if (at !== lastAt.current) { direction.current = at < lastAt.current ? "backward" : "forward"; lastAt.current = at; }
   const q = state.question;
   if (q?.id === "approve_setup") approve.current = q;
+  useEffect(() => { if (q) setLaunched(false); }, [q]);
   useEffect(() => {
     if (q && pending.current?.id === q.id) {
       const { answer } = pending.current;
@@ -99,7 +117,10 @@ export function Connect({ api, args, done, paused, openAI }: Props) {
     }
   }, [q]);
 
+  const startHere = useCallback((tag: string) => startTag(api, tag), [api]);
   const send = (answer: unknown) => {
+    const named = q?.id === "profile" && (answer as { name?: unknown } | null)?.name;
+    if (typeof named === "string" && named) dispatch({ type: "named", name: named });
     dispatch({ type: "answered" });
     session.current?.send({ answer });
   };
@@ -116,7 +137,7 @@ export function Connect({ api, args, done, paused, openAI }: Props) {
     session.current?.send({ answer: null, pause: true });
     paused();
   };
-  if (state.outcome === "complete") return <Ready api={api} state={state} done={done} />;
+  if (state.outcome === "complete") return <Ready api={api} state={state} done={done} start={start ?? startHere} usageNote={usageNote} />;
   const picture = source(state.profile?.preview, state.profile?.revision);
   const body = (): ReactNode => {
     if (state.outcome === "paused") {
@@ -129,6 +150,7 @@ export function Connect({ api, args, done, paused, openAI }: Props) {
           foot={<><Quiet title="Back to Home" onClick={done} /><span className="spacer" />
             <Primary title="Try again" onClick={() => {
               retryTag.current = state.tag || retryTag.current;
+              setLaunched(false);
               dispatch({ type: "restart" });
               setAttempt((value) => value + 1);
             }} autoFocus /></>}>
@@ -136,7 +158,7 @@ export function Connect({ api, args, done, paused, openAI }: Props) {
         </FlowBody>
       );
     }
-    if (state.creating && approve.current) return <Create question={approve.current} state={state} send={send} picture={picture} />;
+    if ((state.creating || (launched && !q)) && approve.current) return <Create question={approve.current} state={state} running send={send} picture={picture} />;
     if (!q) return <FlowBody title={state.lastQuestion ? "Getting the next step ready" : "Meet your new Tag"}
       lead={state.lastQuestion ? "Your choices are saved as you go." : "Give it a name, choose its AI, and connect it to Slack."}
       art={keyArt}>
@@ -154,7 +176,7 @@ export function Connect({ api, args, done, paused, openAI }: Props) {
         if (state.workspaces?.workspaces) return <Workspaces state={state} question={q} send={send} back={back} backThen={backThen}
           signIn={() => { dispatch({ type: "addWorkspace" }); send(answerFor(state.workspaces!, "sign_in")); }} />;
         break;
-      case "approve_setup": if (q.recap) return <Create question={q} state={state} send={send} picture={picture} />; break;
+      case "approve_setup": if (q.recap) return <Create question={q} state={state} running={false} send={send} picture={picture} launch={() => setLaunched(true)} />; break;
       case "existing_app": case "app_id": case "app_checks": return <ExistingApp state={state} question={q} send={send} back={back} />;
       case "channels": if (q.channels) return <Channels question={q} name={state.profile?.name || q.tag_name || "Tag"} send={send} back={back} />; break;
     }
@@ -168,15 +190,18 @@ export function Connect({ api, args, done, paused, openAI }: Props) {
   };
   return (
     <>
-      <FlowSky state={state} picture={picture} cancel={state.outcome ? undefined : cancel} />
-      {body()}
-      {state.error && !state.outcome && q?.id !== "profile" && <div style={{ margin: "-4px 24px 16px" }}><ErrorLine>{state.error}</ErrorLine></div>}
+      <FlowSky state={state} picture={picture} direction={direction.current} cancel={state.outcome ? undefined : cancel} />
+      {/* One canvas for every step: a fixed panel, so the window never resizes between them. */}
+      <div className={`flow-panel ${direction.current}`}>
+        {body()}
+        {state.error && !state.outcome && q?.id !== "profile" && <div style={{ margin: "-4px 24px 16px" }}><ErrorLine>{state.error}</ErrorLine></div>}
+      </div>
     </>
   );
 }
 
 /** The sky with the step track; the marker is the Tag being made, so it travels with you. */
-function FlowSky({ state, picture, cancel }: { state: SetupState; picture: string | null; cancel?: () => void }) {
+function FlowSky({ state, picture, direction, cancel }: { state: SetupState; picture: string | null; direction: "forward" | "backward"; cancel?: () => void }) {
   const steps = state.existing ? EXISTING_FLOW : FLOW;
   const at = trackStep(state);
   const id = state.question?.id;
@@ -186,7 +211,7 @@ function FlowSky({ state, picture, cancel }: { state: SetupState; picture: strin
     <Sky kind="flow" clouds="clear" stars={50}>
       {cancel && <div className="sky-top"><button className="sky-btn small" onClick={cancel}>Cancel</button></div>}
       <div className="flow-head"><h2>Add a Tag</h2><span>{sub}</span></div>
-      <div className="track" aria-label="Setup progress">
+      <div className={`track ${direction}`} aria-label="Setup progress" style={{ "--steps": steps.length } as CSSProperties}>
         {steps.map((label, i) => (
           <div key={label} className={`tstep${i < at ? " done" : i === at ? " now" : ""}`} aria-current={i === at ? "step" : undefined}>
             <span className="tnode">{i === at ? <img src={picture ?? tagIcon} alt="" /> : <i />}</span>
@@ -225,8 +250,9 @@ function Meet({ api, question, send, sendInPlace, existing }: {
   const [description, setDescription] = useState(question.description ?? "");
   const [dragging, setDragging] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [rolling, setRolling] = useState(false);
   const preview = source(question.preview, question.preview_revision ?? question.picture_label);
-  useEffect(() => { setBusy(false); }, [question]);
+  useEffect(() => { setBusy(false); setRolling(false); }, [question]);
   useEffect(() => api.onFileDrop((paths) => { if (paths[0]) { setBusy(true); sendInPlace({ picture: paths[0] }); } }, setDragging), [api, sendInPlace]);
   const limit = question.name_limit ?? 35;
   const max = question.description_limit ?? 140;
@@ -241,7 +267,7 @@ function Meet({ api, question, send, sendInPlace, existing }: {
         <p className="lead">{question.editing ? EDIT_LEAD : "Name it, give it a look, and say what it does. Nothing is created in Slack yet."}</p>
       </div>
       <div className="card mrow">
-        <span className={dragging ? "avw2 dragging" : "avw2"}>
+        <span className={`avw2${dragging ? " dragging" : ""}${rolling ? " rolling" : ""}`}>
           <img key={preview ?? ""} className="pic fresh" src={preview ?? tagIcon} alt={`${name || "Tag"}'s picture`}
             style={question.picture === "custom" ? { background: "#fff" } : undefined} />
         </span>
@@ -261,7 +287,7 @@ function Meet({ api, question, send, sendInPlace, existing }: {
             {description.length > max - 30 && <span className="desc-count">{max - description.length}</span>}
           </div>
           <div className="pic-acts">
-            <button className="p-btn soft sm" disabled={busy} onClick={() => { setBusy(true); sendInPlace("shuffle"); }}><Icon name="dice" size={16} />Shuffle picture</button>
+            <button className="p-btn soft sm" disabled={busy} onClick={() => { setBusy(true); setRolling(true); sendInPlace("shuffle"); }}><Icon name="dice" size={16} />Shuffle picture</button>
             <button className="p-btn quiet sm" disabled={busy} onClick={() => void upload()}><Icon name="upload" size={16} />Upload your own</button>
           </div>
         </div>
@@ -327,7 +353,7 @@ function SignIn({ api, question, state, setStep, send }: {
   const items = [
     { title: "Copy your sign-in line", detail: "A one-time line that tells Slack this computer is yours.",
       act: <div className="ticket"><span className="mono">{line}</span>
-        <Primary small title="Copy" icon="copy" autoFocus onClick={() => { void api.copy(line); setStep(1); }} /></div>,
+        <Primary small title="Copy" icon="copy" autoFocus onClick={() => { void api.copy(line).catch(() => {}); setStep(1); }} /></div>,
       redo: <button className="link redo" onClick={() => setStep(0)}>Copy again</button> },
     { title: "Send it in Slack, then click Confirm",
       detail: "Paste it into any message box in the workspace you want, and send it. Slack asks you to confirm.",
@@ -448,9 +474,10 @@ function Workspaces({ state, question, send, back, backThen, signIn }: {
 
 const CREATE_STEPS = ["create", "picture", "install", "connect"];
 
-function Create({ question, state, send, picture }: { question: SetupQuestion; state: SetupState; send: (a: unknown) => void; picture: string | null }) {
+function Create({ question, state, running, send, picture, launch }: {
+  question: SetupQuestion; state: SetupState; running: boolean; send: (a: unknown) => void; picture: string | null; launch?: () => void;
+}) {
   const recap = question.recap!;
-  const running = !!state.creating;
   const where = recap.workspace.organization ? recap.workspace.name : recap.workspace.name;
   const reported = state.creating ?? [];
   const labels: Record<string, string> = {
@@ -459,19 +486,44 @@ function Create({ question, state, send, picture }: { question: SetupQuestion; s
   };
   const at = Math.max(...reported.map((s) => CREATE_STEPS.indexOf(s.step)), 0);
   const pick = (id: string) => send(answerFor(question, id));
+  const image = source(recap.picture, recap.picture_revision ?? state.profile?.revision) ?? picture ?? tagIcon;
+  // Once it's running, the choices are made: show only the installation, step by step.
+  if (running) {
+    return (
+      <FlowBody title={`Adding ${recap.name} to Slack…`}
+        lead={recap.approval ? "If an organization admin needs to approve, setup pauses here and picks up where it left off."
+          : "Takes about a minute. Slack may ask a workspace admin to approve."}>
+        <div className="card">
+          <div className="recap-top">
+            <img src={image} alt="" />
+            <div className="txt"><span className="name"><span className="nm">{recap.name}</span></span>
+              <span className="sub" style={{ display: "flex", alignItems: "center", gap: 6 }}><WorkspaceMark label={recap.workspace.name} icon={recap.workspace.icon ?? null} />{where}</span></div>
+          </div>
+          <div className="steps" style={{ borderTop: "1px solid var(--line)" }} aria-label="Installation progress">
+            {CREATE_STEPS.map((step, i) => {
+              const st = i < at ? "done" : i === at ? "running" : "pending";
+              return (
+                <div key={step} className={`st ${st}`} aria-current={st === "running" ? "step" : undefined}>
+                  <span className={`sicon ${st}`}>{st === "done" ? <Icon name="check" size={12} /> : st === "running" ? <span className="spin" /> : null}</span>
+                  <div className="stt">{labels[step]}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </FlowBody>
+    );
+  }
   return (
-    <FlowBody title={running ? "Creating it in Slack…" : `Ready to create it in ${where}?`}
-      lead={running ? undefined : "Slack creates the app with this name and picture, then installs it."}
-      foot={running
-        ? <span className="meta">{recap.approval ? "If an organization admin needs to approve, setup pauses here and picks up where it left off."
-          : "Takes about a minute. Slack may ask a workspace admin to approve."}</span>
-        : <>{question.can_go_back && <Back onClick={() => pick("back")} />}<span className="spacer" /><Primary title="Create in Slack" onClick={() => pick("create")} autoFocus /></>}>
+    <FlowBody title={`Ready to create it in ${where}?`}
+      lead="Slack creates the app with this name and picture, then installs it."
+      foot={<>{question.can_go_back && <Back onClick={() => pick("back")} />}<span className="spacer" /><Primary title="Create in Slack" onClick={() => { launch?.(); pick("create"); }} autoFocus /></>}>
       <div className="card">
         <div className="recap-top">
-          <img src={source(recap.picture, recap.picture_revision ?? state.profile?.revision) ?? picture ?? tagIcon} alt="" />
+          <img src={image} alt="" />
           <div className="txt"><span className="name"><span className="nm">{recap.name}</span></span>
             <span className="sub wrap">{recap.description || "New Slack app"}</span></div>
-          <button className="link" disabled={running} onClick={() => pick("edit")}>Edit</button>
+          <button className="link" onClick={() => pick("edit")}>Edit</button>
         </div>
         <dl className="summary">
           <dt>Workspace</dt>
@@ -480,24 +532,11 @@ function Create({ question, state, send, picture }: { question: SetupQuestion; s
           <dt>Owner</dt>
           <dd><span className="owner"><OwnerMark icon={recap.owner.icon} />You{recap.owner.name ? ` · @${recap.owner.name}` : ""}</span></dd>
           {recap.ai && <><dt>AI</dt><dd><AgentMark backend={recap.ai.backend} size={20} />{recap.ai.backend_name} · {recap.ai.label}
-            <button className="link" disabled={running} onClick={() => pick("edit_ai")}>Edit</button></dd></>}
+            <button className="link" onClick={() => pick("edit_ai")}>Edit</button></dd></>}
           <dt>Who can ask it</dt>
           <dd>Only you <span style={{ fontWeight: 400, color: "var(--muted)" }}>· people in the channel see its replies</span></dd>
           {recap.approval && <><dt>Approval</dt><dd style={{ fontWeight: 500, color: "var(--muted)" }}>An org admin may need to approve. Setup waits and resumes.</dd></>}
         </dl>
-        {running && (
-          <div className="steps" style={{ borderTop: "1px solid var(--line)" }}>
-            {CREATE_STEPS.map((step, i) => {
-              const st = i < at ? "done" : i === at ? "running" : "pending";
-              return (
-                <div key={step} className={`st ${st}`}>
-                  <span className={`sicon ${st}`}>{st === "done" ? <Icon name="check" size={12} /> : st === "running" ? <span className="spin" /> : null}</span>
-                  <div className="stt">{labels[step]}</div>
-                </div>
-              );
-            })}
-          </div>
-        )}
       </div>
     </FlowBody>
   );
@@ -660,18 +699,96 @@ export function slackLink(ready: SetupReady, place: string) {
     : `slack://channel?team=${encodeURIComponent(ready.team)}&id=${encodeURIComponent(place)}`;
 }
 
-function Ready({ api, state, done }: { api: Bridge; state: SetupState; done: () => void }) {
-  const name = state.profile?.name || "your Tag";
+/** Plain words for what each start phase is doing, while it runs. */
+function phaseDetail(phase: Phase, name: string, channels: string[], seconds: number) {
+  switch (phase) {
+    case "prepare": return "Making sure its Slack app, picture and permissions are current.";
+    case "memory": return `Memory lets ${name} remember conversations. It loads once and stays on for all your Tags.`;
+    case "channels": {
+      const where = channels.length === 1 ? `#${channels[0]}` : channels.length ? `${channels.length} channels` : "its channels";
+      return seconds >= 20 ? `Reading recent messages in ${where} so ${name} has context. The first time can take a few minutes.`
+        : `Reading recent messages in ${where}.`;
+    }
+    case "slack": return `Checking ${name}'s access, then connecting to Slack.`;
+  }
+}
+
+function elapsed(seconds: number) {
+  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
+}
+
+function StartSteps({ progress, name, channels, seconds, failed, error, detailed }: {
+  progress: StartProgress; name: string; channels: string[]; seconds: number; failed: boolean; error: string; detailed: boolean;
+}) {
+  // An older Tag reports no steps; show one honest step instead.
+  const rows = detailed ? START_PHASES.map((phase) => ({ id: phase.id as Phase | null, title: phase.title, ...progress.phases[phase.id] }))
+    : [{ id: null, title: `Starting ${name}`, state: (failed ? "attention" : "running") as StepState, text: "" }];
+  // A failure lands on the step that was running, else the first one that didn't finish.
+  const failedAt = failed ? (rows.find((r) => r.state === "running" || r.state === "attention") ?? rows.find((r) => r.state !== "done")) : undefined;
+  return (
+    <div className="card steps start-steps" aria-live="polite">
+      {rows.map((row) => {
+        const st = row === failedAt ? "failed" : row.state === "attention" ? "failed" : row.state === "running" && !failed ? "running"
+          : row.state === "done" ? "done" : "pending";
+        return (
+          <div key={row.title} className={`st ${st}`}>
+            <span className={`sicon ${st}`}>{st === "done" ? <Icon name="check" size={12} /> : st === "running" ? <span className="spin" />
+              : st === "failed" ? <Icon name="bang" size={12} /> : null}</span>
+            <div style={{ flex: 1 }}>
+              <div className="stt">{row.title}{st === "running" && <span className="st-time">{elapsed(seconds)}</span>}</div>
+              {st === "running" && row.id && <div className="std">{phaseDetail(row.id, name, channels, seconds)}</div>}
+              {st === "failed" && <div className="std bad">{error || row.text || "Something went wrong."}</div>}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function Ready({ api, state, done, start, usageNote }: { api: Bridge; state: SetupState; done: () => void; start: StartTag; usageNote?: Props["usageNote"] }) {
   const ready = state.ready;
+  const name = ready?.name || state.profile?.name || "your Tag";
   const places = tryPlaces(ready);
   const [where, setWhere] = useState("dm");
   const [prompt, setPrompt] = useState(0);
-  const [step, setStep] = useState<"idle" | "starting" | "waiting" | "done" | "failed">("idle");
+  const [step, setStep] = useState<"starting" | "idle" | "waiting" | "done" | "failed">("starting");
   const [error, setError] = useState("");
+  const [attempt, setAttempt] = useState(0);
+  const [progress, setProgress] = useState(initialStart);
+  const [detailed, setDetailed] = useState(false);
+  const [seconds, setSeconds] = useState(0);
   const place = places.find((p) => p.id === where) ?? places[0];
   const text = `${place.dm ? "" : `@${name} `}${TRY_PROMPTS[prompt]}`;
   const picture = source(state.profile?.preview, state.profile?.revision);
-  // Ticks only once Tag records a reply after Start; nothing is made up.
+  // Setup is done, so start the Tag once its process has exited and let go of the Tag.
+  // Once per try, even when StrictMode replays the effect.
+  const tried = useRef("");
+  useEffect(() => {
+    const key = `${state.tag}:${attempt}`;
+    if (!state.ended || !state.tag || tried.current === key) return;
+    tried.current = key;
+    setStep("starting");
+    setError("");
+    setProgress(initialStart());
+    setDetailed(false);
+    void start(state.tag, (line) => {
+      setDetailed(true);
+      setProgress((current) => startReducer(current, line));
+    }).then((failure) => {
+      if (failure) { setStep("failed"); setError(failure); } else setStep("idle");
+    });
+  }, [start, state.ended, state.tag, attempt]);
+  // Time spent on the current step, so a long one reads as working, not stuck.
+  const phaseKey = `${attempt}:${progress.current ?? ""}`;
+  useEffect(() => {
+    if (step !== "starting") return;
+    setSeconds(0);
+    const began = Date.now();
+    const timer = setInterval(() => setSeconds(Math.floor((Date.now() - began) / 1000)), 1000);
+    return () => clearInterval(timer);
+  }, [step, phaseKey]);
+  // Ticks only once Tag records a reply after Slack opens; nothing is made up.
   useEffect(() => {
     if (step !== "waiting" || !state.tag) return;
     const since = Date.now();
@@ -680,51 +797,65 @@ function Ready({ api, state, done }: { api: Bridge; state: SetupState; done: () 
     }).catch(() => {}), 5000);
     return () => clearInterval(timer);
   }, [api, state.tag, step]);
-  const start = async () => {
-    setStep("starting");
-    setError("");
-    const result = await api.tag(state.tag ? [state.tag, "start"] : ["start"]);
-    if (result.code !== 0) { setStep("failed"); setError((result.stderr || result.stdout).trim().split("\n").pop() ?? ""); return; }
-    await api.copy(text);
+  const openSlack = async () => {
+    await api.copy(text).catch(() => {});
     if (ready) void api.open(slackLink(ready, place.id));
     setStep("waiting");
   };
+  const starting = step === "starting" || step === "failed";
+  const channels = (ready?.channels ?? []).map((c) => c.name);
   return (
     <>
       <Sky kind="ready" stars={90}>
-        {CONFETTI.map(([left, top, background], i) => <span key={i} className="confetti" style={{ left, top, background }} />)}
+        {/* Confetti bursts out of the new Tag's picture, then twinkles in place. */}
+        {CONFETTI.map(([left, top, background], i) => <span key={i} className="confetti"
+          style={{ left, top, background, "--dx": `${260 - left}px`, "--dy": `${100 - top}px`, animationDelay: `${0.25 + (i % 5) * 0.03}s, ${1.2 + i * 0.17}s` } as CSSProperties} />)}
         <img className="big-av" src={picture ?? tagIcon} alt="" />
       </Sky>
+      <div className="flow-panel ready">
       <div className="body roomy">
         <div style={{ textAlign: "center" }}>
           <div className="eyebrow" style={{ color: "var(--green)" }}>Setup complete</div>
-          <div className="h2" style={{ fontSize: 26 }}>Say hi to {name}</div>
-          <p className="lead">Start it, then send this in Slack. We copy it for you.</p>
+          <div className="h2" style={{ fontSize: 26 }}>{step === "starting" ? `Starting ${name}…` : step === "failed" ? `${name} didn't start` : `Say hi to ${name}`}</div>
+          <p className="lead">{step === "starting" ? "About a minute the first time. You can go to Home; it keeps starting."
+            : step === "failed" ? "Your setup is saved. Try again, or check it from Home."
+            : "Send this in Slack. We copy it for you."}</p>
           {ready?.ai && <p className="ai-line"><AgentMark backend={ready.ai.backend} size={18} /><span><b>{ready.ai.backend_name} connected</b></span></p>}
         </div>
-        <div className="thread try-thread">
-          <div className="thread-h">{place.dm ? "Direct message" : "Thread"}
-            <span className="place-wrap"><span className="place-now">{place.dm ? `DM with ${name}` : place.label}</span>
-              <select className="place-sel" aria-label="Where to try it" value={place.id} disabled={step !== "idle"} onChange={(e) => setWhere(e.target.value)}>
-                {places.map((p) => <option key={p.id} value={p.id}>{p.dm ? `DM with ${name}` : p.label}</option>)}
-              </select>{step === "idle" && <Icon name="chevdown" size={10} />}</span>
+        {starting ? <StartSteps progress={progress} name={name} channels={channels} seconds={seconds} failed={step === "failed"} error={error} detailed={detailed} />
+          : (
+          <div className="thread try-thread">
+            <div className="thread-h">{place.dm ? "Direct message" : "Thread"}
+              <span className="place-wrap"><span className="place-now">{place.dm ? `DM with ${name}` : place.label}</span>
+                <select className="place-sel" aria-label="Where to try it" value={place.id} disabled={step !== "idle"} onChange={(e) => setWhere(e.target.value)}>
+                  {places.map((p) => <option key={p.id} value={p.id}>{p.dm ? `DM with ${name}` : p.label}</option>)}
+                </select>{step === "idle" && <Icon name="chevdown" size={10} />}</span>
+            </div>
+            <div className="smsg"><OwnerMark icon={ready?.owner?.icon} />
+              <div><div className="who">{ready?.owner?.name || "You"}<span>now</span></div><p>{!place.dm && <span className="mention">@{name}</span>}{!place.dm && " "}{TRY_PROMPTS[prompt]}</p></div></div>
+            {progress.phases.channels.background && step === "idle" && (
+              <p className="meta import-note">{name} can answer now. It's still reading older messages
+                in {channels.length === 1 ? `#${channels[0]}` : "its channels"}; questions about them work once that finishes.</p>
+            )}
+            <div className="try-foot">
+              {step === "idle" && <button className="link" onClick={() => setPrompt((prompt + 1) % TRY_PROMPTS.length)}>Try another message</button>}
+              {step === "waiting" && <>Paste and send it in Slack. {ready && <button className="link" onClick={() => void api.open(slackLink(ready, place.id))}>Open Slack again</button>}</>}
+              {step === "done" && <span className="replied"><Icon name="check" size={12} />{name} replied in Slack</span>}
+            </div>
           </div>
-          <div className="smsg"><span className="you"><Icon name="user" size={16} /></span>
-            <div><div className="who">You<span>now</span></div><p>{!place.dm && <span className="mention">@{name}</span>}{!place.dm && " "}{TRY_PROMPTS[prompt]}</p></div></div>
-          <div className="try-foot">
-            {step === "idle" && <button className="link" onClick={() => setPrompt((prompt + 1) % TRY_PROMPTS.length)}>Try another message</button>}
-            {step === "starting" && <>Starting {name}…</>}
-            {step === "waiting" && <>Paste and send it in Slack. {ready && <button className="link" onClick={() => void api.open(slackLink(ready, place.id))}>Open Slack again</button>}</>}
-            {step === "done" && <span className="replied"><Icon name="check" size={12} />{name} replied in Slack</span>}
-            {step === "failed" && <span style={{ color: "var(--red)" }}>{name} didn't start. {error}</span>}
-          </div>
-        </div>
+        )}
         <div className="foot">
           {step === "done" ? <><span className="spacer" /><Primary title="Go to Home" onClick={done} /></>
-            : step === "idle" || step === "failed" ? <><button className="link" onClick={done}>Later</button><span className="spacer" />
-              <Primary title="Start and open Slack" icon="external" onClick={() => void start()} /></>
+            : step === "failed" ? <><button className="link" onClick={done}>Later</button><span className="spacer" />
+              <Primary title="Try again" onClick={() => setAttempt((value) => value + 1)} /></>
+            : step === "starting" ? <><button className="link" onClick={done}>Go to Home</button><span className="spacer" />
+              <Primary title="Open Slack" icon="external" disabled onClick={() => {}} /></>
+            : step === "idle" ? <><button className="link" onClick={done}>Later</button><span className="spacer" />
+              <Primary title="Open Slack" icon="external" onClick={() => void openSlack()} /></>
             : <><button className="link" onClick={done}>Skip to Home</button><span className="spacer" /></>}
         </div>
+        {usageNote && <UsageNote {...usageNote} />}
+      </div>
       </div>
     </>
   );

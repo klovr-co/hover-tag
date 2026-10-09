@@ -141,13 +141,26 @@ def _run(command: list[str], *, cwd: Path, capture: bool = True) -> subprocess.C
         raise RuntimeError("Slack CLI did not complete; check its installation and retry") from exc
 
 
+_SECRET = re.compile(r"\b(?:xox[a-z]-|xapp-)[A-Za-z0-9-]+")
+_SIGN_IN = re.compile(r"login|log in|sign in|not_authed|invalid_auth|token_(?:expired|revoked)|unauthori[sz]ed|auth", re.I)
+
+
+def _cli_failure(result: subprocess.CompletedProcess, what: str, retry: str) -> RuntimeError:
+    """Say what Slack CLI reported; suggest `slack login` only when that's the problem."""
+    output = re.sub(r"\x1b\[[0-9;]*m", "", f"{result.stdout or ''}\n{result.stderr or ''}")
+    lines = [line.strip(" ✗✖!›>") for line in output.splitlines() if line.strip(" ✗✖!›>")]
+    detail = _SECRET.sub("<redacted>", lines[-1])[:300] if lines else ""
+    step = "run `slack login`, then retry" if not detail or _SIGN_IN.search(detail) else "retry"
+    return RuntimeError(f"{what}{f' ({detail})' if detail else ''}; {step} `{retry}`")
+
+
 def remote_manifest(slack: str, project: Path, app_id: str) -> dict:
     result = _run([
         slack, "manifest", "info", "--source", "remote", "--app", app_id,
         "--skip-update", "--no-color",
     ], cwd=project)
     if result.returncode:
-        raise RuntimeError("Slack app settings could not be inspected; run `slack login`, then retry `tag start`")
+        raise _cli_failure(result, "Slack app settings could not be inspected", "tag start")
     return _json_output(result.stdout)
 
 
@@ -343,7 +356,7 @@ def set_display_name(home: Path, values: dict[str, str], name: str, *, retry: st
         migration_project = _migration_project(project, renamed, team_id, app_id, Path(directory))
         result = _run(_sync_command(slack, migration_project, app_id, team_id), cwd=migration_project)
         if result.returncode:
-            raise RuntimeError(f"Slack could not rename the app; run `slack login`, then retry `{retry}`")
+            raise _cli_failure(result, "Slack could not rename the app", retry)
     if not _saved(lambda: not _named(remote_manifest(slack, project, app_id), name)[1]):
         raise RuntimeError(f"Slack did not save the new name; retry `{retry}`")
     return True
@@ -370,7 +383,7 @@ def set_description(home: Path, values: dict[str, str], description: str, *, ret
         migration_project = _migration_project(project, described, team_id, app_id, Path(directory))
         result = _run(_sync_command(slack, migration_project, app_id, team_id), cwd=migration_project)
         if result.returncode:
-            raise RuntimeError(f"Slack could not change the description; run `slack login`, then retry `{retry}`")
+            raise _cli_failure(result, "Slack could not change the description", retry)
     if not _saved(lambda: not _described(remote_manifest(slack, project, app_id), description)[1]):
         raise RuntimeError(f"Slack did not save the new description; retry `{retry}`")
     return True
@@ -433,7 +446,7 @@ def _reconcile(home: Path, config_path: Path, values: dict[str, str], receipt: d
         if changed:
             result = _run(_sync_command(slack, migration_project, app_id, authorization_id), cwd=migration_project)
             if result.returncode:
-                raise RuntimeError("Slack app settings migration failed; run `slack login`, then retry `tag start`")
+                raise _cli_failure(result, "Slack app settings migration failed", "tag start")
     verified = remote_manifest(slack, project, app_id)
     if migrate_manifest(verified, enterprise=bool(enterprise_id))[1]:
         raise RuntimeError("Slack did not save the required app settings; retry `tag start`")

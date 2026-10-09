@@ -3,20 +3,28 @@
 // Settings → AI connections: shared accounts for every Tag.
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import type { Bridge, Session } from "../lib/bridge";
-import { idleSignIn, parseConnections, resultLine, signInArgs, signInReducer, type Connection, type AIConnections } from "../lib/ai";
+import { idleSignIn, parseConnections, resultLine, signInArgs, signInReducer, type ApiGroup, groupApis, type Connection, type AIConnections } from "../lib/ai";
 import type { Tags } from "../lib/tags";
 import { failureLine } from "../lib/tags";
+import { title } from "../lib/protocol";
 import { ChangeAccount, ConnectionRow, type RowAction } from "./AI";
+import { ApiDialog, ApiList } from "./ApiConnections";
 import { CompactSky, ErrorLine, Icon, Spinner } from "./ui";
+import { RiverFoot } from "./Settings";
 
 /** Installation-wide accounts. Models belong to each Tag's Details tab. */
-export function AISettings({ api, tags, close }: { api: Bridge; tags: Tags; close: () => void }) {
+export function AISettings({ api, tags, close, apiConnections = false }: {
+  api: Bridge; tags: Tags; close: () => void;
+  /** The installed Tag supports `settings ai api` (the api-connections capability). */
+  apiConnections?: boolean;
+}) {
   const [report, setReport] = useState<AIConnections | null>(null);
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
   const [checking, setChecking] = useState(false);
   const [opened, setOpened] = useState(new Set<string>());
   const [changing, setChanging] = useState<Connection | null>(null);
+  const [editingApi, setEditingApi] = useState<ApiGroup | "new" | null>(null);
   const [signIn, dispatch] = useReducer(signInReducer, idleSignIn);
   const session = useRef<Session | null>(null);
   const mounted = useRef(true);
@@ -65,9 +73,12 @@ export function AISettings({ api, tags, close }: { api: Bridge; tags: Tags; clos
     } else void start(action.backend, undefined, action.kind === "resume");
   };
   const busy = !!signIn.step;
+  const apiChanged = (text: string) => { setToast(text); void reload(); void tags.refresh(); };
+  const tagChoices = tags.rows.filter((row) => row.valid !== false && row.state !== "setup_incomplete")
+    .map((row) => ({ id: row.id, name: title(row) }));
   return <>
     <CompactSky title="AI connections" sub="Shared by all your Tags" back={close} />
-    <div className="body">
+    <div className="body river">
       <div className="section">
         <div className="sec-head"><h3>Connections</h3><span className="spacer" />
           {checking ? <span className="meta"><Spinner small />Checking…</span>
@@ -83,10 +94,29 @@ export function AISettings({ api, tags, close }: { api: Bridge; tags: Tags; clos
         <p className="mcap">Connect once for all Tags. Choose each Tag's model and thinking level in its Details tab.</p>
         {report?.running && <p className="mcap">Running Tags pause while you sign in and start again afterwards.</p>}
       </div>
+      {apiConnections && report && <div className="section">
+        <div className="sec-head"><h3>Your own API</h3><span className="spacer" />
+          {!!report.api_connections?.length && <button className="p-btn soft sm" disabled={busy} onClick={() => setEditingApi("new")}>
+            <Icon name="plus" size={11} />Add</button>}
+        </div>
+        {report.api_connections?.length
+          ? <>
+            <ApiList groups={groupApis(report.api_connections)} busy={busy} open={setEditingApi} />
+            <p className="mcap">Used instead of your plan sign-in.</p>
+          </>
+          : <button className="ghost-add" disabled={busy} onClick={() => setEditingApi("new")}>
+            <span className="gi"><Icon name="plus" /></span>
+            <span><b>Add your own API</b><span className="meta">Use an OpenAI, Anthropic, or Azure OpenAI key instead of your plan.</span></span>
+          </button>}
+      </div>}
       {toast && <div className="savebar" role="status"><span className="t"><Icon name="check" size={12} />{toast}</span></div>}
       {error && <ErrorLine>{error}</ErrorLine>}
+      <RiverFoot />
     </div>
     {changing && !busy && <ChangeAccount connection={changing} running={report?.running ?? false}
       cancel={() => setChanging(null)} choose={(method) => void start(changing.backend, method)} />}
+    {editingApi && <ApiDialog api={api} tags={tagChoices} initial={editingApi === "new" ? null : editingApi}
+      running={tags.rows.some((r) => r.state === "running" && (editingApi === "new" || editingApi.tags.some((t) => t.id === r.id)))}
+      close={() => setEditingApi(null)} saved={apiChanged} />}
   </>;
 }

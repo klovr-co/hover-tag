@@ -4,7 +4,7 @@ Your workspace is the folder where Tag works on your files. Upload a brief in
 Slack and ask Tag to save the open questions there. As you answer them, ask Tag
 to update the saved file.
 
-This guide works with Codex or Claude and assumes you have completed
+This guide works with Codex or Claude Code and assumes you have completed
 [your first Tag task](../getting-started/first-task.md). Claude uses the same
 workspace with `.claude/skills` and `.mcp.json`.
 
@@ -83,6 +83,19 @@ keeps the local file, reports the failure, and continues with other files. Ask
 Tag to attach it again after resolving the failure, or to create a smaller copy
 for an oversized file.
 
+## Use earlier files in a thread
+
+Tag automatically opens the files on your current message. If your message has
+none, it opens the most recent message with files. When a request depends on
+other files earlier in the thread, such as "what do you think about both?",
+Tag opens those files too, up to 15 MB each. It can open only files shared in
+the current channel. If it cannot open a file, it says so instead of
+commenting on it. An earlier file over 15 MB is skipped rather than blocking
+the request, so you can give Tag a local path or link to it instead.
+
+Images Tag returns in a thread are also kept in the channel's `images` folder
+under `artifacts/` in the workspace, so Tag can reopen its own earlier results.
+
 ## Use a forwarded Slack file
 
 Tag can read supported files attached to forwarded Slack messages, as well as
@@ -106,16 +119,19 @@ workspace. Ask Tag to save a copy if you want to keep working on it later.
 ## Find your workspace
 
 The workspace lives on the computer running Tag. If someone else hosts Tag for
-your team, the folder is on their machine. On the computer running Tag, open a
-terminal and run:
+your team, the folder is on their machine. In the Tag app, open the Tag, choose
+**Details**, and click **Show** next to **Working folder**. From a terminal,
+run:
 
 ```sh
 tag paths
 ```
 
-Find the `workspace` path in the output. A normal installation uses
-`~/Tag/default` for the default Tag and `~/Tag/NAME` for a named Tag. Custom
-installations can use a different location, so use the path your command reports.
+Find the `workspace` path in the output. A normal installation names each Tag's
+folder after its Slack workspace and app IDs, in lowercase, such as
+`~/Tag/t0abc123-a0xyz789`. Tags created by earlier releases in `~/Tag/default`
+or `~/Tag/NAME` are moved there automatically once their Slack app is known.
+Custom installations can use a different location, so use the path Tag reports.
 
 Tag keeps this folder separate from its application releases. Files and local
 skills stay in place when you upgrade. Its hidden `.tag` directory holds this

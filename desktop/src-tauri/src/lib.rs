@@ -116,6 +116,8 @@ struct AppInfo {
     channel_initialized: bool,
     legacy_wanted_tags: Option<Vec<String>>,
     first_name: Option<String>,
+    /// A development build (`./tag app`, `npm run tauri -- dev`): it never updates itself.
+    development: bool,
 }
 
 /// The first word of the account's full name, for Home's greeting. Windows
@@ -213,6 +215,7 @@ fn app_info(app: AppHandle) -> AppInfo {
         channel_initialized,
         legacy_wanted_tags: if migrated { None } else { legacy_wanted_tags() },
         first_name: first_name(),
+        development: cfg!(debug_assertions),
     }
 }
 
@@ -442,6 +445,7 @@ mod tests {
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_window_now(app)))
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec![AUTOSTART_FLAG]),
@@ -460,6 +464,14 @@ pub fn run() {
         ])
         .setup(|app| {
             tray::create(app.handle())?;
+            // hover-tag:// links bring the window forward; the page opens the linked Tag.
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                #[cfg(any(windows, target_os = "linux"))]
+                let _ = app.deep_link().register_all();
+                let handle = app.handle().clone();
+                app.deep_link().on_open_url(move |_| show_window_now(&handle));
+            }
             // Opened by the login item: stay in the tray, no window or Dock icon.
             if std::env::args().any(|a| a == AUTOSTART_FLAG) {
                 #[cfg(target_os = "macos")]

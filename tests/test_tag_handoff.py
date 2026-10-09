@@ -154,6 +154,10 @@ class ThreeTagTests(unittest.TestCase):
         backend = patch.object(slack_socket_agent, "run_backend", side_effect=self.fake_backend)
         backend.start()
         self.addCleanup(backend.stop)
+        # Each Tag runs in its own process, so the busy-thread guard is not shared between them.
+        busy = patch.object(slack_socket_agent, "reserve_thread", return_value=True)
+        busy.start()
+        self.addCleanup(busy.stop)
         for tag in (TAG_A, TAG_B, TAG_C):
             app = FakeApp()
             self.bus.apps[tag] = app

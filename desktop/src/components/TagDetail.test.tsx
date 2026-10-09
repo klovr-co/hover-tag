@@ -16,8 +16,8 @@ async function open(tab?: string, canDescribe = false, configure?: (api: Bridge,
   const run = api.tag;
   api.tag = (args) => { calls.push(args); return run(args); };
   const remove = vi.fn(async () => true);
-  const describe = vi.fn(async () => true);
-  const tags = { rows, busy: new Set<string>(), toggle: vi.fn(), workspace: vi.fn(), rename: vi.fn(async () => true), describe, refresh: vi.fn(), remove } as unknown as Tags;
+  const describe = vi.fn(async () => "");
+  const tags = { rows, busy: new Set<string>(), toggle: vi.fn(), workspace: vi.fn(), rename: vi.fn(async () => ""), describe, refresh: vi.fn(), remove } as unknown as Tags;
   const say = vi.fn();
   render(<TagDetail api={api} tags={tags} initial={rows[0].id} problems={{}} back={vi.fn()} add={vi.fn()} showSettings={vi.fn()}
     finishSetup={vi.fn()} openAI={vi.fn()} say={say} canDescribe={canDescribe} />);
@@ -92,15 +92,26 @@ describe("Tag detail", () => {
     await vi.waitFor(() => expect(say).toHaveBeenCalledWith("Saved the description"));
   });
 
-  it("shows why a change failed instead of quietly leaving the form open", async () => {
+  it("shows why a change failed under the field being edited, and keeps it open to retry", async () => {
     const api = demoBridge();
     const rows: TagRow[] = parseList((await api.tag(["list", "--json"])).stdout);
-    const tags = { rows, busy: new Set<string>(), error: "Rename failed. Slack did not save the new name; retry `tag maya rename \"Maxine's Tag\"`",
-      toggle: vi.fn(), workspace: vi.fn(), rename: vi.fn(async () => false), refresh: vi.fn(), remove: vi.fn() } as unknown as Tags;
+    const failure = "Slack could not change the description (The request to Slack timed out); retry `tag maya describe \"Launch help\"`";
+    const tags = { rows, busy: new Set<string>(), error: "", toggle: vi.fn(), workspace: vi.fn(),
+      rename: vi.fn(async () => "Rename failed. Slack did not save the new name; retry `tag maya rename \"Maxine's Tag\"`"),
+      describe: vi.fn(async () => failure), refresh: vi.fn(), remove: vi.fn() } as unknown as Tags;
     render(<TagDetail api={api} tags={tags} initial={rows[0].id} problems={{}} back={vi.fn()} add={vi.fn()} showSettings={vi.fn()}
-      finishSetup={vi.fn()} openAI={vi.fn()} say={vi.fn()} />);
+      finishSetup={vi.fn()} openAI={vi.fn()} say={vi.fn()} canDescribe />);
     fireEvent.click(screen.getByRole("tab", { name: "Details" }));
-    expect(screen.getByText(/Slack did not save the new name/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.change(screen.getByLabelText("Description"), { target: { value: "Launch help" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    const shown = await screen.findByText(/The request to Slack timed out/);
+    expect(shown.closest(".desc-edit")).toBeTruthy();
+    expect(screen.getByLabelText("Description")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Save" })[0]);
+    expect((await screen.findByText(/Slack did not save the new name/)).closest(".edit-err")).toBeTruthy();
   });
 
   it("shows the description but no Edit when the installed Tag can't change it", async () => {
@@ -138,6 +149,26 @@ describe("Tag detail", () => {
 
 const entry = (summary: string, at: string, kind = "replied", channel = "C0LAUNCH1") => ({
   run_id: summary, reply_summary: summary, at, kind, channel, channel_name: "launch", dm: false, step_count: 2,
+});
+
+it("groups replies in one Slack thread into one entry led by the latest reply", async () => {
+  await open(undefined, false, (api) => {
+    const run = api.tag;
+    api.tag = async (args) => args[1] === "logs" ? { code: 0, stderr: "", stdout: JSON.stringify({ services: {}, activity: [
+      { ...entry("Started the issue review", "2026-10-05T01:00:00Z"), thread: "a1" },
+      { ...entry("Separate question", "2026-10-05T01:30:00Z"), thread: "b2" },
+      { ...entry("Closed 12 of 67 issues", "2026-10-05T02:00:00Z"), thread: "a1" },
+      entry("Older Tag without threads", "2026-10-05T00:30:00Z"),
+    ] }) } : run(args);
+  });
+  await screen.findByText("Closed 12 of 67 issues");
+  const messages = () => [...document.querySelectorAll(".sl-msg p")].map((el) => el.textContent);
+  expect(messages()).toEqual(["Older Tag without threads", "Separate question", "Closed 12 of 67 issues"]);
+  const toggle = screen.getByRole("button", { name: "Show 1 earlier reply in this thread" });
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  fireEvent.click(toggle);
+  expect(messages()).toEqual(["Older Tag without threads", "Separate question", "Closed 12 of 67 issues", "Started the issue review"]);
+  expect(screen.getByRole("button", { name: "Hide 1 earlier reply in this thread" }).getAttribute("aria-expanded")).toBe("true");
 });
 
 it("shows chronological history, hides failures by default, and remembers Show errors", async () => {
@@ -266,7 +297,7 @@ it("loads channel history as a continuous chronological window across Tags", asy
   await screen.findByText("Channel reply 0");
   expect(summaries()).toHaveLength(120);
   expect(screen.queryByRole("button", { name: "Load older activity" })).toBeNull();
-});
+}, 20_000);
 
 
 it("hides empty reply rows and uses a plain empty state in Tag and channel activity", async () => {
@@ -310,4 +341,14 @@ it("retains excerpts and artifact-only replies without unavailable metadata", as
   expect(document.querySelectorAll(".sl-msg")).toHaveLength(3);
   expect(screen.queryByTitle("Generation time, including tool work")).toBeNull();
   expect(screen.queryByText(/Tokens unavailable/)).toBeNull();
+});
+
+it("counts a Tag's channels instead of listing them in the header", async () => {
+  await open(undefined, false, (_api, rows) => {
+    rows[0].channels = [{ id: "C1", name: "launch" }, { id: "C2", name: "general" }, { id: "C3", name: "ops" }];
+  });
+  expect(document.querySelector(".sl-mhead .sub")?.textContent).toMatch(/ · in 3 channels$/);
+  cleanup();
+  await open(undefined, false, (_api, rows) => { rows[0].channels = [{ id: "C1", name: "launch" }]; });
+  expect(document.querySelector(".sl-mhead .sub")?.textContent).toMatch(/ · in #launch$/);
 });

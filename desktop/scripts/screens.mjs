@@ -15,25 +15,34 @@ for (const scheme of ["light", "dark"]) {
   const page = await browser.newPage({ viewport: { width: 800, height: 1100 }, deviceScaleFactor: 2, colorScheme: scheme });
   const suffix = scheme === "dark" ? "-dark" : "";
   // Home, with every Tag, then with one and none.
-  await page.goto(base + "/?update=1");
+  await page.goto(base);
   await page.getByText("of 3 online").waitFor();
   await shot(page, "home" + suffix);
+  await page.goto(base + "/?update=1");
+  await page.getByText("of 3 online").waitFor();
+  await shot(page, "home-update" + suffix);
   await page.goto(base + "/?tags=1");
   await page.getByText("Try it in Slack").waitFor();
   await shot(page, "home-one" + suffix);
   await page.goto(base + "/?tags=0");
   await page.getByText("Bring your first Tag to Slack").waitFor();
   await shot(page, "home-empty" + suffix);
-  // The first-run usage data notice.
+  // The first-run usage data note on Home.
   await page.goto(base + "/?telemetry=ask");
-  await page.getByText("Help support Tag's development").waitFor();
-  await shot(page, "usage-data" + suffix);
+  await page.getByText("Tag shares anonymous usage data").waitFor();
+  await shot(page, "usage-note" + suffix);
   // Tag detail is the wide screen.
   await page.goto(base);
   await button(page, "Open Maya's Tag").click();
   await page.getByText("Replied in").waitFor();
   width = 800;
   await shot(page, "tag-activity" + suffix);
+  await page.getByRole("tab", { name: "Channels" }).click();
+  await page.waitForTimeout(600);
+  await shot(page, "tag-channels" + suffix);
+  await page.getByRole("tab", { name: "Logs" }).click();
+  await page.waitForTimeout(600);
+  await shot(page, "tag-logs" + suffix);
   await page.getByRole("tab", { name: "Details" }).click();
   await page.getByRole("radiogroup", { name: "Thinking level" }).waitFor({ timeout: 10000 });
   await shot(page, "tag-details" + suffix);
@@ -41,8 +50,12 @@ for (const scheme of ["light", "dark"]) {
   // Settings and AI connections.
   await button(page, "Back to Your Tags").click();
   await button(page, "Settings").click();
-  await page.getByText("Release channel").waitFor();
+  await page.getByText("Appearance").waitFor();
   await shot(page, "settings" + suffix);
+  await page.getByRole("tab", { name: "Updates" }).click();
+  await page.getByText("Release channel").waitFor();
+  await shot(page, "settings-updates" + suffix);
+  await page.getByRole("tab", { name: "General" }).click();
   await button(page, "Open AI connections").click();
   await page.getByRole("button", { name: "Check connections" }).waitFor();
   await page.waitForTimeout(1500);
@@ -68,11 +81,13 @@ for (const scheme of ["light", "dark"]) {
   await page.getByText("Where should Maya's Tag start?").waitFor({ timeout: 15000 });
   await shot(page, "add-channels" + suffix);
   await button(page, /Continue with/).click();
+  await page.locator(".st.running", { hasText: "Reading its channels" }).waitFor({ timeout: 15000 });
+  await shot(page, "add-starting" + suffix);
   await page.getByText("Say hi to Maya's Tag").waitFor({ timeout: 15000 });
   await shot(page, "add-ready" + suffix);
   // First run: install.
   await page.goto(base + "/?installed=0");
-  await page.getByText("Your personal assistant, in Slack.").waitFor();
+  await page.getByText("Multiplayer AI, right in Slack.").waitFor();
   await shot(page, "welcome" + suffix);
   await button(page, "Install Tag").click();
   await page.waitForTimeout(6000);

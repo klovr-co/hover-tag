@@ -12,6 +12,33 @@ from scripts import opentag_agent
 
 
 class OpenTagAgentPromptTests(unittest.TestCase):
+    def test_standing_instructions_hold_nothing_that_changes_between_requests(self) -> None:
+        root = Path("/tag")
+        instructions = opentag_agent.build_instructions(
+            skill_dir=root / "skill", workdir=root / "workspace", channel_id="C123", output_files=True)
+        request = opentag_agent.build_request(
+            channel_id="C123", question="Summarize the plan", thread_text="U1: first\nU2: second",
+            attachments_dir=root / "inv-7/attachments", allowed_scopes="file://local/tag/workspace",
+            output_manifest=root / "inv-7/manifest.json")
+        self.assertNotIn("inv-7", instructions)
+        self.assertNotIn("Summarize the plan", instructions)
+        self.assertIn("record_output_artifact.py", instructions)
+        attachments = root / "inv-7/attachments"
+        for value in (str(attachments), str(attachments / "results/images"),
+                      str(attachments / "results/artifacts"), str(root / "inv-7/manifest.json"),
+                      "file://local/tag/workspace", "Summarize the plan", "Slack thread context:"):
+            self.assertIn(value, request)
+
+    def test_continued_request_carries_only_new_thread_messages(self) -> None:
+        request = opentag_agent.build_request(
+            channel_id="C123", question="And now?", thread_text="U2: new message", attachments_dir=None,
+            allowed_scopes="x", continued=True)
+        self.assertIn("New Slack thread messages since your last reply", request)
+        self.assertIn("U2: new message", request)
+        empty = opentag_agent.build_request(channel_id="C123", question="And now?", thread_text="", attachments_dir=None,
+                                            allowed_scopes="x", continued=True)
+        self.assertIn("(none)", empty)
+
     def test_slack_prompt_requires_clarification_for_ambiguous_scope(self) -> None:
         prompt = opentag_agent.build_prompt(
             skill_dir=Path("/tmp/open-tag"),
@@ -135,6 +162,8 @@ class OpenTagAgentPromptTests(unittest.TestCase):
         self.assertIn("slack_post_message.py", prompt)
         self.assertIn("new top-level channel message", prompt)
         self.assertIn("only when the user", prompt)
+        self.assertIn("slack_thread_file.py", prompt)
+        self.assertIn("Never comment on a file you have not opened", prompt)
 
     def test_slack_prompt_registers_only_explicitly_requested_output_files(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:

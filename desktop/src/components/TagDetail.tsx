@@ -16,16 +16,18 @@ import teamArt from "../assets/art/tag-team.png";
 import keyArt from "../assets/art/tag-key.png";
 import { workingFolder } from "./Home";
 import { ModelMenu, ModelWarning, SaveBar, ThinkingRow } from "./AI";
-import { Avatar, dragWindow, ErrorLine, fitText, Icon, Primary, Switch, workspaceColor, WorkspaceMark, source, tagIcon } from "./ui";
+import { Avatar, dragWindow, ErrorLine, fitText, Icon, Primary, Switch, useCopied, workspaceColor, WorkspaceMark, source, tagIcon } from "./ui";
 
 export type Selection = { kind: "tag"; id: string } | { kind: "channel"; id: string };
-type Tab = "activity" | "channels" | "logs" | "details";
+export type Tab = "activity" | "channels" | "logs" | "details";
 
 interface Props {
   api: Bridge;
   tags: Tags;
   /** The Tag that was opened from Home. */
   initial: string;
+  /** The tab to show first; a Slack link opens Details. */
+  initialTab?: Tab;
   problems: Record<string, string | null>;
   back: () => void;
   add: () => void;
@@ -46,12 +48,12 @@ export const shortPath = (path: string) => path.replace(/^(\/Users\/[^/]+|\/home
 /** A channel's name for people, or its ID while Tag hasn't recorded one. */
 const channelName = (channel: { id: string; name: string | null }) => channel.name ?? channel.id;
 
-export function TagDetail({ api, tags, initial, problems, back, add, showSettings, finishSetup, openAI, say, canDescribe = false }: Props) {
+export function TagDetail({ api, tags, initial, initialTab = "activity", problems, back, add, showSettings, finishSetup, openAI, say, canDescribe = false }: Props) {
   const rows = tags.rows;
   const start = rows.find((row) => row.id === initial);
   const [workspace, setWorkspace] = useState(start?.slack_workspace ?? "");
   const [selected, setSelected] = useState<Selection>({ kind: "tag", id: initial });
-  const [tab, setTab] = useState<Tab>("activity");
+  const [tab, setTab] = useState<Tab>(initialTab);
   const [query, setQuery] = useState("");
   const [hideErrors, setHideErrors] = useState(true);
   const all = groups(rows);
@@ -313,7 +315,10 @@ function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, sa
   const channels = row.channels ?? [];
   const model = modelText(row)?.model ?? "";
   const effort = row.default_effort ? ` · ${effortShort(row.default_effort)}` : "";
-  const copyLog = () => { void api.copy(logText); say("Copied the full log"); };
+  const copyLog = async () => {
+    try { await api.copy(logText); say("Copied the full log"); return true; }
+    catch { say("Could not copy the log"); return false; }
+  };
   return (
     <>
       <div className="sl-mhead">
@@ -323,7 +328,7 @@ function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, sa
           <span className={state === "attention" ? "sub bad" : "sub"}>
             <span>{state === "attention" ? problemText(row) : WORD[state]}{model && " · "}
               {model && <span style={problem ? { color: "var(--amber)", fontWeight: 600 } : undefined} title={problem ?? undefined}>{model}{effort}</span>}
-              {channels.length > 0 && ` · in ${channels.map((c) => `#${channelName(c)}`).join(", ")}`}</span>
+              {channels.length > 0 && ` · in ${channels.length === 1 ? `#${channelName(channels[0])}` : `${channels.length} channels`}`}</span>
           </span>
         </div>
         <Switch on={on} busy={tags.busy.has(row.id)} label={`${on ? "Stop" : "Start"} ${title(row)}`} onClick={() => void tags.toggle(row)} />
@@ -423,6 +428,8 @@ type FilterProps = { hideErrors: boolean; setHideErrors: (hide: boolean) => void
 type ActivityEntry = { tag: string; item: ActivityItem };
 type HistoryProps = { hasMore: boolean; loading: boolean; loadOlder: () => void };
 const activityKey = ({ tag, item }: ActivityEntry) => `${tag}:${item.run_id ?? item.at}`;
+/** Older Tags report no thread, so each of their runs stays its own entry. */
+const threadKey = (entry: ActivityEntry) => entry.item.thread ? `${entry.tag}:thread:${entry.item.thread}` : activityKey(entry);
 function mergeActivity(previous: ActivityEntry[] | null, incoming: ActivityEntry[]) {
   const merged = new Map((previous ?? []).map((entry) => [activityKey(entry), entry]));
   for (const entry of incoming) merged.set(activityKey(entry), entry);
@@ -442,18 +449,30 @@ function ActivityFeed({ api, rows, entries, hideErrors, hasMore, loading, loadOl
     .filter(({ item }) => item.kind !== "replied" || item.reply_summary?.trim() || item.reply_preview?.trim() || item.artifacts?.length)
     .sort((a, b) => new Date(a.item.at).getTime() - new Date(b.item.at).getTime());
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [openThreads, setOpenThreads] = useState<Record<string, boolean>>({});
+  // Every reply in one Slack thread continues one conversation, so it is one entry.
+  const threads = [...sorted.reduce((groups, entry) => {
+    const group = groups.get(threadKey(entry)) ?? [];
+    group.push(entry);
+    return groups.set(threadKey(entry), group);
+  }, new Map<string, ActivityEntry[]>()).values()]
+    .sort((a, b) => new Date(a[a.length - 1].item.at).getTime() - new Date(b[b.length - 1].item.at).getTime());
   const feed = useRef<HTMLDivElement>(null);
   const viewport = useRef({ initialized: false, bottom: true, height: 0, first: "", top: 0 });
-  const first = sorted[0] ? activityKey(sorted[0]) : "";
+  // Older activity can join existing threads, so the first thread doesn't always change.
+  const olderRequested = useRef(false);
+  const requestOlder = useCallback(() => { olderRequested.current = true; loadOlder(); }, [loadOlder]);
+  const first = threads[0] ? threadKey(threads[0][0]) : "";
   useLayoutEffect(() => {
     const scroller = feed.current?.closest<HTMLElement>(".sl-body");
     if (!scroller || entries === null) return;
     const previous = viewport.current;
     if (!previous.initialized || previous.bottom) scroller.scrollTop = scroller.scrollHeight;
-    else if (previous.first !== first) scroller.scrollTop += scroller.scrollHeight - previous.height;
+    else if (previous.first !== first || olderRequested.current) scroller.scrollTop += scroller.scrollHeight - previous.height;
+    if (!loading) olderRequested.current = false;
     viewport.current = { initialized: true, first, height: scroller.scrollHeight, top: scroller.scrollTop,
       bottom: scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop < 40 };
-  }, [entries, first]);
+  }, [entries, first, loading]);
   useEffect(() => {
     const scroller = feed.current?.closest<HTMLElement>(".sl-body");
     if (!scroller) return;
@@ -462,53 +481,71 @@ function ActivityFeed({ api, rows, entries, hideErrors, hasMore, loading, loadOl
       const upwards = scroller.scrollTop < previous.top;
       viewport.current = { ...previous, top: scroller.scrollTop, height: scroller.scrollHeight,
         bottom: scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop < 40 };
-      if (upwards && scroller.scrollTop < 80 && hasMore && !loading) loadOlder();
+      if (upwards && scroller.scrollTop < 80 && hasMore && !loading) requestOlder();
     };
     scroller.addEventListener("scroll", scroll);
     return () => scroller.removeEventListener("scroll", scroll);
-  }, [hasMore, loading, loadOlder]);
+  }, [hasMore, loading, requestOlder]);
+  const message = ({ tag, item }: ActivityEntry) => {
+    const row = rows.find((row) => row.id === tag);
+    if (!row) return null;
+    const preview = item.reply_summary?.trim() || item.reply_preview?.trim();
+    const at = new Date(item.at);
+    const key = activityKey({ tag, item });
+    return (
+      <div className={item.kind === "working" ? "sl-msg working" : "sl-msg"}>
+        <Avatar row={row} size={34} badge={false} className="" />
+        <div>
+          <div className="who">{title(row)}<span>{clock(at)}</span>{item.model && <span title={`${item.backend ?? "Agent"} · ${item.model}${item.reasoning_effort ? ` · ${effortLabel(item.reasoning_effort)} thinking` : ""}`}>· {item.model_name || item.model}{item.reasoning_effort && ` ${effortShort(item.reasoning_effort)}`}</span>}
+            {item.duration_seconds != null && Number.isFinite(item.duration_seconds) && item.duration_seconds > 0 && <span title="Generation time, including tool work">· {generationTime(item.duration_seconds)}</span>}
+            {item.usage && <ActivityTokens usage={item.usage} />}
+            <StepsToggle item={item} open={!!expanded[key]} controls={`${key}:work`} onToggle={() => setExpanded((all) => ({ ...all, [key]: !all[key] }))} />
+          </div>
+          {item.kind === "replied" ?
+            preview && <p className="activity-reply-preview">{preview}</p>
+            : <p>{ACTIVITY_TEXT[item.kind] ?? "Worked in"} <span className={item.dm ? undefined : "sl-chan"}>{placeText(item)}</span>{item.kind === "working" ? "…" : ""}</p>}
+          <ActivityArtifacts api={api} item={item} />
+          <ActivityDetails api={api} tag={row.id} item={item} open={!!expanded[key]} id={`${key}:work`}>
+            {item.kind === "replied" && (showReplyPlace || (preview && !item.reply_summary?.trim())) &&
+            <div className="activity-reply-place">
+              {showReplyPlace && <>Replied{(item.dm || item.channel_name) && <> in <span className={item.dm ? undefined : "sl-chan"}>{placeText(item)}</span></>}</>}
+              {preview && !item.reply_summary?.trim() && <span>{showReplyPlace && " · "}{item.reply_summary_status === "pending" ? "Summarizing…" : item.reply_summary_status === "unavailable" ? "Summary unavailable · Reply excerpt" : "Reply excerpt"}</span>}
+            </div>
+            }
+          </ActivityDetails>
+        </div>
+      </div>
+    );
+  };
   let day = "";
   return <>
     <div ref={feed} className="activity-history">
-    {hasMore && <button className="link activity-older" disabled={loading} onClick={loadOlder}>{loading ? "Loading older activity…" : "Load older activity"}</button>}
+    {hasMore && <button className="link activity-older" disabled={loading} onClick={requestOlder}>{loading ? "Loading older activity…" : "Load older activity"}</button>}
     {entries === null && <div className="sl-empty"><span className="spin" /></div>}
     {entries !== null && !sorted.length && <div className="sl-empty">
       <img src={tagIcon} alt="" style={{ width: 48, borderRadius: 12 }} />
       <div className="label">{empty}</div>
     </div>}
-      {sorted.map(({ tag, item }, i) => {
-        const row = rows.find((row) => row.id === tag);
-        if (!row) return null;
-        const preview = item.reply_summary?.trim() || item.reply_preview?.trim();
-        const at = new Date(item.at);
-        const label = dayLabel(at, now);
+      {threads.map((thread) => {
+        const latest = thread[thread.length - 1];
+        const earlier = thread.slice(0, -1);
+        const label = dayLabel(new Date(latest.item.at), now);
         const divider = label !== day;
-        const key = `${row.id}:${item.run_id ?? `${item.at}-${i}`}`;
+        const group = threadKey(latest);
         day = label;
         return (
-          <div key={key}>
+          <div key={group}>
             {divider && <div className="sl-day"><span>{label}</span></div>}
-            <div className="sl-msg">
-              <Avatar row={row} size={34} badge={false} className="" />
-              <div>
-                <div className="who">{title(row)}<span>{clock(at)}</span>{item.model && <span title={`${item.backend ?? "Agent"} · ${item.model}${item.reasoning_effort ? ` · ${effortLabel(item.reasoning_effort)} thinking` : ""}`}>· {item.model_name || item.model}{item.reasoning_effort && ` ${effortShort(item.reasoning_effort)}`}</span>}
-                  {item.duration_seconds != null && Number.isFinite(item.duration_seconds) && item.duration_seconds > 0 && <span title="Generation time, including tool work">· {generationTime(item.duration_seconds)}</span>}
-                  {item.usage && <ActivityTokens usage={item.usage} />}
-                  <StepsToggle item={item} open={!!expanded[key]} controls={`${key}:work`} onToggle={() => setExpanded((all) => ({ ...all, [key]: !all[key] }))} />
-                </div>
-                {item.kind === "replied" ?
-                  preview && <p className="activity-reply-preview">{preview}</p>
-                  : <p>{ACTIVITY_TEXT[item.kind] ?? "Worked in"} <span className={item.dm ? undefined : "sl-chan"}>{placeText(item)}</span>{item.kind === "working" ? "…" : ""}</p>}
-                <ActivityArtifacts api={api} item={item} />
-                <ActivityDetails api={api} tag={row.id} item={item} open={!!expanded[key]} id={`${key}:work`}>
-                  {item.kind === "replied" && (showReplyPlace || (preview && !item.reply_summary?.trim())) &&
-                  <div className="activity-reply-place">
-                    {showReplyPlace && <>Replied{(item.dm || item.channel_name) && <> in <span className={item.dm ? undefined : "sl-chan"}>{placeText(item)}</span></>}</>}
-                    {preview && !item.reply_summary?.trim() && <span>{showReplyPlace && " · "}{item.reply_summary_status === "pending" ? "Summarizing…" : item.reply_summary_status === "unavailable" ? "Summary unavailable · Reply excerpt" : "Reply excerpt"}</span>}
-                  </div>
-                  }
-                </ActivityDetails>
-              </div>
+            <div className="activity-group">
+            {message(latest)}
+            {earlier.length > 0 && <div className="activity-thread-group">
+              <button className="link activity-thread-toggle" aria-expanded={!!openThreads[group]}
+                aria-label={`${openThreads[group] ? "Hide" : "Show"} ${earlier.length} earlier ${earlier.length === 1 ? "reply" : "replies"} in this thread`}
+                onClick={() => setOpenThreads((all) => ({ ...all, [group]: !all[group] }))}>
+                {openThreads[group] ? "Hide earlier" : `${earlier.length} earlier ${earlier.length === 1 ? "reply" : "replies"}`}
+              </button>
+              {openThreads[group] && earlier.map((entry) => <div key={activityKey(entry)}>{message(entry)}</div>)}
+            </div>}
             </div>
           </div>
         );
@@ -517,18 +554,19 @@ function ActivityFeed({ api, rows, entries, hideErrors, hasMore, loading, loadOl
   </>;
 }
 
-function Logs({ text, copyLog }: { text: string; copyLog: () => void }) {
+function Logs({ text, copyLog }: { text: string; copyLog: () => Promise<boolean> }) {
+  const copy = useCopied();
   return <>
     <div className="row" style={{ marginBottom: 8 }}>
       <p className="lead" style={{ margin: 0, flex: 1 }}>Recent entries from this Tag's services, newest last.</p>
-      <button className="p-btn soft sm" onClick={copyLog}>Copy full log</button>
+      <button className="p-btn soft sm" onClick={() => void copyLog().then((ok) => ok && copy.mark())}>{copy.label("Copy full log")}</button>
     </div>
     <pre className="logbox selectable" aria-label="Tag log" style={{ maxHeight: "none" }}>{text.trim() || "No log entries yet."}</pre>
   </>;
 }
 
 function Activity({ api, row, items, showLogs, problem, openAI, hideErrors, hasMore, loading, loadOlder }: Pick<FilterProps, "hideErrors"> & HistoryProps & {
-  api: Bridge; row: TagRow; items: ActivityItem[] | null; copyLog: () => void; showLogs: () => void; problem: string | null; openAI: () => void;
+  api: Bridge; row: TagRow; items: ActivityItem[] | null; copyLog: () => Promise<boolean>; showLogs: () => void; problem: string | null; openAI: () => void;
 }) {
   const attention = status(row) === "attention";
   return <>
@@ -554,7 +592,7 @@ function Activity({ api, row, items, showLogs, problem, openAI, hideErrors, hasM
 const DESCRIPTION_LIMIT = 140;
 
 function Details({ api, tags, row, copyLog, openAI, say, canDescribe }: {
-  api: Bridge; tags: Tags; row: TagRow; copyLog: () => void; openAI: () => void; say: (text: string) => void; canDescribe: boolean;
+  api: Bridge; tags: Tags; row: TagRow; copyLog: () => Promise<boolean>; openAI: () => void; say: (text: string) => void; canDescribe: boolean;
 }) {
   const name = title(row);
   const choice = useModelChoice(api, row.id, {
@@ -562,14 +600,25 @@ function Details({ api, tags, row, copyLog, openAI, say, canDescribe }: {
   });
   const [renaming, setRenaming] = useState(false);
   const [newName, setNewName] = useState(row.slack_name ?? "");
+  const copyMention = useCopied();
+  const copyFullLog = useCopied();
   const folder = workingFolder(row as TagRow & { home?: string });
   const running = row.state === "running";
   const saved = choice.report?.default_model;
-  const rename = async () => { if (await tags.rename(row, newName)) { setRenaming(false); say(`Renamed to ${newName.trim()}`); } };
+  // A failed rename or description change shows under the field being edited, which stays open to retry.
+  const [renameError, setRenameError] = useState("");
+  const rename = async () => {
+    const failure = await tags.rename(row, newName);
+    setRenameError(failure);
+    if (!failure) { setRenaming(false); say(`Renamed to ${newName.trim()}`); }
+  };
   const [describing, setDescribing] = useState(false);
   const [newDescription, setNewDescription] = useState(row.description ?? "");
+  const [describeError, setDescribeError] = useState("");
   const describe = async () => {
-    if (await tags.describe(row, newDescription)) { setDescribing(false); say(newDescription.trim() ? "Saved the description" : "Cleared the description"); }
+    const failure = await tags.describe(row, newDescription);
+    setDescribeError(failure);
+    if (!failure) { setDescribing(false); say(newDescription.trim() ? "Saved the description" : "Cleared the description"); }
   };
   const describeBusy = tags.busy.has(row.id);
   return (
@@ -580,14 +629,15 @@ function Details({ api, tags, row, copyLog, openAI, say, canDescribe }: {
           <dd>
             <input className="field" autoFocus value={newName} aria-label="Name in Slack" maxLength={35} style={{ height: 32, flex: 1, minWidth: 0, maxWidth: 240 }}
               onChange={(e) => setNewName(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter" && newName.trim()) void rename(); if (e.key === "Escape") setRenaming(false); }} />
-            <button className="p-btn quiet sm" onClick={() => setRenaming(false)}>Cancel</button>
+              onKeyDown={(e) => { if (e.key === "Enter" && newName.trim()) void rename(); if (e.key === "Escape") { setRenaming(false); setRenameError(""); } }} />
+            <button className="p-btn quiet sm" onClick={() => { setRenaming(false); setRenameError(""); }}>Cancel</button>
             <button className="p-btn ink sm" disabled={!newName.trim() || tags.busy.has(row.id)} onClick={() => void rename()}>Save</button>
+            {renameError && <div className="edit-err"><ErrorLine>{renameError}</ErrorLine></div>}
           </dd>
         ) : (
           <dd>
             <span className="mention">@{name}</span>
-            <button className="link" onClick={() => { void api.copy(`@${name}`); say("Copied mention"); }}>Copy</button>
+            <button className="link" onClick={() => void api.copy(`@${name}`).then(() => { say("Copied mention"); copyMention.mark(); }, () => say("Could not copy the mention"))}>{copyMention.label("Copy")}</button>
             {row.slack_name && <button className="link" onClick={() => { setNewName(row.slack_name ?? ""); setRenaming(true); }}>Rename</button>}
           </dd>
         )}
@@ -597,12 +647,13 @@ function Details({ api, tags, row, copyLog, openAI, say, canDescribe }: {
             <div className="desc-wrap">
               <textarea className="field desc" autoFocus rows={2} maxLength={DESCRIPTION_LIMIT} value={newDescription} aria-label="Description" ref={fitText}
                 placeholder="One line on what it does" onChange={(e) => { setNewDescription(e.target.value.replace(/[\r\n]+/g, " ")); fitText(e.currentTarget); }}
-                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void describe(); } if (e.key === "Escape") setDescribing(false); }} />
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void describe(); } if (e.key === "Escape") { setDescribing(false); setDescribeError(""); } }} />
               {newDescription.length > DESCRIPTION_LIMIT - 30 && <span className="desc-count">{DESCRIPTION_LIMIT - newDescription.length}</span>}
             </div>
+            {describeError && <ErrorLine>{describeError}</ErrorLine>}
             <div className="desc-acts">
-              <button className="p-btn quiet sm" onClick={() => setDescribing(false)}>Cancel</button>
-              <button className="p-btn ink sm" disabled={describeBusy || newDescription.trim() === (row.description ?? "")} onClick={() => void describe()}>Save</button>
+              <button className="p-btn quiet sm" onClick={() => { setDescribing(false); setDescribeError(""); }}>Cancel</button>
+              <button className="p-btn ink sm" disabled={describeBusy || newDescription.trim() === (row.description ?? "")} onClick={() => void describe()}>{describeBusy ? "Saving…" : "Save"}</button>
             </div>
           </dd>
         ) : (row.description || canDescribe) && (
@@ -637,7 +688,7 @@ function Details({ api, tags, row, copyLog, openAI, say, canDescribe }: {
         <dt>Working folder</dt>
         <dd><span className="mono selectable">{shortPath(folder)}</span><button className="link" onClick={() => void api.open(folder)}>Show</button></dd>
         <dt>Log</dt>
-        <dd><span className="meta">For troubleshooting</span><button className="link" onClick={copyLog}>Copy full log</button></dd>
+        <dd><span className="meta">For troubleshooting</span><button className="link" onClick={() => void copyLog().then((ok) => ok && copyFullLog.mark())}>{copyFullLog.label("Copy full log")}</button></dd>
       </dl>
       <hr className="sl-sep" />
       <RemoveTag tags={tags} row={row} say={say} />
