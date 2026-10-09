@@ -39,6 +39,12 @@ STABLE_SECONDS = 300
 SUPERVISED_ENV = "TAG_AUTOSTART_SUPERVISED"
 # Exit status the service manager treats as "start me again with new code".
 RELOAD_EXIT = 75
+# Login services get the system's minimal PATH, without the folders where
+# `claude` and `codex` are usually installed. These match Tag.app's tool path;
+# starts made by the person add the folders on their own PATH.
+TOOL_DIRECTORIES = ("~/.local/bin", "/opt/homebrew/bin", "/usr/local/bin")
+PATH_RECORD = "state/autostart-path.json"
+MAX_RECORDED_DIRECTORIES = 64
 
 
 def wanted(home: Path) -> bool | None:
@@ -57,6 +63,48 @@ def set_wanted(home: Path, running: bool) -> None:
     temporary = path.with_name(path.name + ".tmp")
     temporary.write_text(json.dumps({"version": 1, "running": running}) + "\n", encoding="utf-8")
     os.replace(temporary, path)
+
+
+def _directories(path: str) -> list[str]:
+    return [item for item in path.split(os.pathsep) if os.path.isabs(item)]
+
+
+def _unique(items: list[str]) -> list[str]:
+    return list(dict.fromkeys(items))
+
+
+def _recorded_path(installation_root: Path) -> list[str]:
+    try:
+        record = json.loads((installation_root / PATH_RECORD).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    directories = record.get("directories") if isinstance(record, dict) else None
+    if not isinstance(directories, list):
+        return []
+    return [item for item in directories if isinstance(item, str) and os.path.isabs(item)]
+
+
+def remember_path(installation_root: Path, path: str | None = None) -> None:
+    """Add the folders on this person's PATH to the ones login starts search.
+
+    Earlier folders are kept, so a start from Tag.app never drops one that a
+    terminal start found.
+    """
+    recorded = _recorded_path(installation_root)
+    current = _directories(os.environ.get("PATH", "") if path is None else path)
+    # Each Tag's own integrations folder is added by its start; never share it with other Tags.
+    current = [item for item in current if Path(item).parts[-2:] != ("integrations", "bin")]
+    merged = _unique(current + recorded)[:MAX_RECORDED_DIRECTORIES]
+    if merged != recorded:
+        (installation_root / PATH_RECORD).parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        _write(installation_root / PATH_RECORD, json.dumps({"version": 1, "directories": merged}) + "\n")
+
+
+def tool_path(installation_root: Path, path: str | None = None) -> str:
+    """The PATH for starts the login service makes, so the AI tools are found."""
+    common = [] if os.name == "nt" else [os.path.expanduser(item) for item in TOOL_DIRECTORIES]
+    current = _directories(os.environ.get("PATH", "") if path is None else path)
+    return os.pathsep.join(_unique(_recorded_path(installation_root) + common + current))
 
 
 def service_command(installation_root: Path, source_root: Path) -> list[str]:
@@ -435,7 +483,8 @@ def run(installation_root: Path, lifecycle, source_root: Path) -> int:
             hidden = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
             try:
                 result = subprocess.run([*command, tag_id, "start"], stdin=subprocess.DEVNULL,
-                                        env={**os.environ, SUPERVISED_ENV: "1"},
+                                        env={**os.environ, SUPERVISED_ENV: "1",
+                                             "PATH": tool_path(installation_root)},
                                         capture_output=True, text=True, check=False, **hidden)
             except (OSError, subprocess.SubprocessError) as error:
                 # For example, the launcher is briefly missing during an upgrade.
