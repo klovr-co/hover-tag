@@ -63,6 +63,15 @@ unknown `release:*` labels intentionally prevent publication. Beta lines only
 accept `release:skip`; patch and minor labels begin alpha lines. Stable releases
 remain manually qualified and published; see `RELEASE.md`.
 
+### Release line targeting
+
+Before merging or recommending a merge, confirm which release the PR targets:
+the current `VERSION` line on `main`, also an older stable release (merge to
+`main`, then cherry-pick to `release/vX.Y.x`), or a later version (keep it
+unmerged as a draft with a `target:vX.Y` label). Never merge a PR labeled for a
+later version into `main` before the current line ships stable. Never merge
+`main` into a maintenance branch. See "Release lines" in `RELEASE.md`.
+
 ### Automatic upgrade migrations
 
 Treat changes required by a new release like database migrations. Ship versioned,
