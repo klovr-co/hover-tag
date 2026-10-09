@@ -227,12 +227,13 @@ class ThreeTagTests(unittest.TestCase):
         thread = self.bus.thread(request["ts"])
         working = [m for m in thread if m["text"] == tag_handoff.WORKING_TEXT]
         self.assertEqual({TAG_B, TAG_C}, {m["user"] for m in working})
-        closing = thread[-1]
-        self.assertEqual(TAG_A, closing["user"])
-        self.assertEqual(f"Done. The final answer is in <https://slack.test/C123/p{origin['ts']}|the original thread>.",
-                         closing["text"])
+        # A peer can still post housekeeping after its result, so find the closing note by its text.
+        closing_text = f"Done. The final answer is in <https://slack.test/C123/p{origin['ts']}|the original thread>."
+        closing = [m for m in thread if m["text"] == closing_text]
+        self.assertEqual([TAG_A], [m["user"] for m in closing], thread)
         replies = [m for m in thread if tag_handoff.RESULT_RE.search(m["text"])]
         self.assertEqual({TAG_B, TAG_C}, {m["user"] for m in replies})
+        self.assertGreater(thread.index(closing[0]), max(thread.index(m) for m in replies))
         for task_run in (run for run in self.runs if run[0] != TAG_A):
             self.assertNotIn("slack.test", task_run[1], "a peer must get only the task")
         briefs = {run[0]: run[1] for run in self.runs if run[0] != TAG_A}

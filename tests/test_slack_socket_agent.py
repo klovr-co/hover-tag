@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import io
 import json
+from contextlib import redirect_stdout
 from dataclasses import replace
 import os
 import signal
@@ -8,6 +10,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 try:
@@ -3167,6 +3170,98 @@ class SlackBridgeReadinessTests(unittest.TestCase):
 
         invitation_memory.start.assert_called_once_with()
         invitation_memory.stop.assert_called_once_with()
+
+
+class SocketConnectionTests(unittest.TestCase):
+    """A client that stays disconnected, as after sleeping on another network, is replaced."""
+
+    class InlineThread:
+        def __init__(self, target, **_kwargs) -> None:
+            self.target = target
+
+        def start(self) -> None:
+            self.target()
+
+    def connection(self, *handlers: MagicMock) -> tuple[Any, list[float]]:
+        now = [0.0]
+        opened = iter(handlers)
+        connection = slack_socket_agent.SocketConnection(
+            lambda: next(opened), recovery_seconds=60, clock=lambda: now[0]
+        )
+        return connection, now
+
+    @staticmethod
+    def handler(connected: bool) -> MagicMock:
+        handler = MagicMock()
+        handler.client.is_connected.return_value = connected
+        return handler
+
+    def test_connected_client_is_kept(self) -> None:
+        current = self.handler(True)
+        connection, now = self.connection(current)
+        for now[0] in (0, 120, 600):
+            self.assertTrue(connection.is_connected())
+        self.assertIs(connection.handler, current)
+        current.close.assert_not_called()
+
+    def test_client_that_stays_down_is_replaced_after_the_grace_period(self) -> None:
+        stuck, fresh = self.handler(False), self.handler(True)
+        connection, now = self.connection(stuck, fresh)
+        with patch.object(slack_socket_agent.threading, "Thread", self.InlineThread), \
+                redirect_stdout(io.StringIO()) as output:
+            self.assertFalse(connection.is_connected())
+            now[0] = 59
+            self.assertFalse(connection.is_connected())
+            self.assertIs(connection.handler, stuck)
+            now[0] = 60
+            self.assertTrue(connection.is_connected())
+
+        self.assertIs(connection.handler, fresh)
+        fresh.connect.assert_called_once_with()
+        stuck.close.assert_called_once_with()
+        self.assertIn("replaced it with a fresh one", output.getvalue())
+
+    def test_client_that_recovers_by_itself_restarts_the_grace_period(self) -> None:
+        flaky = self.handler(False)
+        connection, now = self.connection(flaky)
+        self.assertFalse(connection.is_connected())
+        now[0] = 50
+        flaky.client.is_connected.return_value = True
+        self.assertTrue(connection.is_connected())
+        flaky.client.is_connected.return_value = False
+        now[0] = 100
+        self.assertFalse(connection.is_connected())
+        now[0] = 159
+        self.assertFalse(connection.is_connected())
+        self.assertIs(connection.handler, flaky)
+
+    def test_unreachable_slack_keeps_the_current_client_and_retries_later(self) -> None:
+        stuck = self.handler(False)
+        offline, fresh = self.handler(False), self.handler(True)
+        offline.connect.side_effect = OSError("nodename nor servname provided")
+        connection, now = self.connection(stuck, offline, fresh)
+        with patch.object(slack_socket_agent.threading, "Thread", self.InlineThread), \
+                redirect_stdout(io.StringIO()) as output:
+            connection.is_connected()
+            now[0] = 60
+            self.assertFalse(connection.is_connected())
+            self.assertIs(connection.handler, stuck)
+            offline.close.assert_called_once_with()
+            stuck.close.assert_not_called()
+            now[0] = 119
+            self.assertFalse(connection.is_connected())
+            now[0] = 120
+            self.assertTrue(connection.is_connected())
+
+        self.assertIs(connection.handler, fresh)
+        stuck.close.assert_called_once_with()
+        self.assertIn("still unreachable", output.getvalue())
+
+    def test_close_closes_the_current_client(self) -> None:
+        current = self.handler(True)
+        connection, _now = self.connection(current)
+        connection.close()
+        current.close.assert_called_once_with()
 
 
 class SlackAnswerStreamTests(unittest.TestCase):

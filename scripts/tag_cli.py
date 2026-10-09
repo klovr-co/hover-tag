@@ -1749,6 +1749,14 @@ def _workspace_lifecycle(installation_root: Path, workspace: str, action: str, j
     return 1 if failed else 0
 
 
+def _remember_tool_path(installation_root: Path) -> None:
+    """Let starts made at login find the AI tools this person's PATH finds."""
+    try:
+        autostart.remember_path(installation_root)
+    except OSError:
+        pass  # The login service still searches the usual install folders.
+
+
 def _autostart_command(installation_root: Path, args, parser) -> int:
     """Keep chosen Tags running after login, and restart them if they stop."""
     action = args.arguments[0] if args.arguments else "status"
@@ -1767,6 +1775,7 @@ def _autostart_command(installation_root: Path, args, parser) -> int:
         result = autostart.status(installation_root)
     elif action == "on":
         seeded = autostart.seed_from_running(installation_root, sys.modules[__name__])
+        _remember_tool_path(installation_root)
         result = autostart.enable(installation_root, ROOT)
     elif action == "off":
         result = autostart.disable(installation_root)
@@ -3046,6 +3055,7 @@ def _run_cli() -> int:
         if not supervised:
             # Recorded even if this start fails: the login service retries with backoff.
             autostart.set_wanted(home, True)
+            _remember_tool_path(installation_root)
         if restart_flow:
             display.section("Starting")
         else:

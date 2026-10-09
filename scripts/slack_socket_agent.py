@@ -138,6 +138,8 @@ ACTIVITY_WAIT_SECONDS = 12.0
 CANCEL_GRACE_SECONDS = 6.0
 STATUS_REFRESH_SECONDS = 90
 STATUS_CLEANUP_RETRY_DELAYS = (2, 5, 15, 30, 60, 90, 90, 90)
+# Awake seconds a Socket Mode client may stay disconnected before it is replaced.
+SOCKET_RECOVERY_SECONDS = 60.0
 ACTIVITY_ACTION_ID = "opentag_view_activity"
 SHOW_ACTIVITY_DETAILS = False
 SETTINGS_ACTION_ID = "opentag_change_agent_settings"
@@ -4969,6 +4971,65 @@ def create_app(
     return app
 
 
+class SocketConnection:
+    """Keep Socket Mode connected, replacing a client that stays disconnected.
+
+    After a laptop sleeps on one network and wakes on another, Slack's client
+    can keep failing to reconnect while a fresh client connects at once. On
+    macOS and Linux the monotonic clock pauses during sleep, so only awake
+    time counts.
+    """
+
+    def __init__(
+        self,
+        open_handler: Callable[[], Any],
+        *,
+        recovery_seconds: float = SOCKET_RECOVERY_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self.open_handler = open_handler
+        self.recovery_seconds = recovery_seconds
+        self.clock = clock
+        self.handler = open_handler()
+        self.down_since: float | None = None
+
+    def connect(self) -> None:
+        self.handler.connect()
+
+    def is_connected(self) -> bool:
+        """Report the connection, replacing the client once it stays down too long."""
+        if self.handler.client.is_connected():
+            self.down_since = None
+            return True
+        now = self.clock()
+        if self.down_since is None:
+            self.down_since = now
+        elif now - self.down_since >= self.recovery_seconds:
+            # The replacement gets the same grace period before it is replaced too.
+            self.down_since = now
+            return self.replace()
+        return False
+
+    def replace(self) -> bool:
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        fresh = self.open_handler()
+        try:
+            fresh.connect()
+        except Exception as exc:  # noqa: BLE001 - the current client keeps retrying
+            print(f"{stamp} Slack is still unreachable; retrying with a fresh connection later "
+                  f"({type(exc).__name__})", flush=True)
+            threading.Thread(target=fresh.close, name="slack-socket-close", daemon=True).start()
+            return False
+        stale, self.handler = self.handler, fresh
+        print(f"{stamp} Slack connection did not recover; replaced it with a fresh one", flush=True)
+        # Closing joins the old client's threads; never hold up the new connection.
+        threading.Thread(target=stale.close, name="slack-socket-close", daemon=True).start()
+        return fresh.client.is_connected()
+
+    def close(self) -> None:
+        self.handler.close()
+
+
 def install_shutdown_handlers(shutdown_requested: threading.Event) -> None:
     """Turn process signals into a graceful main-loop exit."""
     if threading.current_thread() is not threading.main_thread():
@@ -5016,7 +5077,8 @@ def main() -> None:
         session_journal=session_journal,
     )
     print_live_summary(args.backend, allowed_user_ids)
-    handler = SocketModeHandler(app, require_env("SLACK_APP_TOKEN"))
+    app_token = require_env("SLACK_APP_TOKEN")
+    connection = SocketConnection(lambda: SocketModeHandler(app, app_token))
     session_journal.reconcile(app.client, app.logger)
     shutdown_requested = threading.Event()
     install_shutdown_handlers(shutdown_requested)
@@ -5044,7 +5106,7 @@ def main() -> None:
         invitation_memory.start()
     next_handoff_check = 0.0
     try:
-        handler.connect()
+        connection.connect()
         while not shutdown_requested.is_set():
             if time.monotonic() >= next_handoff_check:
                 next_handoff_check = time.monotonic() + 30
@@ -5052,12 +5114,13 @@ def main() -> None:
                     app.tag_expire_handoffs(app.client, app.logger)
                 except Exception as exc:  # noqa: BLE001 - keep the bridge running
                     app.logger.warning("Could not check Tag handoff deadlines: %s", exc)
+            connected = connection.is_connected()
             if args.ready_file:
                 invitation_ready = (
                     invitation_memory is None
                     or invitation_memory.ready_for_requests()
                 )
-                if handler.client.is_connected() and invitation_ready:
+                if connected and invitation_ready:
                     instance_id = args.process_id or require_env("OPENTAG_PROCESS_ID")
                     temporary = args.ready_file.with_name(
                         f"{args.ready_file.name}.tmp.{os.getpid()}"
@@ -5078,7 +5141,7 @@ def main() -> None:
             invitation_memory.stop()
         if args.ready_file:
             args.ready_file.unlink(missing_ok=True)
-        handler.close()
+        connection.close()
         session_journal.reconcile(app.client, app.logger)
 
 
