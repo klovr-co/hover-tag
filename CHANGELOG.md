@@ -2,6 +2,30 @@
 
 All notable changes to Tag are documented here.
 
+## [0.3.1] - 2026-10-09
+
+A patch for 0.3. Existing installations pick it up on their next `tag upgrade`
+or from the update notice in Tag; there is nothing to set up again.
+
+### Slack
+
+- **Choose how far a Claude approval reaches.** Claude approvals now offer
+  **Allow once**, **Always allow** for the rule Claude suggests, and **Deny** in
+  one row. **More options** adds **Allow for this task**, a rule for a whole
+  command such as `claude --chrome`, folder access, and **Deny and stop**. Saved
+  rules ask first, then apply only to that Tag, in its workspace
+  `.claude/settings.local.json`. Codex approvals use the same short row.
+- **Clearer startup message about channels.** When no channels are configured,
+  Tag now says channel mentions are off instead of claiming to listen in
+  "(none configured)".
+
+### Reliability
+
+- **Tags reconnect after your computer sleeps.** A Slack connection that stays
+  down for a minute of awake time is replaced automatically.
+- **Tags started at login find `claude` and `codex`.** Login-started Tags now
+  search the usual install folders, so they no longer fail to find the agent.
+
 ## [0.3.0] - 2026-10-08
 
 The 0.3 line introduces **Tag** as a desktop app for macOS. The
