@@ -29,25 +29,24 @@ gh pr create --base main
 ### A fix that older stable users also need
 
 Merge the fix to `main` first. If users of the older stable release need it
-before the next release, a maintainer copies it onto that release's
-maintenance branch:
+before the next release, add the `backport:vX.Y.x` label (for example,
+`backport:v0.3.x`) to the merged PR, or run the **Backport** workflow. It opens
+a pull request that cherry-picks the commit onto `release/vX.Y.x`, creating the
+branch from the line's newest stable tag if needed. Review and merge that pull
+request. If the cherry-pick conflicts, the workflow comments on the original PR,
+and a maintainer copies the commit by hand:
 
 ```bash
-# Only the first time: create the branch from the stable tag
-git switch -c release/v0.3.x v0.3.0
-git push -u origin release/v0.3.x
-
-# For each fix: copy the merged commit from main
-git switch release/v0.3.x
+git switch -c backport/pr-123-to-v0.3.x origin/release/v0.3.x
 git cherry-pick -x <commit-on-main>
-git push
 ```
 
 - Never merge `main` into a `release/vX.Y.x` branch, because that pulls in
   unreleased work.
 - Never land a fix only on the maintenance branch. It must be on `main` too.
-- The release automation publishes only from `main`, so ask a maintainer
-  before you rely on a patch release such as `v0.3.1`.
+- A maintenance branch publishes stable patches such as `v0.3.1`. A maintainer
+  runs **Prepare stable release** with the `branch` input. See "Patching an
+  older stable release" in [RELEASE.md](RELEASE.md).
 
 ### A later version
 

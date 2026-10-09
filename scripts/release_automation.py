@@ -23,6 +23,7 @@ from typing import Any, Iterable
 
 VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta)(?:\.(\d+))?)?$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+MAINTENANCE_BRANCH_RE = re.compile(r"^release/v(\d+)\.(\d+)\.x$")
 REQUIRED_WORKFLOWS = ("ci.yml", "install-smoke.yml")
 EDGE_WORKFLOW = "edge-build.yml"
 AUTO_RELEASE_LABELS = {
@@ -134,6 +135,61 @@ def validate_candidate(
     if transition_history:
         errors.extend(validate_transition(max(transition_history, key=Version.precedence), candidate))
     return errors
+
+
+def validate_maintenance_candidate(
+    version: str, line: str, tags: Iterable[str], allow_existing_version: bool = False
+) -> list[str]:
+    """Validate a stable patch release made from a maintenance branch.
+
+    `line` is "MAJOR.MINOR". Patch releases are stable only, and each must be
+    the next patch after the newest published release of the same line.
+    """
+    try:
+        candidate = Version.parse(version)
+        major, minor = (int(part) for part in line.split("."))
+    except ValueError as error:
+        return [str(error)]
+    errors: list[str] = []
+    if (candidate.major, candidate.minor) != (major, minor):
+        errors.append(f"VERSION {candidate} is not on the {line} line")
+    if candidate.phase != "stable":
+        errors.append("a maintenance branch publishes stable patch releases only")
+    if errors:
+        return errors
+    published: list[Version] = []
+    for tag in tags:
+        try:
+            item = Version.parse(tag.removeprefix("v"))
+        except ValueError:
+            continue
+        if (item.major, item.minor) == (major, minor) and item.phase == "stable":
+            published.append(item)
+    if candidate in published and not allow_existing_version:
+        return [f"release tag v{candidate} already exists"]
+    previous = [item for item in published if item != candidate]
+    newest = max((item.patch for item in previous), default=None)
+    if newest is None:
+        return [f"no stable release of the {line} line has been published"]
+    if candidate.patch != newest + 1:
+        return [f"expected {major}.{minor}.{newest + 1} after {major}.{minor}.{newest}, got {candidate}"]
+    return []
+
+
+def validate_source_ref(source_ref: str, version: str) -> list[str]:
+    """Allow `main`, or the maintenance branch of the version's own line."""
+    if source_ref == "refs/heads/main":
+        return []
+    match = MAINTENANCE_BRANCH_RE.fullmatch(source_ref.removeprefix("refs/heads/"))
+    try:
+        core = Version.parse(version).core
+    except ValueError as error:
+        return [str(error)]
+    if match and source_ref.startswith("refs/heads/") and (
+        int(match[1]), int(match[2])
+    ) == core[:2]:
+        return []
+    return [f"invalid provenance source_ref: {source_ref!r} cannot build {version}"]
 
 
 def validate_release_tag(source_version: str, release_tag: str) -> list[str]:
@@ -328,14 +384,16 @@ def write_channel_index(repository: str, output: Path) -> None:
     output.write_text(json.dumps(index, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def validate_selected_sha(sha: str, resolved: str, is_on_main: bool) -> list[str]:
+def validate_selected_sha(
+    sha: str, resolved: str, is_on_main: bool, branch: str = "origin/main"
+) -> list[str]:
     errors: list[str] = []
     if not SHA_RE.fullmatch(sha):
         errors.append("selected commit must be a full, lowercase 40-character SHA")
     if resolved != sha:
         errors.append("selected commit did not resolve to the requested SHA")
     if not is_on_main:
-        errors.append("selected commit is not reachable from origin/main")
+        errors.append(f"selected commit is not reachable from {branch}")
     return errors
 
 
@@ -487,7 +545,6 @@ def _validate_provenance(
     expected: dict[str, Any] = {
         "schema_version": 1,
         "channel": channel,
-        "source_ref": "refs/heads/main",
         "version": version,
         "archive": {"name": archive_name, "sha256": digest},
     }
@@ -496,6 +553,11 @@ def _validate_provenance(
     for key, value in expected.items():
         if provenance.get(key) != value:
             errors.append(f"invalid provenance {key}: expected {value!r}")
+    source_ref = provenance.get("source_ref")
+    if not isinstance(source_ref, str):
+        errors.append("invalid provenance source_ref: expected a branch reference")
+    else:
+        errors.extend(validate_source_ref(source_ref, version))
     built_at = provenance.get("built_at")
     try:
         parsed = datetime.fromisoformat(built_at.removesuffix("Z") + "+00:00")
@@ -619,6 +681,11 @@ def main() -> int:
     candidate.add_argument("--version", required=True)
     candidate.add_argument("--phase", choices=("alpha", "beta", "stable"), required=True)
     candidate.add_argument("--allow-existing-version", action="store_true")
+    candidate.add_argument("--line", help="MAJOR.MINOR line of a maintenance branch")
+
+    branch = subparsers.add_parser("validate-branch")
+    branch.add_argument("--name", required=True)
+    branch.add_argument("--print-line", action="store_true")
 
     automatic = subparsers.add_parser("next-prerelease")
     automatic.add_argument("--base-version", required=True)
@@ -669,9 +736,22 @@ def main() -> int:
     args = parser.parse_args()
     if args.command == "validate-candidate":
         tags = subprocess.check_output(["git", "tag", "--list", "v*"], text=True).splitlines()
+        if args.line:
+            return _print_errors(validate_maintenance_candidate(
+                args.version, args.line, tags, args.allow_existing_version
+            ))
         return _print_errors(validate_candidate(
             args.version, args.phase, tags, args.allow_existing_version
         ))
+    if args.command == "validate-branch":
+        if args.name == "main":
+            return 0
+        match = MAINTENANCE_BRANCH_RE.fullmatch(args.name)
+        if not match:
+            return _print_errors([f"{args.name!r} is neither main nor a release/vX.Y.x branch"])
+        if args.print_line:
+            print(f"{match[1]}.{match[2]}")
+        return 0
     if args.command == "next-prerelease":
         tags = subprocess.check_output(["git", "tag", "--list", "v*"], text=True).splitlines()
         try:
@@ -694,7 +774,7 @@ def main() -> int:
         on_main = subprocess.run(
             ["git", "merge-base", "--is-ancestor", args.sha, args.main_ref]
         ).returncode == 0
-        return _print_errors(validate_selected_sha(args.sha, resolved, on_main))
+        return _print_errors(validate_selected_sha(args.sha, resolved, on_main, args.main_ref))
     if args.command == "check-workflows":
         return _print_errors(check_workflows(args.repository, args.sha, args.wait_seconds))
     if args.command == "wait-for-predecessor":

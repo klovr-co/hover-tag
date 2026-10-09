@@ -5,7 +5,7 @@ on:
   workflow_run:
     workflows: [CI]
     types: [completed]
-    branches: [main]
+    branches: [main, 'release/v*.x']
 
 permissions:
   actions: read
@@ -25,6 +25,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       EDGE_SHA: ${{ github.event.workflow_run.head_sha }}
+      SOURCE_BRANCH: ${{ github.event.workflow_run.head_branch }}
     outputs:
       release_tag: ${{ steps.prerelease.outputs.release_tag }}
       docs_tag: ${{ steps.prerelease.outputs.docs_tag }}
@@ -39,8 +40,17 @@ jobs:
           python-version: '3.12'
       - name: Verify exact main commit and required workflows
         run: |
-          git fetch origin main --tags
-          python scripts/release_automation.py validate-commit --sha "$EDGE_SHA"
+          python scripts/release_automation.py validate-branch --name "$SOURCE_BRANCH"
+          git fetch origin main "$SOURCE_BRANCH" --tags
+          # Maintenance branches (release/vX.Y.x) keep a build for a later stable
+          # release, but never move the edge channel or publish a prerelease.
+          if [ "$SOURCE_BRANCH" = main ]; then
+            echo "MAINTENANCE=false" >> "$GITHUB_ENV"
+          else
+            echo "MAINTENANCE=true" >> "$GITHUB_ENV"
+          fi
+          python scripts/release_automation.py validate-commit --sha "$EDGE_SHA" \
+            --main-ref "origin/$SOURCE_BRANCH"
           previous_sha=$(git rev-parse "$EDGE_SHA^")
           python scripts/release_automation.py wait-for-predecessor \
             --repository "$GITHUB_REPOSITORY" --sha "$previous_sha" --wait-seconds 600
@@ -48,6 +58,11 @@ jobs:
             --repository "$GITHUB_REPOSITORY" --sha "$EDGE_SHA" --wait-seconds 600
       - name: Resolve automatic prerelease intent
         run: |
+          if [ "$MAINTENANCE" = true ]; then
+            echo "AUTO_PUBLISH=false" >> "$GITHUB_ENV"
+            echo "RELEASE_VERSION=$(head -n 1 VERSION)" >> "$GITHUB_ENV"
+            exit 0
+          fi
           mapfile -t labels < <(
             gh api "repos/$GITHUB_REPOSITORY/commits/$EDGE_SHA/pulls" \
               --jq '.[].labels[].name | select(startswith("release:"))'
@@ -78,7 +93,7 @@ jobs:
             )
           fi
           python scripts/package_release.py --channel edge --commit-sha "$EDGE_SHA" \
-            --source-ref refs/heads/main --built-at "$built_at" \
+            --source-ref "refs/heads/$SOURCE_BRANCH" --built-at "$built_at" \
             --version "$RELEASE_VERSION" "${telemetry_arguments[@]}"
           python scripts/release_automation.py validate-edge \
             --directory out --sha "$EDGE_SHA" --version "$RELEASE_VERSION"
@@ -93,6 +108,7 @@ jobs:
           if-no-files-found: error
           retention-days: 90
       - name: Update public edge channel
+        if: env.MAINTENANCE != 'true'
         run: |
           if [ "$(git ls-remote origin refs/heads/main | cut -f1)" != "$EDGE_SHA" ]; then
             echo "A newer main commit exists; leaving the moving edge tag unchanged."
