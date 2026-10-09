@@ -157,6 +157,10 @@ start after you sign in to your computer and restart if they stop. Turn on
 
 In the terminal: `tag autostart on`.
 
+Tags started this way find `claude` and `codex` in the usual install folders
+(`~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`). They also look in the
+folders on your PATH when you last started a Tag or turned this on yourself.
+
 ## Update
 
 Open **Settings** → **Updates** and click **Update Tag**. This updates the app

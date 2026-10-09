@@ -121,6 +121,74 @@ class InstallationTests(unittest.TestCase):
         self.assertEqual(supervisor.failures, {})
 
 
+class ToolPathTests(unittest.TestCase):
+    """Starts at login find `claude` and `codex` although login services get a minimal PATH."""
+
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name) / "tag-home"
+
+    @unittest.skipIf(os.name == "nt", "Windows starts login programs with the person's own PATH")
+    def test_login_starts_search_the_usual_install_folders(self) -> None:
+        with patch.dict(os.environ, {"HOME": "/Users/person"}):
+            folders = autostart.tool_path(self.root, "/usr/bin:/bin").split(os.pathsep)
+        self.assertEqual(folders[:3], ["/Users/person/.local/bin", "/opt/homebrew/bin", "/usr/local/bin"])
+        self.assertEqual(folders[3:], ["/usr/bin", "/bin"])
+
+    def test_folders_from_the_persons_own_starts_come_first_and_accumulate(self) -> None:
+        autostart.remember_path(self.root, os.pathsep.join(["/nvm/v22/bin", "relative/bin", "/usr/bin"]))
+        autostart.remember_path(self.root, os.pathsep.join(["/opt/tools/bin", "/usr/bin"]))
+        folders = autostart.tool_path(self.root, "/usr/bin").split(os.pathsep)
+        self.assertEqual(folders[:3], ["/opt/tools/bin", "/usr/bin", "/nvm/v22/bin"])
+        self.assertNotIn("relative/bin", folders)
+        self.assertEqual(folders.count("/usr/bin"), 1)
+
+    def test_an_unchanged_path_is_not_rewritten(self) -> None:
+        autostart.remember_path(self.root, "/nvm/v22/bin")
+        record = self.root / autostart.PATH_RECORD
+        before = record.stat().st_mtime_ns
+        with patch.object(autostart, "_write") as write:
+            autostart.remember_path(self.root, "/nvm/v22/bin")
+        write.assert_not_called()
+        self.assertEqual(record.stat().st_mtime_ns, before)
+
+    def test_a_damaged_record_is_ignored(self) -> None:
+        (self.root / "state").mkdir(parents=True)
+        (self.root / autostart.PATH_RECORD).write_text("not json", encoding="utf-8")
+        self.assertIn("/usr/bin", autostart.tool_path(self.root, "/usr/bin").split(os.pathsep))
+        autostart.remember_path(self.root, "/nvm/v22/bin")
+        self.assertEqual(autostart.tool_path(self.root, "").split(os.pathsep)[0], "/nvm/v22/bin")
+
+    def test_the_login_service_starts_tags_with_the_tool_path(self) -> None:
+        autostart.remember_path(self.root, "/nvm/v22/bin")
+
+        class Stop(Exception):
+            pass
+
+        class OneCheck:
+            def __init__(self, _root, _lifecycle, start) -> None:
+                self.start = start
+
+            def check(self) -> None:
+                self.start("first")
+                raise Stop
+
+        finished = Mock(returncode=0, stdout="", stderr="")
+        with patch.object(autostart, "Supervisor", OneCheck), \
+                patch.object(autostart.subprocess, "run", return_value=finished) as run, \
+                patch.dict(os.environ, {"PATH": "/usr/bin:/bin"}), \
+                redirect_stdout(StringIO()), self.assertRaises(Stop):
+            autostart.run(self.root, Mock(), Path(self.temporary_source()))
+        environment = run.call_args.kwargs["env"]
+        self.assertEqual(environment[autostart.SUPERVISED_ENV], "1")
+        self.assertEqual(environment["PATH"].split(os.pathsep)[0], "/nvm/v22/bin")
+        self.assertIn("/usr/bin", environment["PATH"].split(os.pathsep))
+
+    def temporary_source(self) -> str:
+        return str(self.root.parent / "source")
+
+
 class ServiceDefinitionTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -290,6 +358,38 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(code, 0)
         start.assert_not_called()
         self.assertFalse(autostart.wanted(self.home))
+
+    def start_until_readiness(self, environment: dict[str, str]) -> None:
+        """Run `tag start` up to its first readiness step, then stop it there."""
+        (self.home / "config/settings.json").write_text("{}", encoding="utf-8")
+        with patch.dict(os.environ, environment), \
+                patch.object(tag_cli, "missing_runtime_dependencies", return_value=[]), \
+                patch.object(tag_cli, "legacy_slack_ready", return_value=False), \
+                patch.object(tag_cli, "read_config", return_value={}), \
+                patch("scripts.tag_config.config_errors", return_value=[]), \
+                patch.object(tag_cli, "assert_unique_slack_app"), \
+                patch("scripts.tag_config.migrate_file_delivery"), \
+                patch.object(tag_cli, "selected_target", side_effect=RuntimeError("stop here")), \
+                self.assertRaisesRegex(RuntimeError, "stop here"):
+            self.cli("t1-a1", "start")
+
+    def test_a_persons_start_records_where_their_tools_live(self) -> None:
+        self.start_until_readiness({"PATH": os.pathsep.join(["/nvm/v22/bin", "/usr/bin"])})
+        folders = autostart.tool_path(self.root, "").split(os.pathsep)
+        self.assertEqual(folders[0], "/nvm/v22/bin")
+        # The Tag's own integrations folder stays out of the record the other Tags share.
+        self.assertFalse([item for item in folders if item.endswith(os.path.join("integrations", "bin"))])
+
+    def test_a_supervised_start_does_not_record_the_services_path(self) -> None:
+        autostart.set_wanted(self.home, True)
+        self.start_until_readiness({autostart.SUPERVISED_ENV: "1", "PATH": "/usr/bin"})
+        self.assertFalse((self.root / autostart.PATH_RECORD).exists())
+
+    def test_turning_autostart_on_records_where_tools_live(self) -> None:
+        with patch.dict(os.environ, {"PATH": "/nvm/v22/bin"}), \
+                patch.object(autostart, "enable", return_value={"enabled": True}):
+            self.assertEqual(self.cli("autostart", "on", "--json")[0], 0)
+        self.assertEqual(autostart.tool_path(self.root, "").split(os.pathsep)[0], "/nvm/v22/bin")
 
     def test_keep_records_choices_without_starting(self) -> None:
         code, output = self.cli("autostart", "keep", "t1-a1", "--json")

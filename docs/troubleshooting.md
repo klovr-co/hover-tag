@@ -76,6 +76,7 @@ no setup, and a failed one is retried on the next start.
 | Bridge immediately stops | Runtime dependency or configuration failed after preflight | Run `tag logs`, or open the Tag's **Logs** tab in the app. |
 | Mention is denied | The caller is not in the Slack user allowlist | Add their exact member ID to `SLACK_ALLOWED_USER_IDS` only if the owner intends to share access. |
 | Mention receives no reply | Slack did not emit an event or the bridge rejected the channel | Confirm Socket Mode is connected, mention your Tag from an authorized human account, and verify the channel is in `SLACK_CHANNEL_IDS`. |
+| Tag stops replying while the computer travels or sleeps | The computer is asleep, or Slack's connection dropped when the network changed | Tag can't reply while its computer sleeps, for example with the lid closed on battery. Once the computer is awake and online, Tag reconnects by itself: a connection that stays down for a minute is replaced with a fresh one, and `tag logs` shows `replaced it with a fresh one`. You don't need to restart it. |
 | Direct message receives no reply | DM invocation was disabled, its automatic Slack migration is pending, or the sender is not authorized | Ensure `OPENTAG_SLACK_DM_ENABLED` is not `0`, run `tag restart` in an interactive terminal and approve Slack's permission prompt if shown, then confirm the sender is in `SLACK_ALLOWED_USER_IDS`. |
 
 ## Failed Slack requests
