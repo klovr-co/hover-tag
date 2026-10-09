@@ -44,9 +44,19 @@ git cherry-pick -x <commit-on-main>
 - Never merge `main` into a `release/vX.Y.x` branch, because that pulls in
   unreleased work.
 - Never land a fix only on the maintenance branch. It must be on `main` too.
-- A maintenance branch publishes stable patches such as `v0.3.1`. A maintainer
-  runs **Prepare stable release** with the `branch` input. See "Patching an
-  older stable release" in [RELEASE.md](RELEASE.md).
+
+Merging into `release/vX.Y.x` publishes nothing. CI, the install smoke test,
+and a kept build run, but stable users get no update. Fixes can collect on the
+branch until a maintainer releases them as a stable patch, such as `v0.3.1`:
+
+1. Merge a pull request into `release/vX.Y.x` that sets `VERSION` to the patch
+   (for example, `0.3.1`) and adds its `CHANGELOG.md` entry and
+   `docs/releases/v0.3.1.md`.
+2. Run **Prepare stable release** with `branch` set to `release/vX.Y.x` and the
+   tested commit's SHA. It creates a draft release.
+3. Publish the draft. Stable users get the update only after this step.
+
+See "Patching an older stable release" in [RELEASE.md](RELEASE.md).
 
 ### A later version
 
