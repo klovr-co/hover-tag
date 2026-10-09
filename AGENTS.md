@@ -24,6 +24,12 @@ canonical record for discussion, specification, and implementation history.
 Use the repository's default five-role triage vocabulary. See
 `docs/agents/triage-labels.md`.
 
+### Live Slack testing
+
+When asked to test in the sandbox or live in Slack, follow
+`.agents/skills/live-slack-test/SKILL.md`. Run it in the main session, not
+through an improvised subagent.
+
 ### Destructive Slack app operations
 
 Always obtain a fresh, explicit confirmation from the user immediately before
