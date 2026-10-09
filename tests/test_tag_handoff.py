@@ -435,6 +435,24 @@ class HandoffHelperTests(unittest.TestCase):
         (store.root / "h-0000000000.json").write_text(json.dumps({"state": "waiting"}), encoding="utf-8")
         self.assertEqual(["h-ffffffffff"], [r["id"] for r in store.claim_expired(now=1000 + 31 * 60)])
 
+    def test_an_unwritable_wait_does_not_stop_later_waits(self) -> None:
+        store = HandoffStore(Path(self.temp.name) / "handoffs")
+        for handoff_id in ("h-0000000001", "h-0000000002"):
+            store.create(handoff_id=handoff_id, team="T", requester=MAYA, origin_channel="C1",
+                         origin_thread_ts="1.0", question="q", task="t",
+                         targets=[{"name": "Tag B", "user_id": TAG_B}], request_ts="2.0", wait_minutes=30, now=1000)
+        real_write = tag_handoff.write_document
+
+        def write(path: Path, record: dict) -> None:
+            if path.stem == "h-0000000001":
+                raise OSError("disk full")
+            real_write(path, record)
+        with patch.object(tag_handoff, "write_document", side_effect=write):
+            claimed = store.claim_expired(now=1000 + 31 * 60)
+        self.assertEqual(["h-0000000002"], [r["id"] for r in claimed])
+        # The failed wait stays waiting, so the next scan retries it.
+        self.assertEqual(["h-0000000001"], [r["id"] for r in store.claim_expired(now=1000 + 32 * 60)])
+
     def test_each_wait_combines_once_even_with_duplicate_or_late_replies(self) -> None:
         store = HandoffStore(Path(self.temp.name) / "handoffs")
         targets = [{"name": "Tag B", "user_id": TAG_B}, {"name": "Tag C", "user_id": TAG_C}]

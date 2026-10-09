@@ -275,7 +275,10 @@ class HandoffStore:
                     record["state"] = "combining"
                     return True
                 return False
-            record, ready = self._update(path.stem, change)
+            try:
+                record, ready = self._update(path.stem, change)
+            except (OSError, ValueError):
+                continue  # One unwritable file must not stop the other waits.
             if ready and record is not None:
                 claimed.append(record)
         return claimed
