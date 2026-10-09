@@ -279,11 +279,28 @@ class ThreeTagTests(unittest.TestCase):
             list(self.plan_steps(card).values()),
         )
         self.assertFalse(card["streaming"], "the steps must close when the handoff finishes")
+        self.assertFalse([m for m in self.bus.thread(origin["ts"]) if m["text"].startswith("Asked other Tags")],
+                         "a closed card must not fall back to a status line")
         request = next(m for m in self.bus.messages if tag_handoff.REQUEST_RE.search(m["text"]))
         self.assertIn({"type": "markdown_text", "text": f"Their replies are in [a new message]"
                        f"(https://slack.test/C123/p{request['ts']})."}, card["chunks"])
         self.assertNotIn("<@", json.dumps(card["chunks"]))
         self.assertIn("Launch day is 12 November", self.origin_replies(origin)[-1])
+
+    def test_updates_after_the_steps_close_are_ignored(self) -> None:
+        with patch.dict(os.environ, {"OPENTAG_SLACK_STREAMING": "1"}):
+            origin = self.bus.human_mention(TAG_A, f"<@{TAG_A}> ask Tag B and Tag C, then write the launch report")
+            self.bus.settle()
+        app = self.bus.apps[TAG_A]
+        handoff_id = next(path.stem for path in self.stores[TAG_A].root.glob("h-*.json"))
+        before = list(self.bus.thread(origin["ts"]))
+        client = self.bus.clients[TAG_A]
+        client.chat_appendStream.reset_mock()
+        client.chat_stopStream.reset_mock()
+        app.tag_update_handoff_status(client, MagicMock(), handoff_id)
+        self.assertEqual(before, self.bus.thread(origin["ts"]))
+        client.chat_appendStream.assert_not_called()
+        client.chat_stopStream.assert_not_called()
 
     def test_steps_get_the_request_link_once_even_when_it_arrives_late(self) -> None:
         client = self.bus.clients[TAG_A]

@@ -4111,6 +4111,8 @@ def create_app(
             channel, ts = record["origin_channel"], record["status_ts"]
             done = record["state"] in tag_handoff.FINISHED
             if record.get("status_mode") == "plan":
+                if record.get("status_closed"):
+                    return  # The steps already show the final state; Slack refuses more chunks.
                 chunks = tag_handoff.plan_chunks(record)
                 # Peers can finish before the request link is saved; add it once, whichever update comes first.
                 if not record.get("link_shown") and record.get("request_ts"):
@@ -4124,6 +4126,7 @@ def create_app(
                 try:
                     if done:
                         client.chat_stopStream(channel=channel, ts=ts, chunks=chunks)
+                        handoff_store.set_field(handoff_id, "status_closed", "1")
                     else:
                         client.chat_appendStream(channel=channel, ts=ts, chunks=chunks)
                     if any(chunk["type"] == "markdown_text" for chunk in chunks):
@@ -4977,6 +4980,7 @@ def create_app(
         handle_invocation(event, body, client, logger, direct_message=True)
 
     app.tag_expire_handoffs = expire_handoffs
+    app.tag_update_handoff_status = update_handoff_status
     return app
 
 
