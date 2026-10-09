@@ -15,6 +15,8 @@ transport can replace Slack later without changing the record.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import html
 import json
 import os
 import re
@@ -93,9 +95,23 @@ def new_handoff_id() -> str:
     return f"h-{uuid.uuid4().hex[:10]}"
 
 
-def request_text(handoff_id: str, targets: list[dict[str, str]], task: str, requester: str) -> str:
+def request_text(
+    handoff_id: str, targets: list[dict[str, str]], task: str, requester: str, origin_link: str | None = None,
+) -> str:
     mentions = " ".join(f"<@{target['user_id']}>" for target in targets)
-    return f"{mentions} {task}\n\n_Handoff {handoff_id} for <@{requester}>. Reply in this thread._"
+    text = f"{mentions} {task}\n\n_Handoff {handoff_id} for <@{requester}>. Reply in this thread._"
+    # After the marker, so task_from_request never passes the link to a peer.
+    return f"{text}\n<{origin_link}|Asked from this thread>" if origin_link else text
+
+
+WORKING_TEXT = "Working on it…"
+
+
+def closing_text(record: dict[str, Any]) -> str:
+    """Last note in the request thread. It must never mention a Tag."""
+    done = "Done. The final answer is in" if record.get("state") == "completed" else "Tag couldn't write the final answer. See"
+    link = record.get("origin_link")
+    return f"{done} <{link}|the original thread>." if link else f"{done} the original thread."
 
 
 def result_prefix(handoff_id: str, sender: str, outcome: str) -> str:
@@ -106,6 +122,23 @@ def task_from_request(text: str) -> str:
     """The delegated task without mentions or the handoff marker."""
     body = REQUEST_RE.split(text, maxsplit=1)[0]
     return re.sub(r"<@[^>]+>", "", body).strip()
+
+
+def mentioned_tags(text: str) -> list[str]:
+    """Member IDs the request message was sent to, in order."""
+    head = REQUEST_RE.split(text, maxsplit=1)[0]
+    return list(dict.fromkeys(re.findall(rf"<@({MEMBER_ID})(?:\|[^>]*)?>", head)))
+
+
+def peer_brief(own_name: str, sender_name: str, other_names: list[str], task: str) -> str:
+    """The question a peer runs: who it is, who asked, and which part is its own."""
+    together = f", together with {', '.join(other_names)}," if other_names else ""
+    return (
+        f"You are {own_name}. {sender_name} asked you{together} to help with the request below for the person "
+        f"named in it. The same message went to every Tag it names. Answer only the part meant for {own_name}; "
+        "if no part is named, answer all of it. You cannot contact other Tags. If you need something, say what "
+        f"in your reply.\n\nRequest from {sender_name}:\n{task}"
+    )
 
 
 # Agent side: record the request for the bridge -----------------------------------
@@ -205,7 +238,7 @@ class HandoffStore:
             return record, result
 
     def set_field(self, handoff_id: str, name: str, value: str) -> None:
-        if name not in {"status_ts", "request_ts"}:
+        if name not in {"status_ts", "status_mode", "request_ts", "request_link", "origin_link"}:
             raise ValueError(f"cannot set {name}")
         self._update(handoff_id, lambda record: record.__setitem__(name, value))
 
@@ -233,7 +266,12 @@ class HandoffStore:
 
             def change(record: dict[str, Any]) -> bool:
                 deadline = record.get("deadline")
-                if record.get("state") == "waiting" and isinstance(deadline, (int, float)) and deadline <= moment:
+                targets = record.get("targets")
+                answered = isinstance(targets, dict) and bool(targets) and all(
+                    isinstance(item, dict) and item.get("state") in FINISHED for item in targets.values()
+                )
+                overdue = isinstance(deadline, (int, float)) and deadline <= moment
+                if record.get("state") == "waiting" and (overdue or answered):
                     record["state"] = "combining"
                     return True
                 return False
@@ -244,6 +282,34 @@ class HandoffStore:
 
     def finish(self, handoff_id: str, outcome: str) -> None:
         self._update(handoff_id, lambda record: record.__setitem__("state", outcome))
+
+    def fail_if_combining(self, handoff_id: str) -> bool:
+        """End a combine run that stopped without a result; return True if it changed."""
+        def change(record: dict[str, Any]) -> bool:
+            if record.get("state") == "combining":
+                record["state"] = "failed"
+                return True
+            return False
+        return bool(self._update(handoff_id, change)[1])
+
+    def requeue_combining(self) -> list[str]:
+        """Return interrupted combine runs to waiting; claim_expired runs them again."""
+        requeued = []
+        for path in sorted(self.root.glob("h-*.json")):
+            if not re.fullmatch(HANDOFF_ID, path.stem):
+                continue
+
+            def change(record: dict[str, Any]) -> bool:
+                if record.get("state") == "combining":
+                    record["state"] = "waiting"
+                    return True
+                return False
+            try:
+                if self._update(path.stem, change)[1]:
+                    requeued.append(path.stem)
+            except (OSError, ValueError):
+                continue  # A damaged file must not stop startup.
+        return requeued
 
 
 def status_text(record: dict[str, Any]) -> str:
@@ -257,7 +323,51 @@ def status_text(record: dict[str, Any]) -> str:
         tail = "Writing the final answer…"
     else:
         tail = "Done."
-    return f"Asked other Tags in a new message in this channel. {' · '.join(parts)}. {tail}"
+    link = record.get("request_link")
+    where = f"<{link}|a new message>" if link else "a new message"
+    return f"Asked other Tags in {where} in this channel. {' · '.join(parts)}. {tail}"
+
+
+PLAN_TITLE = "Asking other Tags"
+
+
+def plan_chunks(record: dict[str, Any]) -> list[dict[str, Any]]:
+    """Slack plan steps for the original thread: one per Tag, then the final answer.
+
+    Every call returns every step, so a late or repeated update cannot leave a step behind.
+    Titles never mention a Tag.
+    """
+    labels = {
+        "submitted": ("Waiting for {name}", "in_progress"),
+        "completed": ("{name} replied", "complete"),
+        "failed": ("{name} couldn't help", "error"),
+    }
+    chunks = []
+    for user_id, target in record["targets"].items():
+        title, status = labels[target["state"]]
+        if record["state"] != "waiting" and target["state"] == "submitted":
+            title, status = "{name} didn't reply in time", "error"
+        chunks.append({
+            "type": "task_update",
+            "id": hashlib.sha256(f"{record['id']}:{user_id}".encode()).hexdigest()[:32],
+            "title": html.escape(title.format(name=target["name"])[:200], quote=False),
+            "status": status,
+        })
+    final = {
+        "waiting": "pending", "combining": "in_progress", "completed": "complete", "failed": "error",
+    }.get(record["state"], "pending")
+    chunks.append({
+        "type": "task_update",
+        "id": hashlib.sha256(f"{record['id']}:final".encode()).hexdigest()[:32],
+        "title": "Write the final answer" if record["state"] != "failed" else "Couldn't write the final answer",
+        "status": final,
+    })
+    return chunks
+
+
+def plan_link_text(record: dict[str, Any]) -> str:
+    link = record.get("request_link")
+    return f"Their replies are in [a new message]({link})." if link else "Their replies are in a new message in this channel."
 
 
 def combine_question(record: dict[str, Any]) -> str:

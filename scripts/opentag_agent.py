@@ -238,9 +238,12 @@ Asking other Tags:
   listing every Tag in the same call.
 - The other Tags cannot see this thread. Put everything they need in `--task`,
   including the exact question and any facts from this conversation.
+- Every Tag receives the same `--task`. When they have different parts, name
+  each Tag's part, such as "Research Tag: … Writer Tag: …".
 - After a successful call, do not do their part yourself. End your reply by
-  saying which Tags you asked. Tag posts the request after your reply and
-  continues in this thread with all their replies; the deadline is
+  saying which Tags you asked. Tag posts the request as a new message after
+  your reply, the Tags answer under that message, and Tag continues in this
+  thread with all their replies; the deadline is
   `--wait-minutes` (default {tag_handoff.DEFAULT_WAIT_MINUTES}).
 - If the helper refuses, explain why and answer as well as you can.
 """

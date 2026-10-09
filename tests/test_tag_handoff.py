@@ -89,6 +89,33 @@ class SlackBus:
             return {"ok": True, "messages": thread, "has_more": False}
 
         client.chat_postMessage.side_effect = post
+
+        def start_stream(channel: str, thread_ts: str, chunks: list[dict[str, Any]], **_kwargs: Any) -> dict[str, Any]:
+            with self.lock:
+                message = {"channel": channel, "ts": self.next_ts(), "user": bot_user, "text": "",
+                           "thread_ts": thread_ts, "chunks": list(chunks), "streaming": True}
+                self.messages.append(message)
+            return {"ok": True, "ts": message["ts"]}
+
+        def append_stream(channel: str, ts: str, chunks: list[dict[str, Any]], stop: bool = False) -> dict[str, Any]:
+            with self.lock:
+                message = next(m for m in self.messages if m["ts"] == ts)
+                if not message["streaming"]:
+                    raise RuntimeError("message_not_in_streaming_state")
+                message["chunks"].extend(chunks)
+                message["streaming"] = not stop
+            return {"ok": True}
+
+        names = {TAG_A: "Tag A", TAG_B: "Tag B", TAG_C: "Tag C"}
+        client.users_info.side_effect = lambda user: {"ok": True, "user": {
+            "id": user, "is_bot": user in names, "profile": {"display_name": names.get(user, "Maya")}}}
+        client.auth_test.return_value = {"ok": True, "user_id": bot_user}
+        client.chat_startStream.side_effect = start_stream
+        client.chat_appendStream.side_effect = append_stream
+        client.chat_stopStream.side_effect = lambda channel, ts, chunks=(), **_k: append_stream(
+            channel, ts, list(chunks), stop=True)
+        client.chat_getPermalink.side_effect = lambda channel, message_ts: {
+            "ok": True, "permalink": f"https://slack.test/{channel}/p{message_ts}"}
         client.chat_update.side_effect = update
         client.chat_delete.side_effect = delete
         client.conversations_replies.side_effect = replies
@@ -196,8 +223,23 @@ class ThreeTagTests(unittest.TestCase):
         request = next(m for m in self.bus.messages if tag_handoff.REQUEST_RE.search(m["text"]))
         self.assertNotIn("thread_ts", request)
         self.assertIn(f"<@{TAG_B}> <@{TAG_C}> Give Acme's Q3 revenue", request["text"])
-        replies = self.bus.thread(request["ts"])
+        self.assertIn(f"<https://slack.test/C123/p{origin['ts']}|Asked from this thread>", request["text"])
+        thread = self.bus.thread(request["ts"])
+        working = [m for m in thread if m["text"] == tag_handoff.WORKING_TEXT]
+        self.assertEqual({TAG_B, TAG_C}, {m["user"] for m in working})
+        closing = thread[-1]
+        self.assertEqual(TAG_A, closing["user"])
+        self.assertEqual(f"Done. The final answer is in <https://slack.test/C123/p{origin['ts']}|the original thread>.",
+                         closing["text"])
+        replies = [m for m in thread if tag_handoff.RESULT_RE.search(m["text"])]
         self.assertEqual({TAG_B, TAG_C}, {m["user"] for m in replies})
+        for task_run in (run for run in self.runs if run[0] != TAG_A):
+            self.assertNotIn("slack.test", task_run[1], "a peer must get only the task")
+        briefs = {run[0]: run[1] for run in self.runs if run[0] != TAG_A}
+        self.assertIn("Tag A asked you, together with Tag C, to help", briefs[TAG_B])
+        self.assertIn("Tag A asked you, together with Tag B, to help", briefs[TAG_C])
+        self.assertTrue(briefs[TAG_B].startswith("You are Tag B."))
+        self.assertIn("Request from Tag A:\nGive Acme's Q3 revenue and the launch headline.", briefs[TAG_B])
         for reply in replies:
             self.assertTrue(reply["text"].startswith(f"<@{TAG_A}> _Handoff "))
             self.assertIn("result: completed", reply["text"])
@@ -210,12 +252,81 @@ class ThreeTagTests(unittest.TestCase):
 
         status = next(text for text in self.origin_replies(origin) if text.startswith("Asked other Tags"))
         self.assertIn("Tag B: replied ✓ · Tag C: replied ✓. Done.", status)
+        self.assertIn(f"<https://slack.test/C123/p{request['ts']}|a new message>", status)
         self.assertNotIn("<@", status)
         record = self.stores[TAG_A].get(tag_handoff.REQUEST_RE.search(request["text"]).group(1))
         self.assertEqual("completed", record["state"])
         peer_runs = [run for run in self.runs if run[0] != TAG_A]
         self.assertEqual({1}, {run[2]["handoff_depth"] for run in peer_runs})
         self.assertEqual({None}, {run[2]["handoff_requests"] for run in peer_runs})
+
+    def plan_steps(self, message: dict[str, Any]) -> dict[str, tuple[str, str]]:
+        latest: dict[str, tuple[str, str]] = {}
+        for chunk in message["chunks"]:
+            if chunk["type"] == "task_update":
+                latest[chunk["id"]] = (chunk["title"], chunk["status"])
+        return latest
+
+    def test_progress_shows_as_steps_like_a_run(self) -> None:
+        with patch.dict(os.environ, {"OPENTAG_SLACK_STREAMING": "1"}):
+            origin = self.bus.human_mention(TAG_A, f"<@{TAG_A}> ask Tag B and Tag C, then write the launch report")
+            self.bus.settle()
+        card = next(m for m in self.bus.thread(origin["ts"]) if "chunks" in m)
+        self.assertEqual({"type": "plan_update", "title": "Asking other Tags"}, card["chunks"][0])
+        self.assertEqual(
+            [("Tag B replied", "complete"), ("Tag C replied", "complete"), ("Write the final answer", "complete")],
+            list(self.plan_steps(card).values()),
+        )
+        self.assertFalse(card["streaming"], "the steps must close when the handoff finishes")
+        request = next(m for m in self.bus.messages if tag_handoff.REQUEST_RE.search(m["text"]))
+        self.assertIn({"type": "markdown_text", "text": f"Their replies are in [a new message]"
+                       f"(https://slack.test/C123/p{request['ts']})."}, card["chunks"])
+        self.assertNotIn("<@", json.dumps(card["chunks"]))
+        self.assertIn("Launch day is 12 November", self.origin_replies(origin)[-1])
+
+    def test_steps_fall_back_to_a_status_line_when_slack_ends_them(self) -> None:
+        client = self.bus.clients[TAG_A]
+        client.chat_appendStream.side_effect = RuntimeError("message_not_in_streaming_state")
+        with patch.dict(os.environ, {"OPENTAG_SLACK_STREAMING": "1"}):
+            origin = self.bus.human_mention(TAG_A, f"<@{TAG_A}> ask Tag B and Tag C, then write the launch report")
+            self.bus.settle()
+        statuses = [m["text"] for m in self.bus.thread(origin["ts"]) if m["text"].startswith("Asked other Tags")]
+        self.assertEqual(1, len(statuses), "fall back once, then keep editing that line")
+        self.assertIn("Tag B: replied ✓ · Tag C: replied ✓. Done.", statuses[0])
+
+    def test_only_handoff_markers_mention_a_tag(self) -> None:
+        self.answers[TAG_B] = f"REVENUE: $1.2M. <@{TAG_C}> has the headline; ask <@{TAG_A}>."
+        origin = self.bus.human_mention(TAG_A, f"<@{TAG_A}> ask Tag B and Tag C, then write the launch report")
+        self.bus.settle()
+        reply = next(m["text"] for m in self.bus.messages if m["user"] == TAG_B and tag_handoff.RESULT_RE.search(m["text"]))
+        body = tag_handoff.RESULT_RE.split(reply, maxsplit=1)[-1]
+        self.assertNotIn("<@", body)
+        self.assertIn("@Tag A", body)
+        self.assertEqual(1, len([run for run in self.runs if run[0] == TAG_C]), "Tag C must not get a second session")
+        self.assertNotIn("<@", self.origin_replies(origin)[-1])
+
+    def test_task_names_other_tags_but_still_mentions_people(self) -> None:
+        def ask(_backend: str, *_args: Any, **kwargs: Any) -> tuple[str, bool]:
+            if getattr(self.bus.current, "tag", TAG_A) != TAG_A or kwargs["handoff_depth"]:
+                return "ok", True
+            with patch.dict(os.environ, {"OPENTAG_HANDOFF_REQUESTS": str(kwargs["handoff_requests"]),
+                                         "OPENTAG_HANDOFF_DEPTH": "0", "OPENTAG_PEER_TAGS": PEERS}):
+                tag_handoff.record_request(["Tag B"], f"Compare with <@{TAG_C}> for <@{MAYA}>.", 30)
+            return "Asked.", True
+        with patch.object(slack_socket_agent, "run_backend", side_effect=ask):
+            self.bus.human_mention(TAG_A, f"<@{TAG_A}> ask Tag B")
+            self.bus.settle()
+        request = next(m["text"] for m in self.bus.messages if tag_handoff.REQUEST_RE.search(m["text"]))
+        self.assertEqual([TAG_B, MAYA, MAYA], re.findall(r"<@([A-Z0-9]+)>", request))
+        self.assertIn("Compare with @Tag C", request)
+        self.assertFalse(any(m["user"] == TAG_C for m in self.bus.messages))
+
+    def test_steps_name_a_tag_that_missed_the_deadline(self) -> None:
+        record = {"id": "h-0123456789", "state": "completed", "targets": {
+            TAG_B: {"name": "Tag B", "state": "completed"}, TAG_C: {"name": "Tag C", "state": "submitted"}}}
+        steps = [(c["title"], c["status"]) for c in tag_handoff.plan_chunks(record)]
+        self.assertEqual([("Tag B replied", "complete"), ("Tag C didn't reply in time", "error"),
+                          ("Write the final answer", "complete")], steps)
 
     def test_replies_that_arrive_before_the_request_ts_is_saved_still_count(self) -> None:
         original = HandoffStore.set_field
@@ -342,6 +453,32 @@ class HandoffHelperTests(unittest.TestCase):
         self.assertIn("Tag B: replied ✓ · Tag C: couldn't help", tag_handoff.status_text(record))
         self.assertIn("Tag C did not provide a result", tag_handoff.combine_question(record))
 
+    def test_an_interrupted_combine_is_requeued_and_runs_again(self) -> None:
+        store = HandoffStore(Path(self.temp.name) / "handoffs")
+        store.create(handoff_id="h-0123456789", team="T", requester=MAYA, origin_channel="C1",
+                     origin_thread_ts="1.0", question="q", task="t",
+                     targets=[{"name": "Tag B", "user_id": TAG_B}], request_ts="2.0", wait_minutes=30, now=1000)
+        self.assertTrue(store.record_reply("h-0123456789", TAG_B, "completed", "3.0")[1])
+        (store.root / "h-old.json").write_text("{}", encoding="utf-8")
+        self.assertEqual(["h-0123456789"], store.requeue_combining())
+        self.assertEqual([], store.requeue_combining())
+        # Every Tag already replied, so the next scan claims it before the deadline, once.
+        self.assertEqual(["h-0123456789"], [r["id"] for r in store.claim_expired(now=1001)])
+        self.assertEqual([], store.claim_expired(now=1001))
+
+    def test_a_combine_that_ends_without_a_result_fails_closed(self) -> None:
+        store = HandoffStore(Path(self.temp.name) / "handoffs")
+        store.create(handoff_id="h-0123456789", team="T", requester=MAYA, origin_channel="C1",
+                     origin_thread_ts="1.0", question="q", task="t",
+                     targets=[{"name": "Tag B", "user_id": TAG_B}], request_ts="2.0", wait_minutes=30, now=1000)
+        self.assertFalse(store.fail_if_combining("h-0123456789"))
+        store.claim_expired(now=1000 + 31 * 60)
+        self.assertTrue(store.fail_if_combining("h-0123456789"))
+        self.assertEqual("failed", store.get("h-0123456789")["state"])
+        store.finish("h-0123456789", "completed")
+        self.assertFalse(store.fail_if_combining("h-0123456789"))
+        self.assertEqual("completed", store.get("h-0123456789")["state"])
+
     def test_request_marker_round_trip(self) -> None:
         text = tag_handoff.request_text("h-0123456789", [{"name": "Tag B", "user_id": TAG_B}], "Check *this*.", MAYA)
         self.assertEqual(("h-0123456789", MAYA), tag_handoff.REQUEST_RE.search(text).groups())
@@ -349,6 +486,16 @@ class HandoffHelperTests(unittest.TestCase):
         prefix = tag_handoff.result_prefix("h-0123456789", TAG_A, "completed")
         self.assertEqual(("h-0123456789", "completed"), tag_handoff.RESULT_RE.search(prefix + "\n\nbody").groups())
         self.assertEqual(json.loads(json.dumps(text)), text)
+
+    def test_links_are_optional_and_never_reach_the_peer(self) -> None:
+        linked = tag_handoff.request_text("h-0123456789", [{"name": "Tag B", "user_id": TAG_B}], "Check.", MAYA,
+                                          "https://slack.test/C123/p1")
+        self.assertEqual(("h-0123456789", MAYA), tag_handoff.REQUEST_RE.search(linked).groups())
+        self.assertEqual("Check.", tag_handoff.task_from_request(linked))
+        record = {"state": "waiting", "deadline": 0, "targets": {TAG_B: {"name": "Tag B", "state": "submitted"}}}
+        self.assertIn("Asked other Tags in a new message in this channel.", tag_handoff.status_text(record))
+        self.assertEqual("Tag couldn't write the final answer. See the original thread.",
+                         tag_handoff.closing_text({"state": "failed"}))
 
 
 class HandoffPromptAndSettingsTests(unittest.TestCase):
