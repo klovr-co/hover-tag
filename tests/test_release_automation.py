@@ -25,6 +25,8 @@ from scripts.release_automation import (
     select_auto_prerelease,
     successful_run,
     validate_candidate,
+    validate_maintenance_candidate,
+    validate_source_ref,
     validate_edge_bundle,
     validate_release_bundle,
     validate_release_tag,
@@ -281,6 +283,42 @@ class ChannelIndexTests(unittest.TestCase):
                 repository="klovr-co/hover-tag",
                 generated_at="2026-09-22T00:00:00Z",
             )
+
+
+class MaintenanceReleaseTests(unittest.TestCase):
+    TAGS = ["v0.3.0", "v0.3.0-beta.20", "v0.4.0-alpha.3"]
+
+    def test_accepts_the_next_stable_patch_despite_a_newer_main_line(self) -> None:
+        self.assertEqual(validate_maintenance_candidate("0.3.1", "0.3", self.TAGS), [])
+        self.assertEqual(
+            validate_maintenance_candidate("0.3.2", "0.3", [*self.TAGS, "v0.3.1"]), [],
+        )
+
+    def test_rejects_wrong_line_phase_skipped_or_repeated_patch(self) -> None:
+        for version in ("0.4.1", "0.3.1-alpha.1", "0.3.2", "0.3.0"):
+            with self.subTest(version=version):
+                self.assertTrue(validate_maintenance_candidate(version, "0.3", self.TAGS))
+        self.assertTrue(validate_maintenance_candidate("0.3.1", "0.3", [*self.TAGS, "v0.3.1"]))
+
+    def test_allows_republishing_an_existing_draft_version(self) -> None:
+        self.assertEqual(validate_maintenance_candidate(
+            "0.3.1", "0.3", [*self.TAGS, "v0.3.1"], allow_existing_version=True,
+        ), [])
+
+    def test_requires_a_published_stable_release_on_the_line(self) -> None:
+        self.assertTrue(validate_maintenance_candidate("0.5.1", "0.5", self.TAGS))
+
+    def test_provenance_branch_must_match_the_version_line(self) -> None:
+        self.assertEqual(validate_source_ref("refs/heads/main", "0.4.0-alpha.1"), [])
+        self.assertEqual(validate_source_ref("refs/heads/release/v0.3.x", "0.3.1"), [])
+        self.assertTrue(validate_source_ref("refs/heads/release/v0.3.x", "0.4.1"))
+        self.assertTrue(validate_source_ref("refs/heads/feature", "0.3.1"))
+        self.assertTrue(validate_source_ref("refs/heads/release/v0.3.x/../main", "0.3.1"))
+
+    def test_selected_commit_error_names_the_branch(self) -> None:
+        sha = "a" * 40
+        errors = validate_selected_sha(sha, sha, False, "origin/release/v0.3.x")
+        self.assertEqual(errors, ["selected commit is not reachable from origin/release/v0.3.x"])
 
 
 class SelectedCommitTests(unittest.TestCase):
