@@ -150,20 +150,28 @@ an older stable release get them by upgrading. There is no permanent
 maintenance branch.
 
 Create one only when a stable release needs an urgent fix that cannot wait for
-the next line. Branch from the stable tag and cherry-pick the fixes that
-already merged to `main`:
-
-```bash
-git switch -c release/v0.3.x v0.3.0
-git cherry-pick -x <fix-commit-on-main>
-```
+the next line. Label the merged PR `backport:vX.Y.x` (or run the **Backport**
+workflow with the PR number and branch). The workflow creates `release/vX.Y.x`
+from the line's newest stable tag if it doesn't exist, cherry-picks the merged
+commit with `-x` onto a `backport/pr-N-to-vX.Y.x` branch, and opens a pull
+request against the maintenance branch. On a conflict it comments on the
+original PR instead. Set the `BACKPORT_TOKEN` secret so CI runs on that pull
+request; without it, close and reopen the pull request to start CI.
 
 Never merge `main` into a maintenance branch, and never land a fix only on the
 maintenance branch. Because every fix already exists on `main`, nothing merges
-back. The release automation builds and validates only commits on `main`, so
-publishing a patch such as `v0.3.1` from a maintenance branch first requires
-extending the workflows to accept that branch. Delete the branch when its line
-is no longer supported.
+back.
+
+CI and install smoke run on pushes to `release/v*.x`, and the edge build keeps
+the exact artifact for each commit without moving `edge` or publishing a
+prerelease. A maintenance branch publishes stable patches only, with no alpha
+or beta stage. To release one, set `VERSION` to the next patch (for example,
+`0.3.1`), add the `CHANGELOG.md` entry and `docs/releases/v0.3.1.md`, merge that
+through a pull request, and run **Prepare stable release** with `branch` set to
+`release/v0.3.x` and the tested commit SHA. The workflow checks that the commit
+is on that branch, that the version is the next stable patch of the same line,
+and that the retained artifact came from that branch. A maintainer publishes
+the draft. Delete the branch when its line is no longer supported.
 
 ## Tag.app
 

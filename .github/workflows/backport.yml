@@ -1,0 +1,114 @@
+name: Backport
+
+# Copies a merged `main` PR onto a maintenance branch (release/vX.Y.x) by
+# opening a pull request. Label the PR `backport:vX.Y.x` before or after merging,
+# or run this workflow by hand with the PR number and branch.
+on:
+  pull_request_target:
+    types: [closed, labeled]
+  workflow_dispatch:
+    inputs:
+      pull_request:
+        description: Number of the merged pull request on main
+        required: true
+        type: string
+      branch:
+        description: Maintenance branch, for example release/v0.3.x
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: backport-${{ inputs.pull_request || github.event.pull_request.number }}-${{ inputs.branch || github.event.label.name || 'closed' }}
+  cancel-in-progress: false
+
+jobs:
+  backport:
+    name: Open backport pull request
+    # Never check out or run code from the pull request: this job uses main only.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.merged == true &&
+       github.event.pull_request.base.ref == 'main' &&
+       (github.event.action == 'closed' ||
+        startsWith(github.event.label.name, 'backport:v')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # A token that is not GITHUB_TOKEN lets CI run on the backport pull request.
+      GH_TOKEN: ${{ secrets.BACKPORT_TOKEN || github.token }}
+      PULL_REQUEST: ${{ inputs.pull_request || github.event.pull_request.number }}
+      REQUESTED_BRANCH: ${{ inputs.branch }}
+      CUSTOM_TOKEN: ${{ secrets.BACKPORT_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.BACKPORT_TOKEN || github.token }}
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Backport to each requested branch
+        run: |
+          [[ "$PULL_REQUEST" =~ ^[0-9]+$ ]]
+          pull=$(gh pr view "$PULL_REQUEST" --json state,baseRefName,mergeCommit,title,labels)
+          test "$(jq -r .state <<<"$pull")" = MERGED
+          test "$(jq -r .baseRefName <<<"$pull")" = main
+          sha=$(jq -r .mergeCommit.oid <<<"$pull")
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+          git merge-base --is-ancestor "$sha" origin/main
+          title=$(jq -r .title <<<"$pull")
+
+          branches=()
+          if [ -n "$REQUESTED_BRANCH" ]; then
+            branches+=("$REQUESTED_BRANCH")
+          else
+            while IFS= read -r label; do
+              branches+=("release/${label#backport:}")
+            done < <(jq -r '.labels[].name | select(startswith("backport:v"))' <<<"$pull")
+          fi
+          test "${#branches[@]}" -gt 0 || { echo 'No backport branch requested.'; exit 0; }
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin --tags
+          for branch in "${branches[@]}"; do
+            python scripts/release_automation.py validate-branch --name "$branch"
+            [ "$branch" != main ]
+            line=$(python scripts/release_automation.py validate-branch --name "$branch" --print-line)
+            work="backport/pr-$PULL_REQUEST-to-${branch#release/}"
+
+            if git ls-remote --exit-code --heads origin "$work" >/dev/null; then
+              echo "$work already exists; leaving it as is."
+              continue
+            fi
+            if ! git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
+              # First fix for this line: start from its newest stable release.
+              base=$(git tag --list "v$line.*" --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)
+              test -n "$base" || { echo "No stable v$line release to branch from." >&2; exit 1; }
+              git push origin "refs/tags/$base^{commit}:refs/heads/$branch"
+            fi
+            git fetch origin "$branch"
+            git switch -c "$work" "origin/$branch"
+            if ! git cherry-pick -x "$sha"; then
+              git cherry-pick --abort
+              gh pr comment "$PULL_REQUEST" --body "Backport to \`$branch\` has conflicts. Cherry-pick \`$sha\` onto \`$branch\` by hand with \`git cherry-pick -x\`."
+              git switch --detach origin/main
+              continue
+            fi
+            git push origin "$work"
+            body="Backport of #$PULL_REQUEST (\`$sha\`) to \`$branch\`, cherry-picked with \`-x\`.
+
+          Release target: also fix the older stable release. Never merge \`main\` into \`$branch\`."
+            if [ "$CUSTOM_TOKEN" != true ]; then
+              body="$body
+
+          This pull request was opened with \`GITHUB_TOKEN\`, so CI does not run on it yet. Close and reopen it to start CI, or set the \`BACKPORT_TOKEN\` secret."
+            fi
+            gh pr create --base "$branch" --head "$work" --title "$title (backport $line)" --body "$body"
+            git switch --detach origin/main
+          done
