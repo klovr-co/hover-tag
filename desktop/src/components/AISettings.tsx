@@ -81,7 +81,7 @@ export function AISettings({ api, tags, close, apiConnections = false }: {
     <div className="body river">
       <div className="section">
         <div className="sec-head"><h3>Connections</h3><span className="spacer" />
-          {checking ? <span className="meta"><Spinner small />Checking…</span>
+          {checking ? <span className="meta" style={{ display: "inline-flex", gap: 6, alignItems: "center" }}><Spinner small />Checking…</span>
             : <button className="p-btn soft sm" disabled={busy} onClick={() => void reload()}>Check connections</button>}
         </div>
         <div className="card">
