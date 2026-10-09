@@ -136,16 +136,12 @@ Before merging, decide which release each PR belongs to:
 - **The current line** (`VERSION` on `main`): merge it normally.
 - **A fix for an older stable release as well:** merge it to `main`, then
   cherry-pick it to the maintenance branch, as described below.
-- **A later version:** merge it to `main` behind a feature flag that is off
-  by default, and label the PR `target:vX.Y`. Turn the flag on in the PR that
-  starts that version's line, and remove the flag once the feature is stable.
-  Hidden code still ships, so it must pass the same tests, CLI and Tag.app
-  consistency, and backend parity rules as visible code. When a flag is
-  impractical, keep the PR as an unmerged draft instead and merge `main` into
-  it regularly.
+- **A later version:** don't merge it yet. Keep the PR as a draft with a
+  `target:vX.Y` label, and merge `main` into it regularly. After the current
+  line ships stable, set `VERSION` to the next alpha line and merge the PR.
 
-Every merged commit belongs to the current line, so the automation never needs
-a second development branch.
+`main` holds only work for the current line, so the automation never needs a
+second development branch.
 
 ## Patching an older stable release
 

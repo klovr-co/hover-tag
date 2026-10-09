@@ -67,10 +67,9 @@ remain manually qualified and published; see `RELEASE.md`.
 
 Before merging or recommending a merge, confirm which release the PR targets:
 the current `VERSION` line on `main`, also an older stable release (merge to
-`main`, then cherry-pick to `release/vX.Y.x`), or a later version (label it
-`target:vX.Y` and hide it behind a feature flag that is off by default, or
-keep it as an unmerged draft when a flag is impractical). Never merge
-later-version work into `main` unless it is hidden behind a flag that is off by default. Never merge
+`main`, then cherry-pick to `release/vX.Y.x`), or a later version (keep it
+unmerged as a draft with a `target:vX.Y` label). Never merge a PR labeled for a
+later version into `main` before the current line ships stable. Never merge
 `main` into a maintenance branch. See "Release lines" in `RELEASE.md`.
 
 ### Automatic upgrade migrations
