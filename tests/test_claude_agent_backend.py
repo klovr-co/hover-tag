@@ -284,12 +284,32 @@ class FakeClient:
 class PermissionResultAllow:
     behavior: str = "allow"
     updated_input: dict[str, Any] | None = None
+    updated_permissions: list[Any] | None = None
 
 
 @dataclass
 class PermissionResultDeny:
     behavior: str = "deny"
     message: str = ""
+    interrupt: bool = False
+
+
+@dataclass
+class PermissionRuleValue:
+    tool_name: str
+    rule_content: str | None = None
+
+
+@dataclass
+class PermissionUpdate:
+    type: str
+    rules: list[PermissionRuleValue] | None = None
+    behavior: str | None = None
+    destination: str | None = None
+    directories: list[str] | None = None
+
+
+CHROME_RULE = PermissionUpdate("addRules", [PermissionRuleValue("Bash", "claude --chrome:*")], "allow", "localSettings")
 
 
 def fake_options(**kwargs: Any) -> types.SimpleNamespace:
@@ -302,6 +322,8 @@ FAKE_SDK = types.SimpleNamespace(
     PermissionResultAllow=PermissionResultAllow,
     PermissionResultDeny=PermissionResultDeny,
 )
+# Like the real SDK, rule classes are only exported from the types module.
+FAKE_SDK_TYPES = types.SimpleNamespace(PermissionUpdate=PermissionUpdate, PermissionRuleValue=PermissionRuleValue)
 
 
 class ClaudeAgentRunTests(unittest.TestCase):
@@ -313,7 +335,8 @@ class ClaudeAgentRunTests(unittest.TestCase):
         self.approvals.mkdir()
         self.control = self.root / "control"
         self.control.write_text("", encoding="utf-8")
-        patcher = patch.dict("sys.modules", {"claude_agent_sdk": FAKE_SDK})
+        patcher = patch.dict("sys.modules", {"claude_agent_sdk": FAKE_SDK,
+                                                "claude_agent_sdk.types": FAKE_SDK_TYPES})
         patcher.start()
         self.addCleanup(patcher.stop)
         env = patch.dict(os.environ, {"OPENTAG_CLAUDE_CLI": "/bin/claude"}, clear=False)
@@ -379,7 +402,125 @@ class ClaudeAgentRunTests(unittest.TestCase):
         self.run_agent(script)
         self.assertEqual(self.root / ".mcp.json", FakeClient.instances[0].options.mcp_servers)
 
+    def decide(self, choice_label: str, context: Any, tool_input: dict[str, Any] | None = None,
+               ) -> tuple[Any, list[dict[str, Any]]]:
+        """Run one Bash approval and click the Slack choice with this label."""
+        tool_input = tool_input or {"command": "claude --chrome open"}
+        decisions: list[Any] = []
+
+        async def script(client):
+            decisions.append(await client.options.can_use_tool("Bash", tool_input, context))
+            yield ResultMessage(result="done")
+
+        def click(events: list[dict[str, Any]]) -> None:
+            while not any(event["type"] == "approval_request" for event in events):
+                time.sleep(0.01)
+            request = next(event for event in events if event["type"] == "approval_request")
+            choice = next(c["id"] for c in request["choices"] if c["label"] == choice_label)
+            (self.approvals / f"{request['approval_id']}.json").write_text(
+                json.dumps({"choice": choice}), encoding="utf-8")
+
+        FakeClient.script = script
+        events: list[dict[str, Any]] = []
+        agent = ClaudeAgentRun(cwd=self.root, timeout=30, control_file=self.control, run_id="run1",
+                               approval_dir=self.approvals)
+        clicker = threading.Thread(target=click, args=(events,))
+        clicker.start()
+        status, _ = agent.run("prompt", model=None, reasoning_effort=None, emit=events.append)
+        clicker.join(timeout=5)
+        self.assertEqual("completed", status)
+        self.assertEqual([], list(self.approvals.iterdir()))
+        return decisions[0], events
+
     def test_slack_approval_allows_one_tool_call(self) -> None:
+        decision, events = self.decide("Allow once", None, {"command": "rm x"})
+        request = next(event for event in events if event["type"] == "approval_request")
+        self.assertEqual(APPROVAL_LABEL_COMMAND, request["label"])
+        self.assertEqual(["Allow once", "Deny", "Deny and stop"], [c["label"] for c in request["choices"]])
+        self.assertTrue(all("result" not in c for c in request["choices"]))
+        self.assertEqual(PermissionResultAllow(updated_input={"command": "rm x"}), decision)
+        self.assertIn({"type": "approval_expired", "approval_id": request["approval_id"]}, events)
+
+    def test_suggested_rule_offers_task_and_saved_scopes(self) -> None:
+        context = types.SimpleNamespace(suggestions=[
+            CHROME_RULE, PermissionUpdate("setMode", behavior=None),
+        ])
+        _decision, events = self.decide("Deny", context)
+        choices = next(event for event in events if event["type"] == "approval_request")["choices"]
+        self.assertEqual(["Allow once", "Allow for this task", "Always allow", "Deny", "Deny and stop"],
+                         [c["label"] for c in choices])
+        saved = choices[2]
+        self.assertTrue(saved["persistent"])
+        self.assertIn("Bash(claude --chrome:*)", saved["detail"])
+        self.assertFalse(choices[1]["persistent"])
+
+    def test_task_scope_grants_the_rule_for_this_session_only(self) -> None:
+        decision, _events = self.decide("Allow for this task", types.SimpleNamespace(suggestions=[CHROME_RULE]))
+        self.assertEqual("allow", decision.behavior)
+        self.assertEqual(["session"], [u.destination for u in decision.updated_permissions])
+        self.assertEqual("localSettings", CHROME_RULE.destination)  # The CLI's suggestion is not mutated.
+
+    def test_saved_rule_goes_to_the_tag_workspace_settings(self) -> None:
+        context = types.SimpleNamespace(suggestions=[
+            PermissionUpdate("addRules", [PermissionRuleValue("Bash", "claude --chrome:*")], "allow", "userSettings"),
+        ])
+        decision, _events = self.decide("Always allow", context)
+        self.assertEqual("allow", decision.behavior)
+        self.assertEqual([("localSettings", [PermissionRuleValue("Bash", "claude --chrome:*")])],
+                         [(u.destination, u.rules) for u in decision.updated_permissions])
+
+    def test_exact_command_suggestion_also_offers_a_saved_prefix_rule(self) -> None:
+        exact = PermissionUpdate("addRules", [PermissionRuleValue("Bash", "claude --chrome --version")], "allow")
+        decision, events = self.decide("Always allow claude --chrome commands", types.SimpleNamespace(suggestions=[exact]),
+                                       {"command": "claude --chrome --version"})
+        choices = next(event for event in events if event["type"] == "approval_request")["choices"]
+        prefix = next(c for c in choices if c["label"] == "Always allow claude --chrome commands")
+        self.assertTrue(prefix["persistent"])
+        # The main row is allow once, the broadest saved rule, and deny.
+        self.assertEqual(["Allow once", "Always allow claude --chrome commands", "Deny"],
+                         [c["label"] for c in choices if c["primary"]])
+        self.assertIn("Bash(claude --chrome:*)", prefix["detail"])
+        self.assertEqual([PermissionUpdate("addRules", [PermissionRuleValue("Bash", "claude --chrome:*")],
+                                           "allow", "localSettings")], decision.updated_permissions)
+
+    def test_prefix_rule_needs_a_plain_command_with_a_subcommand(self) -> None:
+        for command in ("ls foo", "claude --chrome x; rm y", "echo $(id) a b", "a 'b c' d"):
+            self.assertIsNone(claude_agent_backend.command_prefix(command), command)
+        labels = [c["label"] for c in claude_agent_backend.approval_choices(
+            [], "Read", {"command": "git push origin"}, lambda *_: None)]
+        self.assertNotIn("Always allow this prefix", labels)
+
+    def test_folder_suggestions_offer_task_and_saved_access(self) -> None:
+        folder = PermissionUpdate("addDirectories", destination="session", directories=["/Users/me/Downloads"])
+        decision, events = self.decide("Always allow", types.SimpleNamespace(suggestions=[
+            folder, PermissionUpdate("addDirectories", directories=["relative"]),
+        ]), {"command": "ls"})
+        choices = next(event for event in events if event["type"] == "approval_request")["choices"]
+        self.assertIn("folder /Users/me/Downloads", choices[1]["detail"])
+        self.assertNotIn("relative", choices[2]["detail"])
+        self.assertEqual([("addDirectories", "localSettings", ["/Users/me/Downloads"])],
+                         [(u.type, u.destination, u.directories) for u in decision.updated_permissions])
+
+    def test_deny_and_stop_interrupts_the_task(self) -> None:
+        decision, _events = self.decide("Deny and stop", None)
+        self.assertEqual(("deny", True), (decision.behavior, decision.interrupt))
+
+    def test_unsafe_or_non_allow_suggestions_are_not_offered(self) -> None:
+        choices = claude_agent_backend.approval_choices([
+            PermissionUpdate("addRules", [PermissionRuleValue("Bash", "x\nrm -rf /")], "allow"),
+            PermissionUpdate("addRules", [PermissionRuleValue("Bash", "rm:*")], "deny"),
+            PermissionUpdate("addRules", [], "allow"),
+            {"type": "addRules", "behavior": "allow", "rules": [{"tool_name": "WebFetch", "rule_content": None}]},
+        ])
+        self.assertEqual(["Allow once", "Allow for this task", "Always allow", "Deny", "Deny and stop"],
+                         [c["label"] for c in choices])
+        self.assertTrue(choices[2]["detail"].endswith(": WebFetch"))
+        self.assertEqual(["Allow once", "Always allow", "Deny"], [c["label"] for c in choices if c["primary"]])
+        self.assertEqual([{"type": "addRules", "behavior": "allow", "destination": "session",
+                           "rules": [{"tool_name": "WebFetch", "rule_content": None}]}],
+                         choices[1]["result"]["updates"])
+
+    def test_generic_approval_cannot_stand_in_for_a_choice(self) -> None:
         decisions: list[Any] = []
 
         async def script(client):
@@ -398,14 +539,9 @@ class ClaudeAgentRunTests(unittest.TestCase):
                                approval_dir=self.approvals)
         approver = threading.Thread(target=approve, args=(events,))
         approver.start()
-        status, _ = agent.run("prompt", model=None, reasoning_effort=None, emit=events.append)
+        agent.run("prompt", model=None, reasoning_effort=None, emit=events.append)
         approver.join(timeout=5)
-
-        self.assertEqual("completed", status)
-        self.assertEqual(APPROVAL_LABEL_COMMAND,
-                         next(event["label"] for event in events if event["type"] == "approval_request"))
-        self.assertEqual(PermissionResultAllow(updated_input={"command": "rm x"}), decisions[0])
-        self.assertEqual([], list(self.approvals.iterdir()))
+        self.assertEqual("deny", decisions[0].behavior)
 
     def test_denies_interactive_questions_and_unapproved_tools(self) -> None:
         decisions: list[Any] = []

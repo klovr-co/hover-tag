@@ -1789,12 +1789,88 @@ class SlackApprovalTests(unittest.TestCase):
             team="T1", channel="C1", thread_ts="1", user_id="U1", approval_id="a" * 32,
             label="run a command outside the workspace sandbox", choices=choices,
         )
-        buttons = [b["elements"][0] for b in blocks if b["type"] == "actions"]
+        buttons = [b["accessory"] for b in blocks if "accessory" in b]
         self.assertEqual(["Allow for this task", "Always allow this host"],
                          [b["text"]["text"] for b in buttons])
+        self.assertIn("forms.google.com", blocks[-1]["text"]["text"])
         self.assertIn("forms.google.com", buttons[1]["confirm"]["text"]["text"])
         self.assertNotIn("forms.google.com", buttons[1]["value"])
         self.assertEqual("1", json.loads(buttons[1]["value"])["choice"])
+
+    def test_plain_choices_share_one_row_and_rules_sit_beside_their_buttons(self) -> None:
+        choices = [{"id": "0", "label": "Allow once", "detail": ""},
+                   {"id": "1", "label": "Always allow", "detail": "Save rule: Bash(x:*)", "persistent": True},
+                   {"id": "2", "label": "Deny", "detail": ""}]
+        blocks = slack_socket_agent.approval_button_blocks(
+            team="T1", channel="C1", thread_ts="1", user_id="U1", approval_id="a" * 32,
+            label="run a command that requires approval", backend="claude", choices=choices,
+        )
+        self.assertEqual(["section", "actions", "section"], [b["type"] for b in blocks])
+        self.assertEqual(["Allow once", "Deny"], [b["text"]["text"] for b in blocks[1]["elements"]])
+        self.assertEqual("Save rule: Bash(x:*)", blocks[2]["text"]["text"])
+        self.assertEqual("Always allow", blocks[2]["accessory"]["text"]["text"])
+        self.assertEqual("Save Claude rule?", blocks[2]["accessory"]["confirm"]["title"]["text"])
+
+    def test_main_row_hides_other_choices_behind_more_options(self) -> None:
+        choices = [{"id": "0", "label": "Allow once", "detail": "", "primary": True},
+                   {"id": "1", "label": "Allow for this task", "detail": "Task: Bash(x)"},
+                   {"id": "2", "label": "Always allow x commands", "detail": "Save: Bash(x:*)", "persistent": True,
+                    "primary": True},
+                   {"id": "3", "label": "Deny", "detail": "", "primary": True},
+                   {"id": "4", "label": "Deny and stop", "detail": ""}]
+        kwargs = dict(team="T1", channel="C1", thread_ts="1", user_id="U1", approval_id="a" * 32,
+                      label="run a command that requires approval", backend="claude", choices=choices)
+        compact = slack_socket_agent.approval_button_blocks(**kwargs)
+        self.assertEqual(["section", "actions"], [b["type"] for b in compact])
+        row = compact[1]["elements"]
+        self.assertEqual(["Allow once", "Always allow x commands", "Deny", "More options"], [b["text"]["text"] for b in row])
+        self.assertEqual("Save: Bash(x:*)", row[1]["confirm"]["text"]["text"])
+        self.assertEqual(slack_socket_agent.APPROVAL_MORE_ACTION_ID, row[3]["action_id"])
+        self.assertNotIn("choice", json.loads(row[3]["value"]))
+        full = slack_socket_agent.approval_button_blocks(**kwargs, expanded=True)
+        labels = [e["text"]["text"] for b in full for e in b.get("elements", []) + [b.get("accessory")] if e]
+        self.assertEqual(["Allow once", "Deny", "Deny and stop", "Allow for this task", "Always allow x commands"], labels)
+
+    def test_more_options_redraws_only_a_pending_prompt_for_its_requester(self) -> None:
+        fake_app = FakeApp()
+        with tempfile.TemporaryDirectory() as raw, patch.object(
+            slack_socket_agent, "App", return_value=fake_app
+        ), patch.dict(os.environ, {"SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_IDS": "C1"}, clear=True), patch.object(
+            slack_socket_agent, "discover_tag_models", return_value=[]
+        ):
+            slack_socket_agent.create_app("codex", 30, frozenset({"UOWNER", "UOTHER"}))
+            handler = fake_app.actions[slack_socket_agent.APPROVAL_MORE_ACTION_ID]
+            process = MagicMock()
+            process.poll.return_value = None
+            run = slack_socket_agent.ActiveBackendRun(process, Path(raw) / "control", "run", Path(raw))
+            aid = "e" * 32
+            choices = [{"id": "0", "label": "Allow once", "detail": "", "primary": True},
+                       {"id": "1", "label": "Deny and stop", "detail": ""}]
+            run.register_approval(aid, choices)
+            run.pending_approval_prompts[aid] = {"approval_id": aid, "label": "run a command that requires approval",
+                                                 "choices": choices, "backend": "claude"}
+            key = slack_socket_agent.RunKey("T1", "C1", "1.0")
+            slack_socket_agent.register_active_run(key, run)
+            metadata = {"team": "T1", "channel": "C1", "thread_ts": "1.0", "user": "UOWNER", "approval_id": aid}
+
+            def click(user: str) -> MagicMock:
+                respond = MagicMock()
+                handler(ack=MagicMock(), client=MagicMock(), logger=MagicMock(), respond=respond, body={
+                    "user": {"id": user}, "channel": {"id": "C1"}, "team": {"id": "T1"},
+                    "actions": [{"action_id": slack_socket_agent.APPROVAL_MORE_ACTION_ID,
+                                 "value": json.dumps(metadata)}]})
+                return respond
+
+            try:
+                self.assertFalse(click("UOTHER").called)
+                shown = click("UOWNER").call_args.kwargs
+                self.assertTrue(shown["replace_original"])
+                self.assertIn("Deny and stop", json.dumps(shown["blocks"]))
+                self.assertIn(aid, run.pending_approvals)  # Expanding decides nothing.
+                self.assertTrue(run.resolve_approval(aid, choice="1"))
+                self.assertIn("expired", click("UOWNER").call_args.kwargs["text"])
+            finally:
+                slack_socket_agent.unregister_active_run(key, run)
 
     def test_native_choice_registry_rejects_forgery_replay_and_expiry(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
