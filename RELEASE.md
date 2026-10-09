@@ -12,11 +12,12 @@ agent before claiming a release qualified for it. Hosted operation, enterprise p
 and production-grade sandboxing are out of scope.
 
 The canonical source repository is <https://github.com/klovr-co/hover-tag>. `VERSION`
-selects the current release line (`v0.3.0`). The first beta is
-`v0.3.0-beta.1`; later eligible merges publish monotonically increasing
-candidates such as `v0.3.0-beta.2`. Beta releases are GitHub prereleases
-and remain opt-in. The previous line published `v0.2.0-alpha` and
-`v0.2.0-beta` candidates before stable `v0.2.0`.
+selects the current release line (`v0.4.0-alpha`). Eligible merges publish
+monotonically increasing candidates such as `v0.4.0-alpha.1` and
+`v0.4.0-alpha.2`. Alpha and beta releases are GitHub prereleases and remain
+opt-in. The previous line published `v0.3.0-alpha` and `v0.3.0-beta`
+candidates before stable `v0.3.0`, and `v0.2.0-alpha` and `v0.2.0-beta`
+candidates before stable `v0.2.0`.
 
 Published releases trigger `.github/workflows/release-package.yml`, which
 verifies or creates `tag-<version>.zip`, `SHA256SUMS`, and
@@ -127,6 +128,42 @@ after upload. Manually published releases trigger `.github/workflows/release-pac
 which verifies attached archives, checksums, provenance, internal versions, and
 the prerelease setting instead of rebuilding. Older releases without prepared
 assets retain the original build-on-publication fallback.
+
+## Release lines
+
+Before merging, decide which release each PR belongs to:
+
+- **The current line** (`VERSION` on `main`): merge it normally.
+- **A fix for an older stable release as well:** merge it to `main`, then
+  cherry-pick it to the maintenance branch, as described below.
+- **A later version:** don't merge it yet. Keep the PR as a draft with a
+  `target:vX.Y` label, and merge `main` into it regularly. After the current
+  line ships stable, set `VERSION` to the next alpha line and merge the PR.
+
+`main` holds only work for the current line, so the automation never needs a
+second development branch.
+
+## Patching an older stable release
+
+`main` carries the next release line. Fixes land on `main` first, and users of
+an older stable release get them by upgrading. There is no permanent
+maintenance branch.
+
+Create one only when a stable release needs an urgent fix that cannot wait for
+the next line. Branch from the stable tag and cherry-pick the fixes that
+already merged to `main`:
+
+```bash
+git switch -c release/v0.3.x v0.3.0
+git cherry-pick -x <fix-commit-on-main>
+```
+
+Never merge `main` into a maintenance branch, and never land a fix only on the
+maintenance branch. Because every fix already exists on `main`, nothing merges
+back. The release automation builds and validates only commits on `main`, so
+publishing a patch such as `v0.3.1` from a maintenance branch first requires
+extending the workflows to accept that branch. Delete the branch when its line
+is no longer supported.
 
 ## Tag.app
 
