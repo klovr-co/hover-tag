@@ -129,6 +129,22 @@ which verifies attached archives, checksums, provenance, internal versions, and
 the prerelease setting instead of rebuilding. Older releases without prepared
 assets retain the original build-on-publication fallback.
 
+## Release lines
+
+Before merging, decide which release each PR belongs to:
+
+- **The current line** (`VERSION` on `main`): merge it normally.
+- **A fix for an older stable release as well:** merge it to `main`, then
+  cherry-pick it to the maintenance branch, as described below.
+- **A later version:** don't merge it yet. Keep the PR as a draft with a
+  `target:vX.Y` label, and merge `main` into it regularly. After the current
+  line ships stable, set `VERSION` to the next alpha line and merge the PR. Use
+  a disabled feature flag instead only when a large change would conflict
+  too much as a long-lived branch.
+
+`main` holds only work for the current line, so the automation never needs a
+second development branch.
+
 ## Patching an older stable release
 
 `main` carries the next release line. Fixes land on `main` first, and users of
