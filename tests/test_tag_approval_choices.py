@@ -35,6 +35,17 @@ class NativeApprovalChoiceTests(unittest.TestCase):
         self.assertTrue(all(c["persistent"] for c in choices))
         self.assertNotIn("result", json.dumps(public_approval_choices(choices)))
 
+    def test_main_row_is_allow_once_first_saved_rule_and_deny(self):
+        choices = approval_choices("item/commandExecution/requestApproval", {"availableDecisions": [
+            "accept", "acceptForSession", {"acceptWithExecpolicyAmendment": {"execpolicy_amendment": ["git", "push"]}},
+            "decline", "cancel"]})
+        self.assertEqual(["Allow once", "Always allow this prefix", "Deny"],
+                         [c["label"] for c in choices if c["primary"]])
+        plain = approval_choices("item/commandExecution/requestApproval", {
+            "availableDecisions": ["accept", "acceptForSession", "decline", "cancel"]})
+        self.assertEqual(["Allow once", "Allow for this task", "Deny"],
+                         [c["label"] for c in plain if c["primary"]])
+
     def test_older_server_proposals_and_deny_host_are_supported(self):
         choices = approval_choices(COMMAND, {
             "proposedExecpolicyAmendment": ["git", "status"],

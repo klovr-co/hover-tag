@@ -32,7 +32,13 @@ come from the signed-in account's model catalog. See
 
 `OPENTAG_CLAUDE_PERMISSION_MODE` selects `auto` (default), `acceptEdits`,
 `default`, `dontAsk`, or `bypassPermissions`. Anything Claude would ask about is
-sent privately to the requester as a one-time approval.
+sent privately to the requester. Every request offers Allow once, Deny, and
+Deny and stop. When the CLI suggests allow rules or directories, Tag also
+offers Allow for this task (`session` destination) and Always allow
+(`localSettings`, the Tag workspace's `.claude/settings.local.json`). Plain
+shell commands also offer Always allow this prefix, a `Bash(<program> <first
+argument>:*)` rule like Codex's prefix amendments. The bridge confirms saved
+rules before applying them.
 
 Set `OPENTAG_CLAUDE_TRANSPORT=print` to roll back to the previous print mode:
 

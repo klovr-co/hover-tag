@@ -191,7 +191,9 @@ Try this:
    [Watch Tag work](reference/supported-capabilities.md#watch-tag-work).
 4. If the agent asks to do something outside its sandbox, only you see the
    approval. Codex offers **Allow once**, **Allow for this task**, **Deny**, and
-   **Deny and stop**; Claude offers **Approve once** and **Deny**.
+   **Deny and stop**; Claude offers **Allow once**, **Deny**, and **Deny and
+   stop**, plus **Allow for this task** and **Always allow** when it proposes
+   a rule.
 5. Review the answer. It ends with the agent, model, thinking level, and how
    long it took. Long answers arrive as several replies. Use Slack's **Stop**
    button to stop a running task.
@@ -639,7 +641,7 @@ not set up.
 | One conversation per thread | Implemented for Codex and Claude | Per requester; bounded by token and idle limits. Legacy transports start fresh. |
 | Thread text and attachments | Implemented | Bounded and untrusted. Earlier thread files can be reopened. |
 | Live activity and streamed answers | Implemented with App Server or Agent SDK | No private reasoning or raw tool output in Slack. |
-| Approvals | Codex: several choices; Claude: approve once or deny | Private to the requester; unanswered requests are denied. |
+| Approvals | Codex and Claude: scoped choices, including saved rules | Private to the requester; unanswered requests are denied. |
 | Stop a task | Implemented with App Server or Agent SDK | Slack's Stop button. |
 | Saved files | Implemented | Kept locally and attached in Slack by default; 15 MB per file. |
 | Generated images | Implemented | Up to 10 per request, uploaded and kept in the Tag's folder. |
