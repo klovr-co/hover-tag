@@ -35,7 +35,7 @@ def approval_choices(method: str, params: dict[str, Any]) -> list[dict[str, Any]
             add("Allow for this turn", {"permissions": permissions, "scope": "turn"}, detail)
             add("Allow for this task", {"permissions": permissions, "scope": "session"}, detail)
         add("Deny", {"permissions": {}, "scope": "turn"})
-        return choices
+        return mark_primary(choices)
 
     legacy = method in {"execCommandApproval", "applyPatchApproval"}
     command = method in {"item/commandExecution/requestApproval", "execCommandApproval"}
@@ -92,6 +92,23 @@ def approval_choices(method: str, params: dict[str, Any]) -> list[dict[str, Any]
                     verb = "allow" if rule["action"] == "allow" else "deny"
                     add(f"Always {verb} this host", {"decision": native},
                         f"Save a persistent network {verb} rule for host: " + rule["host"], True)
+    return mark_primary(choices)
+
+
+def mark_primary(choices: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Mark the short main row: allow once, the first saved rule or task grant, and deny.
+
+    The bridge shows unmarked choices only after the requester asks for more.
+    """
+    def first(match: Any) -> dict[str, Any] | None:
+        return next((c for c in choices if match(c)), None)
+
+    allow = first(lambda c: c["label"] in ("Allow once", "Allow for this turn")) or (choices[0] if choices else None)
+    broader = first(lambda c: c.get("persistent")) or first(
+        lambda c: c is not allow and c["label"].startswith("Allow"))
+    deny = first(lambda c: c["label"] == "Deny")
+    for choice in choices:
+        choice["primary"] = any(choice is c for c in (allow, broader, deny))
     return choices
 
 

@@ -11,11 +11,12 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import shutil
 import time
 import uuid
 from collections.abc import Callable
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict, is_dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -402,6 +403,100 @@ def approval_label(tool_name: str) -> str:
     return APPROVAL_LABEL_TOOL
 
 
+def _field(value: Any, name: str) -> Any:
+    return value.get(name) if isinstance(value, dict) else getattr(value, name, None)
+
+
+def _with_destination(update: Any, destination: str) -> Any:
+    if isinstance(update, dict):
+        return {**update, "destination": destination}
+    return replace(update, destination=destination)
+
+
+def rule_text(rule: Any) -> str | None:
+    """Render one suggested rule as settings syntax, or None if unsafe to show."""
+    tool, content = _field(rule, "tool_name"), _field(rule, "rule_content")
+    if not isinstance(tool, str) or not tool or (content is not None and not isinstance(content, str)):
+        return None
+    text = f"{tool}({content})" if content else tool
+    if len(text) > 500 or any(ord(c) < 32 for c in text):
+        return None
+    return text
+
+
+PREFIX_WORD = re.compile(r"[A-Za-z0-9._/@:=+-]+")
+
+
+def command_prefix(command: Any) -> str | None:
+    """Return a program-and-subcommand prefix, like Codex's prefix rules, if unambiguous."""
+    if not isinstance(command, str) or len(command) > 2000 or re.search(r"[;&|`$()<>\\\n'\"]", command):
+        return None
+    words = command.split()
+    if len(words) < 3 or not all(PREFIX_WORD.fullmatch(word) for word in words[:2]):
+        return None
+    return " ".join(words[:2])
+
+
+def _directories(update: Any) -> list[str] | None:
+    directories = _field(update, "directories")
+    if (not isinstance(directories, list) or not directories
+            or not all(isinstance(d, str) and d.startswith("/") and len(d) <= 500
+                       and not any(ord(c) < 32 for c in d) for d in directories)):
+        return None
+    return directories
+
+
+def approval_choices(suggestions: Any, tool_name: str = "", tool_input: dict[str, Any] | None = None,
+                     make_rule: Callable[[str, str], Any] | None = None) -> list[dict[str, Any]]:
+    """Offer one-time, task-scoped, and saved decisions for one tool call.
+
+    Claude's own allow-rule and folder suggestions become task or saved grants.
+    For shell commands Tag also offers a program-and-subcommand prefix rule,
+    like Codex. Task scope applies to this SDK session; saved grants go to the
+    Tag workspace's `.claude/settings.local.json`, never global settings.
+    """
+    updates, targets = [], []
+    for update in suggestions if isinstance(suggestions, list) else []:
+        kind = _field(update, "type")
+        if kind == "addRules" and _field(update, "behavior") == "allow":
+            texts = [rule_text(rule) for rule in _field(update, "rules") or []]
+            if not texts or None in texts:
+                continue
+            targets.extend(texts)
+        elif kind == "addDirectories" and (directories := _directories(update)):
+            targets.extend("folder " + d for d in directories)
+        else:
+            continue
+        updates.append(update)
+    choices: list[dict[str, Any]] = []
+
+    def add(label: str, detail: str, result: dict[str, Any], persistent: bool = False) -> None:
+        choices.append({"id": str(len(choices)), "label": label, "detail": detail,
+                        "persistent": persistent, "result": result})
+
+    add("Allow once", "", {"behavior": "allow"})
+    if updates:
+        shown = ", ".join(targets)
+        add("Allow for this task", "For this Tag task only: " + shown,
+            {"behavior": "allow", "updates": [_with_destination(u, "session") for u in updates]})
+        add("Always allow", "Save for future requests to this Tag: " + shown,
+            {"behavior": "allow", "updates": [_with_destination(u, "localSettings") for u in updates]}, True)
+    prefix = command_prefix((tool_input or {}).get("command")) if tool_name == "Bash" else None
+    if prefix and make_rule is not None and f"Bash({prefix}:*)" not in targets:
+        add(f"Always allow {prefix} commands" if len(prefix) <= 50 else "Always allow this prefix",
+            f"Save for future requests to this Tag: Bash({prefix}:*)",
+            {"behavior": "allow", "updates": [make_rule("Bash", prefix + ":*")]}, True)
+    add("Deny", "", {"behavior": "deny"})
+    add("Deny and stop", "", {"behavior": "deny", "interrupt": True})
+    # Main row: allow once, the broadest saved grant on offer, and deny.
+    saved = [c for c in choices if c["persistent"]]
+    primary = {"0", saved[-1]["id"] if saved else "", str(len(choices) - 2)}
+    for choice in choices:
+        choice["primary"] = choice["id"] in primary
+    return choices
+
+
+
 def workspace_mcp_config(workdir: Path) -> Path | None:
     """Layer only the workspace's Tag-owned MCP servers, like Codex's config."""
     config = workdir / ".mcp.json"
@@ -490,9 +585,13 @@ class ClaudeAgentRun:
             self.stderr.append(line)
             del self.stderr[:-200]
 
-        # This adapter supports one-time SDK decisions only; it exposes no
-        # persistent/session grants or automatic-review denial retry protocol.
-        async def can_use_tool(tool_name: str, tool_input: dict[str, Any], _context: Any) -> Any:
+        def saved_rule(tool: str, content: str) -> Any:
+            from claude_agent_sdk.types import PermissionRuleValue, PermissionUpdate
+            return PermissionUpdate(type="addRules", rules=[PermissionRuleValue(tool, content)],
+                                    behavior="allow", destination="localSettings")
+
+        # Claude has no automatic-review denial retry protocol.
+        async def can_use_tool(tool_name: str, tool_input: dict[str, Any], context: Any) -> Any:
             if self.text_only_instructions is not None:
                 return deny(message="Tools are disabled for reply summaries.")
             if tool_name in INTERACTIVE_TOOLS:
@@ -500,17 +599,26 @@ class ClaudeAgentRun:
             if self.approval_dir is None or emit is None:
                 return deny(message="Tag cannot request approval for this run.")
             approval_id = uuid.uuid4().hex
-            emit({"type": "approval_request", "approval_id": approval_id, "label": approval_label(tool_name)})
+            choices = approval_choices(_field(context, "suggestions"), tool_name, tool_input, saved_rule)
+            emit({"type": "approval_request", "approval_id": approval_id, "label": approval_label(tool_name),
+                  "choices": [{k: v for k, v in c.items() if k != "result"} for c in choices]})
             self.pending_approvals += 1
             try:
-                approved = await self._wait_for_approval(
+                selected = await self._wait_for_approval(
                     approval_id, min(deadline, time.monotonic() + APPROVAL_TIMEOUT_SECONDS),
                 )
             finally:
                 self.pending_approvals -= 1
                 self.last_activity = time.monotonic()
-            if approved:
+                emit({"type": "approval_expired", "approval_id": approval_id})
+            choice = next((c for c in choices if c["id"] == selected.get("choice")), None)
+            result = choice["result"] if choice and not self.interrupt_sent else {"behavior": "deny"}
+            if result["behavior"] == "allow":
+                if result.get("updates"):
+                    return allow(updated_input=tool_input, updated_permissions=result["updates"])
                 return allow(updated_input=tool_input)
+            if result.get("interrupt"):
+                return deny(message="Denied in Slack; stop this task.", interrupt=True)
             return deny(message="Denied in Slack")
 
         kwargs: dict[str, Any] = {
@@ -560,12 +668,12 @@ class ClaudeAgentRun:
                           settings=json.dumps({"disableAllHooks": True}))
         return options_factory(**kwargs)
 
-    async def _wait_for_approval(self, approval_id: str, deadline: float) -> bool:
+    async def _wait_for_approval(self, approval_id: str, deadline: float) -> dict[str, Any]:
         assert self.approval_dir is not None
         decision_file = self.approval_dir / f"{approval_id}.json"
         while time.monotonic() < deadline:
             if self.interrupt_sent or self._control_requested():
-                return False
+                return {}
             try:
                 payload = json.loads(decision_file.read_text(encoding="utf-8"))
             except FileNotFoundError:
@@ -573,10 +681,10 @@ class ClaudeAgentRun:
                 continue
             except (OSError, json.JSONDecodeError):
                 decision_file.unlink(missing_ok=True)
-                return False
+                return {}
             decision_file.unlink(missing_ok=True)
-            return isinstance(payload, dict) and payload.get("decision") == "approve"
-        return False
+            return payload if isinstance(payload, dict) else {}
+        return {}
 
     def _control_requested(self) -> bool:
         if not self.control_file or not self.run_id:
