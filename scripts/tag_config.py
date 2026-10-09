@@ -12,9 +12,11 @@ from urllib.parse import urlsplit
 try:
     from agent_models import SUPPORTED_REASONING_EFFORTS
     from mfs_scope_policy import canonical_uri, parse_scopes
+    from tag_handoff import parse_peers
 except ImportError:
     from scripts.agent_models import SUPPORTED_REASONING_EFFORTS
     from scripts.mfs_scope_policy import canonical_uri, parse_scopes
+    from scripts.tag_handoff import parse_peers
 
 DEFAULTS = {
     "OPENTAG_BACKEND": "codex", "OPENTAG_BOT_NAME": "Tag",
@@ -42,7 +44,8 @@ PUBLIC = frozenset((*DEFAULTS, "MFS_ALLOWED_SCOPES", "OPENTAG_WORKDIR",
                     "MFS_SLACK_CONNECTOR_URI", "MFS_SLACK_CONNECTOR_CONFIG",
                     "OPENTAG_CODEX_MODELS", "OPENTAG_CODEX_REASONING_EFFORTS",
                     "OPENTAG_CLAUDE_MODELS", "OPENTAG_DEFAULT_MODEL", "OPENTAG_BACKENDS",
-                    "OPENTAG_DEFAULT_EFFORT", "OPENTAG_BOT_DESCRIPTION"))
+                    "OPENTAG_DEFAULT_EFFORT", "OPENTAG_BOT_DESCRIPTION",
+                    "OPENTAG_PEER_TAGS"))
 EDITABLE = PUBLIC - {"OPENTAG_WORKDIR"} | {
     "SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "MFS_TOKEN", "MFS_SLACK_TOKEN", "MFS_HOME"
 }
@@ -71,6 +74,7 @@ LABELS = {
     "OPENTAG_SLACK_DM_ENABLED": "Direct messages (1 on, 0 off)",
     "OPENTAG_FILE_DELIVERY": "File delivery (local or local+slack)",
     "OPENTAG_TRANSPORT": "Chat service",
+    "OPENTAG_PEER_TAGS": "Other Tags this Tag may ask (Name=MEMBERID, comma-separated)",
     "OPENTAG_THREAD_MAX_CONTEXT_TOKENS": "Continue a Slack thread's conversation up to this many tokens (0 never continues)",
     "OPENTAG_THREAD_IDLE_HOURS": "Continue a Slack thread's conversation within this many idle hours (0 never continues)",
 }
@@ -189,6 +193,11 @@ def validation_error(key: str, value: str) -> str | None:
         return "Choose auto, acceptEdits, default, dontAsk, or bypassPermissions"
     if key == "OPENTAG_FILE_DELIVERY" and value not in {"local", "local+slack"}:
         return "Choose local or local+slack"
+    if key == "OPENTAG_PEER_TAGS" and value.strip():
+        try:
+            parse_peers(value)
+        except ValueError as exc:
+            return str(exc)
     if key == "OPENTAG_TRANSPORT" and value != "slack":
         return "Only slack is supported"
     if key in {"OPENTAG_TIMEOUT_SECONDS", "OPENTAG_MAX_TIMEOUT_SECONDS", "OPENTAG_BACKEND_ATTEMPTS"} and (not value.isascii() or not value.isdigit() or int(value) < 1):

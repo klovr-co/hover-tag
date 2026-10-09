@@ -10,9 +10,11 @@ the behavior contract for the fresh CLI agent launched by the bridge.
 - **Brain**: the current CLI agent process. It receives the Slack thread, the
   allowed MFS scopes, and the workspace. Unless a backend provides its own
   session continuity, each invocation is a fresh run.
-- **Memory**: retrievable context in MFS. This can include Slack history that the
-  operator's Slack connector is allowed to index, plus repositories, docs,
-  issues, databases, object stores, or web sources.
+- **Memory**: facts people explicitly asked Tag to remember, loaded into every
+  prompt for the current channel (see `references/memory.md`), plus retrievable
+  context in MFS. MFS can include Slack history that the operator's Slack
+  connector is allowed to index, plus repositories, docs, issues, databases,
+  object stores, or web sources.
 - **Tools**: external systems exposed through MFS connectors for read/search, and
   any command, skill, or file tool available to the backend in the workspace.
   A tool's own credentials and grants determine its capabilities; Tag does not
@@ -98,8 +100,9 @@ sandbox, explicit tool allowlists, and auditable data-source policies.
   the operator.
 - Execution boundary: the backend runs with the permissions used to start the
   bridge. Use a trusted workspace for demos and a sandbox for production.
-- Memory boundary: durable context is whatever the operator has indexed and
-  authorized through MFS.
+- Memory boundary: durable context is Tag memory for the current channel and
+  all channels, plus whatever the operator has indexed and authorized through
+  MFS. Provider-native memory is disabled for Tag runs.
 - Tool boundary: locally installed commands and skills run with the permissions of
   the backend process. Their own credentials and authorization grants apply. Run the
   bot in a trusted channel and use a real sandbox for stronger isolation.

@@ -132,7 +132,9 @@ class FlowTests(unittest.TestCase):
 
     def test_start_waits_for_a_start_in_progress_and_does_not_start_twice(self):
         self.seed()
-        (code, output), memory = self.start_while_locked(10, release_after=0.3)
+        result, memory = self.start_while_locked(10, release_after=0.3)
+        self.assertNotIsInstance(result, Exception, result)  # Show why start failed.
+        code, output = result
         self.assertEqual(code, 0)
         self.assertIn("Waiting for another start, stop or setup to finish", output)
         self.assertIn("Already connected", output)
@@ -144,7 +146,9 @@ class FlowTests(unittest.TestCase):
     def test_start_json_reports_each_step_as_it_happens(self):
         self.seed()
         self.addCleanup(tag_cli.display.progress_events, False)
-        (code, output), _ = self.start_while_locked(10, release_after=0.3, args=("start", "--json"))
+        result, _ = self.start_while_locked(10, release_after=0.3, args=("start", "--json"))
+        self.assertNotIsInstance(result, Exception, result)  # Show why start failed.
+        code, output = result
         self.assertEqual(code, 0)
         events = [json.loads(line) for line in output.splitlines()]
         # Only JSON lines: no banner or completion text for the client to skip.

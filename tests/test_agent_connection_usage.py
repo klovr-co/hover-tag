@@ -102,6 +102,8 @@ class ConnectionTests(unittest.TestCase):
                 model=None, reasoning_effort=None, fast_mode=False, emit=None, deadline=10)
             self.assertEqual(options["env"]["ANTHROPIC_API_KEY"], "test-private-credential")
             self.assertEqual(options["env"]["CLAUDE_CODE_OAUTH_TOKEN"], "")
+            # An API connection must not re-enable Claude's own memory.
+            self.assertEqual(options["env"]["CLAUDE_CODE_DISABLE_AUTO_MEMORY"], "1")
             self.assertEqual(options["model"], "deployment-one")
 
     def test_invalid_configuration_fails_closed(self):

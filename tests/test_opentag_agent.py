@@ -17,7 +17,7 @@ class OpenTagAgentPromptTests(unittest.TestCase):
         instructions = opentag_agent.build_instructions(
             skill_dir=root / "skill", workdir=root / "workspace", channel_id="C123", output_files=True)
         request = opentag_agent.build_request(
-            question="Summarize the plan", thread_text="U1: first\nU2: second",
+            channel_id="C123", question="Summarize the plan", thread_text="U1: first\nU2: second",
             attachments_dir=root / "inv-7/attachments", allowed_scopes="file://local/tag/workspace",
             output_manifest=root / "inv-7/manifest.json")
         self.assertNotIn("inv-7", instructions)
@@ -31,11 +31,11 @@ class OpenTagAgentPromptTests(unittest.TestCase):
 
     def test_continued_request_carries_only_new_thread_messages(self) -> None:
         request = opentag_agent.build_request(
-            question="And now?", thread_text="U2: new message", attachments_dir=None,
+            channel_id="C123", question="And now?", thread_text="U2: new message", attachments_dir=None,
             allowed_scopes="x", continued=True)
         self.assertIn("New Slack thread messages since your last reply", request)
         self.assertIn("U2: new message", request)
-        empty = opentag_agent.build_request(question="And now?", thread_text="", attachments_dir=None,
+        empty = opentag_agent.build_request(channel_id="C123", question="And now?", thread_text="", attachments_dir=None,
                                             allowed_scopes="x", continued=True)
         self.assertIn("(none)", empty)
 
@@ -54,6 +54,47 @@ class OpenTagAgentPromptTests(unittest.TestCase):
         self.assertIn("search general workspace all", prompt)
         self.assertIn("ask a short scope", prompt)
         self.assertIn("do not call a search helper", prompt)
+
+    def test_prompt_loads_channel_memory_and_explains_the_memory_helper(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "memory"
+            from scripts.tag_memory import MemoryStore
+
+            MemoryStore(root, "C123", "UANA").save("deadline", "Reports are due Friday.", all_channels=True)
+            MemoryStore(root, "C123", "UBEN").save("pricing", "Launch pricing is 49 per seat.", kind="note")
+            with patch.dict(os.environ, {"OPENTAG_MEMORY_ROOT": str(root)}):
+                prompt = opentag_agent.build_prompt(
+                    skill_dir=Path("/tmp/open-tag"),
+                    workdir=Path("/tmp/workspace"),
+                    channel_id="C123",
+                    question="what is due?",
+                    thread_text="",
+                    attachments_dir=None,
+                    allowed_scopes="slack://tag-t1/channels/general__C123",
+                )
+        self.assertIn("- deadline: Reports are due Friday.", prompt)
+        self.assertIn("- pricing: Launch pricing is 49 per seat. (this channel)", prompt)
+        self.assertIn(str(Path("/tmp/open-tag/scripts/tag_memory.py")), prompt)
+        self.assertIn("Do not save memory on your own initiative", prompt)
+        self.assertIn("only when the\n  user explicitly says it is for all channels", prompt)
+        self.assertLess(prompt.index("<tag-memory"), prompt.index("User question:"))
+
+    def test_native_memory_is_disabled_for_both_backends(self) -> None:
+        with patch.dict(os.environ, {"CLAUDE_CODE_DISABLE_AUTO_MEMORY": "0"}):
+            opentag_agent.disable_native_memory()
+            self.assertEqual("1", os.environ["CLAUDE_CODE_DISABLE_AUTO_MEMORY"])
+        with patch.object(opentag_agent, "codex_workspace_args", return_value=[]), \
+                patch.object(opentag_agent, "backend_command", side_effect=lambda name: [name]):
+            commands = [
+                opentag_agent.codex_app_server_command(Path("/work")),
+                opentag_agent.codex_stream_command(
+                    "prompt", skill_dir=Path("/skill"), workdir=Path("/work"),
+                    attachments_dir=None, output_path=Path("/tmp/final.txt"),
+                ),
+            ]
+        for command in commands:
+            index = command.index("features.memories=false")
+            self.assertEqual("-c", command[index - 1])
 
     def test_windows_npm_backend_bypasses_command_shell(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -187,6 +228,7 @@ class OpenTagAgentPromptTests(unittest.TestCase):
         self.assertEqual("done", output)
         self.assertIn("--approve-for-me", command)
         self.assertIn("features.fast_mode=true", command)
+        self.assertIn("features.memories=false", command)
         self.assertIn('service_tier="default"', command)
         self.assertNotIn("--dangerously-bypass-approvals-and-sandbox", command)
 
@@ -350,7 +392,8 @@ class BackendStreamEventTests(unittest.TestCase):
                 opentag_agent.codex_event_transport()
 
     def test_app_server_command_applies_selected_fast_mode(self) -> None:
-        with patch.object(opentag_agent, "codex_workspace_args", return_value=[]):
+        with patch.object(opentag_agent, "codex_workspace_args", return_value=[]), \
+                patch.object(opentag_agent, "backend_command", side_effect=lambda name: [name]):
             command = opentag_agent.codex_app_server_command(
                 Path("/work"),
                 fast_mode=True,

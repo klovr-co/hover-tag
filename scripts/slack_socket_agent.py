@@ -68,9 +68,11 @@ try:
     from .tag_activity_details import sanitize_activity_details
     from .tag_approval_choices import sanitize_review_details
     from .tag_activity_labels import activity_title_for_status, readable_activity_title
-    from .tag_paths import tag_temp_dir
+    from .tag_paths import instance_home, tag_temp_dir
     from .record_output_artifact import channel_artifact_directory
     from . import slack_channels
+    from . import tag_memory
+    from . import tag_handoff
 except ImportError:  # Direct script execution does not create a package context.
     import slack_identity
     from agent_models import (
@@ -109,8 +111,10 @@ except ImportError:  # Direct script execution does not create a package context
     from tag_approval_choices import sanitize_review_details
     from tag_activity_labels import activity_title_for_status, readable_activity_title
     from record_output_artifact import channel_artifact_directory
-    from tag_paths import tag_temp_dir
+    from tag_paths import instance_home, tag_temp_dir
     import slack_channels
+    import tag_memory
+    import tag_handoff
 
 
 MENTION_RE = re.compile(r"<@[^>]+>")
@@ -2251,6 +2255,9 @@ def run_backend(
     scope_plan: ScopePlan | None = None,
     slack_search_grant: ScopePlan | None = None,
     on_error: Callable[[str | None, str], None] | None = None,
+    memory_receipts: Path | None = None,
+    handoff_requests: Path | None = None,
+    handoff_depth: int = 0,
 ) -> tuple[str, bool]:
     if max_timeout is None:
         max_timeout = int(os.getenv("OPENTAG_MAX_TIMEOUT_SECONDS", "3600"))
@@ -2306,6 +2313,9 @@ def run_backend(
                 if slack_search_grant and slack_search_grant.mode == "all"
                 else None
             ),
+            memory_receipts=str(memory_receipts) if memory_receipts else None,
+            handoff_requests=str(handoff_requests) if handoff_requests else None,
+            handoff_depth=handoff_depth,
         )
         result = subprocess.run(
             cmd,
@@ -2360,6 +2370,9 @@ def run_backend_events(
     on_error: Callable[[str | None, str], None] | None = None,
     on_trace_event: Callable[[dict[str, Any]], None] | None = None,
     on_run_info: Callable[[dict[str, str]], None] | None = None,
+    memory_receipts: Path | None = None,
+    handoff_requests: Path | None = None,
+    handoff_depth: int = 0,
     resume_session: str | None = None,
     on_session: Callable[[str], None] | None = None,
     thread_new_text: str | None = None,
@@ -2444,6 +2457,9 @@ def run_backend_events(
             if slack_search_grant and slack_search_grant.mode == "all"
             else None
         ),
+        memory_receipts=str(memory_receipts) if memory_receipts else None,
+        handoff_requests=str(handoff_requests) if handoff_requests else None,
+        handoff_depth=handoff_depth,
     )
     try:
         process = subprocess.Popen(
@@ -3363,6 +3379,8 @@ def create_app(
     session_journal: SlackSessionJournal | None = None,
     report_store: ErrorReportStore | None = None,
     activity_store: ActivityStore | None = None,
+    peers: list[tag_handoff.Peer] | None = None,
+    handoff_store: tag_handoff.HandoffStore | None = None,
 ) -> App:
     retire_slack_settings()
     if max_timeout is None:
@@ -3400,6 +3418,18 @@ def create_app(
         app = App(token=token, before_authorize=workspace_boundary)
     report_store = report_store or default_report_store()
     activity_store = activity_store or ActivityStore()
+    if peers is None:
+        try:
+            peers = tag_handoff.parse_peers(os.getenv("OPENTAG_PEER_TAGS", ""))
+        except ValueError as exc:
+            raise RuntimeError(f"OPENTAG_PEER_TAGS is invalid: {exc}") from None
+    # Other Tags whose bot messages this Tag accepts; everything else from bots is ignored.
+    peer_ids = frozenset(peer.user_id for peer in peers)
+    handoff_store = handoff_store or tag_handoff.HandoffStore(instance_home() / "state" / "handoffs")
+    # A restart can end a combine run before it finishes; the next deadline scan picks it up again.
+    handoff_store.requeue_combining()
+    handled_peer_requests: set[tuple[str, str]] = set()
+    handled_peer_lock = threading.Lock()
     thread_sessions = ThreadSessions(activity_store.root.parent / "agent-sessions.json")
     fallback_reports: dict[str, ErrorReport] = {}
 
@@ -4047,6 +4077,251 @@ def create_app(
     def dismiss_retired_settings(ack: Any) -> None:
         ack(response_action="update", view=retired_settings_modal())
 
+    handoff_status_lock = threading.Lock()
+    bot_names: dict[str, str | None] = {peer.user_id: peer.name for peer in peers}
+    bot_names_lock = threading.Lock()
+
+    def without_bot_mentions(client: Any, logger: Any, text: str) -> str:
+        """Write every app bot as a plain name; a mention would wake it for nothing.
+
+        Only handoff markers mention a Tag. People stay mentioned.
+        """
+        for user_id in set(re.findall(r"<@([UW][A-Z0-9]{2,20})(?:\|[^>]*)?>", text)):
+            with bot_names_lock:
+                known = user_id in bot_names
+            if not known:
+                name = None
+                try:
+                    user = client.users_info(user=user_id).get("user") or {}
+                    if user.get("is_bot") is True:
+                        profile = user.get("profile") or {}
+                        found = profile.get("display_name") or profile.get("real_name") or user.get("name")
+                        name = found if isinstance(found, str) and found else "a Tag"
+                except Exception as exc:  # noqa: BLE001 - peers still ignore unmarked bot mentions
+                    logger.info("Could not check whether %s is a bot: %s", user_id, exc)
+                    continue
+                with bot_names_lock:
+                    bot_names[user_id] = name
+            name = bot_names[user_id]
+            if name:
+                text = re.sub(rf"<@{user_id}(?:\|[^>]*)?>", lambda _match: f"@{name}", text)
+        return text
+
+
+    def update_handoff_status(client: Any, logger: Any, handoff_id: str) -> None:
+        # One writer at a time, so an older update cannot overwrite a newer one.
+        with handoff_status_lock:
+            record = handoff_store.get(handoff_id)
+            if record is None or not record.get("status_ts"):
+                return
+            channel, ts = record["origin_channel"], record["status_ts"]
+            done = record["state"] in tag_handoff.FINISHED
+            if record.get("status_mode") == "plan":
+                if record.get("status_closed"):
+                    return  # The steps already show the final state; Slack refuses more chunks.
+                chunks = tag_handoff.plan_chunks(record)
+                # Peers can finish before the request link is saved; add it once, whichever update comes first.
+                if not record.get("link_shown") and record.get("request_ts"):
+                    if not record.get("request_link") and (
+                        link := message_link(client, logger, channel, record["request_ts"])
+                    ):
+                        handoff_store.set_field(handoff_id, "request_link", link)
+                        record["request_link"] = link
+                    if record.get("request_link"):
+                        chunks.append({"type": "markdown_text", "text": tag_handoff.plan_link_text(record)})
+                try:
+                    if done:
+                        client.chat_stopStream(channel=channel, ts=ts, chunks=chunks)
+                        handoff_store.set_field(handoff_id, "status_closed", "1")
+                    else:
+                        client.chat_appendStream(channel=channel, ts=ts, chunks=chunks)
+                    if any(chunk["type"] == "markdown_text" for chunk in chunks):
+                        handoff_store.set_field(handoff_id, "link_shown", "1")
+                    return
+                except Exception as exc:  # noqa: BLE001 - fall back to a plain status line
+                    logger.warning("Tag handoff steps stopped updating for %s: %s", handoff_id, exc)
+                try:
+                    posted = client.chat_postMessage(
+                        channel=channel, thread_ts=record["origin_thread_ts"], text=tag_handoff.status_text(record),
+                    )
+                    handoff_store.set_field(handoff_id, "status_mode", "text")
+                    handoff_store.set_field(handoff_id, "status_ts", posted["ts"])
+                except Exception as exc:  # noqa: BLE001 - progress text must not stop the handoff
+                    logger.warning("Could not post Tag handoff status %s: %s", handoff_id, exc)
+                return
+            try:
+                client.chat_update(channel=channel, ts=ts, text=tag_handoff.status_text(record))
+            except Exception as exc:  # noqa: BLE001 - progress text must not stop the handoff
+                logger.warning("Could not update Tag handoff status %s: %s", handoff_id, exc)
+
+    def post_handoff_status(client: Any, logger: Any, handoff_id: str) -> None:
+        """Show steps like a run's activity, or a status line when Slack can't."""
+        record = handoff_store.get(handoff_id) or {}
+        if env_enabled("OPENTAG_SLACK_STREAMING", default=True):
+            try:
+                started = client.chat_startStream(
+                    channel=record["origin_channel"], thread_ts=record["origin_thread_ts"],
+                    recipient_user_id=record["requester"], recipient_team_id=record["team"],
+                    task_display_mode="plan",
+                    chunks=[{"type": "plan_update", "title": tag_handoff.PLAN_TITLE}, *tag_handoff.plan_chunks(record)],
+                )
+                handoff_store.set_field(handoff_id, "status_mode", "plan")
+                handoff_store.set_field(handoff_id, "status_ts", started["ts"])
+                return
+            except Exception as exc:  # noqa: BLE001 - the status line is the fallback
+                logger.info("Slack steps are unavailable for Tag handoff %s: %s", handoff_id, exc)
+        status = client.chat_postMessage(
+            channel=record["origin_channel"], thread_ts=record["origin_thread_ts"],
+            text=tag_handoff.status_text(record),
+        )
+        handoff_store.set_field(handoff_id, "status_mode", "text")
+        handoff_store.set_field(handoff_id, "status_ts", status["ts"])
+
+    def message_link(client: Any, logger: Any, channel: str, ts: str) -> str | None:
+        try:
+            link = client.chat_getPermalink(channel=channel, message_ts=ts).get("permalink")
+        except Exception as exc:  # noqa: BLE001 - links are a convenience; the handoff still works
+            logger.warning("Could not get a Slack link for %s: %s", ts, exc)
+            return None
+        return link if isinstance(link, str) and link else None
+
+    def start_handoff(
+        client: Any, logger: Any, team: str, channel: str, thread_ts: str,
+        requester: str, question: str, request: dict[str, Any],
+    ) -> None:
+        targets = [target for target in request["targets"] if target.get("user_id") in peer_ids]
+        if not targets:
+            return
+        handoff_id = tag_handoff.new_handoff_id()
+        wait_minutes = min(
+            max(int(request.get("wait_minutes") or tag_handoff.DEFAULT_WAIT_MINUTES), 1),
+            tag_handoff.MAX_WAIT_MINUTES,
+        )
+        # Save the wait before posting so an immediate reply always finds it.
+        handoff_store.create(
+            handoff_id=handoff_id, team=team, requester=requester, origin_channel=channel,
+            origin_thread_ts=thread_ts, question=question, task=request["task"], targets=targets,
+            request_ts="", wait_minutes=wait_minutes,
+        )
+        try:
+            post_handoff_status(client, logger, handoff_id)
+            origin_link = message_link(client, logger, channel, thread_ts)
+            if origin_link:
+                handoff_store.set_field(handoff_id, "origin_link", origin_link)
+            posted = client.chat_postMessage(
+                channel=channel, unfurl_links=False, unfurl_media=False,
+                text=tag_handoff.request_text(
+                    handoff_id, targets, without_bot_mentions(client, logger, request["task"]), requester, origin_link,
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001 - report instead of waiting for nobody
+            logger.warning("Could not post Tag handoff %s: %s", handoff_id, exc)
+            handoff_store.finish(handoff_id, "failed")
+            update_handoff_status(client, logger, handoff_id)
+            client.chat_postMessage(
+                channel=channel, thread_ts=thread_ts, text="I couldn't post the request to the other Tags.",
+            )
+            return
+        handoff_store.set_field(handoff_id, "request_ts", posted["ts"])
+        if request_link := message_link(client, logger, channel, posted["ts"]):
+            handoff_store.set_field(handoff_id, "request_link", request_link)
+            update_handoff_status(client, logger, handoff_id)
+
+    def combine_handoff(record: dict[str, Any], client: Any, logger: Any) -> None:
+        try:
+            update_handoff_status(client, logger, record["id"])
+            handle_invocation(
+                {
+                    "channel": record["origin_channel"],
+                    "ts": record["origin_thread_ts"],
+                    "thread_ts": record["origin_thread_ts"],
+                    "user": record["requester"],
+                    "text": tag_handoff.combine_question(record),
+                },
+                {"team_id": record["team"]},
+                client,
+                logger,
+                direct_message=False,
+                combine=record,
+            )
+        finally:
+            # A run that ends without a terminal state fails closed, so the wait never stays combining.
+            if handoff_store.fail_if_combining(record["id"]):
+                update_handoff_status(client, logger, record["id"])
+
+    def expire_handoffs(client: Any, logger: Any) -> None:
+        for record in handoff_store.claim_expired():
+            threading.Thread(
+                target=combine_handoff, args=(record, client, logger),
+                name=f"tag-handoff-{record['id']}", daemon=True,
+            ).start()
+
+    def handle_peer_message(event: dict[str, Any], body: dict[str, Any], client: Any, logger: Any) -> None:
+        sender = event.get("user", "")
+        if sender not in peer_ids:
+            logger.info("Ignoring a bot mention from %s, which is not a peer Tag", sender or "(unknown)")
+            return
+        text = event.get("text", "")
+        result = tag_handoff.RESULT_RE.search(text)
+        if result:
+            handoff_id, outcome = result.groups()
+            record = handoff_store.get(handoff_id)
+            if (
+                record is None
+                or record["origin_channel"] != event.get("channel")
+                or not event.get("thread_ts")
+                # A fast peer can reply before request_ts is saved; the handoff id still ties it to this wait.
+                or (record["request_ts"] and event["thread_ts"] != record["request_ts"])
+            ):
+                return
+            if not record["request_ts"]:
+                if sender not in record["targets"]:
+                    return  # Only a target may fix which thread is the request thread.
+                handoff_store.set_field(handoff_id, "request_ts", event["thread_ts"])
+            record, ready = handoff_store.record_reply(handoff_id, sender, outcome, event.get("ts", ""))
+            update_handoff_status(client, logger, handoff_id)
+            if ready and record is not None:
+                combine_handoff(record, client, logger)
+            return
+        request = tag_handoff.REQUEST_RE.search(text)
+        if not request or event.get("thread_ts"):
+            return
+        handoff_id, requester = request.groups()
+        with handled_peer_lock:
+            key = (event.get("channel", ""), event.get("ts", ""))
+            if key in handled_peer_requests:
+                return
+            handled_peer_requests.add(key)
+        if not slack_user_allowed(requester, allowed_user_ids):
+            client.chat_postMessage(
+                channel=event["channel"],
+                thread_ts=event["ts"],
+                text=f"{tag_handoff.result_prefix(handoff_id, sender, 'failed')} "
+                f"<@{requester}> isn't allowed to use this Tag.",
+            )
+            return
+        try:
+            # Visible in the request thread, where Slack's own status may not show to everyone.
+            client.chat_postMessage(channel=event["channel"], thread_ts=event["ts"], text=tag_handoff.WORKING_TEXT)
+        except Exception as exc:  # noqa: BLE001 - progress text must not stop the work
+            logger.warning("Could not post Tag handoff progress %s: %s", handoff_id, exc)
+        peer_event = {key: value for key, value in event.items() if key not in {"bot_id", "bot_profile"}}
+        own_user = next((item.get("user_id") for item in body.get("authorizations") or []
+                         if isinstance(item, dict) and item.get("is_bot")), None)
+        if own_user is None:
+            try:
+                own_user = client.auth_test().get("user_id")
+            except Exception as exc:  # noqa: BLE001 - the brief is still useful without it
+                logger.info("Could not identify this Tag for handoff %s: %s", handoff_id, exc)
+        others = [without_bot_mentions(client, logger, f"<@{user_id}>").lstrip("@")
+                  for user_id in tag_handoff.mentioned_tags(text) if user_id != own_user]
+        sender_name = next((peer.name for peer in peers if peer.user_id == sender), "Another Tag")
+        own_name = os.getenv("OPENTAG_BOT_NAME") or (
+            without_bot_mentions(client, logger, f"<@{own_user}>").lstrip("@") if own_user else "this Tag")
+        peer_event.update(user=requester, text=tag_handoff.peer_brief(
+            own_name, sender_name, others, tag_handoff.task_from_request(text)))
+        handle_invocation(peer_event, body, client, logger, direct_message=False, peer_request=(handoff_id, sender))
+
     def handle_invocation(
         event: dict[str, Any],
         body: dict[str, Any],
@@ -4055,9 +4330,13 @@ def create_app(
         *,
         direct_message: bool,
         prior_error_reference: str | None = None,
+        peer_request: tuple[str, str] | None = None,
+        combine: dict[str, Any] | None = None,
     ) -> None:
         channel = event["channel"]
         thread_ts = event.get("thread_ts") or event["ts"]
+        # Answering another Tag or combining replies never starts another handoff.
+        handoff_depth = 1 if peer_request or combine else 0
         user_id = event.get("user", "")
         if not slack_user_allowed(user_id, allowed_user_ids):
             logger.warning(
@@ -4219,6 +4498,12 @@ def create_app(
         output_manifest = (
             default_workdir() / f"{OUTPUT_ARTIFACT_MANIFEST_PREFIX}{uuid.uuid4().hex}.json"
         )
+        memory_receipts = tag_temp_dir() / f"memory-receipts-{uuid.uuid4().hex}.jsonl"
+        handoff_requests = (
+            tag_temp_dir() / f"handoff-request-{uuid.uuid4().hex}.jsonl"
+            if peer_ids and handoff_depth == 0 and not direct_message
+            else None
+        )
 
         try:
             with tempfile.TemporaryDirectory(
@@ -4233,17 +4518,27 @@ def create_app(
                                  if isinstance(item, dict) and item.get("is_bot")), None)
                 if continued:
                     thread_text, thread_new_text = build_thread_texts(
-                        client, channel, thread_ts, attachment_dir, request=event,
+                        client, channel, thread_ts, attachment_dir, request=None if combine else event,
                         since_ts=continued[1], own_user=own_user,
                     )
                 else:
-                    thread_text = build_thread_text(client, channel, thread_ts, attachment_dir, request=event)
+                    thread_text = build_thread_text(
+                        client, channel, thread_ts, attachment_dir, request=None if combine else event,
+                    )
                     thread_new_text = None
+                if combine:
+                    replies = build_thread_text(client, channel, combine["request_ts"], attachment_dir)
+                    handoff_text = f"\n\nHandoff thread with the other Tags' replies:\n{replies}"
+                    thread_text += handoff_text
+                    if thread_new_text is not None:
+                        thread_new_text += handoff_text
                 failure_stage = "backend execution"
                 stream_available = (
                     env_enabled("OPENTAG_SLACK_STREAMING", default=True)
                     and indicator.native
                     and indicator.message_ts is None
+                    # A reply to another Tag must be one new message that mentions it.
+                    and peer_request is None
                 )
                 app_server_selected = rich_events_selected(request_backend)
                 if app_server_selected:
@@ -4299,6 +4594,9 @@ def create_app(
                         on_error=capture_backend_error,
                         on_trace_event=trace_activity if app_server_selected else None,
                         on_run_info=capture_run_info,
+                        memory_receipts=memory_receipts,
+                        handoff_requests=handoff_requests,
+                        handoff_depth=handoff_depth,
                         resume_session=continued[0] if continued and app_server_selected else None,
                         thread_new_text=thread_new_text,
                         on_session=capture_session if app_server_selected else None,
@@ -4321,6 +4619,9 @@ def create_app(
                         scope_plan=scope_plan,
                         slack_search_grant=slack_search_grant,
                         on_error=capture_backend_error,
+                        memory_receipts=memory_receipts,
+                        handoff_requests=handoff_requests,
+                        handoff_depth=handoff_depth,
                     )
                 finish_activity(
                     "completed" if succeeded else
@@ -4362,8 +4663,18 @@ def create_app(
                         channel=channel,
                         thread_ts=thread_ts,
                     )
+                memory_changes = tag_memory.receipt_lines(memory_receipts)
+                if succeeded and memory_changes:
+                    answer = f"{answer.rstrip()}\n\n" + "\n".join(memory_changes)
+                # A Tag's own words never mention another Tag; only handoff markers do.
+                answer = without_bot_mentions(client, logger, answer)
                 indicator.clear()
                 stopped = answer.startswith(("Stopped.", "Stop requested"))
+                if peer_request is not None and (succeeded or stopped):
+                    handoff_id, sender = peer_request
+                    outcome = "completed" if succeeded else "failed"
+                    answer = f"{tag_handoff.result_prefix(handoff_id, sender, outcome)}\n\n{answer}"
+
                 summary_blocks = run_summary_blocks(
                     agent_settings, models, request_backend, time.monotonic() - request_started,
                     outcome="completed" if succeeded else "stopped" if stopped else "failed",
@@ -4426,12 +4737,47 @@ def create_app(
                     if answer_stream is not None:
                         outcome = "interrupted" if answer.startswith(("Stopped.", "Stop requested")) else "unknown" if succeeded else "failed"
                         answer_stream.abort(outcome)
-                    if succeeded or answer.startswith(("Stopped.", "Stop requested")):
+                    if peer_request is not None and (succeeded or stopped):
+                        # Editing a placeholder does not notify the other Tag; post anew.
+                        post_final_reply(client, channel, thread_ts, answer, None, footer_blocks)
+                        if indicator.message_ts is not None:
+                            try:
+                                client.chat_delete(channel=channel, ts=indicator.message_ts)
+                            except Exception as exc:  # noqa: BLE001 - the reply is already posted
+                                logger.warning("Could not delete Tag progress placeholder: %s", exc)
+                    elif succeeded or stopped:
                         post_final_reply(client, channel, thread_ts, answer, indicator.message_ts, footer_blocks)
                     else:
                         post_private_failure(
                             client, channel, thread_ts, user_id, answer, indicator.message_ts, footer_blocks
                         )
+                        if peer_request is not None:
+                            handoff_id, sender = peer_request
+                            client.chat_postMessage(
+                                channel=channel,
+                                thread_ts=thread_ts,
+                                text=f"{tag_handoff.result_prefix(handoff_id, sender, 'failed')} "
+                                "Tag couldn't complete this request.",
+                            )
+                if succeeded and handoff_requests is not None:
+                    request = tag_handoff.read_request(handoff_requests)
+                    if request is not None:
+                        start_handoff(client, logger, team, channel, thread_ts, user_id, question, request)
+                if combine is not None:
+                    handoff_store.finish(combine["id"], "completed" if succeeded else "failed")
+                    update_handoff_status(client, logger, combine["id"])
+                    if (closed := handoff_store.get(combine["id"])) and closed.get("request_ts"):
+                        try:
+                            client.chat_postMessage(
+                                channel=channel, thread_ts=closed["request_ts"], text=tag_handoff.closing_text(closed),
+                                unfurl_links=False, unfurl_media=False,
+                            )
+                        except Exception as exc:  # noqa: BLE001 - the answer is already posted
+                            logger.warning("Could not close Tag handoff thread %s: %s", combine["id"], exc)
+                if memory_changes and not succeeded:
+                    client.chat_postMessage(
+                        channel=channel, thread_ts=thread_ts, text="\n".join(memory_changes)
+                    )
                 if succeeded:
                     upload_errors = upload_generated_images(
                         client,
@@ -4539,6 +4885,9 @@ def create_app(
         finally:
             release_thread(thread_key)
             output_manifest.unlink(missing_ok=True)
+            memory_receipts.unlink(missing_ok=True)
+            if handoff_requests is not None:
+                handoff_requests.unlink(missing_ok=True)
 
     @app.action(RETRY_ACTION_ID)
     def retry_request(ack: Any, body: dict[str, Any], client: Any, logger: Any) -> None:
@@ -4620,6 +4969,9 @@ def create_app(
         ):
             logger.warning("Ignoring Open Tag mention from unapproved Slack channel %s", channel)
             return
+        if event.get("bot_id") or event.get("user") in peer_ids:
+            handle_peer_message(event, body, client, logger)
+            return
         handle_invocation(event, body, client, logger, direct_message=False)
 
     @app.event("message")
@@ -4636,6 +4988,8 @@ def create_app(
             return
         handle_invocation(event, body, client, logger, direct_message=True)
 
+    app.tag_expire_handoffs = expire_handoffs
+    app.tag_update_handoff_status = update_handoff_status
     return app
 
 
@@ -4772,9 +5126,16 @@ def main() -> None:
             from tag_paths import instance_home
         invitation_memory = InvitationMemory(instance_home())
         invitation_memory.start()
+    next_handoff_check = 0.0
     try:
         connection.connect()
         while not shutdown_requested.is_set():
+            if time.monotonic() >= next_handoff_check:
+                next_handoff_check = time.monotonic() + 30
+                try:
+                    app.tag_expire_handoffs(app.client, app.logger)
+                except Exception as exc:  # noqa: BLE001 - keep the bridge running
+                    app.logger.warning("Could not check Tag handoff deadlines: %s", exc)
             connected = connection.is_connected()
             if args.ready_file:
                 invitation_ready = (

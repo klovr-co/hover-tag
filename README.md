@@ -114,8 +114,8 @@ for terminal and source installs.
 
 Tag connects **Slack → your local agent → your files and permitted sources**.
 Optional [MFS](https://github.com/zilliztech/mfs) indexing makes approved history
-and other sources searchable. Tag does not automatically remember every
-conversation. [See how it works →](https://www.hover.team/tag/how-it-works/)
+and other sources searchable. Tag remembers facts you explicitly ask it to
+remember, but not every conversation. [See how it works →](https://www.hover.team/tag/how-it-works/)
 
 ## Early, open source, yours to run
 

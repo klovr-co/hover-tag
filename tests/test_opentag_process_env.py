@@ -109,3 +109,22 @@ class CurrentChannelMemoryTests(unittest.TestCase):
         )
         self.assertEqual('{"C2": "support"}', environment["OPENTAG_SLACK_CHANNEL_LABELS"])
         self.assertEqual('{"mode": "all"}', environment["OPENTAG_SLACK_SEARCH_GRANT"])
+
+    def test_memory_receipts_reach_only_the_requested_run(self) -> None:
+        environment = backend_environment(
+            {"OPENTAG_MEMORY_RECEIPTS": "/stale/receipts.jsonl"},
+            transport="slack",
+            conversation_id="C1",
+            caller_id="U1",
+            memory_receipts="/tmp/run/receipts.jsonl",
+        )
+        self.assertEqual("/tmp/run/receipts.jsonl", environment["OPENTAG_MEMORY_RECEIPTS"])
+        self.assertEqual(("C1", "U1"), (environment["OPENTAG_CURRENT_CHANNEL_ID"], environment["OPENTAG_CALLER_ID"]))
+
+        environment = backend_environment(
+            {"OPENTAG_MEMORY_RECEIPTS": "/stale/receipts.jsonl"},
+            transport="slack",
+            conversation_id="C1",
+            caller_id="U1",
+        )
+        self.assertNotIn("OPENTAG_MEMORY_RECEIPTS", environment)

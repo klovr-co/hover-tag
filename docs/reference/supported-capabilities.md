@@ -15,6 +15,7 @@ unavailable behavior.
 | Inspect saved activity | Implemented with App Server or Agent SDK | The app's Activity tab lists delivered replies, newest at the bottom, grouped by Slack thread (**N earlier replies** expands a group). Each entry has an AI-written one-sentence summary (a local excerpt while it's pending or if it fails), the model, saved thinking level, elapsed time, reported token usage, and output file chips. Its step count opens the saved tool steps. **Show errors** reveals failed requests. Each channel also has an Activity tab across the workspace's Tags. In the CLI, `tag NAME logs --json` includes the same records (filter with `--activity-channel`, `--hide-errors` and `--activity-limit`), and `tag NAME logs --activity RUN_ID` shows one run's tool previews and error reports. Expired records can't be rebuilt. |
 | Continue with thread context | Implemented | A later mention continues the thread's agent conversation (see below); a fresh conversation receives one page of up to 30 messages. |
 | Post a requested top-level message | Implemented | Restricted to the channel that invoked Tag. |
+| Ask other Tags and combine their answers | Implemented | Requires `OPENTAG_PEER_TAGS` on each Tag. One request message asks up to five Tags; replies collect in its thread; Tag combines them once all reply or the deadline passes. A Tag answering another Tag cannot pass the work on. Works with Codex and Claude. |
 | Create a requested Slack Canvas | Implemented | Requires the Slack Canvas scope and explicit user intent. |
 | Deliver saved files | Implemented | Keeps local copies and uploads Slack attachments by default. One Open folder action remains; individual file actions appear for local-only files and failed or oversized uploads. See [Working with files](../concepts/workspaces-and-tools.md#also-attach-saved-files-in-slack). |
 | Upload generated images as results | Implemented | Uploads supported backend-generated PNG, JPEG, GIF, and WebP results to the requesting thread and keeps a copy in the channel's `artifacts/<channel>/images` folder; requires `files:write`. Image generation depends on the backend's available tools. |
@@ -46,8 +47,10 @@ unavailable behavior.
 | Reopen precise MFS records | Implemented | Read and list helpers enforce the configured roots. |
 | Use indexed Slack channel history | Implemented | Requires a configured MFS Slack connector and an allowed `slack://` root. |
 | Use repositories, documents, issues, databases, and object stores | Connector-dependent | The source must already be indexed by MFS and permitted to Tag. |
-| Automatically remember every conversation | Not provided | Continuity comes from Slack threads, workspace state, and approved indexed sources. |
-| Dedicated local memory-note store | Not provided | Durable retrieval uses indexed, permitted MFS sources. |
+| Remember facts on request | Implemented | Explicit save, change, and forget for the current channel or, when asked, all channels. Saved facts load before every request in that channel. Codex and Claude use the same store and helper. |
+| Report memory changes | Implemented | Verified saves, changes, and forgets are added to the Slack reply from the store's receipts, including when the run fails. |
+| Provider-native memory | Disabled | Tag turns off Claude auto memory and Codex memories so that every remembered fact can be listed, corrected, and forgotten through Tag. |
+| Automatically remember every conversation | Not provided | Continuity comes from Slack threads, workspace state, saved memory, and approved indexed sources. |
 
 ## Operator controls
 

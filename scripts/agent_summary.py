@@ -18,11 +18,13 @@ try:
     from .codex_agent_backend import CodexAppServer
     from .tag_activity import ActivityStore, artifact_records, reply_preview
     from .tag_error_reporting import redact_sensitive_text
+    from .tag_memory import CODEX_NATIVE_MEMORY_ARGS
 except ImportError:
     from claude_agent_backend import ClaudeAgentRun
     from codex_agent_backend import CodexAppServer
     from tag_activity import ActivityStore, artifact_records, reply_preview
     from tag_error_reporting import redact_sensitive_text
+    from tag_memory import CODEX_NATIVE_MEMORY_ARGS
 
 
 MAX_SUMMARY_CHARS = 110
@@ -82,7 +84,7 @@ def summarize_reply(answer: str, backend: str, model: str | None, *, artifacts: 
             except ImportError:
                 from opentag_agent import executable_command
             runner = CodexAppServer(executable_command(
-                ["codex", "app-server", "-c", "features.hooks=false"]), **options)
+                ["codex", "app-server", "-c", "features.hooks=false", *CODEX_NATIVE_MEMORY_ARGS]), **options)
         elif backend == "claude":
             runner = ClaudeAgentRun(**options)
         else:

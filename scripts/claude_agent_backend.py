@@ -31,6 +31,7 @@ try:
         token_usage,
     )
     from .tag_activity_details import item_activity_details, preview
+    from .tag_memory import CLAUDE_NATIVE_MEMORY_ENV
 except ImportError:  # Direct script execution does not create a package context.
     from opentag_process_env import text_only_environment
     import agent_connection, agent_usage
@@ -43,6 +44,7 @@ except ImportError:  # Direct script execution does not create a package context
         token_usage,
     )
     from tag_activity_details import item_activity_details, preview
+    from tag_memory import CLAUDE_NATIVE_MEMORY_ENV
 
 
 CONTROL_POLL_SECONDS = 0.1
@@ -519,6 +521,7 @@ class ClaudeAgentRun:
             "setting_sources": ["user", "project", "local"],
             "can_use_tool": can_use_tool,
             "stderr": capture_stderr,
+            "env": dict(CLAUDE_NATIVE_MEMORY_ENV),
         }
         try:
             agent_connection.routing("claude")
@@ -526,7 +529,7 @@ class ClaudeAgentRun:
             raise ClaudeAgentError(str(exc)) from None
         if agent_connection.active("claude"):
             try:
-                kwargs["env"] = agent_connection.claude_environment()
+                kwargs["env"] = {**agent_connection.claude_environment(), **CLAUDE_NATIVE_MEMORY_ENV}
             except ValueError as exc:
                 raise ClaudeAgentError(str(exc)) from None
             kwargs["model"] = model or agent_connection.models("claude")[0]
@@ -551,7 +554,7 @@ class ClaudeAgentRun:
             kwargs.update(tools=[], mcp_servers={}, setting_sources=[], add_dirs=[],
                           permission_mode="dontAsk", max_turns=1,
                           system_prompt=self.text_only_instructions,
-                          env=text_only_environment(os.environ),
+                          env={**text_only_environment(os.environ), **CLAUDE_NATIVE_MEMORY_ENV},
                           extra_args={"strict-mcp-config": None, "disable-slash-commands": None,
                                       "no-session-persistence": None},
                           settings=json.dumps({"disableAllHooks": True}))
