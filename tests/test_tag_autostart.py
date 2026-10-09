@@ -132,7 +132,7 @@ class ToolPathTests(unittest.TestCase):
     @unittest.skipIf(os.name == "nt", "Windows starts login programs with the person's own PATH")
     def test_login_starts_search_the_usual_install_folders(self) -> None:
         with patch.dict(os.environ, {"HOME": "/Users/person"}):
-            folders = autostart.tool_path(self.root, "/usr/bin:/bin").split(os.pathsep)
+            folders = autostart.tool_path(self.root, os.pathsep.join(["/usr/bin", "/bin"])).split(os.pathsep)
         self.assertEqual(folders[:3], ["/Users/person/.local/bin", "/opt/homebrew/bin", "/usr/local/bin"])
         self.assertEqual(folders[3:], ["/usr/bin", "/bin"])
 
@@ -177,7 +177,7 @@ class ToolPathTests(unittest.TestCase):
         finished = Mock(returncode=0, stdout="", stderr="")
         with patch.object(autostart, "Supervisor", OneCheck), \
                 patch.object(autostart.subprocess, "run", return_value=finished) as run, \
-                patch.dict(os.environ, {"PATH": "/usr/bin:/bin"}), \
+                patch.dict(os.environ, {"PATH": os.pathsep.join(["/usr/bin", "/bin"])}), \
                 redirect_stdout(StringIO()), self.assertRaises(Stop):
             autostart.run(self.root, Mock(), Path(self.temporary_source()))
         environment = run.call_args.kwargs["env"]
