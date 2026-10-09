@@ -147,6 +147,7 @@ RETRY_ACTION_ID = "opentag_retry_request"
 APPROVAL_APPROVE_ACTION_ID = "opentag_approval_approve"
 APPROVAL_DENY_ACTION_ID = "opentag_approval_deny"
 APPROVAL_CHOICE_ACTION_PREFIX = "opentag_approval_choice_"
+APPROVAL_MORE_ACTION_ID = "opentag_approval_more"
 REPORT_ISSUE_ACTION_ID = "opentag_report_issue"
 FIX_WITH_AGENT_ACTION_ID = "opentag_fix_with_coding_agent"
 JOIN_COMMUNITY_ACTION_ID = "opentag_join_hover_community"
@@ -2071,6 +2072,8 @@ class ActiveBackendRun:
     cancel_requested: bool = False
     pending_approvals: set[str] = field(default_factory=set)
     pending_approval_choices: dict[str, set[str]] = field(default_factory=dict)
+    # The posted prompt, so "More options" can redraw it without trusting Slack.
+    pending_approval_prompts: dict[str, dict[str, Any]] = field(default_factory=dict)
     kill_timer: threading.Timer | None = None
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
@@ -2143,6 +2146,7 @@ class ActiveBackendRun:
                 return False  # Native choices cannot be replaced with a generic approval.
             self.pending_approvals.remove(approval_id)
             self.pending_approval_choices.pop(approval_id, None)
+            self.pending_approval_prompts.pop(approval_id, None)
             target = self.approval_dir / f"{approval_id}.json"
             temporary = self.approval_dir / f".{approval_id}.{uuid.uuid4().hex}.tmp"
             try:
@@ -2161,6 +2165,7 @@ class ActiveBackendRun:
         with self.lock:
             self.pending_approvals.clear()
             self.pending_approval_choices.clear()
+            self.pending_approval_prompts.clear()
             if self.kill_timer is not None:
                 self.kill_timer.cancel()
                 self.kill_timer = None
@@ -2219,6 +2224,17 @@ def cancel_active_run(key: RunKey, event_ts: str | None = None) -> bool:
         return False
     run.cancel()
     return True
+
+
+def pending_approval_prompt(key: RunKey, approval_id: str) -> dict[str, Any] | None:
+    with ACTIVE_RUNS_LOCK:
+        run = ACTIVE_RUNS.get(key)
+    if run is None:
+        return None
+    with run.lock:
+        if approval_id not in run.pending_approvals or run.process.poll() is not None:
+            return None
+        return run.pending_approval_prompts.get(approval_id)
 
 
 def resolve_active_approval(key: RunKey, approval_id: str, *, approved: bool = False,
@@ -2537,6 +2553,7 @@ def run_backend_events(
                     with active_run.lock:
                         active_run.pending_approvals.discard(approval_id)
                         active_run.pending_approval_choices.pop(approval_id, None)
+                        active_run.pending_approval_prompts.pop(approval_id, None)
             elif event_type == "approval_request":
                 approval_id = event.get("approval_id")
                 label = event.get("label")
@@ -2554,6 +2571,9 @@ def run_backend_events(
                                 prompt["choices"] = event["choices"]
                             if "review_details" in event:
                                 prompt["review_details"] = sanitize_review_details(event["review_details"])
+                            with active_run.lock:
+                                if approval_id in active_run.pending_approvals:
+                                    active_run.pending_approval_prompts[approval_id] = {**prompt, "backend": backend}
                             on_approval(prompt)
                         except Exception as exc:  # noqa: BLE001 - fail closed if Slack cannot ask
                             diagnostics.append(f"Could not present approval: {exc}")
@@ -2903,6 +2923,7 @@ def approval_button_blocks(
     backend: str = "codex",
     choices: list[dict[str, Any]] | None = None,
     review_details: dict[str, str] | None = None,
+    expanded: bool = False,
 ) -> list[dict[str, Any]]:
     retry = label == "retry an action denied by automatic review"
     safe_labels = {
@@ -2927,29 +2948,38 @@ def approval_button_blocks(
     )
     if choices is not None and not retry:
         blocks = [{"type": "section", "text": {"type": "plain_text", "text":
-            f"{backend_display_name(backend)} needs approval to {action}. Choose the scope you want to allow."}}]
-        for choice in choices:
-            detail = choice.get("detail", "")
-            if detail:
-                blocks.append({"type": "section", "text": {
-                    "type": "plain_text", "text": choice["label"] + ": " + detail,
-                }})
+            f"{backend_display_name(backend)} needs approval to {action}."}}]
+
+        def button(choice: dict[str, Any]) -> dict[str, Any]:
             value = json.loads(metadata)
             value["choice"] = choice["id"]
-            button = {
+            element = {
                 "type": "button", "action_id": APPROVAL_CHOICE_ACTION_PREFIX + choice["id"],
                 "text": {"type": "plain_text", "text": choice["label"]},
                 "value": json.dumps(value, separators=(",", ":")),
             }
             if choice.get("persistent"):
-                button["confirm"] = {
+                element["confirm"] = {
                     "title": {"type": "plain_text", "text": f"Save {backend_display_name(backend)} rule?"},
-                    "text": {"type": "plain_text", "text": detail},
+                    "text": {"type": "plain_text", "text": choice.get("detail", "")},
                     "confirm": {"type": "plain_text", "text": "Save rule"},
                     "deny": {"type": "plain_text", "text": "Back"},
                 }
-            # Keep each rule description immediately above its own button.
-            blocks.append({"type": "actions", "elements": [button]})
+            return element
+
+        primary = [c for c in choices if c.get("primary")]
+        if primary and not expanded and len(primary) < len(choices):
+            # A short main row; the rest wait behind "More options".
+            more = {"type": "button", "action_id": APPROVAL_MORE_ACTION_ID,
+                    "text": {"type": "plain_text", "text": "More options"}, "value": metadata}
+            blocks.append({"type": "actions", "elements": [button(c) for c in primary] + [more]})
+            return blocks
+        # Plain choices share one row; each scoped rule sits beside its own button.
+        quick = [button(c) for c in choices if not c.get("detail")]
+        if quick:
+            blocks.append({"type": "actions", "elements": quick})
+        blocks.extend({"type": "section", "text": {"type": "plain_text", "text": c["detail"]},
+                       "accessory": button(c)} for c in choices if c.get("detail"))
         return blocks
     details = sanitize_review_details(review_details)
     if retry:
@@ -3666,6 +3696,7 @@ def create_app(
     @app.action(re.compile(r"^" + APPROVAL_CHOICE_ACTION_PREFIX + r"[0-9]{1,2}$"))
     @app.action(APPROVAL_APPROVE_ACTION_ID)
     @app.action(APPROVAL_DENY_ACTION_ID)
+    @app.action(APPROVAL_MORE_ACTION_ID)
     def resolve_backend_approval(
         ack: Any,
         body: dict[str, Any],
@@ -3693,7 +3724,8 @@ def create_app(
                 if (not isinstance(choice, str) or not re.fullmatch(r"[0-9]{1,2}", choice)
                         or action_id != APPROVAL_CHOICE_ACTION_PREFIX + choice):
                     raise ValueError("invalid approval choice")
-            elif choice is not None or action_id not in {APPROVAL_APPROVE_ACTION_ID, APPROVAL_DENY_ACTION_ID}:
+            elif choice is not None or action_id not in {
+                    APPROVAL_APPROVE_ACTION_ID, APPROVAL_DENY_ACTION_ID, APPROVAL_MORE_ACTION_ID}:
                 raise ValueError("invalid approval action")
             approved = action_id == APPROVAL_APPROVE_ACTION_ID
             if not all(
@@ -3722,6 +3754,24 @@ def create_app(
                     user=user_id,
                     thread_ts=thread_ts,
                     text="Only the authorized user who started this request can decide it.",
+                )
+                return
+            if action_id == APPROVAL_MORE_ACTION_ID:
+                prompt = pending_approval_prompt(RunKey(team, channel, thread_ts), approval_id)
+                if prompt is None:
+                    respond(text="This approval request has expired or was already decided.",
+                            response_type="ephemeral", replace_original=True)
+                    return
+                prompt_backend = prompt.get("backend", backend)
+                respond(
+                    text=f"{backend_display_name(prompt_backend)} needs your approval to continue.",
+                    blocks=approval_button_blocks(
+                        team=team, channel=channel, thread_ts=thread_ts, user_id=user_id,
+                        approval_id=approval_id, label=prompt["label"], backend=prompt_backend,
+                        choices=prompt.get("choices"), expanded=True,
+                    ),
+                    response_type="ephemeral",
+                    replace_original=True,
                 )
                 return
             if not resolve_active_approval(

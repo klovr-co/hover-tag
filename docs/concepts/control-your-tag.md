@@ -91,10 +91,26 @@ approved automatically by Tag.
 
 Claude runs in its `auto` permission mode by default, so most actions proceed
 without a prompt. When Claude would still ask, Tag privately shows **Claude
-needs approval** with **Approve once** and **Deny**. These are one-time
-decisions: Claude requests do not offer task-scoped, persistent-rule, or
-**Approve retry** choices. The same requester and expiry rules apply, and
-unanswered or unavailable requests are denied. The operator can choose another
+needs approval** with a short row: **Allow once**, the broadest saved rule on
+offer, and **Deny**. **More options** shows every choice, including **Deny and
+stop**, with the exact rule beside each button. Codex approvals use the same
+layout. When Claude proposes a rule or a folder for the action, such as
+`Bash(claude --chrome --version)` or a folder outside the workspace, Tag also
+offers:
+
+- **Allow for this task** — applies the rule or folder access until this Slack
+  request ends.
+- **Always allow** — saves it for future requests to this Tag.
+- **Always allow this prefix** — for a plain shell command with a subcommand,
+  saves a rule for the program and its first argument, such as
+  `Bash(claude --chrome:*)`, like Codex's prefix rules.
+
+Saved choices ask for confirmation, then go to this Tag's workspace
+`.claude/settings.local.json`. Other Tags and the operator's own Claude
+settings are not changed. Remove the line from that file to revoke it.
+
+Claude has no **Approve retry** choice. The same requester and expiry rules
+apply, and unanswered or unavailable requests are denied. The operator can choose another
 mode with `OPENTAG_CLAUDE_PERMISSION_MODE`; see the
 [backend reference](../../references/backends.md).
 
