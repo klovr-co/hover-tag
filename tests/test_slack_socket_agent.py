@@ -68,6 +68,31 @@ class SlackBotNameTests(unittest.TestCase):
             self.assertEqual(slack_socket_agent.suggested_bot_name("codex"), "TeamBot")
 
 
+class LiveSummaryTests(unittest.TestCase):
+    def summary(self, env: dict[str, str]) -> str:
+        from contextlib import redirect_stdout
+        from io import StringIO
+
+        out = StringIO()
+        with patch.dict(os.environ, {"SLACK_BOT_TOKEN": "xoxb-test", **env}, clear=True), patch.object(
+            slack_socket_agent.slack_channels, "channel_label", side_effect=lambda _t, c: f"#{c}"
+        ), redirect_stdout(out):
+            slack_socket_agent.print_live_summary("claude", frozenset({"U1"}))
+        return out.getvalue()
+
+    def test_configured_channel_is_listening(self) -> None:
+        self.assertIn("listening for @mentions in channel #C123", self.summary({"SLACK_CHANNEL_IDS": "C123"}))
+
+    def test_no_channel_reports_mentions_disabled(self) -> None:
+        output = self.summary({})
+        self.assertIn("channel mentions disabled (no channels configured)", output)
+        self.assertNotIn("listening for @mentions", output)
+
+    def test_invited_policy_without_channels(self) -> None:
+        output = self.summary({"SLACK_CHANNEL_POLICY": "invited"})
+        self.assertIn("listening in channels Tag is invited to", output)
+
+
 class FakeResponse:
     def __init__(self, body: bytes) -> None:
         self.body = body
