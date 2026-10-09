@@ -128,6 +128,50 @@ which verifies attached archives, checksums, provenance, internal versions, and
 the prerelease setting instead of rebuilding. Older releases without prepared
 assets retain the original build-on-publication fallback.
 
+## Release lines
+
+Before merging, decide which release each PR belongs to:
+
+- **The current line** (`VERSION` on `main`): merge it normally.
+- **A fix for an older stable release as well:** merge it to `main`, then
+  cherry-pick it to the maintenance branch, as described below.
+- **A later version:** don't merge it yet. Keep the PR as a draft with a
+  `target:vX.Y` label, and merge `main` into it regularly. After the current
+  line ships stable, set `VERSION` to the next alpha line and merge the PR.
+
+`main` holds only work for the current line, so the automation never needs a
+second development branch.
+
+## Patching an older stable release
+
+`main` carries the next release line. Fixes land on `main` first, and users of
+an older stable release get them by upgrading. There is no permanent
+maintenance branch.
+
+Create one only when a stable release needs an urgent fix that cannot wait for
+the next line. Label the merged PR `backport:vX.Y.x` (or run the **Backport**
+workflow with the PR number and branch). The workflow creates `release/vX.Y.x`
+from the line's newest stable tag if it doesn't exist, cherry-picks the merged
+commit with `-x` onto a `backport/pr-N-to-vX.Y.x` branch, and opens a pull
+request against the maintenance branch. On a conflict it comments on the
+original PR instead. Set the `BACKPORT_TOKEN` secret so CI runs on that pull
+request; without it, close and reopen the pull request to start CI.
+
+Never merge `main` into a maintenance branch, and never land a fix only on the
+maintenance branch. Because every fix already exists on `main`, nothing merges
+back.
+
+CI and install smoke run on pushes to `release/v*.x`, and the edge build keeps
+the exact artifact for each commit without moving `edge` or publishing a
+prerelease. A maintenance branch publishes stable patches only, with no alpha
+or beta stage. To release one, set `VERSION` to the next patch (for example,
+`0.3.1`), add the `CHANGELOG.md` entry and `docs/releases/v0.3.1.md`, merge that
+through a pull request, and run **Prepare stable release** with `branch` set to
+`release/v0.3.x` and the tested commit SHA. The workflow checks that the commit
+is on that branch, that the version is the next stable patch of the same line,
+and that the retained artifact came from that branch. A maintainer publishes
+the draft. Delete the branch when its line is no longer supported.
+
 ## Tag.app
 
 Each published release also builds Tag.app (`desktop/`) on macOS,

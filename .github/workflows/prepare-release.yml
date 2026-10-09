@@ -4,8 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       commit_sha:
-        description: Full SHA of the tested main commit to promote
+        description: Full SHA of the tested commit to promote
         required: true
+        type: string
+      branch:
+        description: main, or the maintenance branch (release/vX.Y.x) for a stable patch
+        required: false
+        default: main
         type: string
 
 permissions:
@@ -24,11 +29,12 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       RELEASE_SHA: ${{ inputs.commit_sha }}
+      RELEASE_BRANCH: ${{ inputs.branch }}
       RELEASE_PHASE: stable
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
+          ref: ${{ inputs.branch }}
           fetch-depth: 0
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -36,8 +42,10 @@ jobs:
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
       - name: Validate selected commit, version, and remote gates
         run: |
-          git fetch origin main --tags
-          python scripts/release_automation.py validate-commit --sha "$RELEASE_SHA"
+          python scripts/release_automation.py validate-branch --name "$RELEASE_BRANCH"
+          git fetch origin main "$RELEASE_BRANCH" --tags
+          python scripts/release_automation.py validate-commit --sha "$RELEASE_SHA" \
+            --main-ref "origin/$RELEASE_BRANCH"
           python scripts/release_automation.py check-workflows \
             --repository "$GITHUB_REPOSITORY" --sha "$RELEASE_SHA"
           git checkout --detach "$RELEASE_SHA"
@@ -49,8 +57,13 @@ jobs:
             test "$(jq -r .targetCommitish <<<"$release_json")" = "$RELEASE_SHA"
             retry=(--allow-existing-version)
           fi
+          line=()
+          if [ "$RELEASE_BRANCH" != main ]; then
+            line=(--line "$(python scripts/release_automation.py validate-branch \
+              --name "$RELEASE_BRANCH" --print-line)")
+          fi
           python scripts/release_automation.py validate-candidate \
-            --version "$version" --phase "$RELEASE_PHASE" "${retry[@]}"
+            --version "$version" --phase "$RELEASE_PHASE" "${retry[@]}" "${line[@]}"
           test -f "docs/releases/v$version.md"
       - name: Download exact edge artifact
         run: |
