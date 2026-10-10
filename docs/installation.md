@@ -10,9 +10,17 @@ Download Tag from the [Tag guide](https://www.hover.team/tag/) or from
 | Your computer | Download | Then |
 | --- | --- | --- |
 | Mac | `Tag-VERSION-macos.dmg` | Open it and drag Tag to **Applications**. |
+| Linux (Ubuntu, Debian) | `Tag-VERSION-linux-amd64.deb` | Open it in your software installer, or run `sudo apt install ./Tag-VERSION-linux-amd64.deb`. |
+| Linux (other distributions) | `Tag-VERSION-linux-x86_64.AppImage` | Make it executable (`chmod +x`) and run it. |
 
-Windows and Linux: coming soon. Until then, use the terminal installer. See
+Each Linux download has a checksum in `DESKTOP-SHA256SUMS-linux` on the same
+release page. Check it with `sha256sum -c DESKTOP-SHA256SUMS-linux`.
+
+Windows: coming soon. Until then, use the terminal installer. See
 [Install from a terminal](#install-from-a-terminal).
+
+The Linux app needs a desktop session. On a server without a display, use the
+terminal installer.
 
 During the 0.3 beta, downloads are prereleases.
 
@@ -64,8 +72,8 @@ running**.
 ## Before you begin
 
 - [ ] A computer that can stay awake and online while Tag answers: macOS 12 or
-  later for the desktop app. The terminal installer also supports Windows 10
-  or 11 and 64-bit Linux.
+  later or 64-bit Linux with a desktop for the desktop app. The terminal
+  installer also supports Windows 10 or 11 and Linux without a desktop.
 - [ ] About 650 MB of free disk space.
 - [ ] An AI account. Use Codex or Claude Code if you have one. You can also
   connect a [ChatGPT plan](reference/chatgpt-connection.md) or an
