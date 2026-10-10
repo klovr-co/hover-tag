@@ -321,6 +321,74 @@ class MaintenanceReleaseTests(unittest.TestCase):
         self.assertEqual(errors, ["selected commit is not reachable from origin/release/v0.3.x"])
 
 
+class InstalledClientCompatibilityTests(unittest.TestCase):
+    """Released Tag versions verify provenance and cannot be updated to relax it."""
+
+    def package(self, *extra: str) -> dict:
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "out"
+            argv = ["package_release.py", "--output", str(output), "--version", "0.3.1",
+                    "--commit-sha", "a" * 40, "--source-ref", "refs/heads/main",
+                    "--built-at", "2026-10-09T00:00:00Z", *extra]
+            with patch("sys.argv", argv), patch("builtins.print"):
+                package_release.main()
+            data = (output / "BUILD-PROVENANCE.json").read_bytes()
+            archive = next(output.glob("tag-0.3.1.zip")).read_bytes()
+        digest = hashlib.sha256(archive).hexdigest()
+        self.assertEqual(json.loads(data)["archive"]["sha256"], digest)
+        return {"data": data, "digest": digest}
+
+    def test_maintenance_build_provenance_passes_the_installed_client_check(self) -> None:
+        from scripts.tag_install import _verify_provenance
+        built = self.package("--source-branch", "release/v0.3.x")
+        self.assertEqual(json.loads(built["data"])["source_branch"], "release/v0.3.x")
+        self.assertEqual(json.loads(built["data"])["source_ref"], "refs/heads/main")
+        self.assertEqual(_verify_provenance(
+            built["data"], expected_channel="release", archive_name="tag-0.3.1.zip",
+            digest=built["digest"], version="0.3.1",
+        ), "a" * 40)
+
+    def test_main_build_provenance_has_no_source_branch(self) -> None:
+        self.assertNotIn("source_branch", json.loads(self.package()["data"]))
+
+    def test_source_branch_must_match_the_version_line(self) -> None:
+        provenance = {
+            "schema_version": 1, "channel": "release", "source_ref": "refs/heads/main",
+            "version": "0.3.1", "archive": {"name": "tag-0.3.1.zip", "sha256": "d"},
+            "commit_sha": "a" * 40, "built_at": "2026-10-09T00:00:00Z",
+        }
+        from scripts.release_automation import _validate_provenance
+        def check(branch: object) -> list[str]:
+            return _validate_provenance(
+                {**provenance, "source_branch": branch}, channel="release",
+                archive_name="tag-0.3.1.zip", digest="d", version="0.3.1", sha=None,
+            )
+        self.assertEqual(check("release/v0.3.x"), [])
+        self.assertTrue(check("release/v0.4.x"))
+        self.assertTrue(check("main"))
+        self.assertTrue(check(7))
+
+    def test_rehearsal_reports_what_the_previous_installer_rejects(self) -> None:
+        import types
+        from scripts import rehearse_upgrade
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "tag-0.3.1.zip").write_bytes(b"archive")
+            (root / "BUILD-PROVENANCE.json").write_text("{}", encoding="utf-8")
+            def reject(*_args, **_keywords):
+                raise ValueError("Release provenance source_ref does not match the selected release")
+            old = types.SimpleNamespace(_verify_provenance=reject)
+            with patch("importlib.import_module", return_value=old), \
+                    self.assertRaises(ValueError):
+                rehearse_upgrade.rehearse(root, root, "0.3.1")
+            old = types.SimpleNamespace(_verify_provenance=lambda *a, **k: "a" * 40)
+            with patch("importlib.import_module", return_value=old):
+                self.assertEqual(rehearse_upgrade.rehearse(root, root, "0.3.1"), "a" * 40)
+
+    def test_provenance_published_with_the_branch_in_source_ref_still_validates(self) -> None:
+        self.assertEqual(validate_source_ref("refs/heads/release/v0.3.x", "0.3.1"), [])
+
+
 class SelectedCommitTests(unittest.TestCase):
     def test_requires_exact_full_sha_on_main(self) -> None:
         sha = "a" * 40

@@ -553,11 +553,23 @@ def _validate_provenance(
     for key, value in expected.items():
         if provenance.get(key) != value:
             errors.append(f"invalid provenance {key}: expected {value!r}")
+    # Installed Tag versions accept only source_ref refs/heads/main, so a
+    # maintenance build keeps it and names its branch in source_branch. v0.3.1
+    # was published with the branch in source_ref, so that is still accepted.
     source_ref = provenance.get("source_ref")
     if not isinstance(source_ref, str):
         errors.append("invalid provenance source_ref: expected a branch reference")
     else:
         errors.extend(validate_source_ref(source_ref, version))
+    if "source_branch" in provenance:
+        source_branch = provenance["source_branch"]
+        if not isinstance(source_branch, str) or source_branch == "main":
+            errors.append("invalid provenance source_branch: expected a release/vX.Y.x branch")
+        else:
+            errors.extend(
+                error.replace("source_ref", "source_branch")
+                for error in validate_source_ref(f"refs/heads/{source_branch}", version)
+            )
     built_at = provenance.get("built_at")
     try:
         parsed = datetime.fromisoformat(built_at.removesuffix("Z") + "+00:00")
