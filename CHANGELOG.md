@@ -2,10 +2,20 @@
 
 All notable changes to Tag are documented here.
 
-## [0.3.1] - 2026-10-09
+## [0.3.2] - 2026-10-10
 
-A patch for 0.3. Existing installations pick it up on their next `tag upgrade`
-or from the update notice in Tag; there is nothing to set up again.
+A patch for 0.3. It includes everything in 0.3.1, which was withdrawn before it
+reached most installations, and fixes the update check that made 0.3.0
+installations reject it. Existing installations pick it up on their next
+`tag upgrade` or from the update notice in Tag; there is nothing to set up
+again.
+
+### Updates
+
+- **0.3.0 installations can update to this patch.** Release files for a patch
+  now keep the `source_ref` that installed versions check for, and name the
+  patch branch in a separate field. Each release is also checked against the
+  previous release's installer before it is prepared.
 
 ### Slack
 
