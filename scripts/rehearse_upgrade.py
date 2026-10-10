@@ -11,25 +11,41 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import importlib
+import subprocess
 import sys
 from pathlib import Path
 
+# Runs in a new process with the earlier checkout as the working directory, so
+# no module this process already imported can stand in for that release's code.
+VERIFY = """
+import sys
+from pathlib import Path
+sys.path.insert(0, ".")
+sys.path.insert(0, "scripts")
+import scripts.tag_install as install
+if not Path(install.__file__).resolve().is_relative_to(Path.cwd().resolve()):
+    sys.exit("loaded " + install.__file__ + " instead of the previous release's installer")
+directory, version, digest = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+try:
+    print(install._verify_provenance(
+        (directory / "BUILD-PROVENANCE.json").read_bytes(), expected_channel="release",
+        archive_name=f"tag-{version}.zip", digest=digest, version=version,
+    ))
+except ValueError as error:
+    sys.exit(str(error))
+"""
 
-def rehearse(previous_checkout: Path, directory: Path, version: str, channel: str = "release") -> str:
+
+def rehearse(previous_checkout: Path, directory: Path, version: str) -> str:
     """Return the commit SHA the earlier installer accepts, or raise ValueError."""
-    sys.path.insert(0, str(previous_checkout))
-    sys.path.insert(0, str(previous_checkout / "scripts"))
-    try:
-        install = importlib.import_module("scripts.tag_install")
-    finally:
-        del sys.path[:2]
-    archive = directory / f"tag-{version}.zip"
-    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-    return install._verify_provenance(
-        (directory / "BUILD-PROVENANCE.json").read_bytes(),
-        expected_channel=channel, archive_name=archive.name, digest=digest, version=version,
+    digest = hashlib.sha256((directory / f"tag-{version}.zip").read_bytes()).hexdigest()
+    result = subprocess.run(
+        [sys.executable, "-c", VERIFY, str(directory.resolve()), version, digest],
+        cwd=previous_checkout, capture_output=True, text=True, check=False,
     )
+    if result.returncode != 0:
+        raise ValueError(result.stderr.strip() or "the previous installer failed to run")
+    return result.stdout.strip()
 
 
 def main() -> int:

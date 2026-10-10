@@ -27,6 +27,7 @@ from scripts.release_automation import (
     validate_candidate,
     validate_maintenance_candidate,
     validate_source_ref,
+    validate_source_branch,
     validate_edge_bundle,
     validate_release_bundle,
     validate_release_tag,
@@ -310,8 +311,8 @@ class MaintenanceReleaseTests(unittest.TestCase):
 
     def test_provenance_branch_must_match_the_version_line(self) -> None:
         self.assertEqual(validate_source_ref("refs/heads/main", "0.4.0-alpha.1"), [])
-        self.assertEqual(validate_source_ref("refs/heads/release/v0.3.x", "0.3.1"), [])
-        self.assertTrue(validate_source_ref("refs/heads/release/v0.3.x", "0.4.1"))
+        self.assertEqual(validate_source_branch("release/v0.3.x", "0.3.2"), [])
+        self.assertTrue(validate_source_branch("release/v0.3.x", "0.4.1"))
         self.assertTrue(validate_source_ref("refs/heads/feature", "0.3.1"))
         self.assertTrue(validate_source_ref("refs/heads/release/v0.3.x/../main", "0.3.1"))
 
@@ -368,25 +369,30 @@ class InstalledClientCompatibilityTests(unittest.TestCase):
         self.assertTrue(check("main"))
         self.assertTrue(check(7))
 
-    def test_rehearsal_reports_what_the_previous_installer_rejects(self) -> None:
-        import types
+    def test_rehearsal_uses_the_previous_installer_not_a_cached_module(self) -> None:
+        import scripts.tag_install  # noqa: F401 - the current installer is already imported
         from scripts import rehearse_upgrade
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
+            previous = root / "previous"
+            (previous / "scripts").mkdir(parents=True)
             (root / "tag-0.3.1.zip").write_bytes(b"archive")
             (root / "BUILD-PROVENANCE.json").write_text("{}", encoding="utf-8")
-            def reject(*_args, **_keywords):
-                raise ValueError("Release provenance source_ref does not match the selected release")
-            old = types.SimpleNamespace(_verify_provenance=reject)
-            with patch("importlib.import_module", return_value=old), \
-                    self.assertRaises(ValueError):
-                rehearse_upgrade.rehearse(root, root, "0.3.1")
-            old = types.SimpleNamespace(_verify_provenance=lambda *a, **k: "a" * 40)
-            with patch("importlib.import_module", return_value=old):
-                self.assertEqual(rehearse_upgrade.rehearse(root, root, "0.3.1"), "a" * 40)
+            installer = previous / "scripts" / "tag_install.py"
+            installer.write_text(
+                "def _verify_provenance(*_a, **_k):\n"
+                "    raise ValueError('old installer says no')\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "old installer says no"):
+                rehearse_upgrade.rehearse(previous, root, "0.3.1")
+            installer.write_text(
+                "def _verify_provenance(*_a, **_k):\n    return 'a' * 40\n", encoding="utf-8")
+            self.assertEqual(rehearse_upgrade.rehearse(previous, root, "0.3.1"), "a" * 40)
 
-    def test_provenance_published_with_the_branch_in_source_ref_still_validates(self) -> None:
+    def test_only_the_published_v0_3_1_may_keep_its_branch_in_source_ref(self) -> None:
         self.assertEqual(validate_source_ref("refs/heads/release/v0.3.x", "0.3.1"), [])
+        self.assertTrue(validate_source_ref("refs/heads/release/v0.3.x", "0.3.2"))
+        self.assertTrue(validate_source_ref("refs/heads/release/v0.4.x", "0.3.1"))
+        self.assertEqual(validate_source_ref("refs/heads/main", "0.3.2"), [])
 
 
 class SelectedCommitTests(unittest.TestCase):
