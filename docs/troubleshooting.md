@@ -18,7 +18,7 @@ flowchart TD
 
 | Problem | What it means | Fix |
 | --- | --- | --- |
-| The install screen says **Installation stopped** | A download or install step failed. The failed step shows the cause. | Check your internet connection and disk space (about 650 MB), then choose **Try again**. It is safe to retry. **Copy details** copies the installer log for a report. |
+| The install screen says **Installation stopped** | A download or install step failed. The failed step shows the cause. | Check your internet connection and disk space (about 1.8 GB), then choose **Try again**. It is safe to retry. **Copy details** copies the installer log for a report. |
 | macOS won't open Tag | Gatekeeper blocks apps that aren't signed and notarized | Download Tag again from the [releases page](https://github.com/klovr-co/hover-tag/releases). Don't bypass the warning for a build you didn't expect. |
 | `tag: command not found` after the terminal installer | Its command directory isn't on your PATH | Add `~/.local/bin` (macOS and Linux) or `%LOCALAPPDATA%\Tag\bin` (Windows) to your PATH, then open a new terminal. |
 | `TAG_HOME must be an absolute path` | `TAG_HOME` is set to a relative path | Unset it, or set it to a full path. |

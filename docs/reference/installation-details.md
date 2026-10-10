@@ -375,6 +375,30 @@ Tag's working folder and `.tag` data. Native Linux builds require a compatible
 glibc distribution and wheels for the runtime packages; musl-only distributions
 are not qualified by this bootstrap.
 
+## Memory embedding model
+
+Tag's memory server (MFS) embeds text with a local model by default
+(`gpahal/bge-m3-onnx-int8`, about 560 MB). The installer downloads it from
+`huggingface.co` into `${MFS_HOME:-~/.mfs}/onnx-cache`, so the computer needs
+outbound access to that host, and it is the longest install step. The model stays
+the default.
+
+The installer skips the download when MFS will not use it:
+
+- The MFS server configuration (`$MFS_SERVER_CONFIG`, `./server.toml`,
+  `$MFS_HOME/server.toml`, or `~/.mfs/server.toml`) selects another embedding
+  provider, for example `provider = "openai"` under `[embedding]`.
+- `TAG_SKIP_MFS_MODEL=1` is set, for an install that chooses its provider later:
+  `TAG_SKIP_MFS_MODEL=1 ./install.sh`. This also works with the curl installer
+  and `install.ps1`. The desktop app runs the same installer step, so it also
+  honors the server configuration; it has no setting for the variable.
+
+The installer prints which one applied. A skipped model is not lost: if you later
+switch to the local provider, MFS downloads the model the first time it starts.
+A hosted provider needs its own key in the environment of the MFS process, for
+example `OPENAI_API_KEY`. An unreadable server configuration keeps the local
+default.
+
 ## Measured installation size
 
 Measured on macOS ARM64 on 2026-09-27, using Python 3.12.14, uv 0.12.19,
@@ -393,6 +417,11 @@ Since this measurement, Tag no longer installs the MFS CLI (about 2 MB less).
 | MFS CLI (no longer installed) | 2,038,676 B | included in release environment below |
 | Release environment, including packages and the MFS CLI then installed | see above | 583,249,864 B |
 | MFS embedding model and tokenizer | 587,042,498 B | 587,042,939 B including cache metadata |
+
+A later install on Linux x86-64 measured **1.8 GB** in total: 977 MB for the
+release environment, 186 MB for the managed Python, and 560 MB for the model in
+`~/.mfs`, plus up to 1 GB of uv package cache while installing. Without the
+model (see above) the total is about 1.2 GB. The user guide quotes the 1.8 GB.
 
 The dependency payload is approximately 797 MiB before the Tag runtime archive,
 index metadata, HTTP overhead, or retries. The first installed Tag home measured

@@ -16,6 +16,20 @@ All notable changes to Tag are documented here.
   Tag now turns off Claude auto memory and Codex memories for its runs so that
   everything it remembers can be listed, corrected, and forgotten.
 
+### Fixed
+
+- `tag autostart` now keeps memory (MFS) running too. If MFS stops, the login
+  service restarts it with the same back-off it uses for Tags, whether it was
+  started by a Tag or by `tag memory start`. On Linux, Tag turns on systemd
+  linger so the service also starts at boot, or shows the one command to run.
+- The installer no longer downloads the 560 MB memory model when your MFS
+  configuration uses a hosted embedding provider such as OpenAI. Set
+  `TAG_SKIP_MFS_MODEL=1` to skip it when the provider isn't chosen yet. The
+  local model is still the default.
+- `tag memory start` works after you remove your last Tag instead of failing on a
+  missing `~/Tag/default` folder.
+- The docs now say the install needs about 1.8 GB of disk, not 650 MB.
+
 ## [0.3.0] - 2026-10-08
 
 The 0.3 line introduces **Tag** as a desktop app for macOS. The

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -138,7 +140,7 @@ class TagLifecycleTests(unittest.TestCase):
         self.assertEqual(environment["MFS_URL"], "http://localhost:13619")
         self.assertEqual(environment["TAG_INSTANCE_HOME"], str(self.home))
 
-    def test_shared_memory_start_reuses_the_installation_lock_and_workspace(self) -> None:
+    def test_shared_memory_start_reuses_the_installation_lock_and_state_folder(self) -> None:
         context = tag_instances.resolve(self.root)
         environment = {
             "MFS_URL": "http://127.0.0.1:13619",
@@ -155,7 +157,28 @@ class TagLifecycleTests(unittest.TestCase):
 
         self.assertFalse((context.shared_mfs_home / "start.lock").exists())
         self.assertEqual(start.call_args.kwargs["state_dir"], context.shared_mfs_home)
-        self.assertEqual(start.call_args.kwargs["cwd"], context.workspace)
+        self.assertEqual(start.call_args.kwargs["cwd"], context.shared_mfs_home)
+
+    def test_shared_memory_starts_after_the_last_tag_is_removed(self) -> None:
+        # MFS is shared by every Tag, so it must not need any Tag's workspace folder.
+        shutil.rmtree(self.home)
+        context = tag_instances.resolve(self.root)
+        self.assertFalse(context.workspace.exists())
+        environment = {"MFS_URL": "http://127.0.0.1:13619", "OPENTAG_MFS_STARTUP_ATTEMPTS": "1"}
+
+        def launch(*_args, **kwargs):
+            subprocess.run([sys.executable, "-c", "pass"], cwd=kwargs["cwd"], check=True)
+
+        with patch.object(
+            tag_cli, "healthy", side_effect=[False, False, True]
+        ), patch.object(
+            tag_cli, "mfs_server_executable", return_value="/bin/mfs-server"
+        ), patch.object(tag_cli, "replace_unmanaged_local_mfs"), patch.object(
+            tag_cli, "start_process", side_effect=launch
+        ), patch.object(tag_cli.tag_mfs_runtime, "active", return_value=True):
+            tag_cli.ensure_shared_memory(context, environment)
+
+        self.assertFalse(context.workspace.exists())
 
     @unittest.skipIf(os.name == "nt", "Tag finds the listener with lsof only on macOS and Linux")
     def test_local_mfs_listener_matches_the_resolved_configured_address(self) -> None:

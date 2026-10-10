@@ -749,7 +749,9 @@ def _ensure_shared_memory_running(
             start_process(
                 context.home, "mfs",
                 [sys.executable, str(ROOT / "scripts/tag_mfs_server.py"), "run"],
-                environment=child_environment, state_dir=shared, cwd=context.workspace,
+                # MFS serves every Tag, so it never runs in one Tag's workspace: that
+                # folder is gone once the Tag is removed.
+                environment=child_environment, state_dir=shared, cwd=shared,
                 metadata={"slack_runtime_version": tag_mfs_runtime.VERSION, "instance_id": instance_id},
             )
         attempts = int(environment.get("OPENTAG_MFS_STARTUP_ATTEMPTS", "90"))
@@ -1786,16 +1788,24 @@ def _autostart_command(installation_root: Path, args, parser) -> int:
         if item.get("valid") and Path(str(item["home"])).exists():
             home = tag_instances.resolve(installation_root, str(item["id"])).home
             tags.append({"tag": str(item["id"]), "keep_running": autostart.wanted(home) is True})
-    result = {"schema_version": 1, **result, "tags": tags}
+    memory = {"keep_running": autostart.memory_needed(installation_root, sys.modules[__name__])}
+    result = {"schema_version": 1, **result, "memory": memory, "tags": tags}
     if args.json_output:
         print(json.dumps(result, indent=2))
         return 0
     display.header("Autostart", "Start your Tags after you log in, and restart them if they stop.")
     display.info_row("Login service", "On" if result["enabled"] else "Off", good=result["enabled"])
     display.info_row("Mechanism", result["mechanism"])
+    if "linger" in result:
+        # A systemd user service starts at boot only while the account has linger on.
+        linger = result["linger"]
+        display.info_row("Starts at boot", "Yes" if linger["enabled"] else f"Only after you log in · run {linger['command']}",
+                         good=linger["enabled"])
     for tag in tags:
         display.info_row(tag["tag"], "kept running" if tag["keep_running"] else "left off",
                          good=tag["keep_running"])
+    display.info_row("Memory", "kept running" if memory["keep_running"] else "left off",
+                     good=memory["keep_running"])
     if seeded:
         display.info_row("Kept running", "Tags already running: " + ", ".join(seeded), good=True)
     display.next_action("Choose which Tags run", "tag NAME start  ·  tag NAME stop",
@@ -2675,6 +2685,9 @@ def _run_cli() -> int:
             config_path = context.home / "config/settings.json"
             values = read_config(config_path) if config_path.is_file() else {}
             environment = instance_environment(context, values)
+            if os.getenv(autostart.SUPERVISED_ENV) != "1":
+                # Recorded even if this start fails: the login service retries with backoff.
+                autostart.set_memory_wanted(context.shared_mfs_home, True)
             ensure_shared_memory(context, environment)
         migrate_legacy_mfs_record(tag_instances.resolve(installation_root))
         context.shared_mfs_home.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -2688,12 +2701,16 @@ def _run_cli() -> int:
             if not managed:
                 raise RuntimeError("The running memory service is not owned by this Tag installation")
             stop_process(home, "mfs", state_dir=context.shared_mfs_home)
+            autostart.set_memory_wanted(context.shared_mfs_home, False)
             result.update(managed=False, healthy=False)
+        result["keep_running"] = autostart.memory_needed(installation_root, sys.modules[__name__])
         if args.json_output:
             print(json.dumps(result, indent=2))
         else:
             display.header("Memory", "Shared by every Tag in this installation.")
             display.info_row("Service", "Managed and running" if result["managed"] else "Not managed", good=result["managed"])
+            display.info_row("Restarts", "Kept running by tag autostart" if result["keep_running"]
+                             else "Not restarted if it stops")
             display.info_row("Active Tags", ", ".join(bridges) if bridges else "None")
             detail = log_tail(home, "mfs", 20, state_dir=context.shared_mfs_home)
             if detail:

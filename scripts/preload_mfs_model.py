@@ -1,7 +1,18 @@
 #!/usr/bin/env python3
-"""Warm MFS's default local embedding model cache during Tag installation."""
+"""Warm MFS's default local embedding model cache during Tag installation.
+
+The model is a large download, so it is skipped when MFS will not use it:
+either the server configuration selects a hosted embedding provider, or
+TAG_SKIP_MFS_MODEL=1 says so (for installs that choose the provider later).
+A skipped model is fetched by MFS itself the first time it starts with the
+local provider.
+"""
 from __future__ import annotations
 
+import os
+
+LOCAL_PROVIDER = "onnx"
+SKIP_ENVIRONMENT = "TAG_SKIP_MFS_MODEL"
 
 
 def _embedding_components():
@@ -10,6 +21,25 @@ def _embedding_components():
     from mfs_server.config import EmbeddingConfig
 
     return EmbeddingConfig, get_provider
+
+
+def _server_config_loader():
+    from mfs_server.config import load_server_config
+
+    return load_server_config
+
+
+def _configured_embedding() -> tuple[str, str]:
+    """The provider and model the MFS server configuration selects.
+
+    Reads the same server.toml lookup chain as the server. A configuration that
+    cannot be read keeps the local default, which is what MFS falls back to.
+    """
+    try:
+        embedding = _server_config_loader()(apply_env=False).embedding
+        return embedding.provider, embedding.model
+    except Exception:
+        return LOCAL_PROVIDER, ""
 
 
 def preload_default_embedding() -> tuple[str, str]:
@@ -21,6 +51,13 @@ def preload_default_embedding() -> tuple[str, str]:
 
 
 def main() -> int:
+    if os.environ.get(SKIP_ENVIRONMENT, "").strip().lower() in {"1", "true", "yes", "on"}:
+        print(f"MFS embedding model download skipped ({SKIP_ENVIRONMENT} is set)")
+        return 0
+    configured, _ = _configured_embedding()
+    if configured != LOCAL_PROVIDER:
+        print(f"MFS embedding model download skipped (embedding provider is {configured})")
+        return 0
     provider, model = preload_default_embedding()
     print(f"MFS embedding model ready: {provider}/{model}")
     return 0

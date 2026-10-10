@@ -122,7 +122,9 @@ MFS is shared by the installation. `tag NAME stop`, restart, reset, and
 failed startup leave shared memory and other Tags running. Inspect it with
 `tag memory status`; after stopping every Tag bridge, an installation-owned
 service can be stopped explicitly with `tag memory stop`. Tag refuses to stop
-an externally managed MFS process.
+an externally managed MFS process. `tag memory start` also works with no Tags,
+for example after you remove the last one: MFS runs from its own state folder,
+not from a Tag's workspace.
 
 An upgrade restarts each previously running Tag, leaving stopped Tags stopped
 and shared MFS online. `--no-restart` defers activation until you restart those
@@ -569,7 +571,22 @@ running without starting them now. A start made by the login service follows
 the recorded choice instead of changing it, so stopping a Tag while the
 service is starting it leaves the Tag off. Each restart counts until the Tag has
 stayed up for five minutes, so a Tag that crashes right after starting also
-backs off. `tag autostart off` removes the service and leaves running
+backs off.
+
+The same service keeps shared memory (MFS) running. It restarts MFS, with the
+same back-off, when a kept Tag needs it (its `MFS_URL` is the local server Tag
+manages) or when `tag memory start` was the last thing you ran. `tag memory
+stop` records that it should stay off. A remote `MFS_URL` is never started by
+Tag. `tag memory status` and `tag autostart --json` report `keep_running` for
+memory. Without `tag autostart on`, nothing restarts MFS: a stopped server stays
+down until you run `tag memory start` or `tag start`.
+
+On Linux, systemd starts a user service at boot only while the account has
+linger on. `tag autostart on` and the service itself try `loginctl
+enable-linger`; if the system needs an administrator, `tag autostart` shows
+"Only after you log in" with the command to run, `sudo loginctl enable-linger
+USER`, and `--json` reports it as `linger`. `tag autostart off` leaves linger as
+it is. `tag autostart off` removes the service and leaves running
 Tags as they are; the service is set up so that stopping it never stops the
 Tags it started. The service runs Tag's stable launcher, so upgrades take
 effect without registering it again. Its output is in
