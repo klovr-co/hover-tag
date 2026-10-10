@@ -937,10 +937,14 @@ def _memory_embedding(context, args, home: Path, installation_root: Path) -> int
                 import tag_api
             except ImportError:
                 from scripts import tag_api
-            if not args.stdin and not display.stdin_is_terminal():
+            custom = choice == tag_embedding.CUSTOM
+            if not args.stdin and not display.stdin_is_terminal() and not custom:
                 raise RuntimeError("Send the API key on stdin with --stdin")
-            key = tag_api.read_key(args.json_output) or tag_embedding.saved_key(shared, choice) or ""
-            tag_embedding.set_hosted(shared, choice, key, verify=tag_embedding.check_key)
+            # A custom endpoint may need no key, so only ask for one when it can be given.
+            key = (tag_api.read_key(args.json_output) if args.stdin or display.stdin_is_terminal() else "") \
+                or tag_embedding.saved_key(shared, choice) or ""
+            tag_embedding.set_hosted(shared, choice, key, model=args.embedding_model or "",
+                                     base_url=args.base_url or "", verify=tag_embedding.probe)
         else:
             tag_embedding.set_local(shared)
         # MFS keeps one index per search model, so the new one starts empty.
@@ -965,7 +969,7 @@ def _memory_embedding(context, args, home: Path, installation_root: Path) -> int
     else:
         display.header("Memory search model", "Shared by every Tag in this installation.")
         embedding = report["embedding"]
-        display.info_row("Search model", "On this computer" if embedding["local"] else f"Hosted ({embedding['provider']})")
+        display.info_row("Search model", "Default (built in)" if embedding["local"] else f"Hosted ({embedding['provider']})")
         if reindexing:
             display.info_row("Index", "Rebuilding from your Slack channels; search is partial until it finishes", good=True)
         if note:
@@ -2392,6 +2396,7 @@ def _run_cli() -> int:
     parser.add_argument("--base-url", dest="base_url", metavar="URL", help="settings ai api set: the API base URL (HTTPS); empty for the provider's default")
     parser.add_argument("--models", dest="api_models", metavar="A,B", help="settings ai api set: model IDs, or Azure deployment names, comma-separated")
     parser.add_argument("--api-version", dest="api_version", metavar="VERSION", help="settings ai api set --kind azure: the Azure API version")
+    parser.add_argument("--embedding-model", dest="embedding_model", metavar="NAME", help="memory embedding: the provider's embedding model (default: its first)")
     parser.add_argument("--stdin", action="store_true", help="read a config value from stdin")
     parser.add_argument("--from", dest="source", type=Path)
     parser.add_argument("--no-start", action="store_true", help=argparse.SUPPRESS)
@@ -2444,8 +2449,14 @@ def _run_cli() -> int:
     if (args.method or args.account or args.restart or args.effort is not None) and not settings_ai:
         parser.error("--method, --account, --effort and --restart are only for tag settings ai")
     api_options = (args.api_backend, args.api_kind, args.base_url, args.api_models, args.api_version)
-    if any(option is not None for option in api_options) and not (settings_ai and args.arguments[1:2] == ["api"]):
-        parser.error("--backend, --kind, --base-url, --models and --api-version are only for tag settings ai api")
+    memory_embedding = args.command == "memory" and args.arguments[:1] == ["embedding"]
+    if args.embedding_model is not None and not memory_embedding:
+        parser.error("--embedding-model is only for tag memory embedding")
+    if any(option is not None for option in api_options) and not (settings_ai and args.arguments[1:2] == ["api"]) \
+            and not (memory_embedding and args.base_url is not None and not any(
+                option is not None for option in (args.api_backend, args.api_kind, args.api_models, args.api_version))):
+        parser.error("--backend, --kind, --base-url, --models and --api-version are only for tag settings ai api "
+                     "(--base-url also works with tag memory embedding custom)")
     if args.json_output and args.command not in {"list", "memory", "inspect", "status", "doctor", "config", "paths", "upgrade", "telemetry", "setup", "add", "rename", "describe", "abandon", "remove", "start", "stop", "restart", "autostart", "version", "logs", "chatgpt", "usage"} and not settings_ai:
         parser.error("--json supports list, memory, inspect, status, doctor, config, paths, upgrade, telemetry, usage, chatgpt, settings ai, autostart, version, logs, setup, add, rename, describe, start, and stop/restart with --workspace")
     if args.json_output and args.follow:
@@ -2784,7 +2795,7 @@ def _run_cli() -> int:
             display.info_row("Service", "Managed and running" if result["managed"] else "Not managed", good=result["managed"])
             display.info_row("Restarts", "Kept running by tag autostart" if result["keep_running"]
                              else "Not restarted if it stops")
-            display.info_row("Search model", "On this computer" if result["embedding"]["local"]
+            display.info_row("Search model", "Default (built in)" if result["embedding"]["local"]
                              else f"Hosted ({result['embedding']['provider']})",
                              good=not result["embedding"].get("problem"))
             if result["embedding"].get("problem"):

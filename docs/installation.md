@@ -23,7 +23,7 @@ Keep your computer online until it finishes.
 
 ![Tag's welcome screen, with Install Tag](assets/screenshots/welcome.png)
 
-Tag shows each step with a progress bar. **Preparing local memory** takes
+Tag shows each step with a progress bar. **Preparing memory** takes
 the longest.
 
 ![Tag installing the runtime, with each step and a progress bar](assets/screenshots/installing.png)
@@ -105,7 +105,7 @@ The installer downloads Tag's local memory model (560 MB) from
 `huggingface.co`, so the computer needs outbound access to it. If your memory
 search uses a hosted embedding provider such as OpenAI, skip the download:
 `./install.sh --hosted-memory` (or `TAG_SKIP_MFS_MODEL=1 ./install.sh`; on
-Windows, `install.ps1 -HostedMemory`). In Tag.app, turn on **Hosted memory** on
+Windows, `install.ps1 -HostedMemory`). In Tag.app, turn on **Hosted search model** on
 the install screen, choose OpenAI or Jina, and paste its key; the terminal installer asks the
 same question when you run it interactively. See
 [Memory embedding model](reference/installation-details.md#memory-embedding-model).

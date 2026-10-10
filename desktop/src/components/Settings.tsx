@@ -345,38 +345,49 @@ export function MemoryRow({ api, setError }: { api: Bridge; setError: (message: 
   </>;
 }
 
-/** Where memory computes search embeddings: pick one, add its key if it needs one, switch. */
+/** How memory computes search embeddings: pick a provider, its model, a key if it needs one, then switch. */
 export function SearchModelRow({ api, embedding, setError, changed }: {
   api: Bridge; embedding: NonNullable<MemoryStatus["embedding"]>; setError: (message: string) => void; changed: () => void;
 }) {
   const [picked, setPicked] = useState(embedding.current);
+  const [model, setModel] = useState("");
+  const [url, setUrl] = useState("");
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
-  useEffect(() => setPicked(embedding.current), [embedding.current]);
   const choice = embedding.choices.find((c) => c.id === picked);
+  const inUse = embedding.choices.find((c) => c.id === embedding.current);
+  // Start from what is configured when the provider is the one in use, else from its first model.
+  const reset = (id: string) => {
+    const next = embedding.choices.find((c) => c.id === id);
+    setPicked(id);
+    setKey("");
+    setModel(next?.model || next?.models[0]?.id || "");
+    setUrl(next?.baseUrl ?? "");
+  };
+  useEffect(() => reset(embedding.current), [embedding.current, inUse?.model, inUse?.baseUrl]);
   if (!choice) return null;
-  const switching = picked !== embedding.current;
-  const needsKey = choice.hosted && !choice.keySaved;
+  const switching = picked !== embedding.current || (choice.hosted && (model !== choice.model || url !== choice.baseUrl) && !!choice.model);
+  const needsKey = choice.hosted && !choice.keySaved && !choice.keyOptional;
+  const missing = (needsKey && !key.trim()) || (choice.needsUrl && (!url.trim() || !model.trim()));
   const apply = async () => {
     setBusy(true);
     setError("");
-    const result = await setEmbedding(api, picked, key.trim());
+    const result = await setEmbedding(api, picked, key.trim(), { model: choice.hosted ? model.trim() : "", baseUrl: choice.needsUrl ? url.trim() : "" });
     setBusy(false);
-    if (!result.ok) { setError(result.error); setPicked(embedding.current); return; }
-    setKey("");
+    if (!result.ok) { setError(result.error); reset(embedding.current); return; }
     setNote(result.reindexing ? "Memory is indexing your Slack channels again; search is partial until it finishes." : result.note);
     changed();
   };
   return <>
     <div className="r set model-head" style={{ padding: "13px 14px 6px" }}>
       <div className="txt"><span className="label" style={{ fontSize: 14.5 }}>Search model</span>
-        <span className="sub wrap">{embedding.problem || note || "Where memory turns text into searchable vectors."}</span></div>
+        <span className="sub wrap">{embedding.problem || note || "How memory turns text into searchable vectors."}</span></div>
     </div>
     <div className="model-choices" role="radiogroup" aria-label="Search model">
       {embedding.choices.map((c) => (
         <button key={c.id} className={`opt${c.id === picked ? " sel" : ""}`} role="radio" aria-checked={c.id === picked}
-          aria-label={c.label} disabled={busy} onClick={() => { setPicked(c.id); setKey(""); }}>
+          aria-label={c.label} disabled={busy} onClick={() => reset(c.id)}>
           <span className="radio-dot" aria-hidden="true" />
           <span className="txt"><span className="label">{c.label}{c.id === embedding.current && <i className="chip-now">In use</i>}</span>
             <span className="sub wrap">{c.detail}</span></span>
@@ -385,12 +396,22 @@ export function SearchModelRow({ api, embedding, setError, changed }: {
     </div>
     {switching && (
       <div className="model-edit">
-        {needsKey && <input className="field mono" type="password" value={key} placeholder={`Paste your ${choice.label} key`}
-          aria-label={`${choice.label} API key`} autoComplete="new-password" spellCheck={false} disabled={busy}
-          onChange={(e) => setKey(e.target.value)} />}
-        <p>{choice.hosted ? `${choice.label} receives the text of indexed messages. ` : ""}Memory indexes your Slack channels again with
+        {choice.needsUrl && <input className="field mono" value={url} placeholder="Endpoint address, such as http://localhost:11434/v1"
+          aria-label="Endpoint address" spellCheck={false} disabled={busy} onChange={(e) => setUrl(e.target.value)} />}
+        {choice.needsUrl && <input className="field mono" value={model} placeholder="Embedding model name"
+          aria-label="Model name" spellCheck={false} disabled={busy} onChange={(e) => setModel(e.target.value)} />}
+        {choice.models.length > 0 && (
+          <select className="field" value={model} aria-label={`${choice.label} model`} disabled={busy} onChange={(e) => setModel(e.target.value)}>
+            {choice.models.map((m) => <option key={m.id} value={m.id}>{m.id} · {m.dim} dimensions</option>)}
+          </select>
+        )}
+        {choice.hosted && (needsKey || choice.keyOptional) && <input className="field mono" type="password" value={key}
+          placeholder={choice.keyOptional ? "API key (optional)" : `Paste your ${choice.label} key`}
+          aria-label={choice.keyOptional ? `${choice.label} API key (optional)` : `${choice.label} API key`}
+          autoComplete="new-password" spellCheck={false} disabled={busy} onChange={(e) => setKey(e.target.value)} />}
+        <p>{choice.hosted && !choice.needsUrl ? `${choice.label} receives the text of indexed messages. ` : ""}Memory indexes your Slack channels again with
           the new model, so search is partial until it finishes. You can switch back; the old index is kept.</p>
-        <Primary small title={busy ? "Switching…" : `Switch to ${choice.label}`} disabled={busy || (needsKey && !key.trim())} onClick={() => void apply()} />
+        <Primary small title={busy ? "Switching…" : `Switch to ${choice.label}`} disabled={busy || missing} onClick={() => void apply()} />
       </div>
     )}
   </>;

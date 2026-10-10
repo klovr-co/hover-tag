@@ -7,16 +7,17 @@ const report = (extra: object) => JSON.stringify({ schema_version: 1, managed: t
 describe("memory status", () => {
   it("reads the service state and where the search model runs", () => {
     const memory = parseMemory(report({ embedding: { provider: "onnx", model: "m", local: true, current: "onnx", choices: [
-      { id: "onnx", label: "On this computer", detail: "Private", hosted: false, key_saved: false },
+      { id: "onnx", label: "Default", detail: "Private", hosted: false, key_saved: false },
       { id: "openai", label: "OpenAI", detail: "Fast", hosted: true, key_saved: true }] } }));
     expect(memory).toMatchObject({ healthy: true, managed: true, keepRunning: true, embedding: { provider: "onnx", local: true, current: "onnx" } });
-    expect(memory.embedding?.choices[1]).toEqual({ id: "openai", label: "OpenAI", detail: "Fast", hosted: true, keySaved: true });
-    expect(memoryDetail(memory)).toBe("Running. Restarts itself if it stops. Search model runs on this computer.");
+    expect(memory.embedding?.choices[1]).toEqual({ id: "openai", label: "OpenAI", detail: "Fast", hosted: true, keySaved: true,
+      keyOptional: false, models: [], needsUrl: false, model: "", baseUrl: "" });
+    expect(memoryDetail(memory)).toBe("Running. Restarts itself if it stops. Search model: default, built in.");
   });
 
   it("says when the search model is hosted, and when memory won't restart", () => {
     const memory = parseMemory(report({ healthy: false, keep_running: false, embedding: { provider: "openai", local: false, current: "openai", choices: [{ id: "openai", label: "OpenAI", hosted: true }] } }));
-    expect(memoryDetail(memory)).toBe("Not running. Won't restart if it stops; turn on Keep Tags running for that. Search model is hosted (OpenAI).");
+    expect(memoryDetail(memory)).toBe("Not running. Won't restart if it stops; turn on Keep Tags running for that. Search model: OpenAI (hosted).");
   });
 
   it("copes with an older Tag that doesn't report the search model", () => {
@@ -55,7 +56,14 @@ describe("changing the search model", () => {
     expect(send).toHaveBeenCalledWith({ api_key: "jina-synthetic" });
   });
 
-  it("switches back to the local model without a key", async () => {
+  it("passes the model and a custom address as options, never the key", async () => {
+    const { api, calls } = bridge([JSON.stringify({ ok: true })]);
+    await setEmbedding(api, "custom", "", { model: "nomic-embed-text", baseUrl: "http://localhost:11434/v1" });
+    expect(calls[0]).toEqual(["memory", "embedding", "custom", "--embedding-model", "nomic-embed-text",
+      "--base-url", "http://localhost:11434/v1", "--stdin", "--json"]);
+  });
+
+  it("switches back to the default without a key", async () => {
     const { api, send, calls } = bridge([JSON.stringify({ ok: true, reindexing: false, note: "Takes effect the next time memory starts." })]);
     const result = await setEmbedding(api, "local", "");
     expect(result.note).toBe("Takes effect the next time memory starts.");

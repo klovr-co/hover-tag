@@ -343,21 +343,31 @@ def _search_model_label() -> str:
 
 
 def _choose_search_model() -> None:
-    """Pick where memory computes search embeddings; `tag memory embedding` does the work."""
+    """Pick how memory computes search embeddings; `tag memory embedding` does the work."""
     tag_embedding, shared = _embedding_choices()
     options = tag_embedding.choices(shared)
     ui.message("Switching builds a new index: memory indexes your Slack channels again with the new model.")
-    choice = ui.choose("Search model", [f"{c['label']} · {c['detail']}" for c in options] + ["Cancel"])
-    if choice >= len(options):
+    chosen = ui.choose("Search model", [f"{c['label']} · {c['detail']}" for c in options] + ["Cancel"])
+    if chosen >= len(options):
         return
-    picked = options[choice]
-    key = ""
+    picked = options[chosen]
+    arguments, key = [], ""
     if picked["hosted"]:
-        key = getpass.getpass(f"{picked['label']} API key (Enter to keep a saved key): ").strip()
+        if picked["needs_url"]:
+            url = input(f"Endpoint address [{picked['base_url'] or 'http://localhost:11434/v1'}]: ").strip() \
+                or str(picked["base_url"] or "http://localhost:11434/v1")
+            model = input(f"Embedding model name [{picked['model']}]: ").strip() or str(picked["model"])
+            arguments += ["--base-url", url, "--embedding-model", model]
+        else:
+            models = picked["models"]
+            index = ui.choose(f"{picked['label']} model", [f"{m['id']} ({m['dim']} dimensions)" for m in models])
+            arguments += ["--embedding-model", models[index]["id"]]
+        key = getpass.getpass(
+            f"{picked['label']} API key ({'optional, ' if picked['key_optional'] else ''}Enter to keep a saved key): ").strip()
     if ui.choose("Switch the search model?", ["Switch and re-index", "Cancel"]) != 0:
         return
     command = [sys.executable, str(Path(__file__).with_name("tag_cli.py")), "memory", "embedding",
-               "local" if not picked["hosted"] else str(picked["id"]), *(["--stdin"] if picked["hosted"] else []), "--json"]
+               str(picked["id"]) if picked["hosted"] else "local", *arguments, *(["--stdin"] if picked["hosted"] else []), "--json"]
     # The key goes over stdin only, never into the command line.
     completed = subprocess.run(command, input=key + "\n" if picked["hosted"] else None, text=True, capture_output=True, check=False)
     try:

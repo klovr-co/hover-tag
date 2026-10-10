@@ -159,17 +159,20 @@ In the terminal: `tag autostart on`.
 
 Keep Tags running also restarts memory (MFS) if it stops. The **Memory** switch
 below it shows whether memory is running, whether it restarts itself, and
-whether its search model runs on this computer or is hosted. Turn it off to stop
+which search model it uses. Turn it off to stop
 memory (stop your Tags first); in the terminal, `tag memory status`, `start`, and
 `stop`.
 
-**Search model** chooses where memory computes embeddings: **On this
-computer** (private, works offline, about 560 MB), **OpenAI**, or **Jina** (each
-needs its own API key, and the text of indexed messages goes to that provider).
-Pick one, paste its key if it needs one, and choose **Switch**. Tag checks the
-key first, and memory then indexes your Slack channels again, so search is
-partial until it finishes. In the terminal: `tag memory embedding local`,
-`openai`, or `jina`, or **Workspace and memory** in `tag settings`.
+**Search model** chooses how memory turns text into searchable vectors. Pick
+**Default** (built in, runs on this computer, private, works offline, about 560
+MB), **OpenAI** or **Jina** (each needs its own API key, and the text of indexed
+messages goes to that provider), or **Custom** for any OpenAI-compatible
+endpoint, such as Ollama or LM Studio, where you give its address and model
+name and the key is optional. Pick one, fill in what it asks for, and choose
+**Switch**. Tag tests it first, then memory indexes your Slack channels again, so
+search is partial until it finishes. In the terminal: `tag memory embedding
+local`, `openai`, `jina`, or `custom`, or **Workspace and memory** in `tag
+settings`.
 
 Tags started this way find `claude` and `codex` in the usual install folders
 (`~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`). They also look in the

@@ -255,13 +255,13 @@ export function App() {
   // A reinstall keeps existing Tags: return to them instead of setting up a first Tag again.
   const afterInstall = async (command: string, provider = "openai", apiKey = "", hostedMemory = false) => {
     setInfo({ ...info, cli: command || info.cli || "tag" });
-    // The installer skipped the local model, so save the OpenAI choice now; otherwise memory
+    // The installer skipped the built-in model, so save the hosted choice now; otherwise memory
     // would fetch that model the first time it starts.
     if (apiKey) {
       const saved = await setEmbedding(api, provider, apiKey);
-      if (!saved.ok) say(`Memory will use the on-computer model until you add a working key in Settings. ${saved.error}`);
+      if (!saved.ok) say(`Memory will use the default search model until you add a working key in Settings. ${saved.error}`);
     } else if (hostedMemory) {
-      say("Add your key in Settings → General → Search model. Until then, memory downloads the on-computer model when it starts.");
+      say("Add your key in Settings → General → Search model. Until then, memory downloads the default search model when it starts.");
     }
     const listed = await api.tag(["list", "--json"]).catch(() => null);
     let empty = false;

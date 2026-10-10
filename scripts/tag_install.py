@@ -666,7 +666,7 @@ def install(
             row("Runtime", f"Python {sys.version_info.major}.{sys.version_info.minor} · dependencies ready")
             progress("memory")
             paragraph(
-                "Skipping the local memory model (hosted memory)…" if hosted_memory
+                "Skipping the built-in search model (using a hosted one)…" if hosted_memory
                 else "Preparing the memory model (skipped for hosted providers)…",
                 MUTED, indent="    ",
             )
@@ -674,7 +674,7 @@ def install(
                 [str(python), str(release / "scripts/preload_mfs_model.py")],
                 "Preparing the MFS embedding model",
             )
-            row("Memory", "Hosted embeddings; no local model downloaded" if hosted_memory
+            row("Memory", "Hosted search model; built-in model not downloaded" if hosted_memory
                 else "Embedding model ready, or not needed for your provider")
             if tag_dependencies is not None:
                 tag_dependencies.ensure_slack(home)
@@ -771,7 +771,7 @@ raise SystemExit(subprocess.call([record["python"], str(release / "scripts/tag_c
         paragraph("Next step", MUTED)
         paragraph("› tag setup", "1;" + ACCENT)
         if hosted_memory:
-            paragraph("Then choose your hosted provider for memory (openai or jina), and paste its key when asked:", MUTED)
+            paragraph("Then choose your hosted search model (openai or jina), and paste its key when asked:", MUTED)
             paragraph("› tag memory embedding openai", "1;" + ACCENT)
         paragraph("Already configured? Run tag stop, then tag start.", MUTED)
         paragraph(f"If needed, add {short_path(bin_dir)} to PATH.", MUTED)
@@ -782,11 +782,11 @@ raise SystemExit(subprocess.call([record["python"], str(release / "scripts/tag_c
 
 
 def ask_hosted_memory() -> bool:
-    """In a terminal, offer to skip the 560 MB local model. Never asks the app, scripts, or a settled choice."""
+    """In a terminal, offer to skip the 560 MB built-in search model. Never asks the app, scripts, or a settled choice."""
     if (os.environ.get("TAG_SKIP_MFS_MODEL") or os.environ.get("TAG_INSTALL_PROGRESS")
             or not sys.stdin.isatty()):
         return False
-    answer = input("Use a hosted provider (OpenAI or Jina) for memory instead of the 560 MB local search model? [y/N] ")
+    answer = input("Use a hosted search model (OpenAI or Jina) instead of the built-in one (560 MB download)? [y/N] ")
     return answer.strip().lower() in {"y", "yes"}
 
 
@@ -801,7 +801,7 @@ def main() -> int:
     parser.add_argument("--migrate-dependencies", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument(
         "--hosted-memory", action="store_true",
-        help="skip the 560 MB local search-model download (you will use a hosted embedding provider such as OpenAI)",
+        help="skip the 560 MB built-in search-model download (you will use a hosted provider such as OpenAI or Jina)",
     )
     args = parser.parse_args()
     if args.hosted_memory or (not args.skip_dependencies and ask_hosted_memory()):

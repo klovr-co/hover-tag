@@ -27,15 +27,16 @@ All notable changes to Tag are documented here.
   `TAG_SKIP_MFS_MODEL=1` to skip it when the provider isn't chosen yet. The
   local model is still the default.
 - Tag.app and the terminal installer can skip the model download too: the install
-  screen has a **Hosted memory** switch, and `./install.sh --hosted-memory`
+  screen has a **Hosted search model** switch, and `./install.sh --hosted-memory`
   (`install.ps1 -HostedMemory`) does the same.
-- Choose where memory computes search embeddings after install, on this
-  computer, OpenAI, or Jina: Settings → General → **Search model**, `tag memory
-  embedding local|openai|jina`, or `tag settings`. Tag checks your key first, stores it privately, restarts
+- Choose how memory computes search embeddings after install: the built-in
+  Default, OpenAI or Jina with a model of your choice, or any OpenAI-compatible
+  endpoint such as Ollama: Settings → General → **Search model**, `tag memory
+  embedding local|openai|jina|custom`, or `tag settings`. Tag checks your key first, stores it privately, restarts
   memory, and indexes your Slack channels again into the new index. The install
   screen and an interactive terminal install offer the same choice up front.
 - Settings → General has a **Memory** switch that shows whether memory runs,
-  restarts itself, and uses a local or hosted search model. `tag memory status`
+  restarts itself, and which search model it uses. `tag memory status`
   reports the same as `embedding` in `--json`.
 - `tag memory start` works after you remove your last Tag instead of failing on a
   missing `~/Tag/default` folder.

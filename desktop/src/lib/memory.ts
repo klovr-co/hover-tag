@@ -21,6 +21,15 @@ export interface EmbeddingChoice {
   hosted: boolean;
   /** A key for this provider is already stored, so switching to it needs none. */
   keySaved: boolean;
+  /** The key can be left empty, as for a local endpoint. */
+  keyOptional: boolean;
+  /** Models to pick from; empty when the person names one (a custom endpoint). */
+  models: { id: string; dim: number }[];
+  /** The person gives the endpoint's address. */
+  needsUrl: boolean;
+  /** What is configured now, when this provider is the one in use. */
+  model: string;
+  baseUrl: string;
 }
 
 export interface Embedding {
@@ -41,7 +50,8 @@ export function parseMemory(output: string): MemoryStatus {
     healthy?: boolean; managed?: boolean; keep_running?: boolean; running_tags?: string[];
     embedding?: {
       provider?: string; local?: boolean; current?: string; reindex_pending?: boolean; problem?: string;
-      choices?: { id: string; label: string; detail?: string; hosted?: boolean; key_saved?: boolean }[];
+      choices?: { id: string; label: string; detail?: string; hosted?: boolean; key_saved?: boolean; key_optional?: boolean;
+        models?: { id: string; dim: number }[]; needs_url?: boolean; model?: string; base_url?: string }[];
     } | null;
   }>(output);
   return {
@@ -53,7 +63,9 @@ export function parseMemory(output: string): MemoryStatus {
     embedding: status.embedding?.choices?.length ? {
       provider: status.embedding.provider ?? "", local: !!status.embedding.local,
       current: status.embedding.current ?? (status.embedding.local ? "onnx" : status.embedding.provider ?? ""),
-      choices: status.embedding.choices.map((c) => ({ id: c.id, label: c.label, detail: c.detail ?? "", hosted: !!c.hosted, keySaved: !!c.key_saved })),
+      choices: status.embedding.choices.map((c) => ({
+        id: c.id, label: c.label, detail: c.detail ?? "", hosted: !!c.hosted, keySaved: !!c.key_saved, keyOptional: !!c.key_optional,
+        models: c.models ?? [], needsUrl: !!c.needs_url, model: c.model ?? "", baseUrl: c.base_url ?? "" })),
       reindexPending: !!status.embedding.reindex_pending, problem: status.embedding.problem ?? "",
     } : status.embedding ? {
       provider: status.embedding.provider ?? "", local: !!status.embedding.local, current: status.embedding.local ? "onnx" : status.embedding.provider ?? "",
@@ -65,21 +77,24 @@ export function parseMemory(output: string): MemoryStatus {
 /** Where search embeddings are computed: the one fact people choose at install time. */
 export function embeddingText(memory: MemoryStatus) {
   if (!memory.embedding) return "";
-  if (memory.embedding.local) return "Search model runs on this computer.";
+  if (memory.embedding.local) return "Search model: default, built in.";
   const label = memory.embedding.choices.find((c) => c.id === memory.embedding?.current)?.label ?? memory.embedding.provider;
-  return `Search model is hosted (${label}).`;
+  return `Search model: ${label} (hosted).`;
 }
 
 /**
  * `tag memory embedding local|openai`. The key goes over stdin only and is never part of the command,
  * so it can't show up in a process list or a log.
  */
-export function setEmbedding(api: Bridge, choice: string, key: string): Promise<EmbeddingResult> {
+export function setEmbedding(api: Bridge, choice: string, key: string, options: { model?: string; baseUrl?: string } = {}): Promise<EmbeddingResult> {
   const failed = (error: string): EmbeddingResult => ({ ok: false, error, reindexing: false, note: "" });
   return new Promise((resolve) => {
     let result: EmbeddingResult | null = null;
     const hosted = choice !== "local" && choice !== "onnx";
-    const args = ["memory", "embedding", hosted ? choice : "local", ...(hosted ? ["--stdin"] : []), "--json"];
+    const args = ["memory", "embedding", hosted ? choice : "local",
+      ...(hosted && options.model ? ["--embedding-model", options.model] : []),
+      ...(hosted && options.baseUrl ? ["--base-url", options.baseUrl] : []),
+      ...(hosted ? ["--stdin"] : []), "--json"];
     api.setup(args, (line) => {
       if (!line.trim().startsWith("{")) return;
       try {

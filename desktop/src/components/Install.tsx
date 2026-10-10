@@ -77,8 +77,8 @@ export function Welcome({ api, platform, install, preview }: { api: Bridge; plat
         <div className="fact"><span className="fi"><Icon name="disk" size={16} /></span><span>About <b>1.8 GB</b> of disk space</span></div>
         <div className="fact"><span className="fi"><Icon name="wifi" size={16} /></span><span>Keep this {machine} online until it finishes</span></div>
         {!preview && <div className="fact"><span className="fi"><Icon name="disk" size={16} /></span>
-          <span style={{ flex: 1 }}><b>Hosted memory.</b> Use a hosted provider for memory and skip the 560 MB search model.</span>
-          <Switch on={hosted} busy={false} label="Use hosted memory" onClick={() => setHosted(!hosted)} /></div>}
+          <span style={{ flex: 1 }}><b>Hosted search model.</b> Use OpenAI or Jina instead of the built-in one, and skip its 560 MB download.</span>
+          <Switch on={hosted} busy={false} label="Use a hosted search model" onClick={() => setHosted(!hosted)} /></div>}
         {!preview && hosted && <div className="model-edit" style={{ padding: 0 }}>
           <div className="segc" role="radiogroup" aria-label="Hosted provider">
             {HOSTED_MEMORY.map((p) => (

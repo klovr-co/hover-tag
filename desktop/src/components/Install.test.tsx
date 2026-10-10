@@ -51,10 +51,10 @@ it("tells people the install needs about 1.8 GB, as measured", () => {
   expect(screen.queryByText("650 MB")).toBeNull();
 });
 
-it("lets people skip the local search model and give an OpenAI key for hosted memory", () => {
+it("lets people skip the built-in search model and give a hosted provider key", () => {
   const install = vi.fn();
   render(<Welcome api={demoBridge()} platform="macos" install={install} />);
-  const toggle = screen.getByRole("switch", { name: "Use hosted memory" });
+  const toggle = screen.getByRole("switch", { name: "Use a hosted search model" });
   expect(toggle.getAttribute("aria-checked")).toBe("false");
   expect(screen.queryByLabelText("OpenAI API key")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Install Tag" }));
@@ -70,7 +70,7 @@ it("lets people skip the local search model and give an OpenAI key for hosted me
   expect(install).toHaveBeenLastCalledWith({ hostedMemory: true, provider: "jina", apiKey: "jina-synthetic" });
 });
 
-it("passes the hosted memory choice to the installer", async () => {
+it("passes the hosted search model choice to the installer", async () => {
   const api = demoBridge();
   const install = vi.spyOn(api, "install");
   render(<Installing api={api} hostedMemory done={vi.fn()} retry={vi.fn()} cancel={vi.fn()} />);

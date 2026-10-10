@@ -287,9 +287,13 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
         return json({ schema_version: 1, managed: memoryRunning, healthy: memoryRunning, running_tags: [],
           keep_running: keepRunning, embedding: { provider: embedding, model: "m", local: embedding === "onnx", current: embedding,
             choices: [
-              { id: "onnx", label: "On this computer", detail: "Private and works offline. About 560 MB.", hosted: false, key_saved: false },
-              { id: "openai", label: "OpenAI", detail: "Fast and cheap. Needs an OpenAI key.", hosted: true, key_saved: false },
-              { id: "jina", label: "Jina", detail: "Strong multilingual search. Needs a Jina key.", hosted: true, key_saved: false }] } });
+              { id: "onnx", label: "Default", detail: "Built in. Runs on this computer, private, works offline. About 560 MB.", hosted: false, key_saved: false },
+              { id: "openai", label: "OpenAI", detail: "Fast and cheap. Needs an OpenAI key.", hosted: true, key_saved: false,
+                models: [{ id: "text-embedding-3-small", dim: 1536 }, { id: "text-embedding-3-large", dim: 3072 }] },
+              { id: "jina", label: "Jina", detail: "Strong multilingual search. Needs a Jina key.", hosted: true, key_saved: false,
+                models: [{ id: "jina-embeddings-v4", dim: 2048 }, { id: "jina-embeddings-v3", dim: 1024 }] },
+              { id: "custom", label: "Custom", detail: "Any OpenAI-compatible endpoint: Ollama, LM Studio, vLLM, or your own gateway.",
+                hosted: true, key_saved: false, key_optional: true, needs_url: true, models: [] }] } });
       }
       if (first === "autostart") {
         if (second === "on" || second === "off") keepRunning = second === "on";
