@@ -595,6 +595,9 @@ button.hello:hover b { text-decoration: underline; text-underline-offset: 2px; }
 }
 :where(:root[data-theme="dark"]) .veil2 { background: rgba(0, 6, 12, .55); }
 @keyframes fadein { from { opacity: 0; } }
+.model-edit { padding: 0 14px 13px; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; animation: rise2 .22s var(--ease); }
+.model-edit p { margin: 0; font-size: 12.5px; color: var(--muted); }
+.model-edit .field { height: 36px; font-size: 13.5px; }
 .dlg { width: 100%; max-width: 432px; background: var(--pop); border-radius: 12px; border: 1px solid var(--line-strong); box-shadow: 0 30px 80px rgba(0, 20, 40, .35); padding: 18px 18px 16px; display: flex; flex-direction: column; gap: 12px; animation: rise2 .22s cubic-bezier(.22, 1, .36, 1); cursor: default; }
 .dlg h3 { margin: 0; font-size: 17px; font-weight: 600; color: var(--ink); letter-spacing: -.2px; }
 .dlg p { margin: 0; font-size: 14px; color: var(--text); line-height: 1.5; }
@@ -1048,7 +1051,7 @@ button.list-item:hover { background: var(--fill); }
 .tags-row { animation: bob 1.4s steps(2) infinite; }
 
 @media (prefers-reduced-motion: reduce) {
-  .api-row.entering, .api-row.entering > img, .api-leave, .api-check, .api-models, .api-saved, .api-azure, .api-hint, .api-chip,
+  .api-row.entering, .api-row.entering > img, .api-leave, .api-check, .api-models, .api-saved, .api-azure, .api-hint, .api-chip, .model-edit,
   .api-progress span:last-child,
   .sky .sum .sq, .flow-panel > .body > *, .r.starting .badge, .confetti, .notice.info .bar, .usage-note, .avw2.rolling .pic,
   .empty img, .tags-row, .r.click:hover .av, .sl-item:hover img, .track .tnode img { animation: none !important; }

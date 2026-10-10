@@ -39,6 +39,7 @@ try:
     import tag_autostart as autostart
     import agent_models
     import preload_mfs_model
+    import tag_embedding
 except ImportError:
     from scripts.tag_paths import initialize_instance, initialize_workspace, runtime_environment, tag_home
     from scripts import tag_instances, tag_telemetry
@@ -46,6 +47,7 @@ except ImportError:
     from scripts import tag_locks
     from scripts import agent_models
     from scripts import preload_mfs_model
+    from scripts import tag_embedding
     from scripts.tag_config import read_config
     from scripts import tag_credentials
     from scripts import tag_welcome
@@ -747,7 +749,8 @@ def _ensure_shared_memory_running(
             stop_process(context.home, "mfs", state_dir=shared)
         if not healthy(url):
             instance_id = uuid.uuid4().hex
-            child_environment = dict(environment, TAG_MFS_STATE_DIR=str(shared), TAG_MFS_PROCESS_ID=instance_id)
+            child_environment = dict(environment, TAG_MFS_STATE_DIR=str(shared), TAG_MFS_PROCESS_ID=instance_id,
+                                     **tag_embedding.server_environment(shared))
             start_process(
                 context.home, "mfs",
                 [sys.executable, str(ROOT / "scripts/tag_mfs_server.py"), "run"],
@@ -908,7 +911,69 @@ def load_connector_config(path: Path) -> dict[str, object]:
         return tomllib.load(handle)
 
 
-def sync_configured_slack_memory(environment: dict[str, str] | None = None) -> None:
+def _embedding_report(shared: Path) -> dict[str, object]:
+    """Which embedding provider memory uses, reading the same configuration the managed MFS will."""
+    provider, model = preload_mfs_model.configured_embedding(tag_embedding.managed_config(shared))
+    report = {"provider": provider, "model": model, "local": preload_mfs_model.uses_local_model(provider),
+              "key_saved": tag_embedding.saved_key(shared) is not None,
+              "reindex_pending": tag_embedding.reindex_pending(shared)}
+    if problem := tag_embedding.problem(shared):
+        report["problem"] = problem
+    return report
+
+
+def _memory_embedding(context, args, home: Path, installation_root: Path) -> int:
+    """`tag memory embedding [status|local|openai]`: where memory computes its search embeddings."""
+    shared = context.shared_mfs_home
+    choice = args.arguments[1] if len(args.arguments) > 1 else "status"
+    if choice not in {"status", "local", "openai"}:
+        raise RuntimeError("Choose local or openai")
+    reindexing, note = False, ""
+    if choice != "status":
+        shared.mkdir(parents=True, exist_ok=True, mode=0o700)
+        was_running = process_for(shared / "mfs.json") is not None
+        if choice == "openai":
+            try:
+                import tag_api
+            except ImportError:
+                from scripts import tag_api
+            if not args.stdin and not display.stdin_is_terminal():
+                raise RuntimeError("Send the OpenAI key on stdin with --stdin")
+            key = tag_api.read_key(args.json_output) or tag_embedding.saved_key(shared) or ""
+            tag_embedding.set_openai(shared, key, verify=tag_embedding.check_key)
+        else:
+            tag_embedding.set_local(shared)
+        # MFS keeps one index per search model, so the new one starts empty.
+        tag_embedding.mark_reindex(shared)
+        if was_running:
+            config_path = context.home / "config/settings.json"
+            values = read_config(config_path) if config_path.is_file() else {}
+            environment = instance_environment(context, values)
+            stop_process(home, "mfs", state_dir=shared)
+            ensure_shared_memory(context, environment)
+            try:
+                sync_configured_slack_memory(environment, full=True)
+                tag_embedding.clear_reindex(shared)
+                reindexing = True
+            except RuntimeError as error:
+                note = f"Memory restarted with the new search model, but re-indexing didn't start: {error}"
+        else:
+            note = "Takes effect the next time memory starts; Slack memory is indexed again then."
+    report = {"schema_version": 1, "embedding": _embedding_report(shared), "reindexing": reindexing, "note": note}
+    if args.json_output:
+        print(json.dumps(report))
+    else:
+        display.header("Memory search model", "Shared by every Tag in this installation.")
+        embedding = report["embedding"]
+        display.info_row("Search model", "On this computer" if embedding["local"] else f"Hosted ({embedding['provider']})")
+        if reindexing:
+            display.info_row("Index", "Rebuilding from your Slack channels; search is partial until it finishes", good=True)
+        if note:
+            print("  " + note)
+    return 0
+
+
+def sync_configured_slack_memory(environment: dict[str, str] | None = None, *, full: bool = False) -> None:
     """Register and incrementally sync the connector approved during setup.
 
     Talks to the MFS server's HTTP API directly (POST /v1/add), as the `mfs`
@@ -921,7 +986,7 @@ def sync_configured_slack_memory(environment: dict[str, str] | None = None) -> N
         return
     settings = load_connector_config(config)
     try:
-        mfs_post_json("/v1/add", {"target": uri, "config": settings, "full": False, "process": False}, source)
+        mfs_post_json("/v1/add", {"target": uri, "config": settings, "full": full, "process": False}, source)
         return
     except MfsRequestError as error:
         failure = error
@@ -930,7 +995,8 @@ def sync_configured_slack_memory(environment: dict[str, str] | None = None) -> N
         # conflict, so update that same registered connector instead of
         # pretending that its old configuration describes new channel consent.
         try:
-            mfs_post_json("/v1/add", {"target": uri, "update": True, "config": settings}, source)
+            body = {"target": uri, "update": True, "config": settings}
+            mfs_post_json("/v1/add", dict(body, full=True) if full else body, source)
             return
         except MfsRequestError as error:
             failure = error
@@ -2401,8 +2467,8 @@ def _run_cli() -> int:
         os.environ[SETUP_PROTOCOL_ENV] = "jsonl"
     if os.getenv(SETUP_PROTOCOL_ENV) == "jsonl" and args.command in {"setup", "add"}:
         _setup_ui().enter_protocol()
-    if args.stdin and args.command != "config":
-        parser.error("--stdin is only for config set")
+    if args.stdin and args.command not in {"config", "memory"}:
+        parser.error("--stdin is only for config set and memory embedding")
     if args.offline and args.command not in {"inspect", "doctor"}:
         parser.error("--offline supports inspect and doctor")
     if args.follow and args.command != "logs":
@@ -2680,9 +2746,13 @@ def _run_cli() -> int:
             print(usage['coverage'])
         return 0
     if args.command == "memory":
-        action = args.arguments[0] if len(args.arguments) == 1 else "status" if not args.arguments else ""
-        if action not in {"start", "status", "stop"}:
-            parser.error("memory accepts start, status, or stop")
+        action = args.arguments[0] if args.arguments else "status"
+        if action == "embedding":
+            if len(args.arguments) > 2:
+                parser.error("memory embedding accepts status, local, or openai")
+            return _memory_embedding(context, args, home, installation_root)
+        if len(args.arguments) > 1 or action not in {"start", "status", "stop"}:
+            parser.error("memory accepts start, status, stop, or embedding")
         if action == "start":
             config_path = context.home / "config/settings.json"
             values = read_config(config_path) if config_path.is_file() else {}
@@ -2706,8 +2776,7 @@ def _run_cli() -> int:
             autostart.set_memory_wanted(context.shared_mfs_home, False)
             result.update(managed=False, healthy=False)
         result["keep_running"] = autostart.memory_needed(installation_root, sys.modules[__name__])
-        provider, model = preload_mfs_model.configured_embedding()
-        result["embedding"] = {"provider": provider, "model": model, "local": preload_mfs_model.uses_local_model(provider)}
+        result["embedding"] = _embedding_report(context.shared_mfs_home)
         if args.json_output:
             print(json.dumps(result, indent=2))
         else:
@@ -2716,7 +2785,11 @@ def _run_cli() -> int:
             display.info_row("Restarts", "Kept running by tag autostart" if result["keep_running"]
                              else "Not restarted if it stops")
             display.info_row("Search model", "On this computer" if result["embedding"]["local"]
-                             else f"Hosted ({result['embedding']['provider']})")
+                             else f"Hosted ({result['embedding']['provider']})",
+                             good=not result["embedding"].get("problem"))
+            if result["embedding"].get("problem"):
+                ui_problem = result["embedding"]["problem"]
+                display.info_row("Search model problem", ui_problem, good=False)
             display.info_row("Active Tags", ", ".join(bridges) if bridges else "None")
             detail = log_tail(home, "mfs", 20, state_dir=context.shared_mfs_home)
             if detail:
@@ -3167,7 +3240,14 @@ def _run_cli() -> int:
             if os.getenv("SLACK_CHANNEL_POLICY") == "invited":
                 reconcile_invitation_memory(home)
             else:
-                sync_configured_slack_memory()
+                # A changed search model means a new, empty index: import everything again once.
+                shared_memory = context.shared_mfs_home
+                reindex = tag_embedding.reindex_pending(shared_memory)
+                if reindex:
+                    sync_configured_slack_memory(full=True)
+                    tag_embedding.clear_reindex(shared_memory)
+                else:
+                    sync_configured_slack_memory()
             # Don't wait for the first import: Tag answers now, and history search covers each
             # channel once memory has imported it. One check still picks up renamed channels.
             try:

@@ -41,6 +41,7 @@ The Tag desktop app and the CLI use the same Tags, settings, and lifecycle: the 
 | Model and thinking level | Details → **Model** | `tag NAME settings ai model VALUE [--effort LEVEL]` |
 | AI accounts | Settings → General → **AI connections** | `tag settings ai`, `tag settings ai sign-in codex\|claude` |
 | Keep Tags running | Settings → General → **Keep Tags running** | `tag autostart on` |
+| Search model (local or OpenAI) | Settings → General → **Search model** | `tag memory embedding local\|openai` |
 | Memory on or off | Settings → General → **Memory** | `tag memory start` / `stop`; `tag memory status --json` also reports `embedding` |
 | Open at login | Settings → General → **Open Tag at login** | Not needed; `tag autostart on` runs without the app |
 | Update | Settings → **Updates** → **Update Tag** | `tag upgrade` |
@@ -123,7 +124,10 @@ MFS is shared by the installation. `tag NAME stop`, restart, reset, and
 failed startup leave shared memory and other Tags running. Inspect it with
 `tag memory status`; after stopping every Tag bridge, an installation-owned
 service can be stopped explicitly with `tag memory stop`. Tag refuses to stop
-an externally managed MFS process. `tag memory start` also works with no Tags,
+an externally managed MFS process. `tag memory embedding [status|local|openai]` chooses where memory computes
+search embeddings; see [Choosing the search model after
+install](installation-details.md#choosing-the-search-model-after-install).
+`tag memory start` also works with no Tags,
 for example after you remove the last one: MFS runs from its own state folder,
 not from a Tag's workspace.
 

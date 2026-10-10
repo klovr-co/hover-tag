@@ -163,6 +163,13 @@ whether its search model runs on this computer or is hosted. Turn it off to stop
 memory (stop your Tags first); in the terminal, `tag memory status`, `start`, and
 `stop`.
 
+**Search model** chooses where memory computes embeddings: **On this
+computer** (private, works offline, about 560 MB) or **OpenAI** (needs an API
+key; the text of indexed messages goes to OpenAI). Tag checks the key before
+switching, and memory then indexes your Slack channels again, so search is
+partial until it finishes. In the terminal: `tag memory embedding local` or
+`openai`, or **Workspace and memory** in `tag settings`.
+
 Tags started this way find `claude` and `codex` in the usual install folders
 (`~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`). They also look in the
 folders on your PATH when you last started a Tag or turned this on yourself.

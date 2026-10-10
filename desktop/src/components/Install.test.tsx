@@ -51,17 +51,19 @@ it("tells people the install needs about 1.8 GB, as measured", () => {
   expect(screen.queryByText("650 MB")).toBeNull();
 });
 
-it("lets people skip the local search model when they'll use hosted memory", () => {
+it("lets people skip the local search model and give an OpenAI key for hosted memory", () => {
   const install = vi.fn();
   render(<Welcome api={demoBridge()} platform="macos" install={install} />);
-  const toggle = screen.getByRole("switch", { name: "Use hosted memory" });
+  const toggle = screen.getByRole("switch", { name: "Use OpenAI for memory" });
   expect(toggle.getAttribute("aria-checked")).toBe("false");
+  expect(screen.queryByLabelText("OpenAI API key")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Install Tag" }));
-  expect(install).toHaveBeenLastCalledWith(false);
+  expect(install).toHaveBeenLastCalledWith({ hostedMemory: false, openAIKey: "" });
   fireEvent.click(toggle);
   expect(toggle.getAttribute("aria-checked")).toBe("true");
+  fireEvent.change(screen.getByLabelText("OpenAI API key"), { target: { value: " sk-synthetic " } });
   fireEvent.click(screen.getByRole("button", { name: "Install Tag" }));
-  expect(install).toHaveBeenLastCalledWith(true);
+  expect(install).toHaveBeenLastCalledWith({ hostedMemory: true, openAIKey: "sk-synthetic" });
 });
 
 it("passes the hosted memory choice to the installer", async () => {

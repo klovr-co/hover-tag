@@ -90,6 +90,7 @@
     "scripts/tag_dependencies.py",
     "scripts/tag_diagnose.py",
     "scripts/tag_display.py",
+    "scripts/tag_embedding.py",
     "scripts/tag_error_migrations.py",
     "scripts/tag_error_reporting.py",
     "scripts/tag_handoff.py",

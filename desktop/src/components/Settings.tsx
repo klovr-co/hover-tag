@@ -5,7 +5,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { APPEARANCES, APPEARANCE_LABEL, setAppearance, useAppearance } from "../lib/appearance";
 import type { AppInfo, Bridge } from "../lib/bridge";
 import { parseConnections } from "../lib/ai";
-import { memoryDetail, parseMemory, type MemoryStatus } from "../lib/memory";
+import { memoryDetail, parseMemory, setEmbedding, type EmbeddingChoice, type MemoryStatus } from "../lib/memory";
 import { KEEP_RUNNING_DETAIL, parseJSON } from "../lib/protocol";
 import type { Tags } from "../lib/tags";
 import { useTrack, type Telemetry } from "../lib/telemetry";
@@ -330,7 +330,7 @@ export function MemoryRow({ api, setError }: { api: Bridge; setError: (message: 
     return () => { live = false; };
   }, [api]);
   if (!memory) return null; // An older Tag without `memory --json` simply has no row.
-  return (
+  return <>
     <SetRow label="Memory" detail={memoryDetail(memory)}>
       <Switch on={memory.healthy} busy={busy} label="Memory" onClick={async () => {
         setBusy(true);
@@ -340,7 +340,50 @@ export function MemoryRow({ api, setError }: { api: Bridge; setError: (message: 
         finally { setBusy(false); }
       }} />
     </SetRow>
-  );
+    {memory.embedding && <SearchModelRow api={api} embedding={memory.embedding} setError={setError}
+      changed={() => void api.tag(["memory", "status", "--json"]).then((r) => { if (r.code === 0) setMemory(parseMemory(r.stdout)); })} />}
+  </>;
+}
+
+/** Where memory computes search embeddings. Switching builds a new index, so it asks first and says so. */
+export function SearchModelRow({ api, embedding, setError, changed }: {
+  api: Bridge; embedding: NonNullable<MemoryStatus["embedding"]>; setError: (message: string) => void; changed: () => void;
+}) {
+  const current: EmbeddingChoice = embedding.local ? "local" : "openai";
+  const [picked, setPicked] = useState<EmbeddingChoice>(current);
+  const [key, setKey] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState("");
+  useEffect(() => setPicked(current), [current]);
+  const switching = picked !== current;
+  const needsKey = picked === "openai" && !embedding.keySaved;
+  const apply = async () => {
+    setBusy(true);
+    setError("");
+    const result = await setEmbedding(api, picked, key.trim());
+    setBusy(false);
+    if (!result.ok) { setError(result.error); setPicked(current); return; }
+    setKey("");
+    setNote(result.reindexing ? "Memory is indexing your Slack channels again; search is partial until it finishes." : result.note);
+    changed();
+  };
+  return <>
+    <SetRow label="Search model"
+      detail={embedding.problem || note || "Where memory turns text into searchable vectors. On this computer is private and works offline; OpenAI needs a key and sends text to OpenAI."}>
+      <div className="segc" role="radiogroup" aria-label="Search model">
+        <button role="radio" aria-checked={picked === "local"} disabled={busy} onClick={() => setPicked("local")}>On this computer</button>
+        <button role="radio" aria-checked={picked === "openai"} disabled={busy} onClick={() => setPicked("openai")}>OpenAI</button>
+      </div>
+    </SetRow>
+    {switching && (
+        <div className="model-edit">
+          {needsKey && <input className="field mono" type="password" value={key} placeholder="OpenAI API key" aria-label="OpenAI API key"
+            autoComplete="new-password" spellCheck={false} disabled={busy} onChange={(e) => setKey(e.target.value)} />}
+          <p>Switching builds a new index, so Memory indexes your Slack channels again with the new model. The old index is kept if you switch back.</p>
+          <Primary small title={busy ? "Switching…" : needsKey ? "Save and switch" : "Switch"} disabled={busy || (needsKey && !key.trim())} onClick={() => void apply()} />
+        </div>
+    )}
+  </>;
 }
 
 /** The Settings row that opens AI & models, with a summary for the main Tag. */

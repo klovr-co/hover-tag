@@ -614,6 +614,7 @@ def install(
         )
     lock = home / "state/install.lock"
     install_lock = LifecycleLock(lock).acquire()
+    hosted_memory = os.environ.get("TAG_SKIP_MFS_MODEL", "").strip().lower() in {"1", "true", "yes", "on"}
     try:
         version = (source / "VERSION").read_text(encoding="utf-8").strip()
         if selection is not None and selection.version != version:
@@ -664,7 +665,6 @@ def install(
                 )
             row("Runtime", f"Python {sys.version_info.major}.{sys.version_info.minor} · dependencies ready")
             progress("memory")
-            hosted_memory = os.environ.get("TAG_SKIP_MFS_MODEL", "").strip().lower() in {"1", "true", "yes", "on"}
             paragraph(
                 "Skipping the local memory model (hosted memory)…" if hosted_memory
                 else "Preparing the memory model (skipped for hosted providers)…",
@@ -770,12 +770,24 @@ raise SystemExit(subprocess.call([record["python"], str(release / "scripts/tag_c
         emit()
         paragraph("Next step", MUTED)
         paragraph("› tag setup", "1;" + ACCENT)
+        if hosted_memory:
+            paragraph("Then choose OpenAI for memory, and paste your key when asked:", MUTED)
+            paragraph("› tag memory embedding openai", "1;" + ACCENT)
         paragraph("Already configured? Run tag stop, then tag start.", MUTED)
         paragraph(f"If needed, add {short_path(bin_dir)} to PATH.", MUTED)
         emit()
         return release
     finally:
         install_lock.release()
+
+
+def ask_hosted_memory() -> bool:
+    """In a terminal, offer to skip the 560 MB local model. Never asks the app, scripts, or a settled choice."""
+    if (os.environ.get("TAG_SKIP_MFS_MODEL") or os.environ.get("TAG_INSTALL_PROGRESS")
+            or not sys.stdin.isatty()):
+        return False
+    answer = input("Use OpenAI for memory instead of the 560 MB local search model? [y/N] ")
+    return answer.strip().lower() in {"y", "yes"}
 
 
 def main() -> int:
@@ -792,7 +804,7 @@ def main() -> int:
         help="skip the 560 MB local search-model download (you will use a hosted embedding provider such as OpenAI)",
     )
     args = parser.parse_args()
-    if args.hosted_memory:
+    if args.hosted_memory or (not args.skip_dependencies and ask_hosted_memory()):
         os.environ["TAG_SKIP_MFS_MODEL"] = "1"  # read by preload_mfs_model.py in the memory step
     if args.source and (args.channel or args.version):
         parser.error("--source cannot be combined with --channel or --version")

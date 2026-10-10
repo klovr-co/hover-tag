@@ -44,6 +44,19 @@ class PreloadMfsModelTests(unittest.TestCase):
         preload.assert_called_once_with()
         self.assertIn("MFS embedding model ready", output)
 
+    def test_a_provider_chosen_through_tag_is_read_from_its_managed_configuration(self) -> None:
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as temp:
+            managed = Path(temp) / "shared/mfs/server.toml"
+            managed.parent.mkdir(parents=True)
+            managed.write_text('[embedding]\nprovider = "openai"\n', encoding="utf-8")
+            with patch.dict(os.environ, {"TAG_HOME": temp}), \
+                    patch.object(preload_mfs_model, "configured_embedding", return_value=("openai", "m")) as configured, \
+                    redirect_stdout(StringIO()):
+                self.assertEqual(preload_mfs_model.main(), 0)
+            configured.assert_called_once_with(managed)
+
     def test_a_hosted_provider_skips_the_download(self) -> None:
         for provider in ("openai", "gemini", "voyage", "jina", "mistral", "ollama"):
             with self.subTest(provider=provider):
@@ -70,7 +83,7 @@ class PreloadMfsModelTests(unittest.TestCase):
         loader = Mock(return_value=config)
         with patch.object(preload_mfs_model, "_server_config_loader", return_value=loader):
             self.assertEqual(preload_mfs_model.configured_embedding(), ("openai", "text-embedding-3-small"))
-        loader.assert_called_once_with(apply_env=False)
+        loader.assert_called_once_with(None, apply_env=False)
 
     def test_an_unreadable_configuration_keeps_the_local_default(self) -> None:
         with patch.object(preload_mfs_model, "_server_config_loader", return_value=Mock(side_effect=ValueError("bad toml"))):

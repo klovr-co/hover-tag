@@ -144,6 +144,37 @@ class TagControlTests(unittest.TestCase):
         self.assertIn("Settings closed", output.getvalue())
         self.assertEqual(self.path.read_bytes(), original)
 
+    def run_search_model_menu(self, picks, key="sk-test-synthetic"):
+        runs = []
+
+        def fake_run(command, **kwargs):
+            runs.append((command, kwargs))
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+        with patch.object(tag_control.ui, "keyboard_available", return_value=True), patch.object(
+            tag_control.ui, "choose", side_effect=picks
+        ), patch.object(tag_control.getpass, "getpass", return_value=key), patch.object(
+            tag_control.subprocess, "run", side_effect=fake_run
+        ), redirect_stdout(StringIO()) as output:
+            tag_control.settings_menu(self.home)
+        return runs, output.getvalue()
+
+    def test_settings_can_switch_memory_to_openai_without_putting_the_key_in_the_command(self):
+        self.complete()
+        # Workspace and memory → Search model → OpenAI → confirm → Back
+        runs, output = self.run_search_model_menu([1, 4, 1, 0, 6])
+        self.assertEqual(len(runs), 1)
+        command, kwargs = runs[0]
+        self.assertEqual(command[-3:], ["openai", "--stdin", "--json"])
+        self.assertNotIn("sk-test-synthetic", " ".join(command))
+        self.assertEqual(kwargs["input"], "sk-test-synthetic\n")
+        self.assertNotIn("sk-test-synthetic", output)
+
+    def test_settings_search_model_cancel_changes_nothing(self):
+        self.complete()
+        runs, _ = self.run_search_model_menu([1, 4, 2, 6])
+        self.assertEqual(runs, [])
+
     def test_settings_plain_number_navigation_still_works(self):
         self.complete()
         with patch.object(tag_control.ui, "keyboard_available", return_value=False), patch(

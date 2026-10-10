@@ -628,6 +628,29 @@ class TagHomeTests(unittest.TestCase):
                 self.assertEqual(tag_install.main(), 0)
             self.assertIsNone(seen["skip"])
 
+    def test_interactive_install_offers_hosted_memory_and_only_when_a_person_can_answer(self):
+        from scripts import tag_install
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("TAG_SKIP_MFS_MODEL", None)
+            os.environ.pop("TAG_INSTALL_PROGRESS", None)
+            with patch.object(sys.stdin, "isatty", return_value=False), patch("builtins.input") as ask:
+                self.assertFalse(tag_install.ask_hosted_memory())
+            ask.assert_not_called()
+            with patch.object(sys.stdin, "isatty", return_value=True), patch("builtins.input", return_value="y") as ask:
+                self.assertTrue(tag_install.ask_hosted_memory())
+            self.assertIn("560 MB", ask.call_args.args[0])
+            with patch.object(sys.stdin, "isatty", return_value=True), patch("builtins.input", return_value=""):
+                self.assertFalse(tag_install.ask_hosted_memory())
+            # The desktop app and an explicit environment choice are never asked again.
+            with patch.dict(os.environ, {"TAG_INSTALL_PROGRESS": "jsonl"}), \
+                    patch.object(sys.stdin, "isatty", return_value=True), patch("builtins.input") as ask:
+                self.assertFalse(tag_install.ask_hosted_memory())
+            ask.assert_not_called()
+            with patch.dict(os.environ, {"TAG_SKIP_MFS_MODEL": "1"}), \
+                    patch.object(sys.stdin, "isatty", return_value=True), patch("builtins.input") as ask:
+                self.assertFalse(tag_install.ask_hosted_memory())
+            ask.assert_not_called()
+
     def test_failed_upgrade_keeps_current_release(self):
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp) / "home"

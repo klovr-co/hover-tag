@@ -10,6 +10,7 @@ local provider.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 LOCAL_PROVIDER = "onnx"
 SKIP_ENVIRONMENT = "TAG_SKIP_MFS_MODEL"
@@ -29,14 +30,14 @@ def _server_config_loader():
     return load_server_config
 
 
-def configured_embedding() -> tuple[str, str]:
+def configured_embedding(config_path=None) -> tuple[str, str]:
     """The provider and model the MFS server configuration selects.
 
     Reads the same server.toml lookup chain as the server. A configuration that
     cannot be read keeps the local default, which is what MFS falls back to.
     """
     try:
-        embedding = _server_config_loader()(apply_env=False).embedding
+        embedding = _server_config_loader()(str(config_path) if config_path else None, apply_env=False).embedding
         return embedding.provider, embedding.model
     except Exception:
         return LOCAL_PROVIDER, ""
@@ -44,6 +45,15 @@ def configured_embedding() -> tuple[str, str]:
 
 def uses_local_model(provider: str) -> bool:
     return provider == LOCAL_PROVIDER
+
+
+def _managed_config():
+    """The server configuration Tag keeps when someone picks a provider in Tag, if any."""
+    home = os.environ.get("TAG_HOME")
+    if not home:
+        return None
+    path = Path(home) / "shared/mfs/server.toml"
+    return path if path.is_file() else None
 
 
 def preload_default_embedding() -> tuple[str, str]:
@@ -58,7 +68,7 @@ def main() -> int:
     if os.environ.get(SKIP_ENVIRONMENT, "").strip().lower() in {"1", "true", "yes", "on"}:
         print(f"MFS embedding model download skipped ({SKIP_ENVIRONMENT} is set)")
         return 0
-    configured, _ = configured_embedding()
+    configured, _ = configured_embedding(_managed_config())
     if not uses_local_model(configured):
         print(f"MFS embedding model download skipped (embedding provider is {configured})")
         return 0

@@ -148,3 +148,61 @@ describe("Memory row", () => {
     expect(screen.getByRole("switch", { name: "Memory" }).getAttribute("aria-checked")).toBe("true");
   });
 });
+
+describe("Search model row", () => {
+  function model(embedding: { provider: string; local: boolean; key_saved?: boolean }, outcome: object = { ok: true, reindexing: true }) {
+    const api = demoBridge();
+    let current = embedding;
+    const sent: unknown[] = [];
+    const calls: string[][] = [];
+    api.tag = async (args) => {
+      calls.push(args);
+      if (args[2] === "local") current = { provider: "onnx", local: true, key_saved: true };
+      return { code: 0, stderr: "", stdout: JSON.stringify({ schema_version: 1, managed: true, healthy: true, running_tags: [],
+        keep_running: true, embedding: { model: "m", ...current } }) };
+    };
+    api.setup = async (args, onLine, onExit) => {
+      calls.push(args);
+      if ((outcome as { ok: boolean }).ok) current = { provider: "openai", local: false, key_saved: true };
+      setTimeout(() => { onLine(JSON.stringify(outcome)); onExit(0, ""); }, 0);
+      return { send: (m) => sent.push(m), stop: () => {} };
+    };
+    const setError = vi.fn();
+    render(<MemoryRow api={api} setError={setError} />);
+    return { calls, sent, setError };
+  }
+
+  it("shows where the search model runs and asks for a key before switching to OpenAI", async () => {
+    const { sent, calls } = model({ provider: "onnx", local: true });
+    const local = await screen.findByRole("radio", { name: "On this computer" });
+    expect(local.getAttribute("aria-checked")).toBe("true");
+    expect(screen.queryByLabelText("OpenAI API key")).toBeNull();
+    fireEvent.click(screen.getByRole("radio", { name: "OpenAI" }));
+    const save = screen.getByRole("button", { name: "Save and switch" });
+    expect(save.hasAttribute("disabled")).toBe(true);
+    fireEvent.change(screen.getByLabelText("OpenAI API key"), { target: { value: "sk-synthetic" } });
+    expect(save.hasAttribute("disabled")).toBe(false);
+    expect(screen.getByText(/indexes your Slack channels again/)).toBeTruthy();
+    fireEvent.click(save);
+    await vi.waitFor(() => expect(sent).toEqual([{ api_key: "sk-synthetic" }]));
+    await vi.waitFor(() => expect(screen.getByRole("radio", { name: "OpenAI" }).getAttribute("aria-checked")).toBe("true"));
+    expect(calls.flat()).not.toContain("sk-synthetic");
+    expect(screen.queryByLabelText("OpenAI API key")).toBeNull();
+  });
+
+  it("doesn't need the key again when one is saved, and switches back to local", async () => {
+    const { calls } = model({ provider: "openai", local: false, key_saved: true });
+    fireEvent.click(await screen.findByRole("radio", { name: "On this computer" }));
+    fireEvent.click(screen.getByRole("button", { name: "Switch" }));
+    await vi.waitFor(() => expect(calls).toContainEqual(["memory", "embedding", "local", "--json"]));
+  });
+
+  it("keeps the old choice and says why when OpenAI refuses the key", async () => {
+    const { setError } = model({ provider: "onnx", local: true }, { ok: false, error: "OpenAI rejected that key." });
+    fireEvent.click(await screen.findByRole("radio", { name: "OpenAI" }));
+    fireEvent.change(screen.getByLabelText("OpenAI API key"), { target: { value: "sk-wrong" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save and switch" }));
+    await vi.waitFor(() => expect(setError).toHaveBeenCalledWith("OpenAI rejected that key."));
+    expect(screen.getByRole("radio", { name: "On this computer" }).getAttribute("aria-checked")).toBe("true");
+  });
+});
