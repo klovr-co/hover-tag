@@ -176,20 +176,33 @@ def validate_maintenance_candidate(
     return []
 
 
-def validate_source_ref(source_ref: str, version: str) -> list[str]:
-    """Allow `main`, or the maintenance branch of the version's own line."""
-    if source_ref == "refs/heads/main":
-        return []
-    match = MAINTENANCE_BRANCH_RE.fullmatch(source_ref.removeprefix("refs/heads/"))
+# v0.3.1 was published with its maintenance branch in source_ref. Installed
+# versions reject that, so no other release may do the same.
+LEGACY_BRANCH_IN_SOURCE_REF = {"0.3.1": "release/v0.3.x"}
+
+
+def validate_source_branch(branch: str, version: str) -> list[str]:
+    """Allow only the maintenance branch of the version's own line."""
+    match = MAINTENANCE_BRANCH_RE.fullmatch(branch)
     try:
         core = Version.parse(version).core
     except ValueError as error:
         return [str(error)]
-    if match and source_ref.startswith("refs/heads/") and (
-        int(match[1]), int(match[2])
-    ) == core[:2]:
+    if match and (int(match[1]), int(match[2])) == core[:2]:
         return []
-    return [f"invalid provenance source_ref: {source_ref!r} cannot build {version}"]
+    return [f"invalid provenance source_branch: {branch!r} cannot build {version}"]
+
+
+def validate_source_ref(source_ref: str, version: str) -> list[str]:
+    """Require `refs/heads/main`, which installed versions check for.
+
+    The one exception is the provenance already published for v0.3.1.
+    """
+    if source_ref == "refs/heads/main":
+        return []
+    if source_ref == f"refs/heads/{LEGACY_BRANCH_IN_SOURCE_REF.get(version)}":
+        return []
+    return [f"invalid provenance source_ref: {source_ref!r} must be 'refs/heads/main'"]
 
 
 def validate_release_tag(source_version: str, release_tag: str) -> list[str]:
@@ -553,11 +566,20 @@ def _validate_provenance(
     for key, value in expected.items():
         if provenance.get(key) != value:
             errors.append(f"invalid provenance {key}: expected {value!r}")
+    # Installed Tag versions accept only source_ref refs/heads/main, so a
+    # maintenance build keeps it and names its branch in source_branch. v0.3.1
+    # was published with the branch in source_ref, so that is still accepted.
     source_ref = provenance.get("source_ref")
     if not isinstance(source_ref, str):
         errors.append("invalid provenance source_ref: expected a branch reference")
     else:
         errors.extend(validate_source_ref(source_ref, version))
+    if "source_branch" in provenance:
+        source_branch = provenance["source_branch"]
+        if not isinstance(source_branch, str) or source_branch == "main":
+            errors.append("invalid provenance source_branch: expected a release/vX.Y.x branch")
+        else:
+            errors.extend(validate_source_branch(source_branch, version))
     built_at = provenance.get("built_at")
     try:
         parsed = datetime.fromisoformat(built_at.removesuffix("Z") + "+00:00")

@@ -92,8 +92,12 @@ jobs:
               --privacy-notice-url https://github.com/klovr-co/hover-tag/blob/main/docs/reference/telemetry.md
             )
           fi
+          # Installed Tag versions accept only source_ref refs/heads/main, so a
+          # maintenance build keeps it and names its real branch separately.
+          branch_arguments=()
+          if [ "$SOURCE_BRANCH" != main ]; then branch_arguments+=(--source-branch "$SOURCE_BRANCH"); fi
           python scripts/package_release.py --channel edge --commit-sha "$EDGE_SHA" \
-            --source-ref "refs/heads/$SOURCE_BRANCH" --built-at "$built_at" \
+            --source-ref refs/heads/main "${branch_arguments[@]}" --built-at "$built_at" \
             --version "$RELEASE_VERSION" "${telemetry_arguments[@]}"
           python scripts/release_automation.py validate-edge \
             --directory out --sha "$EDGE_SHA" --version "$RELEASE_VERSION"
