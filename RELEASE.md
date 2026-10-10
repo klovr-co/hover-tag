@@ -172,6 +172,15 @@ is on that branch, that the version is the next stable patch of the same line,
 and that the retained artifact came from that branch. A maintainer publishes
 the draft. Delete the branch when its line is no longer supported.
 
+The provenance file is a contract with installed Tag versions. They verify it
+with their own code, which says `source_ref` must be `refs/heads/main`, and
+they cannot be updated to relax that. A maintenance build therefore keeps
+`source_ref` as `refs/heads/main` and records its real branch in
+`source_branch`. Never change a value an installed version checks. **Prepare
+stable release** rehearses the upgrade before it creates the draft: it runs the
+previous stable release's own installer check against the new assets, and the
+draft is not created if that installer rejects them.
+
 ## Tag.app
 
 Each published release also builds Tag.app (`desktop/`) on macOS,
