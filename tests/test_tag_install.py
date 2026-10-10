@@ -606,6 +606,28 @@ class TagHomeTests(unittest.TestCase):
             self.assertEqual(json.loads((home / "current.json").read_text(encoding="utf-8"))["release"], first.name)
             self.assertEqual(skill.read_text(encoding="utf-8"), "personal skill")
 
+    def test_hosted_memory_flag_skips_the_model_download_for_this_install_only(self):
+        from scripts import tag_install
+        with tempfile.TemporaryDirectory() as temp:
+            seen = {}
+            def fake_install(*_args, **_kwargs):
+                seen["skip"] = os.environ.get("TAG_SKIP_MFS_MODEL")
+            argv = ["tag_install.py", "--source", str(Path(__file__).resolve().parents[1]), "--hosted-memory"]
+            # main() imports the source tree's modules and extends sys.path; keep both out of other tests.
+            with patch.dict(os.environ, {"TAG_HOME": temp}, clear=False), patch.dict(sys.modules), \
+                    patch.object(sys, "path", list(sys.path)), \
+                    patch.object(sys, "argv", argv), patch.object(tag_install, "install", fake_install):
+                os.environ.pop("TAG_SKIP_MFS_MODEL", None)
+                self.assertEqual(tag_install.main(), 0)
+            self.assertEqual(seen["skip"], "1")
+            seen.clear()
+            with patch.dict(os.environ, {"TAG_HOME": temp}, clear=False), patch.dict(sys.modules), \
+                    patch.object(sys, "path", list(sys.path)), \
+                    patch.object(sys, "argv", argv[:-1]), patch.object(tag_install, "install", fake_install):
+                os.environ.pop("TAG_SKIP_MFS_MODEL", None)
+                self.assertEqual(tag_install.main(), 0)
+            self.assertIsNone(seen["skip"])
+
     def test_failed_upgrade_keeps_current_release(self):
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp) / "home"

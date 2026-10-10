@@ -26,6 +26,12 @@ All notable changes to Tag are documented here.
   configuration uses a hosted embedding provider such as OpenAI. Set
   `TAG_SKIP_MFS_MODEL=1` to skip it when the provider isn't chosen yet. The
   local model is still the default.
+- Tag.app and the terminal installer can skip the model download too: the install
+  screen has a **Hosted memory** switch, and `./install.sh --hosted-memory`
+  (`install.ps1 -HostedMemory`) does the same.
+- Settings → General has a **Memory** switch that shows whether memory runs,
+  restarts itself, and uses a local or hosted search model. `tag memory status`
+  reports the same as `embedding` in `--json`.
 - `tag memory start` works after you remove your last Tag instead of failing on a
   missing `~/Tag/default` folder.
 - The docs now say the install needs about 1.8 GB of disk, not 650 MB.

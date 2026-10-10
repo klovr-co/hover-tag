@@ -33,7 +33,7 @@ class PreloadMfsModelTests(unittest.TestCase):
     def run_main(self, provider: str, **environment: str) -> tuple[str, Mock]:
         output = StringIO()
         with patch.dict(os.environ, environment), \
-                patch.object(preload_mfs_model, "_configured_embedding", return_value=(provider, "m")), \
+                patch.object(preload_mfs_model, "configured_embedding", return_value=(provider, "m")), \
                 patch.object(preload_mfs_model, "preload_default_embedding", return_value=("onnx", "m")) as preload, \
                 redirect_stdout(output):
             self.assertEqual(preload_mfs_model.main(), 0)
@@ -69,12 +69,12 @@ class PreloadMfsModelTests(unittest.TestCase):
         config = type("Config", (), {"embedding": type("E", (), {"provider": "openai", "model": "text-embedding-3-small"})()})()
         loader = Mock(return_value=config)
         with patch.object(preload_mfs_model, "_server_config_loader", return_value=loader):
-            self.assertEqual(preload_mfs_model._configured_embedding(), ("openai", "text-embedding-3-small"))
+            self.assertEqual(preload_mfs_model.configured_embedding(), ("openai", "text-embedding-3-small"))
         loader.assert_called_once_with(apply_env=False)
 
     def test_an_unreadable_configuration_keeps_the_local_default(self) -> None:
         with patch.object(preload_mfs_model, "_server_config_loader", return_value=Mock(side_effect=ValueError("bad toml"))):
-            self.assertEqual(preload_mfs_model._configured_embedding()[0], "onnx")
+            self.assertEqual(preload_mfs_model.configured_embedding()[0], "onnx")
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { APPEARANCES, APPEARANCE_LABEL, setAppearance, useAppearance } from "../lib/appearance";
 import type { AppInfo, Bridge } from "../lib/bridge";
 import { parseConnections } from "../lib/ai";
+import { memoryDetail, parseMemory, type MemoryStatus } from "../lib/memory";
 import { KEEP_RUNNING_DETAIL, parseJSON } from "../lib/protocol";
 import type { Tags } from "../lib/tags";
 import { useTrack, type Telemetry } from "../lib/telemetry";
@@ -241,6 +242,7 @@ export function Settings({ api, info, tags, telemetry, close, replay, initialTab
               <Switch on={tags.keepRunning} busy={keepBusy} label="Keep Tags running"
                 onClick={async () => { setKeepBusy(true); await tags.setAutostart(!tags.keepRunning); setKeepBusy(false); }} />
             </SetRow>
+            <MemoryRow api={api} setError={setError} />
           </div>
         </div>
         {openAI && (
@@ -309,6 +311,34 @@ export function UsageDataRow({ api, telemetry, setError }: { api: Bridge; teleme
         catch (e) { setError(e instanceof Error ? e.message : String(e)); }
         finally { setBusy(false); }
       }} />}
+    </SetRow>
+  );
+}
+
+/** Settings → General: the shared memory every Tag searches, with its state and a way to start or stop it. */
+export function MemoryRow({ api, setError }: { api: Bridge; setError: (message: string) => void }) {
+  const [memory, setMemory] = useState<MemoryStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const load = async (args: string[]) => {
+    const result = await api.tag(args);
+    if (result.code !== 0) throw new Error(result.stderr.trim().split("\n").pop() || "Couldn't reach memory.");
+    setMemory(parseMemory(result.stdout));
+  };
+  useEffect(() => {
+    let live = true;
+    void api.tag(["memory", "status", "--json"]).then((r) => { if (live && r.code === 0) setMemory(parseMemory(r.stdout)); }).catch(() => {});
+    return () => { live = false; };
+  }, [api]);
+  if (!memory) return null; // An older Tag without `memory --json` simply has no row.
+  return (
+    <SetRow label="Memory" detail={memoryDetail(memory)}>
+      <Switch on={memory.healthy} busy={busy} label="Memory" onClick={async () => {
+        setBusy(true);
+        setError("");
+        try { await load(["memory", memory.healthy ? "stop" : "start", "--json"]); }
+        catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+        finally { setBusy(false); }
+      }} />
     </SetRow>
   );
 }

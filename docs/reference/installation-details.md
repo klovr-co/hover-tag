@@ -388,10 +388,10 @@ The installer skips the download when MFS will not use it:
 - The MFS server configuration (`$MFS_SERVER_CONFIG`, `./server.toml`,
   `$MFS_HOME/server.toml`, or `~/.mfs/server.toml`) selects another embedding
   provider, for example `provider = "openai"` under `[embedding]`.
-- `TAG_SKIP_MFS_MODEL=1` is set, for an install that chooses its provider later:
-  `TAG_SKIP_MFS_MODEL=1 ./install.sh`. This also works with the curl installer
-  and `install.ps1`. The desktop app runs the same installer step, so it also
-  honors the server configuration; it has no setting for the variable.
+- You ask for it, for an install that chooses its provider later:
+  `./install.sh --hosted-memory`, `install.ps1 -HostedMemory`, or
+  `TAG_SKIP_MFS_MODEL=1` in the environment (all work with the curl installer).
+  Tag.app's install screen has a **Hosted memory** switch that does the same.
 
 The installer prints which one applied. A skipped model is not lost: if you later
 switch to the local provider, MFS downloads the model the first time it starts.

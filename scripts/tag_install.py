@@ -664,12 +664,18 @@ def install(
                 )
             row("Runtime", f"Python {sys.version_info.major}.{sys.version_info.minor} · dependencies ready")
             progress("memory")
-            paragraph("Preparing the memory model (skipped for hosted providers)…", MUTED, indent="    ")
+            hosted_memory = os.environ.get("TAG_SKIP_MFS_MODEL", "").strip().lower() in {"1", "true", "yes", "on"}
+            paragraph(
+                "Skipping the local memory model (hosted memory)…" if hosted_memory
+                else "Preparing the memory model (skipped for hosted providers)…",
+                MUTED, indent="    ",
+            )
             install_step(
                 [str(python), str(release / "scripts/preload_mfs_model.py")],
                 "Preparing the MFS embedding model",
             )
-            row("Memory", "Embedding model ready, or not needed for your provider")
+            row("Memory", "Hosted embeddings; no local model downloaded" if hosted_memory
+                else "Embedding model ready, or not needed for your provider")
             if tag_dependencies is not None:
                 tag_dependencies.ensure_slack(home)
             install_step([str(python), "-c", "import mfs_server, psutil, slack_bolt"], "Checking the prepared runtime")
@@ -781,7 +787,13 @@ def main() -> int:
     parser.add_argument("--bin-dir", type=Path)
     parser.add_argument("--skip-dependencies", action="store_true", help="development/test installs only")
     parser.add_argument("--migrate-dependencies", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--hosted-memory", action="store_true",
+        help="skip the 560 MB local search-model download (you will use a hosted embedding provider such as OpenAI)",
+    )
     args = parser.parse_args()
+    if args.hosted_memory:
+        os.environ["TAG_SKIP_MFS_MODEL"] = "1"  # read by preload_mfs_model.py in the memory step
     if args.source and (args.channel or args.version):
         parser.error("--source cannot be combined with --channel or --version")
     if sys.version_info < (3, 10):

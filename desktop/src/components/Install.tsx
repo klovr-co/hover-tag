@@ -9,7 +9,7 @@ import welcomeArt from "../assets/art/welcome-maya.png";
 import building from "../assets/art/tag-building.png";
 import celebrate from "../assets/art/tag-celebrate.png";
 import puzzled from "../assets/art/tag-puzzled.png";
-import { ErrorLine, Icon, Primary, Quiet, Sky, Spinner, useCopied } from "./ui";
+import { ErrorLine, Icon, Primary, Quiet, Sky, Spinner, Switch, useCopied } from "./ui";
 
 /** Keep startup in the same shell as setup, including a recoverable failure. */
 export function Starting({ error, retry }: { error?: string; retry: () => void }) {
@@ -56,15 +56,16 @@ function InstallCanvas({ title, lead, side, art, children, foot }: {
 
 /** Replay ends with Done; first-run welcome offers installation and quitting. */
 export function Welcome({ api, platform, install, preview }: { api: Bridge; platform: string } &
-  ({ install: () => void; preview?: never } | { preview: () => void; install?: never })) {
+  ({ install: (hostedMemory: boolean) => void; preview?: never } | { preview: () => void; install?: never })) {
   const machine = platform === "macos" ? "Mac" : "computer";
+  const [hosted, setHosted] = useState(false);
   return (
     <InstallCanvas title="Install Tag" lead="Multiplayer AI, right in Slack."
       foot={<>
         <span className="spacer" />
         {preview ? <Primary title="Done" onClick={preview} autoFocus /> : <>
           <Quiet title="Quit" onClick={() => void api.quit()} />
-          <Primary title="Install Tag" onClick={install} autoFocus />
+          <Primary title="Install Tag" onClick={() => install(hosted)} autoFocus />
         </>}
       </>}>
       <div className="facts">
@@ -72,6 +73,9 @@ export function Welcome({ api, platform, install, preview }: { api: Bridge; plat
           <span><b>No administrator password.</b> Tag installs into your user folder and keeps your existing configuration.</span></div>
         <div className="fact"><span className="fi"><Icon name="disk" size={16} /></span><span>About <b>1.8 GB</b> of disk space</span></div>
         <div className="fact"><span className="fi"><Icon name="wifi" size={16} /></span><span>Keep this {machine} online until it finishes</span></div>
+        {!preview && <div className="fact"><span className="fi"><Icon name="disk" size={16} /></span>
+          <span style={{ flex: 1 }}><b>Hosted memory.</b> Skip the 560 MB search model if you'll use OpenAI for memory.</span>
+          <Switch on={hosted} busy={false} label="Use hosted memory" onClick={() => setHosted(!hosted)} /></div>}
       </div>
     </InstallCanvas>
   );
@@ -86,8 +90,8 @@ function StepIcon({ state }: { state: StepState }) {
   return <span className="sicon pending" />;
 }
 
-export function Installing({ api, done, retry, cancel }: {
-  api: Bridge; done: (command: string) => void; retry: () => void; cancel: () => void;
+export function Installing({ api, hostedMemory = false, done, retry, cancel }: {
+  api: Bridge; hostedMemory?: boolean; done: (command: string) => void; retry: () => void; cancel: () => void;
 }) {
   const [state, dispatch] = useReducer(installReducer, initialInstall);
   const [showLog, setShowLog] = useState(false);
@@ -102,7 +106,7 @@ export function Installing({ api, done, retry, cancel }: {
     void Promise.resolve().then(async () => {
       if (!live) return;
       const next = await api.install("", (line) => live && dispatch({ type: "line", line }),
-        (code) => live && dispatch({ type: "exit", code }));
+        (code) => live && dispatch({ type: "exit", code }), { hostedMemory });
       if (!live) { next.stop(); return; }
       owned = next;
       session.current = next;
@@ -118,7 +122,7 @@ export function Installing({ api, done, retry, cancel }: {
       owned?.stop();
       if (session.current === owned) session.current = null;
     };
-  }, [api]);
+  }, [api, hostedMemory]);
   useEffect(() => { stepStart.current = Date.now(); }, [state.current]);
 
   const failed = state.states.includes("failed");

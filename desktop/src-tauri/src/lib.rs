@@ -283,8 +283,12 @@ fn installer_command(app: &AppHandle, channel: &str) -> Result<Command, String> 
 }
 
 #[tauri::command]
-fn install_start(app: AppHandle, sessions: State<Arc<Sessions>>, channel: String, output: Channel<Output>) -> Result<u32, String> {
+fn install_start(app: AppHandle, sessions: State<Arc<Sessions>>, channel: String, hosted_memory: Option<bool>, output: Channel<Output>) -> Result<u32, String> {
     let mut command = installer_command(&app, &channel)?;
+    if hosted_memory == Some(true) {
+        // The installer skips the local search-model download when this is set.
+        command.env("TAG_SKIP_MFS_MODEL", "1");
+    }
     command
         .env("TAG_INSTALL_PROGRESS", "jsonl")
         .env("NO_COLOR", "1")

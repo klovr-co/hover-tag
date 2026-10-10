@@ -59,7 +59,8 @@ export interface Bridge {
   setup(args: string[], onLine: (line: string) => void, onExit: (code: number, stderr: string) => void): Promise<Session>;
   /** `tag ARGS --json` for a command that reports progress as it goes, such as start. */
   follow(args: string[], onLine: (line: string) => void, onExit: (code: number, stderr: string) => void): Promise<Session>;
-  install(channel: string, onLine: (line: string) => void, onExit: (code: number) => void): Promise<Session>;
+  /** `hostedMemory` skips the local search-model download for people who will use a hosted provider. */
+  install(channel: string, onLine: (line: string) => void, onExit: (code: number) => void, options?: { hostedMemory?: boolean }): Promise<Session>;
   copy(text: string): Promise<void>;
   paste(): Promise<string>;
   open(target: string): Promise<void>;
@@ -126,7 +127,8 @@ async function tauriBridge(): Promise<Bridge> {
     setup: (args, onLine, onExit) => stream("setup_start", { args }, onLine, onExit),
     // The same streamed `tag ARGS --json` session as setup; start never reads input.
     follow: (args, onLine, onExit) => stream("setup_start", { args }, onLine, onExit),
-    install: (channel, onLine, onExit) => stream("install_start", { channel }, onLine, (code) => onExit(code)),
+    install: (channel, onLine, onExit, options) =>
+      stream("install_start", { channel, hostedMemory: !!options?.hostedMemory }, onLine, (code) => onExit(code)),
     copy: (text) => clipboard.writeText(text),
     paste: async () => (await clipboard.readText()) ?? "",
     open: (target) => (/^[a-z]+:/i.test(target) ? opener.openUrl(target) : opener.openPath(target)),
@@ -211,6 +213,7 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
   let savedChannel = runtimeVersion.includes("-alpha") ? "alpha" : runtimeVersion.includes("-beta") ? "beta" : "stable";
   const targetVersion = new URLSearchParams(location.search).get("update") ? "0.4.0-alpha.1" : runtimeVersion;
   let keepRunning = false;
+  let memoryRunning = true;
   // ?api=1 starts with one Tag already using its own API.
   const apiDemo: ApiConnection[] = typeof location !== "undefined" && new URLSearchParams(location.search).get("api") ? [{
     tag: rows[0].id, tag_name: rows[0].slack_name ?? "Tag", backend: "codex", kind: "openai", kind_name: "OpenAI-compatible",
@@ -276,6 +279,11 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
           return json({ schema_version: 1, ok: true, default_model: ai.default_model, default_effort: effort,
             restart_required: running && !restart, restarted: restart });
         }
+      }
+      if (first === "memory") {
+        if (second === "start" || second === "stop") memoryRunning = second === "start";
+        return json({ schema_version: 1, managed: memoryRunning, healthy: memoryRunning, running_tags: [],
+          keep_running: keepRunning, embedding: { provider: "onnx", model: "bge-m3", local: true } });
       }
       if (first === "autostart") {
         if (second === "on" || second === "off") keepRunning = second === "on";

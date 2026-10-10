@@ -38,12 +38,14 @@ try:
     import tag_display as display
     import tag_autostart as autostart
     import agent_models
+    import preload_mfs_model
 except ImportError:
     from scripts.tag_paths import initialize_instance, initialize_workspace, runtime_environment, tag_home
     from scripts import tag_instances, tag_telemetry
     from scripts.tag_locks import LifecycleLock
     from scripts import tag_locks
     from scripts import agent_models
+    from scripts import preload_mfs_model
     from scripts.tag_config import read_config
     from scripts import tag_credentials
     from scripts import tag_welcome
@@ -2704,6 +2706,8 @@ def _run_cli() -> int:
             autostart.set_memory_wanted(context.shared_mfs_home, False)
             result.update(managed=False, healthy=False)
         result["keep_running"] = autostart.memory_needed(installation_root, sys.modules[__name__])
+        provider, model = preload_mfs_model.configured_embedding()
+        result["embedding"] = {"provider": provider, "model": model, "local": preload_mfs_model.uses_local_model(provider)}
         if args.json_output:
             print(json.dumps(result, indent=2))
         else:
@@ -2711,6 +2715,8 @@ def _run_cli() -> int:
             display.info_row("Service", "Managed and running" if result["managed"] else "Not managed", good=result["managed"])
             display.info_row("Restarts", "Kept running by tag autostart" if result["keep_running"]
                              else "Not restarted if it stops")
+            display.info_row("Search model", "On this computer" if result["embedding"]["local"]
+                             else f"Hosted ({result['embedding']['provider']})")
             display.info_row("Active Tags", ", ".join(bridges) if bridges else "None")
             detail = log_tail(home, "mfs", 20, state_dir=context.shared_mfs_home)
             if detail:

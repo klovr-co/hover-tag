@@ -41,6 +41,7 @@ The Tag desktop app and the CLI use the same Tags, settings, and lifecycle: the 
 | Model and thinking level | Details → **Model** | `tag NAME settings ai model VALUE [--effort LEVEL]` |
 | AI accounts | Settings → General → **AI connections** | `tag settings ai`, `tag settings ai sign-in codex\|claude` |
 | Keep Tags running | Settings → General → **Keep Tags running** | `tag autostart on` |
+| Memory on or off | Settings → General → **Memory** | `tag memory start` / `stop`; `tag memory status --json` also reports `embedding` |
 | Open at login | Settings → General → **Open Tag at login** | Not needed; `tag autostart on` runs without the app |
 | Update | Settings → **Updates** → **Update Tag** | `tag upgrade` |
 | Release channel | Settings → **Updates** → Stable, Beta, or Alpha | `tag upgrade --channel stable\|beta\|alpha\|edge` |

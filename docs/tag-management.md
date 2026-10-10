@@ -59,7 +59,7 @@ Tag's Details in the app.
 Click the gear to open **Settings**. It has three tabs:
 
 - **General**: **Open Tag at login**, **Appearance**, **Keep Tags running**,
-  **AI connections**, and **Share usage data**.
+  **Memory**, **AI connections**, and **Share usage data**.
 - **Updates**: **Update Tag** and the **Release channel** (Stable, Beta, or
   Alpha).
 - **About**: documentation and **Replay onboarding**.
@@ -157,6 +157,12 @@ start after you sign in to your computer and restart if they stop. Turn on
 
 In the terminal: `tag autostart on`.
 
+Keep Tags running also restarts memory (MFS) if it stops. The **Memory** switch
+below it shows whether memory is running, whether it restarts itself, and
+whether its search model runs on this computer or is hosted. Turn it off to stop
+memory (stop your Tags first); in the terminal, `tag memory status`, `start`, and
+`stop`.
+
 Tags started this way find `claude` and `codex` in the usual install folders
 (`~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`). They also look in the
 folders on your PATH when you last started a Tag or turned this on yourself.
@@ -203,6 +209,7 @@ doesn't have this. Remove the Tag and add a new one instead.
 | Model | Details → **Model** | `tag NAME settings ai model VALUE` |
 | AI accounts | Settings → General → **AI connections** | `tag settings ai` |
 | Keep Tags running | Settings → General → **Keep Tags running** | `tag autostart on` |
+| Start or stop memory | Settings → General → **Memory** | `tag memory start` / `stop` / `status` |
 | Update | Settings → Updates → **Update Tag** | `tag upgrade` |
 | Release channel | Settings → Updates → **Release channel** | `tag upgrade --channel beta` |
 | Usage data | Settings → General → **Share usage data** | `tag telemetry on\|off` |

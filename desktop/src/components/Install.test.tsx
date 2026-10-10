@@ -50,3 +50,24 @@ it("tells people the install needs about 1.8 GB, as measured", () => {
   expect(screen.getByText("1.8 GB")).toBeTruthy();
   expect(screen.queryByText("650 MB")).toBeNull();
 });
+
+it("lets people skip the local search model when they'll use hosted memory", () => {
+  const install = vi.fn();
+  render(<Welcome api={demoBridge()} platform="macos" install={install} />);
+  const toggle = screen.getByRole("switch", { name: "Use hosted memory" });
+  expect(toggle.getAttribute("aria-checked")).toBe("false");
+  fireEvent.click(screen.getByRole("button", { name: "Install Tag" }));
+  expect(install).toHaveBeenLastCalledWith(false);
+  fireEvent.click(toggle);
+  expect(toggle.getAttribute("aria-checked")).toBe("true");
+  fireEvent.click(screen.getByRole("button", { name: "Install Tag" }));
+  expect(install).toHaveBeenLastCalledWith(true);
+});
+
+it("passes the hosted memory choice to the installer", async () => {
+  const api = demoBridge();
+  const install = vi.spyOn(api, "install");
+  render(<Installing api={api} hostedMemory done={vi.fn()} retry={vi.fn()} cancel={vi.fn()} />);
+  await vi.waitFor(() => expect(install).toHaveBeenCalled());
+  expect(install.mock.calls[0][3]).toEqual({ hostedMemory: true });
+});

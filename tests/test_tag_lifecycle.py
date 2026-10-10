@@ -125,6 +125,19 @@ class TagLifecycleTests(unittest.TestCase):
         self.assertIn("startup failed: <redacted>", output.getvalue())
         self.assertNotIn(secret, output.getvalue())
 
+    def test_memory_status_json_says_which_embedding_provider_memory_uses(self) -> None:
+        for configured, local in (("openai", False), ("onnx", True)):
+            with self.subTest(provider=configured), patch.dict(
+                os.environ, {"TAG_HOME": str(self.root)}, clear=False
+            ), patch.object(sys, "argv", ["tag", "memory", "status", "--json"]), patch.object(
+                tag_cli, "healthy", return_value=False
+            ), patch.object(
+                tag_cli.preload_mfs_model, "configured_embedding", return_value=(configured, "model-x")
+            ), redirect_stdout(StringIO()) as output:
+                self.assertEqual(tag_cli.main(), 0)
+            embedding = json.loads(output.getvalue())["embedding"]
+            self.assertEqual(embedding, {"provider": configured, "model": "model-x", "local": local})
+
     def test_memory_start_uses_saved_mfs_settings_before_onboarding_completes(self) -> None:
         config = self.home / "config/settings.json"
         config.write_text('{"MFS_URL":"http://localhost:13619"}', encoding="utf-8")

@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { demoBridge, type RunResult } from "../lib/bridge";
 import type { ProductUpdate } from "../lib/updates";
 import type { Telemetry, TelemetryStatus } from "../lib/telemetry";
-import { ReleaseChannel, UsageDataRow } from "./Settings";
+import { MemoryRow, ReleaseChannel, UsageDataRow } from "./Settings";
 
 afterEach(cleanup);
 
@@ -105,5 +105,46 @@ describe("Usage data", () => {
     rerender(<UsageDataRow api={api} telemetry={telemetry(null)} setError={() => {}} />);
     expect(screen.getByText("Update Tag to manage usage data here.")).toBeTruthy();
     expect(screen.queryByRole("switch")).toBeNull();
+  });
+});
+
+describe("Memory row", () => {
+  function memory(initial: { healthy: boolean; keep_running?: boolean }, stopFails = "") {
+    const api = demoBridge();
+    const calls: string[][] = [];
+    let healthy = initial.healthy;
+    api.tag = async (args) => {
+      calls.push(args);
+      if (args[1] === "start") healthy = true;
+      if (args[1] === "stop") {
+        if (stopFails) return { code: 1, stdout: "", stderr: stopFails };
+        healthy = false;
+      }
+      return { code: 0, stderr: "", stdout: JSON.stringify({ schema_version: 1, managed: healthy, healthy, running_tags: [],
+        keep_running: !!initial.keep_running, embedding: { provider: "openai", model: "m", local: false } }) };
+    };
+    const setError = vi.fn();
+    render(<MemoryRow api={api} setError={setError} />);
+    return { calls, setError };
+  }
+
+  it("shows whether memory runs and where its search model is, and starts it", async () => {
+    const { calls } = memory({ healthy: false });
+    await screen.findByText(/Not running\..*Search model is hosted \(openai\)\./);
+    const toggle = screen.getByRole("switch", { name: "Memory" });
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(toggle);
+    await vi.waitFor(() => expect(screen.getByRole("switch", { name: "Memory" }).getAttribute("aria-checked")).toBe("true"));
+    expect(calls).toContainEqual(["memory", "start", "--json"]);
+  });
+
+  it("stops memory, and reports why when running Tags prevent it", async () => {
+    const { calls, setError } = memory({ healthy: true }, "Stop every Tag bridge before stopping shared memory: research");
+    const toggle = await screen.findByRole("switch", { name: "Memory" });
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(toggle);
+    await vi.waitFor(() => expect(setError).toHaveBeenCalledWith("Stop every Tag bridge before stopping shared memory: research"));
+    expect(calls).toContainEqual(["memory", "stop", "--json"]);
+    expect(screen.getByRole("switch", { name: "Memory" }).getAttribute("aria-checked")).toBe("true");
   });
 });

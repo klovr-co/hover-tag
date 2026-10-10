@@ -22,7 +22,7 @@ import { Toast } from "./components/ui";
 type Screen =
   | { name: "loading" }
   | { name: "welcome" }
-  | { name: "installing"; attempt: number }
+  | { name: "installing"; attempt: number; hostedMemory: boolean }
   | { name: "home" }
   | { name: "connect"; args: string[] }
   | { name: "settings"; tab?: SettingsTab; privacy?: boolean }
@@ -267,10 +267,10 @@ export function App() {
     <TrackContext.Provider value={track}>
       <main ref={setRoot} className={`app${info.platform === "macos" ? " overlay" : ""}${screen.name === "home" ? " home" : ""}${fixed ? " fixed" : ""}${screen.name === "tag" ? " wide" : ""}`}>
         {screen.name === "replay" && <Welcome api={api} platform={info.platform} preview={() => setScreen({ name: "settings", tab: "about" })} />}
-        {screen.name === "welcome" && <Welcome api={api} platform={info.platform} install={() => setScreen({ name: "installing", attempt: 0 })} />}
+        {screen.name === "welcome" && <Welcome api={api} platform={info.platform} install={(hostedMemory) => setScreen({ name: "installing", attempt: 0, hostedMemory })} />}
         {screen.name === "installing" && (
-          <Installing key={screen.attempt} api={api}
-            retry={() => setScreen({ name: "installing", attempt: screen.attempt + 1 })}
+          <Installing key={screen.attempt} api={api} hostedMemory={screen.hostedMemory}
+            retry={() => setScreen({ name: "installing", attempt: screen.attempt + 1, hostedMemory: screen.hostedMemory })}
             cancel={() => setScreen({ name: "welcome" })}
             done={(command) => void afterInstall(command)} />
         )}

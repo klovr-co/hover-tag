@@ -29,7 +29,7 @@ def _server_config_loader():
     return load_server_config
 
 
-def _configured_embedding() -> tuple[str, str]:
+def configured_embedding() -> tuple[str, str]:
     """The provider and model the MFS server configuration selects.
 
     Reads the same server.toml lookup chain as the server. A configuration that
@@ -40,6 +40,10 @@ def _configured_embedding() -> tuple[str, str]:
         return embedding.provider, embedding.model
     except Exception:
         return LOCAL_PROVIDER, ""
+
+
+def uses_local_model(provider: str) -> bool:
+    return provider == LOCAL_PROVIDER
 
 
 def preload_default_embedding() -> tuple[str, str]:
@@ -54,8 +58,8 @@ def main() -> int:
     if os.environ.get(SKIP_ENVIRONMENT, "").strip().lower() in {"1", "true", "yes", "on"}:
         print(f"MFS embedding model download skipped ({SKIP_ENVIRONMENT} is set)")
         return 0
-    configured, _ = _configured_embedding()
-    if configured != LOCAL_PROVIDER:
+    configured, _ = configured_embedding()
+    if not uses_local_model(configured):
         print(f"MFS embedding model download skipped (embedding provider is {configured})")
         return 0
     provider, model = preload_default_embedding()
