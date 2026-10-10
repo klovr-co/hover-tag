@@ -168,6 +168,17 @@ mfs add postgres://prod             --config ./pg.toml        # rows as objects
 export MFS_ALLOWED_SCOPES="slack://team-memory,github://your-org/your-repo,linear://your-workspace,file://local/path/to/workspace"
 ```
 
+A Slack request reaches only its own channel's Slack history. Other sources in
+`MFS_ALLOWED_SCOPES` reach it only through `MFS_CHANNEL_SCOPES`, a JSON object
+from channel ID to the extra scopes that channel may search. Tag keeps only the
+scopes that fall inside `MFS_ALLOWED_SCOPES`, and ignores the whole map if it is
+not valid JSON:
+
+```bash
+tag config set MFS_CHANNEL_SCOPES '{"C0123ABCD": ["file://local/path/to/workspace"]}'
+tag restart
+```
+
 Do not hand-write Tag's primary Slack connector TOML; setup creates it with
 `channel_ids` and a bounded history window. For other connector types, use the
 **mfs-ingest** skill and `docs/connectors/`.

@@ -13,10 +13,12 @@ try:
     from agent_models import SUPPORTED_REASONING_EFFORTS
     from mfs_scope_policy import canonical_uri, parse_scopes
     from tag_handoff import parse_peers
+    from opentag_process_env import parse_channel_scopes
 except ImportError:
     from scripts.agent_models import SUPPORTED_REASONING_EFFORTS
     from scripts.mfs_scope_policy import canonical_uri, parse_scopes
     from scripts.tag_handoff import parse_peers
+    from scripts.opentag_process_env import parse_channel_scopes
 
 DEFAULTS = {
     "OPENTAG_BACKEND": "codex", "OPENTAG_BOT_NAME": "Tag",
@@ -45,7 +47,7 @@ PUBLIC = frozenset((*DEFAULTS, "MFS_ALLOWED_SCOPES", "OPENTAG_WORKDIR",
                     "OPENTAG_CODEX_MODELS", "OPENTAG_CODEX_REASONING_EFFORTS",
                     "OPENTAG_CLAUDE_MODELS", "OPENTAG_DEFAULT_MODEL", "OPENTAG_BACKENDS",
                     "OPENTAG_DEFAULT_EFFORT", "OPENTAG_BOT_DESCRIPTION",
-                    "OPENTAG_PEER_TAGS", "SLACK_ALLOWED_BOT_IDS"))
+                    "OPENTAG_PEER_TAGS", "SLACK_ALLOWED_BOT_IDS", "MFS_CHANNEL_SCOPES"))
 EDITABLE = PUBLIC - {"OPENTAG_WORKDIR"} | {
     "SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "MFS_TOKEN", "MFS_SLACK_TOKEN", "MFS_HOME"
 }
@@ -65,6 +67,7 @@ LABELS = {
     "SLACK_ENTERPRISE_ID": "Slack organization authorization",
     "SLACK_APP_ID": "Slack app ID", "MFS_SLACK_TOKEN": "Slack history credential",
     "MFS_ALLOWED_SCOPES": "Allowed memory sources", "MFS_URL": "Memory server",
+    "MFS_CHANNEL_SCOPES": "Extra memory sources per channel (JSON: channel ID to source URIs)",
     "MFS_TOKEN": "Memory server token", "OPENTAG_TIMEOUT_SECONDS": "Agent idle timeout (seconds)",
     "OPENTAG_MAX_TIMEOUT_SECONDS": "Maximum task runtime (seconds)",
     "MFS_SLACK_HISTORY_DAYS": "Slack history window (days)",
@@ -254,6 +257,13 @@ def validation_error(key: str, value: str) -> str | None:
             valid = False
         if not valid:
             return "Use comma-separated source URIs, such as file://local/path or slack://team"
+    if key == "MFS_CHANNEL_SCOPES" and value.strip():
+        try:
+            channels = parse_channel_scopes(value)
+        except ValueError:
+            return 'Use a JSON object such as {"C0123ABCD": ["file://host/path"]}'
+        if not all(re.fullmatch(r"[CG][A-Z0-9]+", channel) for channel in channels):
+            return "Use Slack channel IDs as keys"
     return None
 
 
