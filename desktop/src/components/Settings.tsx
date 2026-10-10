@@ -369,7 +369,7 @@ export function SearchModelRow({ api, embedding, setError, changed }: {
   };
   return <>
     <SetRow label="Search model"
-      detail={embedding.problem || note || "Where memory turns text into searchable vectors. On this computer is private and works offline; OpenAI needs a key and sends text to OpenAI."}>
+      detail={embedding.problem || note || "Where memory computes search embeddings."}>
       <div className="segc" role="radiogroup" aria-label="Search model">
         <button role="radio" aria-checked={picked === "local"} disabled={busy} onClick={() => setPicked("local")}>On this computer</button>
         <button role="radio" aria-checked={picked === "openai"} disabled={busy} onClick={() => setPicked("openai")}>OpenAI</button>
@@ -379,7 +379,7 @@ export function SearchModelRow({ api, embedding, setError, changed }: {
         <div className="model-edit">
           {needsKey && <input className="field mono" type="password" value={key} placeholder="OpenAI API key" aria-label="OpenAI API key"
             autoComplete="new-password" spellCheck={false} disabled={busy} onChange={(e) => setKey(e.target.value)} />}
-          <p>Switching builds a new index, so Memory indexes your Slack channels again with the new model. The old index is kept if you switch back.</p>
+          <p>{picked === "openai" ? "OpenAI needs a key and receives the text of indexed messages. " : "On this computer is private and works offline. "}Switching builds a new index, so Memory indexes your Slack channels again with the new model. The old index is kept if you switch back.</p>
           <Primary small title={busy ? "Switching…" : needsKey ? "Save and switch" : "Switch"} disabled={busy || (needsKey && !key.trim())} onClick={() => void apply()} />
         </div>
     )}
