@@ -168,6 +168,17 @@ mfs add postgres://prod             --config ./pg.toml        # rows as objects
 export MFS_ALLOWED_SCOPES="slack://team-memory,github://your-org/your-repo,linear://your-workspace,file://local/path/to/workspace"
 ```
 
+A Slack request reaches only its own channel's Slack history. Other sources in
+`MFS_ALLOWED_SCOPES` reach it only through `MFS_CHANNEL_SCOPES`, a JSON object
+from channel ID to the extra scopes that channel may search. Tag keeps only the
+scopes that fall inside `MFS_ALLOWED_SCOPES`, and ignores the whole map if it is
+not valid (bad JSON, a key that is not a channel ID, or a URI with a comma):
+
+```bash
+tag config set MFS_CHANNEL_SCOPES '{"C0123ABCD": ["file://local/path/to/workspace"]}'
+tag restart
+```
+
 Do not hand-write Tag's primary Slack connector TOML; setup creates it with
 `channel_ids` and a bounded history window. For other connector types, use the
 **mfs-ingest** skill and `docs/connectors/`.
@@ -211,7 +222,14 @@ fresh backend task, while replies reuse only that DM thread's bounded context
 requests from, as comma-separated `Name=MEMBERID` pairs that use each Tag's bot
 member ID, for example `Research Tag=U0123ABCD,Writer Tag=U0456EFGH`. It is
 empty by default, which turns handoffs off. Mentions from bots that are not
-listed are ignored. See `references/handoffs.md`.
+listed here or in `SLACK_ALLOWED_BOT_IDS` are ignored. See `references/handoffs.md`.
+
+`SLACK_ALLOWED_BOT_IDS` lists other apps' bots that may invoke Tag by mention,
+as comma-separated bot IDs (`B…`) or bot member IDs (`U…`/`W…`). It is empty by
+default. A listed bot is authorized without being in `SLACK_ALLOWED_USER_IDS`.
+Its requests decline every backend approval prompt and never start a handoff. A failed
+bot request gets a fixed, detail-free reply in the thread, not a private notice.
+Tag's own bot is never accepted, even when listed.
 
 The bridge does not need a model API key. The selected CLI backend handles model
 auth and tool execution.

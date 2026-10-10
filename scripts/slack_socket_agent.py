@@ -2713,8 +2713,14 @@ def post_private_failure(
     answer: str,
     placeholder_ts: str | None = None,
     footer_blocks: list[dict[str, Any]] | None = None,
+    bot_request: bool = False,
 ) -> None:
     """Show a failed request only to its requester in a shared channel."""
+    if bot_request:
+        # An ephemeral reply to a bot is never seen: give the asking app a fixed,
+        # detail-free signal in the thread instead.
+        post_final_reply(client, channel, thread_ts, "Tag couldn't complete this request.", placeholder_ts)
+        return
     if is_direct_message_channel(channel):
         post_final_reply(client, channel, thread_ts, answer, placeholder_ts, footer_blocks)
         return
@@ -3276,6 +3282,25 @@ def slack_user_allowed(user_id: str, allowed_user_ids: frozenset[str]) -> bool:
     return bool(user_id) and user_id in allowed_user_ids
 
 
+def configured_slack_bot_ids() -> frozenset[str]:
+    """Load the optional bot allowlist: bot IDs (B...) or bot member IDs (U... or W...)."""
+    return parse_slack_user_ids(os.getenv("SLACK_ALLOWED_BOT_IDS", ""))
+
+
+def slack_bot_allowed(event: dict[str, Any], allowed_bot_ids: frozenset[str], own_user_id: str | None) -> bool:
+    """A mention from another app's bot that the Tag owner approved; never this Tag itself."""
+    bot_id, user_id = event.get("bot_id") or "", event.get("user") or ""
+    if not bot_id or not allowed_bot_ids or (own_user_id and user_id == own_user_id):
+        return False
+    return bot_id in allowed_bot_ids or (bool(user_id) and user_id in allowed_bot_ids)
+
+
+def own_bot_user_id(body: dict[str, Any]) -> str | None:
+    """This Tag's bot member ID, from the event's authorizations."""
+    return next((item.get("user_id") for item in body.get("authorizations") or []
+                 if isinstance(item, dict) and item.get("is_bot")), None)
+
+
 def app_home_view(
     channel_ids: str = "",
     *,
@@ -3411,8 +3436,11 @@ def create_app(
     activity_store: ActivityStore | None = None,
     peers: list[tag_handoff.Peer] | None = None,
     handoff_store: tag_handoff.HandoffStore | None = None,
+    allowed_bot_ids: frozenset[str] | None = None,
 ) -> App:
     retire_slack_settings()
+    if allowed_bot_ids is None:
+        allowed_bot_ids = configured_slack_bot_ids()
     if max_timeout is None:
         max_timeout = int(os.getenv("OPENTAG_MAX_TIMEOUT_SECONDS", "3600"))
     selected_team = os.getenv("SLACK_TEAM_ID", "").strip()
@@ -4382,13 +4410,15 @@ def create_app(
         prior_error_reference: str | None = None,
         peer_request: tuple[str, str] | None = None,
         combine: dict[str, Any] | None = None,
+        bot_request: bool = False,
     ) -> None:
         channel = event["channel"]
         thread_ts = event.get("thread_ts") or event["ts"]
-        # Answering another Tag or combining replies never starts another handoff.
-        handoff_depth = 1 if peer_request or combine else 0
+        # Answering another Tag, combining replies or answering an approved bot never starts another handoff.
+        handoff_depth = 1 if peer_request or combine or bot_request else 0
         user_id = event.get("user", "")
-        if not slack_user_allowed(user_id, allowed_user_ids):
+        # An approved bot is authorized by SLACK_ALLOWED_BOT_IDS, checked before this call.
+        if not bot_request and not slack_user_allowed(user_id, allowed_user_ids):
             logger.warning(
                 "Rejecting Open Tag invocation from unauthorized Slack user %s in channel %s",
                 user_id or "(missing)",
@@ -4627,7 +4657,8 @@ def create_app(
                         reasoning_effort=agent_settings.reasoning_effort,
                         on_answer_start=indicator.answer_started,
                         on_status=indicator.status,
-                        on_approval=lambda approval: post_backend_approval(
+                        # No one can answer an approval for a bot, so a bot's request declines them.
+                        on_approval=None if bot_request else lambda approval: post_backend_approval(
                             client,
                             team=team,
                             channel=channel,
@@ -4799,7 +4830,8 @@ def create_app(
                         post_final_reply(client, channel, thread_ts, answer, indicator.message_ts, footer_blocks)
                     else:
                         post_private_failure(
-                            client, channel, thread_ts, user_id, answer, indicator.message_ts, footer_blocks
+                            client, channel, thread_ts, user_id, answer, indicator.message_ts, footer_blocks,
+                            bot_request=bot_request,
                         )
                         if peer_request is not None:
                             handoff_id, sender = peer_request
@@ -4875,6 +4907,7 @@ def create_app(
                 str(exc),
                 indicator.message_ts,
                 None,
+                bot_request=bot_request,
             )
         except Exception as exc:
             finish_activity("failed")
@@ -4931,6 +4964,7 @@ def create_app(
                 answer,
                 indicator.message_ts,
                 footer_blocks,
+                bot_request=bot_request,
             )
         finally:
             release_thread(thread_key)
@@ -5018,6 +5052,10 @@ def create_app(
             or newly_invited_channel_allowed(channel, client)
         ):
             logger.warning("Ignoring Open Tag mention from unapproved Slack channel %s", channel)
+            return
+        if event.get("user") not in peer_ids and slack_bot_allowed(event, allowed_bot_ids, own_bot_user_id(body)):
+            logger.info("Accepting a mention from approved bot %s", event.get("bot_id") or event.get("user"))
+            handle_invocation(event, body, client, logger, direct_message=False, bot_request=True)
             return
         if event.get("bot_id") or event.get("user") in peer_ids:
             handle_peer_message(event, body, client, logger)
