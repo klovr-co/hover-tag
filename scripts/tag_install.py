@@ -664,12 +664,12 @@ def install(
                 )
             row("Runtime", f"Python {sys.version_info.major}.{sys.version_info.minor} · dependencies ready")
             progress("memory")
-            paragraph("Preparing the local memory model…", MUTED, indent="    ")
+            paragraph("Preparing the memory model (skipped for hosted providers)…", MUTED, indent="    ")
             install_step(
                 [str(python), str(release / "scripts/preload_mfs_model.py")],
                 "Preparing the MFS embedding model",
             )
-            row("Memory", "Local embedding model cached")
+            row("Memory", "Embedding model ready, or not needed for your provider")
             if tag_dependencies is not None:
                 tag_dependencies.ensure_slack(home)
             install_step([str(python), "-c", "import mfs_server, psutil, slack_bolt"], "Checking the prepared runtime")

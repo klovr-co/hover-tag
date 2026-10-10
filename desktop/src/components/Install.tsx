@@ -70,7 +70,7 @@ export function Welcome({ api, platform, install, preview }: { api: Bridge; plat
       <div className="facts">
         <div className="fact"><span className="fi"><Icon name="user" size={16} /></span>
           <span><b>No administrator password.</b> Tag installs into your user folder and keeps your existing configuration.</span></div>
-        <div className="fact"><span className="fi"><Icon name="disk" size={16} /></span><span>About <b>650 MB</b> of disk space</span></div>
+        <div className="fact"><span className="fi"><Icon name="disk" size={16} /></span><span>About <b>1.8 GB</b> of disk space</span></div>
         <div className="fact"><span className="fi"><Icon name="wifi" size={16} /></span><span>Keep this {machine} online until it finishes</span></div>
       </div>
     </InstallCanvas>

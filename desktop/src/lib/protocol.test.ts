@@ -9,7 +9,7 @@ import progress from "../../../protocol/examples/install-progress.txt?raw";
 import setup from "../../../protocol/examples/setup.jsonl?raw";
 import { fraction, initialInstall, installReducer } from "./install";
 import {
-  compatibility, groups, INSTALL_STEPS, parseList, parseProgressLine, parseSetupLine, status, title,
+  compatibility, groups, KEEP_RUNNING_DETAIL, problemHelp, INSTALL_STEPS, parseList, parseProgressLine, parseSetupLine, status, title,
   type VersionInfo,
 } from "./protocol";
 import { collapseRepeats } from "./protocol";
@@ -214,5 +214,20 @@ describe("log repeats", () => {
     expect(collapseRepeats(["Started", pipe(a), pipe(b), "Stopped", "Stopped"]))
       .toEqual(["Started", `${pipe(b)}  … ×2`, "Stopped  … ×2"]);
     expect(collapseRepeats(["one", "two"])).toEqual(["one", "two"]);
+  });
+});
+
+describe("memory and Keep Tags running", () => {
+  it("says the setting also keeps memory running", () => {
+    expect(KEEP_RUNNING_DETAIL).toContain("memory");
+  });
+
+  it("tells people memory is restarted for them when Keep Tags running is on", () => {
+    const row = { id: "a", services: { mfs: false } } as Parameters<typeof problemHelp>[0];
+    expect(problemHelp(row, null)).toContain("Keep Tags running");
+  });
+
+  it("describes the model step as skipped when memory uses a hosted provider", () => {
+    expect(INSTALL_STEPS.find((item) => item.step === "memory")?.detail).toContain("hosted");
   });
 });

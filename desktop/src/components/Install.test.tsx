@@ -44,3 +44,9 @@ it("draws Welcome on the same canvas as installation", () => {
   expect(container.querySelector(".sky.hero")).toBeTruthy();
   expect(container.querySelector(".body.install")).toBeTruthy();
 });
+
+it("tells people the install needs about 1.8 GB, as measured", () => {
+  render(<Welcome api={demoBridge()} platform="macos" install={vi.fn()} />);
+  expect(screen.getByText("1.8 GB")).toBeTruthy();
+  expect(screen.queryByText("650 MB")).toBeNull();
+});

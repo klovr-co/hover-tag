@@ -5,7 +5,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { APPEARANCES, APPEARANCE_LABEL, setAppearance, useAppearance } from "../lib/appearance";
 import type { AppInfo, Bridge } from "../lib/bridge";
 import { parseConnections } from "../lib/ai";
-import { parseJSON } from "../lib/protocol";
+import { KEEP_RUNNING_DETAIL, parseJSON } from "../lib/protocol";
 import type { Tags } from "../lib/tags";
 import { useTrack, type Telemetry } from "../lib/telemetry";
 import {
@@ -237,7 +237,7 @@ export function Settings({ api, info, tags, telemetry, close, replay, initialTab
               </div>
             </SetRow>
             <SetRow label="Keep Tags running"
-              detail="Start the Tags you switched on after you log in, and restart any that stop. Works even when this app is closed.">
+              detail={KEEP_RUNNING_DETAIL}>
               <Switch on={tags.keepRunning} busy={keepBusy} label="Keep Tags running"
                 onClick={async () => { setKeepBusy(true); await tags.setAutostart(!tags.keepRunning); setKeepBusy(false); }} />
             </SetRow>
