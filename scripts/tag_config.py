@@ -45,7 +45,7 @@ PUBLIC = frozenset((*DEFAULTS, "MFS_ALLOWED_SCOPES", "OPENTAG_WORKDIR",
                     "OPENTAG_CODEX_MODELS", "OPENTAG_CODEX_REASONING_EFFORTS",
                     "OPENTAG_CLAUDE_MODELS", "OPENTAG_DEFAULT_MODEL", "OPENTAG_BACKENDS",
                     "OPENTAG_DEFAULT_EFFORT", "OPENTAG_BOT_DESCRIPTION",
-                    "OPENTAG_PEER_TAGS"))
+                    "OPENTAG_PEER_TAGS", "SLACK_ALLOWED_BOT_IDS"))
 EDITABLE = PUBLIC - {"OPENTAG_WORKDIR"} | {
     "SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "MFS_TOKEN", "MFS_SLACK_TOKEN", "MFS_HOME"
 }
@@ -75,6 +75,7 @@ LABELS = {
     "OPENTAG_FILE_DELIVERY": "File delivery (local or local+slack)",
     "OPENTAG_TRANSPORT": "Chat service",
     "OPENTAG_PEER_TAGS": "Other Tags this Tag may ask (Name=MEMBERID, comma-separated)",
+    "SLACK_ALLOWED_BOT_IDS": "Other apps' bots that may ask this Tag (bot or member IDs, comma-separated)",
     "OPENTAG_THREAD_MAX_CONTEXT_TOKENS": "Continue a Slack thread's conversation up to this many tokens (0 never continues)",
     "OPENTAG_THREAD_IDLE_HOURS": "Continue a Slack thread's conversation within this many idle hours (0 never continues)",
 }
@@ -220,6 +221,10 @@ def validation_error(key: str, value: str) -> str | None:
             return f"Enter a valid {prefix}- token issued by Slack"
     if key == "SLACK_ALLOWED_USER_IDS" and not all(re.fullmatch(r"[UW][A-Z0-9]+", item.strip()) for item in value.split(",")):
         return "Use comma-separated Slack member IDs"
+    if key == "SLACK_ALLOWED_BOT_IDS" and value.strip() and not all(
+        re.fullmatch(r"[BUW][A-Z0-9]+", item.strip()) for item in value.split(",") if item.strip()
+    ):
+        return "Use comma-separated Slack bot IDs (B...) or bot member IDs (U... or W...)"
     if key == "SLACK_CHANNEL_ID" and value and not re.fullmatch(r"[CG][A-Z0-9]+", value):
         return "Use a Slack channel ID, or leave empty for no channel restriction"
     if key == "SLACK_CHANNEL_IDS":

@@ -6,6 +6,14 @@ All notable changes to Tag are documented here.
 
 ### Added
 
+- Let other apps' bots, such as Hover, ask Tag to run a skill by mentioning
+  it. List each bot in `SLACK_ALLOWED_BOT_IDS` (bot IDs or bot member IDs). Tag
+  works for that bot as if an owner asked, except that it declines any approval
+  prompt (nobody can answer one for a bot) and never passes the work to another
+  Tag. The setting is empty by default, so bot mentions stay ignored until the
+  owner lists a bot. This restores what 0.3.1 allowed through
+  `SLACK_ALLOWED_USER_IDS`, which handoffs had blocked since 0.4.0-alpha.4.
+
 - Let one Tag ask other Tags for help and combine their answers. Tag posts one
   request that mentions every Tag, links it to your thread in both directions,
   shows their progress as steps, and writes the final answer once all have replied or the deadline passes. Each

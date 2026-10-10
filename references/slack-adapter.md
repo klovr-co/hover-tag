@@ -211,7 +211,13 @@ fresh backend task, while replies reuse only that DM thread's bounded context
 requests from, as comma-separated `Name=MEMBERID` pairs that use each Tag's bot
 member ID, for example `Research Tag=U0123ABCD,Writer Tag=U0456EFGH`. It is
 empty by default, which turns handoffs off. Mentions from bots that are not
-listed are ignored. See `references/handoffs.md`.
+listed here or in `SLACK_ALLOWED_BOT_IDS` are ignored. See `references/handoffs.md`.
+
+`SLACK_ALLOWED_BOT_IDS` lists other apps' bots that may invoke Tag by mention,
+as comma-separated bot IDs (`B…`) or bot member IDs (`U…`/`W…`). It is empty by
+default. A listed bot is authorized without being in `SLACK_ALLOWED_USER_IDS`.
+Its requests decline every backend approval prompt and never start a handoff.
+Tag's own bot is never accepted, even when listed.
 
 The bridge does not need a model API key. The selected CLI backend handles model
 auth and tool execution.
