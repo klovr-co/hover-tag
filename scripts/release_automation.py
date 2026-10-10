@@ -143,7 +143,8 @@ def validate_maintenance_candidate(
     """Validate a stable patch release made from a maintenance branch.
 
     `line` is "MAJOR.MINOR". Patch releases are stable only, and each must be
-    the next patch after the newest published release of the same line.
+    newer than the newest published release of the same line. A patch number
+    that was shown publicly but never tagged (a withdrawn draft) may be skipped.
     """
     try:
         candidate = Version.parse(version)
@@ -171,8 +172,8 @@ def validate_maintenance_candidate(
     newest = max((item.patch for item in previous), default=None)
     if newest is None:
         return [f"no stable release of the {line} line has been published"]
-    if candidate.patch != newest + 1:
-        return [f"expected {major}.{minor}.{newest + 1} after {major}.{minor}.{newest}, got {candidate}"]
+    if candidate.patch <= newest:
+        return [f"{candidate} must be newer than {major}.{minor}.{newest}"]
     return []
 
 
