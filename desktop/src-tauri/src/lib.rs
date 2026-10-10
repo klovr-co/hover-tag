@@ -292,6 +292,7 @@ fn install_start(app: AppHandle, sessions: State<Arc<Sessions>>, channel: String
         .env("PYTHONUTF8", "1")
         .env("PYTHONIOENCODING", "utf-8")
         .env("PATH", cli::tool_path());
+    cli::clean_appimage_env(&mut command);
     let saved = cli::saved_command_file(&config_dir(&app));
     sessions.start(command, true, output, move |line| {
         // Remember the exact command the installer reported, so PATH never matters.

@@ -102,8 +102,39 @@ pub fn command(cli: &Path, args: &[String]) -> Command {
         .env("PYTHONUTF8", "1")
         .env("TAG_TELEMETRY_SOURCE", "app")
         .stdin(Stdio::null());
+    clean_appimage_env(&mut command);
     #[cfg(windows)]
     command.creation_flags(CREATE_NO_WINDOW);
+    command
+}
+
+/// Remove `dir/...` entries (AppImage bundled libraries) from a path-list value.
+fn strip_prefix_entries(value: &str, dir: &str) -> String {
+    let dir = dir.trim_end_matches('/');
+    value
+        .split(':')
+        .filter(|entry| !entry.is_empty() && *entry != dir && !entry.starts_with(&format!("{dir}/")))
+        .collect::<Vec<_>>()
+        .join(":")
+}
+
+/// Inside an AppImage, AppRun puts the bundled libraries on LD_LIBRARY_PATH. Child processes
+/// (the installer, curl, `tag`) must use the system's libraries, or an old bundled libnghttp2
+/// breaks the system curl. Drop the bundled entries and keep the rest.
+pub fn clean_appimage_env(command: &mut Command) -> &mut Command {
+    let Some(appdir) = std::env::var("APPDIR").ok().filter(|d| !d.is_empty()) else {
+        return command;
+    };
+    for key in ["LD_LIBRARY_PATH", "LD_PRELOAD"] {
+        if let Ok(value) = std::env::var(key) {
+            let kept = strip_prefix_entries(&value, &appdir);
+            if kept.is_empty() {
+                command.env_remove(key);
+            } else {
+                command.env(key, kept);
+            }
+        }
+    }
     command
 }
 
@@ -124,6 +155,13 @@ pub fn tail(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn appimage_library_entries_are_stripped() {
+        assert_eq!(strip_prefix_entries("/tmp/.mount_x/usr/lib:/opt/lib:/tmp/.mount_x/lib64", "/tmp/.mount_x"), "/opt/lib");
+        assert_eq!(strip_prefix_entries("/tmp/.mount_x/usr/lib", "/tmp/.mount_x/"), "");
+        assert_eq!(strip_prefix_entries("/tmp/.mount_xy/lib", "/tmp/.mount_x"), "/tmp/.mount_xy/lib");
+    }
 
     #[test]
     fn tail_keeps_the_end_on_a_character_boundary() {
