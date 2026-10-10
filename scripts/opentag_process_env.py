@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from urllib.parse import urlsplit
 
@@ -79,8 +80,12 @@ def parse_channel_scopes(raw: str) -> dict[str, list[str]]:
         raise ValueError("MFS_CHANNEL_SCOPES must be a JSON object")
     out: dict[str, list[str]] = {}
     for channel, scopes in data.items():
-        if not isinstance(channel, str) or not isinstance(scopes, list) or not all(
-            isinstance(scope, str) and canonical_uri(scope) is not None for scope in scopes
+        # A comma would let one entry smuggle a second scope into the comma-joined list.
+        if not isinstance(channel, str) or not re.fullmatch(r"[CG][A-Z0-9]+", channel) or not isinstance(
+            scopes, list
+        ) or not all(
+            isinstance(scope, str) and "," not in scope and canonical_uri(scope) is not None
+            for scope in scopes
         ):
             raise ValueError("MFS_CHANNEL_SCOPES maps each channel ID to a list of source URIs")
         out[channel] = [scope.strip() for scope in scopes]

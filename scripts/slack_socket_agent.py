@@ -2713,8 +2713,14 @@ def post_private_failure(
     answer: str,
     placeholder_ts: str | None = None,
     footer_blocks: list[dict[str, Any]] | None = None,
+    bot_request: bool = False,
 ) -> None:
     """Show a failed request only to its requester in a shared channel."""
+    if bot_request:
+        # An ephemeral reply to a bot is never seen: give the asking app a fixed,
+        # detail-free signal in the thread instead.
+        post_final_reply(client, channel, thread_ts, "Tag couldn't complete this request.", placeholder_ts)
+        return
     if is_direct_message_channel(channel):
         post_final_reply(client, channel, thread_ts, answer, placeholder_ts, footer_blocks)
         return
@@ -4824,7 +4830,8 @@ def create_app(
                         post_final_reply(client, channel, thread_ts, answer, indicator.message_ts, footer_blocks)
                     else:
                         post_private_failure(
-                            client, channel, thread_ts, user_id, answer, indicator.message_ts, footer_blocks
+                            client, channel, thread_ts, user_id, answer, indicator.message_ts, footer_blocks,
+                            bot_request=bot_request,
                         )
                         if peer_request is not None:
                             handoff_id, sender = peer_request
@@ -4900,6 +4907,7 @@ def create_app(
                 str(exc),
                 indicator.message_ts,
                 None,
+                bot_request=bot_request,
             )
         except Exception as exc:
             finish_activity("failed")
@@ -4956,6 +4964,7 @@ def create_app(
                 answer,
                 indicator.message_ts,
                 footer_blocks,
+                bot_request=bot_request,
             )
         finally:
             release_thread(thread_key)

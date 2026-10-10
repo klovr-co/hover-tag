@@ -259,11 +259,9 @@ def validation_error(key: str, value: str) -> str | None:
             return "Use comma-separated source URIs, such as file://local/path or slack://team"
     if key == "MFS_CHANNEL_SCOPES" and value.strip():
         try:
-            channels = parse_channel_scopes(value)
+            parse_channel_scopes(value)
         except ValueError:
-            return 'Use a JSON object such as {"C0123ABCD": ["file://host/path"]}'
-        if not all(re.fullmatch(r"[CG][A-Z0-9]+", channel) for channel in channels):
-            return "Use Slack channel IDs as keys"
+            return 'Use a JSON object of Slack channel IDs to source URIs without commas, such as {"C0123ABCD": ["file://host/path"]}'
     return None
 
 

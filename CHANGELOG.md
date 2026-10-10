@@ -10,12 +10,14 @@ All notable changes to Tag are documented here.
   it. List each bot in `SLACK_ALLOWED_BOT_IDS` (bot IDs or bot member IDs). Tag
   works for that bot as if an owner asked, except that it declines any approval
   prompt (nobody can answer one for a bot) and never passes the work to another
-  Tag. The setting is empty by default, so bot mentions stay ignored until the
+  Tag. If a bot's request fails, Tag replies in the thread with a fixed message
+  and no details, because a private notice to a bot is never seen. The setting is empty by default, so bot mentions stay ignored until the
   owner lists a bot. This restores what 0.3.1 allowed through
   `SLACK_ALLOWED_USER_IDS`, which handoffs had blocked since 0.4.0-alpha.3.
 - Let a channel search more than its own Slack history. `MFS_CHANNEL_SCOPES`
   maps a channel ID to extra MFS sources, for example a chat archive indexed in
-  MFS. Each must also be in `MFS_ALLOWED_SCOPES`. Before this, a Slack request
+  MFS. Each must also be in `MFS_ALLOWED_SCOPES`. Keys must be channel IDs and
+  URIs must not contain commas; otherwise the whole map is ignored. Before this, a Slack request
   never reached non-Slack sources, even when they were allowed.
 
 - Let one Tag ask other Tags for help and combine their answers. Tag posts one

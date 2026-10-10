@@ -51,6 +51,17 @@ class ApprovedBotMentionTests(unittest.TestCase):
         self.assertIsNone(run.call_args.kwargs["on_approval"])
         self.assertEqual(1, run.call_args.kwargs["handoff_depth"])
 
+    def test_a_failed_bot_request_gets_a_fixed_reply_in_the_thread(self) -> None:
+        client = MagicMock()
+        slack_socket_agent.post_private_failure(
+            client, "C1", "1.0", HOVER_USER, "secret path /home/x failed", None, bot_request=True
+        )
+        client.chat_postEphemeral.assert_not_called()
+        client.chat_postMessage.assert_called_once()
+        posted = client.chat_postMessage.call_args.kwargs["text"]
+        self.assertIn("couldn't complete", posted)
+        self.assertNotIn("secret", posted)
+
     def test_unlisted_bot_is_ignored(self) -> None:
         run, client = self.mention({"user": "U0OTHERBOT", "bot_id": "B0OTHER"})
         run.assert_not_called()

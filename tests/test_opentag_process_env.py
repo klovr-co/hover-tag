@@ -136,6 +136,20 @@ class CurrentChannelMemoryTests(unittest.TestCase):
         )
         self.assertEqual("slack://tag-t1/channels/team__C1", environment["MFS_ALLOWED_SCOPES"])
 
+    def test_a_comma_or_bad_channel_id_in_the_map_adds_nothing_at_runtime(self) -> None:
+        for raw in (
+            '{"C1": ["file://ksk/whatsapp,file://secret/hr"]}',
+            '{"general": ["file://ksk/whatsapp"]}',
+        ):
+            environment = backend_environment(
+                {"MFS_ALLOWED_SCOPES": "slack://tag-t1/channels/team__C1,file://ksk",
+                 "MFS_CHANNEL_SCOPES": raw},
+                transport="slack",
+                conversation_id="C1" if "C1" in raw else "general",
+                caller_id="U1",
+            )
+            self.assertNotIn("file://", environment["MFS_ALLOWED_SCOPES"])
+
     def test_channel_scope_setting_is_validated(self) -> None:
         from scripts import tag_config
 
@@ -147,6 +161,8 @@ class CurrentChannelMemoryTests(unittest.TestCase):
         self.assertIn("JSON object", tag_config.validation_error("MFS_CHANNEL_SCOPES", '{"C1": ["not a uri"]}'))
         self.assertIn("channel IDs", tag_config.validation_error(
             "MFS_CHANNEL_SCOPES", '{"general": ["file://ksk/whatsapp"]}'))
+        self.assertIn("without commas", tag_config.validation_error(
+            "MFS_CHANNEL_SCOPES", '{"C1": ["file://ksk/a,file://secret/b"]}'))
 
     def test_pre_authorized_cross_channel_scopes_replace_default_narrowing(self) -> None:
         environment = backend_environment(
