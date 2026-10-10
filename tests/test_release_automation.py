@@ -296,10 +296,15 @@ class MaintenanceReleaseTests(unittest.TestCase):
         )
 
     def test_rejects_wrong_line_phase_skipped_or_repeated_patch(self) -> None:
-        for version in ("0.4.1", "0.3.1-alpha.1", "0.3.2", "0.3.0"):
+        for version in ("0.4.1", "0.3.1-alpha.1", "0.3.0", "0.2.9"):
             with self.subTest(version=version):
                 self.assertTrue(validate_maintenance_candidate(version, "0.3", self.TAGS))
         self.assertTrue(validate_maintenance_candidate("0.3.1", "0.3", [*self.TAGS, "v0.3.1"]))
+
+    def test_may_skip_a_withdrawn_patch_number(self) -> None:
+        # v0.3.1 was shown publicly, then withdrawn without ever being tagged.
+        self.assertEqual(validate_maintenance_candidate("0.3.2", "0.3", self.TAGS), [])
+        self.assertTrue(validate_maintenance_candidate("0.3.1", "0.3", [*self.TAGS, "v0.3.2"]))
 
     def test_allows_republishing_an_existing_draft_version(self) -> None:
         self.assertEqual(validate_maintenance_candidate(
