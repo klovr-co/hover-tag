@@ -12,7 +12,7 @@ agent before claiming a release qualified for it. Hosted operation, enterprise p
 and production-grade sandboxing are out of scope.
 
 The canonical source repository is <https://github.com/klovr-co/hover-tag>. `VERSION`
-selects the current release line (`v0.3.1`). The first beta is
+selects the current release line (`v0.3.2`). The first beta is
 `v0.3.0-beta.1`; later eligible merges publish monotonically increasing
 candidates such as `v0.3.0-beta.2`. Beta releases are GitHub prereleases
 and remain opt-in. The previous line published `v0.2.0-alpha` and
