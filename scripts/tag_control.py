@@ -325,33 +325,41 @@ def choose_default_model(home: Path, values: dict[str, str]) -> str | None:
     return values_only[choice] if choice < len(choices) else None
 
 
-def _search_model_label() -> str:
+def _embedding_choices():
     try:
         import tag_embedding
         from tag_paths import tag_home
     except ImportError:
         from scripts import tag_embedding
         from scripts.tag_paths import tag_home
-    path = tag_embedding.managed_config(tag_home() / "shared/mfs")
-    hosted = path is not None and 'provider = "openai"' in path.read_text(encoding="utf-8")
-    return "OpenAI" if hosted else "On this computer"
+    shared = tag_home() / "shared/mfs"
+    return tag_embedding, shared
+
+
+def _search_model_label() -> str:
+    tag_embedding, shared = _embedding_choices()
+    current = tag_embedding.current_provider(shared)
+    return next((str(c["label"]) for c in tag_embedding.choices(shared) if c["id"] == current), current)
 
 
 def _choose_search_model() -> None:
     """Pick where memory computes search embeddings; `tag memory embedding` does the work."""
+    tag_embedding, shared = _embedding_choices()
+    options = tag_embedding.choices(shared)
     ui.message("Switching builds a new index: memory indexes your Slack channels again with the new model.")
-    choice = ui.choose("Search model", ["On this computer (private, works offline)", "OpenAI (needs an API key)", "Cancel"])
-    if choice > 1:
+    choice = ui.choose("Search model", [f"{c['label']} · {c['detail']}" for c in options] + ["Cancel"])
+    if choice >= len(options):
         return
+    picked = options[choice]
     key = ""
-    if choice == 1:
-        key = getpass.getpass("OpenAI API key (Enter to keep a saved key): ").strip()
+    if picked["hosted"]:
+        key = getpass.getpass(f"{picked['label']} API key (Enter to keep a saved key): ").strip()
     if ui.choose("Switch the search model?", ["Switch and re-index", "Cancel"]) != 0:
         return
     command = [sys.executable, str(Path(__file__).with_name("tag_cli.py")), "memory", "embedding",
-               "openai" if choice else "local", *(["--stdin"] if choice else []), "--json"]
+               "local" if not picked["hosted"] else str(picked["id"]), *(["--stdin"] if picked["hosted"] else []), "--json"]
     # The key goes over stdin only, never into the command line.
-    completed = subprocess.run(command, input=key + "\n" if choice else None, text=True, capture_output=True, check=False)
+    completed = subprocess.run(command, input=key + "\n" if picked["hosted"] else None, text=True, capture_output=True, check=False)
     try:
         report = json.loads(completed.stdout.strip().splitlines()[-1]) if completed.stdout.strip() else {}
     except ValueError:

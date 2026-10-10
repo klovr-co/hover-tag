@@ -164,11 +164,12 @@ memory (stop your Tags first); in the terminal, `tag memory status`, `start`, an
 `stop`.
 
 **Search model** chooses where memory computes embeddings: **On this
-computer** (private, works offline, about 560 MB) or **OpenAI** (needs an API
-key; the text of indexed messages goes to OpenAI). Tag checks the key before
-switching, and memory then indexes your Slack channels again, so search is
-partial until it finishes. In the terminal: `tag memory embedding local` or
-`openai`, or **Workspace and memory** in `tag settings`.
+computer** (private, works offline, about 560 MB), **OpenAI**, or **Jina** (each
+needs its own API key, and the text of indexed messages goes to that provider).
+Pick one, paste its key if it needs one, and choose **Switch**. Tag checks the
+key first, and memory then indexes your Slack channels again, so search is
+partial until it finishes. In the terminal: `tag memory embedding local`,
+`openai`, or `jina`, or **Workspace and memory** in `tag settings`.
 
 Tags started this way find `claude` and `codex` in the usual install folders
 (`~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`). They also look in the

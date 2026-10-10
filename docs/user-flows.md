@@ -572,7 +572,7 @@ flowchart LR
 | Keep running after login | Settings → General → **Keep Tags running** and **Open Tag at login** | `tag autostart on` |
 | Start, stop, or check memory | Settings → General → **Memory** | `tag memory start` / `stop` / `status` |
 | Skip the local search model at install | Install screen → **Hosted memory** | `./install.sh --hosted-memory` (or answer the prompt) |
-| Switch the search model later | Settings → General → **Search model** | `tag memory embedding local\|openai`; `tag settings` → Workspace and memory |
+| Switch the search model later | Settings → General → **Search model** | `tag memory embedding local\|openai\|jina`; `tag settings` → Workspace and memory |
 | Rename or describe | Details → **Rename** / description **Edit** | `tag NAME rename "Name"`, `tag NAME describe "…"` |
 | Change the model | Details → **Model** | `tag NAME settings ai model VALUE` |
 | Update | Settings → **Updates** → **Update Tag** updates the app and the runtime together; choose Stable, Beta, or Alpha | `tag upgrade`; `tag upgrade --channel beta` |

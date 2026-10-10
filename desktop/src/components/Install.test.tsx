@@ -54,16 +54,20 @@ it("tells people the install needs about 1.8 GB, as measured", () => {
 it("lets people skip the local search model and give an OpenAI key for hosted memory", () => {
   const install = vi.fn();
   render(<Welcome api={demoBridge()} platform="macos" install={install} />);
-  const toggle = screen.getByRole("switch", { name: "Use OpenAI for memory" });
+  const toggle = screen.getByRole("switch", { name: "Use hosted memory" });
   expect(toggle.getAttribute("aria-checked")).toBe("false");
   expect(screen.queryByLabelText("OpenAI API key")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Install Tag" }));
-  expect(install).toHaveBeenLastCalledWith({ hostedMemory: false, openAIKey: "" });
+  expect(install).toHaveBeenLastCalledWith({ hostedMemory: false, provider: "openai", apiKey: "" });
   fireEvent.click(toggle);
   expect(toggle.getAttribute("aria-checked")).toBe("true");
   fireEvent.change(screen.getByLabelText("OpenAI API key"), { target: { value: " sk-synthetic " } });
   fireEvent.click(screen.getByRole("button", { name: "Install Tag" }));
-  expect(install).toHaveBeenLastCalledWith({ hostedMemory: true, openAIKey: "sk-synthetic" });
+  expect(install).toHaveBeenLastCalledWith({ hostedMemory: true, provider: "openai", apiKey: "sk-synthetic" });
+  fireEvent.click(screen.getByRole("radio", { name: "Jina" }));
+  fireEvent.change(screen.getByLabelText("Jina API key"), { target: { value: "jina-synthetic" } });
+  fireEvent.click(screen.getByRole("button", { name: "Install Tag" }));
+  expect(install).toHaveBeenLastCalledWith({ hostedMemory: true, provider: "jina", apiKey: "jina-synthetic" });
 });
 
 it("passes the hosted memory choice to the installer", async () => {

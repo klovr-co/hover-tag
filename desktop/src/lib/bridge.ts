@@ -214,6 +214,7 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
   const targetVersion = new URLSearchParams(location.search).get("update") ? "0.4.0-alpha.1" : runtimeVersion;
   let keepRunning = false;
   let memoryRunning = true;
+  let embedding = "onnx";
   // ?api=1 starts with one Tag already using its own API.
   const apiDemo: ApiConnection[] = typeof location !== "undefined" && new URLSearchParams(location.search).get("api") ? [{
     tag: rows[0].id, tag_name: rows[0].slack_name ?? "Tag", backend: "codex", kind: "openai", kind_name: "OpenAI-compatible",
@@ -282,8 +283,13 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
       }
       if (first === "memory") {
         if (second === "start" || second === "stop") memoryRunning = second === "start";
+        if (second === "embedding") embedding = args[2] === "local" ? "onnx" : args[2];
         return json({ schema_version: 1, managed: memoryRunning, healthy: memoryRunning, running_tags: [],
-          keep_running: keepRunning, embedding: { provider: "onnx", model: "bge-m3", local: true } });
+          keep_running: keepRunning, embedding: { provider: embedding, model: "m", local: embedding === "onnx", current: embedding,
+            choices: [
+              { id: "onnx", label: "On this computer", detail: "Private and works offline. About 560 MB.", hosted: false, key_saved: false },
+              { id: "openai", label: "OpenAI", detail: "Fast and cheap. Needs an OpenAI key.", hosted: true, key_saved: false },
+              { id: "jina", label: "Jina", detail: "Strong multilingual search. Needs a Jina key.", hosted: true, key_saved: false }] } });
       }
       if (first === "autostart") {
         if (second === "on" || second === "off") keepRunning = second === "on";

@@ -13,33 +13,51 @@ export interface MemoryStatus {
   embedding: Embedding | null;
 }
 
+export interface EmbeddingChoice {
+  id: string;
+  label: string;
+  detail: string;
+  /** Needs an API key, and sends the text it indexes to that provider. */
+  hosted: boolean;
+  /** A key for this provider is already stored, so switching to it needs none. */
+  keySaved: boolean;
+}
+
 export interface Embedding {
   provider: string;
   local: boolean;
-  /** An OpenAI key is already stored, so switching back to OpenAI needs no new key. */
-  keySaved: boolean;
+  /** The id of the choice in use. */
+  current: string;
+  choices: EmbeddingChoice[];
   /** Memory still has to index your sources into the new search model's index. */
   reindexPending: boolean;
   problem: string;
 }
-
-export type EmbeddingChoice = "local" | "openai";
 
 export interface EmbeddingResult { ok: boolean; error: string; reindexing: boolean; note: string }
 
 export function parseMemory(output: string): MemoryStatus {
   const status = parseJSON<{
     healthy?: boolean; managed?: boolean; keep_running?: boolean; running_tags?: string[];
-    embedding?: { provider?: string; local?: boolean; key_saved?: boolean; reindex_pending?: boolean; problem?: string } | null;
+    embedding?: {
+      provider?: string; local?: boolean; current?: string; reindex_pending?: boolean; problem?: string;
+      choices?: { id: string; label: string; detail?: string; hosted?: boolean; key_saved?: boolean }[];
+    } | null;
   }>(output);
   return {
     healthy: !!status.healthy,
     managed: !!status.managed,
     keepRunning: !!status.keep_running,
     runningTags: status.running_tags ?? [],
-    embedding: status.embedding ? {
-      provider: status.embedding.provider ?? "", local: !!status.embedding.local, keySaved: !!status.embedding.key_saved,
+    // An older Tag without the choice list can't offer a switch, so it reports none.
+    embedding: status.embedding?.choices?.length ? {
+      provider: status.embedding.provider ?? "", local: !!status.embedding.local,
+      current: status.embedding.current ?? (status.embedding.local ? "onnx" : status.embedding.provider ?? ""),
+      choices: status.embedding.choices.map((c) => ({ id: c.id, label: c.label, detail: c.detail ?? "", hosted: !!c.hosted, keySaved: !!c.key_saved })),
       reindexPending: !!status.embedding.reindex_pending, problem: status.embedding.problem ?? "",
+    } : status.embedding ? {
+      provider: status.embedding.provider ?? "", local: !!status.embedding.local, current: status.embedding.local ? "onnx" : status.embedding.provider ?? "",
+      choices: [], reindexPending: false, problem: "",
     } : null,
   };
 }
@@ -47,18 +65,21 @@ export function parseMemory(output: string): MemoryStatus {
 /** Where search embeddings are computed: the one fact people choose at install time. */
 export function embeddingText(memory: MemoryStatus) {
   if (!memory.embedding) return "";
-  return memory.embedding.local ? "Search model runs on this computer." : `Search model is hosted (${memory.embedding.provider}).`;
+  if (memory.embedding.local) return "Search model runs on this computer.";
+  const label = memory.embedding.choices.find((c) => c.id === memory.embedding?.current)?.label ?? memory.embedding.provider;
+  return `Search model is hosted (${label}).`;
 }
 
 /**
  * `tag memory embedding local|openai`. The key goes over stdin only and is never part of the command,
  * so it can't show up in a process list or a log.
  */
-export function setEmbedding(api: Bridge, choice: EmbeddingChoice, key: string): Promise<EmbeddingResult> {
+export function setEmbedding(api: Bridge, choice: string, key: string): Promise<EmbeddingResult> {
   const failed = (error: string): EmbeddingResult => ({ ok: false, error, reindexing: false, note: "" });
   return new Promise((resolve) => {
     let result: EmbeddingResult | null = null;
-    const args = ["memory", "embedding", choice, ...(choice === "openai" ? ["--stdin"] : []), "--json"];
+    const hosted = choice !== "local" && choice !== "onnx";
+    const args = ["memory", "embedding", hosted ? choice : "local", ...(hosted ? ["--stdin"] : []), "--json"];
     api.setup(args, (line) => {
       if (!line.trim().startsWith("{")) return;
       try {
@@ -68,7 +89,7 @@ export function setEmbedding(api: Bridge, choice: EmbeddingChoice, key: string):
       } catch { /* not a result line */ }
     }, (code, stderr) => resolve(result ?? failed(
       stderr.trim().split("\n").pop()?.replace(/^Error: /, "") || `Tag stopped unexpectedly (${code}).`)))
-      .then((session) => { if (choice === "openai") session.send({ api_key: key }); })
+      .then((session) => { if (hosted) session.send({ api_key: key }); })
       .catch((e) => resolve(failed(String(e))));
   });
 }

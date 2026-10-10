@@ -74,6 +74,9 @@ export const STATUS_LABEL: Record<Status, string> = {
   attention: "Needs attention",
 };
 
+/** Hosted search models the installer can skip the local download for, in the order they're offered. */
+export const HOSTED_MEMORY = [{ id: "openai", label: "OpenAI" }, { id: "jina", label: "Jina" }] as const;
+
 /** Settings → General: the one switch that keeps Tags and the memory they search running. */
 export const KEEP_RUNNING_DETAIL =
   "Start the Tags you switched on after you log in, and restart any that stop, along with the memory they search. Works even when this app is closed.";

@@ -106,7 +106,7 @@ The installer downloads Tag's local memory model (560 MB) from
 search uses a hosted embedding provider such as OpenAI, skip the download:
 `./install.sh --hosted-memory` (or `TAG_SKIP_MFS_MODEL=1 ./install.sh`; on
 Windows, `install.ps1 -HostedMemory`). In Tag.app, turn on **Hosted memory** on
-the install screen and paste your OpenAI key; the terminal installer asks the
+the install screen, choose OpenAI or Jina, and paste its key; the terminal installer asks the
 same question when you run it interactively. See
 [Memory embedding model](reference/installation-details.md#memory-embedding-model).
 

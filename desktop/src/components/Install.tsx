@@ -4,7 +4,7 @@
 import { useEffect, useReducer, useRef, useState, type ReactNode } from "react";
 import type { Bridge, Session } from "../lib/bridge";
 import { fraction, initialInstall, installReducer, type StepState } from "../lib/install";
-import { INSTALL_STEPS } from "../lib/protocol";
+import { HOSTED_MEMORY, INSTALL_STEPS } from "../lib/protocol";
 import welcomeArt from "../assets/art/welcome-maya.png";
 import building from "../assets/art/tag-building.png";
 import celebrate from "../assets/art/tag-celebrate.png";
@@ -56,17 +56,19 @@ function InstallCanvas({ title, lead, side, art, children, foot }: {
 
 /** Replay ends with Done; first-run welcome offers installation and quitting. */
 export function Welcome({ api, platform, install, preview }: { api: Bridge; platform: string } &
-  ({ install: (choice: { hostedMemory: boolean; openAIKey: string }) => void; preview?: never } | { preview: () => void; install?: never })) {
+  ({ install: (choice: { hostedMemory: boolean; provider: string; apiKey: string }) => void; preview?: never } | { preview: () => void; install?: never })) {
   const machine = platform === "macos" ? "Mac" : "computer";
   const [hosted, setHosted] = useState(false);
   const [key, setKey] = useState("");
+  const [provider, setProvider] = useState<string>(HOSTED_MEMORY[0].id);
+  const label = HOSTED_MEMORY.find((p) => p.id === provider)?.label ?? "";
   return (
     <InstallCanvas title="Install Tag" lead="Multiplayer AI, right in Slack."
       foot={<>
         <span className="spacer" />
         {preview ? <Primary title="Done" onClick={preview} autoFocus /> : <>
           <Quiet title="Quit" onClick={() => void api.quit()} />
-          <Primary title="Install Tag" onClick={() => install({ hostedMemory: hosted, openAIKey: hosted ? key.trim() : "" })} autoFocus />
+          <Primary title="Install Tag" onClick={() => install({ hostedMemory: hosted, provider, apiKey: hosted ? key.trim() : "" })} autoFocus />
         </>}
       </>}>
       <div className="facts">
@@ -75,10 +77,15 @@ export function Welcome({ api, platform, install, preview }: { api: Bridge; plat
         <div className="fact"><span className="fi"><Icon name="disk" size={16} /></span><span>About <b>1.8 GB</b> of disk space</span></div>
         <div className="fact"><span className="fi"><Icon name="wifi" size={16} /></span><span>Keep this {machine} online until it finishes</span></div>
         {!preview && <div className="fact"><span className="fi"><Icon name="disk" size={16} /></span>
-          <span style={{ flex: 1 }}><b>Hosted memory.</b> Use OpenAI for memory and skip the 560 MB search model.</span>
-          <Switch on={hosted} busy={false} label="Use OpenAI for memory" onClick={() => setHosted(!hosted)} /></div>}
+          <span style={{ flex: 1 }}><b>Hosted memory.</b> Use a hosted provider for memory and skip the 560 MB search model.</span>
+          <Switch on={hosted} busy={false} label="Use hosted memory" onClick={() => setHosted(!hosted)} /></div>}
         {!preview && hosted && <div className="model-edit" style={{ padding: 0 }}>
-          <input className="field mono" type="password" value={key} placeholder="OpenAI API key (or add it later in Settings)" aria-label="OpenAI API key"
+          <div className="segc" role="radiogroup" aria-label="Hosted provider">
+            {HOSTED_MEMORY.map((p) => (
+              <button key={p.id} role="radio" aria-checked={p.id === provider} onClick={() => setProvider(p.id)}>{p.label}</button>
+            ))}
+          </div>
+          <input className="field mono" type="password" value={key} placeholder={`${label} API key (or add it later in Settings)`} aria-label={`${label} API key`}
             autoComplete="new-password" spellCheck={false} onChange={(e) => setKey(e.target.value)} />
         </div>}
       </div>

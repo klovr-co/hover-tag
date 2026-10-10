@@ -172,7 +172,7 @@ class TagControlTests(unittest.TestCase):
 
     def test_settings_search_model_cancel_changes_nothing(self):
         self.complete()
-        runs, _ = self.run_search_model_menu([1, 4, 2, 6])
+        runs, _ = self.run_search_model_menu([1, 4, 3, 6])
         self.assertEqual(runs, [])
 
     def test_settings_plain_number_navigation_still_works(self):

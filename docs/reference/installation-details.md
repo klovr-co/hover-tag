@@ -400,16 +400,17 @@ An unreadable server configuration keeps the local default.
 ### Choosing the search model after install
 
 Open **Settings** → **General** → **Search model** in Tag.app, or run
-`tag memory embedding openai` (paste your key when asked) or `tag memory
-embedding local`. `tag memory embedding status --json` shows the current choice.
-Tag checks the key with OpenAI before it saves anything. It then:
+`tag memory embedding openai`, `tag memory embedding jina` (paste the key when
+asked) or `tag memory embedding local`. `tag memory embedding status --json`
+shows the current choice and what is on offer. Tag checks the key with the
+provider before it saves anything. It then:
 
 - writes its own copy of the MFS server configuration to
   `shared/mfs/server.toml` under Tag's home, keeping your other settings and
   never editing `~/.mfs/server.toml`;
-- stores the key in a private file (`shared/mfs/credentials/`, mode 0600) and
-  gives it to MFS through its environment, not its command line or the
-  configuration file;
+- stores the key in a private file per provider (`shared/mfs/credentials/`,
+  mode 0600) and gives it to MFS through its environment (`OPENAI_API_KEY` or
+  `JINA_API_KEY`), not its command line or the configuration file;
 - restarts memory if it is running, and indexes your Slack channels again.
 
 MFS keeps a separate index for each vector size, so the local model's index and
@@ -417,7 +418,9 @@ OpenAI's never mix. Switching back to the other model reuses its old index, but
 until the new one is rebuilt, search results are partial. If memory isn't
 running, the re-index happens the next time `tag start` runs. Sources that are
 not the Slack connector are not re-indexed by Tag; add them again to MFS.
-OpenAI embeddings send the text of the indexed messages to OpenAI. If you
+Hosted embeddings send the text of the indexed messages to the provider.
+Gemini, Voyage, Mistral and Ollama are supported by MFS but need extra
+packages that Tag doesn't install; configure them in `server.toml` yourself. If you
 already use `~/.mfs/server.toml` or `OPENAI_API_KEY` yourself, nothing changes
 until you choose in Tag.
 

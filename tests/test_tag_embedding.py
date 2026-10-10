@@ -27,25 +27,25 @@ class EmbeddingConfigTests(unittest.TestCase):
 
     def test_nothing_is_managed_until_the_provider_is_chosen(self):
         self.assertIsNone(tag_embedding.managed_config(self.shared))
-        self.assertIsNone(tag_embedding.saved_key(self.shared))
+        self.assertIsNone(tag_embedding.saved_key(self.shared, "openai"))
 
     def test_openai_writes_the_provider_and_dimension_and_stores_the_key_privately(self):
-        tag_embedding.set_openai(self.shared, "sk-test-synthetic")
+        tag_embedding.set_hosted(self.shared, "openai", "sk-test-synthetic")
         text = tag_embedding.managed_config(self.shared).read_text(encoding="utf-8")
         self.assertIn('[embedding]', text)
         self.assertIn('provider = "openai"', text)
         self.assertIn('model = "text-embedding-3-small"', text)
         self.assertIn("dim = 1536", text)
         self.assertNotIn("sk-test-synthetic", text)
-        self.assertEqual(tag_embedding.saved_key(self.shared), "sk-test-synthetic")
+        self.assertEqual(tag_embedding.saved_key(self.shared, "openai"), "sk-test-synthetic")
         if os.name != "nt":
-            self.assertEqual(stat.S_IMODE(tag_embedding.key_path(self.shared).stat().st_mode), 0o600)
+            self.assertEqual(stat.S_IMODE(tag_embedding.key_path(self.shared, "openai").stat().st_mode), 0o600)
 
     def test_it_keeps_the_rest_of_an_existing_server_configuration(self):
         (self.user / "server.toml").write_text(
             '[milvus]\nuri = "http://example.invalid:19530"\n\n[embedding]\nprovider = "onnx"\nmodel = "m"\n\n[summary]\nenabled = true\n',
             encoding="utf-8")
-        tag_embedding.set_openai(self.shared, "sk-test-synthetic")
+        tag_embedding.set_hosted(self.shared, "openai", "sk-test-synthetic")
         text = tag_embedding.managed_config(self.shared).read_text(encoding="utf-8")
         self.assertIn('uri = "http://example.invalid:19530"', text)
         self.assertIn("[summary]\nenabled = true", text)
@@ -56,7 +56,7 @@ class EmbeddingConfigTests(unittest.TestCase):
 
     def test_switching_back_to_local_is_repeatable_and_keeps_other_settings(self):
         (self.user / "server.toml").write_text('[summary]\nenabled = true\n', encoding="utf-8")
-        tag_embedding.set_openai(self.shared, "sk-test-synthetic")
+        tag_embedding.set_hosted(self.shared, "openai", "sk-test-synthetic")
         for _ in range(2):
             tag_embedding.set_local(self.shared)
         text = tag_embedding.managed_config(self.shared).read_text(encoding="utf-8")
@@ -66,25 +66,54 @@ class EmbeddingConfigTests(unittest.TestCase):
     def test_a_malformed_key_is_refused_and_nothing_is_saved(self):
         for key in ("", "  ", "has space", "line\nbreak"):
             with self.subTest(key=key), self.assertRaises(ValueError):
-                tag_embedding.set_openai(self.shared, key)
+                tag_embedding.set_hosted(self.shared, "openai", key)
         self.assertIsNone(tag_embedding.managed_config(self.shared))
 
     def test_a_key_that_fails_the_check_changes_nothing(self):
-        def reject(_key):
+        def reject(_provider, _key):
             raise ValueError("OpenAI rejected that key.")
         with self.assertRaisesRegex(ValueError, "rejected"):
-            tag_embedding.set_openai(self.shared, "sk-test-synthetic", verify=reject)
+            tag_embedding.set_hosted(self.shared, "openai", "sk-test-synthetic", verify=reject)
         self.assertIsNone(tag_embedding.managed_config(self.shared))
-        self.assertIsNone(tag_embedding.saved_key(self.shared))
+        self.assertIsNone(tag_embedding.saved_key(self.shared, "openai"))
 
     def test_server_environment_points_at_the_managed_file_and_passes_the_key_by_environment(self):
         self.assertEqual(tag_embedding.server_environment(self.shared), {})
-        tag_embedding.set_openai(self.shared, "sk-test-synthetic")
+        tag_embedding.set_hosted(self.shared, "openai", "sk-test-synthetic")
         env = tag_embedding.server_environment(self.shared)
         self.assertEqual(env["MFS_SERVER_CONFIG"], str(tag_embedding.managed_config(self.shared)))
         self.assertEqual(env["OPENAI_API_KEY"], "sk-test-synthetic")
         tag_embedding.set_local(self.shared)
         self.assertNotIn("OPENAI_API_KEY", tag_embedding.server_environment(self.shared))
+
+    def test_jina_is_configured_with_its_own_key_variable_and_dimension(self):
+        tag_embedding.set_hosted(self.shared, "jina", "jina_synthetic")
+        text = tag_embedding.managed_config(self.shared).read_text(encoding="utf-8")
+        self.assertIn('provider = "jina"', text)
+        self.assertIn("dim = 2048", text)
+        env = tag_embedding.server_environment(self.shared)
+        self.assertEqual(env["JINA_API_KEY"], "jina_synthetic")
+        self.assertNotIn("OPENAI_API_KEY", env)
+        self.assertEqual(tag_embedding.current_provider(self.shared), "jina")
+
+    def test_each_provider_keeps_its_own_saved_key_when_switching(self):
+        tag_embedding.set_hosted(self.shared, "openai", "sk-test-synthetic")
+        tag_embedding.set_hosted(self.shared, "jina", "jina_synthetic")
+        tag_embedding.set_hosted(self.shared, "openai", "sk-test-synthetic")
+        self.assertEqual(tag_embedding.saved_key(self.shared, "jina"), "jina_synthetic")
+        self.assertEqual(tag_embedding.server_environment(self.shared)["OPENAI_API_KEY"], "sk-test-synthetic")
+        self.assertNotIn("JINA_API_KEY", tag_embedding.server_environment(self.shared))
+
+    def test_an_unknown_provider_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "Choose one of"):
+            tag_embedding.set_hosted(self.shared, "nonesuch", "k")
+
+    def test_choices_list_the_local_model_first_and_which_keys_are_saved(self):
+        tag_embedding.set_hosted(self.shared, "jina", "jina_synthetic")
+        listed = tag_embedding.choices(self.shared)
+        self.assertEqual([c["id"] for c in listed], ["onnx", "openai", "jina"])
+        self.assertEqual({c["id"]: c["key_saved"] for c in listed}, {"onnx": False, "openai": False, "jina": True})
+        self.assertFalse(listed[0]["hosted"])
 
     def test_reindex_is_remembered_until_it_is_done(self):
         self.assertFalse(tag_embedding.reindex_pending(self.shared))
@@ -95,8 +124,8 @@ class EmbeddingConfigTests(unittest.TestCase):
         self.assertFalse(tag_embedding.reindex_pending(self.shared))
 
     def test_the_hosted_provider_needs_its_key(self):
-        tag_embedding.set_openai(self.shared, "sk-test-synthetic")
-        tag_embedding.key_path(self.shared).unlink()
+        tag_embedding.set_hosted(self.shared, "openai", "sk-test-synthetic")
+        tag_embedding.key_path(self.shared, "openai").unlink()
         self.assertEqual(tag_embedding.problem(self.shared), "The OpenAI key is missing. Save it again.")
 
 

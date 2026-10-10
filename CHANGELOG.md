@@ -29,9 +29,9 @@ All notable changes to Tag are documented here.
 - Tag.app and the terminal installer can skip the model download too: the install
   screen has a **Hosted memory** switch, and `./install.sh --hosted-memory`
   (`install.ps1 -HostedMemory`) does the same.
-- Choose where memory computes search embeddings after install: Settings →
-  General → **Search model**, `tag memory embedding local|openai`, or `tag
-  settings`. Tag checks your OpenAI key first, stores it privately, restarts
+- Choose where memory computes search embeddings after install, on this
+  computer, OpenAI, or Jina: Settings → General → **Search model**, `tag memory
+  embedding local|openai|jina`, or `tag settings`. Tag checks your key first, stores it privately, restarts
   memory, and indexes your Slack channels again into the new index. The install
   screen and an interactive terminal install offer the same choice up front.
 - Settings → General has a **Memory** switch that shows whether memory runs,

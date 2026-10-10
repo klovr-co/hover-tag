@@ -5,7 +5,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { APPEARANCES, APPEARANCE_LABEL, setAppearance, useAppearance } from "../lib/appearance";
 import type { AppInfo, Bridge } from "../lib/bridge";
 import { parseConnections } from "../lib/ai";
-import { memoryDetail, parseMemory, setEmbedding, type EmbeddingChoice, type MemoryStatus } from "../lib/memory";
+import { memoryDetail, parseMemory, setEmbedding, type MemoryStatus } from "../lib/memory";
 import { KEEP_RUNNING_DETAIL, parseJSON } from "../lib/protocol";
 import type { Tags } from "../lib/tags";
 import { useTrack, type Telemetry } from "../lib/telemetry";
@@ -345,43 +345,53 @@ export function MemoryRow({ api, setError }: { api: Bridge; setError: (message: 
   </>;
 }
 
-/** Where memory computes search embeddings. Switching builds a new index, so it asks first and says so. */
+/** Where memory computes search embeddings: pick one, add its key if it needs one, switch. */
 export function SearchModelRow({ api, embedding, setError, changed }: {
   api: Bridge; embedding: NonNullable<MemoryStatus["embedding"]>; setError: (message: string) => void; changed: () => void;
 }) {
-  const current: EmbeddingChoice = embedding.local ? "local" : "openai";
-  const [picked, setPicked] = useState<EmbeddingChoice>(current);
+  const [picked, setPicked] = useState(embedding.current);
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
-  useEffect(() => setPicked(current), [current]);
-  const switching = picked !== current;
-  const needsKey = picked === "openai" && !embedding.keySaved;
+  useEffect(() => setPicked(embedding.current), [embedding.current]);
+  const choice = embedding.choices.find((c) => c.id === picked);
+  if (!choice) return null;
+  const switching = picked !== embedding.current;
+  const needsKey = choice.hosted && !choice.keySaved;
   const apply = async () => {
     setBusy(true);
     setError("");
     const result = await setEmbedding(api, picked, key.trim());
     setBusy(false);
-    if (!result.ok) { setError(result.error); setPicked(current); return; }
+    if (!result.ok) { setError(result.error); setPicked(embedding.current); return; }
     setKey("");
     setNote(result.reindexing ? "Memory is indexing your Slack channels again; search is partial until it finishes." : result.note);
     changed();
   };
   return <>
-    <SetRow label="Search model"
-      detail={embedding.problem || note || "Where memory computes search embeddings."}>
-      <div className="segc" role="radiogroup" aria-label="Search model">
-        <button role="radio" aria-checked={picked === "local"} disabled={busy} onClick={() => setPicked("local")}>On this computer</button>
-        <button role="radio" aria-checked={picked === "openai"} disabled={busy} onClick={() => setPicked("openai")}>OpenAI</button>
-      </div>
-    </SetRow>
+    <div className="r set model-head" style={{ padding: "13px 14px 6px" }}>
+      <div className="txt"><span className="label" style={{ fontSize: 14.5 }}>Search model</span>
+        <span className="sub wrap">{embedding.problem || note || "Where memory turns text into searchable vectors."}</span></div>
+    </div>
+    <div className="model-choices" role="radiogroup" aria-label="Search model">
+      {embedding.choices.map((c) => (
+        <button key={c.id} className={`opt${c.id === picked ? " sel" : ""}`} role="radio" aria-checked={c.id === picked}
+          aria-label={c.label} disabled={busy} onClick={() => { setPicked(c.id); setKey(""); }}>
+          <span className="radio-dot" aria-hidden="true" />
+          <span className="txt"><span className="label">{c.label}{c.id === embedding.current && <i className="chip-now">In use</i>}</span>
+            <span className="sub wrap">{c.detail}</span></span>
+        </button>
+      ))}
+    </div>
     {switching && (
-        <div className="model-edit">
-          {needsKey && <input className="field mono" type="password" value={key} placeholder="OpenAI API key" aria-label="OpenAI API key"
-            autoComplete="new-password" spellCheck={false} disabled={busy} onChange={(e) => setKey(e.target.value)} />}
-          <p>{picked === "openai" ? "OpenAI needs a key and receives the text of indexed messages. " : "On this computer is private and works offline. "}Switching builds a new index, so Memory indexes your Slack channels again with the new model. The old index is kept if you switch back.</p>
-          <Primary small title={busy ? "Switching…" : needsKey ? "Save and switch" : "Switch"} disabled={busy || (needsKey && !key.trim())} onClick={() => void apply()} />
-        </div>
+      <div className="model-edit">
+        {needsKey && <input className="field mono" type="password" value={key} placeholder={`Paste your ${choice.label} key`}
+          aria-label={`${choice.label} API key`} autoComplete="new-password" spellCheck={false} disabled={busy}
+          onChange={(e) => setKey(e.target.value)} />}
+        <p>{choice.hosted ? `${choice.label} receives the text of indexed messages. ` : ""}Memory indexes your Slack channels again with
+          the new model, so search is partial until it finishes. You can switch back; the old index is kept.</p>
+        <Primary small title={busy ? "Switching…" : `Switch to ${choice.label}`} disabled={busy || (needsKey && !key.trim())} onClick={() => void apply()} />
+      </div>
     )}
   </>;
 }

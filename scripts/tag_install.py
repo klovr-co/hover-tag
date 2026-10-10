@@ -771,7 +771,7 @@ raise SystemExit(subprocess.call([record["python"], str(release / "scripts/tag_c
         paragraph("Next step", MUTED)
         paragraph("› tag setup", "1;" + ACCENT)
         if hosted_memory:
-            paragraph("Then choose OpenAI for memory, and paste your key when asked:", MUTED)
+            paragraph("Then choose your hosted provider for memory (openai or jina), and paste its key when asked:", MUTED)
             paragraph("› tag memory embedding openai", "1;" + ACCENT)
         paragraph("Already configured? Run tag stop, then tag start.", MUTED)
         paragraph(f"If needed, add {short_path(bin_dir)} to PATH.", MUTED)
@@ -786,7 +786,7 @@ def ask_hosted_memory() -> bool:
     if (os.environ.get("TAG_SKIP_MFS_MODEL") or os.environ.get("TAG_INSTALL_PROGRESS")
             or not sys.stdin.isatty()):
         return False
-    answer = input("Use OpenAI for memory instead of the 560 MB local search model? [y/N] ")
+    answer = input("Use a hosted provider (OpenAI or Jina) for memory instead of the 560 MB local search model? [y/N] ")
     return answer.strip().lower() in {"y", "yes"}
 
 

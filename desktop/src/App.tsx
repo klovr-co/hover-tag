@@ -23,7 +23,7 @@ import { Toast } from "./components/ui";
 type Screen =
   | { name: "loading" }
   | { name: "welcome" }
-  | { name: "installing"; attempt: number; hostedMemory: boolean; openAIKey: string }
+  | { name: "installing"; attempt: number; hostedMemory: boolean; provider: string; apiKey: string }
   | { name: "home" }
   | { name: "connect"; args: string[] }
   | { name: "settings"; tab?: SettingsTab; privacy?: boolean }
@@ -253,15 +253,15 @@ export function App() {
   }
   const home = () => { setScreen({ name: "home" }); void tags.refresh(); watch.recheck(); };
   // A reinstall keeps existing Tags: return to them instead of setting up a first Tag again.
-  const afterInstall = async (command: string, openAIKey = "", hostedMemory = false) => {
+  const afterInstall = async (command: string, provider = "openai", apiKey = "", hostedMemory = false) => {
     setInfo({ ...info, cli: command || info.cli || "tag" });
     // The installer skipped the local model, so save the OpenAI choice now; otherwise memory
     // would fetch that model the first time it starts.
-    if (openAIKey) {
-      const saved = await setEmbedding(api, "openai", openAIKey);
-      if (!saved.ok) say(`Memory will use the on-computer model until you add a working OpenAI key in Settings. ${saved.error}`);
+    if (apiKey) {
+      const saved = await setEmbedding(api, provider, apiKey);
+      if (!saved.ok) say(`Memory will use the on-computer model until you add a working key in Settings. ${saved.error}`);
     } else if (hostedMemory) {
-      say("Add your OpenAI key in Settings → Memory. Until then, memory downloads the on-computer model when it starts.");
+      say("Add your key in Settings → General → Search model. Until then, memory downloads the on-computer model when it starts.");
     }
     const listed = await api.tag(["list", "--json"]).catch(() => null);
     let empty = false;
@@ -276,12 +276,12 @@ export function App() {
     <TrackContext.Provider value={track}>
       <main ref={setRoot} className={`app${info.platform === "macos" ? " overlay" : ""}${screen.name === "home" ? " home" : ""}${fixed ? " fixed" : ""}${screen.name === "tag" ? " wide" : ""}`}>
         {screen.name === "replay" && <Welcome api={api} platform={info.platform} preview={() => setScreen({ name: "settings", tab: "about" })} />}
-        {screen.name === "welcome" && <Welcome api={api} platform={info.platform} install={({ hostedMemory, openAIKey }) => setScreen({ name: "installing", attempt: 0, hostedMemory, openAIKey })} />}
+        {screen.name === "welcome" && <Welcome api={api} platform={info.platform} install={({ hostedMemory, provider, apiKey }) => setScreen({ name: "installing", attempt: 0, hostedMemory, provider, apiKey })} />}
         {screen.name === "installing" && (
           <Installing key={screen.attempt} api={api} hostedMemory={screen.hostedMemory}
-            retry={() => setScreen({ name: "installing", attempt: screen.attempt + 1, hostedMemory: screen.hostedMemory, openAIKey: screen.openAIKey })}
+            retry={() => setScreen({ name: "installing", attempt: screen.attempt + 1, hostedMemory: screen.hostedMemory, provider: screen.provider, apiKey: screen.apiKey })}
             cancel={() => setScreen({ name: "welcome" })}
-            done={(command) => void afterInstall(command, screen.openAIKey, screen.hostedMemory)} />
+            done={(command) => void afterInstall(command, screen.provider, screen.apiKey, screen.hostedMemory)} />
         )}
         {screen.name === "home" && !tags.loaded && <Starting error={tags.error} retry={() => void tags.refresh()} />}
         {screen.name === "home" && tags.loaded && (

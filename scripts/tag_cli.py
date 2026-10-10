@@ -915,7 +915,7 @@ def _embedding_report(shared: Path) -> dict[str, object]:
     """Which embedding provider memory uses, reading the same configuration the managed MFS will."""
     provider, model = preload_mfs_model.configured_embedding(tag_embedding.managed_config(shared))
     report = {"provider": provider, "model": model, "local": preload_mfs_model.uses_local_model(provider),
-              "key_saved": tag_embedding.saved_key(shared) is not None,
+              "choices": tag_embedding.choices(shared), "current": tag_embedding.current_provider(shared),
               "reindex_pending": tag_embedding.reindex_pending(shared)}
     if problem := tag_embedding.problem(shared):
         report["problem"] = problem
@@ -923,24 +923,24 @@ def _embedding_report(shared: Path) -> dict[str, object]:
 
 
 def _memory_embedding(context, args, home: Path, installation_root: Path) -> int:
-    """`tag memory embedding [status|local|openai]`: where memory computes its search embeddings."""
+    """`tag memory embedding [status|local|PROVIDER]`: where memory computes its search embeddings."""
     shared = context.shared_mfs_home
     choice = args.arguments[1] if len(args.arguments) > 1 else "status"
-    if choice not in {"status", "local", "openai"}:
-        raise RuntimeError("Choose local or openai")
+    if choice not in {"status", "local", *tag_embedding.PROVIDERS}:
+        raise RuntimeError("Choose local, " + ", ".join(tag_embedding.PROVIDERS))
     reindexing, note = False, ""
     if choice != "status":
         shared.mkdir(parents=True, exist_ok=True, mode=0o700)
         was_running = process_for(shared / "mfs.json") is not None
-        if choice == "openai":
+        if choice in tag_embedding.PROVIDERS:
             try:
                 import tag_api
             except ImportError:
                 from scripts import tag_api
             if not args.stdin and not display.stdin_is_terminal():
-                raise RuntimeError("Send the OpenAI key on stdin with --stdin")
-            key = tag_api.read_key(args.json_output) or tag_embedding.saved_key(shared) or ""
-            tag_embedding.set_openai(shared, key, verify=tag_embedding.check_key)
+                raise RuntimeError("Send the API key on stdin with --stdin")
+            key = tag_api.read_key(args.json_output) or tag_embedding.saved_key(shared, choice) or ""
+            tag_embedding.set_hosted(shared, choice, key, verify=tag_embedding.check_key)
         else:
             tag_embedding.set_local(shared)
         # MFS keeps one index per search model, so the new one starts empty.
