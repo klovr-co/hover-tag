@@ -51,26 +51,38 @@ it("tells people the install needs about 1.8 GB, as measured", () => {
   expect(screen.queryByText("650 MB")).toBeNull();
 });
 
-it("names the built-in search model and says it downloads in the background without blocking search-free use", () => {
+const toModel = () => fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+it("keeps the first screen to what installing means, and asks about search on a second one", () => {
   render(<Welcome api={demoBridge()} platform="macos" install={vi.fn()} />);
-  expect(screen.getByText(/Memory search uses a built-in model \(bge-m3, 560 MB\)/)).toBeTruthy();
-  expect(screen.getByText(/downloads in the background after install/)).toBeTruthy();
+  expect(screen.getByText("Install Tag")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Install Tag" })).toBeNull();
+  expect(screen.queryByRole("switch")).toBeNull();
+  toModel();
+  expect(screen.getByText("Memory search")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Install Tag" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Back" }));
+  expect(screen.getByRole("button", { name: "Continue" })).toBeTruthy();
+});
+
+it("names the built-in search model and says it downloads in the background and search waits for it", () => {
+  render(<Welcome api={demoBridge()} platform="macos" install={vi.fn()} />);
+  toModel();
+  expect(screen.getByRole("radio", { name: "Built in" }).getAttribute("aria-checked")).toBe("true");
+  expect(screen.getByText(/bge-m3 runs on this computer/)).toBeTruthy();
+  expect(screen.getByText(/About 560 MB, downloaded in the background after install/)).toBeTruthy();
   expect(screen.getByText(/Search isn't available until it finishes/)).toBeTruthy();
-  fireEvent.click(screen.getByRole("switch", { name: "Use my own search model" }));
-  // With their own model there is nothing to download, so the note goes away.
-  expect(screen.queryByText(/downloads in the background after install/)).toBeNull();
 });
 
 it("lets people skip the built-in search model and name their own", () => {
   const install = vi.fn();
   render(<Welcome api={demoBridge()} platform="macos" install={install} />);
-  const toggle = screen.getByRole("switch", { name: "Use my own search model" });
-  expect(toggle.getAttribute("aria-checked")).toBe("false");
+  toModel();
   expect(screen.queryByLabelText("Endpoint address")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Install Tag" }));
   expect(install).toHaveBeenLastCalledWith({ skipModel: false, baseUrl: "", model: "", apiKey: "" });
-  fireEvent.click(toggle);
-  expect(toggle.getAttribute("aria-checked")).toBe("true");
+  fireEvent.click(screen.getByRole("radio", { name: "Your own endpoint" }));
+  expect(screen.getByRole("radio", { name: "Your own endpoint" }).getAttribute("aria-checked")).toBe("true");
   fireEvent.change(screen.getByLabelText("Endpoint address"), { target: { value: " http://localhost:11434/v1 " } });
   fireEvent.change(screen.getByLabelText("Model name"), { target: { value: "nomic-embed-text" } });
   fireEvent.click(screen.getByRole("button", { name: "Install Tag" }));
@@ -78,6 +90,19 @@ it("lets people skip the built-in search model and name their own", () => {
   fireEvent.change(screen.getByLabelText("API key (optional)"), { target: { value: " sk-synthetic " } });
   fireEvent.click(screen.getByRole("button", { name: "Install Tag" }));
   expect(install).toHaveBeenLastCalledWith({ skipModel: true, baseUrl: "http://localhost:11434/v1", model: "nomic-embed-text", apiKey: "sk-synthetic" });
+});
+
+it("keeps what was typed when going back and forward, and the replay has no search screen", () => {
+  render(<Welcome api={demoBridge()} platform="macos" install={vi.fn()} />);
+  toModel();
+  fireEvent.click(screen.getByRole("radio", { name: "Your own endpoint" }));
+  fireEvent.change(screen.getByLabelText("Model name"), { target: { value: "bge-m3" } });
+  fireEvent.click(screen.getByRole("button", { name: "Back" }));
+  toModel();
+  expect((screen.getByLabelText("Model name") as HTMLInputElement).value).toBe("bge-m3");
+  cleanup();
+  render(<Welcome api={demoBridge()} platform="macos" preview={vi.fn()} />);
+  expect(screen.queryByRole("button", { name: "Continue" })).toBeNull();
 });
 
 it("tells the installer to skip the built-in model download", async () => {

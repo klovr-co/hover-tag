@@ -9,7 +9,7 @@ import welcomeArt from "../assets/art/welcome-maya.png";
 import building from "../assets/art/tag-building.png";
 import celebrate from "../assets/art/tag-celebrate.png";
 import puzzled from "../assets/art/tag-puzzled.png";
-import { ErrorLine, Icon, Primary, Quiet, Sky, Spinner, Switch, useCopied } from "./ui";
+import { ErrorLine, Icon, Primary, Quiet, Sky, Spinner, useCopied } from "./ui";
 
 /** Keep startup in the same shell as setup, including a recoverable failure. */
 export function Starting({ error, retry }: { error?: string; retry: () => void }) {
@@ -58,34 +58,38 @@ function InstallCanvas({ title, lead, side, art, grow, children, foot }: {
 export interface InstallChoice { skipModel: boolean; baseUrl: string; model: string; apiKey: string }
 export const NO_CUSTOM: InstallChoice = { skipModel: false, baseUrl: "", model: "", apiKey: "" };
 
-/** Replay ends with Done; first-run welcome offers installation and quitting. */
+/** Replay ends with Done; first-run welcome has two screens: what installing means, then how memory searches. */
 export function Welcome({ api, platform, install, preview }: { api: Bridge; platform: string } &
   ({ install: (choice: InstallChoice) => void; preview?: never } | { preview: () => void; install?: never })) {
   const machine = platform === "macos" ? "Mac" : "computer";
+  const [step, setStep] = useState<"intro" | "model">("intro");
   const [custom, setCustom] = useState(false);
   const [baseUrl, setBaseUrl] = useState("");
   const [model, setModel] = useState("");
   const [key, setKey] = useState("");
-  return (
-    <InstallCanvas title="Install Tag" lead="Multiplayer AI, right in Slack." grow
-      foot={<>
-        <span className="spacer" />
-        {preview ? <Primary title="Done" onClick={preview} autoFocus /> : <>
-          <Quiet title="Quit" onClick={() => void api.quit()} />
+  if (!preview && step === "model") {
+    const options = [
+      { custom: false, label: "Built in", chip: "Recommended", detail: "bge-m3 runs on this computer: private, and it works offline. About 560 MB, downloaded in the background after install. Search isn't available until it finishes." },
+      { custom: true, label: "Your own endpoint", chip: "", detail: "OpenAI, Ollama, LM Studio, vLLM or your own gateway. Nothing to download." },
+    ];
+    return (
+      <InstallCanvas title="Memory search" lead="How should Tag search what your team has said?" grow
+        foot={<>
+          <Quiet title="Back" onClick={() => setStep("intro")} />
+          <span className="spacer" />
           <Primary title="Install Tag" onClick={() => install(custom ? { skipModel: true, baseUrl: baseUrl.trim(), model: model.trim(), apiKey: key.trim() } : { ...NO_CUSTOM })} autoFocus />
-        </>}
-      </>}>
-      <div className="facts">
-        <div className="fact"><span className="fi"><Icon name="user" size={16} /></span>
-          <span><b>No administrator password.</b> Tag installs into your user folder and keeps your existing configuration.</span></div>
-        <div className="fact"><span className="fi"><Icon name="disk" size={16} /></span><span>About <b>1.8 GB</b> of disk space</span></div>
-        <div className="fact"><span className="fi"><Icon name="wifi" size={16} /></span><span>Keep this {machine} online until it finishes</span></div>
-        {!preview && <div className="fact"><span className="fi"><Icon name="disk" size={16} /></span>
-          <span style={{ flex: 1 }}>{custom
-            ? <><b>Your own search model.</b> Use OpenAI, Ollama or another endpoint. Nothing extra to download.</>
-            : <><b>Memory search uses a built-in model (bge-m3, 560 MB)</b> that downloads in the background after install. Search isn't available until it finishes. Prefer OpenAI, Ollama or another endpoint? Use your own instead.</>}</span>
-          <Switch on={custom} busy={false} label="Use my own search model" onClick={() => setCustom(!custom)} /></div>}
-        {!preview && custom && <div className="model-edit" style={{ padding: 0 }}>
+        </>}>
+        <div className="model-choices" role="radiogroup" aria-label="Search model" style={{ padding: 0 }}>
+          {options.map((o) => (
+            <button key={o.label} className={`opt${o.custom === custom ? " sel" : ""}`} role="radio" aria-checked={o.custom === custom}
+              aria-label={o.label} onClick={() => setCustom(o.custom)}>
+              <span className="radio-dot" aria-hidden="true" />
+              <span className="txt"><span className="label">{o.label}{o.chip && <i className="chip-now">{o.chip}</i>}</span>
+                <span className="sub wrap">{o.detail}</span></span>
+            </button>
+          ))}
+        </div>
+        {custom && <div className="model-edit" style={{ padding: 0 }}>
           <span className="fl" aria-hidden="true">Endpoint address</span>
           <input className="field mono" value={baseUrl} placeholder="http://localhost:11434/v1" aria-label="Endpoint address"
             spellCheck={false} onChange={(e) => setBaseUrl(e.target.value)} />
@@ -97,6 +101,23 @@ export function Welcome({ api, platform, install, preview }: { api: Bridge; plat
             autoComplete="new-password" spellCheck={false} onChange={(e) => setKey(e.target.value)} />
           <p>Leave these empty to finish in Settings → AI. Until then memory downloads the built-in model when it starts.</p>
         </div>}
+      </InstallCanvas>
+    );
+  }
+  return (
+    <InstallCanvas title="Install Tag" lead="Multiplayer AI, right in Slack."
+      foot={<>
+        <span className="spacer" />
+        {preview ? <Primary title="Done" onClick={preview} autoFocus /> : <>
+          <Quiet title="Quit" onClick={() => void api.quit()} />
+          <Primary title="Continue" icon="arrow" onClick={() => setStep("model")} autoFocus />
+        </>}
+      </>}>
+      <div className="facts">
+        <div className="fact"><span className="fi"><Icon name="user" size={16} /></span>
+          <span><b>No administrator password.</b> Tag installs into your user folder and keeps your existing configuration.</span></div>
+        <div className="fact"><span className="fi"><Icon name="disk" size={16} /></span><span>About <b>1.8 GB</b> of disk space</span></div>
+        <div className="fact"><span className="fi"><Icon name="wifi" size={16} /></span><span>Keep this {machine} online until it finishes</span></div>
       </div>
     </InstallCanvas>
   );

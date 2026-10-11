@@ -32,7 +32,7 @@ All notable changes to Tag are documented here.
   status` and `tag settings` show it, and `tag memory download` restarts it. The install
   screen names the model (bge-m3).
 - Tag.app and the terminal installer can skip the model download too: the install
-  screen has a **Your own search model** switch, and `./install.sh
+  has a **Memory search** step with **Your own endpoint**, and `./install.sh
   --skip-memory-model` (`install.ps1 -SkipMemoryModel`) does the same.
 - Choose how memory computes search embeddings after install: the built-in
   Default, or any OpenAI-compatible endpoint (OpenAI, Ollama, LM Studio, vLLM)

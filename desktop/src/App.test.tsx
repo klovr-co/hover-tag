@@ -22,7 +22,7 @@ it("shows a styled startup and recovers when reading app information fails", asy
   // The discarded mount must not overwrite the surviving mount's state.
   reject(new Error("Stale error"));
   fireEvent.click(screen.getByRole("button", { name: "Try again" }));
-  expect(await screen.findByRole("button", { name: "Install Tag" })).toBeTruthy();
+  expect(await screen.findByRole("button", { name: "Continue" })).toBeTruthy();
   expect(screen.queryByText("Couldn't open Tag")).toBeNull();
 });
 
@@ -56,7 +56,7 @@ it("offers to install Tag again when it was removed after the app started", asyn
   });
   vi.mocked(bridge).mockResolvedValue(api);
   render(<App />);
-  expect(await screen.findByRole("button", { name: "Install Tag" })).toBeTruthy();
+  expect(await screen.findByRole("button", { name: "Continue" })).toBeTruthy();
   expect(screen.queryByText("Couldn't open Tag")).toBeNull();
 });
 
@@ -72,7 +72,8 @@ it("returns to existing Tags after reinstalling instead of setting up a first Ta
   const setup = vi.spyOn(api, "setup");
   vi.mocked(bridge).mockResolvedValue(api);
   render(<App />);
-  fireEvent.click(await screen.findByRole("button", { name: "Install Tag" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
+  fireEvent.click(screen.getByRole("button", { name: "Install Tag" }));
   fireEvent.click(await screen.findByRole("button", { name: /Set up your first Tag/ }));
   expect(await screen.findByRole("heading", { name: "Your Tags" })).toBeTruthy();
   expect(setup).not.toHaveBeenCalled();
@@ -93,7 +94,8 @@ it("goes Home, not first-Tag setup, when the list can't be read after installing
   const setup = vi.spyOn(api, "setup");
   vi.mocked(bridge).mockResolvedValue(api);
   render(<App />);
-  fireEvent.click(await screen.findByRole("button", { name: "Install Tag" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
+  fireEvent.click(screen.getByRole("button", { name: "Install Tag" }));
   fireEvent.click(await screen.findByRole("button", { name: /Set up your first Tag/ }));
   expect(await screen.findByRole("heading", { name: "Your Tags" })).toBeTruthy();
   expect(setup).not.toHaveBeenCalled();
@@ -118,7 +120,7 @@ it("offers to install Tag again when it is removed while Home is open", async ()
   removed = true;
   await act(async () => { await vi.advanceTimersByTimeAsync(31_000); });
   vi.useRealTimers();
-  expect(await screen.findByRole("button", { name: "Install Tag" })).toBeTruthy();
+  expect(await screen.findByRole("button", { name: "Continue" })).toBeTruthy();
 });
 
 it("turns usage data on at first run and notes it on Home until the person leaves", async () => {

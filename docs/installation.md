@@ -109,8 +109,8 @@ Tag.app shows the progress on Home, and `tag memory status` shows it in the term
 it stops, **Try again** or `tag memory download` restarts it. If your memory
 search uses your own embedding model, such as OpenAI or Ollama, skip the download:
 `./install.sh --skip-memory-model` (or `TAG_SKIP_MFS_MODEL=1 ./install.sh`; on
-Windows, `install.ps1 -SkipMemoryModel`). In Tag.app, turn on **Your own search model** on
-the install screen and give its address, model and key; the terminal installer asks the
+Windows, `install.ps1 -SkipMemoryModel`). In Tag.app, choose **Your own endpoint** on the
+**Memory search** screen (after **Continue**) and give its address, model and key; the terminal installer asks the
 same question when you run it interactively. See
 [Memory embedding model](reference/installation-details.md#memory-embedding-model).
 

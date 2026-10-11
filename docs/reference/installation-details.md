@@ -401,7 +401,7 @@ The installer skips the download when MFS will not use it:
 - You ask for it, for an install that chooses its provider later:
   `./install.sh --skip-memory-model`, `install.ps1 -SkipMemoryModel`, or
   `TAG_SKIP_MFS_MODEL=1` in the environment (all work with the curl installer).
-  Tag.app's install screen has a **Your own search model** switch that does the same and can set it up for you.
+  Tag.app's second install screen, **Memory search**, has a **Your own endpoint** choice that does the same and can set it up for you.
 
 The installer prints which one applied. A skipped model is not lost: if you later
 switch back to the Default, MFS downloads the model the first time it starts.
