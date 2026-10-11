@@ -16,7 +16,7 @@ import { Home } from "./components/Home";
 import { Installing, NO_CUSTOM, Starting, Welcome, type InstallChoice } from "./components/Install";
 import { AI_CAPABILITY, API_CAPABILITY, SHARED_AI_CAPABILITY } from "./lib/ai";
 import { AISettings } from "./components/AISettings";
-import { Settings, type SettingsTab } from "./components/Settings";
+import { MemorySettings, Settings, type SettingsTab } from "./components/Settings";
 import { TagDetail, type Tab as TagTab } from "./components/TagDetail";
 import { Toast } from "./components/ui";
 
@@ -28,6 +28,7 @@ type Screen =
   | { name: "connect"; args: string[] }
   | { name: "settings"; tab?: SettingsTab; privacy?: boolean }
   | { name: "ai"; resume?: string[] }
+  | { name: "memory" }
   /** `opened` counts Slack links, so a second link resets an open Tag screen. */
   | { name: "tag"; id: string; tab?: TagTab; opened?: number }
   /** Settings > Replay onboarding: the first-run screens again, changing nothing. */
@@ -301,10 +302,12 @@ export function App() {
         {screen.name === "settings" && (
           <Settings key={screen.tab} initialTab={screen.tab} showPrivacy={screen.privacy} api={api} info={info} tags={tags} telemetry={telemetry} close={home} update={update} check={() => void check()}
             runUpdate={() => void runUpdate()} replay={() => setScreen({ name: "replay" })} switched={(done) => dispatchUpdate({ type: "updated", update: done })}
-            openAI={capabilities.includes(SHARED_AI_CAPABILITY) ? () => setScreen({ name: "ai" }) : undefined} />
+            openAI={capabilities.includes(SHARED_AI_CAPABILITY) ? () => setScreen({ name: "ai" }) : undefined}
+            openMemory={() => setScreen({ name: "memory" })} />
         )}
+        {screen.name === "memory" && <MemorySettings api={api} close={() => setScreen({ name: "settings", tab: "ai" })} />}
         {screen.name === "ai" && (
-          <AISettings api={api} tags={tags} apiConnections={capabilities.includes(API_CAPABILITY)} close={() => { watch.recheck(); setScreen(screen.resume ? { name: "connect", args: screen.resume } : { name: "settings" }); }} />
+          <AISettings api={api} tags={tags} apiConnections={capabilities.includes(API_CAPABILITY)} close={() => { watch.recheck(); setScreen(screen.resume ? { name: "connect", args: screen.resume } : { name: "settings", tab: "ai" }); }} />
         )}
         {screen.name === "tag" && (
           <TagDetail key={screen.opened ?? 0} api={api} tags={tags} initial={screen.id} initialTab={screen.tab} problems={watch.problems} back={home} add={add}

@@ -5,7 +5,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { APPEARANCES, APPEARANCE_LABEL, setAppearance, useAppearance } from "../lib/appearance";
 import type { AppInfo, Bridge } from "../lib/bridge";
 import { parseConnections } from "../lib/ai";
-import { memoryDetail, parseMemory, setEmbedding, type MemoryStatus } from "../lib/memory";
+import { embeddingText, memoryDetail, parseMemory, setEmbedding, type MemoryStatus } from "../lib/memory";
 import { KEEP_RUNNING_DETAIL, parseJSON } from "../lib/protocol";
 import type { Tags } from "../lib/tags";
 import { useTrack, type Telemetry } from "../lib/telemetry";
@@ -157,9 +157,10 @@ interface SettingsProps {
   switched: (done: ProductUpdate) => void;
   /** Opens Settings → AI & models. */
   openAI?: () => void;
+  openMemory?: () => void;
 }
 
-export function Settings({ api, info, tags, telemetry, close, replay, initialTab, showPrivacy, update, check, runUpdate, switched, openAI }: SettingsProps) {
+export function Settings({ api, info, tags, telemetry, close, replay, initialTab, showPrivacy, update, check, runUpdate, switched, openAI, openMemory }: SettingsProps) {
   const privacy = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!showPrivacy) return;
@@ -255,10 +256,11 @@ export function Settings({ api, info, tags, telemetry, close, replay, initialTab
             <div className="card"><AISummaryRow api={api} tags={tags} open={openAI} /></div>
           </div>
         )}
-        <div className="section">
-          <div className="sec-head"><h3>Memory</h3></div>
-          <div className="card"><MemoryRow api={api} setError={setError} /></div>
-        </div>
+        {openMemory && (
+          <div className="section">
+            <div className="card"><MemorySummaryRow api={api} open={openMemory} /></div>
+          </div>
+        )}
         </>}
         {tab === "updates" && <div className="section">
           <div className={update.status === "failed" ? "card upd-card failed" : "card upd-card"}>
@@ -419,6 +421,39 @@ export function SearchModelRow({ api, embedding, setError, changed }: {
 }
 
 /** The Settings row that opens AI & models, with a summary for the main Tag. */
+/** Settings → AI: a row into the Memory page, like the AI connections row above it. */
+export function MemorySummaryRow({ api, open }: { api: Bridge; open: () => void }) {
+  const [summary, setSummary] = useState("");
+  useEffect(() => {
+    let live = true;
+    void api.tag(["memory", "status", "--json"]).then((r) => {
+      if (live && r.code === 0) setSummary(embeddingText(parseMemory(r.stdout)).replace(/\.$/, ""));
+    }).catch(() => {});
+    return () => { live = false; };
+  }, [api]);
+  return (
+    <div className="r set click" role="button" tabIndex={0} aria-label="Open memory" onClick={open}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } }}
+      style={{ padding: "13px 14px", gap: 16, borderRadius: "inherit" }}>
+      <div className="txt"><span className="label" style={{ fontSize: 14.5 }}>Memory</span>
+        <span className="sub wrap">{summary || "Shared search for all Tags"}</span></div>
+      <span className="chev" aria-hidden="true"><Icon name="right" size={13} /></span>
+    </div>
+  );
+}
+
+/** The Memory page: the service and the search model, away from the Settings list. */
+export function MemorySettings({ api, close }: { api: Bridge; close: () => void }) {
+  const [error, setError] = useState("");
+  return <>
+    <CompactSky title="Memory" sub="Shared by all your Tags" back={close} />
+    <div className="body river">
+      <div className="section"><div className="card"><MemoryRow api={api} setError={setError} /></div></div>
+      {error && <ErrorLine>{error}</ErrorLine>}
+    </div>
+  </>;
+}
+
 export function AISummaryRow({ api, tags, open }: { api: Bridge; tags: Tags; open: () => void }) {
   const [summary, setSummary] = useState("");
   useEffect(() => {

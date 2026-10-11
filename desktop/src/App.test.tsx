@@ -179,10 +179,14 @@ it("keeps AI settings together on their own tab instead of crowding General", as
   expect(screen.queryByRole("switch", { name: "Memory" })).toBeNull();
   expect(screen.queryByText("Search model")).toBeNull();
   fireEvent.click(screen.getByRole("tab", { name: "AI" }));
+  expect(await screen.findByRole("button", { name: "Open memory" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Open AI connections" })).toBeTruthy();
+  // Memory folds into its own page, like AI connections, instead of sitting open in the list.
+  expect(screen.queryByRole("switch", { name: "Memory" })).toBeNull();
+  expect(screen.queryByRole("switch", { name: "Keep Tags running" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Open memory" }));
   expect(await screen.findByRole("switch", { name: "Memory" })).toBeTruthy();
   expect(screen.getByRole("radiogroup", { name: "Search model" })).toBeTruthy();
-  expect(screen.getByRole("button", { name: "Open AI connections" })).toBeTruthy();
-  expect(screen.queryByRole("switch", { name: "Keep Tags running" })).toBeNull();
 });
 
 it("keeps measuring Home after it replaces the startup element", async () => {
