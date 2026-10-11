@@ -463,7 +463,11 @@ button.hello:hover b { text-decoration: underline; text-underline-offset: 2px; }
 .home-body > .home-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; margin: 0 -16px; padding: 0 16px 2px; }
 .body.settings > .settings-pane { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; margin: 0 -16px; padding: 0 16px; }
 .install .facts { gap: 14px; margin-top: 4px; }
-.install .install-main { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; }
+.install .install-main { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }
+.install .install-main > * { flex: none; }
+/* The welcome screen grows with the optional search model fields instead of scrolling them. */
+.body.install.grow { height: auto; min-height: calc(var(--flow-h) - 190px); }
+.install.grow .install-main { overflow: visible; }
 .install .install-main > .steps { overflow: auto; }
 .install .install-main > .steps .st { padding: 7px 14px; }
 .install .install-main > .logbox { flex: 1; max-height: none; }

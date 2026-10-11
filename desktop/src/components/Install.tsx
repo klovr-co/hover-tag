@@ -33,15 +33,15 @@ export function Starting({ error, retry }: { error?: string; retry: () => void }
  * Welcome to Installing to Installed changes only what's inside the panel, so
  * the window never resizes or jumps between them.
  */
-function InstallCanvas({ title, lead, side, art, children, foot }: {
-  title: ReactNode; lead: ReactNode; side?: ReactNode; art?: string; children: ReactNode; foot: ReactNode;
+function InstallCanvas({ title, lead, side, art, grow, children, foot }: {
+  title: ReactNode; lead: ReactNode; side?: ReactNode; art?: string; grow?: boolean; children: ReactNode; foot: ReactNode;
 }) {
   return (
     <>
       <Sky kind="hero" stars={150}>
         <img className="welcome-art" src={welcomeArt} alt="Maya waving hello with her Water Tag" />
       </Sky>
-      <div className="body roomy install">
+      <div className={`body roomy install${grow ? " grow" : ""}`}>
         <div className="title-row">
           {art && <img className="sprite small" src={art} alt="" />}
           <div style={{ flex: 1, minWidth: 0 }}><div className="h2" style={{ fontSize: 26 }}>{title}</div><p className="lead">{lead}</p></div>
@@ -67,7 +67,7 @@ export function Welcome({ api, platform, install, preview }: { api: Bridge; plat
   const [model, setModel] = useState("");
   const [key, setKey] = useState("");
   return (
-    <InstallCanvas title="Install Tag" lead="Multiplayer AI, right in Slack."
+    <InstallCanvas title="Install Tag" lead="Multiplayer AI, right in Slack." grow
       foot={<>
         <span className="spacer" />
         {preview ? <Primary title="Done" onClick={preview} autoFocus /> : <>
