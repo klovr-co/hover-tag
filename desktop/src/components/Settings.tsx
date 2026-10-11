@@ -252,7 +252,6 @@ export function Settings({ api, info, tags, telemetry, close, replay, initialTab
         {tab === "ai" && <>
         {openAI && (
           <div className="section">
-            <div className="sec-head"><h3>AI connections</h3></div>
             <div className="card"><AISummaryRow api={api} tags={tags} open={openAI} /></div>
           </div>
         )}
@@ -336,7 +335,7 @@ export function MemoryRow({ api, setError }: { api: Bridge; setError: (message: 
   }, [api]);
   if (!memory) return null; // An older Tag without `memory --json` simply has no row.
   return <>
-    <SetRow label="Memory" detail={memoryDetail(memory)}>
+    <SetRow label="Memory service" detail={memoryDetail(memory)}>
       <Switch on={memory.healthy} busy={busy} label="Memory" onClick={async () => {
         setBusy(true);
         setError("");
