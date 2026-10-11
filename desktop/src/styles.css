@@ -617,6 +617,19 @@ button.hello:hover b { text-decoration: underline; text-underline-offset: 2px; }
 .radio-dot::after { content: ""; position: absolute; inset: 3px; border-radius: 50%; background: var(--blue); transform: scale(0); transition: transform .2s var(--spring); }
 .opt[aria-checked="true"] .radio-dot { border-color: var(--blue); }
 .opt[aria-checked="true"] .radio-dot::after { transform: scale(1); }
+.pick-cards { display: flex; flex-direction: column; gap: 10px; }
+.pick-card { border: 1.5px solid var(--line-strong); border-radius: 12px; background: #fff; transition: border-color .16s, box-shadow .16s; overflow: hidden; }
+.pick-card.on { border-color: var(--blue); box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 14%, transparent); }
+.pick-card .opt { align-items: flex-start; padding: 13px 14px; border-radius: 0; }
+.pick-card .opt .label { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14.5px; color: var(--ink); }
+.pick-card .opt .sub { font-size: 13px; }
+.pick-card.on .opt:hover { background: transparent; }
+.pick-fields { padding: 2px 14px 14px 42px; display: flex; flex-direction: column; gap: 10px; animation: rise2 .22s var(--ease); }
+.pick-fields p { margin: 0; font-size: 12.5px; color: var(--muted); }
+.pick-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.fl2 { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; font-weight: 600; color: var(--ink); min-width: 0; }
+.fl2 i { font-style: normal; font-weight: 400; color: var(--muted); margin-left: 4px; }
+.fl2 .field { height: 36px; font-size: 13.5px; font-weight: 400; }
 .chip-now { font-style: normal; font-size: 11px; font-weight: 600; color: var(--blue); background: color-mix(in srgb, var(--blue) 12%, transparent); border-radius: 6px; padding: 1px 6px; }
 .dlg { width: 100%; max-width: 432px; background: var(--pop); border-radius: 12px; border: 1px solid var(--line-strong); box-shadow: 0 30px 80px rgba(0, 20, 40, .35); padding: 18px 18px 16px; display: flex; flex-direction: column; gap: 12px; animation: rise2 .22s cubic-bezier(.22, 1, .36, 1); cursor: default; }
 .dlg h3 { margin: 0; font-size: 17px; font-weight: 600; color: var(--ink); letter-spacing: -.2px; }
@@ -1073,7 +1086,7 @@ button.list-item:hover { background: var(--fill); }
 @media (prefers-reduced-motion: reduce) {
   .radio-dot::after, .model-choices .opt, .opt[aria-checked="true"] .radio-dot::after { transition: none; }
   .model-choices .opt:active:not(:disabled) { transform: none; }
-  .api-row.entering, .api-row.entering > img, .api-leave, .api-check, .api-models, .api-saved, .api-azure, .api-hint, .api-chip, .model-edit,
+  .pick-fields, .api-row.entering, .api-row.entering > img, .api-leave, .api-check, .api-models, .api-saved, .api-azure, .api-hint, .api-chip, .model-edit,
   .api-progress span:last-child,
   .sky .sum .sq, .flow-panel > .body > *, .r.starting .badge, .confetti, .notice.info .bar, .usage-note, .avw2.rolling .pic,
   .empty img, .tags-row, .r.click:hover .av, .sl-item:hover img, .track .tnode img { animation: none !important; }

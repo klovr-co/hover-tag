@@ -79,28 +79,39 @@ export function Welcome({ api, platform, install, preview }: { api: Bridge; plat
           <span className="spacer" />
           <Primary title="Install Tag" onClick={() => install(custom ? { skipModel: true, baseUrl: baseUrl.trim(), model: model.trim(), apiKey: key.trim() } : { ...NO_CUSTOM })} autoFocus />
         </>}>
-        <div className="model-choices" role="radiogroup" aria-label="Search model" style={{ padding: 0 }}>
-          {options.map((o) => (
-            <button key={o.label} className={`opt${o.custom === custom ? " sel" : ""}`} role="radio" aria-checked={o.custom === custom}
-              aria-label={o.label} onClick={() => setCustom(o.custom)}>
-              <span className="radio-dot" aria-hidden="true" />
-              <span className="txt"><span className="label">{o.label}{o.chip && <i className="chip-now">{o.chip}</i>}</span>
-                <span className="sub wrap">{o.detail}</span></span>
-            </button>
-          ))}
+        <div className="pick-cards" role="radiogroup" aria-label="Search model">
+          {options.map((o) => {
+            const on = o.custom === custom;
+            return (
+              <div key={o.label} className={`pick-card${on ? " on" : ""}`}>
+                <button className="opt" role="radio" aria-checked={on} aria-label={o.label} onClick={() => setCustom(o.custom)}>
+                  <span className="radio-dot" aria-hidden="true" />
+                  <span className="txt"><span className="label">{o.label}{o.chip && <i className="chip-now">{o.chip}</i>}</span>
+                    <span className="sub wrap">{o.detail}</span></span>
+                </button>
+                {o.custom && on && (
+                  <div className="pick-fields">
+                    <label className="fl2"><span>Endpoint address</span>
+                      <input className="field" value={baseUrl} placeholder="http://localhost:11434/v1" aria-label="Endpoint address"
+                        spellCheck={false} onChange={(e) => setBaseUrl(e.target.value)} />
+                    </label>
+                    <div className="pick-pair">
+                      <label className="fl2"><span>Model name</span>
+                        <input className="field" value={model} placeholder="bge-m3" aria-label="Model name"
+                          spellCheck={false} onChange={(e) => setModel(e.target.value)} />
+                      </label>
+                      <label className="fl2"><span>API key <i>optional</i></span>
+                        <input className="field" type="password" value={key} placeholder="Local needs none" aria-label="API key (optional)"
+                          autoComplete="new-password" spellCheck={false} onChange={(e) => setKey(e.target.value)} />
+                      </label>
+                    </div>
+                    <p>Leave empty to set it later in Settings → AI. Until then memory uses the built-in model.</p>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
-        {custom && <div className="model-edit" style={{ padding: 0 }}>
-          <span className="fl" aria-hidden="true">Endpoint address</span>
-          <input className="field mono" value={baseUrl} placeholder="http://localhost:11434/v1" aria-label="Endpoint address"
-            spellCheck={false} onChange={(e) => setBaseUrl(e.target.value)} />
-          <span className="fl" aria-hidden="true">Model name</span>
-          <input className="field mono" value={model} placeholder="bge-m3" aria-label="Model name"
-            spellCheck={false} onChange={(e) => setModel(e.target.value)} />
-          <span className="fl" aria-hidden="true">API key <i>optional</i></span>
-          <input className="field mono" type="password" value={key} placeholder="Not needed for local endpoints" aria-label="API key (optional)"
-            autoComplete="new-password" spellCheck={false} onChange={(e) => setKey(e.target.value)} />
-          <p>Leave empty to set it later in Settings → AI. Until then memory uses the built-in model.</p>
-        </div>}
       </InstallCanvas>
     );
   }
