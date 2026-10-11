@@ -74,7 +74,7 @@ it("names the built-in search model and says it downloads in the background and 
   expect(screen.getByText(/560 MB downloads after install; search waits for it/)).toBeTruthy();
 });
 
-it("lets people skip the built-in search model and name their own", () => {
+it("lets people skip the built-in search model and name their own on a screen of its own", () => {
   const install = vi.fn();
   render(<Welcome api={demoBridge()} platform="macos" install={install} />);
   toModel();
@@ -83,6 +83,9 @@ it("lets people skip the built-in search model and name their own", () => {
   expect(install).toHaveBeenLastCalledWith({ skipModel: false, baseUrl: "", model: "", apiKey: "" });
   fireEvent.click(screen.getByRole("radio", { name: "Your own endpoint" }));
   expect(screen.getByRole("radio", { name: "Your own endpoint" }).getAttribute("aria-checked")).toBe("true");
+  expect(screen.queryByLabelText("Endpoint address")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Install Tag" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
   fireEvent.change(screen.getByLabelText("Endpoint address"), { target: { value: " http://localhost:11434/v1 " } });
   fireEvent.change(screen.getByLabelText("Model name"), { target: { value: "nomic-embed-text" } });
   fireEvent.click(screen.getByRole("button", { name: "Install Tag" }));
@@ -96,9 +99,11 @@ it("keeps what was typed when going back and forward, and the replay has no sear
   render(<Welcome api={demoBridge()} platform="macos" install={vi.fn()} />);
   toModel();
   fireEvent.click(screen.getByRole("radio", { name: "Your own endpoint" }));
+  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
   fireEvent.change(screen.getByLabelText("Model name"), { target: { value: "bge-m3" } });
   fireEvent.click(screen.getByRole("button", { name: "Back" }));
-  toModel();
+  expect(screen.getByRole("radio", { name: "Your own endpoint" }).getAttribute("aria-checked")).toBe("true");
+  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
   expect((screen.getByLabelText("Model name") as HTMLInputElement).value).toBe("bge-m3");
   cleanup();
   render(<Welcome api={demoBridge()} platform="macos" preview={vi.fn()} />);

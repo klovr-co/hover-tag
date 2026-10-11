@@ -467,9 +467,6 @@ button.hello:hover b { text-decoration: underline; text-underline-offset: 2px; }
 .install .facts { gap: 14px; margin-top: 4px; }
 .install .install-main { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }
 .install .install-main > * { flex: none; }
-/* The welcome screen grows with the optional search model fields instead of scrolling them. */
-.body.install.grow { height: auto; min-height: calc(var(--flow-h) - 190px); }
-.install.grow .install-main { overflow: visible; }
 .install .install-main > .steps { overflow: auto; }
 .install .install-main > .steps .st { padding: 7px 14px; }
 .install .install-main > .logbox { flex: 1; max-height: none; }
@@ -626,6 +623,7 @@ button.hello:hover b { text-decoration: underline; text-underline-offset: 2px; }
 .pick-card.on .opt:hover { background: transparent; }
 .pick-fields { padding: 2px 14px 14px 42px; display: flex; flex-direction: column; gap: 10px; animation: rise2 .22s var(--ease); }
 .pick-fields p { margin: 0; font-size: 12.5px; color: var(--muted); }
+.pick-fields.flat { padding: 0; animation: none; }
 .pick-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .fl2 { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; font-weight: 600; color: var(--ink); min-width: 0; }
 .fl2 i { font-style: normal; font-weight: 400; color: var(--muted); margin-left: 4px; }

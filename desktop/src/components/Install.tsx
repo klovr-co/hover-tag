@@ -33,15 +33,15 @@ export function Starting({ error, retry }: { error?: string; retry: () => void }
  * Welcome to Installing to Installed changes only what's inside the panel, so
  * the window never resizes or jumps between them.
  */
-function InstallCanvas({ title, lead, side, art, grow, children, foot }: {
-  title: ReactNode; lead: ReactNode; side?: ReactNode; art?: string; grow?: boolean; children: ReactNode; foot: ReactNode;
+function InstallCanvas({ title, lead, side, art, children, foot }: {
+  title: ReactNode; lead: ReactNode; side?: ReactNode; art?: string; children: ReactNode; foot: ReactNode;
 }) {
   return (
     <>
       <Sky kind="hero" stars={150}>
         <img className="welcome-art" src={welcomeArt} alt="Maya waving hello with her Water Tag" />
       </Sky>
-      <div className={`body roomy install${grow ? " grow" : ""}`}>
+      <div className={`body roomy install`}>
         <div className="title-row">
           {art && <img className="sprite small" src={art} alt="" />}
           <div style={{ flex: 1, minWidth: 0 }}><div className="h2" style={{ fontSize: 26 }}>{title}</div><p className="lead">{lead}</p></div>
@@ -58,26 +58,57 @@ function InstallCanvas({ title, lead, side, art, grow, children, foot }: {
 export interface InstallChoice { skipModel: boolean; baseUrl: string; model: string; apiKey: string }
 export const NO_CUSTOM: InstallChoice = { skipModel: false, baseUrl: "", model: "", apiKey: "" };
 
-/** Replay ends with Done; first-run welcome has two screens: what installing means, then how memory searches. */
+/** Replay ends with Done; first-run welcome is up to three screens: what installing means, how memory searches, and (only for your own) the endpoint. */
 export function Welcome({ api, platform, install, preview }: { api: Bridge; platform: string } &
   ({ install: (choice: InstallChoice) => void; preview?: never } | { preview: () => void; install?: never })) {
   const machine = platform === "macos" ? "Mac" : "computer";
-  const [step, setStep] = useState<"intro" | "model">("intro");
+  const [step, setStep] = useState<"intro" | "model" | "endpoint">("intro");
   const [custom, setCustom] = useState(false);
   const [baseUrl, setBaseUrl] = useState("");
   const [model, setModel] = useState("");
   const [key, setKey] = useState("");
+  const choice = (): InstallChoice => custom
+    ? { skipModel: true, baseUrl: baseUrl.trim(), model: model.trim(), apiKey: key.trim() } : { ...NO_CUSTOM };
+  if (!preview && step === "endpoint") {
+    return (
+      <InstallCanvas title="Your own endpoint" lead="OpenAI, Ollama or any compatible endpoint."
+        foot={<>
+          <Quiet title="Back" onClick={() => setStep("model")} />
+          <span className="spacer" />
+          <Primary title="Install Tag" onClick={() => install(choice())} autoFocus />
+        </>}>
+        <div className="pick-fields flat">
+          <label className="fl2"><span>Endpoint address</span>
+            <input className="field" value={baseUrl} placeholder="http://localhost:11434/v1" aria-label="Endpoint address"
+              spellCheck={false} onChange={(e) => setBaseUrl(e.target.value)} />
+          </label>
+          <div className="pick-pair">
+            <label className="fl2"><span>Model name</span>
+              <input className="field" value={model} placeholder="bge-m3" aria-label="Model name"
+                spellCheck={false} onChange={(e) => setModel(e.target.value)} />
+            </label>
+            <label className="fl2"><span>API key <i>optional</i></span>
+              <input className="field" type="password" value={key} placeholder="Local needs none" aria-label="API key (optional)"
+                autoComplete="new-password" spellCheck={false} onChange={(e) => setKey(e.target.value)} />
+            </label>
+          </div>
+          <p>Leave empty to set it later in Settings → AI. Until then memory uses the built-in model.</p>
+        </div>
+      </InstallCanvas>
+    );
+  }
   if (!preview && step === "model") {
     const options = [
       { custom: false, label: "Built in", chip: "Recommended", detail: "bge-m3 runs on this computer. Private, works offline. 560 MB downloads after install; search waits for it." },
       { custom: true, label: "Your own endpoint", chip: "", detail: "OpenAI, Ollama or any compatible endpoint. Nothing to download." },
     ];
     return (
-      <InstallCanvas title="Memory search" lead="How should memory search?" grow
+      <InstallCanvas title="Memory search" lead="How should memory search?"
         foot={<>
           <Quiet title="Back" onClick={() => setStep("intro")} />
           <span className="spacer" />
-          <Primary title="Install Tag" onClick={() => install(custom ? { skipModel: true, baseUrl: baseUrl.trim(), model: model.trim(), apiKey: key.trim() } : { ...NO_CUSTOM })} autoFocus />
+          {custom ? <Primary title="Continue" icon="arrow" onClick={() => setStep("endpoint")} autoFocus />
+            : <Primary title="Install Tag" onClick={() => install(choice())} autoFocus />}
         </>}>
         <div className="pick-cards" role="radiogroup" aria-label="Search model">
           {options.map((o) => {
@@ -89,25 +120,6 @@ export function Welcome({ api, platform, install, preview }: { api: Bridge; plat
                   <span className="txt"><span className="label">{o.label}{o.chip && <i className="chip-now">{o.chip}</i>}</span>
                     <span className="sub wrap">{o.detail}</span></span>
                 </button>
-                {o.custom && on && (
-                  <div className="pick-fields">
-                    <label className="fl2"><span>Endpoint address</span>
-                      <input className="field" value={baseUrl} placeholder="http://localhost:11434/v1" aria-label="Endpoint address"
-                        spellCheck={false} onChange={(e) => setBaseUrl(e.target.value)} />
-                    </label>
-                    <div className="pick-pair">
-                      <label className="fl2"><span>Model name</span>
-                        <input className="field" value={model} placeholder="bge-m3" aria-label="Model name"
-                          spellCheck={false} onChange={(e) => setModel(e.target.value)} />
-                      </label>
-                      <label className="fl2"><span>API key <i>optional</i></span>
-                        <input className="field" type="password" value={key} placeholder="Local needs none" aria-label="API key (optional)"
-                          autoComplete="new-password" spellCheck={false} onChange={(e) => setKey(e.target.value)} />
-                      </label>
-                    </div>
-                    <p>Leave empty to set it later in Settings → AI. Until then memory uses the built-in model.</p>
-                  </div>
-                )}
               </div>
             );
           })}
