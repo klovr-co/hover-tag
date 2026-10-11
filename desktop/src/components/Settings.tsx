@@ -394,12 +394,15 @@ export function SearchModelRow({ api, embedding, setError, changed }: {
     </div>
     {(choice.custom || switching) && (
       <div className="model-edit">
-        {choice.custom && <input className="field mono" value={url} placeholder="Address, such as https://api.openai.com/v1 or http://localhost:11434/v1"
+        {choice.custom && <span className="fl" aria-hidden="true">Endpoint address</span>}
+        {choice.custom && <input className="field mono" value={url} placeholder="https://api.openai.com/v1"
           aria-label="Endpoint address" spellCheck={false} disabled={busy} onChange={(e) => setUrl(e.target.value)} />}
-        {choice.custom && <input className="field mono" value={model} placeholder="Embedding model name, such as text-embedding-3-small"
+        {choice.custom && <span className="fl" aria-hidden="true">Model name</span>}
+        {choice.custom && <input className="field mono" value={model} placeholder="text-embedding-3-small"
           aria-label="Model name" spellCheck={false} disabled={busy} onChange={(e) => setModel(e.target.value)} />}
+        {choice.custom && <span className="fl" aria-hidden="true">API key <i>optional</i></span>}
         {choice.custom && <input className="field mono" type="password" value={key}
-          placeholder={choice.keySaved ? "API key (saved; paste to replace)" : "API key (optional)"} aria-label="API key (optional)"
+          placeholder={choice.keySaved ? "Saved. Paste to replace" : "Not needed for local endpoints"} aria-label="API key (optional)"
           autoComplete="new-password" spellCheck={false} disabled={busy} onChange={(e) => setKey(e.target.value)} />}
         <p>{choice.custom ? "Tag tries the endpoint before saving, so a wrong address, model or key changes nothing. " : ""}Memory then indexes your Slack channels
           again with the new model, so search is partial until it finishes. You can switch back; the old index is kept.</p>

@@ -84,11 +84,14 @@ export function Welcome({ api, platform, install, preview }: { api: Bridge; plat
           <span style={{ flex: 1 }}><b>Your own search model.</b> Use OpenAI, Ollama or another endpoint instead of the built-in one, and skip its 560 MB download.</span>
           <Switch on={custom} busy={false} label="Use my own search model" onClick={() => setCustom(!custom)} /></div>}
         {!preview && custom && <div className="model-edit" style={{ padding: 0 }}>
-          <input className="field mono" value={baseUrl} placeholder="Address, such as http://localhost:11434/v1" aria-label="Endpoint address"
+          <span className="fl" aria-hidden="true">Endpoint address</span>
+          <input className="field mono" value={baseUrl} placeholder="http://localhost:11434/v1" aria-label="Endpoint address"
             spellCheck={false} onChange={(e) => setBaseUrl(e.target.value)} />
-          <input className="field mono" value={model} placeholder="Embedding model name" aria-label="Model name"
+          <span className="fl" aria-hidden="true">Model name</span>
+          <input className="field mono" value={model} placeholder="bge-m3" aria-label="Model name"
             spellCheck={false} onChange={(e) => setModel(e.target.value)} />
-          <input className="field mono" type="password" value={key} placeholder="API key (optional)" aria-label="API key (optional)"
+          <span className="fl" aria-hidden="true">API key <i>optional</i></span>
+          <input className="field mono" type="password" value={key} placeholder="Not needed for local endpoints" aria-label="API key (optional)"
             autoComplete="new-password" spellCheck={false} onChange={(e) => setKey(e.target.value)} />
           <p>Leave these empty to finish in Settings → AI. Until then memory downloads the built-in model when it starts.</p>
         </div>}
