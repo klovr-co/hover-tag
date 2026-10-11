@@ -206,6 +206,19 @@ def mark_reindex(shared: Path) -> None:
     _write(shared / REINDEX_MARK, "pending\n")
 
 
+def record_reindex_job(shared: Path, job_id: str) -> None:
+    """Keep the marker, now naming the MFS job whose completion clears it."""
+    _write(shared / REINDEX_MARK, f"job {job_id}\n")
+
+
+def reindex_job(shared: Path) -> str | None:
+    try:
+        kind, _, job_id = (shared / REINDEX_MARK).read_text(encoding="utf-8").strip().partition(" ")
+    except OSError:
+        return None
+    return job_id.strip() or None if kind == "job" else None
+
+
 def reindex_pending(shared: Path) -> bool:
     return (shared / REINDEX_MARK).is_file()
 

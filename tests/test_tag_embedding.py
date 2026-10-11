@@ -123,6 +123,16 @@ class EmbeddingConfigTests(unittest.TestCase):
         tag_embedding.clear_reindex(self.shared)
         self.assertFalse(tag_embedding.reindex_pending(self.shared))
 
+    def test_reindex_marker_names_the_job_that_clears_it(self):
+        self.assertIsNone(tag_embedding.reindex_job(self.shared))
+        tag_embedding.mark_reindex(self.shared)
+        self.assertIsNone(tag_embedding.reindex_job(self.shared))
+        tag_embedding.record_reindex_job(self.shared, "job-7")
+        self.assertEqual(tag_embedding.reindex_job(self.shared), "job-7")
+        self.assertTrue(tag_embedding.reindex_pending(self.shared))
+        tag_embedding.mark_reindex(self.shared)  # a newer model change forgets the older job
+        self.assertIsNone(tag_embedding.reindex_job(self.shared))
+
 
 class ProbeTests(unittest.TestCase):
     def answer(self, status=200, body=None):

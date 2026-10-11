@@ -628,6 +628,14 @@ class TagHomeTests(unittest.TestCase):
                 self.assertEqual(tag_install.main(), 0)
             self.assertIsNone(seen["skip"])
 
+    def test_conflicting_source_options_fail_before_the_search_model_prompt(self):
+        from scripts import tag_install
+        argv = ["tag_install.py", "--source", str(ROOT), "--channel", "stable"]
+        with patch.object(sys, "argv", argv), patch.object(tag_install, "ask_skip_memory_model") as ask, \
+                contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            tag_install.main()
+        ask.assert_not_called()
+
     def test_interactive_install_offers_a_custom_search_model_and_only_when_a_person_can_answer(self):
         from scripts import tag_install
         with patch.dict(os.environ, {}, clear=False):

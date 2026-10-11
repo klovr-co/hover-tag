@@ -804,10 +804,10 @@ def main() -> int:
         help="skip the 560 MB built-in search-model download (you will point memory at your own, such as OpenAI or Ollama)",
     )
     args = parser.parse_args()
-    if args.skip_memory_model or (not args.skip_dependencies and ask_skip_memory_model()):
-        os.environ["TAG_SKIP_MFS_MODEL"] = "1"  # read by preload_mfs_model.py in the memory step
     if args.source and (args.channel or args.version):
         parser.error("--source cannot be combined with --channel or --version")
+    if args.skip_memory_model or (not args.skip_dependencies and ask_skip_memory_model()):
+        os.environ["TAG_SKIP_MFS_MODEL"] = "1"  # read by preload_mfs_model.py in the memory step
     if sys.version_info < (3, 10):
         raise RuntimeError("Python 3.10 or newer is required")
     with tempfile.TemporaryDirectory(prefix="tag-install-") as temporary:

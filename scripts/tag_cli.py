@@ -950,8 +950,7 @@ def _memory_embedding(context, args, home: Path, installation_root: Path) -> int
             stop_process(home, "mfs", state_dir=shared)
             ensure_shared_memory(context, environment)
             try:
-                sync_configured_slack_memory(environment, full=True)
-                tag_embedding.clear_reindex(shared)
+                reindex_slack_memory(shared, environment)
                 reindexing = True
             except RuntimeError as error:
                 note = f"Memory restarted with the new search model, but re-indexing didn't start: {error}"
@@ -971,8 +970,42 @@ def _memory_embedding(context, args, home: Path, installation_root: Path) -> int
     return 0
 
 
-def sync_configured_slack_memory(environment: dict[str, str] | None = None, *, full: bool = False) -> None:
+def _queued_job(response: dict[str, object]) -> str | None:
+    return str(response["job_id"]) if response.get("job_id") else None
+
+
+JOB_FINISHED = {"succeeded", "partial"}
+JOB_ENDED = JOB_FINISHED | {"failed", "cancelled"}
+
+
+def reindex_slack_memory(shared: Path, environment: dict[str, str] | None = None) -> bool:
+    """Import every channel again after a search-model change; True once MFS reports that done.
+
+    MFS runs the import in the background, so the marker stays until the queued job
+    succeeds. A failed or cancelled job (or one MFS no longer knows) is queued again,
+    and a still-running one is left alone.
+    """
+    job = tag_embedding.reindex_job(shared)
+    if job:
+        try:
+            status = str(_mfs_send("GET", f"/v1/jobs/{urllib.parse.quote(job, safe='')}", environment=environment).get("status", ""))
+        except MfsRequestError:
+            status = ""
+        if status in JOB_FINISHED:
+            tag_embedding.clear_reindex(shared)
+            return True
+        if status and status not in JOB_ENDED:
+            return False
+    job = sync_configured_slack_memory(environment, full=True)
+    if job:
+        tag_embedding.record_reindex_job(shared, job)
+    return False
+
+
+def sync_configured_slack_memory(environment: dict[str, str] | None = None, *, full: bool = False) -> str | None:
     """Register and incrementally sync the connector approved during setup.
+
+    Returns the MFS job that was queued, or None when nothing new was started.
 
     Talks to the MFS server's HTTP API directly (POST /v1/add), as the `mfs`
     client did, so no separate client program is needed on any platform.
@@ -981,11 +1014,10 @@ def sync_configured_slack_memory(environment: dict[str, str] | None = None, *, f
     uri = source.get("MFS_SLACK_CONNECTOR_URI", "").strip()
     config = Path(source.get("MFS_SLACK_CONNECTOR_CONFIG", "")).expanduser()
     if not uri or not config.is_file():
-        return
+        return None
     settings = load_connector_config(config)
     try:
-        mfs_post_json("/v1/add", {"target": uri, "config": settings, "full": full, "process": False}, source)
-        return
+        return _queued_job(mfs_post_json("/v1/add", {"target": uri, "config": settings, "full": full, "process": False}, source))
     except MfsRequestError as error:
         failure = error
     if failure.code == "connector_already_registered":
@@ -994,12 +1026,11 @@ def sync_configured_slack_memory(environment: dict[str, str] | None = None, *, f
         # pretending that its old configuration describes new channel consent.
         try:
             body = {"target": uri, "update": True, "config": settings}
-            mfs_post_json("/v1/add", dict(body, full=True) if full else body, source)
-            return
+            return _queued_job(mfs_post_json("/v1/add", dict(body, full=True) if full else body, source))
         except MfsRequestError as error:
             failure = error
     if failure.code == "sync_already_running":
-        return
+        return None
     if "environment variable MFS_SLACK_TOKEN is not set" in failure.detail:
         raise MfsHistoryCredentialUnavailable(MFS_HISTORY_CREDENTIAL_MESSAGE)
     if "no plugin for slack" in failure.detail.lower():
@@ -2754,7 +2785,7 @@ def _run_cli() -> int:
         action = args.arguments[0] if args.arguments else "status"
         if action == "embedding":
             if len(args.arguments) > 2:
-                parser.error("memory embedding accepts status, local, or openai")
+                parser.error("memory embedding accepts status, local, or custom")
             return _memory_embedding(context, args, home, installation_root)
         if len(args.arguments) > 1 or action not in {"start", "status", "stop"}:
             parser.error("memory accepts start, status, stop, or embedding")
@@ -3243,10 +3274,9 @@ def _run_cli() -> int:
             else:
                 # A changed search model means a new, empty index: import everything again once.
                 shared_memory = context.shared_mfs_home
-                reindex = tag_embedding.reindex_pending(shared_memory)
-                if reindex:
-                    sync_configured_slack_memory(full=True)
-                    tag_embedding.clear_reindex(shared_memory)
+                if tag_embedding.reindex_pending(shared_memory):
+                    if reindex_slack_memory(shared_memory):
+                        sync_configured_slack_memory()
                 else:
                     sync_configured_slack_memory()
             # Don't wait for the first import: Tag answers now, and history search covers each

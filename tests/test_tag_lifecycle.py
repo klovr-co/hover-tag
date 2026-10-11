@@ -140,7 +140,8 @@ class TagLifecycleTests(unittest.TestCase):
                              {"provider": configured, "model": "model-x", "local": local})
             self.assertEqual([c["id"] for c in embedding["choices"]], ["onnx", "custom"])
 
-    def run_embedding(self, *words: str, stdin: str = "", running: bool = False, key_check=None):
+    def run_embedding(self, *words: str, stdin: str = "", running: bool = False, key_check=None,
+                      provider: str = "openai", job: str = "job-1"):
         shared = self.root / "shared/mfs"
         ctx = patch.dict(os.environ, {"TAG_HOME": str(self.root), "MFS_HOME": str(self.root / "user-mfs")}, clear=False)
         with ctx, patch.object(sys, "argv", ["tag", "memory", "embedding", *words, "--json"]), \
@@ -149,9 +150,9 @@ class TagLifecycleTests(unittest.TestCase):
                 patch.object(tag_cli, "process_for", return_value=object() if running else None), \
                 patch.object(tag_cli, "stop_process") as stop, \
                 patch.object(tag_cli, "ensure_shared_memory") as ensure, \
-                patch.object(tag_cli, "sync_configured_slack_memory") as sync, \
+                patch.object(tag_cli, "sync_configured_slack_memory", return_value=job) as sync, \
                 patch.object(tag_cli.tag_embedding, "probe", key_check or (lambda *args: 768)), \
-                patch.object(tag_cli.preload_mfs_model, "configured_embedding", return_value=("openai", "embed-x")), \
+                patch.object(tag_cli.preload_mfs_model, "configured_embedding", return_value=(provider, "embed-x")), \
                 redirect_stdout(StringIO()) as output:
             code = tag_cli.main()
         return code, output.getvalue(), shared, stop, ensure, sync
@@ -185,8 +186,39 @@ class TagLifecycleTests(unittest.TestCase):
         ensure.assert_called_once()
         sync.assert_called_once()
         self.assertTrue(sync.call_args.kwargs["full"])
-        self.assertFalse(tag_cli.tag_embedding.reindex_pending(shared))
+        # The import runs in the background, so the marker stays until MFS reports the job done.
+        self.assertEqual(tag_cli.tag_embedding.reindex_job(shared), "job-1")
         self.assertTrue(json.loads(output)["reindexing"])
+
+    def test_reindex_marker_waits_for_the_job_and_retries_a_failed_one(self):
+        shared = self.root / "shared/mfs"
+        shared.mkdir(parents=True)
+        tag_cli.tag_embedding.mark_reindex(shared)
+        with patch.object(tag_cli, "sync_configured_slack_memory", return_value="job-1") as sync:
+            self.assertFalse(tag_cli.reindex_slack_memory(shared))
+        sync.assert_called_once_with(None, full=True)
+        self.assertEqual(tag_cli.tag_embedding.reindex_job(shared), "job-1")
+        for status, done, queued in (("running", False, False), ("pending", False, False),
+                                     ("failed", False, True), ("cancelled", False, True),
+                                     ("", False, True), ("succeeded", True, False), ("partial", True, False)):
+            with self.subTest(status=status), \
+                    patch.object(tag_cli, "_mfs_send", return_value={"status": status}), \
+                    patch.object(tag_cli, "sync_configured_slack_memory", return_value="job-2") as sync:
+                tag_cli.tag_embedding.record_reindex_job(shared, "job-1")
+                self.assertEqual(tag_cli.reindex_slack_memory(shared), done)
+                self.assertEqual(sync.called, queued)
+                self.assertEqual(tag_cli.tag_embedding.reindex_pending(shared), not done)
+                self.assertEqual(tag_cli.tag_embedding.reindex_job(shared), "job-2" if queued else None if done else "job-1")
+
+    def test_reindex_keeps_the_marker_when_the_job_status_is_unknown(self):
+        shared = self.root / "shared/mfs"
+        shared.mkdir(parents=True)
+        tag_cli.tag_embedding.record_reindex_job(shared, "job-1")
+        error = tag_cli.MfsRequestError(404, "error", "job not found")
+        with patch.object(tag_cli, "_mfs_send", side_effect=error), \
+                patch.object(tag_cli, "sync_configured_slack_memory", return_value=None):
+            self.assertFalse(tag_cli.reindex_slack_memory(shared))
+        self.assertTrue(tag_cli.tag_embedding.reindex_pending(shared))
 
     def test_memory_embedding_rejected_endpoint_changes_nothing(self) -> None:
         def reject(*_args):
@@ -201,7 +233,7 @@ class TagLifecycleTests(unittest.TestCase):
 
     def test_memory_embedding_local_switches_back_and_reindexes_again(self) -> None:
         self.run_embedding(*self.ARGS, "--stdin", stdin="sk-test-synthetic\n")
-        code, output, shared, stop, ensure, sync = self.run_embedding("local", running=True)
+        code, output, shared, stop, ensure, sync = self.run_embedding("local", running=True, provider="onnx")
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(output)["embedding"]["local"], True)
         self.assertNotIn("OPENAI_BASE_URL", tag_cli.tag_embedding.server_environment(shared))
