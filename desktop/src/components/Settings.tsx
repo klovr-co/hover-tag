@@ -420,7 +420,6 @@ export function SearchModelRow({ api, embedding, setError, changed }: {
   </>;
 }
 
-/** The Settings row that opens AI & models, with a summary for the main Tag. */
 /** Settings → AI: a row into the Memory page, like the AI connections row above it. */
 export function MemorySummaryRow({ api, open }: { api: Bridge; open: () => void }) {
   const [summary, setSummary] = useState("");
@@ -450,10 +449,12 @@ export function MemorySettings({ api, close }: { api: Bridge; close: () => void 
     <div className="body river">
       <div className="section"><div className="card"><MemoryRow api={api} setError={setError} /></div></div>
       {error && <ErrorLine>{error}</ErrorLine>}
+      <RiverFoot />
     </div>
   </>;
 }
 
+/** The Settings row that opens AI & models, with a summary for the main Tag. */
 export function AISummaryRow({ api, tags, open }: { api: Bridge; tags: Tags; open: () => void }) {
   const [summary, setSummary] = useState("");
   useEffect(() => {

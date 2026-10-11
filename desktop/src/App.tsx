@@ -272,7 +272,7 @@ export function App() {
   };
   const add = () => setScreen({ name: "connect", args: tags.rows.length ? ["add"] : ["setup"] });
   // These screens are always --flow-h tall and scroll inside, so moving between them never resizes the window.
-  const fixed = screen.name === "home" || screen.name === "settings" || screen.name === "ai";
+  const fixed = screen.name === "home" || screen.name === "settings" || screen.name === "ai" || screen.name === "memory";
   return (
     <TrackContext.Provider value={track}>
       <main ref={setRoot} className={`app${info.platform === "macos" ? " overlay" : ""}${screen.name === "home" ? " home" : ""}${fixed ? " fixed" : ""}${screen.name === "tag" ? " wide" : ""}`}>
