@@ -54,9 +54,16 @@ tag restart
 ## Letting another app's bot ask your Tag
 
 Some apps ask Tag to run a skill by mentioning it in a thread. For example,
-Hover posts `@Tag /update-monday` with the details after a daily update. Your
-Tag accepts such a mention only from a bot that you listed in
-`SLACK_ALLOWED_BOT_IDS`. Mentions from other bots are ignored.
+Hover posts `@Tag /draft-reply` with the details after a person clicks a
+button. Your Tag accepts such a mention only from a bot that you listed in
+`SLACK_ALLOWED_BOT_IDS`, and only when the message is a request: it starts with
+the mention and a command, and its code block holds a Hover request ID
+(`"request_id": "hv-…"`). Other messages from that bot, such as a mirror of
+WhatsApp text that happens to mention Tag, are ignored. Mentions from other
+bots are ignored.
+
+Tag's Slack memory also skips the messages that a listed bot posts, so an app's
+own copies and logs are not indexed. Run `tag restart` after you change the list.
 
 ```bash
 tag config set SLACK_ALLOWED_BOT_IDS B0123ABCD

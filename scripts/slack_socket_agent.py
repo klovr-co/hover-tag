@@ -3295,6 +3295,21 @@ def slack_bot_allowed(event: dict[str, Any], allowed_bot_ids: frozenset[str], ow
     return bot_id in allowed_bot_ids or (bool(user_id) and user_id in allowed_bot_ids)
 
 
+# What an approved bot's request looks like: the mention and a command first, then a code block
+# that carries a Hover request ID. Other messages from the same bot (a mirror of WhatsApp text,
+# a log) never start a run, even if they happen to mention this Tag.
+_BOT_REQUEST = re.compile(r"\A\s*<@[UW][A-Z0-9]+>\s+/[a-z0-9][a-z0-9-]*\s*\n```[\s\S]*?\"request_id\"\s*:\s*\"hv-[0-9a-f]{16}\"")
+_NOT_A_REQUEST_EVENT_TYPES = frozenset({"hover_whatsapp_mirror"})
+
+
+def bot_request_valid(event: dict[str, Any]) -> bool:
+    """True when an approved bot's mention is a Hover request, not other text that mentions Tag."""
+    metadata = event.get("metadata")
+    if isinstance(metadata, dict) and metadata.get("event_type") in _NOT_A_REQUEST_EVENT_TYPES:
+        return False
+    return bool(_BOT_REQUEST.match(event.get("text") or ""))
+
+
 def own_bot_user_id(body: dict[str, Any]) -> str | None:
     """This Tag's bot member ID, from the event's authorizations."""
     return next((item.get("user_id") for item in body.get("authorizations") or []
@@ -5054,6 +5069,10 @@ def create_app(
             logger.warning("Ignoring Open Tag mention from unapproved Slack channel %s", channel)
             return
         if event.get("user") not in peer_ids and slack_bot_allowed(event, allowed_bot_ids, own_bot_user_id(body)):
+            if not bot_request_valid(event):
+                logger.info("Ignoring a mention from approved bot %s that is not a Hover request",
+                            event.get("bot_id") or event.get("user"))
+                return
             logger.info("Accepting a mention from approved bot %s", event.get("bot_id") or event.get("user"))
             handle_invocation(event, body, client, logger, direct_message=False, bot_request=True)
             return

@@ -10,7 +10,8 @@ from scripts import agent_models, opentag_process_env, slack_socket_agent, tag_c
 from tests.test_slack_socket_agent import FakeApp
 
 HOVER_BOT, HOVER_USER, OWN_USER = "B0HOVER", "U0HOVER", "U0TAG"
-REQUEST = "<@U0TAG> /update-monday\n```{\"group_jid\": \"1@g.us\"}```"
+REQUEST_ID = "hv-0123456789abcdef"
+REQUEST = "<@U0TAG> /update-monday\n```{\"group_jid\": \"1@g.us\", \"request_id\": \"" + REQUEST_ID + "\"}```"
 
 
 def setUpModule() -> None:
@@ -61,6 +62,24 @@ class ApprovedBotMentionTests(unittest.TestCase):
         posted = client.chat_postMessage.call_args.kwargs["text"]
         self.assertIn("couldn't complete", posted)
         self.assertNotIn("secret", posted)
+
+    def test_a_mention_that_is_not_a_hover_request_is_ignored(self) -> None:
+        mirrored = "10:42 Siti · can <@U0TAG> /update-monday please?"
+        for text in (mirrored, "<@U0TAG> /update-monday", "<@U0TAG> /update-monday\n```{\"request_id\": \"x1\"}```",
+                     "hello\n" + REQUEST):
+            with self.subTest(text=text):
+                run, client = self.mention({"user": HOVER_USER, "bot_id": HOVER_BOT, "text": text})
+                run.assert_not_called()
+                client.chat_postMessage.assert_not_called()
+
+    def test_a_mirror_post_is_ignored_even_if_it_looks_like_a_request(self) -> None:
+        meta = {"event_type": "hover_whatsapp_mirror", "event_payload": {}}
+        run, _ = self.mention({"user": HOVER_USER, "bot_id": HOVER_BOT, "metadata": meta})
+        run.assert_not_called()
+
+    def test_other_metadata_does_not_block_a_request(self) -> None:
+        run, _ = self.mention({"user": HOVER_USER, "bot_id": HOVER_BOT, "metadata": {"event_type": "hover_tag_request"}})
+        run.assert_called_once()
 
     def test_unlisted_bot_is_ignored(self) -> None:
         run, client = self.mention({"user": "U0OTHERBOT", "bot_id": "B0OTHER"})
