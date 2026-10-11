@@ -61,10 +61,11 @@ describe("model download notice", () => {
 
   it("offers Try again when the download stopped, and starts it again", async () => {
     const { api, calls } = bridge(
-      status({ state: "failed", model: "m", done: 0, total: 0, percent: 0, message: "The search model (m) didn't finish downloading: no network. Memory search isn't available; run tag memory download to try again." }),
+      status({ state: "failed", model: "m", done: 0, total: 0, percent: 0, error: "no network", message: "The search model (m) didn't finish downloading: no network. Memory search isn't available; run tag memory download to try again." }),
       status(running(1, 5 * MiB)));
     render(<ModelDownloadNotice api={api} every={5} />);
     expect(await screen.findByText("The search model didn't finish downloading")).toBeTruthy();
+    expect(screen.getByText(/Reason: no network/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     await waitFor(() => expect(calls).toContainEqual(["memory", "download", "--json"]));
     await screen.findByText("Downloading the search model");

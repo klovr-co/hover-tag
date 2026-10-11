@@ -33,6 +33,8 @@ export interface ModelDownload {
   done: number;
   total: number;
   percent: number;
+  /** Why it stopped, when it failed. */
+  error: string;
   /** What to tell the person, empty once it is ready. */
   message: string;
 }
@@ -57,7 +59,7 @@ export function parseMemory(output: string): MemoryStatus {
     healthy?: boolean; managed?: boolean; keep_running?: boolean; running_tags?: string[];
     embedding?: {
       provider?: string; model?: string; local?: boolean; current?: string; reindex_pending?: boolean;
-      download?: { state?: string; model?: string; done?: number; total?: number; percent?: number; message?: string } | null;
+      download?: { state?: string; model?: string; done?: number; total?: number; percent?: number; error?: string; message?: string } | null;
       choices?: { id: string; label: string; detail?: string; custom?: boolean; model?: string; base_url?: string; key_saved?: boolean }[];
     } | null;
   }>(output);
@@ -74,7 +76,7 @@ export function parseMemory(output: string): MemoryStatus {
         id: c.id, label: c.label, detail: c.detail ?? "", custom: !!c.custom, model: c.model ?? "", baseUrl: c.base_url ?? "", keySaved: !!c.key_saved })),
       reindexPending: !!e.reindex_pending,
       download: e.download ? { state: e.download.state ?? "", model: e.download.model ?? "", done: e.download.done ?? 0,
-        total: e.download.total ?? 0, percent: e.download.percent ?? 0, message: e.download.message ?? "" } : null,
+        total: e.download.total ?? 0, percent: e.download.percent ?? 0, error: e.download.error ?? "", message: e.download.message ?? "" } : null,
     } : null,
   };
 }

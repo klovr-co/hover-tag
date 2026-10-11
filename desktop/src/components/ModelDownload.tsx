@@ -73,7 +73,7 @@ export function ModelDownloadNotice({ api, every = 3000 }: { api: Bridge; every?
         <div style={{ flex: 1 }}>
           <div className="t">The search model didn't finish downloading</div>
           <div className="d">Memory search isn't available until it does. Your Tags keep working.</div>
-          {download.message && <div className="d selectable">{download.message}</div>}
+          {download.error && <div className="d selectable">Reason: {download.error}. Or run <code>tag memory download</code>.</div>}
         </div>
         <div className="act"><button className="p-btn ink sm" onClick={() => void retry()}>Try again</button></div>
       </div>

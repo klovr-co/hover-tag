@@ -32,13 +32,13 @@ describe("memory status", () => {
 });
 
 describe("the built-in model's background download", () => {
-  const download = { state: "downloading", model: "gpahal/bge-m3-onnx-int8", done: 312 * MiB, total: 560 * MiB, percent: 55,
+  const download = { state: "downloading", model: "gpahal/bge-m3-onnx-int8", done: 312 * MiB, total: 560 * MiB, percent: 55, error: "",
     message: "Downloading the search model (gpahal/bge-m3-onnx-int8): 312 of 560 MB. Memory search isn't available until it finishes." };
 
   it("reads the progress, the model and what it means for search", () => {
     const memory = parseMemory(report({ embedding: { provider: "onnx", model: "m", local: true, current: "onnx", choices, download } }));
     expect(memory.embedding?.download).toEqual({ state: "downloading", model: "gpahal/bge-m3-onnx-int8", done: 312 * MiB, total: 560 * MiB, percent: 55,
-      message: download.message });
+      error: "", message: download.message });
   });
 
   it("has no download when none was started or Tag is too old to say", () => {

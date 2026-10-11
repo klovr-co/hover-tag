@@ -301,7 +301,7 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
         const bytes = 560 * 1048576;
         const download = downloadState && embedding === "onnx" ? {
           state: downloadState, model: "gpahal/bge-m3-onnx-int8", done: Math.round(bytes * downloaded), total: bytes,
-          percent: downloadState === "ready" ? 100 : Math.floor(downloaded * 100),
+          percent: downloadState === "ready" ? 100 : Math.floor(downloaded * 100), error: downloadState === "failed" ? "no network" : "",
           message: downloadState === "failed" ? "The search model (gpahal/bge-m3-onnx-int8) didn't finish downloading: no network. Memory search isn't available; run tag memory download to try again." : "" } : null;
         return json({ schema_version: 1, managed: memoryRunning, healthy: memoryRunning, running_tags: [],
           keep_running: keepRunning, embedding: { provider: embedding === "onnx" ? "onnx" : "openai", model: embeddingModel, local: embedding === "onnx", current: embedding, download,
@@ -404,9 +404,17 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
     install: async (_channel, onLine, onExit) => {
       let cancelled = false;
       (async () => {
+        // ?install=fail stops the demo install in the middle, to show the failure screen.
+        const failAt = new URLSearchParams(location.search).get("install") === "fail" ? 4 : -1;
+        let shown = 0;
         for (const line of progressExample.trim().split("\n")) {
           await sleep(1400);
           if (cancelled) return;
+          if (shown++ === failAt) {
+            onLine("Installation failed: Couldn't download the Slack components. Check your internet connection and try again.");
+            onExit(1);
+            return;
+          }
           onLine(line);
           onLine(`  ${line.includes('"release"') ? "✓  Release   Tag v0.2.0" : "…"}`);
         }

@@ -83,7 +83,8 @@ def report(shared: Path) -> dict | None:
                    "Memory search isn't available; run tag memory download to try again.")
     else:
         message = ""
-    return {"state": state, "model": model, "done": done, "total": total, "percent": percent, "message": message}
+    return {"state": state, "model": model, "done": done, "total": total, "percent": percent,
+            "error": error if state == "failed" else "", "message": message}
 
 
 def active(shared: Path) -> bool:

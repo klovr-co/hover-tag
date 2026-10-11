@@ -53,6 +53,7 @@ class ModelDownloadStateTests(unittest.TestCase):
         download.write(self.shared, "failed", model="bge-m3", error="no network")
         report = download.report(self.shared)
         self.assertIn("no network", report["message"])
+        self.assertEqual(report["error"], "no network")
         self.assertIn("tag memory download", report["message"])
 
     def test_an_unreadable_file_reports_nothing_instead_of_crashing_status(self):
