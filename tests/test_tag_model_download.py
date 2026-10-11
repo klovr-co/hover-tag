@@ -30,7 +30,7 @@ class ModelDownloadStateTests(unittest.TestCase):
         self.assertEqual(report["model"], "bge-m3")
         self.assertEqual(report["percent"], 55)
         self.assertEqual(report["message"],
-                         "Downloading the search model (bge-m3): 312 of 560 MB. Memory search isn't available until it finishes.")
+                         "Downloading the search model (bge-m3): 312 of 560 MB. Search is off until it finishes.")
 
     def test_a_download_whose_process_is_gone_is_reported_as_interrupted(self):
         download.write(self.shared, "downloading", model="bge-m3", done=1, total=2, pid=os.getpid())

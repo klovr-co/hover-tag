@@ -86,7 +86,7 @@ export function embeddingText(memory: MemoryStatus) {
   if (!memory.embedding) return "";
   const { download } = memory.embedding;
   if (memory.embedding.local && download?.state === "downloading") {
-    return `Search model: default, built in, downloading (${download.percent}%). Search is unavailable until it finishes.`;
+    return `Search model: default, downloading (${download.percent}%). Search is off until it finishes.`;
   }
   return memory.embedding.local ? "Search model: default, built in." : `Search model: custom (${memory.embedding.model}).`;
 }

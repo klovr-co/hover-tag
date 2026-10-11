@@ -69,11 +69,11 @@ export function Welcome({ api, platform, install, preview }: { api: Bridge; plat
   const [key, setKey] = useState("");
   if (!preview && step === "model") {
     const options = [
-      { custom: false, label: "Built in", chip: "Recommended", detail: "bge-m3 runs on this computer: private, and it works offline. About 560 MB, downloaded in the background after install. Search isn't available until it finishes." },
-      { custom: true, label: "Your own endpoint", chip: "", detail: "OpenAI, Ollama, LM Studio, vLLM or your own gateway. Nothing to download." },
+      { custom: false, label: "Built in", chip: "Recommended", detail: "bge-m3 runs on this computer. Private, works offline. 560 MB downloads after install; search waits for it." },
+      { custom: true, label: "Your own endpoint", chip: "", detail: "OpenAI, Ollama or any compatible endpoint. Nothing to download." },
     ];
     return (
-      <InstallCanvas title="Memory search" lead="How should Tag search what your team has said?" grow
+      <InstallCanvas title="Memory search" lead="How should memory search?" grow
         foot={<>
           <Quiet title="Back" onClick={() => setStep("intro")} />
           <span className="spacer" />
@@ -99,7 +99,7 @@ export function Welcome({ api, platform, install, preview }: { api: Bridge; plat
           <span className="fl" aria-hidden="true">API key <i>optional</i></span>
           <input className="field mono" type="password" value={key} placeholder="Not needed for local endpoints" aria-label="API key (optional)"
             autoComplete="new-password" spellCheck={false} onChange={(e) => setKey(e.target.value)} />
-          <p>Leave these empty to finish in Settings → AI. Until then memory downloads the built-in model when it starts.</p>
+          <p>Leave empty to set it later in Settings → AI. Until then memory uses the built-in model.</p>
         </div>}
       </InstallCanvas>
     );

@@ -1405,7 +1405,7 @@ class TagHomeTests(unittest.TestCase):
     def test_install_says_search_waits_for_the_background_download(self):
         _, output = self.run_dependency_install()
         self.assertIn("downloads in the background", output)
-        self.assertIn("memory search isn't available until it finishes", output)
+        self.assertIn("Search is off until it finishes", output)
 
     @unittest.skipIf(os.name == "nt", "POSIX managed runtime bootstrap")
     def test_a_download_that_cannot_start_does_not_fail_the_install(self):

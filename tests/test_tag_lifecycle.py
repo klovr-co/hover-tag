@@ -155,7 +155,7 @@ class TagLifecycleTests(unittest.TestCase):
                                          total=600 * 1_048_576, pid=os.getpid())
         download = json.loads(self.memory_status("--json"))["embedding"]["download"]
         self.assertEqual((download["state"], download["percent"]), ("downloading", 50))
-        self.assertIn("Memory search isn't available until it finishes", download["message"])
+        self.assertIn("Search is off until it finishes", download["message"])
         text = " ".join(self.memory_status().split())
         self.assertIn("Download", text)
         self.assertIn("300 of 600 MB", text)

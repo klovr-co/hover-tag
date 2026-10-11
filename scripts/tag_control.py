@@ -343,7 +343,7 @@ def _search_model_label() -> str:
     label = next((str(c["label"]) for c in tag_embedding.choices(shared) if c["id"] == current), current)
     download = tag_model_download.report(shared) if current == tag_embedding.LOCAL else None
     if download and download["state"] == "downloading":
-        return f"{label} (downloading, {download['percent']}%; search is unavailable until it finishes)"
+        return f"{label} (downloading {download['percent']}%, search off)"
     return label
 
 

@@ -185,7 +185,7 @@ class TagControlTests(unittest.TestCase):
         self.enterContext(patch.dict(os.environ, {"TAG_HOME": str(self.home)}))
         self.assertEqual(tag_control._search_model_label(), "Default")
         tag_control.tag_model_download.write(shared, "downloading", model="bge-m3", done=1, total=4, pid=os.getpid())
-        self.assertEqual(tag_control._search_model_label(), "Default (downloading, 25%; search is unavailable until it finishes)")
+        self.assertEqual(tag_control._search_model_label(), "Default (downloading 25%, search off)")
         tag_control.tag_model_download.write(shared, "ready", model="bge-m3", done=4, total=4)
         self.assertEqual(tag_control._search_model_label(), "Default")
 

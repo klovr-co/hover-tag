@@ -673,7 +673,7 @@ def install(
                 row("Memory", "Custom search model kept; built-in model not downloaded")
             else:
                 download_model = True
-                row("Memory", "Built-in search model downloads in the background (about 560 MB)")
+                row("Memory", "Search model (560 MB) downloads in the background")
             if tag_dependencies is not None:
                 tag_dependencies.ensure_slack(home)
             install_step([str(python), "-c", "import mfs_server, psutil, slack_bolt"], "Checking the prepared runtime")
@@ -779,8 +779,8 @@ raise SystemExit(subprocess.call([record["python"], str(release / "scripts/tag_c
             paragraph("Then point memory at your search model, giving its address, model name and key:", MUTED)
             paragraph("› tag memory embedding custom --base-url URL --embedding-model NAME", "1;" + ACCENT)
         if download_model:
-            paragraph("The built-in search model keeps downloading in the background. Tag works meanwhile,", MUTED)
-            paragraph("but memory search isn't available until it finishes (tag memory status shows progress).", MUTED)
+            paragraph("The search model keeps downloading in the background (560 MB).", MUTED)
+            paragraph("Search is off until it finishes; tag memory status shows progress.", MUTED)
         paragraph("Already configured? Run tag stop, then tag start.", MUTED)
         paragraph(f"If needed, add {short_path(bin_dir)} to PATH.", MUTED)
         emit()

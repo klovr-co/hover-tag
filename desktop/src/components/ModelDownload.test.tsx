@@ -30,7 +30,7 @@ describe("model download notice", () => {
     render(<ModelDownloadNotice api={api} every={5} />);
     expect(await screen.findByText("Downloading the search model")).toBeTruthy();
     expect(screen.getByText(/bge-m3-onnx-int8 · 312 of 560 MB/)).toBeTruthy();
-    expect(screen.getByText(/Tag works meanwhile, but memory search isn't available until it finishes/)).toBeTruthy();
+    expect(screen.getByText(/Search waits for it; Tags keep working/)).toBeTruthy();
     expect(screen.getByRole("progressbar").getAttribute("aria-valuenow")).toBe("55");
   });
 
@@ -64,8 +64,8 @@ describe("model download notice", () => {
       status({ state: "failed", model: "m", done: 0, total: 0, percent: 0, error: "no network", message: "The search model (m) didn't finish downloading: no network. Memory search isn't available; run tag memory download to try again." }),
       status(running(1, 5 * MiB)));
     render(<ModelDownloadNotice api={api} every={5} />);
-    expect(await screen.findByText("The search model didn't finish downloading")).toBeTruthy();
-    expect(screen.getByText(/Reason: no network/)).toBeTruthy();
+    expect(await screen.findByText("Search model download stopped")).toBeTruthy();
+    expect(screen.getByText(/no network\. Or run/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     await waitFor(() => expect(calls).toContainEqual(["memory", "download", "--json"]));
     await screen.findByText("Downloading the search model");

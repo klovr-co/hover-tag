@@ -77,10 +77,10 @@ def report(shared: Path) -> dict | None:
     if state == "downloading":
         size = f": {_megabytes(done)} of {_megabytes(total)} MB" if total else ""
         message = (f"Downloading the search model{f' ({model})' if model else ''}{size}. "
-                   "Memory search isn't available until it finishes.")
+                   "Search is off until it finishes.")
     elif state == "failed":
-        message = (f"The search model{f' ({model})' if model else ''} didn't finish downloading: {error}. "
-                   "Memory search isn't available; run tag memory download to try again.")
+        message = (f"The search model download failed: {error}. "
+                   "Search is off; run tag memory download to retry.")
     else:
         message = ""
     return {"state": state, "model": model, "done": done, "total": total, "percent": percent,

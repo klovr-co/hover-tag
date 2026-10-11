@@ -48,7 +48,7 @@ describe("the built-in model's background download", () => {
 
   it("adds the download to the Settings description while it runs", () => {
     const memory = parseMemory(report({ embedding: { provider: "onnx", model: "m", local: true, current: "onnx", choices, download } }));
-    expect(memoryDetail(memory)).toBe("Running. Restarts itself if it stops. Search model: default, built in, downloading (55%). Search is unavailable until it finishes.");
+    expect(memoryDetail(memory)).toBe("Running. Restarts itself if it stops. Search model: default, downloading (55%). Search is off until it finishes.");
   });
 });
 

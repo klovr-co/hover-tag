@@ -60,6 +60,7 @@ it("keeps the first screen to what installing means, and asks about search on a 
   expect(screen.queryByRole("switch")).toBeNull();
   toModel();
   expect(screen.getByText("Memory search")).toBeTruthy();
+  expect(screen.getByText("How should memory search?")).toBeTruthy();
   expect(screen.getByRole("button", { name: "Install Tag" })).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Back" }));
   expect(screen.getByRole("button", { name: "Continue" })).toBeTruthy();
@@ -70,8 +71,7 @@ it("names the built-in search model and says it downloads in the background and 
   toModel();
   expect(screen.getByRole("radio", { name: "Built in" }).getAttribute("aria-checked")).toBe("true");
   expect(screen.getByText(/bge-m3 runs on this computer/)).toBeTruthy();
-  expect(screen.getByText(/About 560 MB, downloaded in the background after install/)).toBeTruthy();
-  expect(screen.getByText(/Search isn't available until it finishes/)).toBeTruthy();
+  expect(screen.getByText(/560 MB downloads after install; search waits for it/)).toBeTruthy();
 });
 
 it("lets people skip the built-in search model and name their own", () => {

@@ -302,7 +302,7 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
         const download = downloadState && embedding === "onnx" ? {
           state: downloadState, model: "gpahal/bge-m3-onnx-int8", done: Math.round(bytes * downloaded), total: bytes,
           percent: downloadState === "ready" ? 100 : Math.floor(downloaded * 100), error: downloadState === "failed" ? "no network" : "",
-          message: downloadState === "failed" ? "The search model (gpahal/bge-m3-onnx-int8) didn't finish downloading: no network. Memory search isn't available; run tag memory download to try again." : "" } : null;
+          message: downloadState === "failed" ? "The search model download failed: no network. Search is off; run tag memory download to retry." : "" } : null;
         return json({ schema_version: 1, managed: memoryRunning, healthy: memoryRunning, running_tags: [],
           keep_running: keepRunning, embedding: { provider: embedding === "onnx" ? "onnx" : "openai", model: embeddingModel, local: embedding === "onnx", current: embedding, download,
             choices: [
