@@ -15,6 +15,10 @@ All notable changes to Tag are documented here.
   the same with Codex and Claude, and each reply states exactly what changed.
   Tag now turns off Claude auto memory and Codex memories for its runs so that
   everything it remembers can be listed, corrected, and forgotten.
+- Choose **Queue** or **Steer** when you message Tag while it is still working
+  in the same thread. Queue answers your new message after the current request.
+  Steer stops the current request and answers the new one next, in the same
+  conversation. Before, Tag asked you to mention it again later.
 
 ## [0.3.0] - 2026-10-08
 

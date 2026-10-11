@@ -182,6 +182,98 @@ class ThreadReservationTests(unittest.TestCase):
         slack_socket_agent.release_thread(slack_socket_agent.RunKey("T1", "C1", "2.0"))
 
 
+class WaitingRequestTests(unittest.TestCase):
+    key = slack_socket_agent.RunKey("T1", "C1", "1.0")
+
+    def setUp(self) -> None:
+        self.addCleanup(slack_socket_agent.WAITING_OFFERS.clear)
+        self.addCleanup(slack_socket_agent.QUEUED_REQUESTS.clear)
+        self.addCleanup(slack_socket_agent.release_thread, self.key)
+        self.app = FakeApp()
+        self.root = tempfile.TemporaryDirectory()
+        self.addCleanup(self.root.cleanup)
+        env = patch.dict(os.environ, {
+            "SLACK_BOT_TOKEN": "fixture", "SLACK_CHANNEL_IDS": "C1",
+            "OPENTAG_SLACK_SETTINGS_FILE": str(Path(self.root.name) / "settings.json"),
+            "OPENTAG_WORKDIR": self.root.name,
+        }, clear=True)
+        env.start()
+        self.addCleanup(env.stop)
+        models = [slack_socket_agent.ModelOption("test-model", "Test", ("low",), backend="claude",
+                                                 is_default=True, default_reasoning_effort="low")]
+        with patch.object(slack_socket_agent, "App", return_value=self.app), \
+                patch.object(slack_socket_agent, "discover_tag_models", return_value=models):
+            slack_socket_agent.create_app("claude", 30, frozenset({"U1", "U2"}))
+        self.client = MagicMock()
+
+    def mention_while_busy(self) -> dict:
+        self.assertTrue(slack_socket_agent.reserve_thread(self.key))
+        self.app.events["app_mention"](
+            {"channel": "C1", "ts": "1.5", "thread_ts": "1.0", "user": "U1", "text": "<@BOT> also check B"},
+            {"team_id": "T1"}, self.client, MagicMock())
+        self.client.chat_postMessage.assert_not_called()
+        blocks = self.client.chat_postEphemeral.call_args.kwargs["blocks"]
+        buttons = blocks[1]["elements"]
+        self.assertEqual(["Queue", "Steer"], [b["text"]["text"] for b in buttons])
+        return buttons[0]
+
+    def choose(self, button: dict, action_id: str, user: str = "U1") -> MagicMock:
+        respond = MagicMock()
+        self.app.actions[action_id](
+            ack=MagicMock(), client=self.client, logger=MagicMock(), respond=respond,
+            body={"user": {"id": user}, "channel": {"id": "C1"}, "team": {"id": "T1"},
+                  "actions": [{"action_id": action_id, "value": button["value"]}]})
+        return respond
+
+    def test_busy_thread_offers_queue_and_steer_instead_of_asking_to_mention_again(self) -> None:
+        self.mention_while_busy()
+        self.assertEqual("U1", self.client.chat_postEphemeral.call_args.kwargs["user"])
+        self.assertEqual("1.0", self.client.chat_postEphemeral.call_args.kwargs["thread_ts"])
+
+    def test_queue_runs_the_request_after_the_current_one(self) -> None:
+        button = self.mention_while_busy()
+        respond = self.choose(button, slack_socket_agent.WAITING_QUEUE_ACTION_ID)
+        self.assertIn("Queued", respond.call_args.kwargs["text"])
+        queued = slack_socket_agent.release_thread(self.key)
+        self.assertEqual("1.5", queued.event["ts"])
+        self.assertIsNone(slack_socket_agent.release_thread(self.key))
+        # A second click on the same offer does nothing.
+        respond = self.choose(button, slack_socket_agent.WAITING_QUEUE_ACTION_ID)
+        self.assertIn("expired", respond.call_args.kwargs["text"])
+
+    def test_steer_stops_the_current_request_and_goes_first(self) -> None:
+        earlier = slack_socket_agent.WaitingRequest({"ts": "1.2"}, {}, False, None, None)
+        button = self.mention_while_busy()
+        self.assertTrue(slack_socket_agent.queue_waiting_request(self.key, earlier))
+        with patch.object(slack_socket_agent, "cancel_active_run", return_value=True) as cancel:
+            respond = self.choose(button, slack_socket_agent.WAITING_STEER_ACTION_ID)
+        cancel.assert_called_once_with(self.key)
+        self.assertIn("Stopping", respond.call_args.kwargs["text"])
+        self.assertEqual("1.5", slack_socket_agent.release_thread(self.key).event["ts"])
+        self.assertEqual("1.2", slack_socket_agent.release_thread(self.key).event["ts"])
+
+    def test_choice_after_the_thread_frees_up_starts_the_request_at_once(self) -> None:
+        button = self.mention_while_busy()
+        slack_socket_agent.release_thread(self.key)
+        with patch.object(slack_socket_agent.threading, "Thread") as thread:
+            respond = self.choose(button, slack_socket_agent.WAITING_QUEUE_ACTION_ID)
+        self.assertTrue(thread.call_args.kwargs["kwargs"]["queued"])
+        thread.return_value.start.assert_called_once()
+        self.assertIn("Starting yours now", respond.call_args.kwargs["text"])
+
+    def test_only_the_requester_can_choose(self) -> None:
+        button = self.mention_while_busy()
+        respond = self.choose(button, slack_socket_agent.WAITING_STEER_ACTION_ID, user="U2")
+        respond.assert_not_called()
+        self.assertEqual(1, len(slack_socket_agent.WAITING_OFFERS))
+
+    def test_queued_request_that_loses_the_thread_waits_at_the_front(self) -> None:
+        self.assertTrue(slack_socket_agent.reserve_thread(self.key))
+        queued = slack_socket_agent.WaitingRequest({"ts": "1.5"}, {}, False, None, None)
+        self.assertFalse(slack_socket_agent.reserve_thread(self.key, queued))
+        self.assertIs(queued, slack_socket_agent.release_thread(self.key))
+
+
 class SlackBinaryAttachmentTests(unittest.TestCase):
     def test_downloads_binary_attachment_to_invocation_directory(self) -> None:
         messages = [{"files": [{
