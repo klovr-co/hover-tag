@@ -12,7 +12,7 @@ import unittest
 import urllib.error
 import zipfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from scripts import tag_instances
 from scripts.tag_install import (
@@ -1356,16 +1356,63 @@ class TagHomeTests(unittest.TestCase):
         ), patch("scripts.tag_install.tag_dependencies.ensure_slack", return_value=Path("/managed/slack")), patch(
             "scripts.tag_install.subprocess.run",
             return_value=subprocess.CompletedProcess([], 0, "", ""),
-        ) as run:
+        ) as run, patch("scripts.tag_install.subprocess.Popen", return_value=Mock(pid=4242)) as background:
             install(ROOT, Path(temp) / "home", Path(temp) / "bin")
+            home = Path(temp) / "home"
+            # Marked at once, so Home shows the download before the script's first report.
+            marker = json.loads((home / "shared/mfs/model-download.json").read_text(encoding="utf-8"))
 
         commands = [call.args[0] for call in run.call_args_list]
         self.assertEqual(commands[0][:4], ["/managed/uv", "venv", "--python", "/managed/python"])
         self.assertEqual(commands[1][1:3], ["pip", "install"])
-        self.assertEqual(
-            Path(commands[2][1]).name,
-            "preload_mfs_model.py",
-        )
+        # The model is not a step of the install: it downloads on its own afterwards.
+        self.assertNotIn("preload_mfs_model.py", [Path(part).name for command in commands for part in command])
+        background.assert_called_once()
+        command = background.call_args.args[0]
+        self.assertEqual((Path(command[1]).name, command[2]), ("preload_mfs_model.py", "--progress"))
+        self.assertEqual((marker["state"], marker["pid"]), ("downloading", 4242))
+        self.assertEqual(background.call_args.kwargs["env"]["TAG_HOME"], str(home))
+        self.assertTrue(background.call_args.kwargs.get("start_new_session"))
+
+    def run_dependency_install(self, home_setup=None, **environment):
+        with tempfile.TemporaryDirectory() as temp, patch(
+            "scripts.tag_install.tag_dependencies.prepare_python", return_value=(Path("/managed/python"), Path("/managed/uv"))
+        ), patch("scripts.tag_install.tag_dependencies.ensure_slack", return_value=Path("/managed/slack")), patch(
+            "scripts.tag_install.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", ""),
+        ), patch.dict(os.environ, environment), patch("scripts.tag_install.subprocess.Popen", return_value=Mock(pid=4242)) as background:
+            if environment.get("TAG_SKIP_MFS_MODEL") is None:
+                os.environ.pop("TAG_SKIP_MFS_MODEL", None)
+            home = Path(temp) / "home"
+            if home_setup:
+                home_setup(home)
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                install(ROOT, home, Path(temp) / "bin")
+        return background, output.getvalue()
+
+    @unittest.skipIf(os.name == "nt", "POSIX managed runtime bootstrap")
+    def test_no_background_download_for_a_custom_search_model(self):
+        background, _ = self.run_dependency_install(TAG_SKIP_MFS_MODEL="1")
+        background.assert_not_called()
+
+        def configured(home):
+            (home / "shared/mfs").mkdir(parents=True)
+            (home / "shared/mfs/embedding.json").write_text('{"provider": "custom"}', encoding="utf-8")
+        background, _ = self.run_dependency_install(configured)
+        background.assert_not_called()
+
+    @unittest.skipIf(os.name == "nt", "POSIX managed runtime bootstrap")
+    def test_install_says_search_waits_for_the_background_download(self):
+        _, output = self.run_dependency_install()
+        self.assertIn("downloads in the background", output)
+        self.assertIn("memory search isn't available until it finishes", output)
+
+    @unittest.skipIf(os.name == "nt", "POSIX managed runtime bootstrap")
+    def test_a_download_that_cannot_start_does_not_fail_the_install(self):
+        with patch("scripts.tag_install.start_model_download", side_effect=OSError("no space")):
+            _, output = self.run_dependency_install()
+        self.assertIn("Couldn't start the search model download", output)
+        self.assertNotIn("keeps downloading in the background", output)
 
     @unittest.skipIf(os.name == "nt", "POSIX managed runtime bootstrap")
     def test_install_supports_releases_without_managed_dependencies(self):
@@ -1389,7 +1436,7 @@ class TagHomeTests(unittest.TestCase):
             ), patch("scripts.tag_install.shutil.which", return_value=None), patch(
                 "scripts.tag_install.subprocess.run",
                 return_value=subprocess.CompletedProcess([], 0, "", ""),
-            ) as run:
+            ) as run, patch("scripts.tag_install.subprocess.Popen", return_value=Mock(pid=4242)):
                 install(source, Path(temp) / "home", Path(temp) / "bin")
 
         commands = [call.args[0] for call in run.call_args_list]

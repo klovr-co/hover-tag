@@ -42,7 +42,7 @@ The Tag desktop app and the CLI use the same Tags, settings, and lifecycle: the 
 | AI accounts | Settings → AI → **AI connections** | `tag settings ai`, `tag settings ai sign-in codex\|claude` |
 | Keep Tags running | Settings → General → **Keep Tags running** | `tag autostart on` |
 | Search model (Default or Custom) | Settings → AI → **Search model** | `tag memory embedding local\|custom` |
-| Memory on or off | Settings → AI → **Memory** | `tag memory start` / `stop`; `tag memory status --json` also reports `embedding` |
+| Memory on or off | Settings → AI → **Memory** | `tag memory start` / `stop`; `tag memory status --json` also reports `embedding`, including `embedding.download` while the built-in model downloads; `tag memory download` restarts that download |
 | Open at login | Settings → General → **Open Tag at login** | Not needed; `tag autostart on` runs without the app |
 | Update | Settings → **Updates** → **Update Tag** | `tag upgrade` |
 | Release channel | Settings → **Updates** → Stable, Beta, or Alpha | `tag upgrade --channel stable\|beta\|alpha\|edge` |

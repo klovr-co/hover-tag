@@ -26,6 +26,11 @@ All notable changes to Tag are documented here.
   configuration uses a hosted embedding provider such as OpenAI. Set
   `TAG_SKIP_MFS_MODEL=1` to skip it when the provider isn't chosen yet. The
   local model is still the default.
+- The built-in search model now downloads in the background, so the install no longer
+  waits on 560 MB. Home in Tag.app shows the model and its progress and says that memory
+  search isn't available until it finishes, with **Try again** if it stops; `tag memory
+  status` and `tag settings` show it, and `tag memory download` restarts it. The install
+  screen names the model (bge-m3).
 - Tag.app and the terminal installer can skip the model download too: the install
   screen has a **Your own search model** switch, and `./install.sh
   --skip-memory-model` (`install.ps1 -SkipMemoryModel`) does the same.

@@ -13,6 +13,11 @@ import os
 import sys
 from pathlib import Path
 
+try:
+    import tag_model_download
+except ImportError:  # imported as part of the scripts package
+    from scripts import tag_model_download
+
 LOCAL_PROVIDER = "onnx"
 SKIP_ENVIRONMENT = "TAG_SKIP_MFS_MODEL"
 
@@ -66,7 +71,7 @@ def preload_default_embedding() -> tuple[str, str]:
     return config.provider, provider.model_name
 
 
-def main() -> int:
+def main(argv=()) -> int:
     if os.environ.get(SKIP_ENVIRONMENT, "").strip().lower() in {"1", "true", "yes", "on"}:
         print(f"MFS embedding model download skipped ({SKIP_ENVIRONMENT} is set)")
         return 0
@@ -74,10 +79,31 @@ def main() -> int:
     if not uses_local_model(configured):
         print(f"MFS embedding model download skipped (embedding provider is {configured})")
         return 0
+    if "--progress" in argv and os.environ.get("TAG_HOME"):
+        return _download_with_progress(Path(os.environ["TAG_HOME"]) / "shared/mfs")
     provider, model = preload_default_embedding()
     print(f"MFS embedding model ready: {provider}/{model}")
     return 0
 
 
+def _download_with_progress(shared: Path) -> int:
+    """Download the model while recording progress where `tag memory status` and Tag.app read it."""
+    EmbeddingConfig, _ = _embedding_components()
+    name = EmbeddingConfig().model
+    recorder = tag_model_download.Recorder(shared, name)
+    tag_model_download.write(shared, "downloading", model=name, pid=os.getpid())
+    try:
+        recorder.hook()
+        provider, model = preload_default_embedding()
+    except Exception as error:
+        tag_model_download.write(shared, "failed", model=name, error=str(error) or error.__class__.__name__)
+        print(f"MFS embedding model download failed: {error}", file=sys.stderr)
+        return 1
+    done = sum(bar.done for bar in recorder.bars)
+    tag_model_download.write(shared, "ready", model=name, done=done, total=done)
+    print(f"MFS embedding model ready: {provider}/{model}")
+    return 0
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(sys.argv[1:]))

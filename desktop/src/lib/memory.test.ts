@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { demoBridge } from "./bridge";
 import { memoryDetail, parseMemory, setEmbedding } from "./memory";
 
+const MiB = 1048576;
 const report = (extra: object) => JSON.stringify({ schema_version: 1, managed: true, healthy: true, running_tags: [], keep_running: true, ...extra });
 const choices = [
   { id: "onnx", label: "Default", detail: "Built in", custom: false, model: "", base_url: "", key_saved: false },
@@ -27,6 +28,27 @@ describe("memory status", () => {
     const memory = parseMemory(report({}));
     expect(memory.embedding).toBeNull();
     expect(memoryDetail(memory)).toBe("Running. Restarts itself if it stops.");
+  });
+});
+
+describe("the built-in model's background download", () => {
+  const download = { state: "downloading", model: "gpahal/bge-m3-onnx-int8", done: 312 * MiB, total: 560 * MiB, percent: 55,
+    message: "Downloading the search model (gpahal/bge-m3-onnx-int8): 312 of 560 MB. Memory search isn't available until it finishes." };
+
+  it("reads the progress, the model and what it means for search", () => {
+    const memory = parseMemory(report({ embedding: { provider: "onnx", model: "m", local: true, current: "onnx", choices, download } }));
+    expect(memory.embedding?.download).toEqual({ state: "downloading", model: "gpahal/bge-m3-onnx-int8", done: 312 * MiB, total: 560 * MiB, percent: 55,
+      message: download.message });
+  });
+
+  it("has no download when none was started or Tag is too old to say", () => {
+    expect(parseMemory(report({ embedding: { provider: "onnx", local: true, download: null } })).embedding?.download).toBeNull();
+    expect(parseMemory(report({ embedding: { provider: "onnx", local: true } })).embedding?.download).toBeNull();
+  });
+
+  it("adds the download to the Settings description while it runs", () => {
+    const memory = parseMemory(report({ embedding: { provider: "onnx", model: "m", local: true, current: "onnx", choices, download } }));
+    expect(memoryDetail(memory)).toBe("Running. Restarts itself if it stops. Search model: default, built in, downloading (55%). Search is unavailable until it finishes.");
   });
 });
 

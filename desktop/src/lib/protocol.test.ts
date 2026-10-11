@@ -227,7 +227,8 @@ describe("memory and Keep Tags running", () => {
     expect(problemHelp(row, null)).toContain("Keep Tags running");
   });
 
-  it("describes the model step as skipped when memory uses a custom search model", () => {
-    expect(INSTALL_STEPS.find((item) => item.step === "memory")?.detail).toContain("skipped for a custom one");
+  it("says the search model downloads in the background rather than during the memory step", () => {
+    expect(INSTALL_STEPS.find((item) => item.step === "memory")?.detail).toContain("downloads in the background");
+    expect(INSTALL_STEPS.reduce((sum, item) => sum + item.weight, 0)).toBeCloseTo(1);
   });
 });

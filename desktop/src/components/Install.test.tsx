@@ -51,6 +51,16 @@ it("tells people the install needs about 1.8 GB, as measured", () => {
   expect(screen.queryByText("650 MB")).toBeNull();
 });
 
+it("names the built-in search model and says it downloads in the background without blocking search-free use", () => {
+  render(<Welcome api={demoBridge()} platform="macos" install={vi.fn()} />);
+  expect(screen.getByText(/Memory search uses a built-in model \(bge-m3, 560 MB\)/)).toBeTruthy();
+  expect(screen.getByText(/downloads in the background after install/)).toBeTruthy();
+  expect(screen.getByText(/Search isn't available until it finishes/)).toBeTruthy();
+  fireEvent.click(screen.getByRole("switch", { name: "Use my own search model" }));
+  // With their own model there is nothing to download, so the note goes away.
+  expect(screen.queryByText(/downloads in the background after install/)).toBeNull();
+});
+
 it("lets people skip the built-in search model and name their own", () => {
   const install = vi.fn();
   render(<Welcome api={demoBridge()} platform="macos" install={install} />);

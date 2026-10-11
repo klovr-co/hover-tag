@@ -101,8 +101,12 @@ Then run `tag setup` and `tag start`. For install options, coding-agent setup,
 where files live, and running from source, see
 [Installation details](reference/installation-details.md).
 
-The installer downloads Tag's local memory model (560 MB) from
-`huggingface.co`, so the computer needs outbound access to it. If your memory
+The installer starts downloading Tag's built-in memory model
+(`gpahal/bge-m3-onnx-int8`, about 560 MB) from `huggingface.co` in the background and
+finishes without waiting for it, so the computer needs outbound access to that host.
+Tag works meanwhile, but memory search isn't available until the download finishes.
+Tag.app shows the progress on Home, and `tag memory status` shows it in the terminal; if
+it stops, **Try again** or `tag memory download` restarts it. If your memory
 search uses your own embedding model, such as OpenAI or Ollama, skip the download:
 `./install.sh --skip-memory-model` (or `TAG_SKIP_MFS_MODEL=1 ./install.sh`; on
 Windows, `install.ps1 -SkipMemoryModel`). In Tag.app, turn on **Your own search model** on

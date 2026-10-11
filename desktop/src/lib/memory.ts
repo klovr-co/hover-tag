@@ -26,6 +26,17 @@ export interface EmbeddingChoice {
   keySaved: boolean;
 }
 
+/** The built-in model downloads in the background after install; memory search waits for it. */
+export interface ModelDownload {
+  state: "downloading" | "ready" | "failed" | string;
+  model: string;
+  done: number;
+  total: number;
+  percent: number;
+  /** What to tell the person, empty once it is ready. */
+  message: string;
+}
+
 export interface Embedding {
   provider: string;
   local: boolean;
@@ -36,6 +47,7 @@ export interface Embedding {
   choices: EmbeddingChoice[];
   /** Memory still has to index your sources into the new search model's index. */
   reindexPending: boolean;
+  download: ModelDownload | null;
 }
 
 export interface EmbeddingResult { ok: boolean; error: string; reindexing: boolean; note: string }
@@ -45,6 +57,7 @@ export function parseMemory(output: string): MemoryStatus {
     healthy?: boolean; managed?: boolean; keep_running?: boolean; running_tags?: string[];
     embedding?: {
       provider?: string; model?: string; local?: boolean; current?: string; reindex_pending?: boolean;
+      download?: { state?: string; model?: string; done?: number; total?: number; percent?: number; message?: string } | null;
       choices?: { id: string; label: string; detail?: string; custom?: boolean; model?: string; base_url?: string; key_saved?: boolean }[];
     } | null;
   }>(output);
@@ -60,6 +73,8 @@ export function parseMemory(output: string): MemoryStatus {
       choices: (e.choices ?? []).map((c) => ({
         id: c.id, label: c.label, detail: c.detail ?? "", custom: !!c.custom, model: c.model ?? "", baseUrl: c.base_url ?? "", keySaved: !!c.key_saved })),
       reindexPending: !!e.reindex_pending,
+      download: e.download ? { state: e.download.state ?? "", model: e.download.model ?? "", done: e.download.done ?? 0,
+        total: e.download.total ?? 0, percent: e.download.percent ?? 0, message: e.download.message ?? "" } : null,
     } : null,
   };
 }
@@ -67,6 +82,10 @@ export function parseMemory(output: string): MemoryStatus {
 /** What the search model is, in a few words. */
 export function embeddingText(memory: MemoryStatus) {
   if (!memory.embedding) return "";
+  const { download } = memory.embedding;
+  if (memory.embedding.local && download?.state === "downloading") {
+    return `Search model: default, built in, downloading (${download.percent}%). Search is unavailable until it finishes.`;
+  }
   return memory.embedding.local ? "Search model: default, built in." : `Search model: custom (${memory.embedding.model}).`;
 }
 

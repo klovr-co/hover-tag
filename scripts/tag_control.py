@@ -16,10 +16,11 @@ try:
     import slack_channels
     import setup_ui as ui
     import tag_slack_backoff
+    import tag_model_download
     from tag_paths import default_workspace, tag_home
 except ImportError:
     from scripts import agent_models, slack_channels, tag_config as settings, setup_ui as ui
-    from scripts import tag_slack_backoff
+    from scripts import tag_slack_backoff, tag_model_download
     from scripts.tag_paths import default_workspace, tag_home
 
 
@@ -339,7 +340,11 @@ def _embedding_choices():
 def _search_model_label() -> str:
     tag_embedding, shared = _embedding_choices()
     current = tag_embedding.current_provider(shared)
-    return next((str(c["label"]) for c in tag_embedding.choices(shared) if c["id"] == current), current)
+    label = next((str(c["label"]) for c in tag_embedding.choices(shared) if c["id"] == current), current)
+    download = tag_model_download.report(shared) if current == tag_embedding.LOCAL else None
+    if download and download["state"] == "downloading":
+        return f"{label} (downloading, {download['percent']}%; search is unavailable until it finishes)"
+    return label
 
 
 def _choose_search_model() -> None:

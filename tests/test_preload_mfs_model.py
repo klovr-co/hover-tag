@@ -89,6 +89,58 @@ class PreloadMfsModelTests(unittest.TestCase):
         with patch.object(preload_mfs_model, "_server_config_loader", return_value=Mock(side_effect=ValueError("bad toml"))):
             self.assertEqual(preload_mfs_model.configured_embedding()[0], "onnx")
 
+class BackgroundDownloadTests(unittest.TestCase):
+    """`--progress` is how the installer runs the download on its own and lets Tag show it."""
+
+    def setUp(self) -> None:
+        import tempfile
+        from pathlib import Path
+        self._temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._temp.cleanup)
+        self.home = Path(self._temp.name)
+        self.shared = self.home / "shared/mfs"
+
+    def run_main(self, preload) -> int:
+        from scripts import tag_model_download
+        self.download = tag_model_download
+        config = type("Config", (), {"provider": "onnx", "model": "gpahal/bge-m3-onnx-int8"})()
+        with patch.dict(os.environ, {"TAG_HOME": str(self.home)}), \
+                patch.object(preload_mfs_model, "configured_embedding", return_value=("onnx", "m")), \
+                patch.object(preload_mfs_model, "_embedding_components", return_value=(lambda: config, None)), \
+                patch.object(preload_mfs_model.tag_model_download.Recorder, "hook"), \
+                patch.object(preload_mfs_model, "preload_default_embedding", side_effect=preload), \
+                redirect_stdout(StringIO()):
+            return preload_mfs_model.main(["--progress"])
+
+    def test_a_finished_download_is_recorded_as_ready(self) -> None:
+        self.assertEqual(self.run_main(lambda: ("onnx", "gpahal/bge-m3-onnx-int8")), 0)
+        report = self.download.report(self.shared)
+        self.assertEqual((report["state"], report["model"]), ("ready", "gpahal/bge-m3-onnx-int8"))
+
+    def test_the_model_is_named_before_any_byte_arrives(self) -> None:
+        seen = []
+        def preload():
+            seen.append(self.download.read(self.shared))
+            return ("onnx", "gpahal/bge-m3-onnx-int8")
+        self.run_main(preload)
+        self.assertEqual((seen[0]["state"], seen[0]["model"]), ("downloading", "gpahal/bge-m3-onnx-int8"))
+
+    def test_a_failed_download_is_recorded_with_its_reason_and_fails_the_run(self) -> None:
+        def preload():
+            raise OSError("no network")
+        self.assertEqual(self.run_main(preload), 1)
+        report = self.download.report(self.shared)
+        self.assertEqual(report["state"], "failed")
+        self.assertIn("no network", report["message"])
+
+    def test_nothing_is_recorded_when_the_model_is_not_needed(self) -> None:
+        from scripts import tag_model_download
+        with patch.dict(os.environ, {"TAG_HOME": str(self.home), "TAG_SKIP_MFS_MODEL": "1"}), \
+                redirect_stdout(StringIO()):
+            self.assertEqual(preload_mfs_model.main(["--progress"]), 0)
+        self.assertIsNone(tag_model_download.report(self.shared))
+
+
 
 if __name__ == "__main__":
     unittest.main()

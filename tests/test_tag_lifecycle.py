@@ -140,6 +140,63 @@ class TagLifecycleTests(unittest.TestCase):
                              {"provider": configured, "model": "model-x", "local": local})
             self.assertEqual([c["id"] for c in embedding["choices"]], ["onnx", "custom"])
 
+    def memory_status(self, *flags: str, provider: str = "onnx", action: str = "status") -> str:
+        with patch.dict(os.environ, {"TAG_HOME": str(self.root)}, clear=False), patch.object(
+            sys, "argv", ["tag", "memory", action, *flags]
+        ), patch.object(tag_cli, "healthy", return_value=False), patch.object(
+            tag_cli.preload_mfs_model, "configured_embedding", return_value=(provider, "model-x")
+        ), redirect_stdout(StringIO()) as output:
+            self.assertEqual(tag_cli.main(), 0)
+        return output.getvalue()
+
+    def test_memory_status_reports_the_background_model_download(self) -> None:
+        shared = self.root / "shared/mfs"
+        tag_cli.tag_model_download.write(shared, "downloading", model="bge-m3", done=300 * 1_048_576,
+                                         total=600 * 1_048_576, pid=os.getpid())
+        download = json.loads(self.memory_status("--json"))["embedding"]["download"]
+        self.assertEqual((download["state"], download["percent"]), ("downloading", 50))
+        self.assertIn("Memory search isn't available until it finishes", download["message"])
+        text = " ".join(self.memory_status().split())
+        self.assertIn("Download", text)
+        self.assertIn("300 of 600 MB", text)
+
+    def test_memory_status_has_no_download_when_there_is_none_or_a_custom_model_is_used(self) -> None:
+        self.assertIsNone(json.loads(self.memory_status("--json"))["embedding"]["download"])
+        shared = self.root / "shared/mfs"
+        tag_cli.tag_model_download.write(shared, "downloading", model="bge-m3", done=1, total=2, pid=os.getpid())
+        self.assertIsNone(json.loads(self.memory_status("--json", provider="openai"))["embedding"]["download"])
+
+    def test_memory_download_starts_the_background_download_and_reports_it(self) -> None:
+        with patch.object(tag_cli.tag_model_download, "start_background") as start:
+            start.side_effect = lambda *a, **k: tag_cli.tag_model_download.write(
+                self.root / "shared/mfs", "downloading", model="bge-m3", pid=os.getpid())
+            output = self.memory_status("--json", action="download")
+        start.assert_called_once()
+        self.assertEqual(Path(start.call_args.args[1]).name, "preload_mfs_model.py")
+        # Progress is kept with the installation's shared memory files, not inside one Tag's home.
+        self.assertEqual(Path(start.call_args.args[2]), self.root)
+        self.assertEqual(json.loads(output)["embedding"]["download"]["state"], "downloading")
+
+    def test_memory_download_does_not_start_a_second_download(self) -> None:
+        tag_cli.tag_model_download.write(self.root / "shared/mfs", "downloading", model="bge-m3", pid=os.getpid())
+        with patch.object(tag_cli.tag_model_download, "start_background") as start:
+            self.memory_status("--json", action="download")
+        start.assert_not_called()
+
+    def test_memory_download_refuses_when_a_custom_search_model_is_used(self) -> None:
+        with patch.object(tag_cli.tag_model_download, "start_background") as start, \
+                self.assertRaisesRegex(RuntimeError, "custom search model"):
+            self.memory_status(provider="openai", action="download")
+        start.assert_not_called()
+
+    def test_memory_waits_for_a_running_model_download_before_giving_up_on_starting(self) -> None:
+        shared = self.root / "shared/mfs"
+        self.assertEqual(tag_cli.startup_attempts({}, shared), 90)
+        tag_cli.tag_model_download.write(shared, "downloading", model="bge-m3", done=1, total=2, pid=os.getpid())
+        self.assertGreater(tag_cli.startup_attempts({}, shared), 600)
+        # An explicit limit (tests, scripts) is always honored.
+        self.assertEqual(tag_cli.startup_attempts({"OPENTAG_MFS_STARTUP_ATTEMPTS": "5"}, shared), 5)
+
     def run_embedding(self, *words: str, stdin: str = "", running: bool = False, key_check=None,
                       provider: str = "openai", job: str = "job-1"):
         shared = self.root / "shared/mfs"

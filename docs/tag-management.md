@@ -164,6 +164,12 @@ Keep Tags running also restarts memory (MFS) if it stops. **Settings** → **AI*
 which search model it uses. Turn it off to stop memory (stop your Tags first);
 in the terminal, `tag memory status`, `start`, and `stop`.
 
+After a first install the built-in search model downloads in the background (about
+560 MB). Home shows the model, how far it is, and that memory search isn't available
+until it finishes; Settings → AI shows the same. If it stops, choose **Try again** on
+Home, or run `tag memory download`. `tag memory start` waits for a running download
+instead of giving up.
+
 **Search model** (in **Settings** → **AI**, under Memory) chooses how memory
 turns text into searchable vectors. **Default** is built in: it runs on this
 computer, is private, works offline, and is about 560 MB. **Custom** points memory

@@ -269,8 +269,8 @@ export const INSTALL_STEPS = [
   { step: "tools", title: "Getting installation tools", detail: "A small, verified download", weight: 0.1 },
   { step: "python", title: "Preparing Python", detail: "A private copy, so your system stays untouched", weight: 0.15 },
   { step: "download", title: "Downloading Tag", detail: "The latest release, checked before it's used", weight: 0.1 },
-  { step: "components", title: "Installing components", detail: "Slack connection and local search", weight: 0.3 },
-  { step: "memory", title: "Preparing memory", detail: "Downloads the default search model, the longest step; skipped for a custom one", weight: 0.3 },
+  { step: "components", title: "Installing components", detail: "Slack connection and local search", weight: 0.5 },
+  { step: "memory", title: "Preparing memory", detail: "The search model downloads in the background after install", weight: 0.1 },
   { step: "command", title: "Finishing up", detail: "Adding the tag command", weight: 0.05 },
 ] as const;
 

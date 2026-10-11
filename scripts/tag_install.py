@@ -615,6 +615,7 @@ def install(
     lock = home / "state/install.lock"
     install_lock = LifecycleLock(lock).acquire()
     skip_memory_model = os.environ.get("TAG_SKIP_MFS_MODEL", "").strip().lower() in {"1", "true", "yes", "on"}
+    download_model = False
     try:
         version = (source / "VERSION").read_text(encoding="utf-8").strip()
         if selection is not None and selection.version != version:
@@ -665,17 +666,14 @@ def install(
                 )
             row("Runtime", f"Python {sys.version_info.major}.{sys.version_info.minor} · dependencies ready")
             progress("memory")
-            paragraph(
-                "Skipping the built-in search model (using a custom one)…" if skip_memory_model
-                else "Preparing the memory model (skipped for a custom search model)…",
-                MUTED, indent="    ",
-            )
-            install_step(
-                [str(python), str(release / "scripts/preload_mfs_model.py")],
-                "Preparing the MFS embedding model",
-            )
-            row("Memory", "Custom search model; built-in model not downloaded" if skip_memory_model
-                else "Embedding model ready, or not needed for your provider")
+            if skip_memory_model:
+                paragraph("Skipping the built-in search model (using a custom one)…", MUTED, indent="    ")
+                row("Memory", "Custom search model; built-in model not downloaded")
+            elif custom_model_configured(home):
+                row("Memory", "Custom search model kept; built-in model not downloaded")
+            else:
+                download_model = True
+                row("Memory", "Built-in search model downloads in the background (about 560 MB)")
             if tag_dependencies is not None:
                 tag_dependencies.ensure_slack(home)
             install_step([str(python), "-c", "import mfs_server, psutil, slack_bolt"], "Checking the prepared runtime")
@@ -760,6 +758,13 @@ raise SystemExit(subprocess.call([record["python"], str(release / "scripts/tag_c
                 if key in original_record:
                     current_record[key] = original_record[key]
         atomic_text(current, json.dumps(current_record, indent=2, sort_keys=True) + "\n")
+        if download_model:
+            try:
+                start_model_download(python, release / "scripts/preload_mfs_model.py", home)
+            except OSError as error:
+                # The install is complete without it; MFS fetches the model itself when memory first starts.
+                row("Memory", f"Couldn't start the search model download ({error}); memory fetches it when it starts")
+                download_model = False
         row("Command", short_path(command))
         row("Home", short_path(home))
         progress("done", version=version, command=str(command))
@@ -773,12 +778,48 @@ raise SystemExit(subprocess.call([record["python"], str(release / "scripts/tag_c
         if skip_memory_model:
             paragraph("Then point memory at your search model, giving its address, model name and key:", MUTED)
             paragraph("› tag memory embedding custom --base-url URL --embedding-model NAME", "1;" + ACCENT)
+        if download_model:
+            paragraph("The built-in search model keeps downloading in the background. Tag works meanwhile,", MUTED)
+            paragraph("but memory search isn't available until it finishes (tag memory status shows progress).", MUTED)
         paragraph("Already configured? Run tag stop, then tag start.", MUTED)
         paragraph(f"If needed, add {short_path(bin_dir)} to PATH.", MUTED)
         emit()
         return release
     finally:
         install_lock.release()
+
+
+def custom_model_configured(home: Path) -> bool:
+    """Whether an earlier install already pointed memory at the person's own search model."""
+    try:
+        data = json.loads((home / "shared/mfs/embedding.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(data, dict) and data.get("provider") == "custom"
+
+
+def start_model_download(python: Path, script: Path, home: Path) -> None:
+    """Fetch the built-in search model on its own, so it keeps going after the installer exits.
+
+    The script records its progress in the memory folder for `tag memory status` and Tag.app.
+    """
+    shared = home / "shared/mfs"
+    shared.mkdir(parents=True, exist_ok=True, mode=0o700)
+    options: dict[str, Any] = {}
+    if os.name == "nt":
+        options["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        options["start_new_session"] = True
+    with open(shared / "model-download.log", "ab") as log:
+        process = subprocess.Popen([str(python), str(script), "--progress"], stdin=subprocess.DEVNULL, stdout=log,
+                                   stderr=log, env=dict(os.environ, TAG_HOME=str(home)), close_fds=True, **options)
+    # Mark it at once so Tag.app sees the download even before the script reports its first bytes.
+    # The script replaces this with the model name and progress; "x" never overwrites what it already wrote.
+    try:
+        with open(shared / "model-download.json", "x", encoding="utf-8") as marker:
+            json.dump({"state": "downloading", "model": "", "done": 0, "total": 0, "error": "", "pid": process.pid}, marker)
+    except FileExistsError:
+        pass
 
 
 def ask_skip_memory_model() -> bool:

@@ -81,7 +81,9 @@ export function Welcome({ api, platform, install, preview }: { api: Bridge; plat
         <div className="fact"><span className="fi"><Icon name="disk" size={16} /></span><span>About <b>1.8 GB</b> of disk space</span></div>
         <div className="fact"><span className="fi"><Icon name="wifi" size={16} /></span><span>Keep this {machine} online until it finishes</span></div>
         {!preview && <div className="fact"><span className="fi"><Icon name="disk" size={16} /></span>
-          <span style={{ flex: 1 }}><b>Your own search model.</b> Use OpenAI, Ollama or another endpoint instead of the built-in one, and skip its 560 MB download.</span>
+          <span style={{ flex: 1 }}>{custom
+            ? <><b>Your own search model.</b> Use OpenAI, Ollama or another endpoint. Nothing extra to download.</>
+            : <><b>Memory search uses a built-in model (bge-m3, 560 MB)</b> that downloads in the background after install. Search isn't available until it finishes. Prefer OpenAI, Ollama or another endpoint? Use your own instead.</>}</span>
           <Switch on={custom} busy={false} label="Use my own search model" onClick={() => setCustom(!custom)} /></div>}
         {!preview && custom && <div className="model-edit" style={{ padding: 0 }}>
           <span className="fl" aria-hidden="true">Endpoint address</span>

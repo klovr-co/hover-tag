@@ -380,8 +380,18 @@ are not qualified by this bootstrap.
 Tag's memory server (MFS) embeds text with a built-in model by default
 (`gpahal/bge-m3-onnx-int8`, about 560 MB). The installer downloads it from
 `huggingface.co` into `${MFS_HOME:-~/.mfs}/onnx-cache`, so the computer needs
-outbound access to that host, and it is the longest install step. The model stays
-the default.
+outbound access to that host. The model stays the default.
+
+The download is not an install step: the installer starts `preload_mfs_model.py
+--progress` as a detached background process after the release is in place, and
+finishes without waiting. The script records the model, bytes done and bytes in total
+in `shared/mfs/model-download.json` (`downloading`, `ready`, or `failed`, with its
+process ID; a download whose process is gone reads as interrupted). `tag memory status
+--json` reports it as `embedding.download`, Tag.app shows it on Home and in Settings →
+AI, and `tag settings` shows it beside the search model. Memory search is not available
+until it finishes; `tag memory start` waits for a running download, and `tag memory
+download` starts it again. If it can't be started, the install still succeeds and MFS
+fetches the model itself the first time it starts. The log is `shared/mfs/model-download.log`.
 
 The installer skips the download when MFS will not use it:
 

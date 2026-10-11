@@ -39,6 +39,7 @@ try:
     import tag_autostart as autostart
     import agent_models
     import preload_mfs_model
+    import tag_model_download
     import tag_embedding
 except ImportError:
     from scripts.tag_paths import initialize_instance, initialize_workspace, runtime_environment, tag_home
@@ -47,6 +48,7 @@ except ImportError:
     from scripts import tag_locks
     from scripts import agent_models
     from scripts import preload_mfs_model
+    from scripts import tag_model_download
     from scripts import tag_embedding
     from scripts.tag_config import read_config
     from scripts import tag_credentials
@@ -719,6 +721,14 @@ def ensure_shared_memory(
     finish_connector_removals(context.shared_mfs_home, environment)
 
 
+def startup_attempts(environment: dict[str, str], shared: Path) -> int:
+    """Seconds to wait for MFS to become healthy. The first start also needs the search model,
+    so a download still running (started by the installer) gets all the time it needs."""
+    if "OPENTAG_MFS_STARTUP_ATTEMPTS" in environment:
+        return int(environment["OPENTAG_MFS_STARTUP_ATTEMPTS"])
+    return 3600 if tag_model_download.active(shared) else 90
+
+
 def _ensure_shared_memory_running(
     context: tag_instances.InstanceContext, environment: dict[str, str]
 ) -> None:
@@ -759,7 +769,7 @@ def _ensure_shared_memory_running(
                 environment=child_environment, state_dir=shared, cwd=shared,
                 metadata={"slack_runtime_version": tag_mfs_runtime.VERSION, "instance_id": instance_id},
             )
-        attempts = int(environment.get("OPENTAG_MFS_STARTUP_ATTEMPTS", "90"))
+        attempts = startup_attempts(environment, shared)
         for _ in range(attempts):
             process = process_for(shared / "mfs.json")
             if healthy(url) and tag_mfs_runtime.active(shared, process):
@@ -914,7 +924,10 @@ def load_connector_config(path: Path) -> dict[str, object]:
 def _embedding_report(shared: Path) -> dict[str, object]:
     """Which embedding provider memory uses, reading the same configuration the managed MFS will."""
     provider, model = preload_mfs_model.configured_embedding(tag_embedding.managed_config(shared))
-    return {"provider": provider, "model": model, "local": preload_mfs_model.uses_local_model(provider),
+    local = preload_mfs_model.uses_local_model(provider)
+    return {"provider": provider, "model": model, "local": local,
+            # The built-in model downloads in the background after install; only it matters for the built-in model.
+            "download": tag_model_download.report(shared) if local else None,
             "choices": tag_embedding.choices(shared), "current": tag_embedding.current_provider(shared),
             "reindex_pending": tag_embedding.reindex_pending(shared)}
 
@@ -2787,8 +2800,14 @@ def _run_cli() -> int:
             if len(args.arguments) > 2:
                 parser.error("memory embedding accepts status, local, or custom")
             return _memory_embedding(context, args, home, installation_root)
-        if len(args.arguments) > 1 or action not in {"start", "status", "stop"}:
-            parser.error("memory accepts start, status, stop, or embedding")
+        if len(args.arguments) > 1 or action not in {"start", "status", "stop", "download"}:
+            parser.error("memory accepts start, status, stop, download, or embedding")
+        if action == "download":
+            shared = context.shared_mfs_home
+            if not _embedding_report(shared)["local"]:
+                raise RuntimeError("Memory uses a custom search model, so there is nothing to download")
+            if not tag_model_download.active(shared):
+                tag_model_download.start_background(sys.executable, ROOT / "scripts/preload_mfs_model.py", installation_root, os.environ)
         if action == "start":
             config_path = context.home / "config/settings.json"
             values = read_config(config_path) if config_path.is_file() else {}
@@ -2822,6 +2841,9 @@ def _run_cli() -> int:
                              else "Not restarted if it stops")
             display.info_row("Search model", "Default (built in)" if result["embedding"]["local"]
                              else f"Custom ({result['embedding']['model']})")
+            download = result["embedding"]["download"]
+            if download and download["message"]:
+                display.info_row("Download", download["message"], good=False)
             display.info_row("Active Tags", ", ".join(bridges) if bridges else "None")
             detail = log_tail(home, "mfs", 20, state_dir=context.shared_mfs_home)
             if detail:

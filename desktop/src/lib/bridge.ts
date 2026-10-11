@@ -215,6 +215,10 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
   let keepRunning = false;
   let memoryRunning = true;
   let embedding = "onnx";
+  // ?download=1 shows the built-in model downloading in the background; ?download=failed shows it stopped.
+  const downloadDemo = typeof location === "undefined" ? null : new URLSearchParams(location.search).get("download");
+  let downloadState: "downloading" | "failed" | "ready" | null = downloadDemo === "failed" ? "failed" : downloadDemo ? "downloading" : null;
+  let downloaded = 0.18;
   let embeddingModel = "";
   let embeddingUrl = "";
   // ?api=1 starts with one Tag already using its own API.
@@ -289,8 +293,18 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
           embedding = args[2] === "local" ? "onnx" : "custom";
           if (embedding === "custom") { embeddingModel = args[args.indexOf("--embedding-model") + 1]; embeddingUrl = args[args.indexOf("--base-url") + 1]; }
         }
+        if (second === "download") { downloadState = "downloading"; downloaded = 0.02; }
+        if (downloadState === "downloading" && second === "status") {
+          downloaded = Math.min(1, downloaded + 0.12);
+          if (downloaded >= 1) downloadState = "ready";
+        }
+        const bytes = 560 * 1048576;
+        const download = downloadState && embedding === "onnx" ? {
+          state: downloadState, model: "gpahal/bge-m3-onnx-int8", done: Math.round(bytes * downloaded), total: bytes,
+          percent: downloadState === "ready" ? 100 : Math.floor(downloaded * 100),
+          message: downloadState === "failed" ? "The search model (gpahal/bge-m3-onnx-int8) didn't finish downloading: no network. Memory search isn't available; run tag memory download to try again." : "" } : null;
         return json({ schema_version: 1, managed: memoryRunning, healthy: memoryRunning, running_tags: [],
-          keep_running: keepRunning, embedding: { provider: embedding === "onnx" ? "onnx" : "openai", model: embeddingModel, local: embedding === "onnx", current: embedding,
+          keep_running: keepRunning, embedding: { provider: embedding === "onnx" ? "onnx" : "openai", model: embeddingModel, local: embedding === "onnx", current: embedding, download,
             choices: [
               { id: "onnx", label: "Default", detail: "Built in. Runs on this computer, private, works offline. About 560 MB.", custom: false, model: "", base_url: "", key_saved: false },
               { id: "custom", label: "Custom", detail: "Any OpenAI-compatible endpoint: OpenAI, Ollama, LM Studio, vLLM, or your own gateway.",
