@@ -128,6 +128,7 @@ if ($RuntimeInfo) {
     exit 0
 }
 if ($DependenciesOnly) {
+    if ($SkipMemoryModel) { $env:TAG_SKIP_MFS_MODEL = '1' }
     if (-not $PSScriptRoot -or -not (Test-Path (Join-Path $PSScriptRoot 'requirements-runtime.txt'))) {
         throw '-DependenciesOnly is available only from a Tag source checkout.'
     }

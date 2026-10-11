@@ -151,6 +151,7 @@ class TagLifecycleTests(unittest.TestCase):
                 patch.object(tag_cli, "ensure_shared_memory") as ensure, \
                 patch.object(tag_cli, "sync_configured_slack_memory") as sync, \
                 patch.object(tag_cli.tag_embedding, "probe", key_check or (lambda *args: 768)), \
+                patch.object(tag_cli.preload_mfs_model, "configured_embedding", return_value=("openai", "embed-x")), \
                 redirect_stdout(StringIO()) as output:
             code = tag_cli.main()
         return code, output.getvalue(), shared, stop, ensure, sync

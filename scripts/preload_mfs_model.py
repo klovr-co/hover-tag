@@ -10,6 +10,7 @@ local provider.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 LOCAL_PROVIDER = "onnx"
@@ -40,6 +41,7 @@ def configured_embedding(config_path=None) -> tuple[str, str]:
         embedding = _server_config_loader()(str(config_path) if config_path else None, apply_env=False).embedding
         return embedding.provider, embedding.model
     except Exception:
+        print("Warning: could not read the MFS embedding configuration; using the local model.", file=sys.stderr)
         return LOCAL_PROVIDER, ""
 
 

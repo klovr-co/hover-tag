@@ -312,6 +312,12 @@ class MemorySupervisionTests(unittest.TestCase):
 class LingerTests(unittest.TestCase):
     """A systemd user service starts at boot only for an account with linger on."""
 
+    def setUp(self) -> None:
+        # os.getuid does not exist on Windows; the linger code only runs on systemd hosts.
+        patcher = patch.object(autostart.os, "getuid", create=True, return_value=1000)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def run_loginctl(self, stdout: str = "yes\n", returncode: int = 0):
         return Mock(returncode=returncode, stdout=stdout, stderr="")
 
