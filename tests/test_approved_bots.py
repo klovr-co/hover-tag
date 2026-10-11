@@ -72,6 +72,12 @@ class ApprovedBotMentionTests(unittest.TestCase):
                 run.assert_not_called()
                 client.chat_postMessage.assert_not_called()
 
+    def test_a_request_posted_with_blocks_still_runs(self) -> None:
+        # Slack turns the line breaks of a message's text into spaces when the post also has blocks.
+        flattened = REQUEST.replace("\n", " ")
+        run, _ = self.mention({"user": HOVER_USER, "bot_id": HOVER_BOT, "text": flattened})
+        run.assert_called_once()
+
     def test_a_mirror_post_is_ignored_even_if_it_looks_like_a_request(self) -> None:
         meta = {"event_type": "hover_whatsapp_mirror", "event_payload": {}}
         run, _ = self.mention({"user": HOVER_USER, "bot_id": HOVER_BOT, "metadata": meta})

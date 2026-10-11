@@ -3297,8 +3297,9 @@ def slack_bot_allowed(event: dict[str, Any], allowed_bot_ids: frozenset[str], ow
 
 # What an approved bot's request looks like: the mention and a command first, then a code block
 # that carries a Hover request ID. Other messages from the same bot (a mirror of WhatsApp text,
-# a log) never start a run, even if they happen to mention this Tag.
-_BOT_REQUEST = re.compile(r"\A\s*<@[UW][A-Z0-9]+>\s+/[a-z0-9][a-z0-9-]*\s*\n```[\s\S]*?\"request_id\"\s*:\s*\"hv-[0-9a-f]{16}\"")
+# a log) never start a run, even if they happen to mention this Tag. Slack turns the line breaks
+# of a post's text into spaces when the post also has blocks, so any whitespace may precede the block.
+_BOT_REQUEST = re.compile(r"\A\s*<@[UW][A-Z0-9]+>\s+/[a-z0-9][a-z0-9-]*\s+```[\s\S]*?\"request_id\"\s*:\s*\"hv-[0-9a-f]{16}\"")
 _NOT_A_REQUEST_EVENT_TYPES = frozenset({"hover_whatsapp_mirror"})
 
 
