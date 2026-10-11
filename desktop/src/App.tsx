@@ -13,7 +13,7 @@ import { deepLinkTarget } from "./lib/deeplink";
 import { glide } from "./lib/motion";
 import { Connect } from "./components/Connect";
 import { Home } from "./components/Home";
-import { Installing, Starting, Welcome } from "./components/Install";
+import { Installing, NO_CUSTOM, Starting, Welcome, type InstallChoice } from "./components/Install";
 import { AI_CAPABILITY, API_CAPABILITY, SHARED_AI_CAPABILITY } from "./lib/ai";
 import { AISettings } from "./components/AISettings";
 import { Settings, type SettingsTab } from "./components/Settings";
@@ -23,7 +23,7 @@ import { Toast } from "./components/ui";
 type Screen =
   | { name: "loading" }
   | { name: "welcome" }
-  | { name: "installing"; attempt: number; hostedMemory: boolean; provider: string; apiKey: string }
+  | ({ name: "installing"; attempt: number } & InstallChoice)
   | { name: "home" }
   | { name: "connect"; args: string[] }
   | { name: "settings"; tab?: SettingsTab; privacy?: boolean }
@@ -253,15 +253,15 @@ export function App() {
   }
   const home = () => { setScreen({ name: "home" }); void tags.refresh(); watch.recheck(); };
   // A reinstall keeps existing Tags: return to them instead of setting up a first Tag again.
-  const afterInstall = async (command: string, provider = "openai", apiKey = "", hostedMemory = false) => {
+  const afterInstall = async (command: string, choice: InstallChoice = NO_CUSTOM) => {
     setInfo({ ...info, cli: command || info.cli || "tag" });
-    // The installer skipped the built-in model, so save the hosted choice now; otherwise memory
+    // The installer skipped the built-in model, so save the custom choice now; otherwise memory
     // would fetch that model the first time it starts.
-    if (apiKey) {
-      const saved = await setEmbedding(api, provider, apiKey);
-      if (!saved.ok) say(`Memory will use the default search model until you add a working key in Settings. ${saved.error}`);
-    } else if (hostedMemory) {
-      say("Add your key in Settings → General → Search model. Until then, memory downloads the default search model when it starts.");
+    if (choice.skipModel && choice.baseUrl && choice.model) {
+      const saved = await setEmbedding(api, "custom", choice.apiKey, { model: choice.model, baseUrl: choice.baseUrl });
+      if (!saved.ok) say(`Memory will use the default search model until you fix this in Settings → AI. ${saved.error}`);
+    } else if (choice.skipModel) {
+      say("Set your search model in Settings → AI. Until then, memory downloads the built-in model when it starts.");
     }
     const listed = await api.tag(["list", "--json"]).catch(() => null);
     let empty = false;
@@ -276,12 +276,12 @@ export function App() {
     <TrackContext.Provider value={track}>
       <main ref={setRoot} className={`app${info.platform === "macos" ? " overlay" : ""}${screen.name === "home" ? " home" : ""}${fixed ? " fixed" : ""}${screen.name === "tag" ? " wide" : ""}`}>
         {screen.name === "replay" && <Welcome api={api} platform={info.platform} preview={() => setScreen({ name: "settings", tab: "about" })} />}
-        {screen.name === "welcome" && <Welcome api={api} platform={info.platform} install={({ hostedMemory, provider, apiKey }) => setScreen({ name: "installing", attempt: 0, hostedMemory, provider, apiKey })} />}
+        {screen.name === "welcome" && <Welcome api={api} platform={info.platform} install={(choice) => setScreen({ name: "installing", attempt: 0, ...choice })} />}
         {screen.name === "installing" && (
-          <Installing key={screen.attempt} api={api} hostedMemory={screen.hostedMemory}
-            retry={() => setScreen({ name: "installing", attempt: screen.attempt + 1, hostedMemory: screen.hostedMemory, provider: screen.provider, apiKey: screen.apiKey })}
+          <Installing key={screen.attempt} api={api} skipModel={screen.skipModel}
+            retry={() => setScreen({ ...screen, attempt: screen.attempt + 1 })}
             cancel={() => setScreen({ name: "welcome" })}
-            done={(command) => void afterInstall(command, screen.provider, screen.apiKey, screen.hostedMemory)} />
+            done={(command) => void afterInstall(command, screen)} />
         )}
         {screen.name === "home" && !tags.loaded && <Starting error={tags.error} retry={() => void tags.refresh()} />}
         {screen.name === "home" && tags.loaded && (

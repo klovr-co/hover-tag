@@ -4,7 +4,7 @@
 import { useEffect, useReducer, useRef, useState, type ReactNode } from "react";
 import type { Bridge, Session } from "../lib/bridge";
 import { fraction, initialInstall, installReducer, type StepState } from "../lib/install";
-import { HOSTED_MEMORY, INSTALL_STEPS } from "../lib/protocol";
+import { INSTALL_STEPS } from "../lib/protocol";
 import welcomeArt from "../assets/art/welcome-maya.png";
 import building from "../assets/art/tag-building.png";
 import celebrate from "../assets/art/tag-celebrate.png";
@@ -54,21 +54,25 @@ function InstallCanvas({ title, lead, side, art, children, foot }: {
   );
 }
 
+/** What the install screen asks for besides installing: a search model of the person's own. */
+export interface InstallChoice { skipModel: boolean; baseUrl: string; model: string; apiKey: string }
+export const NO_CUSTOM: InstallChoice = { skipModel: false, baseUrl: "", model: "", apiKey: "" };
+
 /** Replay ends with Done; first-run welcome offers installation and quitting. */
 export function Welcome({ api, platform, install, preview }: { api: Bridge; platform: string } &
-  ({ install: (choice: { hostedMemory: boolean; provider: string; apiKey: string }) => void; preview?: never } | { preview: () => void; install?: never })) {
+  ({ install: (choice: InstallChoice) => void; preview?: never } | { preview: () => void; install?: never })) {
   const machine = platform === "macos" ? "Mac" : "computer";
-  const [hosted, setHosted] = useState(false);
+  const [custom, setCustom] = useState(false);
+  const [baseUrl, setBaseUrl] = useState("");
+  const [model, setModel] = useState("");
   const [key, setKey] = useState("");
-  const [provider, setProvider] = useState<string>(HOSTED_MEMORY[0].id);
-  const label = HOSTED_MEMORY.find((p) => p.id === provider)?.label ?? "";
   return (
     <InstallCanvas title="Install Tag" lead="Multiplayer AI, right in Slack."
       foot={<>
         <span className="spacer" />
         {preview ? <Primary title="Done" onClick={preview} autoFocus /> : <>
           <Quiet title="Quit" onClick={() => void api.quit()} />
-          <Primary title="Install Tag" onClick={() => install({ hostedMemory: hosted, provider, apiKey: hosted ? key.trim() : "" })} autoFocus />
+          <Primary title="Install Tag" onClick={() => install(custom ? { skipModel: true, baseUrl: baseUrl.trim(), model: model.trim(), apiKey: key.trim() } : { ...NO_CUSTOM })} autoFocus />
         </>}
       </>}>
       <div className="facts">
@@ -77,16 +81,16 @@ export function Welcome({ api, platform, install, preview }: { api: Bridge; plat
         <div className="fact"><span className="fi"><Icon name="disk" size={16} /></span><span>About <b>1.8 GB</b> of disk space</span></div>
         <div className="fact"><span className="fi"><Icon name="wifi" size={16} /></span><span>Keep this {machine} online until it finishes</span></div>
         {!preview && <div className="fact"><span className="fi"><Icon name="disk" size={16} /></span>
-          <span style={{ flex: 1 }}><b>Hosted search model.</b> Use OpenAI or Jina instead of the built-in one, and skip its 560 MB download.</span>
-          <Switch on={hosted} busy={false} label="Use a hosted search model" onClick={() => setHosted(!hosted)} /></div>}
-        {!preview && hosted && <div className="model-edit" style={{ padding: 0 }}>
-          <div className="segc" role="radiogroup" aria-label="Hosted provider">
-            {HOSTED_MEMORY.map((p) => (
-              <button key={p.id} role="radio" aria-checked={p.id === provider} onClick={() => setProvider(p.id)}>{p.label}</button>
-            ))}
-          </div>
-          <input className="field mono" type="password" value={key} placeholder={`${label} API key (or add it later in Settings)`} aria-label={`${label} API key`}
+          <span style={{ flex: 1 }}><b>Your own search model.</b> Use OpenAI, Ollama or another endpoint instead of the built-in one, and skip its 560 MB download.</span>
+          <Switch on={custom} busy={false} label="Use my own search model" onClick={() => setCustom(!custom)} /></div>}
+        {!preview && custom && <div className="model-edit" style={{ padding: 0 }}>
+          <input className="field mono" value={baseUrl} placeholder="Address, such as http://localhost:11434/v1" aria-label="Endpoint address"
+            spellCheck={false} onChange={(e) => setBaseUrl(e.target.value)} />
+          <input className="field mono" value={model} placeholder="Embedding model name" aria-label="Model name"
+            spellCheck={false} onChange={(e) => setModel(e.target.value)} />
+          <input className="field mono" type="password" value={key} placeholder="API key (optional)" aria-label="API key (optional)"
             autoComplete="new-password" spellCheck={false} onChange={(e) => setKey(e.target.value)} />
+          <p>Leave these empty to finish in Settings → AI. Until then memory downloads the built-in model when it starts.</p>
         </div>}
       </div>
     </InstallCanvas>
@@ -102,8 +106,8 @@ function StepIcon({ state }: { state: StepState }) {
   return <span className="sicon pending" />;
 }
 
-export function Installing({ api, hostedMemory = false, done, retry, cancel }: {
-  api: Bridge; hostedMemory?: boolean; done: (command: string) => void; retry: () => void; cancel: () => void;
+export function Installing({ api, skipModel = false, done, retry, cancel }: {
+  api: Bridge; skipModel?: boolean; done: (command: string) => void; retry: () => void; cancel: () => void;
 }) {
   const [state, dispatch] = useReducer(installReducer, initialInstall);
   const [showLog, setShowLog] = useState(false);
@@ -118,7 +122,7 @@ export function Installing({ api, hostedMemory = false, done, retry, cancel }: {
     void Promise.resolve().then(async () => {
       if (!live) return;
       const next = await api.install("", (line) => live && dispatch({ type: "line", line }),
-        (code) => live && dispatch({ type: "exit", code }), { hostedMemory });
+        (code) => live && dispatch({ type: "exit", code }), { skipMemoryModel: skipModel });
       if (!live) { next.stop(); return; }
       owned = next;
       session.current = next;
@@ -134,7 +138,7 @@ export function Installing({ api, hostedMemory = false, done, retry, cancel }: {
       owned?.stop();
       if (session.current === owned) session.current = null;
     };
-  }, [api, hostedMemory]);
+  }, [api, skipModel]);
   useEffect(() => { stepStart.current = Date.now(); }, [state.current]);
 
   const failed = state.states.includes("failed");

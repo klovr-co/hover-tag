@@ -74,9 +74,6 @@ export const STATUS_LABEL: Record<Status, string> = {
   attention: "Needs attention",
 };
 
-/** Hosted search models the installer can skip the local download for, in the order they're offered. */
-export const HOSTED_MEMORY = [{ id: "openai", label: "OpenAI" }, { id: "jina", label: "Jina" }] as const;
-
 /** Settings → General: the one switch that keeps Tags and the memory they search running. */
 export const KEEP_RUNNING_DETAIL =
   "Start the Tags you switched on after you log in, and restart any that stop, along with the memory they search. Works even when this app is closed.";
@@ -273,7 +270,7 @@ export const INSTALL_STEPS = [
   { step: "python", title: "Preparing Python", detail: "A private copy, so your system stays untouched", weight: 0.15 },
   { step: "download", title: "Downloading Tag", detail: "The latest release, checked before it's used", weight: 0.1 },
   { step: "components", title: "Installing components", detail: "Slack connection and local search", weight: 0.3 },
-  { step: "memory", title: "Preparing memory", detail: "Downloads the default search model, the longest step; skipped for a hosted one", weight: 0.3 },
+  { step: "memory", title: "Preparing memory", detail: "Downloads the default search model, the longest step; skipped for a custom one", weight: 0.3 },
   { step: "command", title: "Finishing up", detail: "Adding the tag command", weight: 0.05 },
 ] as const;
 

@@ -12,8 +12,8 @@ param(
     [string]$BinDir,
     [switch]$SkipDependencies,
     [switch]$DependenciesOnly,
-    # Skip the 560 MB local search-model download (you will use a hosted embedding provider).
-    [switch]$HostedMemory,
+    # Skip the 560 MB built-in search-model download (you will use a custom search model).
+    [switch]$SkipMemoryModel,
     # Print the prepared Python and uv paths, one per line, and exit.
     [switch]$RuntimeInfo
 )
@@ -152,7 +152,7 @@ if ($Version) { $installerArgs += @('--version', $Version) }
 if ($Channel) { $installerArgs += @('--channel', $Channel) }
 if ($BinDir) { $installerArgs += @('--bin-dir', $BinDir) }
 if ($SkipDependencies) { $installerArgs += '--skip-dependencies' }
-if ($HostedMemory) { $installerArgs += '--hosted-memory' }
+if ($SkipMemoryModel) { $installerArgs += '--skip-memory-model' }
 if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot 'scripts/tag_install.py'))) {
     if (-not $Version -and -not $Channel) { $installerArgs += @('--source', $PSScriptRoot) }
     # The installer writes progress to stderr; never let PowerShell treat that as failure.

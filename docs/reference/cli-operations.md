@@ -39,10 +39,10 @@ The Tag desktop app and the CLI use the same Tags, settings, and lifecycle: the 
 | Rename | Details → **Rename** | `tag NAME rename "Name"` |
 | Describe | Details → description **Edit** | `tag NAME describe "…"` |
 | Model and thinking level | Details → **Model** | `tag NAME settings ai model VALUE [--effort LEVEL]` |
-| AI accounts | Settings → General → **AI connections** | `tag settings ai`, `tag settings ai sign-in codex\|claude` |
+| AI accounts | Settings → AI → **AI connections** | `tag settings ai`, `tag settings ai sign-in codex\|claude` |
 | Keep Tags running | Settings → General → **Keep Tags running** | `tag autostart on` |
-| Search model (Default, OpenAI, Jina, or Custom) | Settings → General → **Search model** | `tag memory embedding local\|openai\|jina\|custom` |
-| Memory on or off | Settings → General → **Memory** | `tag memory start` / `stop`; `tag memory status --json` also reports `embedding` |
+| Search model (Default or Custom) | Settings → AI → **Search model** | `tag memory embedding local\|custom` |
+| Memory on or off | Settings → AI → **Memory** | `tag memory start` / `stop`; `tag memory status --json` also reports `embedding` |
 | Open at login | Settings → General → **Open Tag at login** | Not needed; `tag autostart on` runs without the app |
 | Update | Settings → **Updates** → **Update Tag** | `tag upgrade` |
 | Release channel | Settings → **Updates** → Stable, Beta, or Alpha | `tag upgrade --channel stable\|beta\|alpha\|edge` |
@@ -124,8 +124,9 @@ MFS is shared by the installation. `tag NAME stop`, restart, reset, and
 failed startup leave shared memory and other Tags running. Inspect it with
 `tag memory status`; after stopping every Tag bridge, an installation-owned
 service can be stopped explicitly with `tag memory stop`. Tag refuses to stop
-an externally managed MFS process. `tag memory embedding [status|local|openai|jina|custom]` chooses how memory
-computes search embeddings (`--embedding-model`, and `--base-url` for `custom`); see [Choosing the search model after
+an externally managed MFS process. `tag memory embedding [status|local|custom]` chooses how memory computes search
+embeddings (`custom` takes `--base-url` and `--embedding-model`, and a key on
+stdin); see [Choosing the search model after
 install](installation-details.md#choosing-the-search-model-after-install).
 `tag memory start` also works with no Tags,
 for example after you remove the last one: MFS runs from its own state folder,
@@ -275,12 +276,12 @@ Only when no agent is connected does setup list them, because one is required:
 each shows **Not signed in**, **Sign-in expired**, **Usage limit reached**,
 **Not installed**, or **Update needed**, with the action that fixes it. Account
 changes and connection details are in `tag settings` → AI & models, or
-the Tag app → Settings → General → **AI connections**.
+the Tag app → Settings → AI → **AI connections**.
 
 ### AI & models
 
 Change these later in `tag settings` → **AI & models**, in the app's Settings →
-General → **AI connections**, or with `tag NAME settings ai`:
+AI → **AI connections**, or with `tag NAME settings ai`:
 
 ```sh
 tag settings ai                     # check connections now
@@ -738,7 +739,7 @@ version until that channel catches up.
 ## ChatGPT account connection
 
 A ChatGPT plan is one shared Codex connection for all Tags. Connect it in
-the Tag app → Settings → General → **AI connections**, or with
+the Tag app → Settings → AI → **AI connections**, or with
 `tag settings ai sign-in codex --method chatgpt --restart`. `tag chatgpt status
 --json` inspects it, and `tag settings ai sign-in codex --method codex` returns
 to the computer's Codex sign-in. `--restart` stops running Tags during sign-in
@@ -749,7 +750,7 @@ and starts them again afterwards. See
 
 Use [Models](api-connections.md) to configure
 Codex/Azure or Claude API keys, endpoints, model lists, and advisory budgets.
-In the app, open **Settings → General → AI connections → Add your own API**. In a
+In the app, open **Settings → AI → AI connections → Add your own API**. In a
 terminal, run `tag [NAME] settings ai api set|check|clear`; the key is read
 from stdin.
 `tag usage` and `tag NAME usage --json` report the current UTC month.

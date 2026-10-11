@@ -227,7 +227,7 @@ describe("memory and Keep Tags running", () => {
     expect(problemHelp(row, null)).toContain("Keep Tags running");
   });
 
-  it("describes the model step as skipped when memory uses a hosted provider", () => {
-    expect(INSTALL_STEPS.find((item) => item.step === "memory")?.detail).toContain("hosted");
+  it("describes the model step as skipped when memory uses a custom search model", () => {
+    expect(INSTALL_STEPS.find((item) => item.step === "memory")?.detail).toContain("skipped for a custom one");
   });
 });

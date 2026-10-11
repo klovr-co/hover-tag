@@ -168,6 +168,21 @@ it("replays onboarding from Settings without saving, installing, or quitting", a
   expect(api.install).not.toHaveBeenCalled();
 });
 
+it("keeps AI settings together on their own tab instead of crowding General", async () => {
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  vi.mocked(bridge).mockResolvedValue(demoBridge());
+  render(<StrictMode><App /></StrictMode>);
+  fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
+  expect(await screen.findByRole("switch", { name: "Keep Tags running" })).toBeTruthy();
+  expect(screen.queryByRole("switch", { name: "Memory" })).toBeNull();
+  expect(screen.queryByText("Search model")).toBeNull();
+  fireEvent.click(screen.getByRole("tab", { name: "AI" }));
+  expect(await screen.findByRole("switch", { name: "Memory" })).toBeTruthy();
+  expect(screen.getByRole("radiogroup", { name: "Search model" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Open AI connections" })).toBeTruthy();
+  expect(screen.queryByRole("switch", { name: "Keep Tags running" })).toBeNull();
+});
+
 it("keeps measuring Home after it replaces the startup element", async () => {
   const observed = new Map<Element, ResizeObserverCallback>();
   vi.stubGlobal("ResizeObserver", class {

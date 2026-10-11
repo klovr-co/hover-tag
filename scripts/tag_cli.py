@@ -914,36 +914,30 @@ def load_connector_config(path: Path) -> dict[str, object]:
 def _embedding_report(shared: Path) -> dict[str, object]:
     """Which embedding provider memory uses, reading the same configuration the managed MFS will."""
     provider, model = preload_mfs_model.configured_embedding(tag_embedding.managed_config(shared))
-    report = {"provider": provider, "model": model, "local": preload_mfs_model.uses_local_model(provider),
-              "choices": tag_embedding.choices(shared), "current": tag_embedding.current_provider(shared),
-              "reindex_pending": tag_embedding.reindex_pending(shared)}
-    if problem := tag_embedding.problem(shared):
-        report["problem"] = problem
-    return report
+    return {"provider": provider, "model": model, "local": preload_mfs_model.uses_local_model(provider),
+            "choices": tag_embedding.choices(shared), "current": tag_embedding.current_provider(shared),
+            "reindex_pending": tag_embedding.reindex_pending(shared)}
 
 
 def _memory_embedding(context, args, home: Path, installation_root: Path) -> int:
-    """`tag memory embedding [status|local|PROVIDER]`: where memory computes its search embeddings."""
+    """`tag memory embedding [status|local|custom]`: how memory computes its search embeddings."""
     shared = context.shared_mfs_home
     choice = args.arguments[1] if len(args.arguments) > 1 else "status"
-    if choice not in {"status", "local", *tag_embedding.PROVIDERS}:
-        raise RuntimeError("Choose local, " + ", ".join(tag_embedding.PROVIDERS))
+    if choice not in {"status", "local", tag_embedding.CUSTOM}:
+        raise RuntimeError("Choose local or custom")
     reindexing, note = False, ""
     if choice != "status":
         shared.mkdir(parents=True, exist_ok=True, mode=0o700)
         was_running = process_for(shared / "mfs.json") is not None
-        if choice in tag_embedding.PROVIDERS:
+        if choice == tag_embedding.CUSTOM:
             try:
                 import tag_api
             except ImportError:
                 from scripts import tag_api
-            custom = choice == tag_embedding.CUSTOM
-            if not args.stdin and not display.stdin_is_terminal() and not custom:
-                raise RuntimeError("Send the API key on stdin with --stdin")
-            # A custom endpoint may need no key, so only ask for one when it can be given.
+            # The key is optional (a local server needs none), so only read one when it can be given.
             key = (tag_api.read_key(args.json_output) if args.stdin or display.stdin_is_terminal() else "") \
-                or tag_embedding.saved_key(shared, choice) or ""
-            tag_embedding.set_hosted(shared, choice, key, model=args.embedding_model or "",
+                or tag_embedding.saved_key(shared) or ""
+            tag_embedding.set_custom(shared, key, model=args.embedding_model or "",
                                      base_url=args.base_url or "", verify=tag_embedding.probe)
         else:
             tag_embedding.set_local(shared)
@@ -969,7 +963,7 @@ def _memory_embedding(context, args, home: Path, installation_root: Path) -> int
     else:
         display.header("Memory search model", "Shared by every Tag in this installation.")
         embedding = report["embedding"]
-        display.info_row("Search model", "Default (built in)" if embedding["local"] else f"Hosted ({embedding['provider']})")
+        display.info_row("Search model", "Default (built in)" if embedding["local"] else f"Custom ({embedding['model']})")
         if reindexing:
             display.info_row("Index", "Rebuilding from your Slack channels; search is partial until it finishes", good=True)
         if note:
@@ -2396,7 +2390,7 @@ def _run_cli() -> int:
     parser.add_argument("--base-url", dest="base_url", metavar="URL", help="settings ai api set: the API base URL (HTTPS); empty for the provider's default")
     parser.add_argument("--models", dest="api_models", metavar="A,B", help="settings ai api set: model IDs, or Azure deployment names, comma-separated")
     parser.add_argument("--api-version", dest="api_version", metavar="VERSION", help="settings ai api set --kind azure: the Azure API version")
-    parser.add_argument("--embedding-model", dest="embedding_model", metavar="NAME", help="memory embedding: the provider's embedding model (default: its first)")
+    parser.add_argument("--embedding-model", dest="embedding_model", metavar="NAME", help="memory embedding custom: the embedding model's name")
     parser.add_argument("--stdin", action="store_true", help="read a config value from stdin")
     parser.add_argument("--from", dest="source", type=Path)
     parser.add_argument("--no-start", action="store_true", help=argparse.SUPPRESS)
@@ -2796,11 +2790,7 @@ def _run_cli() -> int:
             display.info_row("Restarts", "Kept running by tag autostart" if result["keep_running"]
                              else "Not restarted if it stops")
             display.info_row("Search model", "Default (built in)" if result["embedding"]["local"]
-                             else f"Hosted ({result['embedding']['provider']})",
-                             good=not result["embedding"].get("problem"))
-            if result["embedding"].get("problem"):
-                ui_problem = result["embedding"]["problem"]
-                display.info_row("Search model problem", ui_problem, good=False)
+                             else f"Custom ({result['embedding']['model']})")
             display.info_row("Active Tags", ", ".join(bridges) if bridges else "None")
             detail = log_tail(home, "mfs", 20, state_dir=context.shared_mfs_home)
             if detail:

@@ -352,24 +352,18 @@ def _choose_search_model() -> None:
         return
     picked = options[chosen]
     arguments, key = [], ""
-    if picked["hosted"]:
-        if picked["needs_url"]:
-            url = input(f"Endpoint address [{picked['base_url'] or 'http://localhost:11434/v1'}]: ").strip() \
-                or str(picked["base_url"] or "http://localhost:11434/v1")
-            model = input(f"Embedding model name [{picked['model']}]: ").strip() or str(picked["model"])
-            arguments += ["--base-url", url, "--embedding-model", model]
-        else:
-            models = picked["models"]
-            index = ui.choose(f"{picked['label']} model", [f"{m['id']} ({m['dim']} dimensions)" for m in models])
-            arguments += ["--embedding-model", models[index]["id"]]
-        key = getpass.getpass(
-            f"{picked['label']} API key ({'optional, ' if picked['key_optional'] else ''}Enter to keep a saved key): ").strip()
+    if picked["custom"]:
+        example = "https://api.openai.com/v1 or http://localhost:11434/v1"
+        url = input(f"Endpoint address ({example}) [{picked['base_url']}]: ").strip() or str(picked["base_url"])
+        model = input(f"Embedding model name [{picked['model']}]: ").strip() or str(picked["model"])
+        key = getpass.getpass("API key (optional; Enter to keep a saved key or use none): ").strip()
+        arguments = ["--base-url", url, "--embedding-model", model]
     if ui.choose("Switch the search model?", ["Switch and re-index", "Cancel"]) != 0:
         return
     command = [sys.executable, str(Path(__file__).with_name("tag_cli.py")), "memory", "embedding",
-               str(picked["id"]) if picked["hosted"] else "local", *arguments, *(["--stdin"] if picked["hosted"] else []), "--json"]
+               "custom" if picked["custom"] else "local", *arguments, *(["--stdin"] if picked["custom"] else []), "--json"]
     # The key goes over stdin only, never into the command line.
-    completed = subprocess.run(command, input=key + "\n" if picked["hosted"] else None, text=True, capture_output=True, check=False)
+    completed = subprocess.run(command, input=key + "\n" if picked["custom"] else None, text=True, capture_output=True, check=False)
     try:
         report = json.loads(completed.stdout.strip().splitlines()[-1]) if completed.stdout.strip() else {}
     except ValueError:

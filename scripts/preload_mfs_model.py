@@ -2,7 +2,7 @@
 """Warm MFS's default local embedding model cache during Tag installation.
 
 The model is a large download, so it is skipped when MFS will not use it:
-either the server configuration selects a hosted embedding provider, or
+either the server configuration selects another embedding provider, or
 TAG_SKIP_MFS_MODEL=1 says so (for installs that choose the provider later).
 A skipped model is fetched by MFS itself the first time it starts with the
 local provider.

@@ -159,32 +159,34 @@ class TagControlTests(unittest.TestCase):
             tag_control.settings_menu(self.home)
         return runs, output.getvalue()
 
-    def test_settings_can_switch_memory_to_openai_without_putting_the_key_in_the_command(self):
+    def test_settings_can_point_memory_at_a_custom_endpoint_without_putting_the_key_in_the_command(self):
         self.complete()
-        # Workspace and memory → Search model → OpenAI → confirm → Back
-        runs, output = self.run_search_model_menu([1, 4, 1, 1, 0, 6])
+        # Workspace and memory → Search model → Custom → confirm → Back
+        with patch("builtins.input", side_effect=["https://api.example.invalid/v1", "embed-x"]):
+            runs, output = self.run_search_model_menu([1, 4, 1, 0, 6])
         self.assertEqual(len(runs), 1)
         command, kwargs = runs[0]
         self.assertEqual(command[command.index("embedding"):],
-                         ["embedding", "openai", "--embedding-model", "text-embedding-3-large", "--stdin", "--json"])
+                         ["embedding", "custom", "--base-url", "https://api.example.invalid/v1",
+                          "--embedding-model", "embed-x", "--stdin", "--json"])
         self.assertNotIn("sk-test-synthetic", " ".join(command))
         self.assertEqual(kwargs["input"], "sk-test-synthetic\n")
         self.assertNotIn("sk-test-synthetic", output)
 
+    def test_settings_can_switch_memory_back_to_the_default(self):
+        self.complete()
+        runs, _ = self.run_search_model_menu([1, 4, 0, 0, 6])
+        command, kwargs = runs[0]
+        self.assertEqual(command[command.index("embedding"):], ["embedding", "local", "--json"])
+        self.assertIsNone(kwargs["input"])
+
     def test_settings_search_model_cancel_changes_nothing(self):
         self.complete()
-        runs, _ = self.run_search_model_menu([1, 4, 4, 6])
+        runs, _ = self.run_search_model_menu([1, 4, 2, 6])
         self.assertEqual(runs, [])
-
-    def test_settings_can_point_memory_at_a_custom_endpoint_with_no_key(self):
-        self.complete()
-        with patch("builtins.input", side_effect=["http://localhost:11434/v1", "nomic-embed-text"]):
-            runs, _ = self.run_search_model_menu([1, 4, 3, 0, 6], key="")
-        command, kwargs = runs[0]
-        self.assertEqual(command[command.index("embedding"):],
-                         ["embedding", "custom", "--base-url", "http://localhost:11434/v1",
-                          "--embedding-model", "nomic-embed-text", "--stdin", "--json"])
-        self.assertEqual(kwargs["input"], "\n")
+        with patch("builtins.input", side_effect=["https://api.example.invalid/v1", "embed-x"]):
+            runs, _ = self.run_search_model_menu([1, 4, 1, 1, 6])
+        self.assertEqual(runs, [])
 
     def test_settings_plain_number_navigation_still_works(self):
         self.complete()

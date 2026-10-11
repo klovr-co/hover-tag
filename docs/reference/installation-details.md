@@ -389,9 +389,9 @@ The installer skips the download when MFS will not use it:
   `$MFS_HOME/server.toml`, or `~/.mfs/server.toml`) selects another embedding
   provider, for example `provider = "openai"` under `[embedding]`.
 - You ask for it, for an install that chooses its provider later:
-  `./install.sh --hosted-memory`, `install.ps1 -HostedMemory`, or
+  `./install.sh --skip-memory-model`, `install.ps1 -SkipMemoryModel`, or
   `TAG_SKIP_MFS_MODEL=1` in the environment (all work with the curl installer).
-  Tag.app's install screen has a **Hosted search model** switch that does the same.
+  Tag.app's install screen has a **Your own search model** switch that does the same and can set it up for you.
 
 The installer prints which one applied. A skipped model is not lost: if you later
 switch back to the Default, MFS downloads the model the first time it starts.
@@ -399,51 +399,50 @@ An unreadable server configuration keeps the local default.
 
 ### Choosing the search model after install
 
-The built-in model is called **Default**. To use something else, open
-**Settings** → **General** → **Search model** in Tag.app, or run `tag memory
-embedding PROVIDER`, where `PROVIDER` is one of:
+The built-in model is called **Default**. To use another, open **Settings** →
+**AI** → **Search model** in Tag.app, or run `tag memory embedding custom` with
+the endpoint's address and the model's name:
 
-| Provider | Models | Key |
-| --- | --- | --- |
-| `local` | the built-in Default | none |
-| `openai` | `text-embedding-3-small` (default), `text-embedding-3-large` | OpenAI key |
-| `jina` | `jina-embeddings-v4` (default), `jina-embeddings-v3` | Jina key |
-| `custom` | any model on an OpenAI-compatible endpoint | optional |
+```sh
+# OpenAI (the key goes on stdin, never on the command line)
+echo "$OPENAI_API_KEY" | tag memory embedding custom --stdin \
+  --base-url https://api.openai.com/v1 --embedding-model text-embedding-3-small
+# Ollama: no key
+tag memory embedding custom --base-url http://localhost:11434/v1 --embedding-model nomic-embed-text
+# Back to the built-in Default
+tag memory embedding local
+```
 
-Add `--embedding-model NAME` to pick a model, and give the key on stdin with
-`--stdin` (or at the prompt in a terminal). `custom` also takes `--base-url`,
-for example `tag memory embedding custom --base-url http://localhost:11434/v1
---embedding-model nomic-embed-text` for Ollama, which serves an OpenAI-style
-`/v1` endpoint; LM Studio, vLLM and gateways work the same way. A custom
-endpoint's key is optional because local servers usually have none.
-`tag memory embedding status --json` shows the current choice and what is on
-offer. Before it saves anything, Tag embeds one word with your key, model and
-address, so a wrong key, an unknown model or an unreachable address is refused
-with a message and changes nothing; for a custom endpoint this also measures
-the model's vector size. Tag then:
+Any server that answers an OpenAI-style `POST /embeddings` works, including
+LM Studio, vLLM and gateways. The key is optional because local servers usually
+have none. `tag memory embedding status --json` shows the current choice and
+what is on offer. Before it saves anything, Tag embeds one word with your
+address, model and key, so a wrong key, an unknown model or an unreachable
+address is refused with a message and changes nothing; this also measures the
+model's vector size. Tag then:
 
 - writes its own copy of the MFS server configuration to
   `shared/mfs/server.toml` under Tag's home, keeping your other settings and
-  never editing `~/.mfs/server.toml`, and records the choice (provider, model,
-  address) in `shared/mfs/embedding.json`;
-- stores each provider's key in its own private file
-  (`shared/mfs/credentials/`, mode 0600) and gives MFS the key and address
-  through its environment (`OPENAI_API_KEY` and `OPENAI_BASE_URL`, or
-  `JINA_API_KEY`), not its command line or the configuration file;
+  never editing `~/.mfs/server.toml`, and records the choice (model, address,
+  vector size) in `shared/mfs/embedding.json`;
+- stores the key, if any, in a private file (`shared/mfs/credentials/`, mode
+  0600) and gives MFS the key and address through its environment
+  (`OPENAI_API_KEY` and `OPENAI_BASE_URL`), not its command line or the
+  configuration file;
 - restarts memory if it is running, and indexes your Slack channels again.
 
 MFS keeps a separate index for each vector size, so one model's index and
 another's never mix. Switching back reuses the old index, but until the new one
 is rebuilt, search results are partial. If memory isn't running, the re-index
 happens the next time `tag start` runs. Sources that are not the Slack
-connector are not re-indexed by Tag; add them again to MFS. Hosted providers
-receive the text of the indexed messages; the Default and a local custom
-endpoint do not send it off your computer.
+connector are not re-indexed by Tag; add them again to MFS. A remote endpoint
+receives the text of the indexed messages; the Default and a local endpoint do
+not send it off your computer.
 
-Gemini, Voyage and Mistral are supported by MFS but need extra packages that Tag
-doesn't install; configure them in `server.toml` yourself. If you already use
-`~/.mfs/server.toml` or `OPENAI_API_KEY` yourself, nothing changes until you
-choose in Tag.
+MFS also supports Gemini, Voyage and Mistral embeddings, which need extra
+packages that Tag doesn't install; configure those in `server.toml` yourself. If
+you already use `~/.mfs/server.toml` or `OPENAI_API_KEY` yourself, nothing
+changes until you choose in Tag.
 
 ## Measured installation size
 

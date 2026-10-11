@@ -121,7 +121,7 @@ describe("Memory row", () => {
         healthy = false;
       }
       return { code: 0, stderr: "", stdout: JSON.stringify({ schema_version: 1, managed: healthy, healthy, running_tags: [],
-        keep_running: !!initial.keep_running, embedding: { provider: "openai", model: "m", local: false } }) };
+        keep_running: !!initial.keep_running, embedding: { provider: "openai", model: "m", local: false, current: "custom", choices: [] } }) };
     };
     const setError = vi.fn();
     render(<MemoryRow api={api} setError={setError} />);
@@ -130,7 +130,7 @@ describe("Memory row", () => {
 
   it("shows whether memory runs and where its search model is, and starts it", async () => {
     const { calls } = memory({ healthy: false });
-    await screen.findByText(/Not running\..*Search model: openai \(hosted\)\./);
+    await screen.findByText(/Not running\..*Search model: custom \(m\)\./);
     const toggle = screen.getByRole("switch", { name: "Memory" });
     expect(toggle.getAttribute("aria-checked")).toBe("false");
     fireEvent.click(toggle);
@@ -150,26 +150,27 @@ describe("Memory row", () => {
 });
 
 describe("Search model row", () => {
-  const choices = (saved: string[]) => [
-    { id: "onnx", label: "Default", detail: "Built in and private.", hosted: false, key_saved: false },
-    { id: "openai", label: "OpenAI", detail: "Fast and cheap.", hosted: true, key_saved: saved.includes("openai"),
-      models: [{ id: "text-embedding-3-small", dim: 1536 }, { id: "text-embedding-3-large", dim: 3072 }] },
-    { id: "jina", label: "Jina", detail: "Strong multilingual search.", hosted: true, key_saved: saved.includes("jina"),
-      models: [{ id: "jina-embeddings-v4", dim: 2048 }, { id: "jina-embeddings-v3", dim: 1024 }] },
-    { id: "custom", label: "Custom", detail: "Any OpenAI-compatible endpoint.", hosted: true, key_saved: false, key_optional: true,
-      needs_url: true, models: [] },
+  const URL = "http://localhost:11434/v1";
+  const choices = (custom: { model?: string; base_url?: string; key_saved?: boolean } = {}) => [
+    { id: "onnx", label: "Default", detail: "Built in and private.", custom: false, model: "", base_url: "", key_saved: false },
+    { id: "custom", label: "Custom", detail: "Any OpenAI-compatible endpoint.", custom: true, model: "", base_url: "", key_saved: false, ...custom },
   ];
-  function model(current: string, saved: string[] = [], outcome: object = { ok: true, reindexing: true }) {
+  function model(initial: "onnx" | "custom", outcome: object = { ok: true, reindexing: true }) {
     const api = demoBridge();
-    let now = current;
+    let now = initial;
+    let saved: { model?: string; base_url?: string } = initial === "custom" ? { model: "nomic-embed-text", base_url: URL } : {};
     const sent: unknown[] = [];
     const calls: string[][] = [];
     const status = () => ({ code: 0, stderr: "", stdout: JSON.stringify({ schema_version: 1, managed: true, healthy: true, running_tags: [],
-      keep_running: true, embedding: { provider: now, model: "m", local: now === "onnx", current: now, choices: choices(saved) } }) });
+      keep_running: true, embedding: { provider: now === "onnx" ? "onnx" : "openai", model: saved.model ?? "", local: now === "onnx", current: now,
+        choices: choices(now === "custom" ? saved : {}) } }) });
     api.tag = async (args) => { calls.push(args); if (args[2] === "local") now = "onnx"; return status(); };
     api.setup = async (args, onLine, onExit) => {
       calls.push(args);
-      if ((outcome as { ok: boolean }).ok) now = args[2];
+      if ((outcome as { ok: boolean }).ok) {
+        now = args[2] === "local" ? "onnx" : "custom";
+        if (now === "custom") saved = { model: args[args.indexOf("--embedding-model") + 1], base_url: args[args.indexOf("--base-url") + 1] };
+      }
       setTimeout(() => { onLine(JSON.stringify(outcome)); onExit(0, ""); }, 0);
       return { send: (m) => sent.push(m), stop: () => {} };
     };
@@ -178,80 +179,72 @@ describe("Search model row", () => {
     return { calls, sent, setError };
   }
 
-  it("lists every choice with what it means, and marks the one in use", async () => {
+  it("shows the two choices and marks the one in use", async () => {
     model("onnx");
-    const local = await screen.findByRole("radio", { name: "Default" });
-    expect(local.getAttribute("aria-checked")).toBe("true");
+    const first = await screen.findByRole("radio", { name: "Default" });
+    expect(first.getAttribute("aria-checked")).toBe("true");
     expect(screen.getByText("In use")).toBeTruthy();
-    expect(screen.getByText("Fast and cheap.")).toBeTruthy();
-    expect(screen.getByRole("radio", { name: "Jina" }).getAttribute("aria-checked")).toBe("false");
+    expect(screen.getByRole("radio", { name: "Custom" }).getAttribute("aria-checked")).toBe("false");
+    expect(screen.queryByLabelText("Endpoint address")).toBeNull();
     expect(screen.queryByRole("button", { name: /Switch to/ })).toBeNull();
   });
 
-  it("asks for the key of a hosted choice, then switches without putting the key in the command", async () => {
-    const { sent, calls } = model("onnx");
-    fireEvent.click(await screen.findByRole("radio", { name: "OpenAI" }));
-    const go = screen.getByRole("button", { name: "Switch to OpenAI" });
-    expect(go.hasAttribute("disabled")).toBe(true);
-    fireEvent.change(screen.getByLabelText("OpenAI API key"), { target: { value: "sk-synthetic" } });
-    expect(go.hasAttribute("disabled")).toBe(false);
-    expect(screen.getByText(/OpenAI receives the text of indexed messages/)).toBeTruthy();
-    fireEvent.click(go);
-    await vi.waitFor(() => expect(sent).toEqual([{ api_key: "sk-synthetic" }]));
-    await vi.waitFor(() => expect(screen.getByRole("radio", { name: "OpenAI" }).getAttribute("aria-checked")).toBe("true"));
-    expect(calls.flat()).not.toContain("sk-synthetic");
-    expect(calls).toContainEqual(["memory", "embedding", "openai", "--embedding-model", "text-embedding-3-small", "--stdin", "--json"]);
-    expect(screen.queryByLabelText("OpenAI API key")).toBeNull();
-  });
-
-  it("lets you pick the provider's model, and sends it as an option", async () => {
-    const { calls } = model("onnx", ["jina"]);
-    fireEvent.click(await screen.findByRole("radio", { name: "Jina" }));
-    const picker = screen.getByLabelText("Jina model") as HTMLSelectElement;
-    expect(picker.value).toBe("jina-embeddings-v4");
-    fireEvent.change(picker, { target: { value: "jina-embeddings-v3" } });
-    fireEvent.click(screen.getByRole("button", { name: "Switch to Jina" }));
-    await vi.waitFor(() => expect(calls).toContainEqual(
-      ["memory", "embedding", "jina", "--embedding-model", "jina-embeddings-v3", "--stdin", "--json"]));
-  });
-
-  it("points memory at a custom endpoint: address and model are required, the key isn't", async () => {
+  it("needs an address and a model, but no key, to switch to a custom endpoint", async () => {
     const { calls, sent } = model("onnx");
     fireEvent.click(await screen.findByRole("radio", { name: "Custom" }));
     const go = screen.getByRole("button", { name: "Switch to Custom" });
     expect(go.hasAttribute("disabled")).toBe(true);
-    fireEvent.change(screen.getByLabelText("Endpoint address"), { target: { value: "http://localhost:11434/v1" } });
+    fireEvent.change(screen.getByLabelText("Endpoint address"), { target: { value: URL } });
     expect(go.hasAttribute("disabled")).toBe(true);
     fireEvent.change(screen.getByLabelText("Model name"), { target: { value: "nomic-embed-text" } });
-    expect(screen.getByLabelText("Custom API key (optional)")).toBeTruthy();
     expect(go.hasAttribute("disabled")).toBe(false);
     fireEvent.click(go);
     await vi.waitFor(() => expect(calls).toContainEqual(["memory", "embedding", "custom", "--embedding-model", "nomic-embed-text",
-      "--base-url", "http://localhost:11434/v1", "--stdin", "--json"]));
+      "--base-url", URL, "--stdin", "--json"]));
     expect(sent).toEqual([{ api_key: "" }]);
+    await vi.waitFor(() => expect(screen.getByRole("radio", { name: "Custom" }).getAttribute("aria-checked")).toBe("true"));
+    expect(await screen.findByText(`nomic-embed-text at ${URL}`)).toBeTruthy();
   });
 
-  it("works for another provider, and skips the key field when one is saved", async () => {
-    const { calls } = model("onnx", ["jina"]);
-    fireEvent.click(await screen.findByRole("radio", { name: "Jina" }));
-    expect(screen.queryByLabelText("Jina API key")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Switch to Jina" }));
-    await vi.waitFor(() => expect(calls).toContainEqual(["memory", "embedding", "jina", "--embedding-model", "jina-embeddings-v4", "--stdin", "--json"]));
+  it("sends the key over stdin, never in the command", async () => {
+    const { calls, sent } = model("onnx");
+    fireEvent.click(await screen.findByRole("radio", { name: "Custom" }));
+    fireEvent.change(screen.getByLabelText("Endpoint address"), { target: { value: "https://api.openai.com/v1" } });
+    fireEvent.change(screen.getByLabelText("Model name"), { target: { value: "text-embedding-3-small" } });
+    fireEvent.change(screen.getByLabelText("API key (optional)"), { target: { value: "sk-synthetic" } });
+    fireEvent.click(screen.getByRole("button", { name: "Switch to Custom" }));
+    await vi.waitFor(() => expect(sent).toEqual([{ api_key: "sk-synthetic" }]));
+    expect(calls.flat()).not.toContain("sk-synthetic");
   });
 
-  it("switches back to the default without a key", async () => {
-    const { calls } = model("openai", ["openai"]);
+  it("lets you edit the model of the endpoint in use without retyping the address", async () => {
+    const { calls } = model("custom");
+    const field = await screen.findByLabelText("Model name") as HTMLInputElement;
+    expect(field.value).toBe("nomic-embed-text");
+    expect((screen.getByLabelText("Endpoint address") as HTMLInputElement).value).toBe(URL);
+    const save = screen.getByRole("button", { name: "Save changes" });
+    expect(save.hasAttribute("disabled")).toBe(true);
+    fireEvent.change(field, { target: { value: "mxbai-embed-large" } });
+    expect(save.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(save);
+    await vi.waitFor(() => expect(calls).toContainEqual(["memory", "embedding", "custom", "--embedding-model", "mxbai-embed-large",
+      "--base-url", URL, "--stdin", "--json"]));
+  });
+
+  it("switches back to the default without any fields", async () => {
+    const { calls } = model("custom");
     fireEvent.click(await screen.findByRole("radio", { name: "Default" }));
     fireEvent.click(screen.getByRole("button", { name: "Switch to Default" }));
     await vi.waitFor(() => expect(calls).toContainEqual(["memory", "embedding", "local", "--json"]));
   });
 
-  it("keeps the old choice and says why when the provider refuses the key", async () => {
-    const { setError } = model("onnx", [], { ok: false, error: "OpenAI rejected that key." });
-    fireEvent.click(await screen.findByRole("radio", { name: "OpenAI" }));
-    fireEvent.change(screen.getByLabelText("OpenAI API key"), { target: { value: "sk-wrong" } });
-    fireEvent.click(screen.getByRole("button", { name: "Switch to OpenAI" }));
-    await vi.waitFor(() => expect(setError).toHaveBeenCalledWith("OpenAI rejected that key."));
+  it("keeps the old choice and says why when the endpoint is refused", async () => {
+    const { setError } = model("onnx", { ok: false, error: "localhost rejected that key." });
+    fireEvent.click(await screen.findByRole("radio", { name: "Custom" }));
+    fireEvent.change(screen.getByLabelText("Endpoint address"), { target: { value: URL } });
+    fireEvent.change(screen.getByLabelText("Model name"), { target: { value: "m" } });
+    fireEvent.click(screen.getByRole("button", { name: "Switch to Custom" }));
+    await vi.waitFor(() => expect(setError).toHaveBeenCalledWith("localhost rejected that key."));
     expect(screen.getByRole("radio", { name: "Default" }).getAttribute("aria-checked")).toBe("true");
   });
 });

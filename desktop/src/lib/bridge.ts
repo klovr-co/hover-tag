@@ -59,8 +59,8 @@ export interface Bridge {
   setup(args: string[], onLine: (line: string) => void, onExit: (code: number, stderr: string) => void): Promise<Session>;
   /** `tag ARGS --json` for a command that reports progress as it goes, such as start. */
   follow(args: string[], onLine: (line: string) => void, onExit: (code: number, stderr: string) => void): Promise<Session>;
-  /** `hostedMemory` skips the local search-model download for people who will use a hosted provider. */
-  install(channel: string, onLine: (line: string) => void, onExit: (code: number) => void, options?: { hostedMemory?: boolean }): Promise<Session>;
+  /** `skipMemoryModel` skips the built-in search-model download for people who will use their own. */
+  install(channel: string, onLine: (line: string) => void, onExit: (code: number) => void, options?: { skipMemoryModel?: boolean }): Promise<Session>;
   copy(text: string): Promise<void>;
   paste(): Promise<string>;
   open(target: string): Promise<void>;
@@ -128,7 +128,7 @@ async function tauriBridge(): Promise<Bridge> {
     // The same streamed `tag ARGS --json` session as setup; start never reads input.
     follow: (args, onLine, onExit) => stream("setup_start", { args }, onLine, onExit),
     install: (channel, onLine, onExit, options) =>
-      stream("install_start", { channel, hostedMemory: !!options?.hostedMemory }, onLine, (code) => onExit(code)),
+      stream("install_start", { channel, skipMemoryModel: !!options?.skipMemoryModel }, onLine, (code) => onExit(code)),
     copy: (text) => clipboard.writeText(text),
     paste: async () => (await clipboard.readText()) ?? "",
     open: (target) => (/^[a-z]+:/i.test(target) ? opener.openUrl(target) : opener.openPath(target)),
@@ -215,6 +215,8 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
   let keepRunning = false;
   let memoryRunning = true;
   let embedding = "onnx";
+  let embeddingModel = "";
+  let embeddingUrl = "";
   // ?api=1 starts with one Tag already using its own API.
   const apiDemo: ApiConnection[] = typeof location !== "undefined" && new URLSearchParams(location.search).get("api") ? [{
     tag: rows[0].id, tag_name: rows[0].slack_name ?? "Tag", backend: "codex", kind: "openai", kind_name: "OpenAI-compatible",
@@ -283,17 +285,16 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
       }
       if (first === "memory") {
         if (second === "start" || second === "stop") memoryRunning = second === "start";
-        if (second === "embedding") embedding = args[2] === "local" ? "onnx" : args[2];
+        if (second === "embedding") {
+          embedding = args[2] === "local" ? "onnx" : "custom";
+          if (embedding === "custom") { embeddingModel = args[args.indexOf("--embedding-model") + 1]; embeddingUrl = args[args.indexOf("--base-url") + 1]; }
+        }
         return json({ schema_version: 1, managed: memoryRunning, healthy: memoryRunning, running_tags: [],
-          keep_running: keepRunning, embedding: { provider: embedding, model: "m", local: embedding === "onnx", current: embedding,
+          keep_running: keepRunning, embedding: { provider: embedding === "onnx" ? "onnx" : "openai", model: embeddingModel, local: embedding === "onnx", current: embedding,
             choices: [
-              { id: "onnx", label: "Default", detail: "Built in. Runs on this computer, private, works offline. About 560 MB.", hosted: false, key_saved: false },
-              { id: "openai", label: "OpenAI", detail: "Fast and cheap. Needs an OpenAI key.", hosted: true, key_saved: false,
-                models: [{ id: "text-embedding-3-small", dim: 1536 }, { id: "text-embedding-3-large", dim: 3072 }] },
-              { id: "jina", label: "Jina", detail: "Strong multilingual search. Needs a Jina key.", hosted: true, key_saved: false,
-                models: [{ id: "jina-embeddings-v4", dim: 2048 }, { id: "jina-embeddings-v3", dim: 1024 }] },
-              { id: "custom", label: "Custom", detail: "Any OpenAI-compatible endpoint: Ollama, LM Studio, vLLM, or your own gateway.",
-                hosted: true, key_saved: false, key_optional: true, needs_url: true, models: [] }] } });
+              { id: "onnx", label: "Default", detail: "Built in. Runs on this computer, private, works offline. About 560 MB.", custom: false, model: "", base_url: "", key_saved: false },
+              { id: "custom", label: "Custom", detail: "Any OpenAI-compatible endpoint: OpenAI, Ollama, LM Studio, vLLM, or your own gateway.",
+                custom: true, model: embeddingModel, base_url: embeddingUrl, key_saved: false }] } });
       }
       if (first === "autostart") {
         if (second === "on" || second === "off") keepRunning = second === "on";

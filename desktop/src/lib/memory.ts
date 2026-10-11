@@ -14,22 +14,16 @@ export interface MemoryStatus {
 }
 
 export interface EmbeddingChoice {
+  /** "onnx" is the built-in Default; "custom" is an OpenAI-compatible endpoint the person names. */
   id: string;
   label: string;
   detail: string;
-  /** Needs an API key, and sends the text it indexes to that provider. */
-  hosted: boolean;
-  /** A key for this provider is already stored, so switching to it needs none. */
-  keySaved: boolean;
-  /** The key can be left empty, as for a local endpoint. */
-  keyOptional: boolean;
-  /** Models to pick from; empty when the person names one (a custom endpoint). */
-  models: { id: string; dim: number }[];
-  /** The person gives the endpoint's address. */
-  needsUrl: boolean;
-  /** What is configured now, when this provider is the one in use. */
+  /** The person gives an address, a model name and, optionally, a key. */
+  custom: boolean;
+  /** What is configured now, when this is the one in use. */
   model: string;
   baseUrl: string;
+  keySaved: boolean;
 }
 
 export interface Embedding {
@@ -37,10 +31,11 @@ export interface Embedding {
   local: boolean;
   /** The id of the choice in use. */
   current: string;
+  /** What the status reported for the model in use. */
+  model: string;
   choices: EmbeddingChoice[];
   /** Memory still has to index your sources into the new search model's index. */
   reindexPending: boolean;
-  problem: string;
 }
 
 export interface EmbeddingResult { ok: boolean; error: string; reindexing: boolean; note: string }
@@ -49,52 +44,43 @@ export function parseMemory(output: string): MemoryStatus {
   const status = parseJSON<{
     healthy?: boolean; managed?: boolean; keep_running?: boolean; running_tags?: string[];
     embedding?: {
-      provider?: string; local?: boolean; current?: string; reindex_pending?: boolean; problem?: string;
-      choices?: { id: string; label: string; detail?: string; hosted?: boolean; key_saved?: boolean; key_optional?: boolean;
-        models?: { id: string; dim: number }[]; needs_url?: boolean; model?: string; base_url?: string }[];
+      provider?: string; model?: string; local?: boolean; current?: string; reindex_pending?: boolean;
+      choices?: { id: string; label: string; detail?: string; custom?: boolean; model?: string; base_url?: string; key_saved?: boolean }[];
     } | null;
   }>(output);
+  const e = status.embedding;
   return {
     healthy: !!status.healthy,
     managed: !!status.managed,
     keepRunning: !!status.keep_running,
     runningTags: status.running_tags ?? [],
     // An older Tag without the choice list can't offer a switch, so it reports none.
-    embedding: status.embedding?.choices?.length ? {
-      provider: status.embedding.provider ?? "", local: !!status.embedding.local,
-      current: status.embedding.current ?? (status.embedding.local ? "onnx" : status.embedding.provider ?? ""),
-      choices: status.embedding.choices.map((c) => ({
-        id: c.id, label: c.label, detail: c.detail ?? "", hosted: !!c.hosted, keySaved: !!c.key_saved, keyOptional: !!c.key_optional,
-        models: c.models ?? [], needsUrl: !!c.needs_url, model: c.model ?? "", baseUrl: c.base_url ?? "" })),
-      reindexPending: !!status.embedding.reindex_pending, problem: status.embedding.problem ?? "",
-    } : status.embedding ? {
-      provider: status.embedding.provider ?? "", local: !!status.embedding.local, current: status.embedding.local ? "onnx" : status.embedding.provider ?? "",
-      choices: [], reindexPending: false, problem: "",
+    embedding: e ? {
+      provider: e.provider ?? "", model: e.model ?? "", local: !!e.local, current: e.current ?? (e.local ? "onnx" : "custom"),
+      choices: (e.choices ?? []).map((c) => ({
+        id: c.id, label: c.label, detail: c.detail ?? "", custom: !!c.custom, model: c.model ?? "", baseUrl: c.base_url ?? "", keySaved: !!c.key_saved })),
+      reindexPending: !!e.reindex_pending,
     } : null,
   };
 }
 
-/** Where search embeddings are computed: the one fact people choose at install time. */
+/** What the search model is, in a few words. */
 export function embeddingText(memory: MemoryStatus) {
   if (!memory.embedding) return "";
-  if (memory.embedding.local) return "Search model: default, built in.";
-  const label = memory.embedding.choices.find((c) => c.id === memory.embedding?.current)?.label ?? memory.embedding.provider;
-  return `Search model: ${label} (hosted).`;
+  return memory.embedding.local ? "Search model: default, built in." : `Search model: custom (${memory.embedding.model}).`;
 }
 
 /**
  * `tag memory embedding local|openai`. The key goes over stdin only and is never part of the command,
  * so it can't show up in a process list or a log.
  */
-export function setEmbedding(api: Bridge, choice: string, key: string, options: { model?: string; baseUrl?: string } = {}): Promise<EmbeddingResult> {
+export function setEmbedding(api: Bridge, choice: "local" | "custom", key: string, options: { model?: string; baseUrl?: string } = {}): Promise<EmbeddingResult> {
   const failed = (error: string): EmbeddingResult => ({ ok: false, error, reindexing: false, note: "" });
   return new Promise((resolve) => {
     let result: EmbeddingResult | null = null;
-    const hosted = choice !== "local" && choice !== "onnx";
-    const args = ["memory", "embedding", hosted ? choice : "local",
-      ...(hosted && options.model ? ["--embedding-model", options.model] : []),
-      ...(hosted && options.baseUrl ? ["--base-url", options.baseUrl] : []),
-      ...(hosted ? ["--stdin"] : []), "--json"];
+    const custom = choice === "custom";
+    const args = ["memory", "embedding", choice,
+      ...(custom ? ["--embedding-model", options.model ?? "", "--base-url", options.baseUrl ?? "", "--stdin"] : []), "--json"];
     api.setup(args, (line) => {
       if (!line.trim().startsWith("{")) return;
       try {
@@ -104,7 +90,7 @@ export function setEmbedding(api: Bridge, choice: string, key: string, options: 
       } catch { /* not a result line */ }
     }, (code, stderr) => resolve(result ?? failed(
       stderr.trim().split("\n").pop()?.replace(/^Error: /, "") || `Tag stopped unexpectedly (${code}).`)))
-      .then((session) => { if (hosted) session.send({ api_key: key }); })
+      .then((session) => { if (custom) session.send({ api_key: key }); })
       .catch((e) => resolve(failed(String(e))));
   });
 }

@@ -21,7 +21,7 @@ import { CompactSky, ErrorLine, Icon, Primary, Secondary, Spinner, Switch, tagIc
 const DOCS = "https://www.hover.team/tag/";
 const HOVER = "https://hover.team";
 
-export type SettingsTab = "general" | "updates" | "about";
+export type SettingsTab = "general" | "ai" | "updates" | "about";
 /** Closes a short screen with a quiet river along the bottom of its panel, so the space above reads as finished. */
 export function RiverFoot({ api }: { api?: Bridge }) {
   return (
@@ -33,8 +33,8 @@ export function RiverFoot({ api }: { api?: Bridge }) {
   );
 }
 
-const SETTINGS_TABS: SettingsTab[] = ["general", "updates", "about"];
-const TAB_LABEL: Record<SettingsTab, string> = { general: "General", updates: "Updates", about: "About" };
+const SETTINGS_TABS: SettingsTab[] = ["general", "ai", "updates", "about"];
+const TAB_LABEL: Record<SettingsTab, string> = { general: "General", ai: "AI", updates: "Updates", about: "About" };
 
 function SetRow({ label, detail, children }: { label: ReactNode; detail: ReactNode; children?: ReactNode }) {
   return (
@@ -212,7 +212,7 @@ export function Settings({ api, info, tags, telemetry, close, replay, initialTab
   return (
     <>
       <CompactSky title="Settings" sub={`Tag ${version}`} back={close} />
-      <div className={tab === "general" ? "body settings" : "body settings river"}>
+      <div className={tab === "general" || tab === "ai" ? "body settings" : "body settings river"}>
         <div className="segc tabs" role="tablist" aria-label="Settings">
           {SETTINGS_TABS.map((t) => (
             <button key={t} role="tab" aria-selected={tab === t} onClick={() => setTab(t)}>
@@ -242,18 +242,23 @@ export function Settings({ api, info, tags, telemetry, close, replay, initialTab
               <Switch on={tags.keepRunning} busy={keepBusy} label="Keep Tags running"
                 onClick={async () => { setKeepBusy(true); await tags.setAutostart(!tags.keepRunning); setKeepBusy(false); }} />
             </SetRow>
-            <MemoryRow api={api} setError={setError} />
           </div>
         </div>
+        <div className="section" ref={privacy}>
+          <div className="sec-head"><h3>Privacy</h3></div>
+          <div className="card"><UsageDataRow api={api} telemetry={telemetry} setError={setError} /></div>
+        </div>
+        </>}
+        {tab === "ai" && <>
         {openAI && (
           <div className="section">
             <div className="sec-head"><h3>AI connections</h3></div>
             <div className="card"><AISummaryRow api={api} tags={tags} open={openAI} /></div>
           </div>
         )}
-        <div className="section" ref={privacy}>
-          <div className="sec-head"><h3>Privacy</h3></div>
-          <div className="card"><UsageDataRow api={api} telemetry={telemetry} setError={setError} /></div>
+        <div className="section">
+          <div className="sec-head"><h3>Memory</h3></div>
+          <div className="card"><MemoryRow api={api} setError={setError} /></div>
         </div>
         </>}
         {tab === "updates" && <div className="section">
@@ -283,7 +288,7 @@ export function Settings({ api, info, tags, telemetry, close, replay, initialTab
             <div className="txt"><span className="label" style={{ fontSize: 14.5 }}>Enjoying Tag?</span><CommunityLinks api={api} /></div>
           </div>
         </div>}
-        {tab !== "general" && <RiverFoot api={api} />}
+        {tab !== "general" && tab !== "ai" && <RiverFoot api={api} />}
         </div>
         {(error || update.error || tags.error) && <ErrorLine>{error || update.error || tags.error}</ErrorLine>}
       </div>
@@ -345,35 +350,29 @@ export function MemoryRow({ api, setError }: { api: Bridge; setError: (message: 
   </>;
 }
 
-/** How memory computes search embeddings: pick a provider, its model, a key if it needs one, then switch. */
+/** How memory computes search embeddings: the built-in Default, or an endpoint you name. */
 export function SearchModelRow({ api, embedding, setError, changed }: {
   api: Bridge; embedding: NonNullable<MemoryStatus["embedding"]>; setError: (message: string) => void; changed: () => void;
 }) {
+  const custom = embedding.choices.find((c) => c.custom);
   const [picked, setPicked] = useState(embedding.current);
-  const [model, setModel] = useState("");
   const [url, setUrl] = useState("");
+  const [model, setModel] = useState("");
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
+  // Start from what is configured, so changing one field is a small edit, not a retype.
+  const reset = (id: string) => { setPicked(id); setKey(""); setUrl(custom?.baseUrl ?? ""); setModel(custom?.model ?? ""); };
+  useEffect(() => reset(embedding.current), [embedding.current, custom?.baseUrl, custom?.model]);
   const choice = embedding.choices.find((c) => c.id === picked);
-  const inUse = embedding.choices.find((c) => c.id === embedding.current);
-  // Start from what is configured when the provider is the one in use, else from its first model.
-  const reset = (id: string) => {
-    const next = embedding.choices.find((c) => c.id === id);
-    setPicked(id);
-    setKey("");
-    setModel(next?.model || next?.models[0]?.id || "");
-    setUrl(next?.baseUrl ?? "");
-  };
-  useEffect(() => reset(embedding.current), [embedding.current, inUse?.model, inUse?.baseUrl]);
   if (!choice) return null;
-  const switching = picked !== embedding.current || (choice.hosted && (model !== choice.model || url !== choice.baseUrl) && !!choice.model);
-  const needsKey = choice.hosted && !choice.keySaved && !choice.keyOptional;
-  const missing = (needsKey && !key.trim()) || (choice.needsUrl && (!url.trim() || !model.trim()));
+  const switching = picked !== embedding.current
+    || (choice.custom && (url !== choice.baseUrl || model !== choice.model || key.trim() !== ""));
+  const missing = choice.custom && (!url.trim() || !model.trim());
   const apply = async () => {
     setBusy(true);
     setError("");
-    const result = await setEmbedding(api, picked, key.trim(), { model: choice.hosted ? model.trim() : "", baseUrl: choice.needsUrl ? url.trim() : "" });
+    const result = await setEmbedding(api, choice.custom ? "custom" : "local", key.trim(), { model: model.trim(), baseUrl: url.trim() });
     setBusy(false);
     if (!result.ok) { setError(result.error); reset(embedding.current); return; }
     setNote(result.reindexing ? "Memory is indexing your Slack channels again; search is partial until it finishes." : result.note);
@@ -382,7 +381,7 @@ export function SearchModelRow({ api, embedding, setError, changed }: {
   return <>
     <div className="r set model-head" style={{ padding: "13px 14px 6px" }}>
       <div className="txt"><span className="label" style={{ fontSize: 14.5 }}>Search model</span>
-        <span className="sub wrap">{embedding.problem || note || "How memory turns text into searchable vectors."}</span></div>
+        <span className="sub wrap">{note || "How memory turns text into searchable vectors."}</span></div>
     </div>
     <div className="model-choices" role="radiogroup" aria-label="Search model">
       {embedding.choices.map((c) => (
@@ -390,28 +389,23 @@ export function SearchModelRow({ api, embedding, setError, changed }: {
           aria-label={c.label} disabled={busy} onClick={() => reset(c.id)}>
           <span className="radio-dot" aria-hidden="true" />
           <span className="txt"><span className="label">{c.label}{c.id === embedding.current && <i className="chip-now">In use</i>}</span>
-            <span className="sub wrap">{c.detail}</span></span>
+            <span className="sub wrap">{c.id === embedding.current && c.custom && c.model ? `${c.model} at ${c.baseUrl}` : c.detail}</span></span>
         </button>
       ))}
     </div>
-    {switching && (
+    {(choice.custom || switching) && (
       <div className="model-edit">
-        {choice.needsUrl && <input className="field mono" value={url} placeholder="Endpoint address, such as http://localhost:11434/v1"
+        {choice.custom && <input className="field mono" value={url} placeholder="Address, such as https://api.openai.com/v1 or http://localhost:11434/v1"
           aria-label="Endpoint address" spellCheck={false} disabled={busy} onChange={(e) => setUrl(e.target.value)} />}
-        {choice.needsUrl && <input className="field mono" value={model} placeholder="Embedding model name"
+        {choice.custom && <input className="field mono" value={model} placeholder="Embedding model name, such as text-embedding-3-small"
           aria-label="Model name" spellCheck={false} disabled={busy} onChange={(e) => setModel(e.target.value)} />}
-        {choice.models.length > 0 && (
-          <select className="field" value={model} aria-label={`${choice.label} model`} disabled={busy} onChange={(e) => setModel(e.target.value)}>
-            {choice.models.map((m) => <option key={m.id} value={m.id}>{m.id} · {m.dim} dimensions</option>)}
-          </select>
-        )}
-        {choice.hosted && (needsKey || choice.keyOptional) && <input className="field mono" type="password" value={key}
-          placeholder={choice.keyOptional ? "API key (optional)" : `Paste your ${choice.label} key`}
-          aria-label={choice.keyOptional ? `${choice.label} API key (optional)` : `${choice.label} API key`}
+        {choice.custom && <input className="field mono" type="password" value={key}
+          placeholder={choice.keySaved ? "API key (saved; paste to replace)" : "API key (optional)"} aria-label="API key (optional)"
           autoComplete="new-password" spellCheck={false} disabled={busy} onChange={(e) => setKey(e.target.value)} />}
-        <p>{choice.hosted && !choice.needsUrl ? `${choice.label} receives the text of indexed messages. ` : ""}Memory indexes your Slack channels again with
-          the new model, so search is partial until it finishes. You can switch back; the old index is kept.</p>
-        <Primary small title={busy ? "Switching…" : `Switch to ${choice.label}`} disabled={busy || missing} onClick={() => void apply()} />
+        <p>{choice.custom ? "Tag tries the endpoint before saving, so a wrong address, model or key changes nothing. " : ""}Memory then indexes your Slack channels
+          again with the new model, so search is partial until it finishes. You can switch back; the old index is kept.</p>
+        <Primary small title={busy ? "Switching…" : picked === embedding.current ? "Save changes" : `Switch to ${choice.label}`}
+          disabled={busy || missing || !switching} onClick={() => void apply()} />
       </div>
     )}
   </>;

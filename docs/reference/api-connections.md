@@ -24,7 +24,7 @@ restarts the Tag if it's running, and every request uses that model.
 ## Use a plan you already have
 
 Sign in with your ChatGPT plan (for Codex) or your Claude plan (for Claude Code)
-in **Settings** → **General** → **AI connections**, or with `tag settings ai`
+in **Settings** → **AI** → **AI connections**, or with `tag settings ai`
 in the terminal. All your Tags share these sign-ins. Choose **Check
 connections** to test them. If a sign-in has expired, choose **Reconnect**.
 
@@ -45,7 +45,7 @@ OpenAI or Anthropic API key.
 
 ### In the app
 
-1. Open **Settings → General → AI connections** and choose **Add your own API**
+1. Open **Settings → AI → AI connections** and choose **Add your own API**
    (or **Add** next to **Your own API**).
 2. Choose the agent: **Codex** or **Claude**.
 3. Enter the base URL (leave it empty to use OpenAI or Anthropic directly), your

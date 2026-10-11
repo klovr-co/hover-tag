@@ -138,7 +138,7 @@ class TagLifecycleTests(unittest.TestCase):
             embedding = json.loads(output.getvalue())["embedding"]
             self.assertEqual({key: embedding[key] for key in ("provider", "model", "local")},
                              {"provider": configured, "model": "model-x", "local": local})
-            self.assertEqual([c["id"] for c in embedding["choices"]], ["onnx", "openai", "jina", "custom"])
+            self.assertEqual([c["id"] for c in embedding["choices"]], ["onnx", "custom"])
 
     def run_embedding(self, *words: str, stdin: str = "", running: bool = False, key_check=None):
         shared = self.root / "shared/mfs"
@@ -150,26 +150,35 @@ class TagLifecycleTests(unittest.TestCase):
                 patch.object(tag_cli, "stop_process") as stop, \
                 patch.object(tag_cli, "ensure_shared_memory") as ensure, \
                 patch.object(tag_cli, "sync_configured_slack_memory") as sync, \
-                patch.object(tag_cli.tag_embedding, "probe", key_check or (lambda *args: None)), \
+                patch.object(tag_cli.tag_embedding, "probe", key_check or (lambda *args: 768)), \
                 redirect_stdout(StringIO()) as output:
             code = tag_cli.main()
         return code, output.getvalue(), shared, stop, ensure, sync
 
-    def test_memory_embedding_openai_saves_the_choice_without_printing_the_key(self) -> None:
+    ARGS = ("custom", "--base-url", "https://api.example.invalid/v1", "--embedding-model", "embed-x")
+
+    def test_memory_embedding_custom_saves_the_choice_without_printing_the_key(self) -> None:
         code, output, shared, stop, ensure, sync = self.run_embedding(
-            "openai", "--stdin", stdin='{"api_key": "sk-test-synthetic"}\n')
+            *self.ARGS, "--stdin", stdin='{"api_key": "sk-test-synthetic"}\n')
         self.assertEqual(code, 0)
         self.assertNotIn("sk-test-synthetic", output)
-        self.assertEqual(json.loads(output)["embedding"]["provider"], "openai")
-        self.assertEqual(tag_cli.tag_embedding.saved_key(shared, "openai"), "sk-test-synthetic")
+        report = json.loads(output)["embedding"]
+        self.assertEqual((report["current"], report["provider"], report["model"]), ("custom", "openai", "embed-x"))
+        self.assertEqual(tag_cli.tag_embedding.saved_key(shared), "sk-test-synthetic")
         # Memory wasn't running: nothing to restart, but the next start must re-index.
         stop.assert_not_called()
         sync.assert_not_called()
         self.assertTrue(tag_cli.tag_embedding.reindex_pending(shared))
 
+    def test_memory_embedding_custom_needs_no_key_and_no_stdin(self) -> None:
+        code, output, shared, *_ = self.run_embedding(*self.ARGS)
+        self.assertEqual(code, 0)
+        self.assertIsNone(tag_cli.tag_embedding.saved_key(shared))
+        self.assertEqual(tag_cli.tag_embedding.choice(shared)["base_url"], "https://api.example.invalid/v1")
+        self.assertEqual(tag_cli.tag_embedding.choice(shared)["dim"], 768)
+
     def test_memory_embedding_restarts_running_memory_and_reindexes(self) -> None:
-        code, output, shared, stop, ensure, sync = self.run_embedding(
-            "openai", "--stdin", stdin="sk-test-synthetic\n", running=True)
+        code, output, shared, stop, ensure, sync = self.run_embedding(*self.ARGS, running=True)
         self.assertEqual(code, 0)
         stop.assert_called_once()
         ensure.assert_called_once()
@@ -178,41 +187,28 @@ class TagLifecycleTests(unittest.TestCase):
         self.assertFalse(tag_cli.tag_embedding.reindex_pending(shared))
         self.assertTrue(json.loads(output)["reindexing"])
 
-    def test_memory_embedding_can_choose_jina(self) -> None:
-        code, output, shared, *_ = self.run_embedding("jina", "--stdin", stdin="jina_synthetic\n")
-        self.assertEqual(code, 0)
-        self.assertEqual(json.loads(output)["embedding"]["current"], "jina")
-        self.assertEqual(tag_cli.tag_embedding.server_environment(shared)["JINA_API_KEY"], "jina_synthetic")
-
-    def test_memory_embedding_can_choose_a_model_and_a_custom_endpoint(self) -> None:
-        code, output, shared, *_ = self.run_embedding("openai", "--embedding-model", "text-embedding-3-large",
-                                                      "--stdin", stdin="sk-test-synthetic\n")
-        self.assertEqual(tag_cli.tag_embedding.choice(shared)["model"], "text-embedding-3-large")
-        code, output, shared, *_ = self.run_embedding(
-            "custom", "--base-url", "http://localhost:11434/v1", "--embedding-model", "nomic-embed-text",
-            key_check=lambda *args: 768)
-        self.assertEqual(code, 0)
-        self.assertEqual(tag_cli.tag_embedding.choice(shared)["dim"], 768)
-        self.assertEqual(tag_cli.tag_embedding.server_environment(shared)["OPENAI_BASE_URL"], "http://localhost:11434/v1")
-
-    def test_memory_embedding_rejected_key_changes_nothing(self) -> None:
+    def test_memory_embedding_rejected_endpoint_changes_nothing(self) -> None:
         def reject(*_args):
-            raise ValueError("OpenAI rejected that key.")
+            raise ValueError("api.example.invalid rejected that key.")
         with self.assertRaisesRegex(ValueError, "rejected"):
-            self.run_embedding("openai", "--stdin", stdin="sk-test-synthetic\n", key_check=reject)
+            self.run_embedding(*self.ARGS, "--stdin", stdin="sk-test-synthetic\n", key_check=reject)
         self.assertIsNone(tag_cli.tag_embedding.managed_config(self.root / "shared/mfs"))
 
+    def test_memory_embedding_refuses_unknown_choices_such_as_the_removed_presets(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "Choose local or custom"):
+            self.run_embedding("openai", "--stdin", stdin="sk-test-synthetic\n")
+
     def test_memory_embedding_local_switches_back_and_reindexes_again(self) -> None:
-        self.run_embedding("openai", "--stdin", stdin="sk-test-synthetic\n")
+        self.run_embedding(*self.ARGS, "--stdin", stdin="sk-test-synthetic\n")
         code, output, shared, stop, ensure, sync = self.run_embedding("local", running=True)
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(output)["embedding"]["local"], True)
-        self.assertNotIn("OPENAI_API_KEY", tag_cli.tag_embedding.server_environment(shared))
+        self.assertNotIn("OPENAI_BASE_URL", tag_cli.tag_embedding.server_environment(shared))
         sync.assert_called_once()
 
     def test_memory_start_gives_mfs_the_chosen_provider(self) -> None:
         shared = self.root / "shared/mfs"
-        tag_cli.tag_embedding.set_hosted(shared, "openai", "sk-test-synthetic")
+        tag_cli.tag_embedding.set_custom(shared, "sk-test-synthetic", model="embed-x", base_url="https://api.example.invalid/v1", verify=lambda *a: 768)
         context = tag_instances.resolve(self.root)
         with patch.object(tag_cli, "healthy", return_value=False), \
                 patch.object(tag_cli, "mfs_server_executable", return_value="mfs-server"), \
@@ -224,6 +220,7 @@ class TagLifecycleTests(unittest.TestCase):
                 tag_cli.ensure_shared_memory(context, {"OPENTAG_MFS_STARTUP_ATTEMPTS": "1"})
         environment = start.call_args.kwargs["environment"]
         self.assertEqual(environment["OPENAI_API_KEY"], "sk-test-synthetic")
+        self.assertEqual(environment["OPENAI_BASE_URL"], "https://api.example.invalid/v1")
         self.assertEqual(environment["MFS_SERVER_CONFIG"], str(shared / "server.toml"))
 
     def test_memory_start_uses_saved_mfs_settings_before_onboarding_completes(self) -> None:

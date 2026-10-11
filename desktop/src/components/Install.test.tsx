@@ -51,29 +51,29 @@ it("tells people the install needs about 1.8 GB, as measured", () => {
   expect(screen.queryByText("650 MB")).toBeNull();
 });
 
-it("lets people skip the built-in search model and give a hosted provider key", () => {
+it("lets people skip the built-in search model and name their own", () => {
   const install = vi.fn();
   render(<Welcome api={demoBridge()} platform="macos" install={install} />);
-  const toggle = screen.getByRole("switch", { name: "Use a hosted search model" });
+  const toggle = screen.getByRole("switch", { name: "Use my own search model" });
   expect(toggle.getAttribute("aria-checked")).toBe("false");
-  expect(screen.queryByLabelText("OpenAI API key")).toBeNull();
+  expect(screen.queryByLabelText("Endpoint address")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Install Tag" }));
-  expect(install).toHaveBeenLastCalledWith({ hostedMemory: false, provider: "openai", apiKey: "" });
+  expect(install).toHaveBeenLastCalledWith({ skipModel: false, baseUrl: "", model: "", apiKey: "" });
   fireEvent.click(toggle);
   expect(toggle.getAttribute("aria-checked")).toBe("true");
-  fireEvent.change(screen.getByLabelText("OpenAI API key"), { target: { value: " sk-synthetic " } });
+  fireEvent.change(screen.getByLabelText("Endpoint address"), { target: { value: " http://localhost:11434/v1 " } });
+  fireEvent.change(screen.getByLabelText("Model name"), { target: { value: "nomic-embed-text" } });
   fireEvent.click(screen.getByRole("button", { name: "Install Tag" }));
-  expect(install).toHaveBeenLastCalledWith({ hostedMemory: true, provider: "openai", apiKey: "sk-synthetic" });
-  fireEvent.click(screen.getByRole("radio", { name: "Jina" }));
-  fireEvent.change(screen.getByLabelText("Jina API key"), { target: { value: "jina-synthetic" } });
+  expect(install).toHaveBeenLastCalledWith({ skipModel: true, baseUrl: "http://localhost:11434/v1", model: "nomic-embed-text", apiKey: "" });
+  fireEvent.change(screen.getByLabelText("API key (optional)"), { target: { value: " sk-synthetic " } });
   fireEvent.click(screen.getByRole("button", { name: "Install Tag" }));
-  expect(install).toHaveBeenLastCalledWith({ hostedMemory: true, provider: "jina", apiKey: "jina-synthetic" });
+  expect(install).toHaveBeenLastCalledWith({ skipModel: true, baseUrl: "http://localhost:11434/v1", model: "nomic-embed-text", apiKey: "sk-synthetic" });
 });
 
-it("passes the hosted search model choice to the installer", async () => {
+it("tells the installer to skip the built-in model download", async () => {
   const api = demoBridge();
   const install = vi.spyOn(api, "install");
-  render(<Installing api={api} hostedMemory done={vi.fn()} retry={vi.fn()} cancel={vi.fn()} />);
+  render(<Installing api={api} skipModel done={vi.fn()} retry={vi.fn()} cancel={vi.fn()} />);
   await vi.waitFor(() => expect(install).toHaveBeenCalled());
-  expect(install.mock.calls[0][3]).toEqual({ hostedMemory: true });
+  expect(install.mock.calls[0][3]).toEqual({ skipMemoryModel: true });
 });

@@ -614,7 +614,7 @@ def install(
         )
     lock = home / "state/install.lock"
     install_lock = LifecycleLock(lock).acquire()
-    hosted_memory = os.environ.get("TAG_SKIP_MFS_MODEL", "").strip().lower() in {"1", "true", "yes", "on"}
+    skip_memory_model = os.environ.get("TAG_SKIP_MFS_MODEL", "").strip().lower() in {"1", "true", "yes", "on"}
     try:
         version = (source / "VERSION").read_text(encoding="utf-8").strip()
         if selection is not None and selection.version != version:
@@ -666,15 +666,15 @@ def install(
             row("Runtime", f"Python {sys.version_info.major}.{sys.version_info.minor} · dependencies ready")
             progress("memory")
             paragraph(
-                "Skipping the built-in search model (using a hosted one)…" if hosted_memory
-                else "Preparing the memory model (skipped for hosted providers)…",
+                "Skipping the built-in search model (using a custom one)…" if skip_memory_model
+                else "Preparing the memory model (skipped for a custom search model)…",
                 MUTED, indent="    ",
             )
             install_step(
                 [str(python), str(release / "scripts/preload_mfs_model.py")],
                 "Preparing the MFS embedding model",
             )
-            row("Memory", "Hosted search model; built-in model not downloaded" if hosted_memory
+            row("Memory", "Custom search model; built-in model not downloaded" if skip_memory_model
                 else "Embedding model ready, or not needed for your provider")
             if tag_dependencies is not None:
                 tag_dependencies.ensure_slack(home)
@@ -770,9 +770,9 @@ raise SystemExit(subprocess.call([record["python"], str(release / "scripts/tag_c
         emit()
         paragraph("Next step", MUTED)
         paragraph("› tag setup", "1;" + ACCENT)
-        if hosted_memory:
-            paragraph("Then choose your hosted search model (openai or jina), and paste its key when asked:", MUTED)
-            paragraph("› tag memory embedding openai", "1;" + ACCENT)
+        if skip_memory_model:
+            paragraph("Then point memory at your search model, giving its address, model name and key:", MUTED)
+            paragraph("› tag memory embedding custom --base-url URL --embedding-model NAME", "1;" + ACCENT)
         paragraph("Already configured? Run tag stop, then tag start.", MUTED)
         paragraph(f"If needed, add {short_path(bin_dir)} to PATH.", MUTED)
         emit()
@@ -781,12 +781,12 @@ raise SystemExit(subprocess.call([record["python"], str(release / "scripts/tag_c
         install_lock.release()
 
 
-def ask_hosted_memory() -> bool:
+def ask_skip_memory_model() -> bool:
     """In a terminal, offer to skip the 560 MB built-in search model. Never asks the app, scripts, or a settled choice."""
     if (os.environ.get("TAG_SKIP_MFS_MODEL") or os.environ.get("TAG_INSTALL_PROGRESS")
             or not sys.stdin.isatty()):
         return False
-    answer = input("Use a hosted search model (OpenAI or Jina) instead of the built-in one (560 MB download)? [y/N] ")
+    answer = input("Use your own search model (OpenAI, Ollama, …) instead of the built-in one (560 MB download)? [y/N] ")
     return answer.strip().lower() in {"y", "yes"}
 
 
@@ -800,11 +800,11 @@ def main() -> int:
     parser.add_argument("--skip-dependencies", action="store_true", help="development/test installs only")
     parser.add_argument("--migrate-dependencies", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument(
-        "--hosted-memory", action="store_true",
-        help="skip the 560 MB built-in search-model download (you will use a hosted provider such as OpenAI or Jina)",
+        "--skip-memory-model", action="store_true",
+        help="skip the 560 MB built-in search-model download (you will point memory at your own, such as OpenAI or Ollama)",
     )
     args = parser.parse_args()
-    if args.hosted_memory or (not args.skip_dependencies and ask_hosted_memory()):
+    if args.skip_memory_model or (not args.skip_dependencies and ask_skip_memory_model()):
         os.environ["TAG_SKIP_MFS_MODEL"] = "1"  # read by preload_mfs_model.py in the memory step
     if args.source and (args.channel or args.version):
         parser.error("--source cannot be combined with --channel or --version")
