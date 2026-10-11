@@ -355,14 +355,19 @@ export function SearchModelRow({ api, embedding, setError, changed }: {
 }) {
   const custom = embedding.choices.find((c) => c.custom);
   const [picked, setPicked] = useState(embedding.current);
-  const [url, setUrl] = useState("");
-  const [model, setModel] = useState("");
+  const [url, setUrl] = useState(custom?.baseUrl ?? "");
+  const [model, setModel] = useState(custom?.model ?? "");
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
   // Start from what is configured, so changing one field is a small edit, not a retype.
   const reset = (id: string) => { setPicked(id); setKey(""); setUrl(custom?.baseUrl ?? ""); setModel(custom?.model ?? ""); };
-  useEffect(() => reset(embedding.current), [embedding.current, custom?.baseUrl, custom?.model]);
+  // The state above already starts from the configured choice; only a change of it resets the form.
+  const first = useRef(true);
+  useEffect(() => {
+    if (first.current) { first.current = false; return; }
+    reset(embedding.current);
+  }, [embedding.current, custom?.baseUrl, custom?.model]);
   const choice = embedding.choices.find((c) => c.id === picked);
   if (!choice) return null;
   const switching = picked !== embedding.current
