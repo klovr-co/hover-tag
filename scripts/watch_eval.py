@@ -23,6 +23,7 @@ from its output file.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -90,7 +91,8 @@ def load_cases(path: Path = FIXTURES) -> tuple[str, list[Case]]:
         if not isinstance(item["expected"], bool):
             raise ValueError(f"{case_id}: expected must be true, false or null")
         if isinstance(item.get("state"), dict):
-            cases.append(Case(case_id, item.get("category", "deployment"), item["expected"], {}, [], item["state"]))
+            cases.append(Case(case_id, item.get("category", "deployment"), item["expected"], {}, [], item["state"],
+                              reachable=item.get("reachable", True) is True))
             continue
         if MENTION_RE.search(item["message"]):
             raise ValueError(f"{case_id}: a message with a member mention never reaches the classifier")
@@ -302,6 +304,107 @@ def export_log(log_path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     return fixture, rows
 
 
+PSEUDONYMS = ("Alex", "Sam", "Priya", "Jordan", "Mei", "Omar", "Lena", "Tomas", "Ana", "Kofi", "Ravi", "Noor")
+DERIVATIONS = ("tag-mention-to-name", "tag-mention-removed", "person-mention-to-name")
+CONFIDENCE = ("high", "medium", "low")
+_LINK_RE = re.compile(r"<(?:https?://|www\.)[^>]*>|https?://\S+|www\.\S+", re.I)
+_MAILTO_RE = re.compile(r"<mailto:[^>]*>", re.I)
+_EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+_PHONE_RE = re.compile(r"(?<![\w.])\+?\d[\d ()-]{6,}\d(?!\w|\.\d)")
+_MEMBER_ID_RE = re.compile(r"\b[UWB][A-Z0-9]{8,}\b")
+_CHANNEL_REF_RE = re.compile(r"<#[CG][A-Z0-9]+\|([^>]*)>")
+
+
+def scrub(text: str) -> str:
+    """Strip contact details and leftover IDs after identity minimization."""
+    text = _MAILTO_RE.sub("<email>", text)
+    text = _LINK_RE.sub("<link>", text)
+    text = _EMAIL_RE.sub("<email>", text)
+    text = _PHONE_RE.sub("<phone>", text)
+    text = _CHANNEL_REF_RE.sub(lambda m: "#" + (m.group(1) or "channel"), text)
+    return _MEMBER_ID_RE.sub("<member>", text)
+
+
+def _pseudonym(user_id: str) -> str:
+    return PSEUDONYMS[int(hashlib.sha256(user_id.encode()).hexdigest(), 16) % len(PSEUDONYMS)]
+
+
+def _derive(text: str, how: str | None, assistant_id: str, assistant_name: str) -> str:
+    mention = re.compile(r"<@([A-Z0-9]+)(?:\|[^>]*)?>")
+    if how in {"tag-mention-to-name", "tag-mention-removed"}:
+        replacement = assistant_name if how == "tag-mention-to-name" else ""
+        text = mention.sub(lambda m: replacement if m.group(1) == assistant_id else m.group(0), text)
+    if how == "person-mention-to-name" or how in {"tag-mention-to-name", "tag-mention-removed"}:
+        # Without mentions, people write names; use stable pseudonyms rather than real ones.
+        text = mention.sub(lambda m: m.group(0) if m.group(1) == assistant_id else _pseudonym(m.group(1)), text)
+    return re.sub(r"\s+", " ", text).strip(" ,")
+
+
+def real_case(item: dict[str, Any], allowed: frozenset[str]) -> dict[str, Any]:
+    """One minimized, scrubbed, labelled case from a real Slack message. Raises ValueError."""
+    channel = item.get("channel")
+    if channel not in allowed:
+        raise ValueError("channel is not on the allowed list")
+    assistant = item.get("assistant") or {}
+    assistant_id, assistant_name = assistant.get("user_id", ""), assistant.get("name", "")
+    requester, ts, how = item.get("requester", ""), item.get("ts", ""), item.get("derived")
+    if not (assistant_id and assistant_name and requester and ts):
+        raise ValueError("assistant, requester and ts are required")
+    if how is not None and how not in DERIVATIONS:
+        raise ValueError(f"derived must be one of {DERIVATIONS}")
+    if not isinstance(item.get("expected"), bool) or item.get("confidence") not in CONFIDENCE:
+        raise ValueError("expected (bool) and confidence (high, medium, low) are required")
+    message = _derive(str(item.get("message", "")), how, assistant_id, assistant_name)
+    if not message or "<@" in message:
+        raise ValueError("the message is empty or still mentions a member, so watching would never classify it")
+    bots = set(item.get("bots", [])) | {assistant_id}
+    history = []
+    for entry in item.get("history", [])[-watch_classifier.MAX_CONTEXT_MESSAGES:]:
+        user = entry.get("user", "")
+        history.append({"user": user, "text": str(entry.get("text", "")), "ts": "h",
+                        **({"bot_id": "B"} if user in bots and user != assistant_id else {})})
+    state = watch_classifier.message_state(
+        {"user": requester, "text": message, "ts": "current"}, history,
+        assistant_name=assistant_name, assistant_user_id=assistant_id)
+    state["current_message"] = scrub(state["current_message"])
+    for entry in state["thread_history"]:
+        entry["text"] = scrub(entry["text"])
+    names = channel_watch.watch_names({"OPENTAG_BOT_NAME": assistant_name})
+    reachable = channel_watch.names_tag(message, names) or any(e["author"] == "tag" for e in state["thread_history"])
+    return {
+        "id": "r-" + hashlib.sha256(f"{channel}|{ts}|{how}".encode()).hexdigest()[:12],
+        "category": str(item.get("category", "real")), "expected": item["expected"],
+        "confidence": item["confidence"], "borderline": bool(item.get("borderline")),
+        "derived": how, "channel": channel, "reachable": reachable,
+        "reason": scrub(str(item.get("reason", "")))[:200], "state": state,
+    }
+
+
+def import_real(items: list[dict[str, Any]], out: Path, allowed: frozenset[str]) -> tuple[int, list[str]]:
+    """Add cases to a private fixture file (dir 700, file 600), replacing same-ID cases."""
+    out.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    out.parent.chmod(0o700)
+    data = json.loads(out.read_text(encoding="utf-8")) if out.exists() else {
+        "schema_version": 1, "assistant_name": "Tag",
+        "description": "Real, minimized Slack cases. Private: never commit or share.", "cases": []}
+    by_id = {case["id"]: case for case in data["cases"]}
+    errors = []
+    for index, item in enumerate(items):
+        try:
+            case = real_case(item, allowed)
+        except (ValueError, TypeError, AttributeError) as exc:
+            errors.append(f"item {index}: {exc}")
+            continue
+        by_id[case["id"]] = case
+    data["cases"] = list(by_id.values())
+    descriptor = os.open(out.with_suffix(".tmp"), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        json.dump(data, handle, ensure_ascii=False, indent=1)
+    os.replace(out.with_suffix(".tmp"), out)
+    out.chmod(0o600)
+    return len(items) - len(errors), errors
+
+
 def recommend(expected: dict[str, bool], rows: list[dict[str, Any]], target: float) -> Metrics | None:
     """The lowest threshold meeting the precision target, which keeps the most recall."""
     for threshold in FINE_SWEEP:
@@ -384,8 +487,37 @@ def main(argv: list[str] | None = None) -> int:
     export_parser.add_argument("log", type=Path)
     export_parser.add_argument("--cases", type=Path, required=True)
     export_parser.add_argument("--scores", type=Path, required=True)
+    import_parser = commands.add_parser("import-real", help="Add real Slack cases from stdin JSON; no network.")
+    import_parser.add_argument("--out", type=Path, required=True)
+    import_parser.add_argument("--allowed", type=Path, required=True, help="File with one allowed channel ID per line.")
+    merge_parser = commands.add_parser("merge", help="Merge fixture files into one; no network.")
+    merge_parser.add_argument("--out", type=Path, required=True)
+    merge_parser.add_argument("inputs", type=Path, nargs="+")
     args = parser.parse_args(argv)
 
+    if args.command == "import-real":
+        allowed = frozenset(line.strip() for line in args.allowed.read_text(encoding="utf-8").splitlines() if line.strip())
+        items = json.load(sys.stdin)
+        added, errors = import_real(items if isinstance(items, list) else [items], args.out, allowed)
+        print(f"Imported {added} case(s); {len(errors)} rejected.", file=sys.stderr)
+        for error in errors:
+            print("  " + error, file=sys.stderr)
+        return 0 if not errors else 1
+    if args.command == "merge":
+        merged: dict[str, Any] = {}
+        for path in args.inputs:
+            for case in json.loads(path.read_text(encoding="utf-8"))["cases"]:
+                merged[case["id"]] = case
+        allowed = frozenset(case["channel"] for case in merged.values())
+        out = {"schema_version": 1, "assistant_name": "Tag",
+               "description": "Real, minimized Slack cases. Private: never commit or share.",
+               "cases": list(merged.values())}
+        args.out.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        descriptor = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(out, handle, ensure_ascii=False, indent=1)
+        print(f"Merged {len(merged)} cases from {len(allowed)} channel(s).", file=sys.stderr)
+        return 0
     if args.command == "export":
         fixture, rows = export_log(args.log)
         for path in (args.cases, args.scores):

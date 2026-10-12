@@ -162,6 +162,66 @@ class DeploymentTuningTests(unittest.TestCase):
         self.assertIn(f"Recommended threshold for precision ≥ 0.95: {best.threshold:.2f}", out.getvalue())
 
 
+class RealCaseImportTests(unittest.TestCase):
+    ALLOWED = frozenset({"CALLOWED"})
+
+    def item(self, **changes) -> dict:
+        return {"channel": "CALLOWED", "ts": "100.1", "requester": "UOWNER", "bots": ["UOTHERBOT"],
+                "assistant": {"user_id": "UPA", "name": "Owner's PA"},
+                "history": [{"user": "UOWNER", "text": "<@UPA|Owner's PA> check <https://x.test/a|the dashboard>"},
+                            {"user": "UPA", "text": "Done. Mail ops@example.com or call +1 (555) 010-9999."},
+                            {"user": "UOTHERBOT", "text": "Build UABCDEFGH12 passed"}],
+                "message": "thanks, now filter out me", "expected": True, "confidence": "high",
+                "category": "continuation", "reason": "continues the exchange"} | changes
+
+    def test_minimizes_and_scrubs_before_storing(self) -> None:
+        case = harness.real_case(self.item(), self.ALLOWED)
+        stored = json.dumps(case)
+        for secret in ("UOWNER", "UPA", "UOTHERBOT", "UABCDEFGH12", "x.test", "example.com", "555", "100.1"):
+            self.assertNotIn(secret, stored)
+        history = case["state"]["thread_history"]
+        self.assertEqual(["requester", "tag", "another_bot"], [h["author"] for h in history])
+        self.assertEqual("<tag> check <link>", history[0]["text"])
+        self.assertEqual("Done. Mail <email> or call <phone>.", history[1]["text"])
+        self.assertTrue(case["reachable"])
+        self.assertTrue(case["id"].startswith("r-"))
+
+    def test_rejects_other_channels_mentions_and_missing_labels(self) -> None:
+        for changes in ({"channel": "CSECRET"}, {"message": "<@UPA> hi"}, {"message": "<@USAM> hi"},
+                        {"confidence": "sure"}, {"expected": "yes"}, {"derived": "invented"}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                harness.real_case(self.item(**changes), self.ALLOWED)
+
+    def test_derivations_turn_mentions_into_names_or_pseudonyms(self) -> None:
+        named = harness.real_case(self.item(message="<@UPA|Owner's PA> what do you think?",
+                                            derived="tag-mention-to-name", history=[]), self.ALLOWED)
+        self.assertEqual("Owner's PA what do you think?", named["state"]["current_message"])
+        self.assertTrue(named["reachable"])
+        bare = harness.real_case(self.item(message="<@UPA> can u filter out me", derived="tag-mention-removed"),
+                                 self.ALLOWED)
+        self.assertEqual("can u filter out me", bare["state"]["current_message"])
+        person = harness.real_case(self.item(message="<@USAM|Real Name> do you want to rename it?",
+                                             derived="person-mention-to-name", history=[]), self.ALLOWED)
+        self.assertNotIn("Real Name", json.dumps(person))
+        self.assertIn(person["state"]["current_message"].split(" ")[0], harness.PSEUDONYMS)
+        self.assertFalse(person["reachable"])
+        self.assertNotEqual(named["id"], harness.real_case(self.item(message="<@UPA> what do you think?",
+                            derived="tag-mention-removed", history=[]), self.ALLOWED)["id"])
+
+    def test_import_writes_private_files_and_loads_as_fixtures(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            out = Path(directory) / "real/cases-a.json"
+            added, errors = harness.import_real([self.item(), self.item(channel="CSECRET")], out, self.ALLOWED)
+            self.assertEqual((1, 1), (added, len(errors)))
+            harness.import_real([self.item(expected=False)], out, self.ALLOWED)  # Same ID replaces.
+            self.assertEqual(0o700, out.parent.stat().st_mode & 0o777)
+            self.assertEqual(0o600, out.stat().st_mode & 0o777)
+            _, cases = harness.load_cases(out)
+            self.assertEqual(1, len(cases))
+            self.assertFalse(cases[0].expected)
+            self.assertTrue(cases[0].reachable)
+
+
 class PaidRunGuardTests(unittest.TestCase):
     def run_score(self, scorer, *, max_usd: float = 1.0, out_path: Path, cases=None) -> float:
         name, all_cases = harness.load_cases()
