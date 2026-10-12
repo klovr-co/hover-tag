@@ -152,6 +152,70 @@ begin with `tag inspect --json` to inspect what is already configured.
 Slack runtime agents load the runtime contract; Tag does not bundle an admin
 skill into their workspace.
 
+## Chief of Staff
+
+One Tag per installation is Chief of Staff
+([ADR 0010](../adr/0010-chief-of-staff.md)). Mention it with new, unclear or
+cross-lane work. It routes each request to one owner Tag, which answers in the
+same thread itself. It is the only Tag that creates Tags, and a person
+approves each one in Slack. Upgrading gives the role to the main Tag; it never
+renames a Slack app.
+
+```sh
+tag chief-of-staff                    # Who holds the role, and the service account
+tag research chief-of-staff set       # Move the role to another Tag
+tag chief-of-staff sign-in            # Once: sign the service account in to Slack
+```
+
+`tag list` marks the Tag with ★ Chief of Staff, and Tag.app's Details shows
+the same role with **Make Chief of Staff**. A Tag's agent can't run these
+commands, or `tag add`, `setup`, `reset`, `remove` or `abandon`, from inside a
+request.
+
+### The service account
+
+Tags that Chief of Staff creates belong to a service account, not one person.
+The service account signs in to its own Slack CLI folder, so your own Slack
+CLI sign-in (`~/.slack`), which other scripts may depend on, is never
+replaced:
+
+1. Create the service account in the workspace and finish joining it.
+2. Run `tag chief-of-staff sign-in` in a terminal. It runs
+   `slack auth login --config-dir <TAG_HOME>/shared/slack/service-account`.
+   Paste the `/slackauthticket` line in Slack while signed in as the service
+   account, then enter the code. Tag saves the sign-in as
+   `OPENTAG_CHIEF_SLACK_SIGN_IN` on Chief of Staff.
+3. To keep the folder elsewhere, for example in a sandbox, first set
+   `tag NAME config set OPENTAG_CHIEF_SLACK_CONFIG /absolute/folder`.
+
+To check the folder by hand, add `--config-dir` to any Slack CLI command, for
+example `slack auth list --config-dir <folder>`. Never run plain
+`slack login` as the service account: that replaces your own default sign-in.
+
+Each created Tag keeps the folder in `OPENTAG_SLACK_CLI_CONFIG`, so renames,
+manifest updates and `tag NAME remove --delete-app` use the same account. The
+new Tag's owners are Chief of Staff's owners, not the service account.
+
+**Fallback.** Without the service account's sign-in, Tag can create the app
+with an app configuration token from api.slack.com/apps. Save the token and
+its refresh token with
+`printf '%s\n%s\n' TOKEN REFRESH | tag chief-of-staff config-token --stdin`.
+Tag renews the token before each use. A person then installs the app from the
+link Chief of Staff posts and adds its app-level token in Tag.app or with
+`tag NAME setup`. Tokens never go in Slack.
+
+### Limits
+
+- `OPENTAG_CHIEF_MAX_TAGS` caps the Tags in the installation (default 10, the
+  number of apps a free Slack workspace allows).
+- One proposal is open at a time.
+- A new Tag uses Chief of Staff's model unless the proposal names another.
+- A new Tag joins only channels Chief of Staff is in.
+- A proposal expires after 60 minutes.
+- A proposal must name a real boundary: credentials, memory, parallel work,
+  identity, or a different owner or runtime. Otherwise Chief of Staff uses a
+  skill or a subagent.
+
 ## Removing a Tag in detail
 
 Remove stops the Tag, removes its Slack history from memory, and moves its

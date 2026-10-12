@@ -39,6 +39,9 @@ it shows is listed in `capabilities`; otherwise it offers to upgrade Tag.
 | `logs-activity` | `activity` in `tag NAME logs --json` |
 | `activity-details` | `tag NAME logs --activity RUN_ID --json` |
 | `telemetry-events` | `tag telemetry record EVENT FIELD=VALUE...`, `available` in `tag telemetry status\|on\|off --json`; see [Usage data](#usage-data) |
+| `chief-of-staff` | `tag chief-of-staff [status] --json`, `tag NAME chief-of-staff set --json`; `chief_of_staff` and `created_by_chief` in `tag list`. See [Chief of Staff](#chief-of-staff) |
+| `setup-preset` | `tag add --json --preset FILE`: a JSON object of the new Tag's first settings (`OPENTAG_BOT_NAME`, `OPENTAG_BOT_DESCRIPTION`, `OPENTAG_DEFAULT_MODEL`, `OPENTAG_DEFAULT_EFFORT`, `SLACK_ALLOWED_USER_IDS`, `OPENTAG_SLACK_CLI_CONFIG`); setup skips the questions they answer. Tokens are refused |
+| `setup-tag-event` | `tag add --json` first prints `{"type": "tag", "tag": ID}`, so a client can resume the new Tag if setup stops |
 | `setup-v2` | Setup order Your Tag → AI → Workspace → Create → Channels; `profile`, `org_workspace`, `existing_app`, and `app_checks` questions; `recap`; creation `progress`; `ready` in the result |
 
 ## Tags
@@ -46,7 +49,8 @@ it shows is listed in `capabilities`; otherwise it offers to upgrade Tag.
 `tag list --json` returns `tags`, one object per Tag with `id`, `valid`,
 `state`, `slack_workspace`, `workspace_name`, `workspace_icon`, `slack_name`,
 `slack_app_id`, `has_app`, `nickname`, `avatar`, `keep_running`, `main`, `description`, `default_model`,
-`default_model_label`, `default_model_name`, `default_effort`, and `channels`. `state` is
+`default_model_label`, `default_model_name`, `default_effort`, `channels`,
+`chief_of_staff`, and `created_by_chief`. `state` is
 `running`, `stopped`, `not_configured`, `setup_incomplete`, `needs_attention`,
 `invalid_configuration`, or `invalid_tag`; treat unknown states as needing
 attention.
@@ -211,6 +215,18 @@ has `status` and, when it failed, `error`. See
 `protocol/examples/start-progress.jsonl`. Two different Tags can start at the
 same time; a second start of the same Tag waits up to 90 seconds for the first. Starting records that the Tag should keep running; stopping
 records that it should stay off (see [Keeping Tags running](cli-operations.md#keeping-tags-running)).
+
+## Chief of Staff
+
+`tag chief-of-staff --json` returns `chief_of_staff` (a Tag ID or `null`),
+`role`, `tags` (`id`, `slack_name`, `chief_of_staff`, `created_by_chief`),
+`max_tags`, and `service_account` (`sign_in`, `config_dir`, `ready`).
+`tag NAME chief-of-staff set --json` moves the role and returns the same
+report. Exactly one Tag holds it. Running Tags pick up the change without a
+restart. In `tag list`, `chief_of_staff` marks that Tag and `created_by_chief`
+marks Tags it created. Clients show the role and offer to move it. They don't
+create Tags themselves; Chief of Staff does that in Slack, after a person
+approves.
 
 ## Setup
 

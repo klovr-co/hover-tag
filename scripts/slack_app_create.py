@@ -11,6 +11,10 @@ import subprocess
 import sys
 
 try:
+    from slack_cli_config import flags as slack_cli_flags
+except ImportError:
+    from scripts.slack_cli_config import flags as slack_cli_flags
+try:
     import slack_identity
     import setup_ui as ui
     import tag_config as settings
@@ -90,7 +94,8 @@ def is_tag_manifest_hook(hooks: dict) -> bool:
     )
 
 
-def prepare_project(project: Path, name: str, *, enterprise: bool = False, description: str = "") -> dict:
+def manifest_for(name: str, *, enterprise: bool = False, description: str = "") -> dict:
+    """Tag's Slack app manifest for one Tag's name and description."""
     import yaml
 
     manifest = yaml.safe_load((ROOT / "slack-app-manifest.yaml").read_text(encoding="utf-8"))
@@ -103,6 +108,11 @@ def prepare_project(project: Path, name: str, *, enterprise: bool = False, descr
     if description.strip():
         manifest["display_information"]["description"] = description.strip()
         manifest["features"]["agent_view"]["agent_description"] = description.strip()
+    return manifest
+
+
+def prepare_project(project: Path, name: str, *, enterprise: bool = False, description: str = "") -> dict:
+    manifest = manifest_for(name, enterprise=enterprise, description=description)
     # Remote source prevents subsequent installations from overwriting app settings.
     config = read_object(project / ".slack/config.json")
     if config.get("manifest", {}).get("source") != "remote":
@@ -127,7 +137,7 @@ def is_installed(project: Path, team_id: str, app_id: str) -> bool:
     try:
         result = subprocess.run(
             [shutil.which("slack") or "slack", "app", "list", "--team", team_id,
-             "--app", app_id, "--skip-update", "--no-color"],
+             "--app", app_id, "--skip-update", "--no-color", *slack_cli_flags()],
             cwd=project, check=False, text=True, capture_output=True, timeout=30,
         )
     except (OSError, subprocess.TimeoutExpired):
