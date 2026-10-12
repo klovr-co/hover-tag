@@ -167,6 +167,8 @@ class ClaudeEventMapper:
         self.completed = False
         self.reported_model: str | None = None
         self.background_tasks: set[str] = set()
+        # True between a deferred result and the follow-up turn background agents wake.
+        self.awaiting_background = False
         self.session_id: str | None = None
 
     @property
@@ -175,6 +177,8 @@ class ClaudeEventMapper:
 
     def map(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         kind = payload.get("kind")
+        if kind in {"StreamEvent", "AssistantMessage"} and payload.get("parent_tool_use_id") is None:
+            self.awaiting_background = False
         if kind == "StreamEvent":
             return self._stream_event(payload)
         if kind == "AssistantMessage":
@@ -359,12 +363,10 @@ class ClaudeEventMapper:
         interrupted = isinstance(terminal_reason, str) and terminal_reason.startswith("aborted")
         if self.background_tasks and not payload.get("is_error") and not interrupted:
             # Background agents will wake Claude for another turn; keep reading.
+            self.awaiting_background = True
             return events
         self.completed = True
-        for tool_use_id, (label, _item) in list(self.tools.items()):
-            events.append({"type": "activity_complete", "activity_id": tool_use_id, "label": label,
-                           "status": "interrupted", "details": {}})
-        self.tools.clear()
+        events.extend(self._close_tools())
         if payload.get("is_error") and not interrupted:
             errors = payload.get("errors")
             detail = payload.get("result") if isinstance(payload.get("result"), str) else ""
@@ -390,6 +392,20 @@ class ClaudeEventMapper:
                 events.append({"type": "message_complete", "message_id": message_id,
                                "phase": "final_answer", "text": text})
         events.append({"type": "turn_complete", "status": "interrupted" if interrupted else "completed"})
+        return events
+
+    def interrupted(self) -> list[dict[str, Any]]:
+        """End a stopped request that Claude will not report a result for."""
+        if self.completed:
+            return []
+        self.completed = True
+        return [*self._close_tools(), {"type": "turn_complete", "status": "interrupted"}]
+
+    def _close_tools(self) -> list[dict[str, Any]]:
+        events = [{"type": "activity_complete", "activity_id": tool_use_id, "label": label,
+                   "status": "interrupted", "details": {}}
+                  for tool_use_id, (label, _item) in self.tools.items()]
+        self.tools.clear()
         return events
 
 
@@ -808,6 +824,13 @@ class ClaudeAgentRun:
                     if self._control_requested():
                         await self.interrupt()
                         interrupt_deadline = min(interrupt_deadline, now + INTERRUPT_GRACE_SECONDS)
+                    # Between turns Claude has nothing to abort, so it never reports the
+                    # stop; and a stop it does not confirm must still end the request.
+                    # Closing the client then shuts the CLI and its background agents down.
+                    if self.interrupt_sent and (mapper.awaiting_background or now >= interrupt_deadline):
+                        for event in mapper.interrupted():
+                            emit(event)
+                        return "interrupted", ""
                     if self.pending_approvals or mapper.tools_running:
                         self.last_activity = now
                     if now >= max_deadline or now >= self.last_activity + self.timeout:

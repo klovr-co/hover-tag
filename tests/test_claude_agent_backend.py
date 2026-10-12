@@ -575,6 +575,44 @@ class ClaudeAgentRunTests(unittest.TestCase):
         self.assertEqual("interrupted", status)
         self.assertEqual("interrupted", events[-2]["status"])
 
+    def test_stop_while_background_agents_work_ends_the_request(self) -> None:
+        async def script(client):
+            yield TaskStartedMessage("a1")
+            yield ResultMessage(result="Agents are working.")
+            yield AssistantMessage([{"id": "t1", "name": "Bash", "input": {"command": "sleep 60"}}],
+                                   parent_tool_use_id="agent")
+            self.control.write_text("run1", encoding="utf-8")
+            await client.interrupted.wait()
+            # Between turns Claude has nothing to abort and reports no result.
+            await asyncio.sleep(30)
+            yield ResultMessage(result="late")
+
+        started = time.monotonic()
+        (status, _detail), events = self.run_agent(script)
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertEqual("interrupted", status)
+        self.assertEqual({"type": "activity_complete", "activity_id": "t1", "label": "Running a command…",
+                          "status": "interrupted", "details": {}}, events[-2])
+        self.assertEqual({"type": "turn_complete", "status": "interrupted"}, events[-1])
+        self.assertTrue(FakeClient.instances[0].disconnected)
+
+    def test_unconfirmed_stop_is_bounded(self) -> None:
+        async def script(client):
+            yield AssistantMessage([{"id": "t1", "name": "Bash", "input": {"command": "sleep 60"}}])
+            self.control.write_text("run1", encoding="utf-8")
+            await client.interrupted.wait()
+            await asyncio.sleep(30)
+            yield ResultMessage(is_error=True, terminal_reason="aborted_tools")
+
+        with patch.object(claude_agent_backend, "INTERRUPT_GRACE_SECONDS", 0.05), patch.object(
+            claude_agent_backend, "CONTROL_POLL_SECONDS", 0.01
+        ):
+            started = time.monotonic()
+            (status, _detail), events = self.run_agent(script)
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertEqual("interrupted", status)
+        self.assertEqual({"type": "turn_complete", "status": "interrupted"}, events[-1])
+
     def test_idle_timeout_interrupts_and_reports_timeout(self) -> None:
         async def script(client):
             await client.interrupted.wait()
