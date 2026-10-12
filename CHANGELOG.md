@@ -16,6 +16,15 @@ All notable changes to Tag are documented here.
   Tag now turns off Claude auto memory and Codex memories for its runs so that
   everything it remembers can be listed, corrected, and forgotten.
 
+### Changed
+
+- Choosing a model is now immediate. Tag saves each signed-in account's model
+  list once for all Tags instead of starting Codex and Claude every time setup
+  or the app lists models, and reads accounts without a saved list at the same
+  time instead of one after another. A list older than a day is updated in the
+  background, and signing in with another account drops its saved list. Run
+  `tag NAME settings ai models --refresh` to read the lists now.
+
 ## [0.3.0] - 2026-10-08
 
 The 0.3 line introduces **Tag** as a desktop app for macOS. The

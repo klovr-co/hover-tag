@@ -10,10 +10,12 @@ import tempfile
 import threading
 import unittest
 from contextlib import redirect_stdout
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from scripts import agent_models, setup_ui, tag_ai, tag_chatgpt, tag_config
+from scripts import agent_models, model_catalog, setup_ui, tag_ai, tag_chatgpt, tag_config
+from scripts.tag_locks import LifecycleLock
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = ROOT / "protocol/examples"
@@ -186,7 +188,7 @@ class ModelTests(Fixture):
 
     def catalog(self, values: dict[str, str], ready=("codex", "claude")) -> dict:
         found = {"codex": self.CODEX, "claude": self.CLAUDE}
-        with patch.object(tag_ai.agent_models, "discover_models", side_effect=lambda name: found[name]):
+        with patch.object(tag_ai.agent_models, "discover_models", side_effect=lambda name, fetch=None: found[name]):
             return tag_ai.models(self.home, values, list(ready))
 
     def test_groups_by_backend_with_each_account_default(self) -> None:
@@ -347,7 +349,7 @@ class ProtocolClient:
 class SetupStepTests(Fixture):
     def setUp(self) -> None:
         super().setUp()
-        self.discover = patch.object(tag_ai.agent_models, "discover_models", side_effect=lambda name: {
+        self.discover = patch.object(tag_ai.agent_models, "discover_models", side_effect=lambda name, fetch=None: {
             "codex": ModelTests.CODEX, "claude": ModelTests.CLAUDE}[name])
         self.discover.start()
         self.addCleanup(self.discover.stop)
@@ -557,7 +559,7 @@ class ThinkingLevelTests(Fixture):
     def setUp(self) -> None:
         super().setUp()
         self.machine()
-        self.discover = patch.object(tag_ai.agent_models, "discover_models", side_effect=lambda name: {
+        self.discover = patch.object(tag_ai.agent_models, "discover_models", side_effect=lambda name, fetch=None: {
             "codex": self.CODEX, "claude": self.CLAUDE}[name])
         self.discover.start()
         self.addCleanup(self.discover.stop)
@@ -683,6 +685,185 @@ class ThinkingLevelTests(Fixture):
         self.run_cli(["model", "codex:gpt-5.5-mini"])
         self.assertNotIn("OPENTAG_DEFAULT_EFFORT", self.saved())
         self.assertNotIn("OPENTAG_BOT_DESCRIPTION", self.saved())
+
+
+class SavedCatalogTests(Fixture):
+    """Each account's catalog is saved once for all Tags and offered without starting a backend."""
+
+    CODEX = [{"model": "gpt-5.5", "displayName": "GPT-5.5", "isDefault": True, "defaultReasoningEffort": "medium",
+              "supportedReasoningEfforts": [{"reasoningEffort": "low"}, {"reasoningEffort": "medium"}]}]
+    CLAUDE = [{"model": "claude-opus-5-5", "displayName": "Opus 5.5", "isDefault": True,
+               "supportedEfforts": ["low", "high"]}]
+    VALUES = {"OPENTAG_BACKEND": "codex"}
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.calls: list[str] = []
+        self.catalogs = {"codex": self.CODEX, "claude": self.CLAUDE}
+        for backend in ("codex", "claude"):
+            fetch = patch.object(agent_models, f"fetch_{backend}_model_catalog",
+                                 side_effect=lambda backend=backend: self.fetch(backend))
+            fetch.start()
+            self.addCleanup(fetch.stop)
+        self.sign_in_claude("account-1")
+
+    def fetch(self, backend: str) -> list[dict]:
+        self.calls.append(backend)
+        return self.catalogs[backend]
+
+    def sign_in_claude(self, account: str) -> None:
+        (self.root / "claude").mkdir(exist_ok=True)
+        (self.root / "claude/.claude.json").write_text(json.dumps(
+            {"oauthAccount": {"accountUuid": account, "emailAddress": "maya@example.com"}}), encoding="utf-8")
+
+    def models(self, values: dict[str, str] | None = None, **options) -> dict:
+        return tag_ai.models(self.home, values or self.VALUES, ["codex", "claude"], **options)
+
+    def values(self, result: dict) -> list[str]:
+        return [entry["value"] for group in result["groups"] for entry in group["models"]]
+
+    def test_without_a_saved_catalog_backends_are_read_at_once_and_saved(self) -> None:
+        both = threading.Barrier(2, timeout=5)
+
+        def fetch(backend: str) -> list[dict]:
+            both.wait()  # Breaks unless Codex and Claude are read at the same time.
+            self.calls.append(backend)
+            return self.catalogs[backend]
+
+        self.fetch = fetch
+        result = self.models()
+        self.assertEqual({"codex", "claude"}, set(self.calls))
+        self.assertEqual(["codex", "codex:gpt-5.5", "claude", "claude:claude-opus-5-5"], self.values(result))
+        self.assertEqual((False, None), (result["cached"], result["cached_at"]))
+        self.assertTrue(all(group["fetched_at"] and not group["cached"] for group in result["groups"]))
+        saved = json.loads((self.root / "shared/ai/models/claude.json").read_text(encoding="utf-8"))
+        self.assertEqual(self.CLAUDE, saved["catalog"])
+        self.assertNotIn("account-1", json.dumps(saved))  # Accounts are saved as one-way digests.
+
+    def test_a_saved_catalog_is_offered_without_reading_the_backend(self) -> None:
+        first = self.models()
+        self.calls.clear()
+        result = self.models({"OPENTAG_BACKEND": "claude"})
+        self.assertEqual([], self.calls)
+        self.assertEqual(self.values(first), sorted(self.values(result), key=self.values(first).index))
+        self.assertTrue(result["cached"])
+        self.assertEqual(first["groups"][0]["fetched_at"], result["groups"][1]["fetched_at"])
+        self.assertEqual(min(group["fetched_at"] for group in first["groups"]), result["cached_at"])
+        entries = {entry["value"]: entry for group in result["groups"] for entry in group["models"]}
+        self.assertEqual((["low", "medium"], "medium"), (entries["codex:gpt-5.5"]["efforts"],
+                                                          entries["codex:gpt-5.5"]["default_effort"]))
+
+    def test_each_tags_own_model_settings_apply_to_the_shared_catalog(self) -> None:
+        self.catalogs["codex"] = [*self.CODEX, {"model": "gpt-5.5-mini", "displayName": "GPT-5.5 mini"}]
+        self.models()
+        with patch.dict(os.environ, {"OPENTAG_CODEX_MODELS": "gpt-5.5-mini"}):
+            restricted = self.models()
+        self.assertNotIn("codex:gpt-5.5", self.values(restricted))
+        self.assertIn("codex:gpt-5.5", self.values(self.models()))
+        self.assertCountEqual(["codex", "claude"], self.calls)  # Read once, by the first Tag.
+
+    def test_another_account_reads_its_own_catalog(self) -> None:
+        self.models()
+        self.calls.clear()
+        self.sign_in_claude("account-2")
+        self.catalogs["claude"] = [{"model": "claude-sonnet-5-5", "displayName": "Sonnet 5.5", "isDefault": True}]
+        result = self.models()
+        self.assertEqual(["claude"], self.calls)
+        self.assertIn("claude:claude-sonnet-5-5", self.values(result))
+        self.assertNotIn("claude:claude-opus-5-5", self.values(result))
+
+    def test_signing_in_drops_the_saved_catalog(self) -> None:
+        self.models()
+        self.machine()
+        with patch.object(tag_ai.subprocess, "Popen", return_value=FakeProcess([])):
+            tag_ai.sign_in(self.home, "claude", emit=lambda event: None)
+        self.assertFalse((self.root / "shared/ai/models/claude.json").exists())
+        self.assertTrue((self.root / "shared/ai/models/codex.json").exists())
+
+    def test_refresh_reads_every_catalog_again_and_saves_it(self) -> None:
+        self.models()
+        self.calls.clear()
+        self.catalogs["codex"] = [*self.CODEX, {"model": "gpt-6", "displayName": "GPT-6"}]
+        target = tag_ai.Target(self.home, "maya", lambda: False, lambda action: 0, "Maya's Tag")
+        with patch.object(tag_ai, "connections", return_value=[{"backend": name, "state": "connected"}
+                                                                for name in ("codex", "claude")]), \
+                redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(0, tag_ai.cli(["models"], target, json_output=True, refresh=True))
+        result = json.loads(output.getvalue())
+        self.assertEqual({"codex", "claude"}, set(self.calls))
+        self.assertIn("codex:gpt-6", self.values(result))
+        self.assertFalse(result["cached"])
+        self.calls.clear()
+        self.assertIn("codex:gpt-6", self.values(self.models()))
+        self.assertEqual([], self.calls)
+        with self.assertRaisesRegex(ValueError, "--refresh is only for"):
+            tag_ai.cli(["status"], target, refresh=True)
+
+    def age(self, backend: str, days: float) -> None:
+        file = self.root / f"shared/ai/models/{backend}.json"
+        saved = json.loads(file.read_text(encoding="utf-8"))
+        saved["fetched_at"] = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(timespec="seconds")
+        file.write_text(json.dumps(saved), encoding="utf-8")
+
+    def test_an_old_catalog_is_offered_now_and_read_again_in_the_background(self) -> None:
+        self.models()
+        self.calls.clear()
+        self.age("codex", 2)
+        self.age("claude", 0.5)
+        with patch.object(model_catalog, "refresh_in_background") as background:
+            result = self.models()
+        self.assertEqual([], self.calls)
+        self.assertEqual([True, True], [group["cached"] for group in result["groups"]])
+        background.assert_called_once_with(["codex"])
+        with patch.object(model_catalog, "refresh_in_background") as background:
+            tag_ai.models(self.home, self.VALUES, ["claude"])
+        background.assert_not_called()
+
+    def test_the_background_refresh_runs_in_its_own_process_with_the_tags_environment(self) -> None:
+        with patch.object(model_catalog.subprocess, "Popen") as popen, \
+                patch.dict(os.environ, {"OPENTAG_WORKDIR": "/work/maya"}):
+            model_catalog.refresh_in_background(["codex"])
+        command, options = popen.call_args.args[0], popen.call_args.kwargs
+        self.assertEqual([sys.executable, str(Path(model_catalog.__file__).resolve()), "refresh", "codex"], command)
+        self.assertEqual("/work/maya", options["env"]["OPENTAG_WORKDIR"])
+        self.assertTrue(options.get("start_new_session") or options.get("creationflags"))
+
+    def test_a_background_refresh_saves_the_new_catalog_once_at_a_time(self) -> None:
+        self.models()
+        self.calls.clear()
+        self.catalogs["codex"] = [*self.CODEX, {"model": "gpt-6", "displayName": "GPT-6"}]
+        with LifecycleLock(self.root / "state/model-refresh-codex.lock"):
+            model_catalog.refresh(["codex"])  # Another refresh holds it: nothing is read twice.
+        self.assertEqual([], self.calls)
+        model_catalog.refresh(["codex", "gemini"])
+        self.assertEqual(["codex"], self.calls)
+        self.calls.clear()
+        self.assertIn("codex:gpt-6", self.values(self.models()))
+        self.assertEqual([], self.calls)
+
+    def test_failed_or_empty_catalogs_are_not_saved(self) -> None:
+        self.catalogs["codex"] = []
+        self.models()
+        self.assertFalse((self.root / "shared/ai/models/codex.json").exists())
+
+    def test_a_chosen_model_missing_from_the_saved_catalog_is_read_live(self) -> None:
+        self.models()
+        self.calls.clear()
+        self.catalogs["codex"] = [*self.CODEX, {"model": "gpt-6", "displayName": "GPT-6"}]
+        result = self.models({**self.VALUES, "OPENTAG_DEFAULT_MODEL": "codex:gpt-6"})
+        self.assertEqual(["codex"], self.calls)
+        self.assertTrue(result["default"]["available"])
+        self.assertEqual("codex:gpt-6", result["suggested"])
+        self.assertEqual([False, True], [group["cached"] for group in result["groups"]])
+
+    def test_saving_a_model_missing_from_the_saved_catalog_reads_it_live(self) -> None:
+        self.models()
+        (self.home / "state/model-names.json").unlink()
+        self.calls.clear()
+        self.catalogs["claude"] = [*self.CLAUDE, {"model": "claude-fable-5-1", "displayName": "Fable 5.1"}]
+        choice = tag_ai.save_default_model(self.home, "claude:claude-fable-5-1", ready=["codex", "claude"])
+        self.assertEqual("Fable 5.1", choice["label"])
+        self.assertEqual(["claude"], self.calls)
 
 
 class SignInExampleTests(unittest.TestCase):

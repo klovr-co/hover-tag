@@ -36,6 +36,7 @@ it shows is listed in `capabilities`; otherwise it offers to upgrade Tag.
 | `shared-ai-connections` | Global `tag settings ai connections\|sign-in\|resume --json`; shared accounts, model-only setup |
 | `api-connections` | `tag NAME settings ai api [set\|clear\|check] --json`: a Tag's own API connection; `api_connections` in `tag settings ai connections --json`; see [API connections](#api-connections) |
 | `thinking-level` | `tag NAME settings ai effort LEVEL --json`, `model VALUE --effort LEVEL`; thinking-level fields in `settings ai`, `models`, and `tag list` |
+| `saved-models` | `tag NAME settings ai models --refresh --json`; `cached`, `cached_at`, and each group's `cached` and `fetched_at` in `models` and setup's `default_model` |
 | `logs-activity` | `activity` in `tag NAME logs --json` |
 | `activity-details` | `tag NAME logs --activity RUN_ID --json` |
 | `telemetry-events` | `tag telemetry record EVENT FIELD=VALUE...`, `available` in `tag telemetry status\|on\|off --json`; see [Usage data](#usage-data) |
@@ -386,7 +387,18 @@ levels it offers (`[]` for a model without any), and `default_effort`, the
 level it uses unless the Tag picks one, or `null`; the account default shows
 its default model's levels. `default.available` is false when the
 saved default is no longer offered; `suggested` is the model to preselect.
-Loading models can take several seconds.
+
+Each account's model list is saved once for all Tags, so later calls answer
+at once. A group read from the saved list has `cached: true`; `fetched_at` is
+when its list was read (`null` for a Tag's own API, which lists its models from
+settings). The top-level `cached` says whether any group came from a saved list,
+and `cached_at` is the oldest such `fetched_at`, or `null`. Only an account
+without a saved list is read now, which can take several seconds. A saved list
+older than a day is still returned at once and read again in the background, so
+the next call has the new list. A saved list is dropped when its account
+changes, and is read again when it lacks the Tag's chosen model rather than
+reporting that model unavailable. Add `--refresh` to read every account's list
+now and save it.
 
 `tag NAME settings ai model VALUE --json` saves the default model; the backend
 follows the model. All Slack requests use the Tag's settings; per-user model,
@@ -454,7 +466,8 @@ saved key. `check --backend B --json` returns `ok` and `checks` (`name`, `ok`,
 
 During `tag setup --json`, the AI step uses `choose` questions. When an agent is
 connected, `default_model` has model-only `option_ids`, `groups`, `connections`,
-and `tag_name`. Runtimes advertising `supports_effort: true` also accept
+and `tag_name`, plus `cached_at` as in `settings ai models` (`null` when every
+list was read now). Runtimes advertising `supports_effort: true` also accept
 `{"answer":{"value":"codex:gpt-5.5","effort":"high"}}` to save model and thinking
 together. `default_effort` carries the saved level; each model's `efforts` and
 `default_effort` describe its supported levels and default. `effort: "default"`

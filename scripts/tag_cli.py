@@ -64,7 +64,7 @@ CAPABILITIES = (
     "list", "setup-jsonl", "setup-back", "rename", "workspace-lifecycle",
     "autostart", "autostart-keep", "logs-json", "upgrade-json", "install-progress",
     "ai-connections", "shared-ai-connections", "thinking-level", "logs-activity", "activity-details", "setup-v2", "abandon-setup", "remove-tag",
-    "describe", "telemetry-events", "start-progress", "api-connections",
+    "describe", "telemetry-events", "start-progress", "api-connections", "saved-models",
 )
 UPDATE_CHECK_INTERVAL_SECONDS = 24 * 60 * 60
 COMMANDS = tuple(sorted(tag_instances.RESERVED_NAMES))
@@ -2284,7 +2284,8 @@ def _settings_ai(context, args) -> int:
     api = {"backend": args.api_backend, "kind": args.api_kind, "base_url": args.base_url,
            "models": args.api_models, "api_version": args.api_version}
     return tag_ai.cli(args.arguments[1:], target, json_output=args.json_output, restart=args.restart,
-                      method=args.method, account=args.account, effort=args.effort, api=api)
+                      method=args.method, account=args.account, effort=args.effort, api=api,
+                      refresh=args.refresh)
 
 
 def _run_cli() -> int:
@@ -2301,7 +2302,7 @@ def _run_cli() -> int:
                                      ),
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("command", nargs="?", choices=COMMANDS)
-    parser.add_argument("arguments", nargs="*", help="memory: start | status | stop; config: init | show | keys | set KEY VALUE; chatgpt: status | login [ACCOUNT] | use ACCOUNT | logout [ACCOUNT] | use-codex; settings: ai [status | models | sign-in codex|claude | resume | model VALUE | effort LEVEL|default | api [status | set | clear | check]]")
+    parser.add_argument("arguments", nargs="*", help="memory: start | status | stop; config: init | show | keys | set KEY VALUE; chatgpt: status | login [ACCOUNT] | use ACCOUNT | logout [ACCOUNT] | use-codex; settings: ai [status | models [--refresh] | sign-in codex|claude | resume | model VALUE | effort LEVEL|default | api [status | set | clear | check]]")
     parser.add_argument("--offline", action="store_true")
     parser.add_argument("--json", action="store_true", dest="json_output", help="structured output for inspect, status, doctor, config, paths, upgrade, usage, and chatgpt")
     parser.add_argument("--consent", action="store_true", help="chatgpt login: request plan permission again")
@@ -2309,6 +2310,7 @@ def _run_cli() -> int:
     parser.add_argument("--account", help="settings ai sign-in codex --method chatgpt: renew this saved account")
     parser.add_argument("--effort", metavar="LEVEL", help="settings ai model VALUE: also save this thinking level, or default for the model's own")
     parser.add_argument("--restart", action="store_true", help="settings ai: restart a running Tag to apply the change")
+    parser.add_argument("--refresh", action="store_true", help="settings ai models: read each account's models now instead of the saved list")
     parser.add_argument("--backend", dest="api_backend", choices=("codex", "claude"), help="settings ai api: the agent that uses the API")
     parser.add_argument("--kind", dest="api_kind", choices=("openai", "anthropic", "azure"), help="settings ai api set: the provider's API (azure is Codex only)")
     parser.add_argument("--base-url", dest="base_url", metavar="URL", help="settings ai api set: the API base URL (HTTPS); empty for the provider's default")
@@ -2365,6 +2367,8 @@ def _run_cli() -> int:
         parser.error("settings accepts only ai, for example tag settings ai --json")
     if (args.method or args.account or args.restart or args.effort is not None) and not settings_ai:
         parser.error("--method, --account, --effort and --restart are only for tag settings ai")
+    if args.refresh and not (settings_ai and args.arguments[1:] == ["models"]):
+        parser.error("--refresh is only for tag settings ai models")
     api_options = (args.api_backend, args.api_kind, args.base_url, args.api_models, args.api_version)
     if any(option is not None for option in api_options) and not (settings_ai and args.arguments[1:2] == ["api"]):
         parser.error("--backend, --kind, --base-url, --models and --api-version are only for tag settings ai api")
