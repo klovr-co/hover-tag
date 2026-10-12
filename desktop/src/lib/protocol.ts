@@ -45,7 +45,13 @@ export interface TagRow {
   default_effort?: string | null;
   /** The channels the Tag answers in; `name` is null until Tag has recorded it. */
   channels?: { id: string; name: string | null }[];
+  /** The one Tag that routes requests and alone creates Tags (capability chief-of-staff). */
+  chief_of_staff?: boolean;
+  /** Whether Chief of Staff created this Tag. */
+  created_by_chief?: boolean;
 }
+
+export const CHIEF_OF_STAFF = "Chief of Staff";
 
 /** A setup that stopped before any Slack app existed; there is nothing worth resuming. */
 export const isDraft = (row: TagRow) => status(row) === "setup" && row.has_app === false;
@@ -240,6 +246,8 @@ export interface SetupReady {
 
 export type SetupEvent =
   | { type: "message"; text: string }
+  /** tag add names the new Tag before its first question (capability setup-tag-event). */
+  | { type: "tag"; tag: string }
   | SetupQuestion
   | { type: "result"; status: "complete" | "paused" | "failed" | string; tag?: string; error?: string; ready?: SetupReady }
   /** A step of creating the Slack app, from Create in Slack. */

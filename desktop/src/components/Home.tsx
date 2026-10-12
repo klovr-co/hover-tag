@@ -7,7 +7,7 @@ import type { Bridge } from "../lib/bridge";
 import {
   effortLabel, liveRows, modelText, quietLine, roster, rowLine, summary, type ActivityItem, type QuietLine,
 } from "../lib/home";
-import { groups, problemText, status, title, type Group, type TagRow } from "../lib/protocol";
+import { CHIEF_OF_STAFF, groups, problemText, status, title, type Group, type TagRow } from "../lib/protocol";
 import type { Tags } from "../lib/tags";
 import type { UpdateState } from "../lib/updates";
 import { USAGE_DATA_NOTE } from "../lib/telemetry";
@@ -291,6 +291,14 @@ function Grip() {
 const STATE_WORD = { online: "online", offline: "offline", attention: "stopped", setup: "not in Slack yet" };
 
 /** Two lines: the name and its model, then what it's for, unless something needs you. */
+/** Marks Chief of Staff wherever a Tag's name is shown; it hops once when the role arrives. */
+export function ChiefBadge({ row }: { row: TagRow }) {
+  const chief = Boolean(row.chief_of_staff);
+  const fresh = useFresh(chief) && chief;
+  if (!chief) return null;
+  return <span className={`main-badge chief-badge${fresh ? " fresh" : ""}`} title="Routes requests to one owner Tag, and is the only Tag that creates Tags">★ {CHIEF_OF_STAFF}</span>;
+}
+
 export function TagRowView({ row, tags, report, problem, open, drag, entering }: {
   row: TagRow; tags: Tags; report?: AIStatus; problem: string | null; open: () => void; drag?: Drag; entering?: boolean;
 }) {
@@ -316,6 +324,7 @@ export function TagRowView({ row, tags, report, problem, open, drag, entering }:
       <div className="txt">
         <span className="name">
           <span className="nm">{title(row)}</span>
+          <ChiefBadge row={row} />
           {model && (
             <span className={problem ? "mname bad" : "mname"}
               title={problem ?? `Default model${backend ? ` · ${backend}` : ""}${effort ? ` · ${effort} thinking` : ""}`}>{model.text}</span>

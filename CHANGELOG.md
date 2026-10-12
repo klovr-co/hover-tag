@@ -6,6 +6,20 @@ All notable changes to Tag are documented here.
 
 ### Added
 
+- **Chief of Staff.** One Tag per installation now routes new or unclear work
+  to one owner Tag, which answers in your thread itself. Chief of Staff
+  doesn't combine or reword answers, and mentioning a specialist directly
+  skips it. On upgrade, your main Tag gets the role; move it with
+  `tag NAME chief-of-staff set` or in Tag.app's Details. With a Chief of
+  Staff, a Tag can ask only Chief of Staff for help, for a judgment call.
+- Chief of Staff is the only Tag that can create Tags. It proposes a new Tag
+  in your thread, and nothing happens in Slack until you approve. The new Tag
+  is then created with its own Slack app, name and picture, and starts. If
+  Slack needs an admin to approve the install, Chief of Staff posts that one
+  step. Run `tag chief-of-staff sign-in` once to sign a service account in to
+  its own Slack CLI folder, kept apart from yours.
+- `tag add --json` accepts `--preset FILE` and first reports the new Tag's ID.
+
 - Let one Tag ask other Tags for help and combine their answers. Tag posts one
   request that mentions every Tag, links it to your thread in both directions,
   shows their progress as steps, and writes the final answer once all have replied or the deadline passes. Each

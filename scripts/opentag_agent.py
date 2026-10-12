@@ -151,6 +151,47 @@ Return only the final chat-ready answer.
 """.strip()
 
 
+def chief_instructions(skill_dir: Path, channel_id: str) -> str:
+    """Chief of Staff's standing instructions: route to one owner, and create Tags only as a last resort."""
+    try:
+        import tag_chief
+    except ImportError:
+        from scripts import tag_chief
+    root, own = Path(os.getenv("TAG_HOME", "")), os.getenv("TAG_ID", "")
+    lanes = tag_chief.roster(root, own, os.getenv("SLACK_TEAM_ID", ""))
+    handoff_helper = helper_command(skill_dir / "scripts" / "tag_handoff.py")
+    chief_helper = helper_command(skill_dir / "scripts" / "tag_chief.py")
+    channels = ", ".join(item.strip() for item in os.getenv("SLACK_CHANNEL_IDS", "").split(",") if item.strip())
+    return f"""
+Chief of Staff:
+- You are this installation's Chief of Staff, a dispatcher. Each request has
+  exactly one owner Tag, which handles it end to end and replies in the thread
+  itself. Answer quick questions about Tags, routing or priorities yourself.
+- The Tags you can route to:
+{tag_chief.roster_text(lanes, channel_id)}
+- For work in another Tag's lane, run
+  `{handoff_helper} route --to "NAME" --reason "ONE SENTENCE"` once. Tag hands
+  this thread to that Tag after your reply, and it answers here itself. Then
+  reply with just who will handle it and why. Don't start the work, and never
+  reword or summarize the owner's answer later.
+- Pick one owner. Never split a request across several Tags or ask them to
+  work on it together. Route only to a Tag that is in this channel; otherwise
+  say which Tag owns it and ask the person to invite it with /invite.
+- A new Tag is the last resort. First consider a skill, then an in-process
+  subagent. Propose a Tag only for a real boundary: different credentials,
+  its own memory and routines, long-running parallel work, a distinct
+  @mention identity, or a different owner or runtime. Then run
+  `{chief_helper} propose --name "NAME" --description "LANE" --boundary KIND
+  --why-not-skill "WHY" [--channel CHANNEL_ID] [--model MODEL]
+  [--routine "SCHEDULE::WHAT TO DO"]`. KIND is one of
+  {", ".join(sorted(tag_chief.BOUNDARIES))}. Channels must be ones you are in:
+  {channels or "this channel"}. Leave out --model to use your own.
+- Tag posts the proposal in this thread after your reply, and nothing is
+  created until the person who asked approves it. Say that in your reply.
+- If a helper refuses, explain why and answer as well as you can.
+"""
+
+
 def build_instructions(
     *,
     skill_dir: Path,
@@ -228,8 +269,25 @@ Memory capability:
 """
     handoff_instructions = ""
     peers = tag_handoff.configured_peers()
-    if peers and os.getenv("OPENTAG_HANDOFF_REQUESTS") and os.getenv("OPENTAG_HANDOFF_DEPTH", "0") == "0":
-        handoff_helper = helper_command(skill_dir / "scripts" / "tag_handoff.py")
+    can_act = bool(os.getenv("OPENTAG_HANDOFF_REQUESTS")) and os.getenv("OPENTAG_HANDOFF_DEPTH", "0") == "0"
+    role = tag_handoff.current_role() if can_act else tag_handoff.Role(False, None, [])
+    handoff_helper = helper_command(skill_dir / "scripts" / "tag_handoff.py")
+    if role.is_chief:
+        handoff_instructions = chief_instructions(skill_dir, channel_id)
+    elif role.chief is not None:
+        handoff_instructions = f"""
+Chief of Staff:
+- {role.chief.name} is this installation's Chief of Staff. You own requests in
+  your lane end to end and answer them yourself.
+- Only for a judgment call you shouldn't make alone, such as a priority, an
+  owner, or work outside your lane, run
+  `{handoff_helper} ask --to "{role.chief.name}" --task "TEXT"` once. Put the
+  question and the facts it needs in `--task`. Tag continues in this thread with
+  the reply, and you still write the answer.
+- You cannot create Tags. If someone needs a new Tag, tell them to ask
+  {role.chief.name}.
+"""
+    elif peers and can_act:
         handoff_instructions = f"""
 Asking other Tags:
 - Other Tags you may ask: {", ".join(peer.name for peer in peers)}.

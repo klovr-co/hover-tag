@@ -27,6 +27,11 @@ a local coding-agent backend with optional MFS retrieval.
   owns a working folder at `~/Tag/NAME` with private data in its `.tag` directory;
   implementation code calls this an instance.
 
+- **Chief of Staff** — the one Tag per installation that routes new or unclear
+  requests to one owner Tag, and the only Tag that creates Tags. It is a
+  dispatcher, not an orchestrator: the owner answers in the thread itself.
+- **Specialist** — any other Tag; it owns its lane end to end.
+
 Historical filenames and environment variables containing `opentag` remain for
 compatibility; they do not define a separate product name.
 
@@ -42,3 +47,4 @@ compatibility; they do not define a separate product name.
 - [Login supervisor](docs/adr/0008-login-supervisor.md)
 - [ChatGPT plan connection](docs/adr/0008-chatgpt-plan-connection.md)
 - [Claude Agent SDK transport](docs/adr/0008-claude-agent-sdk.md)
+- [Chief of Staff](docs/adr/0010-chief-of-staff.md)

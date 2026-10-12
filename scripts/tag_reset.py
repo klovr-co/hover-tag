@@ -12,6 +12,10 @@ import sys
 from datetime import datetime, timezone
 
 try:
+    from slack_cli_config import flags as slack_cli_flags
+except ImportError:
+    from scripts.slack_cli_config import flags as slack_cli_flags
+try:
     import setup_ui as ui
     import tag_config as settings
     import slack_app_create
@@ -72,7 +76,7 @@ def delete_slack_app(home: Path, backup: Path, app: dict, executable: str, *, so
             check_app_link(project, app)
             result = subprocess.run(
                 [executable, "app", "delete", "--app", app["app_id"], "--team", app["team_id"],
-                 "--force", "--skip-update", "--no-color"],
+                 "--force", "--skip-update", "--no-color", *slack_cli_flags()],
                 cwd=project, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=90,
             )
         confirmed = result.returncode == 0

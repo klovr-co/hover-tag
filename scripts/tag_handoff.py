@@ -11,6 +11,17 @@ Slack carries every message between Tags, so Tags owned by different people on
 different machines can work together and people can follow the exchange. Wait
 states follow A2A task vocabulary (submitted, completed, failed) so another
 transport can replace Slack later without changing the record.
+
+When an installation has a Chief of Staff (see ``tag_chief``), Tags work as a
+dispatcher and lanes instead:
+
+- Chief of Staff uses ``route`` to give a request to exactly one owner Tag. It
+  posts in the same thread, so the owner sees the whole thread. The owner then
+  replies to the person itself. Nothing is combined or reworded.
+- Any other Tag may ``ask`` only Chief of Staff, for a judgment call. It still
+  writes the answer itself.
+- A request makes at most MAX_TAG_HOPS Tag-to-Tag hops: route, then one
+  escalation. A Tag answering another Tag can neither route nor ask.
 """
 from __future__ import annotations
 
@@ -39,9 +50,14 @@ MAX_TARGETS = 5
 MAX_TASK_CHARS = 3_000
 # A Tag that is answering another Tag, or combining replies, cannot ask again.
 MAX_DEPTH = 1
+# Route (Chief of Staff to the owner), then at most one escalation (owner to Chief of Staff).
+MAX_TAG_HOPS = 2
+MAX_REASON_CHARS = 300
 MEMBER_ID = r"[UW][A-Z0-9]{2,20}"
 HANDOFF_ID = r"h-[0-9a-f]{10}"
+ROUTE_ID = r"r-[0-9a-f]{10}"
 REQUEST_RE = re.compile(rf"_Handoff ({HANDOFF_ID}) for <@({MEMBER_ID})>\. Reply in this thread\._")
+ROUTE_RE = re.compile(rf"_Routed ({ROUTE_ID}) for <@({MEMBER_ID})>\. You own this request\._")
 RESULT_RE = re.compile(rf"_Handoff ({HANDOFF_ID}) result: (completed|failed)\._")
 FINISHED = frozenset({"completed", "failed"})
 
@@ -77,6 +93,47 @@ def configured_peers() -> list[Peer]:
         return parse_peers(os.getenv("OPENTAG_PEER_TAGS", ""))
     except ValueError:
         return []
+
+
+@dataclass(frozen=True)
+class Role:
+    """This Tag's place among the installation's Tags, as the agent's helper sees it.
+
+    ``chief`` is None when the installation has no Chief of Staff; Tags then ask
+    each other as before. The bridge checks the role again before acting.
+    """
+    is_chief: bool
+    chief: Peer | None
+    lanes: list[Peer]
+
+
+def current_role() -> Role:
+    home, own = os.getenv("TAG_HOME", ""), os.getenv("TAG_ID", "")
+    if not home or not own:
+        return Role(False, None, [])
+    try:
+        from tag_chief import chief_card, chief_of_staff, roster
+    except ImportError:
+        from scripts.tag_chief import chief_card, chief_of_staff, roster
+    root = Path(home)
+    team = os.getenv("SLACK_TEAM_ID", "")
+    if chief_of_staff(root) == own:
+        return Role(True, None, [Peer(card.name, card.user_id) for card in roster(root, own, team)])
+    card = chief_card(root, own)
+    return Role(False, Peer(card.name, card.user_id) if card else None, [])
+
+
+def append_request(payload: dict[str, Any]) -> None:
+    """Record the one Tag-to-Tag action this reply may take, for the bridge to carry out."""
+    destination = os.getenv("OPENTAG_HANDOFF_REQUESTS", "")
+    if not destination:
+        raise HandoffRefused("Working with other Tags is unavailable in this conversation.")
+    path = Path(destination)
+    if path.exists() and path.read_text(encoding="utf-8").strip():
+        raise HandoffRefused("This reply already asks, routes or proposes; each reply takes one Tag action. "
+                             "Include every Tag in one request.")
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
 def resolve_peer(value: str, peers: list[Peer]) -> Peer:
@@ -148,8 +205,7 @@ def record_request(targets: list[str], task: str, wait_minutes: int) -> str:
     if int(os.getenv("OPENTAG_HANDOFF_DEPTH", "0") or 0) >= MAX_DEPTH:
         raise HandoffRefused("This run is already part of a handoff, so it cannot ask other Tags. "
                              "Answer with what you have.")
-    destination = os.getenv("OPENTAG_HANDOFF_REQUESTS", "")
-    if not destination:
+    if not os.getenv("OPENTAG_HANDOFF_REQUESTS", ""):
         raise HandoffRefused("Asking other Tags is unavailable in this conversation.")
     task = task.strip()
     if not task:
@@ -158,7 +214,11 @@ def record_request(targets: list[str], task: str, wait_minutes: int) -> str:
         raise HandoffRefused(f"Keep the request under {MAX_TASK_CHARS:,} characters.")
     if not 1 <= wait_minutes <= MAX_WAIT_MINUTES:
         raise HandoffRefused(f"Wait between 1 and {MAX_WAIT_MINUTES} minutes.")
-    peers = configured_peers()
+    role = current_role()
+    if role.is_chief:
+        raise HandoffRefused("Chief of Staff doesn't collect answers from other Tags. Route the request to "
+                             "one owner with route, or answer it yourself.")
+    peers = [role.chief] if role.chief else configured_peers()
     chosen: list[Peer] = []
     for value in targets:
         peer = resolve_peer(value, peers)
@@ -166,27 +226,100 @@ def record_request(targets: list[str], task: str, wait_minutes: int) -> str:
             chosen.append(peer)
     if not chosen or len(chosen) > MAX_TARGETS:
         raise HandoffRefused(f"Ask between 1 and {MAX_TARGETS} Tags at once.")
-    path = Path(destination)
-    if path.exists() and path.read_text(encoding="utf-8").strip():
-        raise HandoffRefused("This reply already asks other Tags; include every Tag in one request.")
-    payload = {"targets": [{"name": peer.name, "user_id": peer.user_id} for peer in chosen],
-               "task": task, "wait_minutes": wait_minutes}
-    with open(path, "a", encoding="utf-8") as handle:
-        handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    append_request({"kind": "ask", "targets": [{"name": peer.name, "user_id": peer.user_id} for peer in chosen],
+                    "task": task, "wait_minutes": wait_minutes})
     names = " and ".join(peer.name for peer in chosen)
     return (f"After this reply, Tag will post the request to {names} in this channel and continue "
             f"in this thread when they answer (up to {wait_minutes} minutes).")
 
 
-def read_request(path: Path) -> dict[str, Any] | None:
+def record_route(target: str, reason: str) -> str:
+    """Chief of Staff gives this request to one owner Tag, which answers in this thread."""
+    if int(os.getenv("OPENTAG_HANDOFF_DEPTH", "0") or 0) >= MAX_DEPTH:
+        raise HandoffRefused("This run is answering another Tag, so it cannot route. Answer with what you have.")
+    if not os.getenv("OPENTAG_HANDOFF_REQUESTS", ""):
+        raise HandoffRefused("Routing is unavailable in this conversation.")
+    role = current_role()
+    if not role.is_chief:
+        raise HandoffRefused("Only Chief of Staff routes requests. Answer it yourself, or ask Chief of Staff.")
+    reason = " ".join(reason.split())
+    if not reason:
+        raise HandoffRefused("Say in one sentence why this Tag should own the request.")
+    if len(reason) > MAX_REASON_CHARS:
+        raise HandoffRefused(f"Keep the reason under {MAX_REASON_CHARS} characters.")
+    peer = resolve_peer(target, role.lanes)
+    append_request({"kind": "route", "target": {"name": peer.name, "user_id": peer.user_id}, "reason": reason})
+    return (f"After this reply, Tag will hand this thread to {peer.name}, which will answer here itself. "
+            "Don't answer the request yourself; say who will and why in one or two sentences.")
+
+
+def read_requests(path: Path) -> list[dict[str, Any]]:
+    """The Tag actions a run recorded; a line without ``kind`` is an ``ask`` from an older release."""
     try:
         lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-        request = json.loads(lines[0]) if lines else None
-    except (OSError, json.JSONDecodeError):
-        return None
-    if not isinstance(request, dict) or not request.get("targets") or not request.get("task"):
+    except OSError:
+        return []
+    found = []
+    for line in lines:
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(item, dict):
+            item.setdefault("kind", "ask")
+            found.append(item)
+    return found
+
+
+def read_request(path: Path) -> dict[str, Any] | None:
+    requests = read_requests(path)
+    request = requests[0] if requests else None
+    if not isinstance(request, dict) or request.get("kind") != "ask" or not request.get("targets") or not request.get("task"):
         return None
     return request
+
+
+def read_route(path: Path) -> dict[str, Any] | None:
+    requests = read_requests(path)
+    request = requests[0] if requests else None
+    target = request.get("target") if isinstance(request, dict) and request.get("kind") == "route" else None
+    if (not isinstance(target, dict) or not re.fullmatch(MEMBER_ID, str(target.get("user_id", "")))
+            or not str(request.get("reason") or "").strip()):
+        return None
+    return {"target": {"name": str(target.get("name") or "a Tag"), "user_id": target["user_id"]},
+            "reason": " ".join(str(request["reason"]).split())[:MAX_REASON_CHARS]}
+
+
+def read_proposal(path: Path) -> dict[str, Any] | None:
+    requests = read_requests(path)
+    request = requests[0] if requests else None
+    return request if isinstance(request, dict) and request.get("kind") == "propose" else None
+
+
+def new_route_id() -> str:
+    return f"r-{uuid.uuid4().hex[:10]}"
+
+
+def route_text(route_id: str, target: dict[str, str], reason: str, requester: str) -> str:
+    """The only message that wakes the owner. Posted in the requester's own thread."""
+    return (f"<@{target['user_id']}> {reason}\n\n"
+            f"_Routed {route_id} for <@{requester}>. You own this request._")
+
+
+def route_brief(own_name: str, chief_name: str, reason: str) -> str:
+    return (
+        f"You are {own_name}. {chief_name} routed the request in this thread to you because: {reason}\n"
+        "You own it end to end. Read the whole thread above, then answer the person who asked, here in this "
+        "thread. Don't wait for other Tags and don't hand it back. If you need a judgment call only "
+        f"{chief_name} can make, you may ask {chief_name} once; you still write the answer."
+    )
+
+
+def routed_note(owner_name: str) -> str:
+    """Context for Chief of Staff when it is mentioned again in a thread it already routed."""
+    return (f"Earlier in this thread you routed the request to {owner_name}, which owns it. "
+            f"If this message continues that work, tell the person to mention {owner_name} directly. "
+            "Route again only if the work has clearly moved to another lane, and say so.")
 
 
 # Bridge side: durable wait records ---------------------------------------------
@@ -396,7 +529,10 @@ def combine_question(record: dict[str, Any]) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Ask other Tags for help from the current Slack channel.")
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("peers", help="List the Tags this Tag may ask.")
+    commands.add_parser("peers", help="List the Tags this Tag may ask or route to.")
+    route = commands.add_parser("route", help="Chief of Staff only: give this request to one owner Tag.")
+    route.add_argument("--to", required=True, help="The owner Tag's name.")
+    route.add_argument("--reason", required=True, help="One sentence: why this Tag owns the request.")
     ask = commands.add_parser("ask", help="Ask one or more Tags; Tag continues when all reply.")
     ask.add_argument("--to", action="append", required=True, help="Tag name; repeat for each Tag.")
     ask.add_argument("--task", required=True, help="What the Tags should do, with the needed context.")
@@ -404,8 +540,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "peers":
-            peers = configured_peers()
+            role = current_role()
+            peers = role.lanes if role.is_chief else [role.chief] if role.chief else configured_peers()
             print("\n".join(peer.name for peer in peers) or "No other Tags are configured.")
+        elif args.command == "route":
+            print(record_route(args.to, args.reason))
         else:
             print(record_request(args.to, args.task, args.wait_minutes))
     except HandoffRefused as exc:

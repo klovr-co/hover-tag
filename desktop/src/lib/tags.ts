@@ -191,6 +191,10 @@ export function useTags(api: Bridge | null, enabled: boolean) {
   const describe = useCallback((row: TagRow, description: string) =>
     attempt(row.id, [row.id, "describe", description.trim(), "--json"], "Couldn't change the description."), [attempt]);
 
+  /** Make this Tag the installation's Chief of Staff; the previous one becomes a specialist. Returns what went wrong, or "". */
+  const makeChief = useCallback((row: TagRow) =>
+    attempt(row.id, [row.id, "chief-of-staff", "set", "--json"], "Couldn't make it Chief of Staff."), [attempt]);
+
   /** Set aside setups that never reached Slack. Call only when no setup is running. */
   const discardDrafts = useCallback(async () => {
     if (!api || !drafts.current.length) return;
@@ -212,7 +216,7 @@ export function useTags(api: Bridge | null, enabled: boolean) {
 
   return {
     rows, loaded, busy, error: error || refreshError, setError, keepRunning,
-    refresh, refreshAutostart, start, toggle, workspace, all, rename, describe, discardDrafts, remove, setAutostart,
+    refresh, refreshAutostart, start, toggle, workspace, all, rename, describe, makeChief, discardDrafts, remove, setAutostart,
   };
 }
 

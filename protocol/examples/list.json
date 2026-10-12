@@ -7,10 +7,12 @@
    "description": "I'm Maya's personal assistant. I help with launch work.",
    "default_model": "codex:gpt-5.5", "default_model_label": "Codex · GPT-5.5",
    "default_model_name": "GPT-5.5", "default_effort": "medium",
-   "channels": [{"id": "C0GENERAL", "name": "general"}, {"id": "C0LAUNCH1", "name": "launch"}]},
+   "channels": [{"id": "C0GENERAL", "name": "general"}, {"id": "C0LAUNCH1", "name": "launch"}],
+   "chief_of_staff": true, "created_by_chief": false},
   {"id": "new-tag", "home": "/Users/maya/Tag/new-tag/.tag", "valid": true,
    "state": "setup_incomplete", "slack_workspace": "T0ACME01", "workspace_name": "Acme Inc", "workspace_icon": null,
    "slack_name": null, "slack_app_id": "A0ACME01", "has_app": true, "nickname": null, "avatar": null, "keep_running": false, "main": false,
    "description": null, "default_model": "codex", "default_model_label": "Codex · account default",
-   "default_model_name": "Account default", "default_effort": null, "channels": []}
+   "default_model_name": "Account default", "default_effort": null, "channels": [],
+   "chief_of_staff": false, "created_by_chief": true}
  ]}

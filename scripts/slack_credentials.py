@@ -11,6 +11,10 @@ import sys
 import tempfile
 
 try:
+    from slack_cli_config import flags as slack_cli_flags
+except ImportError:
+    from scripts.slack_cli_config import flags as slack_cli_flags
+try:
     import slack_identity
     import slack_app_create
     import tag_config as settings
@@ -95,7 +99,7 @@ def receive(project: Path, team_id: str, app_id: str, *, enterprise_id: str = ""
         try:
             result = subprocess.run(
                 [slack, "deploy", "--team", authorization_id, "--app", app_id, *grant,
-                 "--hide-triggers", "--skip-update", "--no-color"],
+                 "--hide-triggers", "--skip-update", "--no-color", *slack_cli_flags()],
                 cwd=handoff, env=environment, input="", capture_output=True, text=True,
                 check=False, timeout=120,
             )
