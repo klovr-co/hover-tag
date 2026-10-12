@@ -71,18 +71,22 @@ def install_store_maintenance(store_type=MilvusStore, flush_after=FLUSH_AFTER_RO
         return params
 
     def use_exact_search(store, name):
-        if DENSE_FIELD not in store.client.list_indexes(name):
+        metric = "COSINE"
+        if DENSE_FIELD in store.client.list_indexes(name):
+            current = store.client.describe_index(name, DENSE_FIELD)
+            if current.get("index_type") == LITE_DENSE_INDEX:
+                return
+            metric = current.get("metric_type", metric)
+            store.client.release_collection(name)
+            store.client.drop_index(name, DENSE_FIELD)
+        elif DENSE_FIELD not in {f["name"] for f in store.client.describe_collection(name)["fields"]}:
+            # A switch that stopped after dropping the index finishes here.
             return
-        current = store.client.describe_index(name, DENSE_FIELD)
-        if current.get("index_type") == LITE_DENSE_INDEX:
-            return
-        store.client.release_collection(name)
-        store.client.drop_index(name, DENSE_FIELD)
         exact = MilvusClient.prepare_index_params()
         exact.add_index(
             field_name=DENSE_FIELD,
             index_type=LITE_DENSE_INDEX,
-            metric_type=current.get("metric_type", "COSINE"),
+            metric_type=metric,
         )
         store.client.create_index(name, exact)
         store.client.load_collection(name)

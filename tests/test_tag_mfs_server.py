@@ -125,6 +125,9 @@ class FakeClient:
     def list_indexes(self, name):
         return []
 
+    def describe_collection(self, name):
+        return {"fields": []}
+
     def flush(self, collection_name):
         self.flushed.append(collection_name)
 
@@ -249,6 +252,17 @@ class MilvusLiteCompactionTests(unittest.TestCase):
         for row in self.rows:
             found = self.client.search("chunks", [row["dense_vec"]], limit=100, anns_field="dense_vec")[0]
             self.assertIn(row["id"], {hit["id"] for hit in found})
+
+    def test_interrupted_switch_is_finished_on_next_startup(self):
+        self.client.upsert("chunks", self.rows)
+        self.client.release_collection("chunks")
+        self.client.drop_index("chunks", "dense_vec")  # as if stopped mid-switch
+        self.connect()
+        self.assertEqual(self.client.describe_index("chunks", "dense_vec")["index_type"], "FLAT")
+        found = self.client.search(
+            "chunks", [self.rows[3]["dense_vec"]], limit=100, anns_field="dense_vec"
+        )[0]
+        self.assertEqual(len({hit["id"] for hit in found}), 100)
 
     def test_rewritten_rows_are_compacted_and_preserved(self):
         store = self.connect()
