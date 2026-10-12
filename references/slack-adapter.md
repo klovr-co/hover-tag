@@ -213,6 +213,12 @@ member ID, for example `Research Tag=U0123ABCD,Writer Tag=U0456EFGH`. It is
 empty by default, which turns handoffs off. Mentions from bots that are not
 listed are ignored. See `references/handoffs.md`.
 
+`OPENTAG_TEST_APP_IDS` is for automated live tests of Tag itself, not for
+normal use. It lists Slack app IDs whose user-token posts Tag answers as the
+person who posted them (Slack marks those posts with the app's bot id). The
+person must still be in `SLACK_ALLOWED_USER_IDS`. It is empty by default and
+`tag config` does not show it; set it by editing the Tag's `settings.json`.
+
 The bridge does not need a model API key. The selected CLI backend handles model
 auth and tool execution.
 

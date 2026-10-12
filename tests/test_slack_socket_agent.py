@@ -2834,6 +2834,47 @@ class SlackDirectMessageTests(unittest.TestCase):
         run_backend.assert_not_called()
 
 
+class TestAppPostTests(unittest.TestCase):
+    """Slack marks a message posted through an app's user token with the app's bot id."""
+
+    def mention(self, event: dict[str, Any], *, test_apps: str | None = "ATEST") -> MagicMock:
+        fake_app = FakeApp()
+        env = {"SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_IDS": "C123", "OPENTAG_SLACK_STREAMING": "0",
+               "OPENTAG_CLAUDE_TRANSPORT": "print"}
+        if test_apps is not None:
+            env["OPENTAG_TEST_APP_IDS"] = test_apps
+        with tempfile.TemporaryDirectory() as raw_home, patch.object(
+            slack_socket_agent, "App", return_value=fake_app
+        ), patch.dict(os.environ, {"TAG_HOME": raw_home, **env}, clear=True), patch.object(
+            slack_socket_agent, "build_thread_text", return_value="UOWNER: hi"
+        ), patch.object(slack_socket_agent, "run_backend", return_value=("Hello.", True)) as run_backend:
+            slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+            fake_app.events["app_mention"](
+                {"channel": "C123", "ts": "1.23", "text": "<@BOT> hi", **event},
+                {"team_id": "T123"}, MagicMock(), MagicMock(),
+            )
+        return run_backend
+
+    POSTED_BY_TEST_APP = {"user": "UOWNER", "bot_id": "B1", "app_id": "ATEST"}
+
+    def test_a_listed_app_posting_as_an_authorized_user_is_answered(self) -> None:
+        self.mention(self.POSTED_BY_TEST_APP).assert_called_once()
+
+    def test_the_app_id_can_come_from_the_bot_profile(self) -> None:
+        event = {"user": "UOWNER", "bot_id": "B1", "bot_profile": {"app_id": "ATEST"}}
+        self.mention(event).assert_called_once()
+
+    def test_nothing_changes_unless_the_app_is_listed(self) -> None:
+        self.mention(self.POSTED_BY_TEST_APP, test_apps=None).assert_not_called()
+        self.mention(self.POSTED_BY_TEST_APP, test_apps="AOTHER").assert_not_called()
+
+    def test_a_listed_app_cannot_speak_for_an_unauthorized_user(self) -> None:
+        self.mention({**self.POSTED_BY_TEST_APP, "user": "USTRANGER"}).assert_not_called()
+
+    def test_a_bot_without_a_user_is_not_a_person(self) -> None:
+        self.mention({"bot_id": "B1", "app_id": "ATEST"}).assert_not_called()
+
+
 class SlackWorkingIndicatorTests(unittest.TestCase):
     def test_journals_native_session_until_clear_succeeds(self) -> None:
         client = MagicMock()
