@@ -64,5 +64,49 @@ class IrcMappingTests(unittest.TestCase):
         return case["stratum"], case["expected"]
 
 
+class AmiMappingTests(unittest.TestCase):
+    def write(self, root, name, text) -> None:
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+
+    def test_group_individual_and_skipped_acts(self) -> None:
+        import tempfile
+        from pathlib import Path
+        nite = 'xmlns:nite="http://nite.sourceforge.net/"'
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write(root, "ontologies/da-types.xml", f'<da-type nite:id="cmrda" name="da-type" {nite}>'
+                       '<da-type nite:id="ami_da_4" name="inf"/><da-type nite:id="ami_da_1" name="bck"/></da-type>')
+            for speaker, words in (("A", ["Shall", "we", "start", "?"]), ("B", ["Yeah", "C", "can", "you", "present"]),
+                                   ("C", ["Mm-hmm", "."]), ("D", ["Sure", "thing", "now"])):
+                start = {"A": 1, "B": 2, "C": 3, "D": 4}[speaker]
+                body = "".join(f'<w nite:id="m.{speaker}.words{i}" starttime="{start + i / 10}"'
+                               f'{" punc=\"true\"" if w in "?." else ""}>{w}</w>' for i, w in enumerate(words))
+                self.write(root, f"words/m.{speaker}.words.xml", f"<nite:root {nite}>{body}</nite:root>")
+            def act(speaker, kind, addressee, last):
+                attr = f' addressee="{addressee}"' if addressee else ""
+                return (f'<nite:root {nite}><dact nite:id="m.{speaker}.da1"{attr}>'
+                        f'<nite:pointer role="da-aspect" href="da-types.xml#id({kind})"/>'
+                        f'<nite:child href="m.{speaker}.words.xml#id(m.{speaker}.words0)..id(m.{speaker}.words{last})"/>'
+                        f"</dact></nite:root>")
+            self.write(root, "dialogueActs/m.A.dialog-act.xml", act("A", "ami_da_4", "B,C,D", 3))
+            self.write(root, "dialogueActs/m.B.dialog-act.xml", act("B", "ami_da_4", "C", 4))
+            self.write(root, "dialogueActs/m.C.dialog-act.xml", act("C", "ami_da_1", "B", 1))
+            self.write(root, "dialogueActs/m.D.dialog-act.xml", act("D", "ami_da_4", "", 2))
+            meetings = public.load_ami(root)
+            self.assertEqual("Shall we start?", meetings["m"][0]["text"])
+            found = {(c["index"], c["assistant"]): (c["stratum"], c["expected"])
+                     for c in public.ami_candidates("m", meetings["m"])}
+            self.assertEqual(("inclusive", True), found[(0, "C")])
+            self.assertEqual(("addressed", True), found[(1, "C")])
+            self.assertEqual(("another_person", False), found[(1, "A")])
+            self.assertFalse([k for k in found if k[0] in (2, 3)])  # Backchannel and unlabelled acts.
+            case = public.build_ami_case({"source_file": "m", "index": 1, "assistant": "C", "expected": True,
+                                          "stratum": "addressed"}, meetings["m"])
+            self.assertEqual("C-public-ami", case["source"])
+            self.assertEqual(["participant"], [h["author"] for h in case["state"]["thread_history"]])
+
+
 if __name__ == "__main__":
     unittest.main()

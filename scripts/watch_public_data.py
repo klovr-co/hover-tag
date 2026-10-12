@@ -8,10 +8,14 @@ even where the annotations are openly licensed.
     irc   Ubuntu IRC disentanglement (Kummerfeld et al., ACL 2019), data CC BY 4.0.
           Each annotation `p c` says message c replies to message p; a self-link
           starts a new conversation. One recent participant plays the Tag.
+    ami   AMI Meeting Corpus addressee annotation (Carletta 2007), CC BY 4.0. Each
+          dialogue act is addressed to one participant, a subgroup, or the whole
+          group. One other participant plays the Tag. Spoken meetings, not chat.
 """
 from __future__ import annotations
 
 import argparse
+import xml.etree.ElementTree as ElementTree
 import hashlib
 import json
 import random
@@ -209,6 +213,110 @@ def load_irc(root: Path, splits: tuple[str, ...]) -> tuple[dict[str, dict], dict
     return logs, links
 
 
+AMI_LICENCE = ("AMI Meeting Corpus manual annotations v1.6.2 (Carletta 2007), CC BY 4.0, "
+               "https://groups.inf.ed.ac.uk/ami/corpus/license.shtml. Changed: sampled, mapped to addressee labels.")
+AMI_SKIP_TYPES = {"bck", "stl", "fra", "oth"}  # The guidelines give these no addressee.
+AMI_STRATA = {"inclusive": 175, "addressed": 175, "another_person": 150, "subgroup_excluded": 50}
+NITE = "{http://nite.sourceforge.net/}"
+HREF_RE = re.compile(r"#id\(([^)]+)\)(?:\.\.id\(([^)]+)\))?")
+
+
+def _ami_words(path: Path) -> tuple[list[str], dict[str, dict]]:
+    order, words = [], {}
+    for element in ElementTree.parse(path).getroot():
+        identifier = element.get(f"{NITE}id")
+        if identifier is None:
+            continue
+        order.append(identifier)
+        if element.tag == "w":
+            words[identifier] = {"text": element.text or "", "punc": element.get("punc") == "true",
+                                 "start": float(element.get("starttime") or "nan")}
+    return order, words
+
+
+def load_ami(root: Path) -> dict[str, list[dict]]:
+    """Dialogue acts per meeting, in time order, for meetings with addressee labels."""
+    types = {element.get(f"{NITE}id"): element.get("name")
+             for element in ElementTree.parse(root / "ontologies/da-types.xml").iter() if element.get("name")}
+    meetings: dict[str, list[dict]] = {}
+    labelled = {path.name.split(".")[0] for path in (root / "dialogueActs").glob("*.dialog-act.xml")
+                if "addressee=" in path.read_text(encoding="utf-8")}
+    for meeting in sorted(labelled):
+        acts = []
+        for path in sorted((root / "dialogueActs").glob(f"{meeting}.?.dialog-act.xml")):
+            speaker = path.name.split(".")[1]
+            words_path = root / "words" / f"{meeting}.{speaker}.words.xml"
+            if not words_path.exists():
+                continue
+            order, words = _ami_words(words_path)
+            position = {identifier: index for index, identifier in enumerate(order)}
+            for act in ElementTree.parse(path).getroot().iter("dact"):
+                pointer = act.find(f"{NITE}pointer")
+                child = act.find(f"{NITE}child")
+                if pointer is None or child is None:
+                    continue
+                kind = types.get(HREF_RE.search(pointer.get("href", "")).group(1)) if HREF_RE.search(pointer.get("href", "")) else None
+                match = HREF_RE.search(child.get("href", ""))
+                if not match or match.group(1) not in position:
+                    continue
+                last = match.group(2) or match.group(1)
+                span = [words[i] for i in order[position[match.group(1)]:position.get(last, position[match.group(1)]) + 1] if i in words]
+                if not span:
+                    continue
+                text = ""
+                for word in span:
+                    text += word["text"] if word["punc"] or not text else " " + word["text"]
+                addressee = act.get("addressee")
+                acts.append({"speaker": speaker, "text": text.strip(), "start": span[0]["start"], "type": kind,
+                             "addressee": set(addressee.split(",")) if addressee else None})
+        acts.sort(key=lambda act: act["start"])
+        for index, act in enumerate(acts):
+            act["index"] = index
+        meetings[meeting] = acts
+    return meetings
+
+
+def ami_candidates(meeting: str, acts: list[dict]) -> list[dict]:
+    speakers = {act["speaker"] for act in acts}
+    found = []
+    for act in acts:
+        if act["addressee"] is None or act["type"] in AMI_SKIP_TYPES or len(act["text"].split()) < 3:
+            continue
+        others = speakers - {act["speaker"]}
+        if act["addressee"] >= others:
+            options = [(x, True, "inclusive") for x in sorted(others)]
+        elif len(act["addressee"]) == 1:
+            options = [(x, x in act["addressee"], "addressed" if x in act["addressee"] else "another_person")
+                       for x in sorted(others)]
+        else:
+            options = [(x, x in act["addressee"], "subgroup_addressed" if x in act["addressee"] else "subgroup_excluded")
+                       for x in sorted(others)]
+        found += [{"source_file": meeting, "index": act["index"], "assistant": x, "expected": label, "stratum": stratum}
+                  for x, label, stratum in options]
+    return found
+
+
+def build_ami_case(candidate: dict, acts: list[dict]) -> dict[str, Any]:
+    act = acts[candidate["index"]]
+    earlier = acts[max(0, act["index"] - watch_classifier.MAX_CONTEXT_MESSAGES):act["index"]]
+    history = [{"ts": str(e["index"]), "user": e["speaker"], "text": e["text"]} for e in earlier]
+    state = watch_classifier.message_state(
+        {"user": act["speaker"], "text": act["text"], "ts": str(act["index"])}, history,
+        assistant_name=ASSISTANT_NAME, assistant_user_id=candidate["assistant"])
+    identifier = "p-ami-" + hashlib.sha256(
+        f"{candidate['source_file']}|{candidate['index']}|{candidate['assistant']}".encode()).hexdigest()[:12]
+    return {
+        "id": identifier, "group": hashlib.sha256(f"ami|{candidate['source_file']}|{candidate['index']}".encode()).hexdigest()[:12],
+        "source": "C-public-ami", "category": candidate["stratum"], "expected": candidate["expected"],
+        "confidence": "medium",  # Inter-annotator agreement on AMI addressees is about alpha 0.5.
+        "borderline": False, "derived": None, "channel": "public-ami",
+        "reachable": any(e["author"] == "tag" for e in state["thread_history"]),
+        "reason": f"from AMI addressee annotation ({candidate['stratum']})", "state": state,
+        "current_raw_noise": watch_real_data.is_noise(act["text"]), "current_test": False,
+        "history_test": False, "flags": watch_real_data.flags(act["text"]),
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     commands = parser.add_subparsers(dest="command", required=True)
@@ -217,7 +325,25 @@ def main(argv: list[str] | None = None) -> int:
     irc.add_argument("--out", type=Path, required=True, help="Private output file.")
     irc.add_argument("--splits", default="dev,test,channel-two,new-domains")
     irc.add_argument("--seed", type=int, default=13)
+    ami = commands.add_parser("ami")
+    ami.add_argument("--data", type=Path, required=True, help="Unpacked AMI manual annotations v1.6.2.")
+    ami.add_argument("--out", type=Path, required=True, help="Private output file.")
+    ami.add_argument("--seed", type=int, default=13)
     args = parser.parse_args(argv)
+    if args.command == "ami":
+        meetings = load_ami(args.data)
+        found = [c for meeting, acts in meetings.items() for c in ami_candidates(meeting, acts)]
+        chosen = sample(found, AMI_STRATA, args.seed)
+        cases = [build_ami_case(candidate, meetings[candidate["source_file"]]) for candidate in chosen]
+        watch_real_data._private_write(args.out, {
+            "schema_version": 1, "assistant_name": ASSISTANT_NAME, "licence": AMI_LICENCE,
+            "description": "Public AMI meeting cases mapped to channel watching. Spoken, not chat.", "cases": cases})
+        print(json.dumps({"meetings": len(meetings), "candidates": len(found),
+                          "candidates_by_stratum": dict(Counter(c["stratum"] for c in found)),
+                          "sampled_by_stratum": dict(Counter(c["category"] for c in cases)),
+                          "positive": sum(c["expected"] for c in cases),
+                          "reachable": sum(c["reachable"] for c in cases)}, indent=1), file=sys.stderr)
+        return 0
     logs, links = load_irc(args.data, tuple(args.splits.split(",")))
     found = []
     for key, messages in logs.items():
