@@ -1,0 +1,243 @@
+// Copyright 2026 klovr.co
+// SPDX-License-Identifier: Apache-2.0
+// A Tag's routines: prompts it runs on a schedule and posts in one channel.
+// Everything goes through `tag NAME routine … --json`, the same as the CLI,
+// and saving here approves exactly what was saved.
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import type { Bridge } from "../lib/bridge";
+import { parseJSON, title, type TagRow } from "../lib/protocol";
+import { useFresh, useListMotion } from "../lib/motion";
+import {
+  cliError, emptyForm, formArgs, formOf, formProblem, outcomeGood, outcomeText, routineLine, SCHEDULE_EXAMPLES, when,
+  type Routine, type RoutineDetail, type RoutineForm, type RoutineList,
+} from "../lib/routines";
+import { ErrorLine, fitText, Icon, Switch } from "./ui";
+
+type Say = (text: string) => void;
+
+export function Routines({ api, row, say }: { api: Bridge; row: TagRow; say: Say }) {
+  const [list, setList] = useState<RoutineList | null>(null);
+  const [error, setError] = useState("");
+  const [editing, setEditing] = useState<Routine | "new" | null>(null);
+  const [open, setOpen] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [saved, setSaved] = useState<string | null>(null);
+  const request = useRef(0);
+  const load = useCallback(async () => {
+    const current = ++request.current;
+    const result = await api.tag([row.id, "routine", "list", "--json"]).catch(() => null);
+    if (current !== request.current || !result) return;
+    if (result.code !== 0) { setError(cliError(result.stdout, result.stderr)); setList((l) => l ?? { tag_running: false, routines: [], limits: { per_tag: 10, per_channel: 3 } }); return; }
+    setList(parseJSON<RoutineList>(result.stdout));
+  }, [api, row.id]);
+  useEffect(() => {
+    void load();
+    const timer = setInterval(() => void load(), 30_000);
+    return () => { request.current++; clearInterval(timer); };
+  }, [load]);
+
+  /** Run one routine command; on success reload and say so, on failure keep the message here. */
+  const act = async (id: string, args: string[], done: string) => {
+    setBusy(id);
+    setError("");
+    try {
+      const result = await api.tag(args);
+      if (result.code !== 0) { setError(cliError(result.stdout, result.stderr)); return false; }
+      say(done);
+      await load();
+      return true;
+    } finally {
+      setBusy(null);
+    }
+  };
+  const channels = row.channels ?? [];
+  if (!list) return <p className="meta" style={{ margin: 0 }}>Loading routines…</p>;
+  const full = list.routines.filter((r) => r.enabled).length >= list.limits.per_tag;
+  return (
+    <div className="rt">
+      <p className="lead" style={{ margin: "0 0 8px" }}>
+        {title(row)} runs these on its own and posts each result in one channel. Saving a routine approves exactly what you save.
+      </p>
+      {!list.tag_running && list.routines.length > 0 && (
+        <p className="meta rt-note"><Icon name="warn" />{title(row)} is stopped, so its routines wait until it starts.</p>
+      )}
+      {error && <ErrorLine>{error}</ErrorLine>}
+      <RoutineRows routines={list.routines} render={(item, state) => (
+        <RoutineRow key={item.id} api={api} tag={row.id} routine={item} state={state} tagRunning={list.tag_running}
+          open={open === item.id} toggleOpen={() => setOpen(open === item.id ? null : item.id)}
+          busy={busy === item.id} saved={saved === item.id} act={act}
+          edit={() => { setEditing(item); setOpen(null); }} />
+      )} />
+      {editing ? (
+        <RoutineEditor key={editing === "new" ? "new" : editing.id} tag={row.id} channels={channels} routine={editing === "new" ? undefined : editing}
+          busy={busy === "form"} cancel={() => setEditing(null)}
+          save={async (args, name) => {
+            const ok = await act("form", args, editing === "new" ? `Added ${name}` : `Saved ${name}`);
+            if (ok) {
+              setEditing(null);
+              if (editing !== "new") {
+                setSaved(editing.id);
+                setTimeout(() => setSaved(null), 900);
+              }
+            }
+            return ok;
+          }} />
+      ) : (
+        <button className="ghost-add rt-add" disabled={full || !channels.length} onClick={() => { setEditing("new"); setError(""); }}>
+          <span className="gi"><Icon name="plus" /></span>
+          {!channels.length ? `Add ${title(row)} to a channel first` : full ? `${list.limits.per_tag} routines are running; pause one to add another` : "Add a routine"}
+        </button>
+      )}
+      {!list.routines.length && !editing && (
+        <p className="meta" style={{ margin: "8px 0 0" }}>
+          For example, every weekday at 09:00, summarise yesterday's merged pull requests in #{channels[0]?.name ?? "a channel"}.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Mounted once the list has loaded, so routines that were already there don't slide in on open. */
+function RoutineRows({ routines, render }: { routines: Routine[]; render: (item: Routine, state: "stay" | "enter" | "leave") => ReactNode }) {
+  const rows = useListMotion(routines, (r) => r.id);
+  if (!rows.length) return null;
+  return <div className="card rt-list">{rows.map(({ item, state }) => render(item, state))}</div>;
+}
+
+function RoutineRow({ api, tag, routine, state, tagRunning, open, toggleOpen, busy, saved, act, edit }: {
+  api: Bridge; tag: string; routine: Routine; state: "stay" | "enter" | "leave"; tagRunning: boolean;
+  open: boolean; toggleOpen: () => void; busy: boolean; saved: boolean;
+  act: (id: string, args: string[], done: string) => Promise<boolean>; edit: () => void;
+}) {
+  // A run starting or a new result gets a ripple; a saved edit flashes once. Opening the tab stays still.
+  const ran = useFresh(routine.running || routine.last_run?.run_id, 900);
+  const flash = saved;
+  const [confirm, setConfirm] = useState(false);
+  const cls = ["rt-row", state === "enter" ? "entering" : "", state === "leave" ? "leaving" : "", flash ? "fresh" : "", open ? "open" : ""].filter(Boolean).join(" ");
+  const dot = routine.attention ? "bad" : routine.running ? "live" : routine.enabled ? "on" : "off";
+  return (
+    <div className={cls}>
+      <div className="rt-head">
+        <button className="rt-main" aria-expanded={open} onClick={toggleOpen}>
+          <span className={`rt-dot ${dot}${ran ? " ran" : ""}`} aria-hidden="true" />
+          <span className="rt-txt">
+            <span className="rt-name">{routine.name}</span>
+            <span className={routine.attention ? "rt-line bad" : "rt-line"}>{routineLine(routine, tagRunning)}</span>
+          </span>
+          <span className={open ? "chev turn" : "chev"}><Icon name="right" size={12} /></span>
+        </button>
+        <Switch on={routine.enabled} busy={busy} label={`${routine.enabled ? "Pause" : "Resume"} ${routine.name}`}
+          onClick={() => void act(routine.id, [tag, "routine", routine.enabled ? "pause" : "resume", routine.id, "--json"],
+            `${routine.enabled ? "Paused" : "Resumed"} ${routine.name}`)} />
+      </div>
+      {open && (
+        <div className="rt-more">
+          <RoutineHistory api={api} tag={tag} routine={routine} />
+          <p className="rt-prompt selectable">{routine.prompt}</p>
+          <p className="meta" style={{ margin: 0 }}>
+            Up to ${routine.limits.max_budget_usd.toFixed(2)}, {routine.limits.max_turns} turns and {Math.round(routine.limits.timeout_seconds / 60)} minutes a run.
+            {routine.catch_up === "skip" ? " Skips runs it missed." : " Runs once to catch up after this computer sleeps."}
+          </p>
+          <div className="rt-acts">
+            <button className="p-btn soft sm" disabled={busy || !tagRunning || !routine.approved || routine.running}
+              title={!tagRunning ? "Start the Tag first" : undefined}
+              onClick={() => void act(routine.id, [tag, "routine", "run-now", routine.id, "--json"], `Running ${routine.name} now`)}>
+              <Icon name="play" size={10} />Run now
+            </button>
+            <button className="p-btn soft sm" disabled={busy} onClick={edit}>{routine.approved ? "Edit" : "Review and approve"}</button>
+            {confirm ? (
+              <span className="rt-confirm">
+                <span className="meta">Remove {routine.name} and its history?</span>
+                <button className="p-btn quiet sm" onClick={() => setConfirm(false)}>Keep</button>
+                <button className="p-btn soft sm" disabled={busy}
+                  onClick={() => void act(routine.id, [tag, "routine", "remove", routine.id, "--json"], `Removed ${routine.name}`)}>Remove</button>
+              </span>
+            ) : (
+              <button className="link bad rt-remove" onClick={() => setConfirm(true)}>Remove</button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RoutineHistory({ api, tag, routine }: { api: Bridge; tag: string; routine: Routine }) {
+  const [detail, setDetail] = useState<RoutineDetail | null>(null);
+  const lastRun = routine.last_run?.run_id;
+  useEffect(() => {
+    let live = true;
+    void api.tag([tag, "routine", "show", routine.id, "--json"]).then((result) => {
+      if (live && result.code === 0) setDetail(parseJSON<RoutineDetail>(result.stdout));
+    }, () => {});
+    return () => { live = false; };
+  }, [api, tag, routine.id, lastRun]);
+  if (!detail) return null;
+  const runs = detail.history.slice(0, 5);
+  if (!runs.length) return <p className="meta" style={{ margin: 0 }}>No runs yet.</p>;
+  return (
+    <ul className="rt-history">
+      {runs.map((run) => (
+        <li key={run.run_id} className={outcomeGood(run) ? "good" : "bad"}>
+          <span className="rt-when">{when(run.started ?? run.scheduled_for, routine.timezone)}</span>
+          <span className="rt-outcome">{outcomeText(run)}{run.trigger === "run-now" ? " · run by hand" : run.trigger === "catch-up" ? " · caught up" : ""}</span>
+          {run.diagnostic && <span className="rt-diag selectable">{run.diagnostic}</span>}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function RoutineEditor({ tag, channels, routine, busy, cancel, save }: {
+  tag: string; channels: { id: string; name: string | null }[]; routine?: Routine; busy: boolean;
+  cancel: () => void; save: (args: string[], name: string) => Promise<boolean>;
+}) {
+  const [form, setForm] = useState<RoutineForm>(routine ? formOf(routine) : emptyForm(channels[0]?.id ?? ""));
+  const [tried, setTried] = useState(false);
+  const problem = formProblem(form);
+  const set = (key: keyof RoutineForm) => (value: string) => setForm((f) => ({ ...f, [key]: value }));
+  const submit = async () => {
+    setTried(true);
+    if (problem) return;
+    await save(formArgs(tag, form, routine), form.name.trim());
+  };
+  return (
+    <form className="card rt-form" onSubmit={(e) => { e.preventDefault(); void submit(); }}>
+      <label className="rt-field"><span>Name</span>
+        <input className="field" autoFocus value={form.name} maxLength={80} placeholder="Weekly PR digest" onChange={(e) => set("name")(e.target.value)} />
+      </label>
+      <label className="rt-field"><span>When</span>
+        <input className="field mono" value={form.schedule} aria-describedby="rt-when-help" onChange={(e) => set("schedule")(e.target.value)} />
+      </label>
+      <div className="rt-chips" id="rt-when-help">
+        {SCHEDULE_EXAMPLES.map((example) => (
+          <button type="button" key={example} className={form.schedule === example ? "rt-chip on" : "rt-chip"} onClick={() => set("schedule")(example)}>{example}</button>
+        ))}
+        <span className="meta">At most once an hour. Times on the hour start a few minutes after.</span>
+      </div>
+      <div className="rt-pair">
+        <label className="rt-field"><span>Timezone</span>
+          <input className="field" value={form.timezone} onChange={(e) => set("timezone")(e.target.value)} />
+        </label>
+        <label className="rt-field"><span>Spend limit per run ($)</span>
+          <input className="field" inputMode="decimal" value={form.budget} onChange={(e) => set("budget")(e.target.value)} />
+        </label>
+      </div>
+      <label className="rt-field"><span>Post in</span>
+        <select className="field" value={form.channel} onChange={(e) => set("channel")(e.target.value)}>
+          {channels.map((c) => <option key={c.id} value={c.id}>#{c.name ?? c.id}</option>)}
+        </select>
+      </label>
+      <label className="rt-field"><span>What to do each time</span>
+        <textarea className="field" rows={3} ref={fitText} value={form.prompt} maxLength={8000}
+          placeholder="Summarise the pull requests merged since the last run. Reply NO_REPLY if there are none."
+          onChange={(e) => { set("prompt")(e.target.value); fitText(e.currentTarget); }} />
+      </label>
+      {tried && problem && <ErrorLine>{problem}</ErrorLine>}
+      <div className="rt-acts end">
+        <button type="button" className="p-btn quiet sm" onClick={cancel}>Cancel</button>
+        <button type="submit" className="p-btn ink sm" disabled={busy}>{busy ? "Saving…" : routine ? "Save and approve" : "Add and approve"}</button>
+      </div>
+    </form>
+  );
+}

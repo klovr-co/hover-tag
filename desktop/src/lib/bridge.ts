@@ -15,6 +15,7 @@ import aiModelsExample from "../../../protocol/examples/ai-models.json";
 import type { AIStatus, ApiConnection, Connection } from "./ai";
 import type { ActivityItem } from "./home";
 import { windowFitter } from "./fit";
+import { demoRoutines } from "./routines";
 
 export interface AppInfo {
   platform: "macos" | "windows" | "linux" | string;
@@ -220,6 +221,7 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
   // ?telemetry=ask shows the first-run usage data notice.
   let telemetry = new URLSearchParams(location.search).get("telemetry") === "ask" ? "not_set" : "on";
   const json = (value: unknown): RunResult => ({ code: 0, stdout: JSON.stringify(value), stderr: "" });
+  const routines = demoRoutines();
   return {
     info: async () => ({
       platform: "macos", demo: true, cli: installed ? "~/.local/bin/tag" : null,
@@ -242,7 +244,7 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
       }
       if (first === "version") {
         return json({ ...versionExample, version: runtimeVersion,
-          capabilities: [...new Set([...versionExample.capabilities, "ai-connections", "shared-ai-connections", "logs-activity", "thinking-level", "describe", "telemetry-events", "api-connections"])] });
+          capabilities: [...new Set([...versionExample.capabilities, "ai-connections", "shared-ai-connections", "logs-activity", "thinking-level", "describe", "telemetry-events", "api-connections", "routines"])] });
       }
       if (second === "settings" && args[2] === "ai" && args[3] === "api" && args[4] === "check") {
         await sleep(500);
@@ -317,6 +319,10 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
         return json({ schema_version: 1, tag: row.id, services: {
           slack: ["Open Tag is live as @" + (row.slack_name ?? "Tag")],
           mfs: ["Memory server ready"] }, activity: matches.slice(0, limit), activity_has_more: matches.length > limit });
+      }
+      if (row && second === "routine") {
+        const result = routines(row.id, row === rows[0], row.state === "running", args.slice(2));
+        return { code: result.ok ? 0 : 1, stdout: JSON.stringify({ schema_version: 1, tag: row.id, ...result }), stderr: "" };
       }
       if (row && (second === "start" || second === "stop")) {
         row.state = second === "start" ? "running" : "stopped";

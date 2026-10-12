@@ -16,10 +16,11 @@ import teamArt from "../assets/art/tag-team.png";
 import keyArt from "../assets/art/tag-key.png";
 import { workingFolder } from "./Home";
 import { ModelMenu, ModelWarning, SaveBar, ThinkingRow } from "./AI";
+import { Routines } from "./Routines";
 import { Avatar, dragWindow, ErrorLine, fitText, Icon, Primary, Switch, useCopied, workspaceColor, WorkspaceMark, source, tagIcon } from "./ui";
 
 export type Selection = { kind: "tag"; id: string } | { kind: "channel"; id: string };
-export type Tab = "activity" | "channels" | "logs" | "details";
+export type Tab = "activity" | "channels" | "routines" | "logs" | "details";
 
 interface Props {
   api: Bridge;
@@ -37,6 +38,8 @@ interface Props {
   say: (text: string) => void;
   /** The installed Tag can change descriptions (`describe` capability). */
   canDescribe?: boolean;
+  /** The installed Tag has routines (`routines` capability). */
+  canRoutines?: boolean;
 }
 
 const PRESENCE = { online: "var(--green)", offline: "transparent", setup: "var(--amber)", attention: "var(--red)" };
@@ -48,7 +51,7 @@ export const shortPath = (path: string) => path.replace(/^(\/Users\/[^/]+|\/home
 /** A channel's name for people, or its ID while Tag hasn't recorded one. */
 const channelName = (channel: { id: string; name: string | null }) => channel.name ?? channel.id;
 
-export function TagDetail({ api, tags, initial, initialTab = "activity", problems, back, add, showSettings, finishSetup, openAI, say, canDescribe = false }: Props) {
+export function TagDetail({ api, tags, initial, initialTab = "activity", problems, back, add, showSettings, finishSetup, openAI, say, canDescribe = false, canRoutines = false }: Props) {
   const rows = tags.rows;
   const start = rows.find((row) => row.id === initial);
   const [workspace, setWorkspace] = useState(start?.slack_workspace ?? "");
@@ -138,7 +141,7 @@ export function TagDetail({ api, tags, initial, initialTab = "activity", problem
           {sel.kind === "channel"
             ? <ChannelPane key={`${group.key}:${sel.id}:${hideErrors}`} hideErrors={hideErrors} setHideErrors={setHideErrors} api={api} channel={channels.find((c) => c.id === sel.id)!} rows={live} team={group.key} open={(id) => choose({ kind: "tag", id })} />
             : <TagPane key={`${sel.id}:${hideErrors}`} hideErrors={hideErrors} setHideErrors={setHideErrors} api={api} tags={tags} row={group.rows.find((r) => r.id === sel.id)!} tab={tab} setTab={setTab}
-              problem={problems[sel.id] ?? null} finishSetup={finishSetup} openAI={openAI} say={say} canDescribe={canDescribe} />}
+              problem={problems[sel.id] ?? null} finishSetup={finishSetup} openAI={openAI} say={say} canDescribe={canDescribe} canRoutines={canRoutines} />}
         </div>
       </div>
     </>
@@ -256,9 +259,9 @@ function dayLabel(at: Date, now: Date) {
   return diff === 0 ? "Today" : diff === 1 ? "Yesterday" : at.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
 }
 
-function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, say, canDescribe, hideErrors, setHideErrors }: FilterProps & {
+function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, say, canDescribe, canRoutines, hideErrors, setHideErrors }: FilterProps & {
   api: Bridge; tags: Tags; row: TagRow; tab: Tab; setTab: (tab: Tab) => void; problem: string | null;
-  finishSetup: (row: TagRow) => void; openAI: (tag: string) => void; say: (text: string) => void; canDescribe: boolean;
+  finishSetup: (row: TagRow) => void; openAI: (tag: string) => void; say: (text: string) => void; canDescribe: boolean; canRoutines: boolean;
 }) {
   const state = status(row);
   const [activity, setActivity] = useState<ActivityItem[] | null>(null);
@@ -335,7 +338,7 @@ function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, sa
       </div>
       <div className="sl-tabbar">
       <div className="sl-tabs" role="tablist">
-        {([["activity", "Activity", null], ["channels", "Channels", channels.length], ["logs", "Logs", null], ["details", "Details", null]] as const).map(([key, label, count]) => (
+        {([["activity", "Activity", null], ["channels", "Channels", channels.length], ...(canRoutines ? [["routines", "Routines", null] as const] : []), ["logs", "Logs", null], ["details", "Details", null]] as const).map(([key, label, count]) => (
           <button key={key} role="tab" aria-selected={tab === key} onClick={() => setTab(key)}>
             {label}{count !== null && <> <span className="tcount">{count}</span></>}
           </button>
@@ -364,6 +367,7 @@ function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, sa
             )}
           </>
         )}
+        {tab === "routines" && canRoutines && <Routines api={api} row={row} say={say} />}
         {tab === "logs" && <Logs text={logView} copyLog={copyLog} />}
         {tab === "details" && <Details api={api} tags={tags} row={row} copyLog={copyLog} openAI={() => openAI(row.id)} say={say} canDescribe={canDescribe} />}
       </div>
