@@ -20,6 +20,7 @@ import json
 import os
 import re
 import secrets
+import threading
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -575,8 +576,23 @@ def empty_state() -> dict[str, Any]:
             "consecutive_failures": 0, "last_success": None, "history": []}
 
 
+_STATE_LOCKS: dict[Path, threading.RLock] = {}
+_STATE_LOCKS_GUARD = threading.Lock()
+
+
+def _state_lock(path: Path) -> threading.RLock:
+    with _STATE_LOCKS_GUARD:
+        return _STATE_LOCKS.setdefault(path, threading.RLock())
+
+
 class RoutineStateStore:
-    """Per-routine run state and history, written only by the bridge."""
+    """Per-routine run state and history, written only by the bridge.
+
+    The scheduler's tick and finishing runs change the same file from different
+    threads, so every change goes through ``update``, which holds a per-routine
+    lock across the read, the change and the write. Writes are atomic, so the
+    CLI can read at any time.
+    """
 
     def __init__(self, home: Path) -> None:
         self.home = home
@@ -603,24 +619,41 @@ class RoutineStateStore:
         return state
 
     def save(self, routine_id: str, state: dict[str, Any]) -> None:
-        state["history"] = state["history"][-MAX_HISTORY:]
-        _atomic_write(self._path(routine_id), state)
+        with _state_lock(self._path(routine_id)):
+            state["history"] = state["history"][-MAX_HISTORY:]
+            _atomic_write(self._path(routine_id), state)
+
+    def update(self, routine_id: str, change: Any) -> dict[str, Any]:
+        """Read, change and write one routine's state as one step; returns the new state.
+
+        ``change`` edits the state in place and may return False to skip writing.
+        """
+        path = self._path(routine_id)
+        with _state_lock(path):
+            state = self.load(routine_id)
+            if change(state) is not False:
+                self.save(routine_id, state)
+            return state
 
     def remove(self, routine_id: str) -> None:
-        self._path(routine_id).unlink(missing_ok=True)
+        path = self._path(routine_id)
+        with _state_lock(path):
+            path.unlink(missing_ok=True)
 
     def record(self, routine_id: str, run: dict[str, Any]) -> dict[str, Any]:
         """Add one run record and update failure counting. Returns the new state."""
-        state = self.load(routine_id)
-        state["history"].append(run)
-        outcome = run.get("outcome")
-        if outcome in {"posted", "no_reply"}:
-            state["consecutive_failures"] = 0
-            state["last_success"] = run.get("ended") or run.get("started")
-        elif outcome in {"failed", "budget_exceeded", "timeout"}:
-            state["consecutive_failures"] += 1
-        self.save(routine_id, state)
-        return state
+        return self.update(routine_id, lambda state: add_run(state, run))
+
+
+def add_run(state: dict[str, Any], run: dict[str, Any]) -> None:
+    """Append a run to history and keep the failure count and last success current."""
+    state["history"].append(run)
+    outcome = run.get("outcome")
+    if outcome in {"posted", "no_reply"}:
+        state["consecutive_failures"] = 0
+        state["last_success"] = run.get("ended") or run.get("started")
+    elif outcome in {"failed", "budget_exceeded", "timeout"}:
+        state["consecutive_failures"] += 1
 
 
 def run_record(routine: dict[str, Any], *, trigger: str, slot: datetime | None, outcome: str,

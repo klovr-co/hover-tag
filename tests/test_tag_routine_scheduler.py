@@ -1,8 +1,12 @@
 import json
+import random
 import tempfile
+import threading
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
 from scripts import tag_routines as routines
 from scripts.tag_routine_scheduler import RoutineScheduler
@@ -239,6 +243,125 @@ class SchedulerTests(unittest.TestCase):
         self.scheduler.tick()
         self.scheduler.recover()
         self.assertEqual(json.loads((self.home / "routines.json").read_text(encoding="utf-8"))["schema_version"], 9)
+
+
+class ConcurrencyTests(unittest.TestCase):
+    """Ticks, run-now requests and finishing runs hit the same routine from many threads."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.home = Path(self.temp.name)
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def test_a_finishing_run_never_clears_another_runs_mark(self):
+        store = routines.RoutineStore(self.home)
+        states = routines.RoutineStateStore(self.home)
+        item = store.add({"name": "R", "schedule": "every 1h", "timezone": "UTC", "channel": "C0123ABCDE",
+                          "prompt": "p", "owner": "U0123ABC"}, by="local-operator", via="cli", now=START)
+        scheduler = RoutineScheduler(self.home, lambda *a: None, clock=lambda: START)
+        states.update(item["id"], lambda state: state.update(running={"token": "newer", "trigger": "run-now"}))
+        record = routines.run_record(item, trigger="schedule", slot=None, outcome="posted")
+        state = scheduler._finish(item["id"], "older", record)
+        self.assertEqual(state["running"]["token"], "newer")
+        self.assertEqual([e["run_id"] for e in state["history"]], [record["run_id"]])
+        self.assertIsNone(scheduler._finish(item["id"], "newer", record)["running"])
+
+    def test_parallel_records_are_never_lost(self):
+        states = routines.RoutineStateStore(self.home)
+        item = routines.approve(routines.validate_routine({
+            "name": "R", "schedule": "every 1h", "timezone": "UTC", "channel": "C0123ABCDE", "prompt": "p",
+            "owner": "U0123ABC"}), by="local-operator", via="cli")
+        def write(index):
+            for _ in range(12):
+                states.record(item["id"], routines.run_record(item, trigger="schedule", slot=None, outcome="posted",
+                                                              diagnostic=str(index)))
+                states.update(item["id"], lambda state: state.update(next_due=START.isoformat()))
+        threads = [threading.Thread(target=write, args=(i,)) for i in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(len(states.load(item["id"])["history"]), 96)
+
+    def test_ticks_and_finishing_runs_keep_every_run_and_never_overlap(self):
+        # Slow every state write a little, so a read-change-write that isn't locked
+        # overlaps with another thread's and loses its change.
+        original = routines._atomic_write
+
+        def slow_write(path, payload):
+            time.sleep(random.uniform(0, 0.004))
+            original(path, payload)
+        patcher = mock.patch.object(routines, "_atomic_write", slow_write)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        store = routines.RoutineStore(self.home)
+        states = routines.RoutineStateStore(self.home)
+        clock_lock = threading.Lock()
+        clock = {"now": START}
+        item = store.add({"name": "Hourly", "schedule": "every 1h", "timezone": "UTC", "channel": "C0123ABCDE",
+                          "prompt": "p", "owner": "U0123ABC"}, by="local-operator", via="cli", now=START)
+        active, peak, records, workers = [0], [0], [], []
+        lock = threading.Lock()
+
+        def now():
+            with clock_lock:
+                return clock["now"]
+
+        def start_run(routine, trigger, slot, last_success):
+            with lock:
+                active[0] += 1
+                peak[0] = max(peak[0], active[0])
+            time.sleep(random.uniform(0, 0.01))
+            with lock:
+                active[0] -= 1
+            record = routines.run_record(routine, trigger=trigger, slot=slot, outcome="posted", started=now(), ended=now())
+            with lock:
+                records.append(record["run_id"])
+            return record
+
+        def spawn(work):
+            thread = threading.Thread(target=work)
+            with lock:
+                workers.append(thread)
+            thread.start()
+
+        scheduler = RoutineScheduler(self.home, start_run, clock=now, spawn=spawn)
+        scheduler.tick()
+
+        def driver(seed):
+            rng = random.Random(seed)
+            for _ in range(40):
+                if rng.random() < 0.3:
+                    routines.request_run(self.home, item["id"])
+                with clock_lock:
+                    clock["now"] += timedelta(minutes=rng.choice([0, 7, 31, 61]))
+                scheduler.tick()
+                time.sleep(rng.uniform(0, 0.003))
+
+        drivers = [threading.Thread(target=driver, args=(seed,)) for seed in range(6)]
+        for thread in drivers:
+            thread.start()
+        for thread in drivers:
+            thread.join()
+        scheduler.tick()
+        for thread in list(workers):
+            thread.join()
+
+        self.assertEqual(peak[0], 1, "a routine overlapped itself")
+        state = states.load(item["id"])
+        self.assertIsNone(state["running"])
+        self.assertEqual(scheduler.running, {})
+        history_ids = [entry["run_id"] for entry in state["history"]]
+        self.assertEqual(len(history_ids), len(set(history_ids)))
+        kept = set(history_ids)
+        # History keeps the newest entries; every finished run within that window is there exactly once.
+        recent = [run_id for run_id in records if run_id in kept]
+        self.assertEqual(len(recent), sum(1 for e in state["history"] if e["outcome"] == "posted"))
+        if len(state["history"]) < routines.MAX_HISTORY:
+            self.assertEqual(sorted(recent), sorted(records))
+        self.assertGreater(datetime.fromisoformat(state["next_due"]), now() - timedelta(hours=1))
 
 
 if __name__ == "__main__":

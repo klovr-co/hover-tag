@@ -14,6 +14,7 @@ work and returns a run record (see ``tag_routines.run_record``).
 from __future__ import annotations
 
 import threading
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -68,17 +69,19 @@ class RoutineScheduler:
             self._warn("Could not read routines: %s", exc)
             return
         for routine in routines:
-            state = self.states.load(routine["id"])
-            running = state.get("running")
-            if not isinstance(running, dict):
-                continue
-            state["running"] = None
-            self.states.save(routine["id"], state)
-            slot = _parse(running.get("scheduled_for"))
-            self.states.record(routine["id"], routines_lib.run_record(
-                routine, trigger=running.get("trigger") if running.get("trigger") in routines_lib.TRIGGERS else "schedule",
-                slot=slot, outcome="interrupted", started=_parse(running.get("started")), ended=self.clock(),
-                diagnostic="Tag stopped before this run finished. It was not run again, so nothing posts twice."))
+            def close(state: dict[str, Any]) -> bool:
+                running = state.get("running")
+                if not isinstance(running, dict):
+                    return False
+                state["running"] = None
+                trigger = running.get("trigger")
+                state["history"].append(routines_lib.run_record(
+                    routine, trigger=trigger if trigger in routines_lib.TRIGGERS else "schedule",
+                    slot=_parse(running.get("scheduled_for")), outcome="interrupted",
+                    started=_parse(running.get("started")), ended=self.clock(),
+                    diagnostic="Tag stopped before this run finished. It was not run again, so nothing posts twice."))
+                return True
+            self.states.update(routine["id"], close)
 
     def tick(self) -> None:
         now = self.clock()
@@ -96,49 +99,58 @@ class RoutineScheduler:
         for request in routines_lib.take_requests(self.home):
             routine = by_id.get(request["routine_id"])
             if routine is not None:
-                self._launch(routine, "run-now", None, now)
+                try:
+                    self._launch(routine, "run-now", None, now)
+                except Exception as exc:  # noqa: BLE001 - keep checking the others
+                    self._warn("Could not start routine %s: %s", routine["id"], exc)
 
     def _check_due(self, routine: dict[str, Any], now: datetime) -> None:
-        state = self.states.load(routine["id"])
         key = schedule_key(routine)
-        if not routine["enabled"]:
-            # A paused routine doesn't catch up; resuming starts from the next slot.
-            if state["next_due"] is not None:
+        decision: dict[str, Any] = {}
+
+        def plan(state: dict[str, Any]) -> bool:
+            if not routine["enabled"]:
+                # A paused routine doesn't catch up; resuming starts from the next slot.
+                if state["next_due"] is None:
+                    return False
                 state["next_due"] = None
-                self.states.save(routine["id"], state)
-            return
-        due = _parse(state.get("next_due"))
-        if due is None or state.get("schedule_key") != key:
+                return True
+            due = _parse(state.get("next_due"))
+            if due is None or state.get("schedule_key") != key:
+                state["next_due"] = routines_lib.next_run(routine, now).isoformat()
+                state["schedule_key"] = key
+                return True
+            if now < due:
+                return False
+            slots = [due]
+            while len(slots) < MAX_SLOTS:
+                following = routines_lib.next_run(routine, slots[-1])
+                if following > now:
+                    break
+                slots.append(following)
+            latest = slots[-1]
             state["next_due"] = routines_lib.next_run(routine, now).isoformat()
-            state["schedule_key"] = key
-            self.states.save(routine["id"], state)
-            return
-        if now < due:
-            return
-        slots = [due]
-        while len(slots) < MAX_SLOTS:
-            following = routines_lib.next_run(routine, slots[-1])
-            if following > now:
-                break
-            slots.append(following)
-        latest = slots[-1]
-        state["next_due"] = routines_lib.next_run(routine, now).isoformat()
-        self.states.save(routine["id"], state)
-        late = now - latest > routines_lib.LATE_AFTER
-        run_latest = not late or (routine["catch_up"] == "latest"
-                                  and now - latest <= routines_lib.CATCH_UP_LOOKBACK)
-        # Every slot that won't run becomes one history entry, however many there were.
-        missed = slots[:-1] if run_latest else slots
-        if missed:
-            count = len(missed)
-            reason = "" if run_latest else (" This routine skips late runs." if routine["catch_up"] == "skip"
-                                            else " The latest was too long ago to catch up.")
-            self.states.record(routine["id"], routines_lib.run_record(
-                routine, trigger="schedule", slot=missed[-1], outcome="missed", count=count,
-                diagnostic=f"Missed {count} run{'s' if count != 1 else ''} while Tag was stopped "
-                           f"or this computer was asleep.{reason}"))
-        if run_latest:
-            self._launch(routine, "catch-up" if late else "schedule", latest, now)
+            late = now - latest > routines_lib.LATE_AFTER
+            run_latest = not late or (routine["catch_up"] == "latest"
+                                      and now - latest <= routines_lib.CATCH_UP_LOOKBACK)
+            # Every slot that won't run becomes one history entry, however many there were.
+            missed = slots[:-1] if run_latest else slots
+            if missed:
+                count = len(missed)
+                reason = "" if run_latest else (" This routine skips late runs." if routine["catch_up"] == "skip"
+                                                else " The latest was too long ago to catch up.")
+                state["history"].append(routines_lib.run_record(
+                    routine, trigger="schedule", slot=missed[-1], outcome="missed", count=count,
+                    diagnostic=f"Missed {count} run{'s' if count != 1 else ''} while Tag was stopped "
+                               f"or this computer was asleep.{reason}"))
+            if run_latest:
+                decision["launch"] = ("catch-up" if late else "schedule", latest)
+            return True
+
+        self.states.update(routine["id"], plan)
+        if "launch" in decision:
+            trigger, slot = decision["launch"]
+            self._launch(routine, trigger, slot, now)
 
     def _launch(self, routine: dict[str, Any], trigger: str, slot: datetime | None, now: datetime) -> None:
         routine_id = routine["id"]
@@ -148,6 +160,7 @@ class RoutineScheduler:
                 routine, trigger=trigger, slot=slot, outcome=outcome, started=now, ended=now,
                 diagnostic=diagnostic))
 
+        token = uuid.uuid4().hex
         with self.lock:
             if routine_id in self.running:
                 return refuse("skipped", "The previous run was still going.")
@@ -156,37 +169,52 @@ class RoutineScheduler:
             if not routines_lib.approved(routine):
                 return refuse("blocked", "This routine changed after it was approved. Approve it again "
                                          "with tag routine edit or in Tag.app.")
-            self.running[routine_id] = trigger
-        state = self.states.load(routine_id)
-        state["running"] = {"trigger": trigger, "started": now.isoformat(timespec="seconds"),
-                            "scheduled_for": slot.isoformat(timespec="seconds") if slot else None}
-        self.states.save(routine_id, state)
-        last_success = state.get("last_success")
-        self.spawn(lambda: self._run(routine, trigger, slot, last_success))
+            self.running[routine_id] = token
 
-    def _run(self, routine: dict[str, Any], trigger: str, slot: datetime | None, last_success: str | None) -> None:
+        def mark(state: dict[str, Any]) -> None:
+            state["running"] = {"token": token, "trigger": trigger, "started": now.isoformat(timespec="seconds"),
+                                "scheduled_for": slot.isoformat(timespec="seconds") if slot else None}
+        try:
+            state = self.states.update(routine_id, mark)
+            last_success = state.get("last_success")
+            self.spawn(lambda: self._run(routine, token, trigger, slot, last_success))
+        except BaseException:
+            with self.lock:
+                if self.running.get(routine_id) == token:
+                    self.running.pop(routine_id)
+            raise
+
+    def _run(self, routine: dict[str, Any], token: str, trigger: str, slot: datetime | None,
+             last_success: str | None) -> None:
         routine_id = routine["id"]
         started = self.clock()
+        record: dict[str, Any] | None = None
+        error = "an internal error"
         try:
             record = self.start_run(routine, trigger, slot, last_success)
         except Exception as exc:  # noqa: BLE001 - a crashed run is a failed run, not a dead scheduler
             self._warn("Routine %s failed: %s", routine_id, exc)
-            record = routines_lib.run_record(
-                routine, trigger=trigger, slot=slot, outcome="failed", started=started, ended=self.clock(),
-                diagnostic=f"Tag hit an internal error ({type(exc).__name__}).")
+            error = f"an internal error ({type(exc).__name__})"
         finally:
+            # Also on BaseException, such as shutdown, so the running mark never outlives the run.
+            if record is None:
+                record = routines_lib.run_record(
+                    routine, trigger=trigger, slot=slot, outcome="failed", started=started, ended=self.clock(),
+                    diagnostic=f"Tag hit {error}.")
+            state = self._finish(routine_id, token, record)
             with self.lock:
-                self.running.pop(routine_id, None)
-            state = self.states.load(routine_id)
-            state["running"] = None
-            self.states.save(routine_id, state)
-        state = self.states.record(routine_id, record)
+                if self.running.get(routine_id) == token:
+                    self.running.pop(routine_id)
+        if not self._exists(routine_id):
+            # Removed while it ran: don't leave its state behind.
+            self.states.remove(routine_id)
+            return
         failures = state["consecutive_failures"]
         if failures >= routines_lib.AUTO_PAUSE_FAILURES and routine["enabled"]:
             try:
                 paused = self.store.set_enabled(
                     routine_id, False, reason=f"Paused after {failures} failed runs in a row.")
-            except routines_lib.RoutineError as exc:
+            except Exception as exc:  # noqa: BLE001 - the next failure tries again
                 self._warn("Could not pause routine %s: %s", routine_id, exc)
                 return
             if self.on_auto_pause is not None:
@@ -194,6 +222,21 @@ class RoutineScheduler:
                     self.on_auto_pause(paused, failures)
                 except Exception as exc:  # noqa: BLE001 - the pause itself already happened
                     self._warn("Could not announce the paused routine %s: %s", routine_id, exc)
+
+    def _finish(self, routine_id: str, token: str, record: dict[str, Any]) -> dict[str, Any]:
+        """Record the run and clear its running mark in one step, never another run's mark."""
+        def finish(state: dict[str, Any]) -> None:
+            running = state.get("running")
+            if isinstance(running, dict) and running.get("token") == token:
+                state["running"] = None
+            routines_lib.add_run(state, record)
+        return self.states.update(routine_id, finish)
+
+    def _exists(self, routine_id: str) -> bool:
+        try:
+            return any(r["id"] == routine_id for r in self.store.load())
+        except (routines_lib.RoutineError, routines_lib.RoutineSchemaError):
+            return True
 
 
 def _parse(value: Any) -> datetime | None:
