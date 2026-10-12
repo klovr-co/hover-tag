@@ -610,9 +610,15 @@ def download_thread_images(
 
 
 def download_thread_text_files(
-    messages: list[dict[str, Any]], budget: AttachmentBudget | None = None
+    messages: list[dict[str, Any]],
+    budget: AttachmentBudget | None = None,
+    attachment_dir: Path | None = None,
 ) -> list[str]:
-    """Read Slack snippets and text attachments into the current prompt only."""
+    """Read Slack snippets and text attachments into the current prompt.
+
+    A long file is inlined as a bounded preview; the full copy is saved in
+    ``attachment_dir`` so the backend can read the rest instead of guessing.
+    """
     lines: list[str] = []
     seen_file_ids: set[str] = set()
     token = require_env("SLACK_BOT_TOKEN")
@@ -634,7 +640,15 @@ def download_thread_text_files(
                     budget.record(len(data))
                 text = data.decode("utf-8", errors="replace").strip()
                 if len(text) > MAX_ATTACHMENT_TEXT_CHARS:
-                    text = text[:MAX_ATTACHMENT_TEXT_CHARS] + "\n[Attachment text truncated]"
+                    notice = "[Attachment text truncated]"
+                    if attachment_dir is not None:
+                        target = attachment_dir / stored_attachment_name(file, len(seen_file_ids))
+                        target.write_bytes(data)
+                        notice = (
+                            f"[Attachment text truncated after {MAX_ATTACHMENT_TEXT_CHARS:,} of {len(text):,} characters. "
+                            f"Read the full file at {target}]"
+                        )
+                    text = text[:MAX_ATTACHMENT_TEXT_CHARS] + "\n" + notice
                 if text:
                     lines.append(f"[Slack text attachment: {name}]\n{text}")
                 else:
@@ -952,7 +966,7 @@ def build_thread_texts(
     selected_messages = [{"files": files}]
     file_lines = [
         *oversized_lines,
-        *download_thread_text_files(selected_messages, budget),
+        *download_thread_text_files(selected_messages, budget, attachment_dir),
         *download_thread_images(selected_messages, attachment_dir, budget),
         *download_thread_binary_files(selected_messages, attachment_dir, budget),
     ]
