@@ -306,8 +306,8 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
         return json({ schema_version: 1, managed: memoryRunning, healthy: memoryRunning, running_tags: [],
           keep_running: keepRunning, embedding: { provider: embedding === "onnx" ? "onnx" : "openai", model: embeddingModel, local: embedding === "onnx", current: embedding, download,
             choices: [
-              { id: "onnx", label: "Default", detail: "Built in. Runs on this computer, private, works offline. About 560 MB.", custom: false, model: "", base_url: "", key_saved: false },
-              { id: "custom", label: "Custom", detail: "Any OpenAI-compatible endpoint: OpenAI, Ollama, LM Studio, vLLM, or your own gateway.",
+              { id: "onnx", label: "Default", detail: "On this computer. Private, offline, 560 MB.", custom: false, model: "", base_url: "", key_saved: false },
+              { id: "custom", label: "Custom", detail: "Any OpenAI-compatible endpoint.",
                 custom: true, model: embeddingModel, base_url: embeddingUrl, key_saved: false }] } });
       }
       if (first === "autostart") {

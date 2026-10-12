@@ -128,9 +128,9 @@ describe("Memory row", () => {
     return { calls, setError };
   }
 
-  it("shows whether memory runs and where its search model is, and starts it", async () => {
+  it("shows whether memory runs, and starts it", async () => {
     const { calls } = memory({ healthy: false });
-    await screen.findByText(/Not running\..*Search model: custom \(m\)\./);
+    await screen.findByText(/^Not running\./);
     const toggle = screen.getByRole("switch", { name: "Memory" });
     expect(toggle.getAttribute("aria-checked")).toBe("false");
     fireEvent.click(toggle);

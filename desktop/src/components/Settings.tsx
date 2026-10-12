@@ -381,13 +381,13 @@ export function SearchModelRow({ api, embedding, setError, changed }: {
     const result = await setEmbedding(api, choice.custom ? "custom" : "local", key.trim(), { model: model.trim(), baseUrl: url.trim() });
     setBusy(false);
     if (!result.ok) { setError(result.error); reset(embedding.current); return; }
-    setNote(result.reindexing ? "Memory is indexing your Slack channels again; search is partial until it finishes." : result.note);
+    setNote(result.reindexing ? "Re-indexing your channels; search is partial until it finishes." : result.note);
     changed();
   };
   return <>
     <div className="r set model-head" style={{ padding: "13px 14px 6px" }}>
       <div className="txt"><span className="label" style={{ fontSize: 14.5 }}>Search model</span>
-        <span className="sub wrap">{note || "How memory turns text into searchable vectors."}</span></div>
+        {note && <span className="sub wrap">{note}</span>}</div>
     </div>
     <div className="model-choices" role="radiogroup" aria-label="Search model">
       {embedding.choices.map((c) => (
@@ -418,8 +418,7 @@ export function SearchModelRow({ api, embedding, setError, changed }: {
             </label>
           </div>
         </>}
-        <p>{choice.custom ? "Tag tries the endpoint before saving, so a wrong address, model or key changes nothing. " : ""}Memory then indexes your Slack channels
-          again with the new model, so search is partial until it finishes. You can switch back; the old index is kept.</p>
+        <p>{choice.custom ? "Tag tests it first. " : ""}Switching re-indexes your channels.</p>
         <Primary small title={busy ? "Switching…" : picked === embedding.current ? "Save changes" : `Switch to ${choice.label}`}
           disabled={busy || missing || !switching} onClick={() => void apply()} />
       </div>

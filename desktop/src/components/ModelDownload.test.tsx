@@ -25,12 +25,11 @@ function bridge(...answers: ReturnType<typeof status>[]) {
 }
 
 describe("model download notice", () => {
-  it("names the model, shows the progress and says search is unavailable until it finishes", async () => {
+  it("names the model and shows the progress", async () => {
     const { api } = bridge(status(running(55, 312 * MiB)));
     render(<ModelDownloadNotice api={api} every={5} />);
     expect(await screen.findByText("Downloading the search model")).toBeTruthy();
     expect(screen.getByText(/bge-m3-onnx-int8 · 312 of 560 MB/)).toBeTruthy();
-    expect(screen.getByText(/Search waits for it; Tags keep working/)).toBeTruthy();
     expect(screen.getByRole("progressbar").getAttribute("aria-valuenow")).toBe("55");
   });
 
@@ -65,8 +64,7 @@ describe("model download notice", () => {
       status(running(1, 5 * MiB)));
     render(<ModelDownloadNotice api={api} every={5} />);
     expect(await screen.findByText("Search model download stopped")).toBeTruthy();
-    expect(screen.getByText("Search is off until it finishes. Tags keep working.")).toBeTruthy();
-    expect(screen.getByText(/^Reason: no network\. Try again, or run/)).toBeTruthy();
+    expect(screen.getByText("No network. Search is off; Tags keep working.")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     await waitFor(() => expect(calls).toContainEqual(["memory", "download", "--json"]));
     await screen.findByText("Downloading the search model");

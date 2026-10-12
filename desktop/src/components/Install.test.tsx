@@ -66,12 +66,12 @@ it("keeps the first screen to what installing means, and asks about search on a 
   expect(screen.getByRole("button", { name: "Continue" })).toBeTruthy();
 });
 
-it("names the built-in search model and says it downloads in the background and search waits for it", () => {
+it("names the built-in search model and its size", () => {
   render(<Welcome api={demoBridge()} platform="macos" install={vi.fn()} />);
   toModel();
   expect(screen.getByRole("radio", { name: "Built in" }).getAttribute("aria-checked")).toBe("true");
-  expect(screen.getByText(/bge-m3 runs on this computer/)).toBeTruthy();
-  expect(screen.getByText(/560 MB downloads after install; search waits for it/)).toBeTruthy();
+  expect(screen.getByText(/bge-m3 on this computer/)).toBeTruthy();
+  expect(screen.getByText(/Private, offline, 560 MB/)).toBeTruthy();
 });
 
 it("lets people skip the built-in search model and name their own on a screen of its own", () => {
@@ -124,7 +124,7 @@ it("says on the Installed screen that the built-in model still downloads, and sa
     api.install = vi.fn(async (_channel, _line, exit) => { setTimeout(() => exit(0)); return { send: vi.fn(), stop: vi.fn() }; });
     const view = render(<Installing api={api} skipModel={skipModel} done={vi.fn()} retry={vi.fn()} cancel={vi.fn()} />);
     expect(await screen.findByText("Tag is installed")).toBeTruthy();
-    expect(!!screen.queryByText(/search model downloads in the background/)).toBe(!skipModel);
+    expect(!!screen.queryByText(/search model is still downloading/)).toBe(!skipModel);
     view.unmount();
   }
 });

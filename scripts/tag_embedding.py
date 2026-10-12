@@ -192,10 +192,10 @@ def choices(shared: Path) -> list[dict[str, object]]:
     """What a person can pick, for any interface to list: the Default first."""
     current = choice(shared)
     return [
-        {"id": LOCAL, "label": "Default", "detail": "Built in. Runs on this computer, private, works offline. About 560 MB.",
+        {"id": LOCAL, "label": "Default", "detail": "On this computer. Private, offline, 560 MB.",
          "custom": False, "model": "", "base_url": "", "key_saved": False},
         {"id": CUSTOM, "label": "Custom",
-         "detail": "Any OpenAI-compatible endpoint: OpenAI, Ollama, LM Studio, vLLM, or your own gateway.",
+         "detail": "Any OpenAI-compatible endpoint.",
          "custom": True, "model": str(current.get("model") or ""), "base_url": str(current.get("base_url") or ""),
          "key_saved": saved_key(shared) is not None},
     ]

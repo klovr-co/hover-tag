@@ -86,7 +86,7 @@ export function embeddingText(memory: MemoryStatus) {
   if (!memory.embedding) return "";
   const { download } = memory.embedding;
   if (memory.embedding.local && download?.state === "downloading") {
-    return `Search model: default, downloading (${download.percent}%). Search is off until it finishes.`;
+    return `Search model: default, downloading (${download.percent}%).`;
   }
   return memory.embedding.local ? "Search model: default, built in." : `Search model: custom (${memory.embedding.model}).`;
 }
@@ -118,6 +118,9 @@ export function setEmbedding(api: Bridge, choice: "local" | "custom", key: strin
 
 export function memoryDetail(memory: MemoryStatus) {
   const state = memory.healthy ? "Running." : "Not running.";
-  const restarts = memory.keepRunning ? "Restarts itself if it stops." : "Won't restart if it stops; turn on Keep Tags running for that.";
-  return [state, restarts, embeddingText(memory)].filter(Boolean).join(" ");
+  const restarts = memory.keepRunning ? "Restarts if it stops." : "Won't restart unless Keep Tags running is on.";
+  // The search model has its own section below; only a download in progress is news here.
+  const download = memory.embedding?.local ? memory.embedding.download : null;
+  const downloading = download?.state === "downloading" ? `Search model downloading (${download.percent}%).` : "";
+  return [state, restarts, downloading].filter(Boolean).join(" ");
 }

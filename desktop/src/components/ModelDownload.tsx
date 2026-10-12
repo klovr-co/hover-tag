@@ -58,7 +58,7 @@ export function ModelDownloadNotice({ api, every = 3000 }: { api: Bridge; every?
         <span className="ic"><Icon name="disk" size={16} /></span>
         <div style={{ flex: 1 }}>
           <div className="t">Downloading the search model</div>
-          <div className="d">{download.model.split("/").pop() || "Built-in model"}{sized}. Search waits for it; Tags keep working.</div>
+          <div className="d">{download.model.split("/").pop() || "Built-in model"}{sized}</div>
           <div className="dl-bar" role="progressbar" aria-label="Search model download" aria-valuemin={0} aria-valuemax={100} aria-valuenow={download.percent}>
             <span style={{ width: `${download.percent}%` }} />
           </div>
@@ -72,8 +72,7 @@ export function ModelDownloadNotice({ api, every = 3000 }: { api: Bridge; every?
         <span className="ic"><Icon name="warn" size={16} /></span>
         <div style={{ flex: 1 }}>
           <div className="t">Search model download stopped</div>
-          <div className="d">Search is off until it finishes. Tags keep working.</div>
-          {download.error && <div className="d selectable">Reason: {download.error}. Try again, or run <code>tag memory download</code>.</div>}
+          <div className="d selectable">{download.error ? `${download.error[0].toUpperCase()}${download.error.slice(1)}. ` : ""}Search is off; Tags keep working.</div>
         </div>
         <div className="act"><button className="p-btn ink sm" onClick={() => void retry()}>Try again</button></div>
       </div>

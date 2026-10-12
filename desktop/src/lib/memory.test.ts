@@ -15,19 +15,19 @@ describe("memory status", () => {
     expect(memory).toMatchObject({ healthy: true, managed: true, keepRunning: true, embedding: { local: true, current: "onnx" } });
     expect(memory.embedding?.choices[1]).toEqual({ id: "custom", label: "Custom", detail: "Any endpoint", custom: true,
       model: "nomic-embed-text", baseUrl: "http://localhost:11434/v1", keySaved: true });
-    expect(memoryDetail(memory)).toBe("Running. Restarts itself if it stops. Search model: default, built in.");
+    expect(memoryDetail(memory)).toBe("Running. Restarts if it stops.");
   });
 
-  it("names a custom model, and says when memory won't restart", () => {
+  it("says when memory won't restart, and leaves the custom model to its own section", () => {
     const memory = parseMemory(report({ healthy: false, keep_running: false,
       embedding: { provider: "openai", model: "nomic-embed-text", local: false, current: "custom", choices } }));
-    expect(memoryDetail(memory)).toBe("Not running. Won't restart if it stops; turn on Keep Tags running for that. Search model: custom (nomic-embed-text).");
+    expect(memoryDetail(memory)).toBe("Not running. Won't restart unless Keep Tags running is on.");
   });
 
   it("copes with an older Tag that doesn't report the search model", () => {
     const memory = parseMemory(report({}));
     expect(memory.embedding).toBeNull();
-    expect(memoryDetail(memory)).toBe("Running. Restarts itself if it stops.");
+    expect(memoryDetail(memory)).toBe("Running. Restarts if it stops.");
   });
 });
 
@@ -48,7 +48,7 @@ describe("the built-in model's background download", () => {
 
   it("adds the download to the Settings description while it runs", () => {
     const memory = parseMemory(report({ embedding: { provider: "onnx", model: "m", local: true, current: "onnx", choices, download } }));
-    expect(memoryDetail(memory)).toBe("Running. Restarts itself if it stops. Search model: default, downloading (55%). Search is off until it finishes.");
+    expect(memoryDetail(memory)).toBe("Running. Restarts if it stops. Search model downloading (55%).");
   });
 });
 

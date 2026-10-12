@@ -92,14 +92,14 @@ export function Welcome({ api, platform, install, preview }: { api: Bridge; plat
                 autoComplete="new-password" spellCheck={false} onChange={(e) => setKey(e.target.value)} />
             </label>
           </div>
-          <p>Leave empty to set it later in Settings → AI. Until then memory uses the built-in model.</p>
+          <p>Leave empty to set it later in Settings.</p>
         </div>
       </InstallCanvas>
     );
   }
   if (!preview && step === "model") {
     const options = [
-      { custom: false, label: "Built in", chip: "Recommended", detail: "bge-m3 runs on this computer. Private, works offline. 560 MB downloads after install; search waits for it." },
+      { custom: false, label: "Built in", chip: "Recommended", detail: "bge-m3 on this computer. Private, offline, 560 MB." },
       { custom: true, label: "Your own endpoint", chip: "", detail: "OpenAI, Ollama or any compatible endpoint. Nothing to download." },
     ];
     return (
@@ -192,7 +192,7 @@ export function Installing({ api, skipModel = false, done, retry, cancel }: {
 
   const failed = state.states.includes("failed");
   const [title, subtitle] = state.finished ? ["Tag is installed", skipModel ? "The tag command is ready. Next, set up your first Tag."
-    : "The tag command is ready. The search model downloads in the background; Home shows progress."]
+    : "The search model is still downloading."]
     : failed ? ["Installation stopped", "You can safely try again."] : ["Installing Tag…", "This usually takes a few minutes."];
   const progress = state.finished ? 1 : fraction(state, (now - stepStart.current) / 1000);
   const percent = Math.round(progress * 100);
