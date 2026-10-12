@@ -536,6 +536,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--scope", choices=("current", "all"), default="current",
                         help="current: only cases today's watching sends to the classifier (default)")
     parser.add_argument("--natural-only", action="store_true", help="Leave out cases derived from mentions.")
+    parser.add_argument("--derived-only", action="store_true", help="Only cases derived from mentions.")
     parser.add_argument("--confident-only", action="store_true", help="Leave out borderline and low-confidence labels.")
     commands = parser.add_subparsers(dest="command")
     commands.add_parser("plan", help="Estimate cost per provider; no network.")
@@ -603,6 +604,8 @@ def main(argv: list[str] | None = None) -> int:
         cases = [case for case in cases if case.reachable]
     if args.natural_only:
         cases = [case for case in cases if case.derived is None]
+    if args.derived_only:
+        cases = [case for case in cases if case.derived is not None]
     if args.confident_only:
         cases = [case for case in cases if not case.borderline]
     if args.command in {None, "plan"}:
