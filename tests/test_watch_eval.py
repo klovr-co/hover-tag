@@ -208,6 +208,27 @@ class RealCaseImportTests(unittest.TestCase):
         self.assertNotEqual(named["id"], harness.real_case(self.item(message="<@UPA> what do you think?",
                             derived="tag-mention-removed", history=[]), self.ALLOWED)["id"])
 
+    def test_stand_in_person_plays_the_tag_and_names_are_swapped(self) -> None:
+        item = {"channel": "CALLOWED", "ts": "7.0", "requester": "UANN", "source": "E-stand-in",
+                "derived": "stand-in", "assistant": {"user_id": "UBEN", "name": "Tag"},
+                "names": {"UBEN": ["Benjamin", "Ben"], "UANN": ["Annabel"], "UCAT": ["Cat"]},
+                "history": [{"user": "UANN", "text": "Ben, can you look at the invoice?"},
+                            {"user": "UBEN", "text": "sure, Annabel, sending it to Cat too"}],
+                "message": "thanks Benjamin, also check the March one",
+                "expected": True, "confidence": "high", "category": "continuation"}
+        case = harness.real_case(item, self.ALLOWED)
+        stored = json.dumps(case)
+        for real in ("Benjamin", "Ben,", "Annabel", "Cat ", "UBEN", "UANN"):
+            self.assertNotIn(real, stored)
+        self.assertEqual("thanks Tag, also check the March one", case["state"]["current_message"])
+        self.assertEqual(["requester", "tag"], [h["author"] for h in case["state"]["thread_history"]])
+        self.assertEqual("Tag, can you look at the invoice?", case["state"]["thread_history"][0]["text"])
+        self.assertEqual(("E-stand-in", "stand-in"), (case["source"], case["derived"]))
+        self.assertTrue(case["reachable"])
+        for changes in ({"source": "A-tag-channels"}, {"requester": "UBEN"}, {"derived": None}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                harness.real_case(item | changes, self.ALLOWED)
+
     def test_import_writes_private_files_and_loads_as_fixtures(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             out = Path(directory) / "real/cases-a.json"

@@ -90,15 +90,15 @@ class RebuildTests(unittest.TestCase):
     def test_refuses_channels_outside_the_allowlist(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "allowed-channels.txt").write_text("CALLOWED\n")
-            (root / "bots.json").write_text(json.dumps({"conversational": BOTS}))
+            (root / "allowed-channels.txt").write_text("CALLOWED\n", encoding="utf-8")
+            (root / "bots.json").write_text(json.dumps({"conversational": BOTS}), encoding="utf-8")
             case = first_pass("5.0", "Owner's PA, what do you think?")
-            (root / "cases-A.json").write_text(json.dumps({"cases": [case]}))
+            (root / "cases-A.json").write_text(json.dumps({"cases": [case]}), encoding="utf-8")
             dumps = [{"channel": "CSECRET", "thread": False, "messages": [{"ts": "5.0", "user": "UOWNER", "text": "x"}]}]
             with patch("sys.stdin", io.StringIO(json.dumps(dumps))), patch("sys.stderr", io.StringIO()) as err:
                 data.main(["--dir", str(root), "rebuild"])
             self.assertIn("Refused 1", err.getvalue())
-            self.assertEqual({}, json.loads((root / "work/rebuilt.json").read_text())["cases"])
+            self.assertEqual({}, json.loads((root / "work/rebuilt.json").read_text(encoding="utf-8"))["cases"])
             self.assertEqual(0o600, (root / "work/rebuilt.json").stat().st_mode & 0o777)
 
 
@@ -125,6 +125,14 @@ class CleanAndAgreeTests(unittest.TestCase):
         self.assertEqual(["6"], [c["group"] for c in flagged])
         self.assertEqual({"context could not be rebuilt": 1, "test traffic": 1, "current message: empty or link only": 1,
                           "same message reused across cases": 1, "exact duplicate": 1, "near duplicate": 1}, removed)
+
+    def test_conflicting_labels_for_one_message_drop_every_copy(self) -> None:
+        cases = [self.rebuilt("1", "Tag what now?", group="g", expected=True),
+                 self.rebuilt("1b", "Tag what now?", group="g", expected=False, derived="tag-mention-removed"),
+                 self.rebuilt("2", "Tag any update?", group="h")]
+        kept, _, removed = data.clean(cases, [c["id"] for c in cases])
+        self.assertEqual(["h"], [c["group"] for c in kept])
+        self.assertEqual(2, removed["same message with conflicting labels"])
 
     def test_agreement_kappa_and_review_lists(self) -> None:
         cases = [self.rebuilt(str(i), f"Owner's PA question {i}", expected=i < 6) for i in range(10)]

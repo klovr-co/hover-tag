@@ -308,7 +308,8 @@ def export_log(log_path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
 
 
 PSEUDONYMS = ("Alex", "Sam", "Priya", "Jordan", "Mei", "Omar", "Lena", "Tomas", "Ana", "Kofi", "Ravi", "Noor")
-DERIVATIONS = ("tag-mention-to-name", "tag-mention-removed", "person-mention-to-name")
+DERIVATIONS = ("tag-mention-to-name", "tag-mention-removed", "person-mention-to-name", "stand-in")
+SOURCES = ("A-tag-channels", "B-sandbox", "E-stand-in")
 CONFIDENCE = ("high", "medium", "low")
 _LINK_RE = re.compile(r"<(?:https?://|www\.)[^>]*>|https?://\S+|www\.\S+", re.I)
 _MAILTO_RE = re.compile(r"<mailto:[^>]*>", re.I)
@@ -357,10 +358,23 @@ def real_case(item: dict[str, Any], allowed: frozenset[str]) -> dict[str, Any]:
         raise ValueError(f"derived must be one of {DERIVATIONS}")
     if not isinstance(item.get("expected"), bool) or item.get("confidence") not in CONFIDENCE:
         raise ValueError("expected (bool) and confidence (high, medium, low) are required")
+    source = item.get("source", "A-tag-channels")
+    if source not in SOURCES:
+        raise ValueError(f"source must be one of {SOURCES}")
+    raw_texts = [str(item.get("message", ""))] + [str(e.get("text", "")) for e in item.get("history", [])]
+    if (how == "stand-in") != (source == "E-stand-in"):
+        raise ValueError("stand-in cases use derived 'stand-in' and source 'E-stand-in'")
+    if how == "stand-in":
+        # A person plays the Tag: their plain-text name becomes the Tag's, other names become pseudonyms.
+        swap = _name_swapper(item.get("names") or {}, assistant_id, assistant_name)
+        item = {**item, "message": swap(item.get("message", "")),
+                "history": [{**e, "text": swap(e.get("text", ""))} for e in item.get("history", [])]}
+        if requester == assistant_id:
+            raise ValueError("the stand-in can't be the requester")
     message = _derive(str(item.get("message", "")), how, assistant_id, assistant_name)
     if not message or "<@" in message:
         raise ValueError("the message is empty or still mentions a member, so watching would never classify it")
-    bots = set(item.get("bots", [])) | {assistant_id}
+    bots = set(item.get("bots", [])) | ({assistant_id} if how != "stand-in" else set())
     history = []
     for entry in item.get("history", [])[-watch_classifier.MAX_CONTEXT_MESSAGES:]:
         user = entry.get("user", "")
@@ -374,13 +388,39 @@ def real_case(item: dict[str, Any], allowed: frozenset[str]) -> dict[str, Any]:
         entry["text"] = scrub(entry["text"])
     names = channel_watch.watch_names({"OPENTAG_BOT_NAME": assistant_name})
     reachable = channel_watch.names_tag(message, names) or any(e["author"] == "tag" for e in state["thread_history"])
+    try:
+        from scripts import watch_real_data as cleaning
+    except ImportError:
+        import watch_real_data as cleaning
     return {
         "id": "r-" + hashlib.sha256(f"{channel}|{ts}|{how}".encode()).hexdigest()[:12],
-        "category": str(item.get("category", "real")), "expected": item["expected"],
+        "group": hashlib.sha256(f"{channel}|{ts}".encode()).hexdigest()[:12],
+        "source": source, "category": str(item.get("category", "real")), "expected": item["expected"],
         "confidence": item["confidence"], "borderline": bool(item.get("borderline")),
         "derived": how, "channel": channel, "reachable": reachable,
         "reason": scrub(str(item.get("reason", "")))[:200], "state": state,
+        # Judged on the raw text before scrubbing; only the verdicts are stored.
+        "current_raw_noise": cleaning.is_noise(raw_texts[0]), "current_test": cleaning.is_test(raw_texts[0]),
+        "history_test": any(cleaning.is_test(text) for text in raw_texts[1:]),
+        "flags": cleaning.flags(raw_texts[0]),
     }
+
+
+def _name_swapper(names: dict[str, list[str]], standin_id: str, assistant_name: str):
+    """Replace real first names (and variants) given by the labeller; longest first."""
+    pairs = []
+    for user, variants in names.items():
+        target = assistant_name if user == standin_id else _pseudonym(user)
+        pairs += [(variant, target) for variant in variants if isinstance(variant, str) and variant.strip()]
+    pairs.sort(key=lambda pair: -len(pair[0]))
+
+    def swap(text: str) -> str:
+        text = str(text)
+        for variant, target in pairs:
+            text = re.sub(rf"(?<![\w]){re.escape(variant.strip())}(?![\w])", target, text, flags=re.I)
+        return text
+
+    return swap
 
 
 def import_real(items: list[dict[str, Any]], out: Path, allowed: frozenset[str]) -> tuple[int, list[str]]:

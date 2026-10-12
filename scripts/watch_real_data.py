@@ -197,8 +197,15 @@ def clean(rebuilt: list[dict], raw_ids: list[str]) -> tuple[list[dict], list[dic
     removed: Counter = Counter()
     rebuilt_ids = {case["id"] for case in rebuilt}
     removed["context could not be rebuilt"] = sum(identifier not in rebuilt_ids for identifier in raw_ids)
+    labels_by_group: dict[str, set] = {}
+    for case in rebuilt:
+        labels_by_group.setdefault(case.get("group") or case["id"], set()).add(case["expected"])
     survivors = []
     for case in rebuilt:
+        case.setdefault("group", case["id"])
+        if len(labels_by_group[case["group"]]) > 1:
+            removed["same message with conflicting labels"] += 1
+            continue
         if case.get("current_raw_noise"):
             removed[f"current message: {case['current_raw_noise']}"] += 1
         elif case.get("current_test") or case.get("history_test"):
@@ -287,6 +294,7 @@ def coverage(cases: list[dict]) -> dict[str, Any]:
             "easy_negative": "easy negative"}
     return {
         "total": len(cases),
+        "source": dict(Counter(c.get("source", "A-tag-channels") for c in cases)),
         "natural_vs_derived": dict(Counter("natural" if c.get("derived") is None else "derived" for c in cases)),
         "positive_vs_negative": dict(Counter("positive" if c["expected"] else "negative" for c in cases)),
         "channel": dict(Counter(c["channel"] for c in cases)),
@@ -303,18 +311,20 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("rebuild", help="Rebuild cases from raw thread dumps on stdin.")
     commands.add_parser("status", help="Which raw cases are not rebuilt yet, by group file.")
-    commands.add_parser("clean")
+    clean_parser = commands.add_parser("clean")
+    clean_parser.add_argument("--imported", action="store_true",
+                              help="Clean the imported cases directly, without a context rebuild.")
     commands.add_parser("blind")
     agree_parser = commands.add_parser("agree")
     agree_parser.add_argument("labels", type=Path, nargs="+")
     args = parser.parse_args(argv)
     root = args.dir
-    raw_cases = {c["id"]: c for path in sorted(root.glob("cases-?.json")) for c in _read(path, {"cases": []})["cases"]}
+    raw_cases = {c["id"]: c for path in sorted(root.glob("cases-*.json")) for c in _read(path, {"cases": []})["cases"]}
     rebuilt_path = root / "work/rebuilt.json"
     state = _read(rebuilt_path, {"cases": {}, "removed": {}})
 
     if args.command == "rebuild":
-        allowed = frozenset(line.strip() for line in (root / "allowed-channels.txt").read_text().splitlines() if line.strip())
+        allowed = frozenset(line.strip() for line in (root / "allowed-channels.txt").read_text(encoding="utf-8").splitlines() if line.strip())
         dumps = json.load(sys.stdin)
         dumps = dumps if isinstance(dumps, list) else [dumps]
         outside = [d for d in dumps if d.get("channel") not in allowed]
@@ -328,19 +338,28 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Rebuilt {count} case(s); {len(state['cases'])} of {len(raw_cases)} done.", file=sys.stderr)
         return 0
     if args.command == "status":
-        for path in sorted(root.glob("cases-?.json")):
+        for path in sorted(root.glob("cases-*.json")):
             ids = [c["id"] for c in _read(path, {"cases": []})["cases"]]
             missing = [i for i in ids if i not in state["cases"]]
             print(f"{path.name}: {len(ids) - len(missing)}/{len(ids)} rebuilt; missing: {' '.join(missing) or 'none'}")
         return 0
     if args.command == "clean":
-        kept, flagged, removed = clean(list(state["cases"].values()), list(raw_cases))
+        source = list(raw_cases.values()) if args.imported else list(state["cases"].values())
+        for case in source:  # Cases imported before verdicts were stored: judge the scrubbed text.
+            if "flags" not in case:
+                text = case["state"]["current_message"]
+                case.update(current_raw_noise=is_noise(text), current_test=is_test(text),
+                            history_test=any(is_test(h["text"]) for h in case["state"]["thread_history"]),
+                            flags=flags(text), group=case.get("group", case["id"]))
+        kept, flagged, removed = clean(source, list(raw_cases))
         for name, value in state["removed"].items():
             removed[f"(messages) {name}"] = value
         _private_write(root / "work/clean.json", {"cases": kept})
         _private_write(root / "work/flagged.json", {"cases": flagged})
-        report = {"raw": len(raw_cases), "removed": removed, "flagged": len(flagged),
-                  "flags": dict(Counter(f for c in flagged for f in c["flags"])), "kept": len(kept)}
+        by_source = lambda cases: dict(Counter(c.get("source", "A-tag-channels") for c in cases))  # noqa: E731
+        report = {"raw": len(raw_cases), "raw_by_source": by_source(raw_cases.values()), "removed": removed,
+                  "flagged": len(flagged), "flags": dict(Counter(f for c in flagged for f in c["flags"])),
+                  "kept": len(kept), "kept_by_source": by_source(kept)}
         _private_write(root / "work/clean-report.json", report)
         print(json.dumps(report, indent=1))
         return 0
