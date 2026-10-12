@@ -3507,6 +3507,33 @@ class SlackAnswerStreamTests(unittest.TestCase):
             "Read files · 2 steps", "Ran a command · 3 steps",
         ])
 
+    def test_thinking_rows_show_the_summary_and_are_bounded(self) -> None:
+        client = MagicMock()
+        client.chat_startStream.return_value = {"ts": "3.45"}
+        stream = slack_socket_agent.SlackAnswerStream(
+            client, "C123", "1.23", "U123", "T123", MagicMock()
+        )
+        for index in range(slack_socket_agent.MAX_STREAM_THINKING_TASKS + 2):
+            event = {"type": "activity_start", "activity_id": f"think-{index}", "label": "Thinking…",
+                     "details": {"tool": "Thinking"}}
+            stream.activity(event)
+            stream.activity({**event, "type": "activity_complete", "status": "completed",
+                             "details": {"output": f"Plan <@U1> step {index}"}})
+            read = {"type": "activity_start", "activity_id": f"read-{index}", "label": "Reading files…"}
+            stream.activity(read)
+            stream.activity({**read, "type": "activity_complete", "status": "completed"})
+
+        self.assertTrue(stream.finish("Done"))
+        chunks = {chunk["id"]: chunk for call in client.chat_startStream.call_args_list
+                  + client.chat_appendStream.call_args_list
+                  for chunk in call.kwargs.get("chunks", []) if chunk["type"] == "task_update"}
+        thinking = [chunk for chunk in chunks.values() if chunk["title"].startswith("Thought")]
+        self.assertEqual(slack_socket_agent.MAX_STREAM_THINKING_TASKS, len(thinking))
+        self.assertEqual("Plan &lt;@U1&gt; step 0", thinking[0]["details"])
+        self.assertEqual({"title": "Thought · 3 steps", "details": "Plan &lt;@U1&gt; step 5"},
+                         {key: thinking[-1][key] for key in ("title", "details")})
+        self.assertIn("Read files · 6 steps", [chunk["title"] for chunk in chunks.values()])
+
     def test_task_groups_are_bounded(self) -> None:
         client = MagicMock()
         client.chat_startStream.return_value = {"ts": "3.45"}

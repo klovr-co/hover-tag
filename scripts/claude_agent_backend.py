@@ -28,7 +28,10 @@ try:
         APPROVAL_TIMEOUT_SECONDS,
         INTERRUPT_GRACE_SECONDS,
         MCP_SERVICE_NAMES,
+        THINKING_LABEL,
+        THINKING_TOOL,
         activity_label,
+        show_thinking,
         token_usage,
     )
     from .tag_activity_details import item_activity_details, preview
@@ -41,7 +44,10 @@ except ImportError:  # Direct script execution does not create a package context
         APPROVAL_TIMEOUT_SECONDS,
         INTERRUPT_GRACE_SECONDS,
         MCP_SERVICE_NAMES,
+        THINKING_LABEL,
+        THINKING_TOOL,
         activity_label,
+        show_thinking,
         token_usage,
     )
     from tag_activity_details import item_activity_details, preview
@@ -156,9 +162,13 @@ class ClaudeEventMapper:
     buffered per message and released once the stop reason is known.
     """
 
-    def __init__(self, *, resuming: bool = False) -> None:
+    def __init__(self, *, resuming: bool = False, thinking: bool = False) -> None:
         # A resumed run reports its session only from the result, once the resume has worked.
         self.resuming = resuming
+        # Thinking summaries become activity; the buffer for each open block is keyed by activity id.
+        self.thinking = thinking
+        self.open_thinking: dict[str, list[str]] = {}
+        self.thinking_blocks: dict[Any, str] = {}
         self.current_message: str | None = None
         self.pending_deltas: dict[str, list[str]] = {}
         self.final_ids: list[str] = []
@@ -233,13 +243,26 @@ class ClaudeEventMapper:
             return []
         if self.current_message is None:
             return []
+        if event_type == "content_block_start":
+            block = event.get("content_block")
+            if self.thinking and isinstance(block, dict) and block.get("type") == "thinking":
+                return self._start_thinking(event.get("index"))
+            return []
         if event_type == "content_block_delta":
             delta = event.get("delta")
             if isinstance(delta, dict) and delta.get("type") == "text_delta":
                 text = delta.get("text")
                 if isinstance(text, str) and text:
                     self.pending_deltas.setdefault(self.current_message, []).append(text)
+            elif isinstance(delta, dict) and delta.get("type") == "thinking_delta":
+                activity_id = self.thinking_blocks.get(event.get("index"))
+                text = delta.get("thinking")
+                if activity_id in self.open_thinking and isinstance(text, str):
+                    self.open_thinking[activity_id].append(text)
             return []
+        if event_type == "content_block_stop":
+            activity_id = self.thinking_blocks.pop(event.get("index"), None)
+            return self._finish_thinking(activity_id, "completed") if activity_id else []
         if event_type == "message_delta":
             delta = event.get("delta")
             stop_reason = delta.get("stop_reason") if isinstance(delta, dict) else None
@@ -260,6 +283,23 @@ class ClaudeEventMapper:
             )
             return events
         return []
+
+    def _start_thinking(self, index: Any) -> list[dict[str, Any]]:
+        activity_id = f"{self.current_message}:thinking:{index}"
+        if activity_id in self.open_thinking:
+            return []
+        self.open_thinking[activity_id] = []
+        self.thinking_blocks[index] = activity_id
+        return [{"type": "activity_start", "activity_id": activity_id, "label": THINKING_LABEL,
+                 "wait_label": "Still thinking…", "details": {"tool": THINKING_TOOL}}]
+
+    def _finish_thinking(self, activity_id: str, status: str) -> list[dict[str, Any]]:
+        parts = self.open_thinking.pop(activity_id, None)
+        if parts is None:
+            return []
+        summary = "".join(parts).strip()
+        return [{"type": "activity_complete", "activity_id": activity_id, "label": THINKING_LABEL,
+                 "status": status, "details": {"output": preview(summary)} if summary else {}}]
 
     def _assistant_message(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         events: list[dict[str, Any]] = []
@@ -402,9 +442,12 @@ class ClaudeEventMapper:
         return [*self._close_tools(), {"type": "turn_complete", "status": "interrupted"}]
 
     def _close_tools(self) -> list[dict[str, Any]]:
-        events = [{"type": "activity_complete", "activity_id": tool_use_id, "label": label,
-                   "status": "interrupted", "details": {}}
-                  for tool_use_id, (label, _item) in self.tools.items()]
+        events = [event for activity_id in list(self.open_thinking)
+                  for event in self._finish_thinking(activity_id, "interrupted")]
+        self.thinking_blocks.clear()
+        events.extend({"type": "activity_complete", "activity_id": tool_use_id, "label": label,
+                       "status": "interrupted", "details": {}}
+                      for tool_use_id, (label, _item) in self.tools.items())
         self.tools.clear()
         return events
 
@@ -669,6 +712,9 @@ class ClaudeAgentRun:
             kwargs["effort"] = reasoning_effort
         if fast_mode:
             kwargs["settings"] = json.dumps({"fastMode": True})
+        if show_thinking():
+            # Newer models omit thinking text unless asked; summaries are all the API offers.
+            kwargs["extra_args"] = {"thinking-display": "summarized"}
         if self.resume_session_id:
             kwargs["resume"] = self.resume_session_id
         if self.instructions:
@@ -794,7 +840,8 @@ class ClaudeAgentRun:
         options = self.options(model=model, reasoning_effort=reasoning_effort, fast_mode=fast_mode,
                                emit=emit, deadline=max_deadline)
         self.client = client_factory(options)
-        mapper = ClaudeEventMapper(resuming=bool(self.resume_session_id))
+        mapper = ClaudeEventMapper(resuming=bool(self.resume_session_id),
+                                   thinking=show_thinking() and self.text_only_instructions is None)
         terminal: dict[str, Any] | None = None
         next_message: asyncio.Task[Any] | None = None
         try:

@@ -203,7 +203,9 @@ setting before restarting Tag.
 Direct-message invocation is enabled by default for the same authorized users,
 who can invoke Tag without an `@mention` from Tag's Messages tab. The channel
 allowlist does not apply to DMs, but `SLACK_ALLOWED_USER_IDS` still does. Set
-`OPENTAG_SLACK_DM_ENABLED=0` to disable DM invocation. Each top-level DM starts a
+`OPENTAG_SLACK_DM_ENABLED=0` to disable DM invocation. Set
+`OPENTAG_SHOW_THINKING=0` to keep thinking summaries out of Agent
+activity and the Activity record. Each top-level DM starts a
 fresh backend task, while replies reuse only that DM thread's bounded context
 (up to 30 messages).
 
@@ -318,7 +320,8 @@ again before storage. It stores this bounded record under
 the instance's private `state/activity/` directory. Records are available for
 30 days; later requests prune expired records and keep at most 200 runs, with
 up to 60 events per run. It does not store or display raw App Server items,
-prompts, or private reasoning. An item marked complete
+prompts, or raw reasoning. Thinking steps store the model's bounded thinking
+summary as their result unless `OPENTAG_SHOW_THINKING=0`. An item marked complete
 means the tool call ended; it does not verify that an external action succeeded.
 App Server can report an outer agent-tool step without exposing connector calls
 made inside that step, so this view is an activity summary rather than a

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import time
@@ -103,6 +104,30 @@ class CodexEventMapperTests(unittest.TestCase):
         })
         self.assertEqual("message_complete", completed[0]["type"])
         self.assertEqual("Hello!", completed[0]["text"])
+
+    def test_reasoning_summary_becomes_thinking_activity_without_raw_content(self) -> None:
+        mapper = CodexEventMapper(thinking=True)
+        started = mapper.map({"method": "item/started",
+                              "params": {"item": {"id": "r1", "type": "reasoning", "summary": [], "content": []}}})
+        completed = mapper.map({"method": "item/completed", "params": {"item": {
+            "id": "r1", "type": "reasoning", "summary": ["**Plan** read the roles", " then write "],
+            "content": ["raw chain of thought"]}}})
+        self.assertEqual([{"type": "activity_start", "activity_id": "r1", "label": "Thinking…",
+                           "wait_label": "Still thinking…", "details": {"tool": "Thinking"}}], started)
+        self.assertEqual([{"type": "activity_complete", "activity_id": "r1", "label": "Thinking…",
+                           "status": "completed",
+                           "details": {"output": "**Plan** read the roles\n\nthen write"}}], completed)
+
+    def test_reasoning_stays_private_when_the_tag_does_not_share_it(self) -> None:
+        mapper = CodexEventMapper(thinking=False)
+        for method in ("item/started", "item/completed"):
+            self.assertEqual([], mapper.map({"method": method, "params": {"item": {
+                "id": "r1", "type": "reasoning", "summary": ["secret"]}}}))
+
+    def test_reasoning_without_summary_completes_without_details(self) -> None:
+        mapper = CodexEventMapper(thinking=True)
+        events = mapper.map({"method": "item/completed", "params": {"item": {"id": "r1", "type": "reasoning"}}})
+        self.assertEqual({}, events[0]["details"])
 
     def test_unknown_phase_is_buffered_until_terminal_fallback(self) -> None:
         mapper = CodexEventMapper()
@@ -220,10 +245,12 @@ class CodexEventMapperTests(unittest.TestCase):
         self.assertIn("sent-123", complete["details"]["output"])
         self.assertNotIn("hidden-password", str(start))
         self.assertNotIn("hidden-token", str(complete))
-        self.assertEqual([], mapper.map({"method": "item/completed", "params": {"item": {
-            "id": "reason-1", "type": "reasoning", "content": "private reasoning",
+        # Raw reasoning content never leaves, and only a list-shaped summary is shared.
+        reasoning = mapper.map({"method": "item/completed", "params": {"item": {
+            "id": "reason-1", "type": "reasoning", "content": ["private reasoning"],
             "summary": "private summary",
-        }}}))
+        }}})
+        self.assertNotIn("private", str(reasoning))
 
     def test_helper_mentions_do_not_claim_execution(self) -> None:
         for command in [
@@ -613,6 +640,18 @@ for line in sys.stdin:
                                 instructions="Standing rules", continued_prompt="Only new messages")
             requests = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
         return result, events, requests
+
+    def test_asks_for_reasoning_summaries_unless_the_tag_keeps_them_private(self) -> None:
+        _result, _events, requests = self.run_server("ok")
+        turn = next(request for request in requests if request["method"] == "turn/start")
+        self.assertEqual("auto", turn["params"]["summary"])
+        with patch.dict(os.environ, {"OPENTAG_SHOW_THINKING": "0"}):
+            _result, _events, requests = self.run_server("ok")
+        turn = next(request for request in requests if request["method"] == "turn/start")
+        self.assertNotIn("summary", turn["params"])
+        _result, _events, requests = self.run_server("ok", text_only_instructions="Summarize.")
+        turn = next(request for request in requests if request["method"] == "turn/start")
+        self.assertNotIn("summary", turn["params"])
 
     def test_missing_conversation_is_replaced_by_a_saved_fresh_one(self) -> None:
         result, events, requests = self.run_server("missing", resume_thread_id="gone")

@@ -16,6 +16,11 @@ All notable changes to Tag are documented here.
   Tag now turns off Claude auto memory and Codex memories for its runs so that
   everything it remembers can be listed, corrected, and forgotten.
 
+- Thinking now shows in the Slack thread for Claude and Codex. Each time the
+  model thinks, Agent activity adds a **Thinking** step with the model's summary
+  of that thinking, and the app's Activity tab keeps every summary. Everyone in the thread can read
+  them; run `tag NAME config set OPENTAG_SHOW_THINKING 0` to keep them private.
+
 ### Fixed
 
 - Tag now reads all of a long text file attached in Slack, such as a large

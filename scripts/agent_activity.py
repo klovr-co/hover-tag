@@ -7,6 +7,7 @@ events into App Server item shapes before labeling them.
 
 from __future__ import annotations
 
+import os
 import re
 import shlex
 from typing import Any
@@ -15,6 +16,14 @@ from typing import Any
 INTERRUPT_GRACE_SECONDS = 5.0
 APPROVAL_POLL_SECONDS = 0.1
 APPROVAL_TIMEOUT_SECONDS = 600.0
+# A stretch of the model's thinking; its summary travels in details, never the label.
+THINKING_LABEL = "Thinking…"
+THINKING_TOOL = "Thinking"
+
+
+def show_thinking() -> bool:
+    """Whether this Tag shares the model's thinking summaries in Agent activity."""
+    return os.getenv("OPENTAG_SHOW_THINKING", "1").strip() != "0"
 
 # Public display vocabulary, never populated from tool arguments or results.
 MCP_SERVICE_NAMES = {
