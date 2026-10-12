@@ -182,12 +182,12 @@ class TagControlTests(unittest.TestCase):
 
     def test_settings_label_shows_a_running_model_download(self):
         shared = self.home / "shared/mfs"
-        self.enterContext(patch.dict(os.environ, {"TAG_HOME": str(self.home)}))
-        self.assertEqual(tag_control._search_model_label(), "Default")
-        tag_control.tag_model_download.write(shared, "downloading", model="bge-m3", done=1, total=4, pid=os.getpid())
-        self.assertEqual(tag_control._search_model_label(), "Default (downloading 25%, search off)")
-        tag_control.tag_model_download.write(shared, "ready", model="bge-m3", done=4, total=4)
-        self.assertEqual(tag_control._search_model_label(), "Default")
+        with patch.dict(os.environ, {"TAG_HOME": str(self.home)}):
+            self.assertEqual(tag_control._search_model_label(), "Default")
+            tag_control.tag_model_download.write(shared, "downloading", model="bge-m3", done=1, total=4, pid=os.getpid())
+            self.assertEqual(tag_control._search_model_label(), "Default (downloading 25%, search off)")
+            tag_control.tag_model_download.write(shared, "ready", model="bge-m3", done=4, total=4)
+            self.assertEqual(tag_control._search_model_label(), "Default")
 
     def test_settings_search_model_cancel_changes_nothing(self):
         self.complete()
