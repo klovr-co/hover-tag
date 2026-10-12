@@ -42,5 +42,6 @@
   "unavailable": [],
   "suggested": "codex:gpt-5.5",
   "cached": true,
-  "cached_at": "2026-10-12T09:30:00+00:00"
+  "cached_at": "2026-10-12T09:30:00+00:00",
+  "refresh_failed": []
 }

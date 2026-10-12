@@ -36,7 +36,7 @@ it shows is listed in `capabilities`; otherwise it offers to upgrade Tag.
 | `shared-ai-connections` | Global `tag settings ai connections\|sign-in\|resume --json`; shared accounts, model-only setup |
 | `api-connections` | `tag NAME settings ai api [set\|clear\|check] --json`: a Tag's own API connection; `api_connections` in `tag settings ai connections --json`; see [API connections](#api-connections) |
 | `thinking-level` | `tag NAME settings ai effort LEVEL --json`, `model VALUE --effort LEVEL`; thinking-level fields in `settings ai`, `models`, and `tag list` |
-| `saved-models` | `tag NAME settings ai models --refresh --json`; `cached`, `cached_at`, and each group's `cached` and `fetched_at` in `models` and setup's `default_model` |
+| `saved-models` | `tag NAME settings ai models --refresh --json`; `cached`, `cached_at`, `refresh_failed`, and each group's `cached` and `fetched_at` in `models`; `cached_at` in setup's `default_model` |
 | `logs-activity` | `activity` in `tag NAME logs --json` |
 | `activity-details` | `tag NAME logs --activity RUN_ID --json` |
 | `telemetry-events` | `tag telemetry record EVENT FIELD=VALUE...`, `available` in `tag telemetry status\|on\|off --json`; see [Usage data](#usage-data) |
@@ -398,7 +398,8 @@ older than a day is still returned at once and read again in the background, so
 the next call has the new list. A saved list is dropped when its account
 changes, and is read again when it lacks the Tag's chosen model rather than
 reporting that model unavailable. Add `--refresh` to read every account's list
-now and save it.
+now and save it. When a live read fails, the account's saved list is kept and
+its backend is listed in `refresh_failed` (otherwise `[]`).
 
 `tag NAME settings ai model VALUE --json` saves the default model; the backend
 follows the model. All Slack requests use the Tag's settings; per-user model,

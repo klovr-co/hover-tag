@@ -242,7 +242,7 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
       }
       if (first === "version") {
         return json({ ...versionExample, version: runtimeVersion,
-          capabilities: [...new Set([...versionExample.capabilities, "ai-connections", "shared-ai-connections", "logs-activity", "thinking-level", "describe", "telemetry-events", "api-connections"])] });
+          capabilities: [...new Set([...versionExample.capabilities, "ai-connections", "shared-ai-connections", "logs-activity", "thinking-level", "describe", "telemetry-events", "api-connections", "saved-models"])] });
       }
       if (second === "settings" && args[2] === "ai" && args[3] === "api" && args[4] === "check") {
         await sleep(500);
@@ -255,9 +255,13 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
         const [action, value] = args.slice(3).filter((a) => !a.startsWith("--"));
         if (!action) return json({ ...ai, running: rows.find((r) => r.id === first)?.state === "running" });
         if (action === "models") {
-          await sleep(900);
+          // --refresh reads each account again instead of the saved lists.
+          const refresh = args.includes("--refresh");
+          await sleep(refresh ? 1500 : 900);
           return json({ ...aiModelsExample, default: { ...ai.default_model, available: true, chosen: true },
-            groups: aiModelsExample.groups.filter((g) => ai.usable.includes(g.backend)) });
+            groups: aiModelsExample.groups.filter((g) => ai.usable.includes(g.backend))
+              .map((g) => refresh ? { ...g, cached: false, fetched_at: new Date().toISOString() } : g),
+            ...(refresh ? { cached: false, cached_at: null, refresh_failed: [] } : {}) });
         }
         if (action === "model" && value) {
           const entry = aiModelsExample.groups.flatMap((g) => g.models.map((m) => ({ ...m, group: g })))

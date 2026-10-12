@@ -364,7 +364,9 @@ def models(home: Path, values: dict[str, str], ready: list[str] | None = None, *
     cached = [group["fetched_at"] for group in groups if group["cached"]]
     return {"schema_version": 1, "groups": groups, "default": choice, "unavailable": unavailable,
             "suggested": suggested_default(groups, choice),
-            "cached": bool(cached), "cached_at": min(cached) if cached else None}
+            "cached": bool(cached), "cached_at": min(cached) if cached else None,
+            # Backends whose live read failed, so their saved catalog was kept.
+            "refresh_failed": [name for name in names if found[name][1] and found[name][1].failed]}
 
 
 def refresh_models(home: Path, values: dict[str, str], ready: list[str] | None = None) -> dict[str, Any]:

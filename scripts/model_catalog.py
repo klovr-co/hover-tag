@@ -142,13 +142,14 @@ class Source:
     """One backend's raw catalog for ``agent_models.discover_models``: saved, or read live and saved.
 
     ``live`` skips the saved catalog. After a call, ``fetched_at`` says when
-    the catalog was read, ``cached`` whether it came from the saved file, and
-    ``stale`` whether that file is old enough to read again.
+    the catalog was read, ``cached`` whether it came from the saved file,
+    ``stale`` whether that file is old enough to read again, and ``failed``
+    whether a live read failed and the saved catalog was kept instead.
     """
 
     def __init__(self, backend: str, *, live: bool = False):
         self.backend, self.live = backend, live
-        self.cached = self.stale = False
+        self.cached = self.stale = self.failed = False
         self.fetched_at: datetime | None = None
 
     def __call__(self) -> list[dict[str, Any]] | None:
@@ -158,6 +159,11 @@ class Source:
             self.cached, self.stale = True, stale(self.fetched_at)
             return catalog
         catalog = getattr(agent_models, FETCHERS[self.backend])()
+        if not catalog and account is not None and (saved := load(self.backend, account)):
+            # A failed read keeps the account's saved catalog rather than a fallback guess.
+            catalog, self.fetched_at = saved
+            self.cached = self.failed = True
+            return catalog
         self.fetched_at = datetime.now(timezone.utc)
         # An empty or failed read is never saved, so the next read tries again.
         if catalog and account is not None:

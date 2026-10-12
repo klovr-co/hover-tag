@@ -841,6 +841,18 @@ class SavedCatalogTests(Fixture):
         self.assertIn("codex:gpt-6", self.values(self.models()))
         self.assertEqual([], self.calls)
 
+    def test_a_failed_refresh_keeps_the_saved_catalog_and_says_so(self) -> None:
+        self.models()
+        self.calls.clear()
+        self.catalogs["claude"] = None  # The SDK session couldn't start.
+        result = tag_ai.refresh_models(self.home, self.VALUES, ["codex", "claude"])
+        self.assertCountEqual(["codex", "claude"], self.calls)
+        self.assertEqual(["claude"], result["refresh_failed"])
+        claude = result["groups"][1]
+        self.assertTrue(claude["cached"])
+        self.assertEqual(["claude", "claude:claude-opus-5-5"], [entry["value"] for entry in claude["models"]])
+        self.assertEqual([], self.models()["refresh_failed"])
+
     def test_failed_or_empty_catalogs_are_not_saved(self) -> None:
         self.catalogs["codex"] = []
         self.models()
