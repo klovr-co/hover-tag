@@ -22,6 +22,7 @@ import urllib.request
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -70,7 +71,7 @@ try:
     from .tag_activity_labels import activity_title_for_status, readable_activity_title
     from .tag_paths import instance_home, tag_temp_dir
     from .record_output_artifact import channel_artifact_directory
-    from . import auto_invoke, slack_channels
+    from . import channel_watch, watch_classifier, slack_channels
     from . import tag_memory
     from . import tag_handoff
 except ImportError:  # Direct script execution does not create a package context.
@@ -112,7 +113,8 @@ except ImportError:  # Direct script execution does not create a package context
     from tag_activity_labels import activity_title_for_status, readable_activity_title
     from record_output_artifact import channel_artifact_directory
     from tag_paths import instance_home, tag_temp_dir
-    import auto_invoke
+    import channel_watch
+    import watch_classifier
     import slack_channels
     import tag_memory
     import tag_handoff
@@ -164,6 +166,9 @@ OPEN_LOCAL_ARTIFACT_ACTION_PATTERN = re.compile(
 OPEN_LOCAL_ARTIFACT_DIRECTORY_ACTION_ID = "opentag_open_local_artifact_directory"
 SETTINGS_VIEW_ID = "opentag_agent_settings"
 HOME_CHANNEL_ACTION_ID = "opentag_home_channel"
+HOME_WATCH_ACTION_ID = "opentag_home_watch_channels"
+WATCH_TAKE_ACTION_ID = "opentag_watch_take"
+WATCH_OFF_ACTION_ID = "opentag_watch_off"
 UNAUTHORIZED_USER_MESSAGE = "Sorry, only users authorized by the Tag owner can use this bot."
 LOADING_MESSAGES = [
     "Working on the request…",
@@ -3229,11 +3234,6 @@ def direct_messages_enabled() -> bool:
     return env_enabled("OPENTAG_SLACK_DM_ENABLED", default=True)
 
 
-def auto_invoke_enabled() -> bool:
-    """Classify untagged channel messages only when the operator explicitly opts in."""
-    return env_enabled("OPENTAG_AUTO_INVOKE", default=False)
-
-
 def slack_conversation_allowed(channel: str, *, direct_message: bool = False) -> bool:
     """Apply the channel allowlist to channels and the DM switch to direct messages."""
     return direct_messages_enabled() if direct_message else slack_channel_allowed(channel)
@@ -3296,6 +3296,29 @@ def slack_user_allowed(user_id: str, allowed_user_ids: frozenset[str]) -> bool:
     return bool(user_id) and user_id in allowed_user_ids
 
 
+def watch_home_blocks() -> list[dict[str, Any]]:
+    """Owner control for watching: per channel, off by default, labelled experimental."""
+    selector: dict[str, Any] = {
+        "type": "multi_conversations_select",
+        "action_id": HOME_WATCH_ACTION_ID,
+        "placeholder": {"type": "plain_text", "text": "Watch no channels"},
+        "filter": {"include": ["public", "private"], "exclude_bot_users": True,
+                   "exclude_external_shared_channels": True},
+    }
+    watched = sorted(channel_watch.watched_channel_ids())
+    if watched:
+        selector["initial_conversations"] = watched
+    return [
+        {"type": "section", "accessory": selector, "text": {"type": "mrkdwn", "text":
+            "*Answer without an @mention (experimental)*\n"
+            "In these channels, Tag answers briefly in threads it's already in and to messages that "
+            "name it. It can't take actions until someone confirms, and it posts a notice first."}},
+        {"type": "context", "elements": [{"type": "mrkdwn", "text":
+            "Needs a classifier key: see `tag config keys`. Quiet hours, a daily limit and a "
+            "cooldown after 👎 apply. Anyone can turn it off with “Don't do this here”."}]},
+    ]
+
+
 def app_home_view(
     channel_ids: str = "",
     *,
@@ -3312,13 +3335,17 @@ def app_home_view(
             ],
         }
     if os.getenv("SLACK_CHANNEL_POLICY") == "invited":
-        return {"type": "home", "blocks": [
+        blocks = [
             {"type": "header", "text": {"type": "plain_text", "text": "Tag"}},
             {"type": "section", "text": {"type": "mrkdwn", "text":
                 "Invite Tag to a channel to enable replies and automatic channel memory. "
                 "Invitations are checked about every minute while Tag runs. "
                 "Only authorized users can request tasks; replies use this channel’s memory only."}},
-        ]}
+            *watch_home_blocks(),
+        ]
+        if notice:
+            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": notice}})
+        return {"type": "home", "blocks": blocks}
     selector: dict[str, Any] = {
         "type": "multi_conversations_select",
         "action_id": HOME_CHANNEL_ACTION_ID,
@@ -3356,6 +3383,7 @@ def app_home_view(
             ],
         },
     ]
+    blocks.extend(watch_home_blocks())
     if notice:
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": notice}})
     return {"type": "home", "blocks": blocks}
@@ -3372,6 +3400,19 @@ def save_home_channels(channel_ids: list[str]) -> None:
     value = ",".join(channel_ids)
     settings.update_config(settings.config_path(instance_home()), {"SLACK_CHANNEL_IDS": value})
     os.environ["SLACK_CHANNEL_IDS"] = value
+
+
+def save_watch_channels(channel_ids: list[str]) -> None:
+    """Persist the watched channels and apply them to this live bridge."""
+    try:
+        import tag_config as settings
+        from tag_paths import instance_home
+    except ImportError:
+        from scripts import tag_config as settings
+        from scripts.tag_paths import instance_home
+    value = ",".join(channel_ids)
+    settings.update_config(settings.config_path(instance_home()), {"OPENTAG_WATCH_CHANNEL_IDS": value})
+    os.environ["OPENTAG_WATCH_CHANNEL_IDS"] = value
 
 
 def print_live_summary(backend: str, allowed_user_ids: frozenset[str]) -> None:
@@ -3408,13 +3449,15 @@ def print_live_summary(backend: str, allowed_user_ids: frozenset[str]) -> None:
     for scope in scopes or ["(none — set MFS_ALLOWED_SCOPES)"]:
         print(f"            - {scope}")
     dm_status = "enabled" if direct_messages_enabled() else "disabled"
+    watched = channel_watch.watched_channel_ids()
     untagged_status = (
-        f"enabled ({os.getenv('OPENTAG_AUTO_INVOKE_PROVIDER') or auto_invoke.DEFAULT_PROVIDER})"
-        if auto_invoke_enabled() else "disabled"
+        f"{len(watched)} channel(s), classifier "
+        f"{os.getenv('OPENTAG_WATCH_CLASSIFIER') or watch_classifier.DEFAULT_PROVIDER}"
+        if watched else "off"
     )
     print(f"  Slack   : {slack_status}")
     print(f"  DMs     : {dm_status}")
-    print(f"  Untagged: replies when addressed {untagged_status}")
+    print(f"  Watching: {untagged_status}")
     print(f"  Access  : {len(allowed_user_ids)} authorized Slack user(s)")
     print("")
     print("  Only explicitly authorized Slack users can drive the backend,")
@@ -3436,6 +3479,8 @@ def create_app(
     activity_store: ActivityStore | None = None,
     peers: list[tag_handoff.Peer] | None = None,
     handoff_store: tag_handoff.HandoffStore | None = None,
+    watch_state: channel_watch.WatchState | None = None,
+    watch_log: channel_watch.ScoreLog | None = None,
 ) -> App:
     retire_slack_settings()
     if max_timeout is None:
@@ -3895,6 +3940,41 @@ def create_app(
                     notice=":warning: Tag could not save that channel. Check the local Tag logs.",
                 ),
             )
+
+    @app.action(HOME_WATCH_ACTION_ID)
+    def select_watch_channels(ack: Any, body: dict[str, Any], client: Any, logger: Any) -> None:
+        ack()
+        user_id = body.get("user", {}).get("id", "")
+        if not slack_user_allowed(user_id, allowed_user_ids):
+            return
+        current = os.getenv("SLACK_CHANNEL_IDS", "").strip() or os.getenv("SLACK_CHANNEL_ID", "").strip()
+        try:
+            chosen = body["actions"][0].get("selected_conversations") or []
+            if not isinstance(chosen, list):
+                raise ValueError("invalid channel selection")
+            outside = [c for c in chosen if not (slack_channel_allowed(c) or newly_invited_channel_allowed(c, client))]
+            if outside:
+                notice = ":warning: Tag can only watch channels where it already responds."
+            else:
+                try:
+                    watch_classifier.settings_from(os.environ)
+                    ready = True
+                except watch_classifier.ClassifierError:
+                    ready = not chosen
+                if not ready:
+                    notice = (":warning: Set the watching classifier's key first, for example "
+                              "`printf '%s' \"$KEY\" | tag config set OPENTAG_TYPESAFE_API_KEY --stdin`.")
+                else:
+                    for channel in channel_watch.watched_channel_ids() - set(chosen):
+                        watching().set_noticed(channel, False)
+                    save_watch_channels(sorted(chosen))
+                    post_watch_notices(client, logger)
+                    notice = (":white_check_mark: Tag posted a notice and now watches the selected channels."
+                              if chosen else ":white_check_mark: Tag watches no channels.")
+        except (KeyError, IndexError, OSError, TypeError, ValueError, RuntimeError) as exc:
+            logger.warning("Could not save watched channels: %s", exc)
+            notice = ":warning: Tag could not save watched channels. Check the local Tag logs."
+        client.views_publish(user_id=user_id, view=app_home_view(current, notice=notice))
 
     @app.action(SETTINGS_ACTION_ID)
     def open_agent_settings(ack: Any, body: dict[str, Any], client: Any, logger: Any) -> None:
@@ -5047,9 +5127,37 @@ def create_app(
         if event.get("bot_id") or event.get("user") in peer_ids:
             handle_peer_message(event, body, client, logger)
             return
+        if channel in channel_watch.watched_channel_ids():
+            watching().engage(channel, event.get("thread_ts") or event["ts"])
         handle_invocation(event, body, client, logger, direct_message=False)
 
     assistant_identity: dict[str, str] = {}
+    watch_stores: dict[str, Any] = {}
+
+    def watch_home() -> Path:
+        return activity_store.root.parent.parent
+
+    def watching() -> channel_watch.WatchState:
+        if "state" not in watch_stores:
+            watch_stores["state"] = watch_state or channel_watch.WatchState(
+                activity_store.root.parent / "channel-watch.json")
+        return watch_stores["state"]
+
+    def watch_scores() -> channel_watch.ScoreLog:
+        if "log" not in watch_stores:
+            watch_stores["log"] = watch_log or channel_watch.ScoreLog(
+                activity_store.root.parent / "channel-watch-scores.jsonl")
+        return watch_stores["log"]
+
+    def watch_ready(channel: str) -> bool:
+        """Watching starts only after its notice is posted and Slack granted reactions."""
+        return watching().noticed(channel) and channel_watch.reactions_granted(watch_home())
+
+    def slack_backoff(error: BaseException) -> bool:
+        seconds = channel_watch.retry_after(error)
+        if seconds is not None:
+            watching().back_off(seconds)
+        return seconds is not None
 
     def current_assistant_user_id(client: Any) -> str:
         if "user_id" not in assistant_identity:
@@ -5075,83 +5183,240 @@ def create_app(
             if direct_messages_enabled():
                 handle_invocation(event, body, client, logger, direct_message=True)
             return
-        if channel_type not in {"channel", "group"} or not auto_invoke_enabled():
+        channel = event.get("channel", "")
+        if channel_type not in {"channel", "group"} or channel not in channel_watch.watched_channel_ids():
             return
-        handle_untagged_message(event, body, client, logger)
+        handle_watched_message(event, body, client, logger)
 
-    def handle_untagged_message(
+    def handle_watched_message(
         event: dict[str, Any],
         body: dict[str, Any],
         client: Any,
         logger: Any,
     ) -> None:
-        channel = event.get("channel", "")
-        if not isinstance(channel, str) or not (
-            slack_conversation_allowed(channel)
-            or newly_invited_channel_allowed(channel, client)
-        ):
-            return
+        """Stage 1: cheap deterministic filters, before any paid call."""
+        channel = event["channel"]
         user_id = event.get("user", "")
-        if not isinstance(user_id, str) or not slack_user_allowed(user_id, allowed_user_ids):
+        message_text = str(event.get("text") or "")
+        thread_ts = event.get("thread_ts")
+        state = watching()
+        if isinstance(thread_ts, str) and thread_ts and channel_watch.STOP_RE.fullmatch(message_text):
+            answered = state.last_reply(channel, thread_ts)
+            if answered is not None:  # Anyone may tell Tag to stop.
+                state.cool_down(channel, channel_watch.cooldown_hours())
+                watch_scores().label(answered.get("score_id", ""), False, "stop")
+                logger.info("Watching paused in %s after a stop message", channel)
+                return
+        if not isinstance(user_id, str) or not user_id or user_id == current_assistant_user_id(client):
+            return
+        if not (slack_conversation_allowed(channel) or newly_invited_channel_allowed(channel, client)):
+            return
+        if not slack_user_allowed(user_id, allowed_user_ids):
             # Ambient messages from other people are normal conversation, not denied requests.
             return
-        message_text = str(event.get("text") or "")
         if not message_text.strip() or MENTION_RE.search(message_text):
             # Explicit bot mentions use app_mention; other member mentions are human-directed.
             return
-        try:
-            classifier = auto_invoke.settings_from(os.environ)
-        except auto_invoke.AutoInvokeError as exc:
-            logger.warning("Untagged reply check failed closed: %s", exc)
+        if not watch_ready(channel):
             return
+        if channel_watch.in_quiet_hours(channel_watch.quiet_hours(), datetime.now()):
+            return
+        anchor = thread_ts if isinstance(thread_ts, str) and thread_ts else event["ts"]
+        if reason := state.blocked(channel, anchor, limit=channel_watch.daily_limit(),
+                                   today=date.today().isoformat()):
+            logger.info("Watching stayed quiet in %s: %s", channel, reason)
+            return
+        if channel_watch.names_tag(message_text, channel_watch.watch_names()):
+            trigger = "named"
+        elif anchor != event["ts"] and state.is_engaged(channel, anchor):
+            trigger = "thread"
+        else:
+            return  # Channel-wide watching is a later, separate opt-in.
+        if not state.claim(channel, anchor):
+            return
+        try:
+            decide_watched_reply(event, client, logger, anchor=anchor, trigger=trigger)
+        finally:
+            state.release(channel, anchor)
 
+    def decide_watched_reply(
+        event: dict[str, Any],
+        client: Any,
+        logger: Any,
+        *,
+        anchor: str,
+        trigger: str,
+    ) -> None:
+        """Stages 2 and 3: the classifier on thread context, then a text-only draft."""
+        channel = event["channel"]
+        try:
+            classifier = watch_classifier.settings_from(os.environ)
+        except watch_classifier.ClassifierError as exc:
+            logger.warning("Watching failed closed: %s", exc)
+            return
         thread_messages: list[dict[str, Any]] = []
-        thread_ts = event.get("thread_ts")
-        if isinstance(thread_ts, str) and thread_ts:
+        if anchor != event["ts"]:
             try:
                 response = client.conversations_replies(
-                    channel=channel,
-                    ts=thread_ts,
-                    limit=auto_invoke.MAX_CONTEXT_MESSAGES + 1,
-                )
-                thread_messages = [
-                    message
-                    for message in response.get("messages", [])
-                    if isinstance(message, dict)
-                ]
-            except Exception as exc:  # noqa: BLE001 - current-message routing can still proceed
-                logger.warning("Could not load thread context for untagged reply check: %s", type(exc).__name__)
-
-        state = auto_invoke.message_state(
-            event,
-            thread_messages,
-            assistant_name=suggested_bot_name(backend),
+                    channel=channel, ts=anchor, limit=watch_classifier.MAX_CONTEXT_MESSAGES + 1)
+                thread_messages = [m for m in response.get("messages", []) if isinstance(m, dict)]
+            except Exception as exc:  # noqa: BLE001 - the classifier still sees the message
+                if slack_backoff(exc):
+                    return
+                logger.warning("Could not load thread context for watching: %s", type(exc).__name__)
+        name = suggested_bot_name(backend)
+        state = watch_classifier.message_state(
+            event, thread_messages, assistant_name=name,
             assistant_user_id=current_assistant_user_id(client) if thread_messages else "",
         )
+        record = {"channel": channel, "thread_ts": anchor, "ts": event["ts"], "trigger": trigger,
+                  "provider": classifier.provider, "threshold": classifier.threshold, "state": state}
         try:
-            decision = auto_invoke.evaluate(
-                state,
-                provider=classifier.provider,
-                api_key=classifier.api_key,
-                threshold=classifier.threshold,
-                model=classifier.model,
-                timeout=classifier.timeout,
+            decision = watch_classifier.evaluate(
+                state, provider=classifier.provider, api_key=classifier.api_key,
+                threshold=classifier.threshold, model=classifier.model, timeout=classifier.timeout,
             )
         except Exception as exc:  # noqa: BLE001 - routing failures must fail closed
-            logger.warning(
-                "Untagged reply check failed closed (%s): %s", classifier.provider, type(exc).__name__
-            )
+            watch_scores().score(**record, outcome=f"classifier {type(exc).__name__}")
+            logger.warning("Watching classifier failed closed (%s): %s", classifier.provider, type(exc).__name__)
             return
-        logger.info(
-            "Untagged reply decision: invoke=%s addressed=%.3f provider=%s model=%s",
-            decision.should_invoke,
-            decision.tag_is_addressed,
-            decision.provider,
-            decision.model,
-        )
-        if decision.should_invoke:
-            handle_invocation(event, body, client, logger, direct_message=False)
+        record.update(model=decision.model, probability=decision.tag_is_addressed)
+        logger.info("Watching decision: invoke=%s addressed=%.3f provider=%s",
+                    decision.should_invoke, decision.tag_is_addressed, decision.provider)
+        if not decision.should_invoke:
+            watch_scores().score(**record, outcome="below threshold")
+            return
+        request_backend = default_settings.backend or backend
+        try:
+            draft = channel_watch.draft_reply(state, request_backend, default_settings.model, name=name)
+        except Exception as exc:  # noqa: BLE001 - a failed draft stays silent
+            logger.warning("Watching draft failed: %s", type(exc).__name__)
+            draft = ""
+        kind, text = channel_watch.interpret(draft)
+        score_id = watch_scores().score(**record, outcome=kind)
+        try:
+            if kind == "react":
+                client.reactions_add(channel=channel, timestamp=event["ts"], name=channel_watch.REACTION)
+            elif kind == "reply":
+                metadata = {"channel": channel, "thread_ts": anchor, "request_ts": event["ts"],
+                            "team": event.get("team", ""), "score_id": score_id}
+                response = client.chat_postMessage(
+                    channel=channel, thread_ts=anchor, text=text, unfurl_links=False, unfurl_media=False,
+                    blocks=channel_watch.reply_blocks(
+                        text, reason=trigger, provider=watch_classifier.PROVIDERS[classifier.provider].label,
+                        probability=decision.tag_is_addressed, take=metadata,
+                        off={"channel": channel, "score_id": score_id},
+                        take_action=WATCH_TAKE_ACTION_ID, off_action=WATCH_OFF_ACTION_ID),
+                )
+                watching().record_reply(channel, anchor, str(response.get("ts", "")), score_id,
+                                        today=date.today().isoformat())
+        except Exception as exc:  # noqa: BLE001 - keep the Socket Mode listener alive
+            if not slack_backoff(exc):
+                logger.warning("Could not post a watched reply: %s", type(exc).__name__)
 
+    @app.action(WATCH_TAKE_ACTION_ID)
+    def take_watched_request(ack: Any, body: dict[str, Any], client: Any, logger: Any) -> None:
+        """A person confirmed in a new turn: run the request with normal capability."""
+        ack()
+        user_id = body.get("user", {}).get("id", "")
+        try:
+            metadata = json.loads(body["actions"][0]["value"])
+            channel, thread_ts, request_ts = metadata["channel"], metadata["thread_ts"], metadata["request_ts"]
+            if not all(isinstance(v, str) and v for v in (channel, thread_ts, request_ts)):
+                raise ValueError("invalid watched-reply metadata")
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
+            logger.warning("Could not read a watched-reply action: %s", exc)
+            return
+        if not slack_user_allowed(user_id, allowed_user_ids):
+            client.chat_postEphemeral(channel=channel, user=user_id, text=UNAUTHORIZED_USER_MESSAGE)
+            return
+        if not slack_conversation_allowed(channel):
+            return
+        try:
+            response = client.conversations_replies(channel=channel, ts=thread_ts)
+            original = next((m for m in response.get("messages", [])
+                             if m.get("ts") == request_ts and isinstance(m.get("text"), str)), None)
+            if original is None:
+                raise ValueError("original Slack request is unavailable")
+            watching().engage(channel, thread_ts)
+            watch_scores().label(str(metadata.get("score_id", "")), True, "take")
+            message = body.get("message") or {}
+            if message.get("ts"):
+                client.chat_update(channel=channel, ts=message["ts"], text=message.get("text", ""),
+                                   blocks=[b for b in message.get("blocks", []) if b.get("type") != "actions"])
+            team = metadata.get("team") or body.get("team", {}).get("id", "")
+            handle_invocation(
+                {"channel": channel, "thread_ts": thread_ts, "ts": request_ts, "user": user_id,
+                 "text": original["text"], "team": team},
+                {"team_id": team}, client, logger, direct_message=False,
+            )
+        except Exception as exc:  # noqa: BLE001 - keep the Slack action listener alive
+            logger.warning("Could not take a watched request: %s", exc)
+            client.chat_postEphemeral(channel=channel, user=user_id,
+                                      text="Tag couldn't start that. Mention it in the thread instead.")
+
+    @app.action(WATCH_OFF_ACTION_ID)
+    def stop_watching_here(ack: Any, body: dict[str, Any], client: Any, logger: Any) -> None:
+        """Anyone in the channel may turn watching off; only an owner can turn it back on."""
+        ack()
+        user_id = body.get("user", {}).get("id", "")
+        try:
+            metadata = json.loads(body["actions"][0]["value"])
+            channel = metadata["channel"]
+            if not isinstance(channel, str) or not channel:
+                raise ValueError("invalid channel")
+            remaining = [c for c in sorted(channel_watch.watched_channel_ids()) if c != channel]
+            save_watch_channels(remaining)
+            watching().set_noticed(channel, False)
+            watch_scores().label(str(metadata.get("score_id", "")), False, "dont-do-this-here")
+            client.chat_postEphemeral(
+                channel=channel, user=user_id,
+                text="Tag stopped watching this channel. Mentions still work. "
+                     "Its owner can turn watching back on from Tag's Home tab.")
+        except Exception as exc:  # noqa: BLE001 - keep the Slack action listener alive
+            logger.warning("Could not stop watching a channel: %s", exc)
+
+    @app.event("reaction_added")
+    def handle_reaction(event: dict[str, Any], logger: Any) -> None:
+        item = event.get("item") or {}
+        channel, ts = item.get("channel", ""), item.get("ts", "")
+        if item.get("type") != "message" or not channel or not ts:
+            return
+        reply = watching().reply(channel, ts) if channel in channel_watch.watched_channel_ids() else None
+        if reply is None:
+            return
+        reaction = str(event.get("reaction", "")).split("::")[0]
+        if reaction in channel_watch.NEGATIVE_REACTIONS:
+            watching().cool_down(channel, channel_watch.cooldown_hours())
+            watch_scores().label(reply.get("score_id", ""), False, "thumbsdown")
+            logger.info("Watching paused in %s after a 👎", channel)
+        elif reaction in channel_watch.POSITIVE_REACTIONS:
+            watching().engage(channel, reply.get("thread_ts", ""))
+            watch_scores().label(reply.get("score_id", ""), True, "thumbsup")
+
+    def post_watch_notices(client: Any, logger: Any) -> None:
+        """Announce watching in each newly opted-in channel; watching waits for the notice."""
+        if not channel_watch.reactions_granted(watch_home()):
+            if channel_watch.watched_channel_ids():
+                logger.warning("Watching is off until Slack grants %s; run tag start to approve them",
+                               ", ".join(channel_watch.REACTION_SCOPES))
+            return
+        for channel in sorted(channel_watch.watched_channel_ids()):
+            if watching().noticed(channel) or not slack_channel_allowed(channel):
+                continue
+            text, blocks = channel_watch.notice_blocks(
+                suggested_bot_name(backend), channel_watch.quiet_hours(),
+                off={"channel": channel}, off_action=WATCH_OFF_ACTION_ID)
+            try:
+                client.chat_postMessage(channel=channel, text=text, blocks=blocks,
+                                        unfurl_links=False, unfurl_media=False)
+            except Exception as exc:  # noqa: BLE001 - this channel stays unwatched until it works
+                slack_backoff(exc)
+                logger.warning("Could not announce watching in %s: %s", channel, type(exc).__name__)
+                continue
+            watching().set_noticed(channel, True)
+
+    app.tag_post_watch_notices = post_watch_notices
     app.tag_expire_handoffs = expire_handoffs
     app.tag_update_handoff_status = update_handoff_status
     return app
@@ -5266,6 +5531,10 @@ def main() -> None:
     app_token = require_env("SLACK_APP_TOKEN")
     connection = SocketConnection(lambda: SocketModeHandler(app, app_token))
     session_journal.reconcile(app.client, app.logger)
+    try:
+        app.tag_post_watch_notices(app.client, app.logger)
+    except Exception as exc:  # noqa: BLE001 - unannounced channels simply stay unwatched
+        app.logger.warning("Could not announce channel watching: %s", exc)
     shutdown_requested = threading.Event()
     install_shutdown_handlers(shutdown_requested)
     # Cosmetic profile refresh must never block Socket Mode heartbeats or tasks.

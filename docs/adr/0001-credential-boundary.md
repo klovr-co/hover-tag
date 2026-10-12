@@ -19,7 +19,7 @@ least-privilege credentials.
 
 Security and setup documentation must state this inheritance directly. Claims
 of credential isolation must specify that only the Socket Mode token, bridge
-access-control settings, and the bridge's own routing-classifier keys are
+access-control settings, and the bridge's own channel-watching classifier keys are
 withheld from backend processes.
 
 ## Consequences

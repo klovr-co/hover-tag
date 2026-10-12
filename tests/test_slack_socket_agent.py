@@ -2521,7 +2521,9 @@ class SlackAppHomeTests(unittest.TestCase):
             os.environ, {"SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_POLICY": "invited"}, clear=True
         ), patch.object(slack_socket_agent, "save_home_channels") as save:
             view = slack_socket_agent.app_home_view("C123")
-            self.assertNotIn("multi_conversations_select", str(view))
+            # The channel picker is replaced; only the separate watching opt-in remains.
+            self.assertNotIn(slack_socket_agent.HOME_CHANNEL_ACTION_ID, str(view))
+            self.assertIn(slack_socket_agent.HOME_WATCH_ACTION_ID, str(view))
             self.assertIn("automatic channel memory", str(view))
             slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
             fake_app.actions[slack_socket_agent.HOME_CHANNEL_ACTION_ID](
@@ -2834,158 +2836,330 @@ class SlackDirectMessageTests(unittest.TestCase):
         run_backend.assert_not_called()
 
 
-class SlackUntaggedReplyTests(unittest.TestCase):
-    ENABLED = {
+class SlackChannelWatchTests(unittest.TestCase):
+    ENVIRONMENT = {
         "SLACK_BOT_TOKEN": "xoxb-test",
-        "SLACK_CHANNEL_IDS": "C123",
+        "SLACK_CHANNEL_IDS": "C123,C456",
         "OPENTAG_SLACK_STREAMING": "0",
         "OPENTAG_CLAUDE_TRANSPORT": "print",
-        "OPENTAG_AUTO_INVOKE": "1",
+        "OPENTAG_BOT_NAME": "Iris's Tag",
+        "OPENTAG_WATCH_CHANNEL_IDS": "C123",
+        "OPENTAG_WATCH_QUIET_HOURS": "",
         "OPENTAG_TYPESAFE_API_KEY": "typesafe-secret",
     }
 
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.home = Path(directory.name)
+        receipt = self.home / "state/slack-manifest-migrations.json"
+        receipt.parent.mkdir(parents=True)
+        receipt.write_text(json.dumps({"version": 5}), encoding="utf-8")
+        self.state = slack_socket_agent.channel_watch.WatchState(self.home / "state/channel-watch.json")
+        self.log_path = self.home / "state/channel-watch-scores.jsonl"
+        self.state.set_noticed("C123", True)
+        self.client = MagicMock()
+        self.client.auth_test.return_value = {"user_id": "UTAG"}
+        self.client.chat_postMessage.return_value = {"ts": "9.000"}
+        self.client.conversations_replies.return_value = {"messages": []}
+        self.environment = dict(self.ENVIRONMENT)
+        self.decision = slack_socket_agent.watch_classifier.ClassifierDecision(True, 0.96, "jev-1.13.0", "typesafe-jev")
+        self.draft = "Want me to take this on?"
+
     def event(self, **changes: str) -> dict[str, str]:
-        return {
-            "channel": "C123",
-            "channel_type": "channel",
-            "ts": "1.00",
-            "user": "UOWNER",
-            "text": "summarize this thread",
-        } | changes
+        return {"channel": "C123", "channel_type": "channel", "ts": "1.000", "user": "UOWNER",
+                "text": "Iris's Tag, what's the plan?"} | changes
 
-    def deliver(
-        self,
-        event: dict[str, str],
-        environment: dict[str, str],
-        *,
-        client: MagicMock | None = None,
-        evaluate: dict | None = None,
-    ) -> tuple[MagicMock, MagicMock]:
-        """Deliver one message event; return the patched evaluate and run_backend."""
+    def app(self, stack: Any) -> FakeApp:
         fake_app = FakeApp()
-        indicator = MagicMock(native=False, message_ts=None)
-        decision = slack_socket_agent.auto_invoke.AutoInvokeDecision(
-            should_invoke=True, tag_is_addressed=0.96, model="jev-1.13.0", provider="typesafe-jev"
+        stack.enter_context(patch.object(slack_socket_agent, "App", return_value=fake_app))
+        stack.enter_context(patch.dict(os.environ, self.environment, clear=True))
+        self.evaluate = stack.enter_context(patch.object(
+            slack_socket_agent.watch_classifier, "evaluate", return_value=self.decision))
+        self.draft_reply = stack.enter_context(patch.object(
+            slack_socket_agent.channel_watch, "draft_reply", return_value=self.draft))
+        self.run_backend = stack.enter_context(patch.object(slack_socket_agent, "run_backend", return_value=("done", True)))
+        stack.enter_context(patch.object(slack_socket_agent, "build_thread_text", return_value="thread context"))
+        stack.enter_context(patch.object(slack_socket_agent, "WorkingIndicator",
+                                         return_value=MagicMock(native=False, message_ts=None)))
+        self.save_watch = stack.enter_context(patch.object(slack_socket_agent, "save_watch_channels"))
+        slack_socket_agent.create_app(
+            "claude", 30, frozenset({"UOWNER"}),
+            activity_store=ActivityStore(self.home / "state/activity"),
+            watch_state=self.state,
+            watch_log=slack_socket_agent.channel_watch.ScoreLog(self.log_path),
         )
-        with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
-            os.environ, environment, clear=True
-        ), patch.object(
-            slack_socket_agent.auto_invoke, "evaluate", **(evaluate or {"return_value": decision})
-        ) as evaluate_mock, patch.object(
-            slack_socket_agent, "WorkingIndicator", return_value=indicator
-        ), patch.object(
-            slack_socket_agent, "build_thread_text", return_value="thread context"
-        ), patch.object(
-            slack_socket_agent, "run_backend", return_value=("done", True)
-        ) as run_backend:
-            slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
-            fake_app.events["message"](event, {"team_id": "T123"}, client or MagicMock(), MagicMock())
-        return evaluate_mock, run_backend
+        return fake_app
 
-    def test_untagged_channel_messages_are_opt_in(self) -> None:
-        environment = {key: value for key, value in self.ENABLED.items() if key != "OPENTAG_AUTO_INVOKE"}
-        evaluate, run_backend = self.deliver(self.event(), environment)
-        evaluate.assert_not_called()
-        run_backend.assert_not_called()
+    def deliver(self, *events: dict[str, str]) -> None:
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            fake_app = self.app(stack)
+            for event in events:
+                fake_app.events["message"](event, {"team_id": "T123"}, self.client, MagicMock())
 
-    def test_unauthorized_ambient_message_is_silent_before_classification(self) -> None:
-        client = MagicMock()
-        evaluate, run_backend = self.deliver(self.event(user="UOTHER"), self.ENABLED, client=client)
-        evaluate.assert_not_called()
-        run_backend.assert_not_called()
-        client.chat_postMessage.assert_not_called()
-        client.chat_postEphemeral.assert_not_called()
+    def log(self) -> list[dict]:
+        if not self.log_path.exists():
+            return []
+        return [json.loads(line) for line in self.log_path.read_text(encoding="utf-8").splitlines()]
 
-    def test_unapproved_channel_bot_output_and_edits_skip_classification(self) -> None:
-        for event in (
-            self.event(channel="C999"),
-            self.event(bot_id="BOTHER"),
-            self.event(subtype="message_changed"),
-            self.event(channel_type="mpim"),
-            self.event(text="   "),
-        ):
-            with self.subTest(event=event):
-                evaluate, run_backend = self.deliver(event, self.ENABLED)
-                evaluate.assert_not_called()
-                run_backend.assert_not_called()
+    def test_named_message_gets_a_labelled_reply_in_its_thread(self) -> None:
+        self.deliver(self.event())
+        self.evaluate.assert_called_once()
+        self.assertEqual("typesafe-jev", self.evaluate.call_args.kwargs["provider"])
+        self.draft_reply.assert_called_once()
+        self.assertEqual("claude", self.draft_reply.call_args.args[1])
+        self.run_backend.assert_not_called()  # Reduced capability: no normal agent run.
+        post = self.client.chat_postMessage.call_args.kwargs
+        self.assertEqual("1.000", post["thread_ts"])  # Never at the top level.
+        self.assertFalse(post["unfurl_links"])
+        self.assertIn("this message names me", json.dumps(post["blocks"]))
+        actions = post["blocks"][-1]["elements"]
+        self.assertEqual([slack_socket_agent.WATCH_TAKE_ACTION_ID, slack_socket_agent.WATCH_OFF_ACTION_ID],
+                         [item["action_id"] for item in actions])
+        [entry] = self.log()
+        self.assertEqual(("reply", 0.96, "named"), (entry["outcome"], entry["probability"], entry["trigger"]))
+        self.assertNotIn("UOWNER", json.dumps(entry))
+        self.assertEqual(entry["id"], self.state.reply("C123", "9.000")["score_id"])
 
-    def test_explicit_mentions_do_not_enter_the_ambient_gate(self) -> None:
-        for text in ("<@UTAG> summarize this", "<@UPERSON> can you summarize this?"):
-            with self.subTest(text=text):
-                evaluate, run_backend = self.deliver(self.event(text=text), self.ENABLED)
-                evaluate.assert_not_called()
-                run_backend.assert_not_called()
-
-    def test_positive_decision_enters_existing_invocation_path(self) -> None:
-        evaluate, run_backend = self.deliver(self.event(), self.ENABLED)
-        evaluate.assert_called_once()
-        self.assertEqual("typesafe-jev", evaluate.call_args.kwargs["provider"])
-        self.assertEqual("typesafe-secret", evaluate.call_args.kwargs["api_key"])
-        self.assertEqual(0.9, evaluate.call_args.kwargs["threshold"])
-        self.assertEqual("jev-latest", evaluate.call_args.kwargs["model"])
-        self.assertEqual("summarize this thread", evaluate.call_args.args[0]["current_message"])
-        run_backend.assert_called_once()
-
-    def test_openai_decisions_uses_its_own_key_model_and_threshold(self) -> None:
-        environment = self.ENABLED | {
-            "OPENTAG_AUTO_INVOKE_PROVIDER": "openai-decisions",
-            "OPENTAG_OPENAI_DECISIONS_API_KEY": "openai-secret",
-            "OPENTAG_DECISIONS_THRESHOLD": "0.8",
-            "OPENTAG_AUTO_INVOKE_TIMEOUT_SECONDS": "3",
+    def test_deterministic_filters_run_before_the_classifier(self) -> None:
+        cases = {
+            "unwatched channel": (self.event(channel="C456"), {}),
+            "unauthorized user": (self.event(user="UOTHER"), {}),
+            "explicit mention": (self.event(text="<@UTAG> plan?"), {}),
+            "mention of a person": (self.event(text="<@USAM> Iris's Tag said hi"), {}),
+            "bot output": (self.event(bot_id="BOT"), {}),
+            "edit": (self.event(subtype="message_changed"), {}),
+            "own message": (self.event(user="UTAG"), {}),
+            "top level without the name": (self.event(text="what's the plan?"), {}),
+            "thread Tag isn't in": (self.event(text="what's the plan?", thread_ts="0.500"), {}),
+            "quiet hours": (self.event(), {"OPENTAG_WATCH_QUIET_HOURS": "00:00-23:59"}),
         }
-        evaluate, run_backend = self.deliver(self.event(), environment)
-        self.assertEqual(
-            {"provider": "openai-decisions", "api_key": "openai-secret", "threshold": 0.8,
-             "model": "gpt-6-luna", "timeout": 3.0},
-            evaluate.call_args.kwargs,
-        )
-        run_backend.assert_called_once()
+        for name, (event, changes) in cases.items():
+            with self.subTest(name):
+                self.environment = self.ENVIRONMENT | changes
+                self.client.reset_mock()
+                self.deliver(event)
+                self.evaluate.assert_not_called()
+                self.client.chat_postMessage.assert_not_called()
 
-    def test_thread_context_is_loaded_and_identity_minimized(self) -> None:
-        client = MagicMock()
-        client.auth_test.return_value = {"user_id": "UTAG"}
-        client.conversations_replies.return_value = {"messages": [
-            {"ts": "0.50", "user": "UTAG", "bot_id": "BTAG", "text": "Here is a draft"},
-            {"ts": "1.00", "user": "UOWNER", "text": "make it shorter"},
+    def test_watching_waits_for_its_notice_and_reaction_permissions(self) -> None:
+        self.state.set_noticed("C123", False)
+        self.deliver(self.event())
+        self.evaluate.assert_not_called()
+        self.state.set_noticed("C123", True)
+        (self.home / "state/slack-manifest-migrations.json").write_text(
+            json.dumps({"version": 5, "optional_pending": ["reactions:read"]}), encoding="utf-8")
+        self.deliver(self.event())
+        self.evaluate.assert_not_called()
+
+    def test_threads_tag_is_in_are_watched_without_the_name(self) -> None:
+        self.state.engage("C123", "0.500")
+        self.client.conversations_replies.return_value = {"messages": [
+            {"ts": "0.500", "user": "UOWNER", "text": "<@UTAG> draft the launch note"},
+            {"ts": "0.700", "user": "UTAG", "bot_id": "BTAG", "text": "Here's a draft"},
         ]}
-        evaluate, _ = self.deliver(
-            self.event(thread_ts="0.50", text="make it shorter"), self.ENABLED, client=client
-        )
-        client.conversations_replies.assert_called_once_with(channel="C123", ts="0.50", limit=11)
-        self.assertEqual(
-            [{"author": "tag", "text": "Here is a draft"}], evaluate.call_args.args[0]["thread_history"]
-        )
+        self.deliver(self.event(text="make it shorter", thread_ts="0.500"))
+        state = self.evaluate.call_args.args[0]
+        self.assertEqual(["requester", "tag"], [item["author"] for item in state["thread_history"]])
+        self.assertEqual("0.500", self.client.chat_postMessage.call_args.kwargs["thread_ts"])
+        self.assertEqual("thread", self.log()[0]["trigger"])
 
-    def test_negative_failed_or_unconfigured_decisions_stay_silent(self) -> None:
-        declined = slack_socket_agent.auto_invoke.AutoInvokeDecision(False, 0.4, "gpt-6-luna", "openai-decisions")
+    def test_explicit_mention_in_a_watched_channel_engages_the_thread(self) -> None:
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            fake_app = self.app(stack)
+            fake_app.events["app_mention"](
+                {"channel": "C123", "ts": "2.000", "thread_ts": "0.500", "user": "UOWNER", "text": "<@UTAG> hi"},
+                {"team_id": "T123"}, self.client, MagicMock())
+        self.assertTrue(self.state.is_engaged("C123", "0.500"))
+        self.run_backend.assert_called_once()
+
+    def test_one_unprompted_reply_per_thread_until_explicit_engagement(self) -> None:
+        self.deliver(self.event(), self.event(ts="2.000", thread_ts="1.000", text="Iris's Tag, and?"))
+        self.assertEqual(1, self.evaluate.call_count)
+        self.state.engage("C123", "1.000")
+        self.deliver(self.event(ts="3.000", thread_ts="1.000", text="Iris's Tag, and?"))
+        self.assertEqual(1, self.evaluate.call_count)  # A fresh patch per delivery.
+
+    def test_daily_limit_per_channel(self) -> None:
+        self.environment = self.ENVIRONMENT | {"OPENTAG_WATCH_DAILY_LIMIT": "1"}
+        self.deliver(self.event(), self.event(ts="5.000"))
+        self.assertEqual(1, self.client.chat_postMessage.call_count)
+
+    def test_quiet_outcomes_post_nothing(self) -> None:
         cases = (
-            ("declined", self.ENABLED, {"return_value": declined}),
-            ("refused", self.ENABLED, {"side_effect": slack_socket_agent.auto_invoke.AutoInvokeRefusal("no")}),
-            ("provider error", self.ENABLED, {"side_effect": slack_socket_agent.auto_invoke.AutoInvokeError("down")}),
-            ("unexpected error", self.ENABLED, {"side_effect": RuntimeError("bug")}),
+            ("below threshold", replace(self.decision, should_invoke=False, tag_is_addressed=0.4), "x", "below threshold"),
+            ("no reply", self.decision, "NO_REPLY", "no_reply"),
+            ("failed draft", self.decision, "", "no_reply"),
         )
-        for name, environment, evaluate_behavior in cases:
+        for name, decision, draft, outcome in cases:
             with self.subTest(name):
-                client = MagicMock()
-                _, run_backend = self.deliver(self.event(), environment, client=client, evaluate=evaluate_behavior)
-                run_backend.assert_not_called()
-                client.chat_postMessage.assert_not_called()
-        for name, environment in (
-            ("missing key", {k: v for k, v in self.ENABLED.items() if k != "OPENTAG_TYPESAFE_API_KEY"}),
-            ("other provider's key only", self.ENABLED | {"OPENTAG_AUTO_INVOKE_PROVIDER": "openai-decisions"}),
-            ("unknown provider", self.ENABLED | {"OPENTAG_AUTO_INVOKE_PROVIDER": "elsewhere"}),
+                self.setUp()
+                self.decision, self.draft = decision, draft
+                self.deliver(self.event())
+                self.client.chat_postMessage.assert_not_called()
+                self.client.reactions_add.assert_not_called()
+                self.assertEqual(outcome, self.log()[0]["outcome"])
+
+    def test_react_outcome_adds_a_reaction_only(self) -> None:
+        self.draft = "REACT"
+        self.deliver(self.event())
+        self.client.reactions_add.assert_called_once_with(channel="C123", timestamp="1.000", name="eyes")
+        self.client.chat_postMessage.assert_not_called()
+
+    def test_unsafe_drafts_become_a_fixed_offer(self) -> None:
+        self.draft = "Sure <!channel>, see https://evil.test"
+        self.deliver(self.event())
+        self.assertEqual(slack_socket_agent.channel_watch.OFFER,
+                         self.client.chat_postMessage.call_args.kwargs["text"])
+
+    def test_classifier_failures_and_missing_keys_fail_closed(self) -> None:
+        from contextlib import ExitStack
+        for name, changes, failure in (
+            ("provider error", {}, slack_socket_agent.watch_classifier.ClassifierError("down")),
+            ("refusal", {}, slack_socket_agent.watch_classifier.ClassifierRefusal("no")),
+            ("missing key", {"OPENTAG_TYPESAFE_API_KEY": ""}, None),
+            ("other provider's key only", {"OPENTAG_WATCH_CLASSIFIER": "openai-decisions"}, None),
         ):
-            with self.subTest(name):
-                evaluate, run_backend = self.deliver(self.event(), environment)
-                evaluate.assert_not_called()
-                run_backend.assert_not_called()
+            with self.subTest(name), ExitStack() as stack:
+                self.client.reset_mock()
+                self.environment = self.ENVIRONMENT | changes
+                fake_app = self.app(stack)
+                if failure:
+                    self.evaluate.side_effect = failure
+                fake_app.events["message"](self.event(), {"team_id": "T123"}, self.client, MagicMock())
+                self.draft_reply.assert_not_called()
+                self.client.chat_postMessage.assert_not_called()
+
+    def test_slack_rate_limit_backs_off(self) -> None:
+        limited = Exception("ratelimited")
+        limited.response = SimpleNamespace(status_code=429, headers={"Retry-After": "120"})
+        self.client.chat_postMessage.side_effect = limited
+        self.deliver(self.event())
+        self.assertEqual("Slack rate limit",
+                         self.state.blocked("C123", "7.000", limit=5, today="2026-10-13"))
+        self.client.chat_postMessage.side_effect = None
+        self.deliver(self.event(ts="7.000"))
+        self.assertEqual(0, self.evaluate.call_count)
+
+    def test_thumbs_down_or_stop_cools_the_channel_and_labels_the_score(self) -> None:
+        from contextlib import ExitStack
+        for feedback in ("reaction", "stop"):
+            with self.subTest(feedback):
+                self.setUp()
+                self.deliver(self.event())
+                score_id = self.log()[0]["id"]
+                with ExitStack() as stack:
+                    fake_app = self.app(stack)
+                    if feedback == "reaction":
+                        fake_app.events["reaction_added"](
+                            {"reaction": "-1", "user": "USAM",
+                             "item": {"type": "message", "channel": "C123", "ts": "9.000"}}, MagicMock())
+                    else:
+                        fake_app.events["message"](
+                            self.event(user="USAM", text="stop", ts="3.000", thread_ts="1.000"),
+                            {"team_id": "T123"}, self.client, MagicMock())
+                self.assertEqual("cooldown", self.state.blocked("C123", "8.000", limit=5, today="d"))
+                label = self.log()[-1]
+                self.assertEqual(("label", score_id, False), (label["type"], label["id"], label["expected"]))
+
+    def test_thumbs_up_engages_the_thread_and_labels_positive(self) -> None:
+        from contextlib import ExitStack
+        self.deliver(self.event())
+        with ExitStack() as stack:
+            self.app(stack).events["reaction_added"](
+                {"reaction": "+1::skin-tone-2", "item": {"type": "message", "channel": "C123", "ts": "9.000"}},
+                MagicMock())
+        self.assertIsNone(self.state.blocked("C123", "1.000", limit=5, today="d"))
+        self.assertTrue(self.log()[-1]["expected"])
+
+    def take_body(self, user: str) -> dict:
+        return {"user": {"id": user}, "team": {"id": "T123"},
+                "message": {"ts": "9.000", "text": "offer", "blocks": [{"type": "section"}, {"type": "actions"}]},
+                "actions": [{"value": json.dumps({"channel": "C123", "thread_ts": "1.000", "request_ts": "1.000",
+                                                  "team": "T123", "score_id": "abc"})}]}
+
+    def test_take_this_on_starts_a_normal_run_for_the_confirming_person(self) -> None:
+        from contextlib import ExitStack
+        self.client.conversations_replies.return_value = {"messages": [
+            {"ts": "1.000", "user": "UOWNER", "text": "Iris's Tag, what's the plan?"}]}
+        with ExitStack() as stack:
+            fake_app = self.app(stack)
+            fake_app.actions[slack_socket_agent.WATCH_TAKE_ACTION_ID](
+                ack=MagicMock(), body=self.take_body("UOWNER"), client=self.client, logger=MagicMock())
+        self.run_backend.assert_called_once()
+        self.assertEqual([{"type": "section"}], self.client.chat_update.call_args.kwargs["blocks"])
+        self.assertTrue(self.state.is_engaged("C123", "1.000"))
+        self.assertEqual(("abc", True, "take"), tuple(self.log()[-1][k] for k in ("id", "expected", "source")))
+
+    def test_take_this_on_requires_an_authorized_person(self) -> None:
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            self.app(stack).actions[slack_socket_agent.WATCH_TAKE_ACTION_ID](
+                ack=MagicMock(), body=self.take_body("USAM"), client=self.client, logger=MagicMock())
+        self.run_backend.assert_not_called()
+        self.client.chat_postEphemeral.assert_called_once()
+
+    def test_anyone_can_turn_watching_off_here(self) -> None:
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            self.app(stack).actions[slack_socket_agent.WATCH_OFF_ACTION_ID](
+                ack=MagicMock(), client=self.client, logger=MagicMock(),
+                body={"user": {"id": "USAM"}, "actions": [{"value": json.dumps({"channel": "C123", "score_id": "abc"})}]})
+            self.save_watch.assert_called_once_with([])
+        self.assertFalse(self.state.noticed("C123"))
+        self.assertIn("stopped watching", self.client.chat_postEphemeral.call_args.kwargs["text"])
+        self.assertEqual(("abc", False), (self.log()[-1]["id"], self.log()[-1]["expected"]))
+
+    def test_notices_are_posted_once_and_gate_watching(self) -> None:
+        from contextlib import ExitStack
+        self.state.set_noticed("C123", False)
+        self.environment = self.ENVIRONMENT | {"OPENTAG_WATCH_CHANNEL_IDS": "C123,C456"}
+        self.client.chat_postMessage.side_effect = [{"ts": "1"}, RuntimeError("not_in_channel")]
+        with ExitStack() as stack:
+            self.app(stack)
+            app = slack_socket_agent.App.return_value
+            app.tag_post_watch_notices(self.client, MagicMock())
+        first = self.client.chat_postMessage.call_args_list[0].kwargs
+        self.assertNotIn("thread_ts", first)  # The owner's opt-in prompts this one top-level notice.
+        self.assertIn("now watches this channel", first["text"])
+        self.assertTrue(self.state.noticed("C123"))
+        self.assertFalse(self.state.noticed("C456"))
+        self.client.chat_postMessage.reset_mock(side_effect=True)
+        with ExitStack() as stack:
+            self.app(stack)
+            slack_socket_agent.App.return_value.tag_post_watch_notices(self.client, MagicMock())
+        self.assertEqual(["C456"], [c.kwargs["channel"] for c in self.client.chat_postMessage.call_args_list])
+
+    def test_home_tab_offers_per_channel_opt_in(self) -> None:
+        from contextlib import ExitStack
+        with patch.dict(os.environ, self.ENVIRONMENT, clear=True):
+            view = slack_socket_agent.app_home_view("C123,C456")
+        selectors = [b.get("accessory", {}) for b in view["blocks"]]
+        watch = next(s for s in selectors if s.get("action_id") == slack_socket_agent.HOME_WATCH_ACTION_ID)
+        self.assertEqual(["C123"], watch["initial_conversations"])
+        body = {"user": {"id": "UOWNER"}, "actions": [{"selected_conversations": ["C123", "C456"]}]}
+        self.environment = self.ENVIRONMENT | {"OPENTAG_TYPESAFE_API_KEY": ""}
+        with ExitStack() as stack:
+            self.app(stack).actions[slack_socket_agent.HOME_WATCH_ACTION_ID](
+                ack=MagicMock(), body=body, client=self.client, logger=MagicMock())
+            self.save_watch.assert_not_called()
+        self.environment = dict(self.ENVIRONMENT)
+        with ExitStack() as stack:
+            self.app(stack).actions[slack_socket_agent.HOME_WATCH_ACTION_ID](
+                ack=MagicMock(), body=body, client=self.client, logger=MagicMock())
+            self.save_watch.assert_called_once_with(["C123", "C456"])
+        with ExitStack() as stack:
+            self.app(stack).actions[slack_socket_agent.HOME_WATCH_ACTION_ID](
+                ack=MagicMock(), body=body | {"user": {"id": "USAM"}}, client=self.client, logger=MagicMock())
+            self.save_watch.assert_not_called()
 
     def test_direct_messages_keep_their_own_path(self) -> None:
-        evaluate, run_backend = self.deliver(
-            self.event(channel="D123", channel_type="im"), self.ENABLED | {"OPENTAG_SLACK_DM_ENABLED": "1"}
-        )
-        evaluate.assert_not_called()
-        run_backend.assert_called_once()
+        self.environment = self.ENVIRONMENT | {"OPENTAG_SLACK_DM_ENABLED": "1"}
+        self.deliver(self.event(channel="D123", channel_type="im"))
+        self.evaluate.assert_not_called()
+        self.run_backend.assert_called_once()
 
 
 class SlackWorkingIndicatorTests(unittest.TestCase):

@@ -8,7 +8,7 @@ import urllib.error
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from scripts import auto_invoke, auto_invoke_eval as harness
+from scripts import watch_classifier, watch_eval as harness
 
 
 class FixtureTests(unittest.TestCase):
@@ -31,6 +31,25 @@ class FixtureTests(unittest.TestCase):
         self.assertEqual(["requester", "tag", "requester"], [item["author"] for item in history])
         self.assertIn("<tag>", history[0]["text"])
 
+    def test_current_scope_matches_what_watching_sends_to_the_classifier(self) -> None:
+        _, cases = harness.load_cases()
+        reachable = {case.id: case.reachable for case in cases}
+        self.assertFalse(reachable["inclusive-anyone"])  # Top level, no name: channel-wide only.
+        self.assertFalse(reachable["person-reply-in-thread"])  # A thread Tag isn't in.
+        for case_id in ("inclusive-anyone-tag-thread", "named-but-for-person", "direct-greeting", "continue-two-step"):
+            self.assertTrue(reachable[case_id], case_id)
+        current = [case for case in cases if case.reachable]
+        self.assertGreaterEqual(sum(case.expected for case in current), 10)
+        self.assertGreaterEqual(sum(not case.expected for case in current), 10)
+        out = io.StringIO()
+        with patch("sys.stdout", out):
+            harness.main(["plan"])
+        self.assertTrue(out.getvalue().startswith(f"{len(current)} cases"))
+        out = io.StringIO()
+        with patch("sys.stdout", out):
+            harness.main(["--scope", "all", "plan"])
+        self.assertTrue(out.getvalue().startswith(f"{len(cases)} cases"))
+
     def test_rejects_messages_that_would_bypass_the_classifier(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "cases.json"
@@ -43,20 +62,21 @@ class FixtureTests(unittest.TestCase):
 
 class OfflineTests(unittest.TestCase):
     def test_plan_and_report_never_use_the_network(self) -> None:
-        with patch.object(auto_invoke.urllib.request, "urlopen") as urlopen:
+        with patch.object(watch_classifier.urllib.request, "urlopen") as urlopen:
             name, cases = harness.load_cases()
             totals = harness.plan(cases, name, io.StringIO())
             with tempfile.TemporaryDirectory() as directory:
                 scores = Path(directory) / "scores.jsonl"
                 scores.write_text("", encoding="utf-8")
-                self.assertEqual(0, harness.main(["report", str(scores)]))
+                with patch("sys.stdout", io.StringIO()):
+                    self.assertEqual(0, harness.main(["report", str(scores)]))
             with patch("sys.stdout", io.StringIO()):
                 self.assertEqual(0, harness.main([]))
         urlopen.assert_not_called()
-        self.assertEqual(set(auto_invoke.PROVIDERS), set(totals))
+        self.assertEqual(set(watch_classifier.PROVIDERS), set(totals))
         for provider, total in totals.items():
             self.assertAlmostEqual(
-                total["tokens"] * auto_invoke.PROVIDERS[provider].usd_per_million_input / 1e6, total["usd"]
+                total["tokens"] * watch_classifier.PROVIDERS[provider].usd_per_million_input / 1e6, total["usd"]
             )
             self.assertLess(total["usd"], 0.05)
 
@@ -91,6 +111,57 @@ class OfflineTests(unittest.TestCase):
         self.assertIn("e [x] expected=True probability=None", text)
 
 
+class DeploymentTuningTests(unittest.TestCase):
+    def test_export_turns_feedback_into_labels_and_scores_without_network(self) -> None:
+        from scripts import channel_watch
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            watch_classifier.urllib.request, "urlopen"
+        ) as urlopen:
+            root = Path(directory)
+            log = channel_watch.ScoreLog(root / "scores.jsonl")
+            state = {"assistant": {"name": "Iris's Tag"}, "current_message": "Iris's Tag?", "thread_history": []}
+            liked = log.score(provider="openai-decisions", probability=0.97, trigger="named", outcome="reply", state=state)
+            disliked = log.score(provider="openai-decisions", probability=0.92, trigger="thread", outcome="reply", state=state)
+            log.score(provider="openai-decisions", probability=0.3, trigger="named", outcome="below threshold", state=state)
+            log.score(provider="openai-decisions", trigger="named", outcome="classifier ClassifierError", state=state)
+            log.label(liked, True, "take")
+            log.label(disliked, True, "thumbsup")
+            log.label(disliked, False, "thumbsdown")
+            cases_path, scores_path = root / "out/cases.json", root / "out/scores.jsonl"
+            with patch("sys.stderr", io.StringIO()):
+                self.assertEqual(0, harness.main([
+                    "export", str(root / "scores.jsonl"), "--cases", str(cases_path), "--scores", str(scores_path)]))
+            fixture = json.loads(cases_path.read_text(encoding="utf-8"))
+            self.assertEqual("Iris's Tag", fixture["assistant_name"])
+            self.assertEqual([True, False, None, None], [case["expected"] for case in fixture["cases"]])
+            self.assertEqual("label from thumbsdown", fixture["cases"][1]["note"])
+            self.assertEqual(3, len(scores_path.read_text(encoding="utf-8").splitlines()))
+            name, cases = harness.load_cases(cases_path)
+            self.assertEqual([liked, disliked], [case.id for case in cases])  # Unlabelled cases wait.
+            self.assertEqual(state, harness.case_state(cases[0], name))
+            out = io.StringIO()
+            harness.report(cases, harness._recorded(scores_path), out)
+            self.assertIn("Not enough to tune: 2 labelled", out.getvalue())
+        urlopen.assert_not_called()
+
+    def test_recommends_the_lowest_threshold_meeting_the_precision_target(self) -> None:
+        expected, rows = {}, []
+        for index in range(240):
+            positive = index % 2 == 0
+            # Positives score 0.80-0.99; negatives spread over 0.00-0.89.
+            probability = 0.8 + (index % 20) / 100 if positive else (index % 90) / 100
+            expected[str(index)] = positive
+            rows.append({"provider": "typesafe-jev", "id": str(index), "outcome": "score", "probability": probability})
+        best = harness.recommend(expected, rows, 0.95)
+        self.assertGreaterEqual(best.precision, 0.95)
+        self.assertLess(harness.metrics(expected, rows, round(best.threshold - 0.01, 2)).precision, 0.95)
+        self.assertIsNone(harness.recommend({"a": False}, [{"id": "a", "outcome": "score", "probability": 1.0}], 0.95))
+        cases = [harness.Case(case_id, "x", label, {}, []) for case_id, label in expected.items()]
+        out = io.StringIO()
+        harness.report(cases, rows, out, target=0.95)
+        self.assertIn(f"Recommended threshold for precision ≥ 0.95: {best.threshold:.2f}", out.getvalue())
+
+
 class PaidRunGuardTests(unittest.TestCase):
     def run_score(self, scorer, *, max_usd: float = 1.0, out_path: Path, cases=None) -> float:
         name, all_cases = harness.load_cases()
@@ -100,7 +171,7 @@ class PaidRunGuardTests(unittest.TestCase):
         )
 
     def test_score_requires_confirmation_budget_and_key(self) -> None:
-        with patch.object(auto_invoke.urllib.request, "urlopen") as urlopen, patch.dict(
+        with patch.object(watch_classifier.urllib.request, "urlopen") as urlopen, patch.dict(
             harness.os.environ, {}, clear=True
         ), patch("sys.stderr", io.StringIO()):
             for argv in (
@@ -114,9 +185,9 @@ class PaidRunGuardTests(unittest.TestCase):
 
     def test_records_scores_refusals_and_resumes_without_repeating_calls(self) -> None:
         scorer = MagicMock(side_effect=[
-            auto_invoke.Score(0.97, "gpt-6-luna", 700),
-            auto_invoke.AutoInvokeRefusal("no"),
-            auto_invoke.Score(0.2, "gpt-6-luna", None),
+            watch_classifier.Score(0.97, "gpt-6-luna", 700),
+            watch_classifier.ClassifierRefusal("no"),
+            watch_classifier.Score(0.2, "gpt-6-luna", None),
         ])
         with tempfile.TemporaryDirectory() as directory:
             out_path = Path(directory) / "scores.jsonl"
@@ -129,14 +200,14 @@ class PaidRunGuardTests(unittest.TestCase):
             self.assertEqual(3, scorer.call_count)
 
     def test_stops_before_the_budget(self) -> None:
-        scorer = MagicMock(return_value=auto_invoke.Score(0.9, "gpt-6-luna", 1_000_000))
+        scorer = MagicMock(return_value=watch_classifier.Score(0.9, "gpt-6-luna", 1_000_000))
         with tempfile.TemporaryDirectory() as directory, self.assertRaisesRegex(harness.BudgetStop, "Stopped before"):
             self.run_score(scorer, max_usd=0.15, out_path=Path(directory) / "scores.jsonl")
         self.assertEqual(1, scorer.call_count)
 
     def test_stops_on_quota_or_auth_errors_and_records_other_failures(self) -> None:
         for status in (401, 429):
-            error = auto_invoke.AutoInvokeError("failed")
+            error = watch_classifier.ClassifierError("failed")
             error.__cause__ = urllib.error.HTTPError("https://example.test", status, "x", None, None)
             scorer = MagicMock(side_effect=error)
             with self.subTest(status=status), tempfile.TemporaryDirectory() as directory:
@@ -145,7 +216,7 @@ class PaidRunGuardTests(unittest.TestCase):
                     self.run_score(scorer, out_path=out_path)
                 self.assertEqual(1, scorer.call_count)
                 self.assertEqual("", out_path.read_text(encoding="utf-8"))
-        scorer = MagicMock(side_effect=auto_invoke.AutoInvokeError("timed out"))
+        scorer = MagicMock(side_effect=watch_classifier.ClassifierError("timed out"))
         with tempfile.TemporaryDirectory() as directory:
             out_path = Path(directory) / "scores.jsonl"
             self.run_score(scorer, out_path=out_path)
@@ -163,7 +234,7 @@ class PaidRunGuardTests(unittest.TestCase):
 
         name, cases = harness.load_cases()
         with tempfile.TemporaryDirectory() as directory, patch.object(
-            auto_invoke.urllib.request, "urlopen", return_value=Response()
+            watch_classifier.urllib.request, "urlopen", return_value=Response()
         ) as urlopen:
             out_path = Path(directory) / "scores.jsonl"
             harness.score_run(cases[:2], name, provider="openai-decisions", api_key="sk-test",

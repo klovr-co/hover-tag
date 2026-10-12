@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "assistant_name": "Tag",
-  "description": "Labelled Slack conversations for the untagged-reply classifier. `expected` is whether Tag should reply. Authors are roles: requester (the Tag's authorized owner, who sent `message`), tag, participant (another person; `participant:NAME` names them), and another_bot. `{tag}`, `{requester}` and `{participant}` in history text become Slack member mentions, so the real identity minimization runs. `message` never contains a member mention: those bypass the classifier. Labels follow the criteria in scripts/auto_invoke.py; `note` explains the hard ones.",
+  "description": "Labelled Slack conversations for the channel-watching classifier. `expected` is whether Tag should reply. Authors are roles: requester (the Tag's authorized owner, who sent `message`), tag, participant (another person; `participant:NAME` names them), and another_bot. `{tag}`, `{requester}` and `{participant}` in history text become Slack member mentions, so the real identity minimization runs. `message` never contains a member mention: those bypass the classifier. Labels follow the criteria in scripts/watch_classifier.py; `note` explains the hard ones.",
   "cases": [
     {"id": "direct-name-question", "category": "direct", "expected": true,
      "message": "Tag, what's the difference between our staging and prod configs?"},
@@ -168,6 +168,40 @@
      ],
      "message": "ok back to the draft: drop the exact times and soften the opening",
      "note": "Resumes the exchange with Tag after a human aside."},
+
+    {"id": "inclusive-anyone-tag-thread", "category": "inclusive", "expected": true,
+     "thread": [
+       {"author": "requester", "text": "{tag} how should we name the new billing tiers?"},
+       {"author": "tag", "text": "Options: Starter / Team / Scale, or Solo / Crew / Fleet."},
+       {"author": "participant:Sam", "text": "meh, neither feels right"}
+     ],
+     "message": "anyone have a better idea?",
+     "note": "Inclusive question in a thread Tag is part of."},
+    {"id": "inclusive-you-all-tag-thread", "category": "inclusive", "expected": true,
+     "thread": [
+       {"author": "requester", "text": "{tag} list three ways to cut our CI time"},
+       {"author": "tag", "text": "1. Cache dependencies 2. Split the e2e suite 3. Skip docs-only changes"}
+     ],
+     "message": "what do you all think of option 2?"},
+    {"id": "named-but-for-person", "category": "another_person", "expected": false,
+     "message": "Sam, Tag's summary missed the Q3 numbers, can you add them to the doc?",
+     "note": "Names Tag, but asks Sam."},
+    {"id": "named-someone-elses-tag", "category": "about_tag", "expected": false,
+     "message": "Priya, can you ask your Tag to pull the churn numbers?",
+     "note": "Names a Tag, but means Priya's, and asks Priya."},
+    {"id": "offer-accepted", "category": "continuation", "expected": true,
+     "thread": [
+       {"author": "requester", "text": "{tag} did the export finish?"},
+       {"author": "tag", "text": "I can check the export logs. Want me to take this on?"}
+     ],
+     "message": "yes please"},
+    {"id": "offer-declined", "category": "continuation", "expected": false,
+     "thread": [
+       {"author": "requester", "text": "{tag} did the export finish?"},
+       {"author": "tag", "text": "I can check the export logs. Want me to take this on?"}
+     ],
+     "message": "no thanks, Sam already checked",
+     "note": "A reply to Tag, but declining: no reply is welcome."},
 
     {"id": "edge-tag-other-meaning", "category": "edge", "expected": false,
      "message": "remember to tag the release in GitHub before you leave",

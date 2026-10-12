@@ -263,9 +263,9 @@ class SlackManifestMigrationTests(unittest.TestCase):
                 self.assertFalse(migrations.reconcile(home, config, self.values()))
             saved = json.loads(marker.read_text(encoding="utf-8"))
             self.assertEqual(saved["version"], migrations.MIGRATION_VERSION)
-            self.assertEqual(saved["optional_pending"], ["team:read"])
+            self.assertEqual(saved["optional_pending"], sorted(migrations.OPTIONAL_BOT_SCOPES))
             self.assertIn("admin must approve", saved["optional_error"])
-            self.assertEqual(migrations.optional_pending(home), ["team:read"])
+            self.assertEqual(migrations.optional_pending(home), sorted(migrations.OPTIONAL_BOT_SCOPES))
             self.assertEqual("xoxb-test-token", migrations.settings.read_config(config)["SLACK_BOT_TOKEN"])
 
             # Repeated starts within a day don't ask Slack again.
@@ -306,7 +306,7 @@ class SlackManifestMigrationTests(unittest.TestCase):
             ):
                 self.assertTrue(migrations.reconcile(home, config, self.values()))
             self.assertEqual("xoxb-fresh", migrations.settings.read_config(config)["SLACK_BOT_TOKEN"])
-            self.assertEqual(migrations.optional_pending(home), ["team:read"])
+            self.assertEqual(migrations.optional_pending(home), sorted(migrations.OPTIONAL_BOT_SCOPES))
 
     def test_required_permissions_still_block_while_team_read_is_optional(self):
         for pending in (False, True):
@@ -403,6 +403,35 @@ class SlackManifestMigrationTests(unittest.TestCase):
                     migrations.reconcile(home, config, self.values())
             receive.assert_not_called()
             self.assertEqual(4, json.loads(marker.read_text(encoding="utf-8"))["version"])
+
+    def test_version_5_reaction_permissions_are_optional_and_gate_watching(self):
+        from scripts import channel_watch
+        self.assertTrue({"reactions:read", "reactions:write"} <= migrations.OPTIONAL_BOT_SCOPES)
+        self.assertIn("reaction_added", migrations.REQUIRED_MANIFEST["settings"]["event_subscriptions"]["bot_events"])
+        with tempfile.TemporaryDirectory() as directory:
+            home, config = self.linked_home(Path(directory))
+            marker = home / "state/slack-manifest-migrations.json"
+            migrations.settings.save_config(marker, {"version": 4, "team_id": "TTEST", "app_id": "ATEST"})
+            self.assertFalse(channel_watch.reactions_granted(home))  # Older receipt: watching stays off.
+            remote = migrations.migrate_manifest(self.manifest())[0]
+            for scope in ("reactions:read", "reactions:write"):
+                remote["oauth_config"]["scopes"]["bot"].remove(scope)
+            remote["settings"]["event_subscriptions"]["bot_events"].remove("reaction_added")
+            needed = set(migrations.NEEDED_BOT_SCOPES) | {"team:read"}
+            with patch.object(migrations.shutil, "which", return_value="/bin/slack"), patch.object(
+                migrations, "remote_manifest", side_effect=[remote, migrations.migrate_manifest(remote)[0]]
+            ), patch.object(migrations, "granted_bot_scopes", side_effect=[needed, needed]), patch.object(
+                migrations, "_sync_command", return_value=["/bin/slack", "manifest", "sync"]
+            ), patch.object(migrations, "_run", return_value=subprocess.CompletedProcess([], 0, "", "")), patch.object(
+                migrations.slack_credentials, "receive",
+                return_value={"SLACK_APP_TOKEN": "xapp-fresh", "SLACK_BOT_TOKEN": "xoxb-fresh"},
+            ):
+                # An admin hasn't approved reactions yet: Tag still starts, and watching stays off.
+                self.assertTrue(migrations.reconcile(home, config, self.values()))
+            self.assertEqual(["reactions:read", "reactions:write"], migrations.optional_pending(home))
+            self.assertFalse(channel_watch.reactions_granted(home))
+            migrations.settings.save_config(marker, {"version": 5, "team_id": "TTEST", "app_id": "ATEST"})
+            self.assertTrue(channel_watch.reactions_granted(home))
 
     def test_optional_scope_is_requested_but_not_needed(self):
         self.assertIn("team:read", migrations.REQUIRED_BOT_SCOPES)

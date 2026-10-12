@@ -16,9 +16,13 @@ SLACK_BRIDGE_ONLY_ENV = {
     "SLACK_CHANNEL_POLICY",
     "SLACK_ALLOWED_USER_IDS",
     "OPENTAG_SLACK_DM_ENABLED",
-    "OPENTAG_AUTO_INVOKE",
-    "OPENTAG_AUTO_INVOKE_PROVIDER",
-    "OPENTAG_AUTO_INVOKE_TIMEOUT_SECONDS",
+    "OPENTAG_WATCH_CHANNEL_IDS",
+    "OPENTAG_WATCH_NAMES",
+    "OPENTAG_WATCH_QUIET_HOURS",
+    "OPENTAG_WATCH_DAILY_LIMIT",
+    "OPENTAG_WATCH_COOLDOWN_HOURS",
+    "OPENTAG_WATCH_CLASSIFIER",
+    "OPENTAG_WATCH_CLASSIFIER_TIMEOUT_SECONDS",
     "OPENTAG_JEV_MODEL",
     "OPENTAG_JEV_THRESHOLD",
     "OPENTAG_TYPESAFE_API_KEY",
@@ -52,6 +56,7 @@ def text_only_environment(source: Mapping[str, str]) -> dict[str, str]:
     return {key: "" if key not in clean or key.startswith(("SLACK_", "MFS_"))
             or key in {"OPENTAG_CALLER_ID", "OPENTAG_CURRENT_CHANNEL_ID",
                        "OPENTAG_SLACK_SEARCH_GRANT", "OPENTAG_SLACK_CHANNEL_LABELS"}
+            or key in SLACK_BRIDGE_ONLY_ENV
             else value for key, value in source.items()}
 
 

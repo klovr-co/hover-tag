@@ -6,11 +6,15 @@ All notable changes to Tag are documented here.
 
 ### Added
 
-- Optionally let Tag reply to untagged messages in its channels when it is being
-  addressed, including inclusive questions such as “anyone?”. Off by default.
-  Each Tag chooses TypeSafe Jev or OpenAI Decisions to classify the message, with
-  that provider's own key and threshold, and stays silent on any error or refusal.
-  Tag adds Slack's channel message events to existing apps automatically.
+- Experimental channel watching: let Tag answer, without an @mention, messages
+  that name it and threads it's already in. Off by default and turned on per
+  channel from the Home tab or `tag config`. Tag posts a notice first. Watched
+  replies come from a text-only run with no tools, files or memory, stay in the
+  thread, say why Tag replied, and offer **Take this on** before any action.
+  Anyone can click **Don't do this here**. Quiet hours, a daily cap, and a
+  cooldown after 👎 apply. Each Tag chooses TypeSafe Jev or OpenAI Decisions to
+  filter messages, with its own key and threshold. Tag adds Slack's channel
+  message and reaction events to existing apps automatically.
 - Let one Tag ask other Tags for help and combine their answers. Tag posts one
   request that mentions every Tag, links it to your thread in both directions,
   shows their progress as steps, and writes the final answer once all have replied or the deadline passes. Each

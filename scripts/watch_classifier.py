@@ -65,16 +65,16 @@ ASSISTANT_ROLE = (
 )
 
 
-class AutoInvokeError(RuntimeError):
+class ClassifierError(RuntimeError):
     """The decision could not be obtained or validated; the caller stays silent."""
 
 
-class AutoInvokeRefusal(AutoInvokeError):
+class ClassifierRefusal(ClassifierError):
     """The provider declined to answer; treated exactly like any other failure."""
 
 
 @dataclass(frozen=True)
-class AutoInvokeDecision:
+class ClassifierDecision:
     should_invoke: bool
     tag_is_addressed: float
     model: str
@@ -169,7 +169,7 @@ def message_state(
 
 def _probability(value: Any) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= 1:
-        raise AutoInvokeError("the provider returned an invalid probability")
+        raise ClassifierError("the provider returned an invalid probability")
     return float(value)
 
 
@@ -198,9 +198,9 @@ def jev_parse(result: Any, _model: str) -> Score:
         probability = result["answers"][QUESTION_NAME]["noul"]
         response_model = result["model"]
     except (KeyError, TypeError) as exc:
-        raise AutoInvokeError("TypeSafe returned an incomplete decision") from exc
+        raise ClassifierError("TypeSafe returned an incomplete decision") from exc
     if not isinstance(response_model, str) or not response_model:
-        raise AutoInvokeError("TypeSafe returned an invalid decision")
+        raise ClassifierError("TypeSafe returned an invalid decision")
     return Score(_probability(probability), response_model, _input_tokens(result))
 
 
@@ -231,15 +231,15 @@ def decisions_payload(state: dict[str, Any], model: str) -> dict[str, Any]:
 def decisions_parse(result: Any, model: str) -> Score:
     answers = result.get("answers") if isinstance(result, dict) else None
     if not isinstance(answers, list):
-        raise AutoInvokeError("OpenAI returned an incomplete decision")
+        raise ClassifierError("OpenAI returned an incomplete decision")
     matches = [a for a in answers if isinstance(a, dict) and a.get("name") == QUESTION_NAME]
     if len(matches) != 1:
-        raise AutoInvokeError("OpenAI returned an incomplete decision")
+        raise ClassifierError("OpenAI returned an incomplete decision")
     answer = matches[0]
     if answer.get("type") == "refusal":
-        raise AutoInvokeRefusal("OpenAI refused to decide")
+        raise ClassifierRefusal("OpenAI refused to decide")
     if answer.get("type") != "predicate":
-        raise AutoInvokeError("OpenAI returned an invalid decision")
+        raise ClassifierError("OpenAI returned an invalid decision")
     # The guide documents only `answers`; report the requested model when no other is given.
     response_model = result.get("model")
     return Score(
@@ -294,9 +294,9 @@ def score(
     try:
         spec = PROVIDERS[provider]
     except KeyError:
-        raise AutoInvokeError(f"Unknown classifier provider {provider!r}") from None
+        raise ClassifierError(f"Unknown classifier provider {provider!r}") from None
     if not api_key:
-        raise AutoInvokeError(f"{spec.key_setting} is not set")
+        raise ClassifierError(f"{spec.key_setting} is not set")
     model = model or spec.default_model
     request = urllib.request.Request(
         spec.url,
@@ -311,7 +311,7 @@ def score(
         with urllib.request.urlopen(request, timeout=timeout) as response:
             result = json.loads(response.read().decode("utf-8"))
     except Exception as exc:  # noqa: BLE001 - callers fail closed on any provider failure
-        raise AutoInvokeError(f"{spec.label} request failed: {type(exc).__name__}") from exc
+        raise ClassifierError(f"{spec.label} request failed: {type(exc).__name__}") from exc
     return spec.parse(result, model)
 
 
@@ -323,10 +323,10 @@ def evaluate(
     threshold: float,
     model: str = "",
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
-) -> AutoInvokeDecision:
-    """Decide whether to invoke Tag; raises AutoInvokeError on any failure."""
+) -> ClassifierDecision:
+    """Decide whether to invoke Tag; raises ClassifierError on any failure."""
     answer = score(state, provider=provider, api_key=api_key, model=model, timeout=timeout)
-    return AutoInvokeDecision(
+    return ClassifierDecision(
         should_invoke=answer.probability >= threshold,
         tag_is_addressed=answer.probability,
         model=answer.model,
@@ -345,20 +345,20 @@ class Settings:
 
 def settings_from(environment: Mapping[str, str] = os.environ) -> Settings:
     """Read the selected provider's settings; a missing key or bad value raises."""
-    provider = environment.get("OPENTAG_AUTO_INVOKE_PROVIDER", "") or DEFAULT_PROVIDER
+    provider = environment.get("OPENTAG_WATCH_CLASSIFIER", "") or DEFAULT_PROVIDER
     spec = PROVIDERS.get(provider)
     if spec is None:
-        raise AutoInvokeError(f"Unknown classifier provider {provider!r}")
+        raise ClassifierError(f"Unknown classifier provider {provider!r}")
     api_key = environment.get(spec.key_setting, "").strip()
     if not api_key:
-        raise AutoInvokeError(f"{spec.key_setting} is not set")
+        raise ClassifierError(f"{spec.key_setting} is not set")
     try:
         threshold = float(environment.get(spec.threshold_setting, "") or spec.default_threshold)
-        timeout = float(environment.get("OPENTAG_AUTO_INVOKE_TIMEOUT_SECONDS", "") or DEFAULT_TIMEOUT_SECONDS)
+        timeout = float(environment.get("OPENTAG_WATCH_CLASSIFIER_TIMEOUT_SECONDS", "") or DEFAULT_TIMEOUT_SECONDS)
     except ValueError:
-        raise AutoInvokeError("Classifier threshold and timeout must be numbers") from None
+        raise ClassifierError("Classifier threshold and timeout must be numbers") from None
     if not 0.5 <= threshold <= 1 or not 0 < timeout <= 30:
-        raise AutoInvokeError("Classifier threshold or timeout is out of range")
+        raise ClassifierError("Classifier threshold or timeout is out of range")
     return Settings(
         provider=provider,
         api_key=api_key,

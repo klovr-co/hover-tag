@@ -27,16 +27,14 @@ the same thread starts their own. A conversation starts fresh after 4 idle
 hours or when it grows too large. A fresh conversation reads one page of up to
 30 thread messages, so restate an important detail if it seems lost.
 
-An operator can optionally let an authorized user talk to Tag without
-mentioning it, including with inclusive questions to the channel such as “What do
-you all think?” Before starting the local agent, Tag sends the current message and
-up to ten recent text messages from that thread to the selected classifier,
-TypeSafe Jev or OpenAI Decisions. Member IDs, files, attachments, and messages from
-the rest of the channel are not included. The classifier returns the probability
-that the user is addressing Tag directly or as part of the audience and that a
-reply is welcome now. Tag acts only when it meets the configured threshold and
-otherwise stays silent. A request for help or a concrete task is not required.
-Explicit mentions continue to work independently.
+An owner can also turn on experimental channel watching for a channel. Tag then
+answers messages that name it, and threads it's already in, without an
+@mention. To decide, it sends the message and up to ten recent messages from
+that thread to the selected classifier, TypeSafe Jev or OpenAI Decisions.
+Member IDs, files, attachments and the rest of the channel are not included.
+A watched reply knows only that thread: it can't search, read files, use
+memory or take actions. It stays in the thread, says why Tag replied, and
+offers **Take this on** for anything more. Explicit mentions work as before.
 
 Tag can also reopen files shared earlier in the thread and images it made
 before. See [Use earlier files in a thread](workspaces-and-tools.md#use-earlier-files-in-a-thread).

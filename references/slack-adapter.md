@@ -16,10 +16,10 @@ scratch. The bridge is intentionally thin. It only:
 The adapter does not answer task questions. Explicit mentions and direct messages
 pass the thread, current-channel MFS scope, and a separate cross-channel search
 grant to a fresh CLI agent. The runtime agent understands the request and chooses
-whether to call the dedicated Slack-history helper. When optional replies to
-untagged messages are enabled, the adapter first asks one bounded question about
-each authorized user's untagged message. See
-[Optional replies to untagged messages](#optional-replies-to-untagged-messages).
+whether to call the dedicated Slack-history helper. In channels where
+watching is turned on, the adapter also decides whether to answer some messages
+without an @mention. Those replies have reduced capability; see
+[Channel watching](#channel-watching-experimental).
 
 By default, `scripts/mfs_search.py` remains narrowed to the invoking channel
 exactly as before. Independently, `scripts/slack_search_scope.py` computes the
@@ -109,6 +109,7 @@ Profile-picture selection and upload require Slack CLI 4.7 or newer.
    - `channels:read` + `channels:history` — read threads in public channels.
    - `groups:read` + `groups:history` — read threads in private channels.
    - `im:history` — read direct-message threads when DM invocation is enabled.
+   - `reactions:read` + `reactions:write` (optional) — see 👎 feedback and react, for channel watching. Without them, watching stays off.
    - `team:read` (optional) — read the workspace icon that Tag.app shows beside the workspace name. Without it, Tag still starts and Tag.app shows just the workspace name.
    - `users:read` — verify app identity and caller visibility for cross-channel search.
 5. Open **Event Subscriptions** and subscribe to Bot Events:
@@ -116,6 +117,7 @@ Profile-picture selection and upload require Slack CLI 4.7 or newer.
    - `message.channels`
    - `message.groups`
    - `message.im`
+   - `reaction_added`
    - `app_home_opened`
    - `agent_session_stopped`
 6. Start Tag. It applies pending manifest migrations and, when a new scope is
@@ -132,53 +134,111 @@ For a private channel, bot membership matters even when the app has
 `groups:history`. If `opentag_doctor.py` reports `not_in_channel`, invite the bot
 again or use a channel where the bot is present.
 
-## Optional replies to untagged messages
+## Channel watching (experimental)
 
-This experimental feature lets an authorized user talk to Tag in an allowed
-channel without mentioning it. That includes addressing everyone with a question
-such as “What do you all think?” It is off by default. Each Tag picks one
-classifier, and each classifier has its own private key, model, and threshold:
+Channel watching lets Tag answer in a channel without an @mention. It is off
+by default and set per channel. [ADR 0010](../docs/adr/0010-channel-watching.md)
+records why it works this way.
 
-| Provider | `OPENTAG_AUTO_INVOKE_PROVIDER` | Key | Model | Threshold |
+**What Tag watches.** In a watched channel, Tag looks only at messages from
+authorized people that:
+
+- name it without an @mention, such as “Iris's Tag, what do you think?”; or
+- continue a thread where someone @mentioned Tag or engaged with it.
+
+Watching every message in a channel is not available.
+
+**Watched replies have reduced capability.** A message that nobody @mentioned
+is untrusted input: anyone in the channel can write text that games the
+classifier. A watched reply comes from a text-only run of the Tag's own model:
+
+- no tools, shell, files, workspace, memory, search or credentials;
+- its only input is the thread, with member IDs replaced by roles.
+
+Tag answers with nothing, an 👀 reaction, or one short line in the same thread,
+never at the top level. Each reply says why Tag replied and has two buttons:
+
+- **Take this on** starts a normal run for the authorized person who clicks it.
+- **Don't do this here** turns watching off in that channel. Anyone can click
+  it.
+
+Any action, change, file or search needs that confirmation, or an @mention.
+
+**Stages.** Each stage runs only if the previous one passes:
+
+1. Free checks. Watching stays quiet for:
+   - bots, edits and Tag's own messages;
+   - unwatched channels and unauthorized people;
+   - member mentions (they keep their usual paths);
+   - quiet hours;
+   - a thread that already has an unprompted reply;
+   - the daily limit, a cooldown, or a Slack rate limit;
+   - a message that neither names Tag nor continues a thread it's in.
+2. The classifier scores the thread context.
+3. The text-only draft may still decide to stay quiet.
+
+**Limits.**
+
+- One unprompted reply per thread until someone engages explicitly: an
+  @mention, **Take this on**, or 👍 on the reply.
+- `OPENTAG_WATCH_DAILY_LIMIT` unprompted replies per channel per day (default
+  `5`).
+- `OPENTAG_WATCH_COOLDOWN_HOURS` of quiet in a channel after a 👎 or a “stop”
+  reply (default `24`).
+- `OPENTAG_WATCH_QUIET_HOURS` in this computer's time (default `19:00-08:00`;
+  empty for none).
+- Tag also pauses watching when Slack answers 429.
+
+**Turning it on.** An authorized person chooses watched channels on Tag's Home
+tab, or sets them with `OPENTAG_WATCH_CHANNEL_IDS`. Tag first posts a notice in
+each channel explaining what it watches and how to turn it off, and watches only
+after that notice is posted. Watching also needs the optional `reactions:read`
+and `reactions:write` permissions, which `tag start` requests; until Slack
+grants them, watching stays off. Add other names people use for the Tag with
+`OPENTAG_WATCH_NAMES`.
+
+**Classifier.** Each Tag picks one classifier, and each has its own private key,
+model and threshold:
+
+| Provider | `OPENTAG_WATCH_CLASSIFIER` | Key | Model | Threshold |
 | --- | --- | --- | --- | --- |
 | TypeSafe Jev (default) | `typesafe-jev` | `OPENTAG_TYPESAFE_API_KEY` | `OPENTAG_JEV_MODEL`, default `jev-latest` | `OPENTAG_JEV_THRESHOLD`, default `0.9` |
 | OpenAI Decisions (beta) | `openai-decisions` | `OPENTAG_OPENAI_DECISIONS_API_KEY` | `OPENTAG_DECISIONS_MODEL`, default `gpt-6-luna` | `OPENTAG_DECISIONS_THRESHOLD`, default `0.9` |
 
-Store the key through standard input, choose the provider, enable the feature,
-and restart Tag:
-
 ```sh
 printf '%s' "$TYPESAFE_API_KEY" | tag config set OPENTAG_TYPESAFE_API_KEY --stdin --json
-tag config set OPENTAG_AUTO_INVOKE_PROVIDER typesafe-jev --json
-tag config set OPENTAG_AUTO_INVOKE 1 --json
+tag config set OPENTAG_WATCH_CHANNEL_IDS C0123456789 --json
 tag restart
 ```
 
-Both providers get the same question: is the requester talking to Tag, directly
-or as part of the addressed audience, such that a reply is welcome now? Jev
-answers it as a `noul` question with true and false criteria about a structured
-state. Decisions answers it as a `predicate`, with the same criteria folded into
-the instructions and the state serialized into `input`. Tag replies only when the
-probability meets the selected provider's threshold. A timeout
-(`OPENTAG_AUTO_INVOKE_TIMEOUT_SECONDS`, default `5`), error, refusal, malformed
-answer, or missing key stays silent. Explicit mentions and direct messages never
-depend on the classifier. A message that mentions any member goes the usual way:
-an app mention for Tag, and silence for a message to someone else.
+Both providers get the same question: is the person talking to Tag, directly
+or as part of the audience, such that a reply is welcome now?
 
-For every eligible untagged message, Tag sends the message text, the configured
-assistant name and role, and up to ten recent text messages from the same Slack
-thread. Slack member IDs become roles (`tag`, `requester`, `participant`,
-`another_bot`). Attachments, files, and channel history outside that thread
-window are excluded. Only messages from an authorized user in an allowed channel
-are evaluated. The keys and these settings stay in the bridge; the local agent
-does not receive them.
+- Jev answers it as a `noul` question with true and false criteria about a
+  structured state.
+- Decisions answers it as a `predicate`, with the same criteria in the
+  instructions and the state serialized into `input`.
 
-The thresholds were chosen without measurement. Before lowering one, score the
-labelled conversations in `evals/auto_invoke/` and compare precision and recall
-(see its README). When several of the same owner's Tags share a channel with this
-feature on, an inclusive question can make each of them reply.
+A timeout (`OPENTAG_WATCH_CLASSIFIER_TIMEOUT_SECONDS`, default `5`), error,
+refusal, malformed answer or missing key all stay silent.
 
-Disable the feature with `tag config set OPENTAG_AUTO_INVOKE 0 --json`.
+For each message that passes the free checks, the classifier receives:
+
+- the message text;
+- the Tag's name and role;
+- up to ten recent text messages from the same thread.
+
+Member IDs become roles (`tag`, `requester`, `participant`, `another_bot`).
+Attachments, files and the rest of the channel are excluded. The keys and
+settings stay in the bridge; the local agent never receives them.
+
+**Tuning.** Tag logs every score, its outcome and the minimized thread state to
+`state/channel-watch-scores.jsonl` in its private folder. 👎, “stop” and
+**Don't do this here** label a reply negative; **Take this on** and 👍 label it
+positive. The thresholds above are unmeasured defaults. Export the log with
+`scripts/watch_eval.py export`, label the rest by hand, and change a threshold
+only after 200 or more labelled messages, aiming for precision (see
+`evals/channel_watch/README.md`).
 
 ## MFS Memory Setup
 
