@@ -616,6 +616,27 @@ class ClaudeAgentRunTests(unittest.TestCase):
         self.assertEqual(["All done."], answers)
         self.assertTrue(FakeClient.instances[0].disconnected)
 
+    def test_resume_after_a_stop_skips_the_stopped_tasks_empty_turn(self) -> None:
+        # The order Claude Code sends when a stopped background command's
+        # notification is still queued in the resumed conversation.
+        async def script(_client):
+            yield TaskNotificationMessage("shell", status="stopped")
+            yield SystemMessage("init", {"session_id": "s-1"})
+            yield ResultMessage(result="", num_turns=0, session_id="s-1")
+            yield SystemMessage("init", {"session_id": "s-1"})
+            for event in stream("m1", "4", stop_reason="end_turn"):
+                yield event
+            yield ResultMessage(result="4", session_id="s-1")
+
+        FakeClient.script = script
+        events: list[dict[str, Any]] = []
+        agent = ClaudeAgentRun(cwd=self.root, timeout=30, resume_session_id="s-1")
+        result = agent.run("prompt", model=None, reasoning_effort=None, emit=events.append)
+
+        self.assertEqual(("completed", ""), result)
+        self.assertEqual(["4"], [event["text"] for event in events if event["type"] == "message_complete"])
+        self.assertEqual(1, sum(event["type"] == "turn_complete" for event in events))
+
     def test_resumes_the_slack_threads_session_and_reports_it(self) -> None:
         async def script(_client):
             yield SystemMessage("init", {"session_id": "s-1"})

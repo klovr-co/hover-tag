@@ -354,6 +354,10 @@ class ClaudeEventMapper:
                 and any(isinstance(item, str) and item.startswith(MISSING_SESSION_ERROR) for item in errors)):
             self.completed = True
             return [{"type": "turn_complete", "status": RESUME_FAILED}]
+        if not payload.get("is_error") and payload.get("num_turns") == 0 and not payload.get("result"):
+            # Resuming after a stop first replays the stopped background task's
+            # notification as an empty turn; this request's own turn follows.
+            return []
         events: list[dict[str, Any]] = agent_usage.claude_event(payload)
         terminal_reason = payload.get("terminal_reason")
         interrupted = isinstance(terminal_reason, str) and terminal_reason.startswith("aborted")

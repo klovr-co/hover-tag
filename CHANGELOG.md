@@ -20,6 +20,12 @@ All notable changes to Tag are documented here.
   Steer stops the current request and answers the new one next, in the same
   conversation. Before, Tag asked you to mention it again later.
 
+### Fixed
+
+- With Claude, a message sent right after stopping a request that was running a
+  command now gets an answer. Before, Tag replied "Open Tag finished without
+  output."
+
 ## [0.3.0] - 2026-10-08
 
 The 0.3 line introduces **Tag** as a desktop app for macOS. The
