@@ -273,10 +273,15 @@ def upcoming(routine: dict[str, Any], after: datetime, count: int = 5) -> list[d
 
 
 def interval_anchor(routine_id: str, schedule: dict[str, Any], now: datetime) -> str:
-    """Intervals count from the next whole minute after creation, moved off :00."""
+    """Intervals count from a minute or few after creation, different per routine.
+
+    Routines saved together (by Chief of Staff, say) then don't all come due at once.
+    """
     start = (now.astimezone(timezone.utc) + timedelta(minutes=1)).replace(second=0, microsecond=0)
+    if not schedule.get("exact"):
+        start += timedelta(minutes=stagger_minutes(routine_id, schedule) - 1)
     if start.minute == 0:
-        start += timedelta(minutes=stagger_minutes(routine_id, schedule))
+        start += timedelta(minutes=1)
     return start.isoformat()
 
 
@@ -572,7 +577,7 @@ def check_limits(others: list[dict[str, Any]], routine: dict[str, Any]) -> None:
 # --- Run state -------------------------------------------------------------
 
 def empty_state() -> dict[str, Any]:
-    return {"schema_version": STATE_SCHEMA_VERSION, "next_due": None, "schedule_key": None, "running": None,
+    return {"schema_version": STATE_SCHEMA_VERSION, "next_due": None, "schedule_key": None, "running": None, "waiting": None,
             "consecutive_failures": 0, "last_success": None, "history": []}
 
 

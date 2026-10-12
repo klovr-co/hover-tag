@@ -99,11 +99,14 @@ class NextRunTests(unittest.TestCase):
             {"name": "Every two hours", "schedule": "every 2h", "timezone": "America/New_York",
              "channel": "C0123ABCDE", "prompt": "p", "owner": "U0123ABC"},
             now=datetime(2026, 3, 8, 0, 0, 30, tzinfo=UTC))
-        self.assertEqual(item["anchor"], "2026-03-08T00:01:00+00:00")
+        anchor = datetime.fromisoformat(item["anchor"])
+        self.assertTrue(datetime(2026, 3, 8, 0, 1, tzinfo=UTC) <= anchor <= datetime(2026, 3, 8, 0, 5, tzinfo=UTC))
         times = routines.upcoming(item, datetime(2026, 3, 8, 5, 0, tzinfo=UTC), 3)
         self.assertEqual([t - s for s, t in zip(times, times[1:])], [timedelta(hours=2)] * 2)
-        self.assertEqual(routines.next_run(item, datetime(2026, 3, 7, tzinfo=UTC)).isoformat(),
-                         "2026-03-08T00:01:00+00:00")
+        self.assertEqual(routines.next_run(item, datetime(2026, 3, 7, tzinfo=UTC)), anchor)
+        exact = routines.interval_anchor("r-0123456789", routines.parse_schedule("every 2h exact"),
+                                         datetime(2026, 3, 8, 0, 0, 30, tzinfo=UTC))
+        self.assertEqual(exact, "2026-03-08T00:01:00+00:00")
 
     def test_interval_anchor_avoids_the_top_of_the_hour(self):
         anchor = routines.interval_anchor("r-0123456789", routines.parse_schedule("every 1h"),
@@ -207,7 +210,9 @@ class StoreTests(unittest.TestCase):
                                now=datetime(2026, 1, 1, 8, 30, tzinfo=UTC))
         edited = self.store.update(added["id"], {"schedule": "every 3h"}, by="local-operator", via="cli",
                                    now=datetime(2026, 1, 2, 8, 30, tzinfo=UTC))
-        self.assertEqual(edited["anchor"], "2026-01-02T08:31:00+00:00")
+        self.assertEqual(edited["anchor"], routines.interval_anchor(
+            added["id"], routines.parse_schedule("every 3h"), datetime(2026, 1, 2, 8, 30, tzinfo=UTC)))
+        self.assertNotEqual(edited["anchor"], added["anchor"])
 
     def test_a_newer_schema_is_refused_and_never_overwritten(self):
         newer = {"schema_version": 2, "routines": [{"future": True}]}

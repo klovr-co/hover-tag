@@ -55,6 +55,8 @@ class RoutineScheduler:
         self.on_auto_pause = on_auto_pause
         self.logger = logger
         self.running: dict[str, str] = {}
+        # At most one run per routine waits for a free slot, oldest first (like Temporal's BufferOne).
+        self.waiting: dict[str, tuple[str, datetime | None]] = {}
         self.lock = threading.Lock()
 
     def _warn(self, message: str, *args: Any) -> None:
@@ -82,6 +84,11 @@ class RoutineScheduler:
                     diagnostic="Tag stopped before this run finished. It was not run again, so nothing posts twice."))
                 return True
             self.states.update(routine["id"], close)
+            waiting = self.states.load(routine["id"]).get("waiting")
+            if isinstance(waiting, dict) and waiting.get("trigger") in routines_lib.TRIGGERS:
+                # A run that was waiting for a slot when Tag stopped still waits.
+                with self.lock:
+                    self.waiting[routine["id"]] = (waiting["trigger"], _parse(waiting.get("scheduled_for")))
 
     def tick(self) -> None:
         now = self.clock()
@@ -103,6 +110,37 @@ class RoutineScheduler:
                     self._launch(routine, "run-now", None, now)
                 except Exception as exc:  # noqa: BLE001 - keep checking the others
                     self._warn("Could not start routine %s: %s", routine["id"], exc)
+        self._drain(now, by_id)
+
+    def _drain(self, now: datetime, by_id: dict[str, dict[str, Any]] | None = None) -> None:
+        """Start waiting runs, oldest first, while there are free slots."""
+        while True:
+            with self.lock:
+                if len(self.running) >= routines_lib.MAX_CONCURRENT_RUNS:
+                    return
+                ready = next((rid for rid in self.waiting if rid not in self.running), None)
+                if ready is None:
+                    return
+                trigger, slot = self.waiting.pop(ready)
+            if by_id is None:
+                try:
+                    by_id = {r["id"]: r for r in self.store.load()}
+                except (routines_lib.RoutineError, routines_lib.RoutineSchemaError) as exc:
+                    self._warn("Could not read routines: %s", exc)
+                    return
+            routine = by_id.get(ready)
+            if routine is None:
+                continue  # Removed while it waited.
+            if trigger != "run-now" and not routine["enabled"]:
+                self.states.update(ready, lambda state: (state.update(waiting=None), routines_lib.add_run(
+                    state, routines_lib.run_record(routine, trigger=trigger, slot=slot, outcome="skipped",
+                                                   started=now, ended=now,
+                                                   diagnostic="Paused while it waited for a free slot."))))
+                continue
+            try:
+                self._launch(routine, trigger, slot, now, queued=True)
+            except Exception as exc:  # noqa: BLE001 - keep draining the others
+                self._warn("Could not start routine %s: %s", ready, exc)
 
     def _check_due(self, routine: dict[str, Any], now: datetime) -> None:
         key = schedule_key(routine)
@@ -152,26 +190,50 @@ class RoutineScheduler:
             trigger, slot = decision["launch"]
             self._launch(routine, trigger, slot, now)
 
-    def _launch(self, routine: dict[str, Any], trigger: str, slot: datetime | None, now: datetime) -> None:
+    def _launch(self, routine: dict[str, Any], trigger: str, slot: datetime | None, now: datetime,
+                *, queued: bool = False) -> None:
         routine_id = routine["id"]
 
-        def refuse(outcome: str, diagnostic: str) -> None:
-            self.states.record(routine_id, routines_lib.run_record(
-                routine, trigger=trigger, slot=slot, outcome=outcome, started=now, ended=now,
-                diagnostic=diagnostic))
+        def refuse(outcome: str, diagnostic: str, waiting: tuple[str, datetime | None] | None = None) -> None:
+            def change(state: dict[str, Any]) -> None:
+                if waiting is not None:
+                    state["waiting"] = {"trigger": waiting[0], "queued": now.isoformat(timespec="seconds"),
+                                        "scheduled_for": waiting[1].isoformat(timespec="seconds") if waiting[1] else None}
+                if outcome:
+                    routines_lib.add_run(state, routines_lib.run_record(
+                        routine, trigger=trigger if waiting is None else replaced[0],
+                        slot=slot if waiting is None else replaced[1], outcome=outcome, started=now, ended=now,
+                        diagnostic=diagnostic))
+            self.states.update(routine_id, change)
 
         token = uuid.uuid4().hex
+        replaced: tuple[str, datetime | None] | None = None
         with self.lock:
             if routine_id in self.running:
-                return refuse("skipped", "The previous run was still going.")
-            if len(self.running) >= routines_lib.MAX_CONCURRENT_RUNS:
-                return refuse("skipped", "Other routines were already running.")
-            if not routines_lib.approved(routine):
-                return refuse("blocked", "This routine changed after it was approved. Approve it again "
-                                         "with tag routine edit or in Tag.app.")
-            self.running[routine_id] = token
+                decision = "overlap"
+            elif not routines_lib.approved(routine):
+                decision = "blocked"
+            elif len(self.running) >= routines_lib.MAX_CONCURRENT_RUNS:
+                decision = "wait"
+                replaced = self.waiting.pop(routine_id, None)
+                self.waiting[routine_id] = (trigger, slot)
+            else:
+                decision = "start"
+                self.running[routine_id] = token
+        if decision == "overlap":
+            return refuse("skipped", "The previous run was still going.")
+        if decision == "blocked":
+            return refuse("blocked", "This routine changed after it was approved. Approve it again "
+                                     "with tag routine edit or in Tag.app.")
+        if decision == "wait":
+            # Both slots are busy: wait for one. A newer run replaces an older waiting one.
+            if replaced is not None:
+                return refuse("skipped", "A newer run replaced it while it waited for a free slot.",
+                              waiting=(trigger, slot))
+            return refuse("", "", waiting=(trigger, slot))
 
         def mark(state: dict[str, Any]) -> None:
+            state["waiting"] = None
             state["running"] = {"token": token, "trigger": trigger, "started": now.isoformat(timespec="seconds"),
                                 "scheduled_for": slot.isoformat(timespec="seconds") if slot else None}
         try:
@@ -205,6 +267,10 @@ class RoutineScheduler:
             with self.lock:
                 if self.running.get(routine_id) == token:
                     self.running.pop(routine_id)
+        try:
+            self._drain(self.clock())
+        except Exception as exc:  # noqa: BLE001 - the next tick drains again
+            self._warn("Could not start waiting routines: %s", exc)
         if not self._exists(routine_id):
             # Removed while it ran: don't leave its state behind.
             self.states.remove(routine_id)

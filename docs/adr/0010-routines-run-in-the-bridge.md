@@ -48,9 +48,15 @@ once.
 restarts, sleep, and clock changes all reduce to "is it due?". After a gap,
 missed slots become one history entry and, by default, one late catch-up run
 for the latest slot within seven days (`catch_up: skip` turns this off). A
-routine never overlaps itself, at most two routine runs share a Tag at once,
-a run cut off by a restart is marked interrupted and never replayed, and five
-failures in a row pause the routine and say so in its channel.
+routine never overlaps itself. At most two routine runs share a Tag at once;
+another routine that comes due waits for a free slot, keeping at most one
+waiting run (a newer slot replaces it), so busy routines can't starve the
+rest. Each routine's state changes under a lock, so ticks and finishing runs
+never overwrite each other. A run cut off by a restart is marked interrupted
+and never replayed, and five failures in a row pause the routine and say so in
+its channel. `tests/soak/routine_soak.py` checks all of this against a real
+bridge process with a scripted backend and a clock that jumps like a laptop
+waking up.
 
 **Approval.** Every routine records who approved it and a hash of what they
 approved: name, schedule, timezone, channel, prompt, owner, limits, and

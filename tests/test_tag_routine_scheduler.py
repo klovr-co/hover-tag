@@ -95,14 +95,51 @@ class SchedulerTests(unittest.TestCase):
         self.pending.pop()()
         self.assertEqual([h["outcome"] for h in self.history(item)], ["skipped", "posted"])
 
-    def test_at_most_two_routines_run_at_once(self):
-        items = [self.add(name=f"R{i}", channel=f"C0{i}ABCDEFG") for i in range(3)]
+    def test_at_most_two_routines_run_at_once_and_the_third_waits_its_turn(self):
+        items = [self.add(name=f"R{i}", channel=f"C0{i}ABCDEFG", schedule="every 1h exact") for i in range(3)]
         self.scheduler.tick()
         self.deferred = True
         self.advance(hours=1)
         self.assertEqual(len(self.pending), 2)
-        skipped = [i for i in items if [h["outcome"] for h in self.history(i)] == ["skipped"]]
-        self.assertEqual(len(skipped), 1)
+        waiting = [i for i in items if self.states.load(i["id"])["waiting"]]
+        self.assertEqual(len(waiting), 1)
+        self.assertEqual(self.history(waiting[0]), [])
+        self.pending.pop(0)()
+        self.assertEqual(len(self.pending), 2)
+        self.assertIsNone(self.states.load(waiting[0]["id"])["waiting"])
+        while self.pending:
+            self.pending.pop(0)()
+        self.assertEqual(sorted(h["outcome"] for i in items for h in self.history(i)), ["posted"] * 3)
+
+    def test_a_newer_slot_replaces_an_older_waiting_run(self):
+        items = [self.add(name=f"R{i}", channel=f"C0{i}ABCDEFG", schedule="every 1h exact") for i in range(3)]
+        self.scheduler.tick()
+        self.deferred = True
+        self.advance(hours=1)
+        waiting = next(i for i in items if self.states.load(i["id"])["waiting"])
+        first = self.states.load(waiting["id"])["waiting"]["scheduled_for"]
+        self.advance(hours=1)
+        self.assertEqual([(h["outcome"], h["scheduled_for"]) for h in self.history(waiting)], [("skipped", first)])
+        self.assertIn("newer run replaced it", self.history(waiting)[0]["diagnostic"])
+        newer = self.states.load(waiting["id"])["waiting"]["scheduled_for"]
+        self.assertEqual(datetime.fromisoformat(newer) - datetime.fromisoformat(first), timedelta(hours=1))
+
+    def test_a_waiting_run_survives_a_restart(self):
+        items = [self.add(name=f"R{i}", channel=f"C0{i}ABCDEFG", schedule="every 1h exact") for i in range(3)]
+        self.scheduler.tick()
+        self.deferred = True
+        self.advance(hours=1)
+        waiting = next(i for i in items if self.states.load(i["id"])["waiting"])
+        self.deferred = False
+        restarted = RoutineScheduler(self.home, self.scheduler.start_run, clock=self.clock, spawn=lambda work: work())
+        restarted.recover()
+        restarted.tick()
+        self.assertEqual([h["outcome"] for h in self.history(waiting)], ["posted"])
+        self.assertIsNone(self.states.load(waiting["id"])["waiting"])
+
+    def test_routines_saved_together_do_not_all_start_together(self):
+        anchors = {self.add(name=f"R{i}", channel=f"C0{i}ABCDEFG")["anchor"] for i in range(3)}
+        self.assertGreater(len(anchors), 1)
 
     def test_after_sleep_missed_slots_collapse_into_one_catch_up(self):
         item = self.add()
@@ -229,8 +266,10 @@ class SchedulerTests(unittest.TestCase):
         self.advance(minutes=1)
         self.assertEqual(self.calls, [])
         self.assertEqual(self.history(item), [])
-        self.advance(hours=1)
+        for _ in range(12):
+            self.advance(minutes=5)
         self.assertEqual([c[1] for c in self.calls], ["schedule"])
+        self.assertEqual([h["outcome"] for h in self.history(item)], ["posted"])
 
     def test_run_now_runs_out_of_schedule_and_respects_overlap(self):
         item = self.add()

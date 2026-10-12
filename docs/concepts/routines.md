@@ -81,7 +81,7 @@ the latest one once if it was due in the last seven days. Use
 | Posted / Nothing new | The run finished. |
 | Failed, Stopped at its spend or time limit | The run stopped. Five failures in a row pause the routine and say so in its channel. |
 | Missed | The computer was asleep or the Tag was stopped. |
-| Skipped | The previous run was still going, or two other routines were running. |
+| Skipped | The previous run was still going, or a newer run replaced it while it waited. A Tag runs two routines at a time; others wait their turn, one waiting run per routine. |
 | Interrupted | The Tag stopped during the run. It isn't run again, so nothing posts twice. |
 | Needs approval | The routine changed after it was approved. Save it again to approve it. |
 
