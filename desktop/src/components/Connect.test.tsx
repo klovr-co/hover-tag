@@ -29,7 +29,8 @@ const QUESTIONS: Record<string, object> = {
 };
 const ORDER = ["profile", "default_model", "workspace", "approve_setup", "channels"];
 
-function setup(track: Track = () => {}, workspace?: string, workspaceName?: string) {
+function setup(track: Track = () => {}, workspace?: string, workspaceName?: string,
+  more?: { presets: "all" | "workspace"; profile?: { name: string; description: string } }) {
   const api = demoBridge();
   const answers: unknown[] = [];
   let emit: (line: string) => void = () => {};
@@ -62,7 +63,7 @@ function setup(track: Track = () => {}, workspace?: string, workspaceName?: stri
     return session;
   };
   render(<StrictMode><TrackContext.Provider value={track}>
-    <Connect api={api} args={["setup"]} workspace={workspace} workspaceName={workspaceName} done={vi.fn()} paused={vi.fn()} />
+    <Connect api={api} args={["setup"]} workspace={workspace} workspaceName={workspaceName} {...more} done={vi.fn()} paused={vi.fn()} />
   </TrackContext.Provider></StrictMode>);
   return answers;
 }
@@ -171,6 +172,17 @@ describe("Add a Tag", () => {
     expect(answers).toEqual([
       { name: "Maya's Tag", description: "Launch help" }, "codex:gpt-5.5", "T0KLOVR1", "create", [],
     ]);
+  });
+
+  it("More options asks every step but the workspace, starting from what was typed", async () => {
+    const answers = setup(() => {}, "T0KLOVR1", "Klovr", { presets: "workspace", profile: { name: "Docs Tag", description: "Docs help" } });
+    expect(await screen.findByDisplayValue("Docs Tag")).toBeTruthy();
+    expect(screen.getByDisplayValue("Docs help")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Continue/ }));
+    expect(await screen.findByText(/^Choose .*'s model$/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Continue/ }));
+    expect(await screen.findByText("Ready to create it in Klovr?")).toBeTruthy();
+    expect(answers).toEqual([{ name: "Docs Tag", description: "Docs help" }, "codex:gpt-5.5", "T0KLOVR1"]);
   });
 
   it("asks as usual when you aren't signed in to the workspace chosen on Home", async () => {

@@ -12,6 +12,7 @@ import { deepLinkTarget } from "./lib/deeplink";
 import { glide } from "./lib/motion";
 import { Connect } from "./components/Connect";
 import { Home } from "./components/Home";
+import { QuickAdd } from "./components/QuickAdd";
 import { Installing, Starting, Welcome } from "./components/Install";
 import { AI_CAPABILITY, API_CAPABILITY, SHARED_AI_CAPABILITY } from "./lib/ai";
 import { AISettings } from "./components/AISettings";
@@ -24,7 +25,7 @@ type Screen =
   | { name: "welcome" }
   | { name: "installing"; attempt: number }
   | { name: "home" }
-  | { name: "connect"; args: string[]; workspace?: string; workspaceName?: string }
+  | { name: "connect"; args: string[]; workspace?: string; workspaceName?: string; presets?: "all" | "workspace"; profile?: { name: string; description: string } }
   | { name: "settings"; tab?: SettingsTab; privacy?: boolean }
   | { name: "ai"; resume?: string[] }
   /** `opened` counts Slack links, so a second link resets an open Tag screen. */
@@ -67,6 +68,8 @@ export function App() {
   const [api, setApi] = useState<Bridge | null>(null);
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [screen, setScreen] = useState<Screen>({ name: "loading" });
+  // The quick-add dialog over Home, for one workspace.
+  const [quick, setQuick] = useState<{ workspace: string; workspaceName: string; workspaceIcon: string | null } | null>(null);
   const [bootError, setBootError] = useState("");
   const [bootAttempt, setBootAttempt] = useState(0);
   const [outdated, setOutdated] = useState(false);
@@ -242,11 +245,12 @@ export function App() {
   }, [api, screen.name, tags.error]);
 
   // Setups that never reached Slack are set aside once the setup flow has ended.
+  // The quick-add dialog runs a setup on Home, so nothing is set aside while it's open.
   useEffect(() => {
-    if (screen.name !== "home" && screen.name !== "tag") return;
+    if ((screen.name !== "home" && screen.name !== "tag") || quick) return;
     const timer = setTimeout(() => void tags.discardDrafts(), 2000);
     return () => clearTimeout(timer);
-  }, [screen.name, tags.rows, tags.discardDrafts]);
+  }, [screen.name, tags.rows, tags.discardDrafts, quick]);
   if (!api || !info || screen.name === "loading") {
     return <main ref={setRoot} className="app"><Starting error={bootError} retry={() => setBootAttempt((value) => value + 1)} /></main>;
   }
@@ -261,7 +265,7 @@ export function App() {
     if (empty) setScreen({ name: "connect", args: ["setup"] }); else home();
   };
   const add = () => setScreen({ name: "connect", args: tags.rows.length ? ["add"] : ["setup"] });
-  const addTo = (workspace: string, workspaceName: string) => setScreen({ name: "connect", args: ["add"], workspace, workspaceName });
+  const addTo = (workspace: string, workspaceName: string, workspaceIcon: string | null) => setQuick({ workspace, workspaceName, workspaceIcon });
   // These screens are always --flow-h tall and scroll inside, so moving between them never resizes the window.
   const fixed = screen.name === "home" || screen.name === "settings" || screen.name === "ai";
   return (
@@ -285,8 +289,14 @@ export function App() {
             fixAI={() => capabilities.includes(SHARED_AI_CAPABILITY) ? setScreen({ name: "ai" }) : say("Update Tag to manage shared AI accounts in Settings.")}
             showSettings={(tab, privacy) => setScreen({ name: "settings", tab, privacy })} />
         )}
+        {screen.name === "home" && quick && (
+          <QuickAdd api={api} {...quick} start={(id) => tags.start(id)}
+            close={() => { setQuick(null); void tags.refresh(); }}
+            moreOptions={(tag, profile) => { setQuick(null); setScreen({ name: "connect", args: tag ? [tag, "setup"] : ["add"], workspace: quick.workspace, workspaceName: quick.workspaceName, presets: "workspace", profile }); }}
+            handOff={(tag) => { setQuick(null); setScreen({ name: "connect", args: [tag, "setup"], workspace: quick.workspace, workspaceName: quick.workspaceName }); }} />
+        )}
         {screen.name === "connect" && (
-          <Connect api={api} args={screen.args} workspace={screen.workspace} workspaceName={screen.workspaceName} start={(id, onLine) => tags.start(id, capabilities.includes("start-progress") ? onLine : undefined)} openAI={capabilities.includes(SHARED_AI_CAPABILITY) ? (resume) => setScreen({ name: "ai", resume }) : undefined} done={home}
+          <Connect api={api} args={screen.args} workspace={screen.workspace} workspaceName={screen.workspaceName} presets={screen.presets} profile={screen.profile} start={(id, onLine) => tags.start(id, capabilities.includes("start-progress") ? onLine : undefined)} openAI={capabilities.includes(SHARED_AI_CAPABILITY) ? (resume) => setScreen({ name: "ai", resume }) : undefined} done={home}
             paused={() => { home(); say("Progress saved. Finish setup from Home any time."); }}
             usageNote={telemetry.announced ? { learnMore: learnUsage, seen: sawOnSetup } : undefined} />
         )}

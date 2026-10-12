@@ -1033,6 +1033,19 @@ button.list-item:hover { background: var(--fill); }
 .veil2.leaving .dlg { animation: dlg-out .16s ease-in forwards; }
 @keyframes fade-away { to { opacity: 0; } }
 @keyframes dlg-out { to { opacity: 0; transform: translateY(6px) scale(.98); } }
+/* Quick add: a dialog over Home. Its steps tick like Create's; the model line settles in when
+   setup names it, and the finished Tag hops beside a check that ripples once. */
+.dlg.quick-dlg { max-width: 460px; }
+.quick-head { display: flex; align-items: center; gap: 9px; }
+.quick-dlg .recap-top, .quick-dlg .steps { border: 1px solid var(--line); border-radius: 10px; }
+.quick-dlg .recap-top { padding: 12px 14px; }
+.quick-model { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--text); }
+.quick-model .muted { color: var(--muted); }
+.quick-model b.fresh { display: inline-block; animation: rise2 .24s var(--ease); }
+.quick-made img { animation: hop .5s var(--spring); }
+.quick-check { margin-left: auto; flex: none; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--green); color: #fff; animation: check-in .28s var(--spring), ripple .7s var(--ease) .1s; }
+.dlg p.quick-hint { font-size: 13.5px; color: var(--muted); }
 /* Play: avatars wiggle on hover, Shuffle rolls through looks, and the empty Home's Tags bob. */
 .r.click:hover .av, .sl-item:hover img { animation: wiggle .45s steps(4); }
 @keyframes wiggle { 25% { transform: rotate(-6deg); } 50% { transform: rotate(5deg); } 75% { transform: rotate(-3deg); } }
@@ -1051,7 +1064,8 @@ button.list-item:hover { background: var(--fill); }
   .api-row.entering, .api-row.entering > img, .api-leave, .api-check, .api-models, .api-saved, .api-azure, .api-hint, .api-chip,
   .api-progress span:last-child,
   .sky .sum .sq, .flow-panel > .body > *, .r.starting .badge, .confetti, .notice.info .bar, .usage-note, .avw2.rolling .pic,
-  .empty img, .tags-row, .r.click:hover .av, .sl-item:hover img, .track .tnode img { animation: none !important; }
+  .empty img, .tags-row, .r.click:hover .av, .sl-item:hover img, .track .tnode img,
+  .quick-model b.fresh, .quick-made img, .quick-check { animation: none !important; }
   .sl-msg.working > div > p { animation: none; background: none; color: inherit; }
   .desc-line.marquee { text-overflow: ellipsis; -webkit-mask: none; mask: none; }
   .desc-line.marquee > span, .r.click:hover .desc-line.marquee > span, .r.click:focus-visible .desc-line.marquee > span { display: inline; transform: none; transition: none; }
