@@ -33,6 +33,8 @@ except ImportError:  # Direct script execution does not create a package context
 SCHEMA_VERSION = 1
 RETENTION_SECONDS = 30 * 24 * 60 * 60
 MAX_RECORDS = 200
+# Routine runs keep their own, smaller budget so they never push out people's requests.
+MAX_ROUTINE_RECORDS = 50
 MAX_EVENTS = 60
 MAX_REPLY_PREVIEW = 220
 ACTIVITY_DETAIL_ACTION_ID = "opentag_activity_detail"
@@ -95,6 +97,27 @@ def _public_labels() -> frozenset[str]:
 PUBLIC_LABELS = _public_labels()
 
 
+def routine_trigger(value: object) -> dict[str, str] | None:
+    """The routine that started a run, or None for a person's request."""
+    if not isinstance(value, dict) or value.get("type") != "routine":
+        return None
+    routine_id, name = value.get("routine_id"), value.get("name")
+    if not isinstance(routine_id, str) or not re.fullmatch(r"r-[0-9a-f]{10}", routine_id):
+        return None
+    if not isinstance(name, str) or not name.strip():
+        return None
+    kind = value.get("trigger")
+    return {"type": "routine", "routine_id": routine_id, "name": preview(name, limit=80),
+            "trigger": kind if kind in {"schedule", "catch-up", "run-now"} else "schedule"}
+
+
+def _is_routine_record(path: Path) -> bool:
+    try:
+        return routine_trigger(json.loads(path.read_text(encoding="utf-8")).get("trigger")) is not None
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
 def _timestamp() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -147,12 +170,18 @@ class ActivityStore:
     def _prune(self) -> None:
         cutoff = time.time() - RETENTION_SECONDS
         files = sorted(self.root.glob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
-        for index, path in enumerate(files):
-            if index >= MAX_RECORDS or path.stat().st_mtime < cutoff:
+        kept = {False: 0, True: 0}
+        for path in files:
+            routine = _is_routine_record(path)
+            limit = MAX_ROUTINE_RECORDS if routine else MAX_RECORDS
+            if kept[routine] >= limit or path.stat().st_mtime < cutoff:
                 path.unlink(missing_ok=True)
+            else:
+                kept[routine] += 1
 
     def create(self, *, team: str, channel: str, thread_ts: str,
-               request_ts: str, requester: str, reasoning_effort: str | None = None) -> str:
+               request_ts: str, requester: str, reasoning_effort: str | None = None,
+               trigger: dict[str, str] | None = None) -> str:
         run_id = uuid.uuid4().hex
         record = {
             "schema_version": SCHEMA_VERSION,
@@ -170,10 +199,22 @@ class ActivityStore:
         }
         if reasoning_effort in SUPPORTED_REASONING_EFFORTS:
             record["reasoning_effort"] = reasoning_effort
+        if (clean := routine_trigger(trigger)) is not None:
+            record["trigger"] = clean
         with self.lock:
             self._write(record)
             self._prune()
         return run_id
+
+    def set_thread(self, run_id: str, thread_ts: str) -> None:
+        """A routine run gets its Slack thread only once it has something to post."""
+        with self.lock:
+            record = self.get(run_id)
+            if record is not None:
+                record["thread_ts"] = thread_ts
+                if not record["request_ts"]:
+                    record["request_ts"] = thread_ts
+                self._write(record)
 
     def get(self, run_id: str) -> dict[str, Any] | None:
         path = self._path(run_id)
@@ -440,6 +481,7 @@ def recent_activity(root: Path, scopes: str = "", limit: int = MAX_RECENT, *,
             **({"step_count": steps} if (steps := len(record["events"]) + record["omitted"]) else {}),
             **({"duration_seconds": duration} if (duration := generation_seconds(record)) is not None else {}),
             **({"reasoning_effort": effort} if (effort := record.get("reasoning_effort")) in SUPPORTED_REASONING_EFFORTS else {}),
+            **({"trigger": trigger} if (trigger := routine_trigger(record.get("trigger"))) else {}),
             **({"usage": usage} if (usage := token_usage(record.get("usage"))) is not None else {}),
             **({"artifacts": artifacts} if (artifacts := artifact_records(record.get("artifacts"))) else {}),
             **({"artifact_thread_url": url} if artifacts and (url := artifact_thread_url(record)) else {}),

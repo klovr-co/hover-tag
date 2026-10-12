@@ -20,6 +20,11 @@ SLACK_BRIDGE_ONLY_ENV = {
     "OPENTAG_SLACK_SEARCH_GRANT",
 }
 
+RUN_LIMIT_ENV = {
+    "OPENTAG_RUN_MAX_TURNS": "max_turns",
+    "OPENTAG_RUN_MAX_BUDGET_USD": "max_budget_usd",
+}
+
 TELEMETRY_ENV_NAMES = {
     "TAG_TELEMETRY",
     "TAG_POSTHOG_HOST",
@@ -78,6 +83,7 @@ def backend_environment(
     memory_receipts: str | None = None,
     handoff_requests: str | None = None,
     handoff_depth: int = 0,
+    run_limits: Mapping[str, float | int] | None = None,
 ) -> dict[str, str]:
     clean = without_telemetry_environment(
         isolated_environment(source, transport=transport)
@@ -111,4 +117,11 @@ def backend_environment(
     else:
         clean.pop("OPENTAG_HANDOFF_REQUESTS", None)
     clean["OPENTAG_HANDOFF_DEPTH"] = str(handoff_depth)
+    # Per-run limits come only from the bridge (routine runs), never from the environment.
+    for name, key in RUN_LIMIT_ENV.items():
+        value = (run_limits or {}).get(key)
+        if value is None:
+            clean.pop(name, None)
+        else:
+            clean[name] = str(value)
     return clean
