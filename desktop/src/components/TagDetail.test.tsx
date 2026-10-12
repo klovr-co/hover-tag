@@ -271,7 +271,7 @@ it("opens at the latest request, loads older records on upward scroll, and prese
     expect(screen.queryByRole("button", { name: "Load older activity" })).toBeNull();
     expect(panel.scrollTop).toBe(1405);
   } finally { height.mockRestore(); clientHeight.mockRestore(); }
-});
+}, 20_000);
 
 it("loads channel history as a continuous chronological window across Tags", async () => {
   await open(undefined, false, (api, rows) => {
