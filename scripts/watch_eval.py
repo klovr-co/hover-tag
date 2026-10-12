@@ -307,7 +307,10 @@ def export_log(log_path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     return fixture, rows
 
 
-PSEUDONYMS = ("Alex", "Sam", "Priya", "Jordan", "Mei", "Omar", "Lena", "Tomas", "Ana", "Kofi", "Ravi", "Noor")
+PSEUDONYMS = ("Alex", "Sam", "Priya", "Jordan", "Mei", "Omar", "Lena", "Tomas", "Ana", "Kofi", "Ravi", "Noor",
+              "Ines", "Hugo", "Yara", "Dmitri", "Leila", "Mateo", "Aiko", "Bram", "Zara", "Felix", "Nadia", "Oskar",
+              "Rhea", "Soren", "Talia", "Viktor", "Wren", "Ezra", "Lucia", "Idris", "Maren", "Cyrus", "Freya",
+              "Juno", "Kiran", "Elif", "Rafa", "Sunniva")
 DERIVATIONS = ("tag-mention-to-name", "tag-mention-removed", "person-mention-to-name", "stand-in")
 SOURCES = ("A-tag-channels", "B-sandbox", "E-stand-in")
 CONFIDENCE = ("high", "medium", "low")
@@ -329,18 +332,30 @@ def scrub(text: str) -> str:
     return _MEMBER_ID_RE.sub("<member>", text)
 
 
-def _pseudonym(user_id: str) -> str:
-    return PSEUDONYMS[int(hashlib.sha256(user_id.encode()).hexdigest(), 16) % len(PSEUDONYMS)]
+class Pseudonyms:
+    """Names unique within one case, so two people never share a pseudonym."""
+
+    def __init__(self, seed: str) -> None:
+        self.names = sorted(PSEUDONYMS, key=lambda name: hashlib.sha256(f"{seed}|{name}".encode()).hexdigest())
+        self.mapping: dict[str, str] = {}
+
+    def __call__(self, key: str) -> str:
+        key = key.lower()
+        if key not in self.mapping:
+            index = len(self.mapping)
+            self.mapping[key] = self.names[index] if index < len(self.names) else f"Person{index + 1}"
+        return self.mapping[key]
 
 
-def _derive(text: str, how: str | None, assistant_id: str, assistant_name: str) -> str:
+def _derive(text: str, how: str | None, assistant_id: str, assistant_name: str, pseudonym=None) -> str:
+    pseudonym = pseudonym or Pseudonyms("")
     mention = re.compile(r"<@([A-Z0-9]+)(?:\|[^>]*)?>")
     if how in {"tag-mention-to-name", "tag-mention-removed"}:
         replacement = assistant_name if how == "tag-mention-to-name" else ""
         text = mention.sub(lambda m: replacement if m.group(1) == assistant_id else m.group(0), text)
     if how == "person-mention-to-name" or how in {"tag-mention-to-name", "tag-mention-removed"}:
         # Without mentions, people write names; use stable pseudonyms rather than real ones.
-        text = mention.sub(lambda m: m.group(0) if m.group(1) == assistant_id else _pseudonym(m.group(1)), text)
+        text = mention.sub(lambda m: m.group(0) if m.group(1) == assistant_id else pseudonym(m.group(1)), text)
     return re.sub(r"\s+", " ", text).strip(" ,")
 
 
@@ -362,16 +377,17 @@ def real_case(item: dict[str, Any], allowed: frozenset[str]) -> dict[str, Any]:
     if source not in SOURCES:
         raise ValueError(f"source must be one of {SOURCES}")
     raw_texts = [str(item.get("message", ""))] + [str(e.get("text", "")) for e in item.get("history", [])]
+    pseudonyms = Pseudonyms(f"{channel}|{ts}")
     if (how == "stand-in") != (source == "E-stand-in"):
         raise ValueError("stand-in cases use derived 'stand-in' and source 'E-stand-in'")
     if how == "stand-in":
         # A person plays the Tag: their plain-text name becomes the Tag's, other names become pseudonyms.
-        swap = _name_swapper(item.get("names") or {}, assistant_id, assistant_name)
+        swap = _name_swapper(item.get("names") or {}, assistant_id, assistant_name, pseudonyms)
         item = {**item, "message": swap(item.get("message", "")),
                 "history": [{**e, "text": swap(e.get("text", ""))} for e in item.get("history", [])]}
         if requester == assistant_id:
             raise ValueError("the stand-in can't be the requester")
-    message = _derive(str(item.get("message", "")), how, assistant_id, assistant_name)
+    message = _derive(str(item.get("message", "")), how, assistant_id, assistant_name, pseudonyms)
     if not message or "<@" in message:
         raise ValueError("the message is empty or still mentions a member, so watching would never classify it")
     bots = set(item.get("bots", [])) | ({assistant_id} if how != "stand-in" else set())
@@ -406,11 +422,12 @@ def real_case(item: dict[str, Any], allowed: frozenset[str]) -> dict[str, Any]:
     }
 
 
-def _name_swapper(names: dict[str, list[str]], standin_id: str, assistant_name: str):
+def _name_swapper(names: dict[str, list[str]], standin_id: str, assistant_name: str, pseudonym=None):
     """Replace real first names (and variants) given by the labeller; longest first."""
+    pseudonym = pseudonym or Pseudonyms("")
     pairs = []
     for user, variants in names.items():
-        target = assistant_name if user == standin_id else _pseudonym(user)
+        target = assistant_name if user == standin_id else pseudonym(user)
         pairs += [(variant, target) for variant in variants if isinstance(variant, str) and variant.strip()]
     pairs.sort(key=lambda pair: -len(pair[0]))
 
