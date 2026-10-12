@@ -1038,7 +1038,7 @@ def sync_configured_slack_memory(environment: dict[str, str] | None = None, *, f
         # conflict, so update that same registered connector instead of
         # pretending that its old configuration describes new channel consent.
         try:
-            body = {"target": uri, "update": True, "config": settings}
+            body = {"target": uri, "update": True, "config": settings, "process": False}
             return _queued_job(mfs_post_json("/v1/add", dict(body, full=True) if full else body, source))
         except MfsRequestError as error:
             failure = error
@@ -2816,6 +2816,12 @@ def _run_cli() -> int:
                 # Recorded even if this start fails: the login service retries with backoff.
                 autostart.set_memory_wanted(context.shared_mfs_home, True)
             ensure_shared_memory(context, environment)
+            # A search-model change made while memory was stopped waits for this start to import again.
+            if tag_embedding.reindex_pending(context.shared_mfs_home):
+                try:
+                    reindex_slack_memory(context.shared_mfs_home, environment)
+                except RuntimeError as error:
+                    print(f"Memory started, but re-indexing didn't start yet: {error}", file=sys.stderr)
         migrate_legacy_mfs_record(tag_instances.resolve(installation_root))
         context.shared_mfs_home.mkdir(parents=True, exist_ok=True, mode=0o700)
         managed = process_for(context.shared_mfs_home / "mfs.json") is not None

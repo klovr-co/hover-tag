@@ -328,6 +328,36 @@ class TagLifecycleTests(unittest.TestCase):
         self.assertEqual(environment["MFS_URL"], "http://localhost:13619")
         self.assertEqual(environment["TAG_INSTANCE_HOME"], str(self.home))
 
+    def run_memory_start(self, reindex):
+        with patch.dict(os.environ, {"TAG_HOME": str(self.root)}, clear=False), \
+                patch.object(sys, "argv", ["tag", "memory", "start"]), \
+                patch.object(tag_cli, "ensure_shared_memory"), \
+                patch.object(tag_cli, "process_for", return_value=None), \
+                patch.object(tag_cli, "healthy", return_value=True), \
+                patch.object(tag_cli, "reindex_slack_memory", side_effect=reindex) as run, \
+                redirect_stdout(StringIO()), patch("sys.stderr", StringIO()) as errors:
+            code = tag_cli.main()
+        return code, run, errors.getvalue()
+
+    def test_memory_start_runs_a_reindex_left_by_a_model_change(self) -> None:
+        shared = tag_instances.resolve(self.root).shared_mfs_home
+        code, run, _ = self.run_memory_start(lambda *_: False)
+        self.assertEqual(code, 0)
+        run.assert_not_called()  # nothing pending
+        tag_cli.tag_embedding.mark_reindex(shared)
+        code, run, _ = self.run_memory_start(lambda *_: False)
+        self.assertEqual(code, 0)
+        run.assert_called_once()
+        self.assertEqual(run.call_args.args[0], shared)
+
+    def test_memory_start_still_succeeds_when_the_reindex_cannot_start(self) -> None:
+        shared = tag_instances.resolve(self.root).shared_mfs_home
+        tag_cli.tag_embedding.mark_reindex(shared)
+        code, _, errors = self.run_memory_start(RuntimeError("Slack history indexing could not start (no token)"))
+        self.assertEqual(code, 0)
+        self.assertIn("no token", errors)
+        self.assertTrue(tag_cli.tag_embedding.reindex_pending(shared))
+
     def test_shared_memory_start_reuses_the_installation_lock_and_state_folder(self) -> None:
         context = tag_instances.resolve(self.root)
         environment = {
@@ -766,6 +796,7 @@ class TagLifecycleTests(unittest.TestCase):
                                  (200, {"job_id": "j2"}))
         self.sync()
         self.assertEqual(requests[1]["body"]["update"], True)
+        self.assertIs(requests[1]["body"]["process"], False)  # queued, like the first add
         self.assertEqual(requests[1]["body"]["target"], "slack://tag-test")
         self.assertIn("config", requests[1]["body"])
 
