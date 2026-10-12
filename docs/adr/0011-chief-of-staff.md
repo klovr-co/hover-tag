@@ -87,8 +87,10 @@ evidence in the [#232 design comment](https://github.com/klovr-co/hover-tag/issu
   Staff, runs `tag autostart keep ID` and `tag ID start`, and reports in the
   thread.
 - **Routines.** Starting routines go to `<Tag home>/state/pending-routines.json`
-  (schema 1: `routines` of `schedule` and `prompt`). The routines feature
-  imports and removes this file.
+  (schema 1: `routines`, each the object `tag NAME routine add --from-json`
+  takes: name, schedule, prompt, channel, owner). Nothing imports it yet:
+  once routines ship (#237), Tag should import the file when the new Tag
+  starts and then remove it. Until then the reply says the routines are saved.
 - A Tag that is not Chief of Staff cannot create Tags. Three checks enforce
   this:
   - the agent helper refuses;

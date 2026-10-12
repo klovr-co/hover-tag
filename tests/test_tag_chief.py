@@ -679,14 +679,17 @@ class CreateTests(unittest.TestCase):
     def test_finish_records_starts_and_hands_over_routines(self) -> None:
         tag_instances.create(self.root, "t123-a9")
         calls: list[list[str]] = []
-        notes = tag_creator.finish_tag(self.root, "t123-a9", {**PROPOSAL, "routines": [
+        notes = tag_creator.finish_tag(self.root, "t123-a9", {**PROPOSAL, "requester": MAYA, "routines": [
             {"schedule": "weekdays 09:00", "prompt": "Post the open invoices"}]},
             call=lambda command: calls.append(command) or MagicMock(returncode=0))
         self.assertEqual(["t123-a9"], tag_chief.created_by_chief(self.root))
         self.assertEqual([["autostart", "keep", "t123-a9", "--json"], ["t123-a9", "start", "--json"]],
                          [command[2:] for command in calls])
         saved = json.loads((tag_instances.resolve(self.root, "t123-a9").home / tag_creator.ROUTINES_FILE).read_text(encoding="utf-8"))
-        self.assertEqual("Post the open invoices", saved["routines"][0]["prompt"])
+        # Each entry is exactly what `tag NAME routine add --from-json` takes.
+        self.assertEqual([{"name": "Finance Tag routine 1", "schedule": "weekdays 09:00",
+                           "prompt": "Post the open invoices", "channel": "C123", "owner": MAYA}], saved["routines"])
+        self.assertEqual(MAYA, saved["approved_by"])
         self.assertIn("1 starting routine(s) are saved", notes[0])
 
 

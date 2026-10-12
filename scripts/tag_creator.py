@@ -196,7 +196,7 @@ def create(root: Path, record: dict[str, Any], *, chief_values: dict[str, str],
     tag = record.get("tag")
     if tag and setup_complete(root, tag):
         # A person finished setup in Tag.app or the CLI after the fallback; just start it.
-        notes = (finish or finish_tag)(root, tag, proposal)
+        notes = (finish or finish_tag)(root, tag, {**proposal, "requester": record.get("requester")})
         return Outcome("created", tag, f"Created *{proposal['name']}*. Mention it directly, or ask me and I'll route to it.",
                        notes=notes)
     sign_in = chief_values.get("OPENTAG_CHIEF_SLACK_SIGN_IN", "")
@@ -232,7 +232,7 @@ def create(root: Path, record: dict[str, Any], *, chief_values: dict[str, str],
         on_tag(tag)  # add renames the Tag after its Slack IDs; keep the final name.
     status = result.get("status")
     if status == "complete" and tag:
-        notes = (finish or finish_tag)(root, tag, proposal)
+        notes = (finish or finish_tag)(root, tag, {**proposal, "requester": record.get("requester")})
         return Outcome("created", tag, f"Created *{proposal['name']}*. Mention it directly, or ask me and I'll route to it.",
                        notes=notes)
     if answers.step:
@@ -267,26 +267,48 @@ def finish_tag(root: Path, tag: str, proposal: dict[str, Any], *,
     if started.returncode:
         notes.append(f"It isn't running yet. Start it in Tag.app or with `tag {tag} start`.")
     if proposal.get("routines"):
-        notes.append(save_routines(root, tag, proposal["routines"]))
+        notes.append(save_routines(root, tag, proposal))
     return notes
 
 
 ROUTINES_FILE = "state/pending-routines.json"
 
 
-def save_routines(root: Path, tag: str, routines: list[dict[str, str]]) -> str:
+def routine_definitions(proposal: dict[str, Any]) -> list[dict[str, str]]:
+    """Starting routines as ``tag NAME routine add --from-json`` objects, one per routine."""
+    channels = proposal.get("channels") or []
+    definitions = []
+    for index, item in enumerate(proposal.get("routines") or [], start=1):
+        definition = {"name": f"{proposal['name']} routine {index}", "schedule": item["schedule"],
+                      "prompt": item["prompt"]}
+        if channels:
+            definition["channel"] = channels[0]
+        if proposal.get("requester"):
+            definition["owner"] = proposal["requester"]
+        definitions.append(definition)
+    return definitions
+
+
+def save_routines(root: Path, tag: str, proposal: dict[str, Any]) -> str:
     """Hand starting routines to the routines feature through a documented file.
 
-    The routines feature imports ``<Tag home>/state/pending-routines.json``
-    (schema 1: ``routines`` of ``schedule``, ``prompt``) when it starts, then
-    removes the file.
+    ``<Tag home>/state/pending-routines.json`` (schema 1) lists ``routines``,
+    each the exact object ``tag NAME routine add --from-json`` takes (name,
+    schedule, prompt, channel, owner), approved by the person who approved the
+    Tag. Nothing here depends on the routines feature.
+
+    TODO(#237): once routines ship, import this file when the Tag starts (or
+    call ``tag NAME routine add --from-json -`` here when ``tag version``
+    lists the ``routines`` capability), then remove the file.
     """
     try:
         import tag_instances
     except ImportError:
         from scripts import tag_instances
     home = tag_instances.resolve(root, tag).home
-    write_document(home / ROUTINES_FILE, {"schema_version": 1, "source": "chief-of-staff", "routines": routines})
+    routines = routine_definitions(proposal)
+    write_document(home / ROUTINES_FILE, {"schema_version": 1, "source": "chief-of-staff",
+                                          "approved_by": proposal.get("requester"), "routines": routines})
     return f"Its {len(routines)} starting routine(s) are saved and are set up when routines are available."
 
 
