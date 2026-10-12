@@ -144,6 +144,7 @@ class DefinitionTests(unittest.TestCase):
         self.assertIn("not approval", text)
         self.assertTrue(text.endswith("Summarise merged PRs."))
         self.assertTrue(routines.is_no_reply(" `NO_REPLY` "))
+        self.assertTrue(routines.is_no_reply("NO_REPLY."))
         self.assertFalse(routines.is_no_reply("NO_REPLY, but here is a summary"))
 
 

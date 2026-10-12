@@ -375,8 +375,12 @@ class ClaudeEventMapper:
             terminal: dict[str, Any] = {"type": "turn_complete", "status": "failed",
                                         "text": detail or str(payload.get("subtype") or "Claude turn failed")}
             status_code = payload.get("api_error_status")
+            subtype = payload.get("subtype")
             if isinstance(status_code, int):
                 terminal["code"] = f"http_{status_code}"
+            elif subtype in LIMIT_SUBTYPES:
+                # Routine runs tell spend and turn limits apart from other failures.
+                terminal["code"] = subtype
             events.append(terminal)
             return events
         if not interrupted:
@@ -536,6 +540,9 @@ def normalize_catalog(models: Any) -> list[dict[str, Any]]:
             "resolvedModel": item.get("resolvedModel") if isinstance(item.get("resolvedModel"), str) else None,
         })
     return catalog
+
+
+LIMIT_SUBTYPES = frozenset({"error_max_budget_usd", "error_max_turns"})
 
 
 def run_limits(environ: Any) -> dict[str, Any]:

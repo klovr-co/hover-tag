@@ -2695,6 +2695,11 @@ def run_backend_events(
     return (answer or "Open Tag finished without output."), True
 
 
+def slack_escape(text: str) -> str:
+    """Show text literally in Slack mrkdwn: no mentions, links or broadcasts."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 def post_final_reply(
     client: Any,
     channel: str,
@@ -5016,23 +5021,26 @@ def create_app(
         team = selected_team or workspace_id(client)
         started = datetime.now(timezone.utc)
         name = routine["name"]
-        header = f"⏰ *{name}*"
+        # The name is the operator's text; escape it so it can't mention @channel or link.
+        header = f"⏰ *{slack_escape(name)}*"
 
         def record(outcome: str, diagnostic: str = "", **extra: Any) -> dict[str, Any]:
             return tag_routines.run_record(routine, trigger=trigger, slot=slot, outcome=outcome, started=started,
                                            ended=datetime.now(timezone.utc), diagnostic=diagnostic, **extra)
 
-        def refuse(diagnostic: str) -> dict[str, Any]:
-            try:
-                post_routine_root(client, routine, f"{header} didn't run: {diagnostic}")
-            except Exception as exc:  # noqa: BLE001 - the run history still records it
-                logger.warning("Could not post routine notice: %s", exc)
+        def refuse(diagnostic: str, *, notify: bool) -> dict[str, Any]:
+            if notify:
+                try:
+                    post_routine_root(client, routine, f"{header} didn't run: {diagnostic}")
+                except Exception as exc:  # noqa: BLE001 - the run history still records it
+                    logger.warning("Could not post routine notice: %s", exc)
             return record("failed", diagnostic)
 
-        if not slack_user_allowed(owner, allowed_user_ids):
-            return refuse("its owner isn't allowed to use this Tag any more.")
+        # A channel the Tag no longer uses gets nothing, not even this notice.
         if not slack_channel_allowed(channel):
-            return refuse("this channel isn't one of the Tag's channels any more.")
+            return refuse("its channel isn't one of the Tag's channels any more.", notify=False)
+        if not slack_user_allowed(owner, allowed_user_ids):
+            return refuse("its owner isn't allowed to use this Tag any more.", notify=True)
         question = tag_routines.run_prompt(routine, trigger=trigger, slot=slot, last_success=last_success)
         configured_team = os.getenv("SLACK_TEAM_ID", "").strip()
         configured_channels = (os.getenv("SLACK_CHANNEL_IDS", "").strip()
@@ -5052,6 +5060,7 @@ def create_app(
         tools_used: list[str] = []
         usage: dict[str, Any] = {}
         limit_hit: list[str] = []
+        error_codes: list[str] = []
         activity_run_id: str | None = None
         if rich_events_selected(request_backend):
             try:
@@ -5095,18 +5104,33 @@ def create_app(
             tokens = sum(value for key in ("input_tokens", "output_tokens")
                          if isinstance(value := counts.get(key), int))
             usage["tokens"] = tokens
+            # Cached context is re-read every turn and costs little; the token limit counts new tokens.
+            cached = counts.get("cache_read_input_tokens")
+            fresh = tokens - (cached if isinstance(cached, int) and 0 <= cached <= tokens else 0)
             cost = event.get("cost_usd")
             if isinstance(cost, (int, float)) and not isinstance(cost, bool):
                 usage["cost_usd"] = round(float(cost), 4)
             over = (usage.get("cost_usd", 0) > limits["max_budget_usd"] if "cost_usd" in usage
-                    else tokens > limits["max_tokens"])
+                    else fresh > limits["max_tokens"])
             if over and not limit_hit:
                 limit_hit.append("cost" if "cost_usd" in usage else "tokens")
                 if (run := active_run(run_key)) is not None:
                     run.cancel()
 
+        def capture_error(code: str | None, _detail: str) -> None:
+            if code:
+                error_codes.append(code)
+
+        def finish_activity(outcome: str) -> None:
+            nonlocal activity_run_id
+            if activity_run_id is not None:
+                try:
+                    activity_store.finish(activity_run_id, outcome)
+                except OSError:
+                    pass
+
         output_manifest = default_workdir() / f"{OUTPUT_ARTIFACT_MANIFEST_PREFIX}{uuid.uuid4().hex}.json"
-        answer, succeeded = "", False
+        answer, succeeded, finished = "", False, False
         try:
             with tempfile.TemporaryDirectory(prefix="slack-routine-", dir=tag_temp_dir()) as raw_dir:
                 attachment_dir = Path(raw_dir)
@@ -5120,23 +5144,22 @@ def create_app(
                     output_manifest=output_manifest, max_timeout=limits["timeout_seconds"],
                     scope_plan=scope_plan, slack_search_grant=search_grant, on_trace_event=trace,
                     run_limits={"max_turns": limits["max_turns"], "max_budget_usd": limits["max_budget_usd"]},
+                    on_error=capture_error,
                 )
-                if activity_run_id is not None:
-                    try:
-                        activity_store.finish(activity_run_id, "completed" if succeeded else "failed")
-                    except OSError:
-                        pass
+                finished = True
+                finish_activity("completed" if succeeded else "failed")
                 extra = {"tools_used": tools_used or None, "cost_usd": usage.get("cost_usd"),
                          "tokens": usage.get("tokens"), "activity_run_id": activity_run_id}
-                lowered = answer.lower()
-                if limit_hit or "max_budget" in lowered:
+                # Limits come from error codes and only for runs that failed: a reply that
+                # merely talks about turns or budgets is still a reply.
+                if not succeeded and (limit_hit or "error_max_budget_usd" in error_codes):
                     outcome = "budget_exceeded"
-                    diagnostic = ("Stopped at the per-run spend limit of "
-                                  f"${limits['max_budget_usd']:.2f}." if limit_hit != ["tokens"] else
-                                  f"Stopped at the per-run limit of {limits['max_tokens']:,} tokens.")
-                elif "maximum runtime" in lowered:
+                    diagnostic = (f"Stopped at the per-run limit of {limits['max_tokens']:,} new tokens."
+                                  if limit_hit == ["tokens"] else
+                                  f"Stopped at the per-run spend limit of ${limits['max_budget_usd']:.2f}.")
+                elif not succeeded and "maximum_runtime" in error_codes:
                     outcome, diagnostic = "timeout", f"Stopped at the {limits['timeout_seconds'] // 60}-minute limit."
-                elif "max_turns" in lowered or "max turns" in lowered:
+                elif not succeeded and "error_max_turns" in error_codes:
                     outcome, diagnostic = "failed", f"Stopped at the limit of {limits['max_turns']} turns."
                 elif succeeded and tag_routines.is_no_reply(answer):
                     if "ts" in root:
@@ -5172,11 +5195,13 @@ def create_app(
                     ensure_root(text)
                 return record(outcome, f"{diagnostic} Reference {reference}.", slack_ts=root.get("ts"), **extra)
         finally:
+            if not finished:
+                finish_activity("failed")
             output_manifest.unlink(missing_ok=True)
 
     def announce_auto_pause(routine: dict[str, Any], failures: int) -> None:
         post_routine_root(app.client, routine,
-                          f"⏰ *{routine['name']}* is paused after {failures} failed runs in a row. "
+                          f"⏰ *{slack_escape(routine['name'])}* is paused after {failures} failed runs in a row. "
                           f"<@{routine['owner']}> can check it with `tag routine show` and resume it "
                           "with `tag routine resume`, or in Tag.app.")
 

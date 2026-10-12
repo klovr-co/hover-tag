@@ -161,6 +161,29 @@ class SchedulerTests(unittest.TestCase):
         self.advance(hours=3)
         self.assertEqual(len(self.calls), routines.AUTO_PAUSE_FAILURES)
 
+    def test_a_routine_removed_while_it_runs_leaves_no_state(self):
+        item = self.add()
+        self.scheduler.tick()
+        self.deferred = True
+        self.advance(hours=1)
+        self.store.remove(item["id"])
+        self.states.remove(item["id"])
+        self.pending.pop()()
+        self.assertFalse((self.home / routines.STATE_DIR / f"{item['id']}.json").exists())
+
+    def test_a_failed_auto_pause_is_retried_on_the_next_failure(self):
+        item = self.add()
+        self.outcome = "failed"
+        self.scheduler.tick()
+        busy = mock.patch.object(self.store.__class__, "set_enabled", side_effect=RuntimeError("busy"))
+        with busy:
+            for _ in range(routines.AUTO_PAUSE_FAILURES):
+                self.advance(hours=1)
+        self.assertTrue(self.store.get(item["id"])["enabled"])
+        self.assertIsNone(self.states.load(item["id"])["running"])
+        self.advance(hours=1)
+        self.assertFalse(self.store.get(item["id"])["enabled"])
+
     def test_a_success_resets_the_failure_count(self):
         item = self.add()
         self.scheduler.tick()

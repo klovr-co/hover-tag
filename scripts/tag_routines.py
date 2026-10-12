@@ -733,4 +733,4 @@ def run_prompt(routine: dict[str, Any], *, trigger: str, slot: datetime | None,
 
 
 def is_no_reply(answer: str) -> bool:
-    return answer.strip().strip("`*_ ").upper() == NO_REPLY
+    return answer.strip().strip("`*_ .").upper() == NO_REPLY

@@ -177,18 +177,78 @@ class RoutineRunTests(unittest.TestCase):
         self.assertRegex(record["diagnostic"], r"Reference [A-F0-9]{8}")
 
     def test_timeouts_are_reported_as_timeouts(self):
-        record = self.run_routine(lambda kwargs: ("Tag backend exceeded its maximum runtime of 1200s", False))
+        def behaviour(kwargs):
+            kwargs["on_error"]("maximum_runtime", "Tag backend exceeded its maximum runtime of 1200s")
+            return "Tag backend exceeded its maximum runtime of 1200s", False
+
+        record = self.run_routine(behaviour)
         self.assertEqual(record["outcome"], "timeout")
         self.assertIn("20-minute", record["diagnostic"])
 
-    def test_owner_and_channel_must_still_be_allowed(self):
+    def test_claude_limit_codes_name_the_limit(self):
+        def failing(code):
+            def behaviour(kwargs):
+                kwargs["on_error"](code, "Reached the limit")
+                return "Reached the limit", False
+            return behaviour
+
+        budget = self.run_routine(failing("error_max_budget_usd"))
+        self.assertEqual(budget["outcome"], "budget_exceeded")
+        self.assertIn("$0.50", budget["diagnostic"])
+        turns = self.run_routine(failing("error_max_turns"))
+        self.assertEqual(turns["outcome"], "failed")
+        self.assertIn("40 turns", turns["diagnostic"])
+
+    def test_a_reply_that_mentions_limits_is_still_posted(self):
+        text = "The max turns setting and the maximum runtime are fine; max_budget is unchanged."
+        record = self.run_routine(lambda kwargs: (text, True))
+        self.assertEqual(record["outcome"], "posted")
+        self.assertIn(text, self.posted_texts()[0])
+
+    def test_a_channel_the_tag_left_gets_no_notice(self):
+        elsewhere = tag_routines.approve({**self.routine, "channel": "C0ELSEWHERE"}, by="local-operator", via="cli")
+        record = self.run_routine(lambda kwargs: self.fail("must not run"), routine=elsewhere)
+        self.assertEqual(record["outcome"], "failed")
+        self.client.chat_postMessage.assert_not_called()
+
+    def test_routine_names_cannot_ping_the_channel(self):
+        loud = tag_routines.approve({**self.routine, "name": "<!channel> digest"}, by="local-operator", via="cli")
+        self.run_routine(lambda kwargs: ("Done.", True), routine=loud)
+        text = self.posted_texts()[0]
+        self.assertNotIn("<!channel>", text)
+        self.assertIn("&lt;!channel&gt; digest", text)
+
+    def test_the_token_limit_counts_new_tokens_not_cached_context(self):
+        stopped = []
+
+        def behaviour(kwargs):
+            run = MagicMock()
+            run.cancel.side_effect = lambda: stopped.append(True)
+            with patch.object(slack_socket_agent, "active_run", return_value=run):
+                kwargs["on_trace_event"]({"type": "usage", "usage": {
+                    "input_tokens": 5_000_000, "cache_read_input_tokens": 4_900_000, "output_tokens": 20_000}})
+            return "Done.", True
+
+        record = self.run_routine(behaviour)
+        self.assertEqual((stopped, record["outcome"]), ([], "posted"))
+        self.assertEqual(record["tokens"], 5_020_000)
+
+    def test_a_crash_in_the_backend_call_closes_its_activity(self):
+        def behaviour(kwargs):
+            raise RuntimeError("backend crashed")
+
+        with self.assertRaises(RuntimeError):
+            self.run_routine(behaviour)
+        records = [self.store.get(p.stem) for p in self.store.root.glob("*.json")]
+        self.assertEqual([r["outcome"] for r in records], ["failed"])
+
+    def test_owner_must_still_be_allowed_and_the_channel_is_told(self):
         stranger = tag_routines.approve({**self.routine, "owner": "USTRANGER"}, by="local-operator", via="cli")
         record = self.run_routine(lambda kwargs: self.fail("must not run"), routine=stranger)
         self.assertEqual(record["outcome"], "failed")
         self.assertIn("owner", record["diagnostic"])
-        elsewhere = tag_routines.approve({**self.routine, "channel": "C0ELSEWHERE"}, by="local-operator", via="cli")
-        record = self.run_routine(lambda kwargs: self.fail("must not run"), routine=elsewhere)
-        self.assertIn("channel", record["diagnostic"])
+        self.assertIn("owner", self.posted_texts()[0])
+        self.assertEqual(self.client.chat_postMessage.call_args.kwargs["channel"], "C0123ABCDE")
         self.assertEqual(self.calls, [])
 
     def test_mentions_of_other_tags_are_removed_from_replies(self):
