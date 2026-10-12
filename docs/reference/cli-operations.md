@@ -39,6 +39,7 @@ The Tag desktop app and the CLI use the same Tags, settings, and lifecycle: the 
 | Rename | Details → **Rename** | `tag NAME rename "Name"` |
 | Describe | Details → description **Edit** | `tag NAME describe "…"` |
 | Model and thinking level | Details → **Model** | `tag NAME settings ai model VALUE [--effort LEVEL]` |
+| Routines | The Tag → **Routines** | `tag NAME routine list\|show\|add\|edit\|pause\|resume\|remove\|run-now`; see [Routines](../concepts/routines.md) |
 | AI accounts | Settings → General → **AI connections** | `tag settings ai`, `tag settings ai sign-in codex\|claude` |
 | Keep Tags running | Settings → General → **Keep Tags running** | `tag autostart on` |
 | Open at login | Settings → General → **Open Tag at login** | Not needed; `tag autostart on` runs without the app |
