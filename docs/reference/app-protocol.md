@@ -23,6 +23,7 @@ it shows is listed in `capabilities`; otherwise it offers to upgrade Tag.
 | `setup-back` | `{"back": true}` during setup |
 | `rename` | `tag NAME rename "Name" --json` |
 | `describe` | `tag NAME describe "Description" --json`: changes the Slack app's one-line description and verifies Slack saved it; `""` clears it |
+| `routines` | `tag NAME routine list\|show\|add\|edit\|pause\|resume\|remove\|run-now --json`; see [Routines](#routines) |
 | `abandon-setup` | `tag NAME abandon --json`: moves a Tag that never reached Slack to `abandoned/` under the installation root; refuses a Tag that has a Slack app, a bot token, or a running bridge |
 | `remove-tag` | `tag NAME remove --json [--delete-app --confirm-app APP_ID]`: stops the Tag and moves its files to `abandoned/`. The Slack app is kept unless `--delete-app` is given with its exact App ID in `--confirm-app` |
 | `workspace-lifecycle` | `tag start\|stop\|restart --workspace TEAM --json` |
@@ -515,3 +516,36 @@ switch the release channel; `current.channel` and `target.channel` report the
 saved and requested channels. Switching to a channel whose newest release is
 older than the installed one saves the channel and keeps the installed
 release (`status` `channel-updated`) until that channel catches up.
+
+## Routines
+
+A routine runs a saved prompt on a schedule and posts the result in one of the
+Tag's channels. See [Routines](../concepts/routines.md).
+
+| Command | Output |
+| --- | --- |
+| `tag NAME routine list --json` | `tag_running`, `routines`, `invalid` (entries that could not be read), and `limits` (`per_tag`, `per_channel`, `min_interval_seconds`); see `routine-list.json` |
+| `tag NAME routine show ROUTINE --json` | `routine`, the next five run times in `upcoming`, and `history`, newest first; see `routine-show.json` |
+| `tag NAME routine add --name … --schedule … --timezone … --channel … --prompt … [--owner U…] [--catch-up latest\|skip] [--max-budget-usd N] [--max-turns N] [--timeout-minutes N] [--paused] --json` | `routine` |
+| `tag NAME routine add --from-json FILE\|- --json` | `routine`; the whole definition as one JSON object, for other components that create routines |
+| `tag NAME routine edit ROUTINE [options] --json` | `routine` |
+| `tag NAME routine pause\|resume ROUTINE --json` | `routine` |
+| `tag NAME routine remove ROUTINE --json` | `removed`, the routine's ID |
+| `tag NAME routine run-now ROUTINE --json` | `requested`; fails when the Tag isn't running or the routine needs approval |
+
+`ROUTINE` is an ID or a unique name. Tag.app passes `--via tag-app` to `add`
+and `edit`, so the approval records where it was made. Saving through the CLI
+or Tag.app approves exactly what was saved (`approval.by` is `local-operator`).
+A routine whose `approved` is false changed after approval and does not run
+until it is saved again.
+
+Each routine row has `next_run` (null while paused), `last_run` (the newest
+history entry or null), `running`, `consecutive_failures`, `paused_reason`
+(set when Tag paused it after repeated failures), and `attention`. History
+`outcome` is one of `posted`, `no_reply`, `failed`, `budget_exceeded`,
+`timeout`, `skipped`, `missed`, `interrupted`, or `blocked`; treat unknown
+values as needing attention. `trigger` is `schedule`, `catch-up`, or
+`run-now`. Activity rows from `tag NAME logs --json` carry `trigger` with
+`type: "routine"`, `routine_id`, `name`, and `trigger` when a routine started
+the run.
+
