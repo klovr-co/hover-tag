@@ -70,7 +70,7 @@ try:
     from .tag_activity_labels import activity_title_for_status, readable_activity_title
     from .tag_paths import instance_home, tag_temp_dir
     from .record_output_artifact import channel_artifact_directory
-    from . import slack_channels
+    from . import auto_invoke, slack_channels
     from . import tag_memory
     from . import tag_handoff
 except ImportError:  # Direct script execution does not create a package context.
@@ -112,6 +112,7 @@ except ImportError:  # Direct script execution does not create a package context
     from tag_activity_labels import activity_title_for_status, readable_activity_title
     from record_output_artifact import channel_artifact_directory
     from tag_paths import instance_home, tag_temp_dir
+    import auto_invoke
     import slack_channels
     import tag_memory
     import tag_handoff
@@ -3228,6 +3229,11 @@ def direct_messages_enabled() -> bool:
     return env_enabled("OPENTAG_SLACK_DM_ENABLED", default=True)
 
 
+def auto_invoke_enabled() -> bool:
+    """Classify untagged channel messages only when the operator explicitly opts in."""
+    return env_enabled("OPENTAG_AUTO_INVOKE", default=False)
+
+
 def slack_conversation_allowed(channel: str, *, direct_message: bool = False) -> bool:
     """Apply the channel allowlist to channels and the DM switch to direct messages."""
     return direct_messages_enabled() if direct_message else slack_channel_allowed(channel)
@@ -3402,8 +3408,13 @@ def print_live_summary(backend: str, allowed_user_ids: frozenset[str]) -> None:
     for scope in scopes or ["(none — set MFS_ALLOWED_SCOPES)"]:
         print(f"            - {scope}")
     dm_status = "enabled" if direct_messages_enabled() else "disabled"
+    untagged_status = (
+        f"enabled ({os.getenv('OPENTAG_AUTO_INVOKE_PROVIDER') or auto_invoke.DEFAULT_PROVIDER})"
+        if auto_invoke_enabled() else "disabled"
+    )
     print(f"  Slack   : {slack_status}")
     print(f"  DMs     : {dm_status}")
+    print(f"  Untagged: replies when addressed {untagged_status}")
     print(f"  Access  : {len(allowed_user_ids)} authorized Slack user(s)")
     print("")
     print("  Only explicitly authorized Slack users can drive the backend,")
@@ -5038,19 +5049,108 @@ def create_app(
             return
         handle_invocation(event, body, client, logger, direct_message=False)
 
+    assistant_identity: dict[str, str] = {}
+
+    def current_assistant_user_id(client: Any) -> str:
+        if "user_id" not in assistant_identity:
+            try:
+                value = client.auth_test().get("user_id", "")
+            except Exception:  # noqa: BLE001 - missing identity only reduces thread context
+                value = ""
+            assistant_identity["user_id"] = value if isinstance(value, str) else ""
+        return assistant_identity["user_id"]
+
     @app.event("message")
-    def handle_direct_message(
+    def handle_message(
         event: dict[str, Any],
         body: dict[str, Any],
         client: Any,
         logger: Any,
     ) -> None:
-        if event.get("channel_type") != "im" or not direct_messages_enabled():
-            return
         # Ignore bot output and Slack's message lifecycle events to prevent reply loops.
         if event.get("bot_id") or event.get("subtype") not in {None, "file_share"}:
             return
-        handle_invocation(event, body, client, logger, direct_message=True)
+        channel_type = event.get("channel_type")
+        if channel_type == "im":
+            if direct_messages_enabled():
+                handle_invocation(event, body, client, logger, direct_message=True)
+            return
+        if channel_type not in {"channel", "group"} or not auto_invoke_enabled():
+            return
+        handle_untagged_message(event, body, client, logger)
+
+    def handle_untagged_message(
+        event: dict[str, Any],
+        body: dict[str, Any],
+        client: Any,
+        logger: Any,
+    ) -> None:
+        channel = event.get("channel", "")
+        if not isinstance(channel, str) or not (
+            slack_conversation_allowed(channel)
+            or newly_invited_channel_allowed(channel, client)
+        ):
+            return
+        user_id = event.get("user", "")
+        if not isinstance(user_id, str) or not slack_user_allowed(user_id, allowed_user_ids):
+            # Ambient messages from other people are normal conversation, not denied requests.
+            return
+        message_text = str(event.get("text") or "")
+        if not message_text.strip() or MENTION_RE.search(message_text):
+            # Explicit bot mentions use app_mention; other member mentions are human-directed.
+            return
+        try:
+            classifier = auto_invoke.settings_from(os.environ)
+        except auto_invoke.AutoInvokeError as exc:
+            logger.warning("Untagged reply check failed closed: %s", exc)
+            return
+
+        thread_messages: list[dict[str, Any]] = []
+        thread_ts = event.get("thread_ts")
+        if isinstance(thread_ts, str) and thread_ts:
+            try:
+                response = client.conversations_replies(
+                    channel=channel,
+                    ts=thread_ts,
+                    limit=auto_invoke.MAX_CONTEXT_MESSAGES + 1,
+                )
+                thread_messages = [
+                    message
+                    for message in response.get("messages", [])
+                    if isinstance(message, dict)
+                ]
+            except Exception as exc:  # noqa: BLE001 - current-message routing can still proceed
+                logger.warning("Could not load thread context for untagged reply check: %s", type(exc).__name__)
+
+        state = auto_invoke.message_state(
+            event,
+            thread_messages,
+            assistant_name=suggested_bot_name(backend),
+            assistant_user_id=current_assistant_user_id(client) if thread_messages else "",
+        )
+        try:
+            decision = auto_invoke.evaluate(
+                state,
+                provider=classifier.provider,
+                api_key=classifier.api_key,
+                threshold=classifier.threshold,
+                model=classifier.model,
+                timeout=classifier.timeout,
+            )
+        except Exception as exc:  # noqa: BLE001 - routing failures must fail closed
+            logger.warning(
+                "Untagged reply check failed closed (%s): %s", classifier.provider, type(exc).__name__
+            )
+            return
+        logger.info(
+            "Untagged reply decision: invoke=%s addressed=%.3f provider=%s model=%s",
+            decision.should_invoke,
+            decision.tag_is_addressed,
+            decision.provider,
+            decision.model,
+        )
+        if decision.should_invoke:
+            handle_invocation(event, body, client, logger, direct_message=False)
 
     app.tag_expire_handoffs = expire_handoffs
     app.tag_update_handoff_status = update_handoff_status

@@ -5,7 +5,7 @@
 Use this reference when setting up the Slack-facing side of Tag from
 scratch. The bridge is intentionally thin. It only:
 
-1. Receives `app_mention` and `message.im` events through Socket Mode.
+1. Receives `app_mention`, channel-message, and `message.im` events through Socket Mode.
 2. Reads the current thread through Slack Web API.
 3. Starts Slack's native working indicator, falling back to a temporary reply
    when that API is unavailable.
@@ -13,10 +13,13 @@ scratch. The bridge is intentionally thin. It only:
 5. Optionally streams normalized answer deltas, or posts the final answer when
    the selected backend provides only a completed response.
 
-The adapter does not answer task questions or classify their meaning. It passes
-the thread, current-channel MFS scope, and a separate cross-channel search grant
-to a fresh CLI agent. The runtime agent understands the request and chooses
-whether to call the dedicated Slack-history helper.
+The adapter does not answer task questions. Explicit mentions and direct messages
+pass the thread, current-channel MFS scope, and a separate cross-channel search
+grant to a fresh CLI agent. The runtime agent understands the request and chooses
+whether to call the dedicated Slack-history helper. When optional replies to
+untagged messages are enabled, the adapter first asks one bounded question about
+each authorized user's untagged message. See
+[Optional replies to untagged messages](#optional-replies-to-untagged-messages).
 
 By default, `scripts/mfs_search.py` remains narrowed to the invoking channel
 exactly as before. Independently, `scripts/slack_search_scope.py` computes the
@@ -40,6 +43,8 @@ Relevant Slack docs:
 
 - Socket Mode: <https://docs.slack.dev/apis/events-api/using-socket-mode/>
 - App mentions: <https://docs.slack.dev/reference/events/app_mention/>
+- Public channel messages: <https://docs.slack.dev/reference/events/message.channels/>
+- Private channel messages: <https://docs.slack.dev/reference/events/message.groups/>
 - Direct messages: <https://docs.slack.dev/reference/events/message.im/>
 - OAuth scopes: <https://docs.slack.dev/reference/scopes/>
 
@@ -108,6 +113,8 @@ Profile-picture selection and upload require Slack CLI 4.7 or newer.
    - `users:read` — verify app identity and caller visibility for cross-channel search.
 5. Open **Event Subscriptions** and subscribe to Bot Events:
    - `app_mention`
+   - `message.channels`
+   - `message.groups`
    - `message.im`
    - `app_home_opened`
    - `agent_session_stopped`
@@ -124,6 +131,54 @@ Profile-picture selection and upload require Slack CLI 4.7 or newer.
 For a private channel, bot membership matters even when the app has
 `groups:history`. If `opentag_doctor.py` reports `not_in_channel`, invite the bot
 again or use a channel where the bot is present.
+
+## Optional replies to untagged messages
+
+This experimental feature lets an authorized user talk to Tag in an allowed
+channel without mentioning it. That includes addressing everyone with a question
+such as “What do you all think?” It is off by default. Each Tag picks one
+classifier, and each classifier has its own private key, model, and threshold:
+
+| Provider | `OPENTAG_AUTO_INVOKE_PROVIDER` | Key | Model | Threshold |
+| --- | --- | --- | --- | --- |
+| TypeSafe Jev (default) | `typesafe-jev` | `OPENTAG_TYPESAFE_API_KEY` | `OPENTAG_JEV_MODEL`, default `jev-latest` | `OPENTAG_JEV_THRESHOLD`, default `0.9` |
+| OpenAI Decisions (beta) | `openai-decisions` | `OPENTAG_OPENAI_DECISIONS_API_KEY` | `OPENTAG_DECISIONS_MODEL`, default `gpt-6-luna` | `OPENTAG_DECISIONS_THRESHOLD`, default `0.9` |
+
+Store the key through standard input, choose the provider, enable the feature,
+and restart Tag:
+
+```sh
+printf '%s' "$TYPESAFE_API_KEY" | tag config set OPENTAG_TYPESAFE_API_KEY --stdin --json
+tag config set OPENTAG_AUTO_INVOKE_PROVIDER typesafe-jev --json
+tag config set OPENTAG_AUTO_INVOKE 1 --json
+tag restart
+```
+
+Both providers get the same question: is the requester talking to Tag, directly
+or as part of the addressed audience, such that a reply is welcome now? Jev
+answers it as a `noul` question with true and false criteria about a structured
+state. Decisions answers it as a `predicate`, with the same criteria folded into
+the instructions and the state serialized into `input`. Tag replies only when the
+probability meets the selected provider's threshold. A timeout
+(`OPENTAG_AUTO_INVOKE_TIMEOUT_SECONDS`, default `5`), error, refusal, malformed
+answer, or missing key stays silent. Explicit mentions and direct messages never
+depend on the classifier. A message that mentions any member goes the usual way:
+an app mention for Tag, and silence for a message to someone else.
+
+For every eligible untagged message, Tag sends the message text, the configured
+assistant name and role, and up to ten recent text messages from the same Slack
+thread. Slack member IDs become roles (`tag`, `requester`, `participant`,
+`another_bot`). Attachments, files, and channel history outside that thread
+window are excluded. Only messages from an authorized user in an allowed channel
+are evaluated. The keys and these settings stay in the bridge; the local agent
+does not receive them.
+
+The thresholds were chosen without measurement. Before lowering one, score the
+labelled conversations in `evals/auto_invoke/` and compare precision and recall
+(see its README). When several of the same owner's Tags share a channel with this
+feature on, an inclusive question can make each of them reply.
+
+Disable the feature with `tag config set OPENTAG_AUTO_INVOKE 0 --json`.
 
 ## MFS Memory Setup
 

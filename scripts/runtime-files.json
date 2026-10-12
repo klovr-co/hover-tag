@@ -38,6 +38,7 @@
     "scripts/agent_sessions.py",
     "scripts/agent_summary.py",
     "scripts/agent_usage.py",
+    "scripts/auto_invoke.py",
     "scripts/claude_agent_backend.py",
     "scripts/codex_agent_backend.py",
     "scripts/install_dependencies.sh",

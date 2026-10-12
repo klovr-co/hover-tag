@@ -18,8 +18,9 @@ boundaries. Operators must isolate the host or local account and supply
 least-privilege credentials.
 
 Security and setup documentation must state this inheritance directly. Claims
-of credential isolation must specify that only the Socket Mode token and bridge
-access-control settings are withheld from backend processes.
+of credential isolation must specify that only the Socket Mode token, bridge
+access-control settings, and the bridge's own routing-classifier keys are
+withheld from backend processes.
 
 ## Consequences
 

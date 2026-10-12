@@ -636,6 +636,7 @@ not set up.
 |---|---|---|
 | Mentions and threaded replies | Implemented | The mention must target a running Tag's app. |
 | Direct messages | Implemented, on by default | Allowed senders only. `OPENTAG_SLACK_DM_ENABLED=0` turns it off. |
+| Replies to untagged messages | Implemented, disabled by default | Authorized messages in allowed channels go to TypeSafe Jev or OpenAI Decisions, per `OPENTAG_AUTO_INVOKE_PROVIDER`. Tag replies when it is directly or inclusively addressed and the probability clears that provider's threshold. Provider failures and refusals stay silent. |
 | Caller authorization | Implemented | `SLACK_ALLOWED_USER_IDS` is required and fails closed. Setup sets the owner. |
 | Channel restriction | Implemented | Channels the Tag joined (invitation policy) or a saved list. |
 | One conversation per thread | Implemented for Codex and Claude | Per requester; bounded by token and idle limits. Legacy transports start fresh. |

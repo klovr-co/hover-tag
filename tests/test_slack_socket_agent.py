@@ -2834,6 +2834,160 @@ class SlackDirectMessageTests(unittest.TestCase):
         run_backend.assert_not_called()
 
 
+class SlackUntaggedReplyTests(unittest.TestCase):
+    ENABLED = {
+        "SLACK_BOT_TOKEN": "xoxb-test",
+        "SLACK_CHANNEL_IDS": "C123",
+        "OPENTAG_SLACK_STREAMING": "0",
+        "OPENTAG_CLAUDE_TRANSPORT": "print",
+        "OPENTAG_AUTO_INVOKE": "1",
+        "OPENTAG_TYPESAFE_API_KEY": "typesafe-secret",
+    }
+
+    def event(self, **changes: str) -> dict[str, str]:
+        return {
+            "channel": "C123",
+            "channel_type": "channel",
+            "ts": "1.00",
+            "user": "UOWNER",
+            "text": "summarize this thread",
+        } | changes
+
+    def deliver(
+        self,
+        event: dict[str, str],
+        environment: dict[str, str],
+        *,
+        client: MagicMock | None = None,
+        evaluate: dict | None = None,
+    ) -> tuple[MagicMock, MagicMock]:
+        """Deliver one message event; return the patched evaluate and run_backend."""
+        fake_app = FakeApp()
+        indicator = MagicMock(native=False, message_ts=None)
+        decision = slack_socket_agent.auto_invoke.AutoInvokeDecision(
+            should_invoke=True, tag_is_addressed=0.96, model="jev-1.13.0", provider="typesafe-jev"
+        )
+        with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+            os.environ, environment, clear=True
+        ), patch.object(
+            slack_socket_agent.auto_invoke, "evaluate", **(evaluate or {"return_value": decision})
+        ) as evaluate_mock, patch.object(
+            slack_socket_agent, "WorkingIndicator", return_value=indicator
+        ), patch.object(
+            slack_socket_agent, "build_thread_text", return_value="thread context"
+        ), patch.object(
+            slack_socket_agent, "run_backend", return_value=("done", True)
+        ) as run_backend:
+            slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+            fake_app.events["message"](event, {"team_id": "T123"}, client or MagicMock(), MagicMock())
+        return evaluate_mock, run_backend
+
+    def test_untagged_channel_messages_are_opt_in(self) -> None:
+        environment = {key: value for key, value in self.ENABLED.items() if key != "OPENTAG_AUTO_INVOKE"}
+        evaluate, run_backend = self.deliver(self.event(), environment)
+        evaluate.assert_not_called()
+        run_backend.assert_not_called()
+
+    def test_unauthorized_ambient_message_is_silent_before_classification(self) -> None:
+        client = MagicMock()
+        evaluate, run_backend = self.deliver(self.event(user="UOTHER"), self.ENABLED, client=client)
+        evaluate.assert_not_called()
+        run_backend.assert_not_called()
+        client.chat_postMessage.assert_not_called()
+        client.chat_postEphemeral.assert_not_called()
+
+    def test_unapproved_channel_bot_output_and_edits_skip_classification(self) -> None:
+        for event in (
+            self.event(channel="C999"),
+            self.event(bot_id="BOTHER"),
+            self.event(subtype="message_changed"),
+            self.event(channel_type="mpim"),
+            self.event(text="   "),
+        ):
+            with self.subTest(event=event):
+                evaluate, run_backend = self.deliver(event, self.ENABLED)
+                evaluate.assert_not_called()
+                run_backend.assert_not_called()
+
+    def test_explicit_mentions_do_not_enter_the_ambient_gate(self) -> None:
+        for text in ("<@UTAG> summarize this", "<@UPERSON> can you summarize this?"):
+            with self.subTest(text=text):
+                evaluate, run_backend = self.deliver(self.event(text=text), self.ENABLED)
+                evaluate.assert_not_called()
+                run_backend.assert_not_called()
+
+    def test_positive_decision_enters_existing_invocation_path(self) -> None:
+        evaluate, run_backend = self.deliver(self.event(), self.ENABLED)
+        evaluate.assert_called_once()
+        self.assertEqual("typesafe-jev", evaluate.call_args.kwargs["provider"])
+        self.assertEqual("typesafe-secret", evaluate.call_args.kwargs["api_key"])
+        self.assertEqual(0.9, evaluate.call_args.kwargs["threshold"])
+        self.assertEqual("jev-latest", evaluate.call_args.kwargs["model"])
+        self.assertEqual("summarize this thread", evaluate.call_args.args[0]["current_message"])
+        run_backend.assert_called_once()
+
+    def test_openai_decisions_uses_its_own_key_model_and_threshold(self) -> None:
+        environment = self.ENABLED | {
+            "OPENTAG_AUTO_INVOKE_PROVIDER": "openai-decisions",
+            "OPENTAG_OPENAI_DECISIONS_API_KEY": "openai-secret",
+            "OPENTAG_DECISIONS_THRESHOLD": "0.8",
+            "OPENTAG_AUTO_INVOKE_TIMEOUT_SECONDS": "3",
+        }
+        evaluate, run_backend = self.deliver(self.event(), environment)
+        self.assertEqual(
+            {"provider": "openai-decisions", "api_key": "openai-secret", "threshold": 0.8,
+             "model": "gpt-6-luna", "timeout": 3.0},
+            evaluate.call_args.kwargs,
+        )
+        run_backend.assert_called_once()
+
+    def test_thread_context_is_loaded_and_identity_minimized(self) -> None:
+        client = MagicMock()
+        client.auth_test.return_value = {"user_id": "UTAG"}
+        client.conversations_replies.return_value = {"messages": [
+            {"ts": "0.50", "user": "UTAG", "bot_id": "BTAG", "text": "Here is a draft"},
+            {"ts": "1.00", "user": "UOWNER", "text": "make it shorter"},
+        ]}
+        evaluate, _ = self.deliver(
+            self.event(thread_ts="0.50", text="make it shorter"), self.ENABLED, client=client
+        )
+        client.conversations_replies.assert_called_once_with(channel="C123", ts="0.50", limit=11)
+        self.assertEqual(
+            [{"author": "tag", "text": "Here is a draft"}], evaluate.call_args.args[0]["thread_history"]
+        )
+
+    def test_negative_failed_or_unconfigured_decisions_stay_silent(self) -> None:
+        declined = slack_socket_agent.auto_invoke.AutoInvokeDecision(False, 0.4, "gpt-6-luna", "openai-decisions")
+        cases = (
+            ("declined", self.ENABLED, {"return_value": declined}),
+            ("refused", self.ENABLED, {"side_effect": slack_socket_agent.auto_invoke.AutoInvokeRefusal("no")}),
+            ("provider error", self.ENABLED, {"side_effect": slack_socket_agent.auto_invoke.AutoInvokeError("down")}),
+            ("unexpected error", self.ENABLED, {"side_effect": RuntimeError("bug")}),
+        )
+        for name, environment, evaluate_behavior in cases:
+            with self.subTest(name):
+                client = MagicMock()
+                _, run_backend = self.deliver(self.event(), environment, client=client, evaluate=evaluate_behavior)
+                run_backend.assert_not_called()
+                client.chat_postMessage.assert_not_called()
+        for name, environment in (
+            ("missing key", {k: v for k, v in self.ENABLED.items() if k != "OPENTAG_TYPESAFE_API_KEY"}),
+            ("other provider's key only", self.ENABLED | {"OPENTAG_AUTO_INVOKE_PROVIDER": "openai-decisions"}),
+            ("unknown provider", self.ENABLED | {"OPENTAG_AUTO_INVOKE_PROVIDER": "elsewhere"}),
+        ):
+            with self.subTest(name):
+                evaluate, run_backend = self.deliver(self.event(), environment)
+                evaluate.assert_not_called()
+                run_backend.assert_not_called()
+
+    def test_direct_messages_keep_their_own_path(self) -> None:
+        evaluate, run_backend = self.deliver(
+            self.event(channel="D123", channel_type="im"), self.ENABLED | {"OPENTAG_SLACK_DM_ENABLED": "1"}
+        )
+        evaluate.assert_not_called()
+        run_backend.assert_called_once()
+
+
 class SlackWorkingIndicatorTests(unittest.TestCase):
     def test_journals_native_session_until_clear_succeeds(self) -> None:
         client = MagicMock()

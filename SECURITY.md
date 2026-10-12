@@ -11,7 +11,8 @@ The agent backend inherits the bridge process environment, including
 `SLACK_BOT_TOKEN`, `MFS_TOKEN`, and unrelated ambient credentials. Tag removes
 `SLACK_APP_TOKEN`, `SLACK_CHANNEL_ID`, `SLACK_CHANNEL_IDS`, and
 `SLACK_ALLOWED_USER_IDS` before
-starting backend work, but it does not broker the remaining credentials.
+starting backend work, along with the optional untagged-reply classifier keys
+(`OPENTAG_TYPESAFE_API_KEY`, `OPENTAG_OPENAI_DECISIONS_API_KEY`) and settings, but it does not broker the remaining credentials.
 
 Consequently, Slack and MFS helper allowlists are guardrails for normal agent
 operation, not hardened capability controls: an agent with shell access can use

@@ -6,6 +6,11 @@ All notable changes to Tag are documented here.
 
 ### Added
 
+- Optionally let Tag reply to untagged messages in its channels when it is being
+  addressed, including inclusive questions such as “anyone?”. Off by default.
+  Each Tag chooses TypeSafe Jev or OpenAI Decisions to classify the message, with
+  that provider's own key and threshold, and stays silent on any error or refusal.
+  Tag adds Slack's channel message events to existing apps automatically.
 - Let one Tag ask other Tags for help and combine their answers. Tag posts one
   request that mentions every Tag, links it to your thread in both directions,
   shows their progress as steps, and writes the final answer once all have replied or the deadline passes. Each

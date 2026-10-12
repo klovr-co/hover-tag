@@ -329,6 +329,81 @@ class SlackManifestMigrationTests(unittest.TestCase):
                 if not pending:
                     self.assertFalse(marker.exists())
 
+    def test_version_5_adds_channel_message_events_to_an_older_installation(self):
+        # An installation that finished version 4: every permission granted, no channel message events.
+        with tempfile.TemporaryDirectory() as directory:
+            home, config = self.linked_home(Path(directory))
+            marker = home / "state/slack-manifest-migrations.json"
+            migrations.settings.save_config(marker, {"version": 4, "team_id": "TTEST", "app_id": "ATEST"})
+            remote = migrations.migrate_manifest(self.manifest())[0]
+            events = remote["settings"]["event_subscriptions"]["bot_events"]
+            events.remove("message.channels")
+            events.remove("message.groups")
+            events.append("reaction_added")
+            granted = set(migrations.REQUIRED_BOT_SCOPES)
+            failed = subprocess.CompletedProcess([], 1, "", "Slack API error: rate limited")
+            success = subprocess.CompletedProcess([], 0, "", "")
+            fresh = {"SLACK_APP_TOKEN": "xapp-fresh", "SLACK_BOT_TOKEN": "xoxb-fresh"}
+
+            # A failed sync stops the start and leaves the old receipt, so the next start retries.
+            with patch.object(migrations.shutil, "which", return_value="/bin/slack"), patch.object(
+                migrations, "remote_manifest", return_value=remote
+            ), patch.object(migrations, "granted_bot_scopes", return_value=granted), patch.object(
+                migrations, "_sync_command", return_value=["/bin/slack", "manifest", "sync"]
+            ), patch.object(migrations, "_run", return_value=failed), patch.object(
+                migrations.slack_credentials, "receive"
+            ) as receive:
+                with self.assertRaisesRegex(RuntimeError, "migration failed"):
+                    migrations.reconcile(home, config, self.values())
+            receive.assert_not_called()
+            self.assertEqual(4, json.loads(marker.read_text(encoding="utf-8"))["version"])
+
+            # The retry syncs, verifies, refreshes credentials, then records version 5.
+            uploads: list[dict] = []
+
+            def sync(command, *, cwd, capture=True):
+                uploads.append(json.loads((cwd / "manifest.json").read_text(encoding="utf-8")))
+                return success
+
+            with patch.object(migrations.shutil, "which", return_value="/bin/slack"), patch.object(
+                migrations, "remote_manifest", side_effect=lambda *_: uploads[-1] if uploads else remote
+            ), patch.object(migrations, "granted_bot_scopes", return_value=granted), patch.object(
+                migrations, "_sync_command", return_value=["/bin/slack", "manifest", "sync"]
+            ), patch.object(migrations, "_run", side_effect=sync), patch.object(
+                migrations.slack_credentials, "receive", return_value=fresh
+            ):
+                self.assertTrue(migrations.reconcile(home, config, self.values()))
+            [uploaded] = uploads
+            for event in ("message.channels", "message.groups", "reaction_added", "message.im"):
+                self.assertIn(event, uploaded["settings"]["event_subscriptions"]["bot_events"])
+            self.assertEqual({"version": 5, "team_id": "TTEST", "app_id": "ATEST"},
+                             json.loads(marker.read_text(encoding="utf-8")))
+            self.assertEqual("xoxb-fresh", migrations.settings.read_config(config)["SLACK_BOT_TOKEN"])
+
+            # Repeated starts are no-ops.
+            with patch.object(migrations, "remote_manifest") as inspect:
+                self.assertFalse(migrations.reconcile(home, config, self.values() | fresh))
+                inspect.assert_not_called()
+
+    def test_version_5_does_not_checkpoint_when_slack_drops_the_new_events(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home, config = self.linked_home(Path(directory))
+            marker = home / "state/slack-manifest-migrations.json"
+            migrations.settings.save_config(marker, {"version": 4, "team_id": "TTEST", "app_id": "ATEST"})
+            remote = migrations.migrate_manifest(self.manifest())[0]
+            remote["settings"]["event_subscriptions"]["bot_events"].remove("message.groups")
+            with patch.object(migrations.shutil, "which", return_value="/bin/slack"), patch.object(
+                migrations, "remote_manifest", return_value=remote
+            ), patch.object(migrations, "granted_bot_scopes", return_value=set(migrations.REQUIRED_BOT_SCOPES)), patch.object(
+                migrations, "_sync_command", return_value=["/bin/slack", "manifest", "sync"]
+            ), patch.object(migrations, "_run", return_value=subprocess.CompletedProcess([], 0, "", "")), patch.object(
+                migrations.slack_credentials, "receive"
+            ) as receive:
+                with self.assertRaisesRegex(RuntimeError, "did not save"):
+                    migrations.reconcile(home, config, self.values())
+            receive.assert_not_called()
+            self.assertEqual(4, json.loads(marker.read_text(encoding="utf-8"))["version"])
+
     def test_optional_scope_is_requested_but_not_needed(self):
         self.assertIn("team:read", migrations.REQUIRED_BOT_SCOPES)
         self.assertNotIn("team:read", migrations.NEEDED_BOT_SCOPES)
