@@ -50,6 +50,9 @@ DEFAULT_TARGET_PRECISION = 0.95
 CHARS_PER_TOKEN = 4
 # Authentication, billing, quota and rate-limit responses stop a paid run.
 STOP_STATUSES = {401, 402, 403, 429}
+# Quota and billing failures can also arrive with other statuses; their bodies say so.
+QUOTA_RE = re.compile(rb"insufficient_quota|quota|budget|billing|credit|balance|payment", re.I)
+MAX_CONSECUTIVE_ERRORS = 3
 REQUESTER, TAG, BOT = "UREQUESTER", "UTAG", "UOTHERBOT"
 MENTION_RE = re.compile(r"<@[^>]+>|\{(?:tag|requester|participant)\}")
 
@@ -181,6 +184,7 @@ def score_run(
     """Score each case once, appending to ``out_path``; returns this run's spend."""
     done = {(row["provider"], row["id"]) for row in _recorded(out_path)}
     spent = last_call_usd = 0.0
+    errors = 0
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("a", encoding="utf-8") as handle:
         for case in cases:
@@ -199,11 +203,23 @@ def score_run(
                 spent += estimate
             except watch_classifier.ClassifierError as exc:
                 cause = exc.__cause__
-                if isinstance(cause, urllib.error.HTTPError) and cause.code in STOP_STATUSES:
-                    raise BudgetStop(f"Stopped on HTTP {cause.code} from {provider}; fix the key, quota or "
-                                     f"rate limit before retrying. Spent ${spent:.4f}") from None
+                if isinstance(cause, urllib.error.HTTPError):
+                    # Classify the body without printing it: some providers echo part of the key.
+                    try:
+                        body = cause.read(4096) or b""
+                    except Exception:  # noqa: BLE001 - an unreadable body still has a status
+                        body = b""
+                    if cause.code in STOP_STATUSES or QUOTA_RE.search(body):
+                        raise BudgetStop(f"Stopped on HTTP {cause.code} from {provider} (auth, quota, budget or "
+                                         f"rate limit); not retrying. Spent ${spent:.4f}") from None
+                errors += 1
                 row.update(outcome="error", error=str(exc))
+                if errors >= MAX_CONSECUTIVE_ERRORS:
+                    handle.write(json.dumps(row) + "\n")
+                    raise BudgetStop(f"Stopped after {errors} errors in a row from {provider}: {exc}. "
+                                     f"Spent ${spent:.4f}")
             else:
+                errors = 0
                 tokens = answer.input_tokens
                 call_usd = cost_usd(provider, tokens) if tokens is not None else estimate
                 spent += call_usd
@@ -212,8 +228,11 @@ def score_run(
                            input_tokens=tokens, usd=round(call_usd, 8))
             handle.write(json.dumps(row) + "\n")
             handle.flush()
-            print(f"{provider} {case.id}: {row['outcome']} "
-                  f"{row.get('probability', '')} (running ${spent:.4f} / ${max_usd:.2f})", file=log)
+            usage = (f" usage {row['input_tokens']} tokens vs ~{estimated_tokens(provider, state)} estimated"
+                     if row.get("input_tokens") is not None else
+                     " (no usage reported; counted the estimate)" if row["outcome"] == "score" else "")
+            print(f"{provider} {case.id}: {row['outcome']} {row.get('probability', '')}{usage} "
+                  f"(running ${spent:.6f} / ${max_usd:.2f})", file=log)
     return spent
 
 
@@ -352,6 +371,10 @@ def main(argv: list[str] | None = None) -> int:
     score_parser.add_argument("--out", type=Path, required=True)
     score_parser.add_argument("--max-usd", type=float, required=True)
     score_parser.add_argument("--model", default="")
+    score_parser.add_argument("--key-file", type=Path, default=os.environ.get("TAG_EVAL_KEY_FILE") or None,
+                              help="Owner-only file holding the provider key (or TAG_EVAL_KEY_FILE).")
+    score_parser.add_argument("--limit", type=int, default=0, help="Score at most this many new cases.")
+    score_parser.add_argument("--cases", default="", help="Comma-separated case IDs to score.")
     score_parser.add_argument("--confirm-paid", action="store_true",
                               help="Required: acknowledge that this calls a paid API.")
     report_parser = commands.add_parser("report", help="Precision, recall and threshold sweep; no network.")
@@ -387,9 +410,26 @@ def main(argv: list[str] | None = None) -> int:
     if not 0 < args.max_usd <= 5:
         parser.error("--max-usd must be greater than 0 and at most 5")
     key_setting = watch_classifier.PROVIDERS[args.provider].key_setting
-    api_key = os.environ.get(key_setting, "").strip()
+    if args.key_file:
+        try:
+            if args.key_file.stat().st_mode & 0o077:
+                parser.error(f"{args.key_file} must be readable only by its owner (chmod 600)")
+            api_key = args.key_file.read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            parser.error(f"could not read the key file: {type(exc).__name__}")
+    else:
+        api_key = os.environ.get(key_setting, "").strip()
     if not api_key:
-        parser.error(f"set {key_setting} to a spend-capped key")
+        parser.error(f"pass --key-file with a spend-capped key, or set {key_setting}")
+    if args.cases:
+        wanted = {item.strip() for item in args.cases.split(",") if item.strip()}
+        unknown = wanted - {case.id for case in cases}
+        if unknown:
+            parser.error("unknown case IDs: " + ", ".join(sorted(unknown)))
+        cases = [case for case in cases if case.id in wanted]
+    if args.limit:
+        done = {row["id"] for row in _recorded(args.out) if row.get("provider") == args.provider}
+        cases = [case for case in cases if case.id not in done][:args.limit]
     try:
         spent = score_run(cases, assistant_name, provider=args.provider, api_key=api_key,
                           out_path=args.out, max_usd=args.max_usd, model=args.model)

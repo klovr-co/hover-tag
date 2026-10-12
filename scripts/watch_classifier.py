@@ -260,7 +260,7 @@ PROVIDERS: dict[str, Provider] = {
         default_model="jev-latest",
         default_threshold=0.9,
         usd_per_million_input=0.042,
-        price_source="input price supplied with this change, not on docs.typesafe.ai/api.md; output price unknown",
+        price_source="https://docs.typesafe.ai/models.md (jev-1.13.0; output free)",
         payload=jev_payload,
         parse=jev_parse,
     ),

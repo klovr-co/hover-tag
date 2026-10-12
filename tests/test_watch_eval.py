@@ -183,6 +183,28 @@ class PaidRunGuardTests(unittest.TestCase):
                     harness.main(argv)
         urlopen.assert_not_called()
 
+    def test_key_file_must_be_owner_only_and_samples_are_small(self) -> None:
+        name, cases = harness.load_cases()
+        with tempfile.TemporaryDirectory() as directory, patch.object(harness, "score_run", return_value=0.0) as run, \
+                patch("sys.stderr", io.StringIO()) as err:
+            key = Path(directory) / "key"
+            key.write_text("sk-SECRET\n", encoding="utf-8")
+            key.chmod(0o644)
+            base = ["score", "--provider", "openai-decisions", "--out", str(Path(directory) / "s.jsonl"),
+                    "--max-usd", "0.5", "--confirm-paid", "--key-file", str(key)]
+            with self.assertRaises(SystemExit):
+                harness.main(base)
+            run.assert_not_called()
+            key.chmod(0o600)
+            self.assertEqual(0, harness.main([*base, "--limit", "4"]))
+            self.assertEqual("sk-SECRET", run.call_args.kwargs["api_key"])
+            self.assertEqual(4, len(run.call_args.args[0]))
+            self.assertEqual(0, harness.main([*base, "--cases", "direct-greeting,offer-declined"]))
+            self.assertEqual(["direct-greeting", "offer-declined"], [c.id for c in run.call_args.args[0]])
+            with self.assertRaises(SystemExit):
+                harness.main([*base, "--cases", "nope"])
+            self.assertNotIn("SECRET", err.getvalue())
+
     def test_records_scores_refusals_and_resumes_without_repeating_calls(self) -> None:
         scorer = MagicMock(side_effect=[
             watch_classifier.Score(0.97, "gpt-6-luna", 700),
@@ -216,12 +238,32 @@ class PaidRunGuardTests(unittest.TestCase):
                     self.run_score(scorer, out_path=out_path)
                 self.assertEqual(1, scorer.call_count)
                 self.assertEqual("", out_path.read_text(encoding="utf-8"))
-        scorer = MagicMock(side_effect=watch_classifier.ClassifierError("timed out"))
+        # A quota failure with another status is recognised from the body, which is never printed.
+        error = watch_classifier.ClassifierError("failed")
+        error.__cause__ = urllib.error.HTTPError(
+            "https://example.test", 400, "x", None,
+            io.BytesIO(b'{"error":{"code":"insufficient_quota","message":"key sk-SECRET"}}'))
+        scorer = MagicMock(side_effect=error)
+        log = io.StringIO()
+        name, all_cases = harness.load_cases()
+        with tempfile.TemporaryDirectory() as directory, self.assertRaises(harness.BudgetStop) as stopped:
+            harness.score_run(all_cases[:3], name, provider="openai-decisions", api_key="sk-SECRET",
+                              out_path=Path(directory) / "scores.jsonl", max_usd=1.0, log=log, scorer=scorer)
+        self.assertEqual(1, scorer.call_count)
+        self.assertNotIn("SECRET", str(stopped.exception) + log.getvalue())
+        # Other failures are recorded, and three in a row stop the run.
+        scorer = MagicMock(side_effect=[
+            watch_classifier.ClassifierError("timed out"), watch_classifier.Score(0.5, "m", 10),
+            *[watch_classifier.ClassifierError("timed out")] * 3])
+        name, all_cases = harness.load_cases()
         with tempfile.TemporaryDirectory() as directory:
             out_path = Path(directory) / "scores.jsonl"
-            self.run_score(scorer, out_path=out_path)
-            self.assertEqual(3, scorer.call_count)
-            self.assertIn('"outcome": "error"', out_path.read_text(encoding="utf-8"))
+            with self.assertRaisesRegex(harness.BudgetStop, "3 errors in a row"):
+                harness.score_run(all_cases[:6], name, provider="openai-decisions", api_key="k",
+                                  out_path=out_path, max_usd=1.0, log=io.StringIO(), scorer=scorer)
+            self.assertEqual(5, scorer.call_count)
+            outcomes = [json.loads(line)["outcome"] for line in out_path.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(["error", "score", "error", "error", "error"], outcomes)
 
     def test_paid_run_uses_mocked_http_end_to_end(self) -> None:
         class Response:
