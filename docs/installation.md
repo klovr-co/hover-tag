@@ -16,6 +16,9 @@ Download Tag from the [Tag guide](https://www.hover.team/tag/) or from
 Each Linux download has a checksum in `DESKTOP-SHA256SUMS-linux` on the same
 release page. Check it with `sha256sum -c DESKTOP-SHA256SUMS-linux`.
 
+The AppImage needs FUSE to open. If it fails with a FUSE or `fusermount`
+error, run it as `./Tag-VERSION-linux-x86_64.AppImage --appimage-extract-and-run`.
+
 Windows: coming soon. Until then, use the terminal installer. See
 [Install from a terminal](#install-from-a-terminal).
 

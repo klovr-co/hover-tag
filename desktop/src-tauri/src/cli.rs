@@ -108,11 +108,12 @@ pub fn command(cli: &Path, args: &[String]) -> Command {
     command
 }
 
-/// Remove `dir/...` entries (AppImage bundled libraries) from a path-list value.
-fn strip_prefix_entries(value: &str, dir: &str) -> String {
+/// Remove `dir/...` entries (AppImage bundled libraries) from a path-list value. `separators`
+/// are the ones ld.so accepts for that variable; the result is joined with `:`, which both accept.
+fn strip_prefix_entries(value: &str, separators: &str, dir: &str) -> String {
     let dir = dir.trim_end_matches('/');
     value
-        .split(':')
+        .split(|c: char| separators.contains(c))
         .filter(|entry| !entry.is_empty() && *entry != dir && !entry.starts_with(&format!("{dir}/")))
         .collect::<Vec<_>>()
         .join(":")
@@ -125,9 +126,9 @@ pub fn clean_appimage_env(command: &mut Command) -> &mut Command {
     let Some(appdir) = std::env::var("APPDIR").ok().filter(|d| !d.is_empty()) else {
         return command;
     };
-    for key in ["LD_LIBRARY_PATH", "LD_PRELOAD"] {
+    for (key, separators) in [("LD_LIBRARY_PATH", ":;"), ("LD_PRELOAD", ": ")] {
         if let Ok(value) = std::env::var(key) {
-            let kept = strip_prefix_entries(&value, &appdir);
+            let kept = strip_prefix_entries(&value, separators, &appdir);
             if kept.is_empty() {
                 command.env_remove(key);
             } else {
@@ -158,9 +159,14 @@ mod tests {
 
     #[test]
     fn appimage_library_entries_are_stripped() {
-        assert_eq!(strip_prefix_entries("/tmp/.mount_x/usr/lib:/opt/lib:/tmp/.mount_x/lib64", "/tmp/.mount_x"), "/opt/lib");
-        assert_eq!(strip_prefix_entries("/tmp/.mount_x/usr/lib", "/tmp/.mount_x/"), "");
-        assert_eq!(strip_prefix_entries("/tmp/.mount_xy/lib", "/tmp/.mount_x"), "/tmp/.mount_xy/lib");
+        assert_eq!(strip_prefix_entries("/tmp/.mount_x/usr/lib:/opt/lib:/tmp/.mount_x/lib64", ":;", "/tmp/.mount_x"), "/opt/lib");
+        assert_eq!(strip_prefix_entries("/tmp/.mount_x/usr/lib", ":;", "/tmp/.mount_x/"), "");
+        assert_eq!(strip_prefix_entries("/tmp/.mount_xy/lib", ":;", "/tmp/.mount_x"), "/tmp/.mount_xy/lib");
+        assert_eq!(strip_prefix_entries("/opt/lib;/tmp/.mount_x/usr/lib", ":;", "/tmp/.mount_x"), "/opt/lib");
+        assert_eq!(
+            strip_prefix_entries("/opt/libfoo.so /tmp/.mount_x/usr/lib/libbar.so", ": ", "/tmp/.mount_x"),
+            "/opt/libfoo.so"
+        );
     }
 
     #[test]
