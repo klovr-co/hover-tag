@@ -6,11 +6,15 @@ import hashlib
 import json
 import os
 import re
+import threading
 import time
 from pathlib import Path
 
 from mfs_server.connectors import registry
 from mfs_server.connectors.slack.plugin import SlackPlugin
+from mfs_server.storage.milvus import MilvusStore
+from pymilvus import MilvusClient
+from pymilvus.milvus_client.index import IndexParam
 from slack_sdk.web.async_client import AsyncWebClient
 
 try:
@@ -21,6 +25,98 @@ except ImportError:
     from tag_config import save_config
 
 RUNTIME_VERSION = 2
+# Milvus Lite appends every write to a log and only tidies that log into
+# indexed storage once 10,000 *different* chunks have changed. Slack syncs keep
+# rewriting the same few thousand chunks, so it never tidies up: the log fills
+# with old copies and every search reads all of them. Tidy up ourselves.
+FLUSH_AFTER_ROWS = 2_000
+# Flushed Lite segments get a FAISS HNSW graph that can strand rows from vector
+# search (milvus-io/milvus-lite#369). Exact search is fast at Tag's scale.
+DENSE_FIELD = "dense_vec"
+LITE_DENSE_INDEX = "FLAT"
+
+
+def install_store_maintenance(store_type=MilvusStore, flush_after=FLUSH_AFTER_ROWS):
+    lock = threading.Lock()
+    pending = {}
+    connect, upsert = store_type.connect, store_type.upsert
+    build_index_params = store_type._build_index_params
+    delete_by_object = store_type.delete_by_object
+    delete_by_connector = store_type.delete_by_connector
+
+    def flush(store, name):
+        if store.client.has_collection(name):
+            store.client.flush(collection_name=name)
+
+    def written(store, namespace_id, rows):
+        if not store.is_lite():
+            return
+        name = store.resolve_collection(namespace_id)
+        with lock:
+            pending[name] = pending.get(name, 0) + rows
+            if pending[name] < flush_after:
+                return
+            pending[name] = 0
+        flush(store, name)
+
+    def index_params(store):
+        params = build_index_params(store)
+        if store.is_lite():
+            for position, index in enumerate(params):
+                if index.field_name == DENSE_FIELD:
+                    metric = index.to_dict().get("metric_type", "COSINE")
+                    params[position] = IndexParam(
+                        DENSE_FIELD, LITE_DENSE_INDEX, index.index_name, metric_type=metric
+                    )
+        return params
+
+    def use_exact_search(store, name):
+        metric = "COSINE"
+        if DENSE_FIELD in store.client.list_indexes(name):
+            current = store.client.describe_index(name, DENSE_FIELD)
+            if current.get("index_type") == LITE_DENSE_INDEX:
+                return
+            metric = current.get("metric_type", metric)
+            store.client.release_collection(name)
+            store.client.drop_index(name, DENSE_FIELD)
+        elif DENSE_FIELD not in {f["name"] for f in store.client.describe_collection(name)["fields"]}:
+            # A switch that stopped after dropping the index finishes here.
+            return
+        exact = MilvusClient.prepare_index_params()
+        exact.add_index(
+            field_name=DENSE_FIELD,
+            index_type=LITE_DENSE_INDEX,
+            metric_type=metric,
+        )
+        store.client.create_index(name, exact)
+        store.client.load_collection(name)
+
+    def connected(store):
+        connect(store)
+        if store.is_lite():
+            # Repair collections from earlier releases before serving searches:
+            # switch to exact search before the first flush builds HNSW.
+            for name in store.client.list_collections():
+                use_exact_search(store, name)
+                flush(store, name)
+
+    def upserted(store, namespace_id, rows):
+        upsert(store, namespace_id, rows)
+        written(store, namespace_id, len(rows))
+
+    def deleted_object(store, namespace_id, *args):
+        delete_by_object(store, namespace_id, *args)
+        written(store, namespace_id, 1)
+
+    def deleted_connector(store, namespace_id, *args):
+        delete_by_connector(store, namespace_id, *args)
+        written(store, namespace_id, flush_after)
+
+    store_type._build_index_params = index_params
+    store_type.connect = connected
+    store_type.upsert = upserted
+    store_type.delete_by_object = deleted_object
+    store_type.delete_by_connector = deleted_connector
 
 
 def install_connector(state: Path):
@@ -104,6 +200,7 @@ def install_connector(state: Path):
 def main():
     state = Path(os.environ["TAG_MFS_STATE_DIR"])
     install_connector(state)
+    install_store_maintenance()
     save_config(state / "slack-runtime-ready-v1.json", {
         "version": RUNTIME_VERSION, "pid": os.getpid(),
         "instance_id": os.environ["TAG_MFS_PROCESS_ID"],
