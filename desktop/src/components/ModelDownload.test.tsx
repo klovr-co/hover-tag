@@ -65,7 +65,8 @@ describe("model download notice", () => {
       status(running(1, 5 * MiB)));
     render(<ModelDownloadNotice api={api} every={5} />);
     expect(await screen.findByText("Search model download stopped")).toBeTruthy();
-    expect(screen.getByText(/no network\. Or run/)).toBeTruthy();
+    expect(screen.getByText("Search is off until it finishes. Tags keep working.")).toBeTruthy();
+    expect(screen.getByText(/^Reason: no network\. Try again, or run/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     await waitFor(() => expect(calls).toContainEqual(["memory", "download", "--json"]));
     await screen.findByText("Downloading the search model");

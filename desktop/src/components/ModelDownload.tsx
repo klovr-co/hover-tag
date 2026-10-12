@@ -72,8 +72,8 @@ export function ModelDownloadNotice({ api, every = 3000 }: { api: Bridge; every?
         <span className="ic"><Icon name="warn" size={16} /></span>
         <div style={{ flex: 1 }}>
           <div className="t">Search model download stopped</div>
-          <div className="d">Search is off until it does. Tags keep working.</div>
-          {download.error && <div className="d selectable">{download.error}. Or run <code>tag memory download</code>.</div>}
+          <div className="d">Search is off until it finishes. Tags keep working.</div>
+          {download.error && <div className="d selectable">Reason: {download.error}. Try again, or run <code>tag memory download</code>.</div>}
         </div>
         <div className="act"><button className="p-btn ink sm" onClick={() => void retry()}>Try again</button></div>
       </div>

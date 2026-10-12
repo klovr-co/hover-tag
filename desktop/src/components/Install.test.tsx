@@ -117,3 +117,14 @@ it("tells the installer to skip the built-in model download", async () => {
   await vi.waitFor(() => expect(install).toHaveBeenCalled());
   expect(install.mock.calls[0][3]).toEqual({ skipMemoryModel: true });
 });
+
+it("says on the Installed screen that the built-in model still downloads, and says nothing when it was skipped", async () => {
+  for (const skipModel of [false, true]) {
+    const api = demoBridge();
+    api.install = vi.fn(async (_channel, _line, exit) => { setTimeout(() => exit(0)); return { send: vi.fn(), stop: vi.fn() }; });
+    const view = render(<Installing api={api} skipModel={skipModel} done={vi.fn()} retry={vi.fn()} cancel={vi.fn()} />);
+    expect(await screen.findByText("Tag is installed")).toBeTruthy();
+    expect(!!screen.queryByText(/search model downloads in the background/)).toBe(!skipModel);
+    view.unmount();
+  }
+});

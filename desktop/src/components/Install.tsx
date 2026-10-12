@@ -191,7 +191,8 @@ export function Installing({ api, skipModel = false, done, retry, cancel }: {
   useEffect(() => { stepStart.current = Date.now(); }, [state.current]);
 
   const failed = state.states.includes("failed");
-  const [title, subtitle] = state.finished ? ["Tag is installed", "The tag command is ready. Next, set up your first Tag."]
+  const [title, subtitle] = state.finished ? ["Tag is installed", skipModel ? "The tag command is ready. Next, set up your first Tag."
+    : "The tag command is ready. The search model downloads in the background; Home shows progress."]
     : failed ? ["Installation stopped", "You can safely try again."] : ["Installing Tag…", "This usually takes a few minutes."];
   const progress = state.finished ? 1 : fraction(state, (now - stepStart.current) / 1000);
   const percent = Math.round(progress * 100);
