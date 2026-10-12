@@ -36,18 +36,20 @@ All notable changes to Tag are documented here.
   --skip-memory-model` (`install.ps1 -SkipMemoryModel`) does the same.
 - Choose how memory computes search embeddings after install: the built-in
   Default, or any OpenAI-compatible endpoint (OpenAI, Ollama, LM Studio, vLLM)
-  with your own model and an optional key. Settings → AI → **Search model**,
+  with your own model and an optional key. Settings → AI → **Memory**,
   `tag memory embedding local|custom`, or `tag settings`. Tag tries the endpoint
   first, stores the key privately, restarts memory, and indexes your Slack
   channels again into the new index. The install screen and an interactive
   terminal install offer the same choice up front.
-- Settings has a new **AI** tab that holds AI connections and a **Memory**
-  switch showing whether memory runs,
-  restarts itself, and which search model it uses. `tag memory status`
+- Settings has a new **AI** tab with two pages: AI connections, and **Memory**,
+  which shows whether memory runs and restarts itself, and which search model it
+  uses. `tag memory status`
   reports the same as `embedding` in `--json`.
 - `tag memory start` works after you remove your last Tag instead of failing on a
   missing `~/Tag/default` folder.
 - The docs now say the install needs about 1.8 GB of disk, not 650 MB.
+- Tag now reads all of a long text file attached in Slack, such as a large
+  HTML or log file. Before, it saw only the first 12,000 characters.
 
 ## [0.3.0] - 2026-10-08
 
