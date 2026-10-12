@@ -16,6 +16,11 @@ All notable changes to Tag are documented here.
   Tag now turns off Claude auto memory and Codex memories for its runs so that
   everything it remembers can be listed, corrected, and forgotten.
 
+### Fixed
+
+- Tag now reads all of a long text file attached in Slack, such as a large
+  HTML or log file. Before, it saw only the first 12,000 characters.
+
 ## [0.3.0] - 2026-10-08
 
 The 0.3 line introduces **Tag** as a desktop app for macOS. The

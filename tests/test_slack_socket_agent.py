@@ -168,6 +168,21 @@ class SlackTextAttachmentTests(unittest.TestCase):
 
         self.assertTrue(text[0].endswith("[Attachment text truncated]"))
 
+    def test_saves_full_copy_of_large_text_attachment(self) -> None:
+        data = b"<html>" + b"a" * slack_socket_agent.MAX_ATTACHMENT_TEXT_CHARS + b"</html>"
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "scripts.slack_socket_agent.download_file_bytes", return_value=data,
+        ), patch.dict(os.environ, {"SLACK_BOT_TOKEN": "xoxb-test"}, clear=False):
+            text = slack_socket_agent.download_thread_text_files(
+                [{"files": [{"id": "F123", "name": "prototype.html", "mimetype": "text/plain", "url_private": "https://example.test/F123"}]}],
+                attachment_dir=Path(directory),
+            )
+            saved = Path(directory) / "prototype-F123.html"
+            self.assertEqual(data, saved.read_bytes())
+
+        self.assertIn(f"Read the full file at {saved}]", text[0])
+        self.assertNotIn("</html>", text[0])
+
 
 class ThreadReservationTests(unittest.TestCase):
     def test_a_thread_runs_one_request_until_it_is_released(self) -> None:
