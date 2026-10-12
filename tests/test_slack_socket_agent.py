@@ -247,7 +247,7 @@ class WaitingRequestTests(unittest.TestCase):
         self.assertTrue(slack_socket_agent.queue_waiting_request(self.key, earlier))
         with patch.object(slack_socket_agent, "cancel_active_run", return_value=True) as cancel:
             respond = self.choose(button, slack_socket_agent.WAITING_STEER_ACTION_ID)
-        cancel.assert_called_once_with(self.key)
+        cancel.assert_called_once_with(self.key, "1.5")
         self.assertIn("Stopping", respond.call_args.kwargs["text"])
         self.assertEqual("1.5", slack_socket_agent.release_thread(self.key).event["ts"])
         self.assertEqual("1.2", slack_socket_agent.release_thread(self.key).event["ts"])
@@ -257,7 +257,8 @@ class WaitingRequestTests(unittest.TestCase):
         slack_socket_agent.release_thread(self.key)
         with patch.object(slack_socket_agent.threading, "Thread") as thread:
             respond = self.choose(button, slack_socket_agent.WAITING_QUEUE_ACTION_ID)
-        self.assertTrue(thread.call_args.kwargs["kwargs"]["queued"])
+        (request,) = thread.call_args.kwargs["args"]
+        self.assertEqual("1.5", request.event["ts"])
         thread.return_value.start.assert_called_once()
         self.assertIn("Starting yours now", respond.call_args.kwargs["text"])
 
@@ -272,6 +273,51 @@ class WaitingRequestTests(unittest.TestCase):
         queued = slack_socket_agent.WaitingRequest({"ts": "1.5"}, {}, False, None, None)
         self.assertFalse(slack_socket_agent.reserve_thread(self.key, queued))
         self.assertIs(queued, slack_socket_agent.release_thread(self.key))
+
+    def test_next_queued_request_is_left_to_the_request_holding_the_thread(self) -> None:
+        later = slack_socket_agent.WaitingRequest({"ts": "1.6"}, {}, False, None, None)
+        slack_socket_agent.QUEUED_REQUESTS[self.key] = [later]
+        self.assertTrue(slack_socket_agent.reserve_thread(self.key))
+        self.assertIsNone(slack_socket_agent.take_next_if_idle(self.key))
+        slack_socket_agent.BUSY_THREADS.discard(self.key)
+        self.assertIs(later, slack_socket_agent.take_next_if_idle(self.key))
+        self.assertIsNone(slack_socket_agent.take_next_if_idle(self.key))
+
+    def run_queued(self, *, busy: bool = False, precheck: Exception | None = None) -> tuple[MagicMock, MagicMock]:
+        """Start a queued request from a Queue click, run it, and report the threads started after it."""
+        button = self.mention_while_busy()
+        slack_socket_agent.release_thread(self.key)
+        with patch.object(slack_socket_agent.threading, "Thread") as thread, \
+                patch.object(slack_socket_agent.threading, "Timer"):
+            self.choose(button, slack_socket_agent.WAITING_QUEUE_ACTION_ID)
+            started, target = thread.call_args.kwargs["args"][0], thread.call_args.kwargs["target"]
+            behind = slack_socket_agent.WaitingRequest(
+                {"channel": "C1", "ts": "1.6", "thread_ts": "1.0", "user": "U1", "text": "<@BOT> and C"},
+                {"team_id": "T1"}, False, self.client, MagicMock())
+            slack_socket_agent.QUEUED_REQUESTS[self.key] = [behind]
+            if busy:
+                self.assertTrue(slack_socket_agent.reserve_thread(self.key))
+            thread.reset_mock()
+            with patch.object(slack_socket_agent, "validate_attachment_metadata", side_effect=precheck):
+                target(started)
+        return thread, started.logger
+
+    def test_a_queued_request_stopped_by_a_precheck_still_starts_the_next(self) -> None:
+        thread, _logger = self.run_queued(precheck=slack_socket_agent.AttachmentLimitError("Too many files."))
+        self.assertEqual("1.6", thread.call_args.kwargs["args"][0].event["ts"])
+        thread.return_value.start.assert_called_once()
+        self.assertIn("Too many files.", self.client.chat_postMessage.call_args.kwargs["text"])
+
+    def test_a_queued_request_that_crashes_still_starts_the_next(self) -> None:
+        thread, logger = self.run_queued(precheck=RuntimeError("boom"))
+        self.assertEqual("1.6", thread.call_args.kwargs["args"][0].event["ts"])
+        logger.exception.assert_called_once()
+
+    def test_a_queued_request_that_loses_the_thread_leaves_the_queue_to_the_holder(self) -> None:
+        thread, logger = self.run_queued(busy=True)
+        thread.assert_not_called()
+        # It went back to the front, ahead of the request that was already waiting.
+        self.assertEqual(["1.5", "1.6"], [r.event["ts"] for r in slack_socket_agent.QUEUED_REQUESTS[self.key]])
 
 
 class SlackBinaryAttachmentTests(unittest.TestCase):

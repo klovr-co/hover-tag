@@ -2205,6 +2205,8 @@ class WaitingRequest:
     client: Any
     logger: Any
     offered_at: float = field(default_factory=time.monotonic)
+    # Set once the request has reached the thread reservation, which then owns passing the queue on.
+    settled: bool = False
 
 
 # Requests offered Queue or Steer, by offer ID, until the requester chooses.
@@ -2228,17 +2230,28 @@ def reserve_thread(key: RunKey, queued: WaitingRequest | None = None) -> bool:
         return True
 
 
+def _pop_queued_request(key: RunKey) -> WaitingRequest | None:
+    """Remove the next queued request; the caller holds ACTIVE_RUNS_LOCK."""
+    queue = QUEUED_REQUESTS.get(key)
+    if not queue:
+        return None
+    request = queue.pop(0)
+    if not queue:
+        QUEUED_REQUESTS.pop(key, None)
+    return request
+
+
 def release_thread(key: RunKey) -> WaitingRequest | None:
     """Free a Slack thread and return the queued request that should run next."""
     with ACTIVE_RUNS_LOCK:
         BUSY_THREADS.discard(key)
-        queue = QUEUED_REQUESTS.get(key)
-        if not queue:
-            return None
-        request = queue.pop(0)
-        if not queue:
-            QUEUED_REQUESTS.pop(key, None)
-        return request
+        return _pop_queued_request(key)
+
+
+def take_next_if_idle(key: RunKey) -> WaitingRequest | None:
+    """The next queued request, unless a request holds the thread and will start it itself."""
+    with ACTIVE_RUNS_LOCK:
+        return None if key in BUSY_THREADS else _pop_queued_request(key)
 
 
 def offer_waiting_request(key: RunKey, request: WaitingRequest) -> str:
@@ -4468,7 +4481,7 @@ def create_app(
         prior_error_reference: str | None = None,
         peer_request: tuple[str, str] | None = None,
         combine: dict[str, Any] | None = None,
-        queued: bool = False,
+        queued: WaitingRequest | None = None,
     ) -> None:
         channel = event["channel"]
         thread_ts = event.get("thread_ts") or event["ts"]
@@ -4571,14 +4584,16 @@ def create_app(
 
         # Hold the thread until this request ends so two mentions cannot resume one conversation.
         thread_key = RunKey(team, channel, thread_ts)
-        waiting = (
+        waiting = queued or (
             WaitingRequest(event, body, direct_message, client, logger)
             if peer_request is None and combine is None
             else None
         )
-        if not reserve_thread(thread_key, waiting if queued else None):
+        if queued is not None:
+            queued.settled = True
+        if not reserve_thread(thread_key, queued):
             indicator.clear()
-            if queued:
+            if queued is not None:
                 return  # Back at the front of the queue; the current request starts it next.
             if waiting is None:
                 client.chat_postMessage(
@@ -5046,14 +5061,24 @@ def create_app(
             if next_request is not None:
                 start_waiting_request(next_request)
 
+    def run_queued_request(request: WaitingRequest) -> None:
+        """Run a queued request; if it ends before taking the thread, keep the queue moving."""
+        key = RunKey(request.body.get("team_id") or request.event.get("team") or "",
+                     request.event["channel"], request.event.get("thread_ts") or request.event["ts"])
+        try:
+            handle_invocation(request.event, request.body, request.client, request.logger,
+                              direct_message=request.direct_message, queued=request)
+        except Exception:  # noqa: BLE001 - one failed request must not strand those queued behind it
+            request.logger.exception("Could not run the queued Slack request")
+        finally:
+            if not request.settled:
+                following = take_next_if_idle(key)
+                if following is not None:
+                    start_waiting_request(following)
+
     def start_waiting_request(request: WaitingRequest) -> None:
-        threading.Thread(
-            target=handle_invocation,
-            args=(request.event, request.body, request.client, request.logger),
-            kwargs={"direct_message": request.direct_message, "queued": True},
-            name="slack-queued-request",
-            daemon=True,
-        ).start()
+        threading.Thread(target=run_queued_request, args=(request,),
+                         name="slack-queued-request", daemon=True).start()
 
     @app.action(WAITING_QUEUE_ACTION_ID)
     @app.action(WAITING_STEER_ACTION_ID)
@@ -5094,7 +5119,8 @@ def create_app(
                 text = "The earlier request has finished. Starting yours now."
                 start_waiting_request(request)
             elif steer:
-                stopped = cancel_active_run(key)
+                # The steering message's time keeps this from stopping a run that began after it.
+                stopped = cancel_active_run(key, request.event.get("ts"))
                 text = ("Stopping the current request. I'll answer yours next."
                         if stopped else "I'll answer yours as soon as the current request ends.")
             else:
