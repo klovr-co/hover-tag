@@ -4,7 +4,7 @@ One Tag (the sender) can ask other Tags (peers) for help and continue when they
 have all replied. Slack carries every message, so the Tags may belong to
 different people on different machines, and people can follow the exchange.
 
-When the installation has a Chief of Staff ([ADR 0010](../docs/adr/0010-chief-of-staff.md)),
+When the installation has a Chief of Staff ([ADR 0011](../docs/adr/0011-chief-of-staff.md)),
 Tags work as a dispatcher and lanes instead; see
 [Chief of Staff routing](#chief-of-staff-routing). Combining answers from
 several Tags, below, applies only when no Chief of Staff is known.

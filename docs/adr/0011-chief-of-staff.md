@@ -1,4 +1,4 @@
-# ADR 0010: Chief of Staff routes each request to one owner and alone creates Tags
+# ADR 0011: Chief of Staff routes each request to one owner and alone creates Tags
 
 - Status: Accepted
 - Date: 2026-10-13

@@ -155,7 +155,7 @@ skill into their workspace.
 ## Chief of Staff
 
 One Tag per installation is Chief of Staff
-([ADR 0010](../adr/0010-chief-of-staff.md)). Mention it with new, unclear or
+([ADR 0011](../adr/0011-chief-of-staff.md)). Mention it with new, unclear or
 cross-lane work. It routes each request to one owner Tag, which answers in the
 same thread itself. It is the only Tag that creates Tags, and a person
 approves each one in Slack. Upgrading gives the role to the main Tag; it never

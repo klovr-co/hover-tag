@@ -47,4 +47,4 @@ compatibility; they do not define a separate product name.
 - [Login supervisor](docs/adr/0008-login-supervisor.md)
 - [ChatGPT plan connection](docs/adr/0008-chatgpt-plan-connection.md)
 - [Claude Agent SDK transport](docs/adr/0008-claude-agent-sdk.md)
-- [Chief of Staff](docs/adr/0010-chief-of-staff.md)
+- [Chief of Staff](docs/adr/0011-chief-of-staff.md)
