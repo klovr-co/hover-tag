@@ -24,7 +24,7 @@ type Screen =
   | { name: "welcome" }
   | { name: "installing"; attempt: number }
   | { name: "home" }
-  | { name: "connect"; args: string[] }
+  | { name: "connect"; args: string[]; workspace?: string; workspaceName?: string }
   | { name: "settings"; tab?: SettingsTab; privacy?: boolean }
   | { name: "ai"; resume?: string[] }
   /** `opened` counts Slack links, so a second link resets an open Tag screen. */
@@ -261,6 +261,7 @@ export function App() {
     if (empty) setScreen({ name: "connect", args: ["setup"] }); else home();
   };
   const add = () => setScreen({ name: "connect", args: tags.rows.length ? ["add"] : ["setup"] });
+  const addTo = (workspace: string, workspaceName: string) => setScreen({ name: "connect", args: ["add"], workspace, workspaceName });
   // These screens are always --flow-h tall and scroll inside, so moving between them never resizes the window.
   const fixed = screen.name === "home" || screen.name === "settings" || screen.name === "ai";
   return (
@@ -278,14 +279,14 @@ export function App() {
         {screen.name === "home" && tags.loaded && (
           <Home api={api} tags={tags} reports={watch.reports} problems={watch.problems} activity={watch.activity}
             firstName={info.firstName ?? null} update={update} outdated={outdated} runUpdate={() => void runUpdate()}
-            add={add} usageNote={telemetry.announced} seenUsageNote={sawOnHome}
+            add={add} addTo={addTo} usageNote={telemetry.announced} seenUsageNote={sawOnHome}
             finishSetup={(row) => setScreen({ name: "connect", args: [row.id, "setup"] })}
             open={(row) => setScreen({ name: "tag", id: row.id })}
             fixAI={() => capabilities.includes(SHARED_AI_CAPABILITY) ? setScreen({ name: "ai" }) : say("Update Tag to manage shared AI accounts in Settings.")}
             showSettings={(tab, privacy) => setScreen({ name: "settings", tab, privacy })} />
         )}
         {screen.name === "connect" && (
-          <Connect api={api} args={screen.args} start={(id, onLine) => tags.start(id, capabilities.includes("start-progress") ? onLine : undefined)} openAI={capabilities.includes(SHARED_AI_CAPABILITY) ? (resume) => setScreen({ name: "ai", resume }) : undefined} done={home}
+          <Connect api={api} args={screen.args} workspace={screen.workspace} workspaceName={screen.workspaceName} start={(id, onLine) => tags.start(id, capabilities.includes("start-progress") ? onLine : undefined)} openAI={capabilities.includes(SHARED_AI_CAPABILITY) ? (resume) => setScreen({ name: "ai", resume }) : undefined} done={home}
             paused={() => { home(); say("Progress saved. Finish setup from Home any time."); }}
             usageNote={telemetry.announced ? { learnMore: learnUsage, seen: sawOnSetup } : undefined} />
         )}

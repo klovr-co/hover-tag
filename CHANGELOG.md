@@ -6,6 +6,10 @@ All notable changes to Tag are documented here.
 
 ### Added
 
+- Add a Tag to a workspace you already know with `tag add --workspace T0ABC123`
+  (a team ID or name), without answering the setup questions. Tag uses the
+  suggested name and picture, your default model, and no channels yet, and pauses
+  with progress saved if something needs your input.
 - Let one Tag ask other Tags for help and combine their answers. Tag posts one
   request that mentions every Tag, links it to your thread in both directions,
   shows their progress as steps, and writes the final answer once all have replied or the deadline passes. Each

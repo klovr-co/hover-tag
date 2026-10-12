@@ -81,6 +81,20 @@ a new Tag from `tag add` is called `new-tag` (or `new-tag-2`, …), and the firs
 Tag of a fresh installation is set up before it is named. The Slack display name
 (for example “Maya's Tag”) is separate and can be the same for several Tags.
 
+To add a Tag to a workspace you are already signed in to without going through
+the questions, name the workspace:
+
+```sh
+tag add --workspace T0ABC123 --name "Research Tag"
+```
+
+`--workspace` takes a team ID or the workspace's name, and `--name` is optional.
+Tag uses the suggested picture, your default model, and you as the owner; it
+approves creating the Slack app and leaves the channels for you to invite it
+to. If a question has no obvious answer, such as an AI that isn't connected, an
+organization, or a workspace you aren't signed in to, setup pauses with your
+progress saved and prints the `tag NAME setup` command to continue.
+
 Rename a Tag with `tag NAME rename "Research Tag"`. This changes the
 assistant's name in Slack, verifies Slack saved it, and gives the Tag a
 nickname for commands, here `research-tag`, so `tag research-tag start` works.

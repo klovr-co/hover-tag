@@ -11,7 +11,7 @@ import { findModel } from "../lib/ai";
 import { fitEffort } from "../lib/model";
 import type { SetupQuestion, SetupReady, SetupWorkspace } from "../lib/protocol";
 import {
-  EXISTING_FLOW, EXIT_OPTION, FLOW, heading, initialSetup, setupReducer, trackStep, type SetupState, type SignInStep,
+  EXISTING_FLOW, EXIT_OPTION, FLOW, heading, initialSetup, quickAnswer, setupReducer, trackStep, type SetupState, type SignInStep,
 } from "../lib/setup";
 import { SetupTracker, setupEntry, useTrack } from "../lib/telemetry";
 import { startTag } from "../lib/tags";
@@ -30,6 +30,10 @@ interface Props {
   api: Bridge;
   /** Arguments for `tag … --json`: ["setup"], ["add"], or [tagId, "setup"]. */
   args: string[];
+  /** Add straight to this Slack workspace (team ID): obvious questions are answered without showing them. */
+  workspace?: string;
+  /** That workspace's name, for the name step. */
+  workspaceName?: string;
   done: () => void;
   /** Setup was cancelled; its progress is saved. */
   paused: () => void;
@@ -46,7 +50,7 @@ const answerFor = (question: SetupQuestion, id: string) => {
   return index >= 0 ? id : (question.options ?? []).indexOf(id);
 };
 
-export function Connect({ api, args, done, paused, openAI, start, usageNote }: Props) {
+export function Connect({ api, args, workspace, workspaceName, done, paused, openAI, start, usageNote }: Props) {
   const [state, dispatch] = useReducer(setupReducer, initialSetup);
   const session = useRef<Session | null>(null);
   const [attempt, setAttempt] = useState(0);
@@ -108,6 +112,15 @@ export function Connect({ api, args, done, paused, openAI, start, usageNote }: P
   const q = state.question;
   if (q?.id === "approve_setup") approve.current = q;
   useEffect(() => { if (q) setLaunched(false); }, [q]);
+  // Each question is answered for you once at most; if Tag asks it again, it's yours to answer.
+  const quickDone = useRef(new Set<string>());
+  const quick = workspace && q && !quickDone.current.has(q.id) ? quickAnswer(q, workspace) : null;
+  useEffect(() => {
+    if (!q || !quick) return;
+    quickDone.current.add(q.id);
+    if (q.id === "approve_setup") setLaunched(true);
+    send(quick.answer);
+  }, [q]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (q && pending.current?.id === q.id) {
       const { answer } = pending.current;
@@ -158,7 +171,11 @@ export function Connect({ api, args, done, paused, openAI, start, usageNote }: P
         </FlowBody>
       );
     }
-    if ((state.creating || (launched && !q)) && approve.current) return <Create question={approve.current} state={state} running send={send} picture={picture} />;
+    if ((state.creating || (launched && !q) || (quick && q?.id === "approve_setup")) && approve.current) return <Create question={approve.current} state={state} running send={send} picture={picture} />;
+    if (quick || (workspace && !q)) return <FlowBody title="Adding a Tag" lead="Using your default model. Change it any time in the Tag's Details."
+      art={keyArt}>
+      <div className="notice info" role="status"><Spinner /><span>{state.status}</span></div>
+    </FlowBody>;
     if (!q) return <FlowBody title={state.lastQuestion ? "Getting the next step ready" : "Meet your new Tag"}
       lead={state.lastQuestion ? "Your choices are saved as you go." : "Give it a name, choose its AI, and connect it to Slack."}
       art={keyArt}>
@@ -166,6 +183,7 @@ export function Connect({ api, args, done, paused, openAI, start, usageNote }: P
     </FlowBody>;
     switch (q.id) {
       case "profile": return <Meet key="profile" api={api} question={q} send={send} sendInPlace={sendInPlace}
+        quickTo={workspace ? workspaceName || "this workspace" : undefined}
         existing={() => { dispatch({ type: "existing" }); send("existing"); }} />;
       case "ai_connection": return <FlowBody title="Connect an AI in Settings" lead="Your AI accounts are shared by all Tags. Connect Codex or Claude, then return to choose this Tag's model."
         foot={<><BackIf question={q} back={back} /><span className="spacer" />
@@ -190,7 +208,7 @@ export function Connect({ api, args, done, paused, openAI, start, usageNote }: P
   };
   return (
     <>
-      <FlowSky state={state} picture={picture} direction={direction.current} cancel={state.outcome ? undefined : cancel} />
+      <FlowSky state={state} picture={picture} direction={direction.current} quick={!!workspace} cancel={state.outcome ? undefined : cancel} />
       {/* One canvas for every step: a fixed panel, so the window never resizes between them. */}
       <div className={`flow-panel ${direction.current}`}>
         {body()}
@@ -201,11 +219,11 @@ export function Connect({ api, args, done, paused, openAI, start, usageNote }: P
 }
 
 /** The sky with the step track; the marker is the Tag being made, so it travels with you. */
-function FlowSky({ state, picture, direction, cancel }: { state: SetupState; picture: string | null; direction: "forward" | "backward"; cancel?: () => void }) {
+function FlowSky({ state, picture, direction, quick, cancel }: { state: SetupState; picture: string | null; direction: "forward" | "backward"; quick?: boolean; cancel?: () => void }) {
   const steps = state.existing ? EXISTING_FLOW : FLOW;
   const at = trackStep(state);
   const id = state.question?.id;
-  const sub = state.existing ? "Use an existing Slack app" : at === 0 ? "Name it and give it a look"
+  const sub = state.existing ? "Use an existing Slack app" : quick && !state.question ? "Adding it to Slack" : at === 0 ? "Name it and give it a look"
     : id === "default_model" ? "Choose its model" : id === "ai_connection" ? "Connect it to an AI" : "Connect it to Slack";
   return (
     <Sky kind="flow" clouds="clear" stars={50}>
@@ -243,8 +261,10 @@ const BackIf = ({ question, back }: { question: SetupQuestion; back: () => void 
 
 const EDIT_LEAD = "You’re still signed in. Done takes you back to Create.";
 
-function Meet({ api, question, send, sendInPlace, existing }: {
+function Meet({ api, question, send, sendInPlace, existing, quickTo }: {
   api: Bridge; question: SetupQuestion; send: (a: unknown) => void; sendInPlace: (a: unknown) => void; existing: () => void;
+  /** Added from a workspace card: this step is the only one, so it creates the Tag there. */
+  quickTo?: string;
 }) {
   const [name, setName] = useState(question.name ?? "");
   const [description, setDescription] = useState(question.description ?? "");
@@ -264,7 +284,8 @@ function Meet({ api, question, send, sendInPlace, existing }: {
     <div className="body roomy">
       <div>
         <div className="h2">{question.editing ? "Edit your Tag" : "Meet your new Tag"}</div>
-        <p className="lead">{question.editing ? EDIT_LEAD : "Name it, give it a look, and say what it does. Nothing is created in Slack yet."}</p>
+        <p className="lead">{question.editing ? EDIT_LEAD : quickTo ? `Name it, give it a look, and say what it does. It joins ${quickTo} with your default model.`
+          : "Name it, give it a look, and say what it does. Nothing is created in Slack yet."}</p>
       </div>
       <div className="card mrow">
         <span className={`avw2${dragging ? " dragging" : ""}${rolling ? " rolling" : ""}`}>
@@ -294,10 +315,10 @@ function Meet({ api, question, send, sendInPlace, existing }: {
       </div>
       {error && <div className="field-err" role="alert"><Icon name="warn" /><span>{error}</span></div>}
       <div className="foot">
-        {question.can_use_existing && !question.editing && <button className="link" onClick={existing}>Use an existing app</button>}
+        {question.can_use_existing && !question.editing && !quickTo && <button className="link" onClick={existing}>Use an existing app</button>}
         <span className="spacer" />
         {question.editing ? <Primary title="Done" disabled={!!nameError} onClick={finish} />
-          : <Primary title="Continue" after="arrow" disabled={!!nameError || busy} onClick={finish} />}
+          : <Primary title={quickTo ? "Create in Slack" : "Continue"} after={quickTo ? undefined : "arrow"} disabled={!!nameError || busy} onClick={finish} />}
       </div>
     </div>
   );

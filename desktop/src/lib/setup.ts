@@ -178,3 +178,24 @@ export function heading(question: SetupQuestion): [string, string] {
 
 /** Setup offers an exit option in lists; the app has its own Cancel. */
 export const EXIT_OPTION = "Exit · finish setup later";
+
+/** Adding a Tag to a workspace chosen on Home: the answer to give `question` without asking, or
+ *  null to ask it as usual. The name, description and picture are always asked; the rest takes the
+ *  obvious answer: the default model, that workspace, Create, and no channels yet. */
+export function quickAnswer(question: SetupQuestion, workspace: string): { answer: unknown } | null {
+  const ids = question.option_ids ?? [];
+  switch (question.id) {
+    case "default_model": {
+      const value = typeof question.default === "number" ? ids[question.default] : undefined;
+      if (!value) return null;
+      return { answer: question.supports_effort ? { value, effort: question.default_effort ?? "default" } : value };
+    }
+    case "workspace":
+      return ids.includes(workspace) ? { answer: workspace } : null;
+    case "approve_setup":
+      return ids.includes("create") ? { answer: "create" } : null;
+    case "channels":
+      return question.allow_empty ? { answer: [] } : null;
+  }
+  return null;
+}

@@ -2120,6 +2120,30 @@ def _setup_result(code: int, tag_id: str, protocol: bool) -> int:
     return code
 
 
+def _quick_add(command: list[str], environment: dict[str, str], args: argparse.Namespace, resume: str) -> int:
+    """Run setup for ``tag add --workspace``, answering the questions that have an obvious answer."""
+    try:
+        import tag_quick_add
+    except ImportError:
+        from scripts import tag_quick_add
+
+    def forward(event: dict, line: str) -> None:
+        if args.json_output:
+            _setup_ui().emit(event)
+        elif event.get("type") in {"message", "progress"} and event.get("text"):
+            print(f"  {event['text']}", flush=True)
+
+    code, reason = tag_quick_add.drive(command, {**environment, SETUP_PROTOCOL_ENV: "jsonl"},
+                                       workspace=args.workspace, name=args.name, forward=forward)
+    if reason:
+        message = f"Setup paused: {reason} Your choices are saved; run {resume} to continue."
+        if args.json_output:
+            _setup_ui().message(message)
+        else:
+            print(message, file=sys.stderr)
+    return code
+
+
 def _setup_step(args: argparse.Namespace, installation_root: Path, *, raw_tag: str | None) -> int:
     """Drive JSON-lines setup one question per command, for agents and scripts."""
     try:
@@ -2339,7 +2363,8 @@ def _run_cli() -> int:
     parser.add_argument("--nickname", help="rename: short name for commands (default: derived from the new name)")
     parser.add_argument("--delete-app", action="store_true", help="remove: also permanently delete the Tag's Slack app")
     parser.add_argument("--confirm-app", help="remove --delete-app: the App ID to delete, typed to confirm")
-    parser.add_argument("--workspace", help="start, stop, restart: every Tag in this Slack workspace (team ID or name)")
+    parser.add_argument("--workspace", help="start, stop, restart: every Tag in this Slack workspace (team ID or name); add: create the new Tag there without asking")
+    parser.add_argument("--name", help="add --workspace: the new Tag's name (default: the suggested one)")
     raw_arguments = sys.argv[1:]
     explicit_tag = bool(
         raw_arguments
@@ -2378,8 +2403,10 @@ def _run_cli() -> int:
         parser.error("--delete-app and --confirm-app are only for remove")
     if args.nickname and args.command != "rename":
         parser.error("--nickname is only for rename")
-    if args.workspace and args.command not in {"start", "stop", "restart"}:
-        parser.error("--workspace is only for start, stop, and restart")
+    if args.workspace and args.command not in {"start", "stop", "restart", "add"}:
+        parser.error("--workspace is only for start, stop, restart, and add")
+    if args.name and not (args.command == "add" and args.workspace):
+        parser.error("--name is only for add --workspace")
     if args.workspace and explicit_tag:
         parser.error("--workspace selects Tags itself; don't also name a Tag")
     if args.json_output and args.command in {"setup", "add"}:
@@ -2516,7 +2543,7 @@ def _run_cli() -> int:
     if args.command == "add":
         if args.arguments:
             parser.error("add does not accept a name; the workspace alias is chosen during onboarding")
-        if not display.stdin_is_terminal() and not args.json_output:
+        if not display.stdin_is_terminal() and not args.json_output and not args.workspace:
             print(
                 "Interactive setup requires a terminal. Use tag inspect --json and tag config set for automation.",
                 file=sys.stderr,
@@ -2532,7 +2559,11 @@ def _run_cli() -> int:
         display.info_row("Home", display.short_path(context.home), good=True)
         display.info_row("Command", context.command("setup"), good=True)
         command = [sys.executable, str(ROOT / "scripts/tag_cli.py"), *context.command_arguments("setup")]
-        result = subprocess.call(command, env={**instance_environment(context), DEFER_RENAME_ENV: "1"})
+        environment = {**instance_environment(context), DEFER_RENAME_ENV: "1"}
+        if args.workspace:
+            result = _quick_add(command, environment, args, context.command("setup"))
+        else:
+            result = subprocess.call(command, env=environment)
         renamed = _rename(installation_root, context.tag_id) if result == 0 else None
         if renamed and not args.json_output:
             display.info_row("Tag", f"Named '{renamed}' after its Slack team and app IDs", good=True)
