@@ -69,6 +69,8 @@ class Case:
     # Whether today's narrow scope sends it to the classifier: it names Tag, or
     # continues a thread Tag is in. Other cases wait for channel-wide watching.
     reachable: bool = True
+    derived: str | None = None
+    borderline: bool = False
 
 
 def _participant_id(author: str) -> str:
@@ -92,7 +94,8 @@ def load_cases(path: Path = FIXTURES) -> tuple[str, list[Case]]:
             raise ValueError(f"{case_id}: expected must be true, false or null")
         if isinstance(item.get("state"), dict):
             cases.append(Case(case_id, item.get("category", "deployment"), item["expected"], {}, [], item["state"],
-                              reachable=item.get("reachable", True) is True))
+                              reachable=item.get("reachable", True) is True, derived=item.get("derived"),
+                              borderline=bool(item.get("borderline")) or item.get("confidence") == "low"))
             continue
         if MENTION_RE.search(item["message"]):
             raise ValueError(f"{case_id}: a message with a member mention never reaches the classifier")
@@ -440,6 +443,14 @@ def report(cases: list[Case], rows: list[dict[str, Any]], out: TextIO, *,
             marker = " *" if spec and item.threshold == spec.default_threshold else ""
             print(f"  {item.threshold:9.2f}  {_fmt(item.precision):>9}  {_fmt(item.recall):>6}  "
                   f"{_fmt(item.f1):>5}  {item.tp:3} {item.fp:3} {item.fn:3} {item.tn:3}{marker}", file=out)
+        positives = [row.get("probability") for row in provider_rows
+                     if row.get("outcome") == "score" and expected[row["id"]]]
+        negatives = [row.get("probability") for row in provider_rows
+                     if row.get("outcome") == "score" and not expected[row["id"]]]
+        print("  score distribution     " + " ".join(f"{low:.1f}+" for low in [i / 10 for i in range(10)]), file=out)
+        for label, values in (("should reply", positives), ("should not", negatives)):
+            buckets = [sum(min(int(v * 10), 9) == i for v in values) for i in range(10)]
+            print(f"  {label:<21}" + " ".join(f"{count:4}" for count in buckets), file=out)
         if spec:
             threshold = spec.default_threshold
             scored = {row["id"]: row.get("probability") for row in provider_rows if row.get("outcome") == "score"}
@@ -467,6 +478,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--fixtures", type=Path, default=FIXTURES)
     parser.add_argument("--scope", choices=("current", "all"), default="current",
                         help="current: only cases today's watching sends to the classifier (default)")
+    parser.add_argument("--natural-only", action="store_true", help="Leave out cases derived from mentions.")
+    parser.add_argument("--confident-only", action="store_true", help="Leave out borderline and low-confidence labels.")
     commands = parser.add_subparsers(dest="command")
     commands.add_parser("plan", help="Estimate cost per provider; no network.")
     score_parser = commands.add_parser("score", help="PAID: score fixtures with one provider.")
@@ -531,6 +544,10 @@ def main(argv: list[str] | None = None) -> int:
     assistant_name, cases = load_cases(args.fixtures)
     if args.scope == "current":
         cases = [case for case in cases if case.reachable]
+    if args.natural_only:
+        cases = [case for case in cases if case.derived is None]
+    if args.confident_only:
+        cases = [case for case in cases if not case.borderline]
     if args.command in {None, "plan"}:
         plan(cases, assistant_name, sys.stdout)
         return 0
