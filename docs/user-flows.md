@@ -332,7 +332,8 @@ flowchart TD
 
 1. The agent decides that it needs outside context.
 2. It searches only the scopes in `MFS_ALLOWED_SCOPES`. A Slack request gets
-   only its own channel's history.
+   only its own channel's history, plus any sources `MFS_CHANNEL_SCOPES` maps
+   to that channel.
 3. It reopens the best results when it needs exact lines or records.
 4. It combines that evidence with the thread and the Tag's folder.
 5. It cites sources when asked or when they make the answer more trustworthy.

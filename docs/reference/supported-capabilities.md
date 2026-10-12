@@ -7,7 +7,7 @@ unavailable behavior.
 
 | Capability | Status | Notes |
 | --- | --- | --- |
-| Respond to app mentions | Implemented | The caller must be in `SLACK_ALLOWED_USER_IDS`. |
+| Respond to app mentions | Implemented | The caller must be in `SLACK_ALLOWED_USER_IDS`, or be another app's bot listed in `SLACK_ALLOWED_BOT_IDS`. |
 | Read the current thread | Implemented | Tag fetches one page containing up to 30 messages. |
 | Read supported attachments | Implemented | Includes [forwarded Slack files](../concepts/workspaces-and-tools.md#use-a-forwarded-slack-file). Either backend can open [earlier thread files](../concepts/workspaces-and-tools.md#use-earlier-files-in-a-thread) shared in the current channel when a request needs them, up to 15 MB each. Text content is truncated at 12,000 characters per item; downloaded image or text files are limited to 15 MiB. |
 | Stream answer text | Implemented | Codex App Server and the Claude Agent SDK stream only final-answer text; commentary and reasoning stay private. |
