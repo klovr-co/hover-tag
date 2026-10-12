@@ -5257,9 +5257,7 @@ def create_app(
         thread_messages: list[dict[str, Any]] = []
         if anchor != event["ts"]:
             try:
-                response = client.conversations_replies(
-                    channel=channel, ts=anchor, limit=watch_classifier.MAX_CONTEXT_MESSAGES + 1)
-                thread_messages = [m for m in response.get("messages", []) if isinstance(m, dict)]
+                thread_messages = watch_classifier.fetch_thread_window(client, channel, anchor, event["ts"])
             except Exception as exc:  # noqa: BLE001 - the classifier still sees the message
                 if slack_backoff(exc):
                     return

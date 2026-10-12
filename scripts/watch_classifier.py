@@ -124,6 +124,38 @@ def minimize_text_identities(
     return SLACK_USER_MENTION_RE.sub(replacement, text)
 
 
+MAX_THREAD_PAGES = 5
+
+
+def thread_window(messages: list[dict[str, Any]], current_ts: str) -> list[dict[str, Any]]:
+    """The thread's first message plus the latest messages before the current one, oldest first.
+
+    The classifier needs both what the thread is about and the exchange the current
+    message answers; the opening replies of a long thread are the least useful part.
+    """
+    ordered = sorted((m for m in messages if isinstance(m, dict) and m.get("ts") != current_ts),
+                     key=lambda m: float(m.get("ts") or 0))
+    before = [m for m in ordered if float(m.get("ts") or 0) < float(current_ts or "inf")]
+    if len(before) <= MAX_CONTEXT_MESSAGES:
+        return before
+    return [before[0], *before[-(MAX_CONTEXT_MESSAGES - 1):]]
+
+
+def fetch_thread_window(client: Any, channel: str, thread_ts: str, current_ts: str) -> list[dict[str, Any]]:
+    """Read the thread up to the current message, page by page, and keep the window."""
+    messages: list[dict[str, Any]] = []
+    cursor = None
+    for _ in range(MAX_THREAD_PAGES):
+        response = client.conversations_replies(
+            channel=channel, ts=thread_ts, latest=current_ts, inclusive=True, limit=200,
+            **({"cursor": cursor} if cursor else {}))
+        messages += [m for m in response.get("messages", []) if isinstance(m, dict)]
+        cursor = (response.get("response_metadata") or {}).get("next_cursor")
+        if not response.get("has_more") or not cursor:
+            break
+    return thread_window(messages, current_ts)
+
+
 def message_state(
     event: dict[str, Any],
     thread_messages: list[dict[str, Any]],

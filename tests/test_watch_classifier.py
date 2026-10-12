@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import unittest
 import urllib.error
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from scripts import watch_classifier
 from scripts import tag_config
@@ -158,6 +158,27 @@ class MessageStateTests(unittest.TestCase):
         self.assertEqual(watch_classifier.MAX_CONTEXT_MESSAGES, len(state["thread_history"]))
         self.assertEqual(watch_classifier.MAX_MESSAGE_CHARS, len(state["current_message"]))
         self.assertTrue(all(len(item["text"]) == watch_classifier.MAX_MESSAGE_CHARS for item in state["thread_history"]))
+
+
+class ThreadWindowTests(unittest.TestCase):
+    def test_keeps_the_opening_and_the_latest_messages_before_the_current_one(self) -> None:
+        thread = [{"ts": f"{index}.0", "text": str(index)} for index in range(30)]
+        window = watch_classifier.thread_window(list(reversed(thread)), "25.0")
+        self.assertEqual(["0", "16", "17", "18", "19", "20", "21", "22", "23", "24"], [m["text"] for m in window])
+        self.assertEqual(["0", "1", "2"], [m["text"] for m in watch_classifier.thread_window(thread[:4], "3.0")])
+
+    def test_fetch_pages_through_long_threads_up_to_the_current_message(self) -> None:
+        client = MagicMock()
+        client.conversations_replies.side_effect = [
+            {"messages": [{"ts": f"{i}.0", "text": str(i)} for i in range(200)], "has_more": True,
+             "response_metadata": {"next_cursor": "next"}},
+            {"messages": [{"ts": f"{i}.0", "text": str(i)} for i in range(200, 251)], "has_more": False},
+        ]
+        window = watch_classifier.fetch_thread_window(client, "C1", "0.0", "250.0")
+        self.assertEqual(["0", *map(str, range(241, 250))], [m["text"] for m in window])
+        first = client.conversations_replies.call_args_list[0].kwargs
+        self.assertEqual(("250.0", True), (first["latest"], first["inclusive"]))
+        self.assertEqual("next", client.conversations_replies.call_args_list[1].kwargs["cursor"])
 
 
 class TypeSafeJevTests(unittest.TestCase):
