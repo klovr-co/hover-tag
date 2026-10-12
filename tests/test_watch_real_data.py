@@ -123,8 +123,9 @@ class CleanAndAgreeTests(unittest.TestCase):
         self.assertEqual(["1", "7"], [c["group"] for c in kept])
         self.assertIsNone(kept[0]["derived"])  # The natural variant wins.
         self.assertEqual(["6"], [c["group"] for c in flagged])
-        self.assertEqual({"context could not be rebuilt": 1, "test traffic": 1, "current message: empty or link only": 1,
-                          "same message reused across cases": 1, "exact duplicate": 1, "near duplicate": 1}, removed)
+        self.assertEqual({f"A-tag-channels: {rule}": 1 for rule in (
+            "context could not be rebuilt", "test traffic", "current message: empty or link only",
+            "same message reused across cases", "exact duplicate", "near duplicate")}, removed)
 
     def test_conflicting_labels_for_one_message_drop_every_copy(self) -> None:
         cases = [self.rebuilt("1", "Tag what now?", group="g", expected=True),
@@ -132,7 +133,7 @@ class CleanAndAgreeTests(unittest.TestCase):
                  self.rebuilt("2", "Tag any update?", group="h")]
         kept, _, removed = data.clean(cases, [c["id"] for c in cases])
         self.assertEqual(["h"], [c["group"] for c in kept])
-        self.assertEqual(2, removed["same message with conflicting labels"])
+        self.assertEqual(2, sum(v for k, v in removed.items() if k.endswith("same message with conflicting labels")))
 
     def test_agreement_kappa_and_review_lists(self) -> None:
         cases = [self.rebuilt(str(i), f"Owner's PA question {i}", expected=i < 6) for i in range(10)]

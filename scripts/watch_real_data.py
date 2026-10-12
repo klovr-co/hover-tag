@@ -30,7 +30,7 @@ except ImportError:
     import watch_eval
 
 
-DERIVATION_ORDER = (None, "tag-mention-removed", "tag-mention-to-name", "person-mention-to-name")
+DERIVATION_ORDER = (None, "tag-mention-removed", "tag-mention-to-name", "person-mention-to-name", "stand-in")
 NOISE_RE = re.compile(
     r"has (?:joined|left) the channel|set the channel (?:topic|purpose|description)|renamed the channel"
     r"|pinned a message|(?:started|ended|joined|left) (?:a |the )?huddle|huddle (?:started|ended)"
@@ -192,11 +192,20 @@ def _normal(text: str) -> str:
     return " ".join(re.sub(r"[^\w<>]+", " ", text.lower()).split())
 
 
+class _BySource(Counter):
+    """Removal counts keyed "source: rule", so each subset reports separately."""
+
+    def drop(self, case: dict, rule: str) -> None:
+        self[f"{case.get('source', 'A-tag-channels')}: {rule}"] += 1
+
+
 def clean(rebuilt: list[dict], raw_ids: list[str]) -> tuple[list[dict], list[dict], dict[str, int]]:
-    """Apply the cleaning rules. Returns kept, flagged, and removals by rule."""
-    removed: Counter = Counter()
+    """Apply the cleaning rules. Returns kept, flagged, and removals by subset and rule."""
+    removed = _BySource()
     rebuilt_ids = {case["id"] for case in rebuilt}
-    removed["context could not be rebuilt"] = sum(identifier not in rebuilt_ids for identifier in raw_ids)
+    missing = sum(identifier not in rebuilt_ids for identifier in raw_ids)
+    if missing:
+        removed["A-tag-channels: context could not be rebuilt"] = missing
     labels_by_group: dict[str, set] = {}
     for case in rebuilt:
         labels_by_group.setdefault(case.get("group") or case["id"], set()).add(case["expected"])
@@ -204,39 +213,44 @@ def clean(rebuilt: list[dict], raw_ids: list[str]) -> tuple[list[dict], list[dic
     for case in rebuilt:
         case.setdefault("group", case["id"])
         if len(labels_by_group[case["group"]]) > 1:
-            removed["same message with conflicting labels"] += 1
+            removed.drop(case, "same message with conflicting labels")
             continue
         if case.get("current_raw_noise"):
-            removed[f"current message: {case['current_raw_noise']}"] += 1
+            removed.drop(case, f"current message: {case['current_raw_noise']}")
         elif case.get("current_test") or case.get("history_test"):
-            removed["test traffic"] += 1
+            removed.drop(case, "test traffic")
         else:
             survivors.append(case)
     by_group: dict[str, dict] = {}
     for case in sorted(survivors, key=lambda c: DERIVATION_ORDER.index(c.get("derived"))):
         if case["group"] in by_group:
-            removed["same message reused across cases"] += 1
+            removed.drop(case, "same message reused across cases")
         else:
             by_group[case["group"]] = case
     kept: list[dict] = []
+    seen_exact: set[tuple] = set()
+    by_source: dict[str, list[tuple[str, str]]] = {}
     for case in by_group.values():
         current = _normal(case["state"]["current_message"])
-        context = [_normal(h["text"]) for h in case["state"]["thread_history"][-2:]]
+        context = " ".join(_normal(h["text"]) for h in case["state"]["thread_history"][-2:])
         duplicate = None
-        for other in kept:
-            other_current = _normal(other["state"]["current_message"])
-            other_context = [_normal(h["text"]) for h in other["state"]["thread_history"][-2:]]
-            if current == other_current and context == other_context:
-                duplicate = "exact duplicate"
-            elif (len(current) >= 15 and difflib.SequenceMatcher(None, current, other_current).ratio() >= 0.92
-                  and difflib.SequenceMatcher(None, " ".join(context), " ".join(other_context)).ratio() >= 0.9):
-                duplicate = "near duplicate"
-            if duplicate:
-                break
+        if (current, context) in seen_exact:
+            duplicate = "exact duplicate"
+        elif len(current) >= 15:
+            for other_current, other_context in by_source.get(case.get("source", ""), []):
+                if abs(len(other_current) - len(current)) > 0.1 * len(current):
+                    continue  # A ratio of 0.92 is impossible at this length difference.
+                matcher = difflib.SequenceMatcher(None, current, other_current)
+                if matcher.real_quick_ratio() >= 0.92 and matcher.quick_ratio() >= 0.92 and matcher.ratio() >= 0.92 \
+                        and difflib.SequenceMatcher(None, context, other_context).ratio() >= 0.9:
+                    duplicate = "near duplicate"
+                    break
         if duplicate:
-            removed[duplicate] += 1
+            removed.drop(case, duplicate)
         else:
             kept.append(case)
+            seen_exact.add((current, context))
+            by_source.setdefault(case.get("source", ""), []).append((current, context))
     flagged = [case for case in kept if case.get("flags")]
     kept = [case for case in kept if not case.get("flags")]
     return kept, flagged, dict(removed)
@@ -382,7 +396,16 @@ def main(argv: list[str] | None = None) -> int:
               "borderline": sorted(set(result["borderline"]) | set(flagged["borderline"])),
               "flagged": sorted(c["id"] for c in flagged["final"])}
     _private_write(root / "final/review-ids.json", review)
-    summary = {"compared": result["compared"], "agreement": result["agreement"], "kappa": result["kappa"],
+    per_source = {}
+    for source in sorted({c.get("source", "A-tag-channels") for c in result["final"] + [
+            c for c in _read(root / "work/clean.json", {"cases": []})["cases"]]}):
+        subset = agree([c for c in _read(root / "work/clean.json", {"cases": []})["cases"]
+                        if c.get("source", "A-tag-channels") == source], labels)
+        per_source[source] = {"compared": subset["compared"], "agreement": subset["agreement"],
+                              "kappa": subset["kappa"], "removed": subset["removed"],
+                              "disagreements": len(subset["disagreements"]), "final": coverage(subset["final"])}
+    summary = {"per_source": per_source,
+               "compared": result["compared"], "agreement": result["agreement"], "kappa": result["kappa"],
                "removed": result["removed"], "final": coverage(result["final"]),
                "flagged_final": len(flagged["final"]), "flagged_agreement": flagged["agreement"],
                "review_counts": {k: len(v) for k, v in review.items()}}
