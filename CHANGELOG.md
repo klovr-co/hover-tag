@@ -28,6 +28,36 @@ All notable changes to Tag are documented here.
 
 ### Fixed
 
+- `tag autostart` now keeps memory (MFS) running too. If MFS stops, the login
+  service restarts it with the same back-off it uses for Tags, whether it was
+  started by a Tag or by `tag memory start`. On Linux, Tag turns on systemd
+  linger so the service also starts at boot, or shows the one command to run.
+- The installer no longer downloads the 560 MB memory model when your MFS
+  configuration uses a hosted embedding provider such as OpenAI. Set
+  `TAG_SKIP_MFS_MODEL=1` to skip it when the provider isn't chosen yet. The
+  local model is still the default.
+- The built-in search model now downloads in the background, so the install no longer
+  waits on 560 MB. Home in Tag.app shows the model and its progress and says that memory
+  search isn't available until it finishes, with **Try again** if it stops; `tag memory
+  status` and `tag settings` show it, and `tag memory download` restarts it. The install
+  screen names the model (bge-m3).
+- Tag.app and the terminal installer can skip the model download too: the install
+  has a **Memory search** step with **Your own endpoint**, and `./install.sh
+  --skip-memory-model` (`install.ps1 -SkipMemoryModel`) does the same.
+- Choose how memory computes search embeddings after install: the built-in
+  Default, or any OpenAI-compatible endpoint (OpenAI, Ollama, LM Studio, vLLM)
+  with your own model and an optional key. Settings → AI → **Memory**,
+  `tag memory embedding local|custom`, or `tag settings`. Tag tries the endpoint
+  first, stores the key privately, restarts memory, and indexes your Slack
+  channels again into the new index. The install screen and an interactive
+  terminal install offer the same choice up front.
+- Settings has a new **AI** tab with two pages: AI connections, and **Memory**,
+  which shows whether memory runs and restarts itself, and which search model it
+  uses. `tag memory status`
+  reports the same as `embedding` in `--json`.
+- `tag memory start` works after you remove your last Tag instead of failing on a
+  missing `~/Tag/default` folder.
+- The docs now say the install needs about 1.8 GB of disk, not 650 MB.
 - Tag now reads all of a long text file attached in Slack, such as a large
   HTML or log file. Before, it saw only the first 12,000 characters.
 
