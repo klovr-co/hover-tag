@@ -337,7 +337,7 @@ export function ProfileFields({ api, question, draft, sendInPlace, onEnter, disa
           </span>
           <div className="pic-acts">
             <button className="p-btn soft sm" aria-label="Shuffle picture" title="Shuffle picture" disabled={busy || locked}
-              onClick={() => { setBusy(true); setRolling(true); sendInPlace("shuffle"); }}><Icon name="dice" size={16} /></button>
+              onClick={() => { setBusy(true); setRolling(true); sendInPlace("shuffle"); }}><Icon name="dice" size={16} />Shuffle</button>
             <button className="p-btn soft sm" aria-label="Upload your own" title="Upload your own" disabled={busy || locked}
               onClick={() => void upload()}><Icon name="upload" size={16} /></button>
           </div>

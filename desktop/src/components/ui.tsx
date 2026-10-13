@@ -34,7 +34,11 @@ const PATHS: Record<string, ReactNode> = {
   updown: <path d="M8 9l4-4 4 4M8 15l4 4 4-4" />,
   restart: <><path d="M21 12a9 9 0 1 1-3-6.7L21 8" /><path d="M21 3v5h-5" /></>,
   upload: <path d="M12 16V4M7 9l5-5 5 5M4 20h16" />,
-  dice: <><rect x="3" y="3" width="18" height="18" rx="4" /><circle cx="8.5" cy="8.5" r="1.2" fill="currentColor" /><circle cx="15.5" cy="15.5" r="1.2" fill="currentColor" /><circle cx="15.5" cy="8.5" r="1.2" fill="currentColor" /><circle cx="8.5" cy="15.5" r="1.2" fill="currentColor" /><circle cx="12" cy="12" r="1.2" fill="currentColor" /></>,
+  // A die seen from above a corner: one dot on top, two and three on the sides.
+  dice: <><path d="M12 2.5l8.5 4.5v10L12 21.5 3.5 17V7z" strokeLinejoin="round" /><path d="M3.5 7 12 11.5 20.5 7M12 11.5v10" strokeLinejoin="round" />
+    <ellipse cx="12" cy="6.9" rx="1.7" ry="1.1" fill="currentColor" stroke="none" />
+    <circle cx="6.1" cy="11.3" r="1.15" fill="currentColor" stroke="none" /><circle cx="9.4" cy="17.2" r="1.15" fill="currentColor" stroke="none" />
+    <circle cx="14.4" cy="17.6" r="1.15" fill="currentColor" stroke="none" /><circle cx="16.25" cy="14.25" r="1.15" fill="currentColor" stroke="none" /><circle cx="18.1" cy="10.9" r="1.15" fill="currentColor" stroke="none" /></>,
   lock: <><rect x="4" y="11" width="16" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></>,
   disk: <path d="M12 3v12M7 10l5 5 5-5M4 21h16" />,
   wifi: <path d="M2 9a15 15 0 0 1 20 0M5 13a10 10 0 0 1 14 0M8.5 16.5a5 5 0 0 1 7 0M12 20h.01" />,
