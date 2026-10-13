@@ -1856,7 +1856,10 @@ class SlackAnswerStream:
                 if thinking:
                     key = f"thinking:{min(self.thinking_rows, MAX_STREAM_THINKING_TASKS - 1)}"
                     self.thinking_rows += 1
-                if key not in self.task_groups and len(self.task_groups) >= MAX_STREAM_TASKS - 1:
+                    if key not in self.task_groups and len(self.task_groups) >= MAX_STREAM_TASKS:
+                        # Thinking never joins the mixed overflow row, where its summary would sit under a tool title.
+                        key = next((k for k in reversed(self.task_groups) if k.startswith("thinking:")), key)
+                elif key not in self.task_groups and len(self.task_groups) >= MAX_STREAM_TASKS - 1:
                     key = "overflow"
                 self.tasks[item_id] = key
                 group = self.task_groups.get(key)
