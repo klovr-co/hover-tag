@@ -2,6 +2,8 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { demoBridge, type Session } from "../lib/bridge";
+import type { SetupQuestion } from "../lib/protocol";
+import { quickAnswer } from "../lib/setup";
 import { QuickAdd, quickStep } from "./QuickAdd";
 
 vi.mock("@tauri-apps/api/core", () => ({ convertFileSrc: (path: string) => `asset://localhost${encodeURIComponent(path)}` }));
@@ -22,6 +24,8 @@ const QUESTIONS: Record<string, object> = {
   org_workspace: { id: "org_workspace", kind: "choose", prompt: "Which workspace in Hover Tag Lab?", options: ["Workspace not listed?"],
     option_ids: ["manual"], workspaces: [], can_go_back: true },
   org_workspace_id: { id: "org_workspace_id", kind: "text", prompt: "Workspace address or ID (T…)", default: "", can_go_back: true },
+  models: { id: "default_model", kind: "choose", prompt: "Default model", options: ["Codex · GPT-5.5", "Codex · GPT-5.5 mini"], default: 0,
+    option_ids: ["codex:gpt-5.5", "codex:gpt-5.5-mini"], supports_effort: true, default_effort: "medium", can_go_back: true },
   ai_connection: { id: "ai_connection", kind: "choose", prompt: "Connect an AI in Settings", options: ["Check connections again"], option_ids: ["check"] },
 };
 
@@ -61,12 +65,12 @@ function fakeSetup(order: string[], pausedTag: string | null = "new-tag") {
   return { api, sent };
 }
 
-function open(order: string[], pausedTag?: string | null, enterprise?: string) {
+function open(order: string[], pausedTag?: string | null, enterprise?: string, modelsFrom?: string) {
   const { api, sent } = fakeSetup(order, pausedTag);
   const props = {
     start: vi.fn(async () => ""), close: vi.fn(), moreOptions: vi.fn(), handOff: vi.fn(),
   };
-  render(<QuickAdd api={api} workspace="T0KLOVR1" workspaceName="Klovr" enterprise={enterprise} {...props} />);
+  render(<QuickAdd api={api} workspace="T0KLOVR1" workspaceName="Klovr" enterprise={enterprise} modelsFrom={modelsFrom} {...props} />);
   return { sent, ...props };
 }
 
@@ -170,6 +174,35 @@ describe("More options without a draft Tag", () => {
     fireEvent.change(await screen.findByDisplayValue("Maya's Tag"), { target: { value: "Docs Tag" } });
     fireEvent.click(screen.getByRole("button", { name: "More options" }));
     await vi.waitFor(() => expect(moreOptions).toHaveBeenCalledWith("", { name: "Docs Tag", description: "" }));
+  });
+});
+
+describe("Choosing the model in the dialog", () => {
+  it("lists the models through a Tag in the workspace and creates the Tag with the one picked", async () => {
+    const { sent } = open(["profile", "models", "workspace", "approve_setup", "channels"], undefined, undefined, "t0klovr1-a0maya01");
+    await screen.findByDisplayValue("Maya's Tag");
+    fireEvent.click(screen.getByRole("button", { name: "Change" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Default model" }, { timeout: 3000 }));
+    fireEvent.click(screen.getByRole("option", { name: /GPT-5\.5 mini/ }));
+    expect(screen.getByRole("button", { name: "Default model" }).textContent).toContain("GPT-5.5 mini");
+    fireEvent.click(screen.getByRole("button", { name: "Create in Slack" }));
+    expect(await screen.findByText("Maya's Tag is ready")).toBeTruthy();
+    // The picked model thinks at its own default level, not the default model's.
+    expect(sent[1]).toEqual({ answer: { value: "codex:gpt-5.5-mini", effort: "default" } });
+    expect(screen.getByText("Codex · GPT-5.5 mini")).toBeTruthy();
+  });
+
+  it("without a Tag in the workspace to ask, says where to change it later", async () => {
+    open(ALL);
+    await screen.findByDisplayValue("Maya's Tag");
+    expect(screen.queryByRole("button", { name: "Change" })).toBeNull();
+    expect(screen.getByText(/change it in its Details any time/)).toBeTruthy();
+  });
+
+  it("takes the default when setup doesn't offer the model picked", () => {
+    const question = QUESTIONS.models as SetupQuestion;
+    expect(quickAnswer(question, "T0KLOVR1", null, "claude:claude-opus-5-5")).toEqual({ answer: { value: "codex:gpt-5.5", effort: "medium" } });
+    expect(quickAnswer(question, "T0KLOVR1", null, "codex:gpt-5.5-mini")).toEqual({ answer: { value: "codex:gpt-5.5-mini", effort: "default" } });
   });
 });
 

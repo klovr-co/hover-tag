@@ -41,7 +41,7 @@ interface Props {
   runUpdate: () => void;
   add: () => void;
   /** Add a Tag straight to this Slack workspace (team ID), asking only for its name and look. */
-  addTo: (group: { key: string; label: string; icon: string | null; enterprise: string | null }) => void;
+  addTo: (group: Group) => void;
   finishSetup: (row: TagRow) => void;
   open: (row: TagRow) => void;
   fixAI: (row: string) => void;

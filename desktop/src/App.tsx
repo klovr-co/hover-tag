@@ -3,7 +3,7 @@
 // Tag.app: installs Tag on first run, then lists, starts and adds Tags.
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
 import { bridge, type AppInfo, type Bridge } from "./lib/bridge";
-import { compatibility, isDraft, parseJSON, parseList, status, type VersionInfo } from "./lib/protocol";
+import { compatibility, isDraft, parseJSON, parseList, status, type Group, type VersionInfo } from "./lib/protocol";
 import { checkUpdate, initialUpdate, installUpdate, updateReducer } from "./lib/updates";
 import { useTags } from "./lib/tags";
 import { TrackContext, useTelemetry, type AppEvents } from "./lib/telemetry";
@@ -69,7 +69,8 @@ export function App() {
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [screen, setScreen] = useState<Screen>({ name: "loading" });
   // The quick-add dialog over Home, for one workspace.
-  const [quick, setQuick] = useState<{ workspace: string; workspaceName: string; workspaceIcon: string | null; enterprise: string | null } | null>(null);
+  const [quick, setQuick] = useState<{ workspace: string; workspaceName: string; workspaceIcon: string | null; enterprise: string | null;
+    modelsFrom: string | null } | null>(null);
   const [bootError, setBootError] = useState("");
   const [bootAttempt, setBootAttempt] = useState(0);
   const [outdated, setOutdated] = useState(false);
@@ -265,8 +266,9 @@ export function App() {
     if (empty) setScreen({ name: "connect", args: ["setup"] }); else home();
   };
   const add = () => setScreen({ name: "connect", args: tags.rows.length ? ["add"] : ["setup"] });
-  const addTo = (group: { key: string; label: string; icon: string | null; enterprise: string | null }) =>
-    setQuick({ workspace: group.key, workspaceName: group.label, workspaceIcon: group.icon, enterprise: group.enterprise });
+  const addTo = (group: Group) =>
+    setQuick({ workspace: group.key, workspaceName: group.label, workspaceIcon: group.icon, enterprise: group.enterprise,
+      modelsFrom: group.rows.find((row) => row.valid && !isDraft(row))?.id ?? null });
   // These screens are always --flow-h tall and scroll inside, so moving between them never resizes the window.
   const fixed = screen.name === "home" || screen.name === "settings" || screen.name === "ai";
   return (

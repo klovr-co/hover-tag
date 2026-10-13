@@ -5,9 +5,11 @@
 // `tag add --json` itself (lib/setup.ts quickAnswer), and shows the creation
 // in place. Anything it can't answer goes to the full setup.
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { aiArgs, findModel, parseModels, parseStatus, type AIModels, type AIStatus } from "../lib/ai";
 import type { Bridge, Session } from "../lib/bridge";
 import { useFresh, reducedMotion } from "../lib/motion";
 import { initialSetup, quickAnswer, setupReducer } from "../lib/setup";
+import { ModelMenu } from "./AI";
 import { ProfileFields, useProfileDraft } from "./Connect";
 import { ErrorLine, Icon, Primary, Spinner, source, tagIcon, WorkspaceMark } from "./ui";
 
@@ -22,6 +24,8 @@ export interface QuickAddProps {
   workspaceIcon?: string | null;
   /** Its Enterprise Grid organization, when it's in one. */
   enterprise?: string | null;
+  /** A Tag already in the workspace, to list the AI accounts' models through; they're shared by every Tag. */
+  modelsFrom?: string | null;
   start: StartTag;
   /** The dialog is gone; `added` when a Tag was created. */
   close: (added: boolean) => void;
@@ -45,7 +49,7 @@ export function quickStep(phase: Phase, modelChosen: boolean, reported: string[]
   return Math.max(1, ...reported.map((step) => QUICK_STEPS.indexOf(step as typeof QUICK_STEPS[number])));
 }
 
-export function QuickAdd({ api, workspace, workspaceName, workspaceIcon, enterprise, start, close, moreOptions, handOff }: QuickAddProps) {
+export function QuickAdd({ api, workspace, workspaceName, workspaceIcon, enterprise, modelsFrom, start, close, moreOptions, handOff }: QuickAddProps) {
   const [state, dispatch] = useReducer(setupReducer, initialSetup);
   const session = useRef<Session | null>(null);
   const [phase, setPhase] = useState<Phase>("form");
@@ -60,6 +64,26 @@ export function QuickAdd({ api, workspace, workspaceName, workspaceIcon, enterpr
   const lastProfile = useRef(profileQuestion);
   if (profileQuestion) lastProfile.current = profileQuestion;
   const draft = useProfileDraft(lastProfile.current);
+
+  // The models, loaded while the name is typed, so Change opens at once.
+  const [models, setModels] = useState<AIModels | null>(null);
+  const [report, setReport] = useState<AIStatus | null>(null);
+  const [picking, setPicking] = useState(false);
+  const [picked, setPicked] = useState<string | null>(null);
+  useEffect(() => {
+    if (!modelsFrom) return;
+    let live = true;
+    void (async () => {
+      const status = await api.tag(aiArgs(modelsFrom, "--json"));
+      if (!live || status.code !== 0) return;
+      setReport(parseStatus(status.stdout));
+      const listed = await api.tag(aiArgs(modelsFrom, "models", "--json"));
+      if (live && listed.code === 0) setModels(parseModels(listed.stdout));
+    })().catch(() => { /* Change just keeps loading; setup still picks the default */ });
+    return () => { live = false; };
+  }, [api, modelsFrom]);
+  const pickedEntry = models && picked ? findModel(models.groups, picked) : null;
+  const pickedLabel = pickedEntry ? `${pickedEntry.group.name} · ${pickedEntry.entry.label}` : null;
 
   useEffect(() => {
     let live = true;
@@ -92,15 +116,16 @@ export function QuickAdd({ api, workspace, workspaceName, workspaceIcon, enterpr
   useEffect(() => {
     if (phase !== "creating" || !q || leaving) return;
     if (q.id === "profile") { setPhase("form"); return; } // Tag didn't accept the name: show why.
-    const quick = answered.current.has(q.id) ? null : quickAnswer(q, workspace, enterprise);
+    const quick = answered.current.has(q.id) ? null : quickAnswer(q, workspace, enterprise, picked);
     if (!quick) { setLeaving("handoff"); pause(); return; }
     answered.current.add(q.id);
     if (q.id === "default_model") {
-      const index = typeof q.default === "number" ? q.default : -1;
+      const ids = q.option_ids ?? [];
+      const index = picked && ids.includes(picked) ? ids.indexOf(picked) : typeof q.default === "number" ? q.default : -1;
       setModel(q.options?.[index] ?? null);
     }
     send(quick.answer);
-  }, [phase, q, leaving, workspace, enterprise, send, pause]);
+  }, [phase, q, leaving, workspace, enterprise, picked, send, pause]);
 
   // Setup ended: finish what the dialog was doing.
   // Without a Tag to continue, it says so and can be closed rather than waiting forever.
@@ -153,7 +178,8 @@ export function QuickAdd({ api, workspace, workspaceName, workspaceIcon, enterpr
     model: "Load your models", create: "Create the Slack app", picture: "Add the picture",
     install: enterprise ? `Add it to ${workspaceName}` : `Install in ${workspaceName}`, connect: "Connect to this Mac", start: `Start ${name}`,
   };
-  const modelFresh = useFresh(model);
+  const shown = model ?? pickedLabel;
+  const modelFresh = useFresh(shown);
   const picture = source(lastProfile.current?.preview, lastProfile.current?.preview_revision ?? lastProfile.current?.picture_label) ?? tagIcon;
   const title = phase === "done" ? (startError ? `${name} is in ${workspaceName}` : `${name} is ready`)
     : busy ? `Adding ${name}…` : `Add a Tag to ${workspaceName}`;
@@ -169,11 +195,19 @@ export function QuickAdd({ api, workspace, workspaceName, workspaceIcon, enterpr
           <>
             <ProfileFields api={api} question={lastProfile.current} draft={draft} sendInPlace={sendInPlace} onEnter={create}
               disabled={!!leaving} />
-            <div className="quick-model" role="note">
-              <Icon name="spark" size={14} />
-              <span>Model · <b className={modelFresh ? "fresh" : undefined}>{model ?? "your account's default"}</b>
-                <span className="muted"> · change it in its Details any time</span></span>
-            </div>
+            {picking ? (
+              <div className="quick-pick">
+                <ModelMenu models={models} report={report} value={picked ?? models?.default.value ?? null}
+                  disabled={!!leaving} onChange={setPicked} />
+              </div>
+            ) : (
+              <div className="quick-model" role="note">
+                <Icon name="spark" size={14} />
+                <span>Model · <b className={modelFresh ? "fresh" : undefined}>{shown ?? "your account's default"}</b>
+                  {!modelsFrom && <span className="muted"> · change it in its Details any time</span>}</span>
+                {modelsFrom && <button className="link" onClick={() => setPicking(true)} disabled={!!leaving}>Change</button>}
+              </div>
+            )}
             {!lastProfile.current && !state.outcome && <div className="dlg-note" role="status"><Spinner small label="Getting ready" />Getting ready…</div>}
             {state.error && <ErrorLine>{state.error}</ErrorLine>}
             <div className="foot">
@@ -189,7 +223,7 @@ export function QuickAdd({ api, workspace, workspaceName, workspaceIcon, enterpr
             <div className={phase === "done" ? "recap-top quick-made" : "recap-top"}>
               <img src={picture} alt="" />
               <div className="txt"><span className="name"><span className="nm">{name}</span></span>
-                <span className="sub">{model ?? "Your default model"}</span></div>
+                <span className="sub">{shown ?? "Your default model"}</span></div>
               {phase === "done" && !startError && <span className="quick-check" aria-hidden="true"><Icon name="check" size={14} /></span>}
             </div>
             {phase !== "failed" && (

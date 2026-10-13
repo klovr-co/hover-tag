@@ -8,7 +8,8 @@ All notable changes to Tag are documented here.
 
 - Add a Tag to a workspace you already use in one step. On Home, click **Add
   Tag** on the workspace's card: a dialog asks only for the name, description
-  and picture, then creates and starts the Tag with your default model.
+  and picture, then creates and starts the Tag with your default model, or the
+  one you pick under **Change**.
   **More options** opens the full setup with that workspace already chosen. In
   the terminal, `tag add --workspace T0ABC123` (a team ID or name) does the
   same; it pauses with progress saved if something needs your input.

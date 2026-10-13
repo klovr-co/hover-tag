@@ -1041,6 +1041,7 @@ button.list-item:hover { background: var(--fill); }
 .quick-dlg .recap-top { padding: 12px 14px; }
 .quick-model { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--text); }
 .quick-model .muted { color: var(--muted); }
+.quick-model .link { margin-left: auto; }
 .quick-model b.fresh { display: inline-block; animation: rise2 .24s var(--ease); }
 .quick-made img { animation: hop .5s var(--spring); }
 .quick-check { margin-left: auto; flex: none; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center;
