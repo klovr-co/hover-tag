@@ -38,7 +38,7 @@ try:
     import tag_display as display
     import tag_autostart as autostart
     import agent_models
-    import tag_chief
+    import tag_lead
     import slack_cli_config
 except ImportError:
     from scripts.tag_paths import initialize_instance, initialize_workspace, runtime_environment, tag_home
@@ -52,7 +52,7 @@ except ImportError:
     from scripts import tag_mfs_runtime, tag_slack_backoff
     from scripts import tag_display as display
     from scripts import tag_autostart as autostart
-    from scripts import tag_chief, slack_cli_config
+    from scripts import tag_lead, slack_cli_config
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_DEPENDENCIES = ("mfs_server", "psutil", "slack_bolt")
@@ -68,7 +68,7 @@ CAPABILITIES = (
     "autostart", "autostart-keep", "logs-json", "upgrade-json", "install-progress",
     "ai-connections", "shared-ai-connections", "thinking-level", "logs-activity", "activity-details", "setup-v2", "abandon-setup", "remove-tag",
     "describe", "telemetry-events", "start-progress", "api-connections",
-    "chief-of-staff", "setup-preset", "setup-tag-event",
+    "lead", "setup-preset", "setup-tag-event",
 )
 UPDATE_CHECK_INTERVAL_SECONDS = 24 * 60 * 60
 COMMANDS = tuple(sorted(tag_instances.RESERVED_NAMES))
@@ -2090,7 +2090,7 @@ def _setup_ready(home: Path, values: dict[str, str]) -> dict:
 
 # A Tag's agent runs with these set (see opentag_process_env); people and the bridge never do.
 AGENT_RUN_MARKERS = ("OPENTAG_CALLER_ID", "OPENTAG_HANDOFF_DEPTH")
-AGENT_REFUSED_COMMANDS = frozenset({"add", "setup", "reset", "remove", "abandon", "chief-of-staff"})
+AGENT_REFUSED_COMMANDS = frozenset({"add", "setup", "reset", "remove", "abandon", "lead"})
 PRESET_KEYS = frozenset({
     "OPENTAG_BOT_NAME", "OPENTAG_BOT_DESCRIPTION", "OPENTAG_DEFAULT_MODEL", "OPENTAG_DEFAULT_EFFORT",
     "SLACK_ALLOWED_USER_IDS", slack_cli_config.TAG_SETTING,
@@ -2134,18 +2134,18 @@ def _apply_slack_cli_setting(home: Path) -> None:
     slack_cli_config.apply_tag_setting(values)
 
 
-def _migrate_chief(installation_root: Path) -> tuple[str | None, list[str]]:
-    """Run the Chief of Staff migration; it never blocks a command that doesn't need it."""
+def _migrate_lead(installation_root: Path) -> tuple[str | None, list[str]]:
+    """Run the Lead migration; it never blocks a command that doesn't need it."""
     try:
-        chief = tag_chief.migrate(installation_root, tag_instances.discover(installation_root),
+        lead = tag_lead.migrate(installation_root, tag_instances.discover(installation_root),
                                   tag_instances.main_tag(installation_root))
     except (OSError, ValueError, RuntimeError):
-        chief = tag_chief.chief_of_staff(installation_root)
-    return chief, tag_chief.created_by_chief(installation_root)
+        lead = tag_lead.lead_id(installation_root)
+    return lead, tag_lead.created_by_lead(installation_root)
 
 
-def _chief_report(installation_root: Path) -> dict:
-    chief, created = _migrate_chief(installation_root)
+def _lead_report(installation_root: Path) -> dict:
+    lead, created = _migrate_lead(installation_root)
     tags, values = [], {}
     for item in tag_instances.discover(installation_root):
         if not item["valid"] or not Path(str(item["home"])).exists():
@@ -2153,70 +2153,70 @@ def _chief_report(installation_root: Path) -> dict:
         home = Path(str(item["home"]))
         path = home / "config/settings.json"
         row_values = read_config(path) if path.is_file() else {}
-        if item["id"] == chief:
+        if item["id"] == lead:
             values = row_values
         tags.append({"id": str(item["id"]), "slack_name": row_values.get("OPENTAG_BOT_NAME") or None,
-                     "chief_of_staff": item["id"] == chief, "created_by_chief": item["id"] in created})
+                     "lead": item["id"] == lead, "created_by_lead": item["id"] in created})
     folder = slack_cli_config.service_account_dir(installation_root, values)
-    max_tags = values.get("OPENTAG_CHIEF_MAX_TAGS") or str(tag_chief.DEFAULT_MAX_TAGS)
-    return {"schema_version": 1, "chief_of_staff": chief, "role": tag_chief.ROLE_NAME, "tags": tags,
-            "max_tags": int(max_tags) if max_tags.isdigit() else tag_chief.DEFAULT_MAX_TAGS,
-            "service_account": {"sign_in": values.get("OPENTAG_CHIEF_SLACK_SIGN_IN") or None,
-                                "config_dir": str(folder), "ready": bool(values.get("OPENTAG_CHIEF_SLACK_SIGN_IN"))}}
+    max_tags = values.get("OPENTAG_LEAD_MAX_TAGS") or str(tag_lead.DEFAULT_MAX_TAGS)
+    return {"schema_version": 1, "lead": lead, "role": tag_lead.ROLE_NAME, "tags": tags,
+            "max_tags": int(max_tags) if max_tags.isdigit() else tag_lead.DEFAULT_MAX_TAGS,
+            "service_account": {"sign_in": values.get("OPENTAG_LEAD_SLACK_SIGN_IN") or None,
+                                "config_dir": str(folder), "ready": bool(values.get("OPENTAG_LEAD_SLACK_SIGN_IN"))}}
 
 
-def _chief_command(installation_root: Path, tag_reference: str | None, args) -> int:
-    """Show or move Chief of Staff, and sign its service account in to Slack."""
+def _lead_command(installation_root: Path, tag_reference: str | None, args) -> int:
+    """Show or move Lead, and sign its service account in to Slack."""
     action = args.arguments[0] if args.arguments else "status"
     if action not in {"status", "set", "sign-in", "config-token"} or len(args.arguments) > 1:
-        raise ValueError("chief-of-staff accepts status, set, sign-in, or config-token. "
-                         "For example: tag NAME chief-of-staff set")
+        raise ValueError("lead accepts status, set, sign-in, or config-token. "
+                         "For example: tag NAME lead set")
     if action == "config-token":
-        return _chief_config_token(installation_root, args)
+        return _lead_config_token(installation_root, args)
     if action == "set":
         if tag_reference is None:
-            raise ValueError("Name the Tag to make Chief of Staff, for example tag research chief-of-staff set")
+            raise ValueError("Name the Tag to make Lead, for example tag research lead set")
         tag_id = tag_instances.resolve_reference(installation_root, tag_reference)
         tag_instances.resolve(installation_root, tag_id)  # Refuse a Tag that doesn't exist.
-        tag_chief.set_chief_of_staff(installation_root, tag_id)
+        tag_lead.set_lead(installation_root, tag_id)
     elif action == "sign-in":
-        return _chief_sign_in(installation_root, args)
+        return _lead_sign_in(installation_root, args)
     elif tag_reference is not None:
-        raise ValueError("chief-of-staff status covers every Tag; run it without a Tag name")
-    report = _chief_report(installation_root)
+        raise ValueError("lead status covers every Tag; run it without a Tag name")
+    report = _lead_report(installation_root)
     if args.json_output:
         print(json.dumps(report, indent=2))
         return 0
-    display.header(tag_chief.ROLE_NAME, "Routes requests to one owner Tag, and is the only Tag that creates Tags.")
-    chief = report["chief_of_staff"]
+    display.header(tag_lead.ROLE_NAME, "Routes requests to one owner Tag, and is the only Tag that creates Tags.")
+    lead = report["lead"]
     for tag in report["tags"]:
-        role = f"★ {tag_chief.ROLE_NAME}" if tag["chief_of_staff"] else "specialist"
-        if tag["created_by_chief"]:
-            role += f" · created by {tag_chief.ROLE_NAME}"
+        role = f"★ {tag_lead.ROLE_NAME}" if tag["lead"] else "specialist"
+        if tag["created_by_lead"]:
+            role += f" · created by {tag_lead.ROLE_NAME}"
         display.info_row(tag["id"], f"{tag['slack_name'] or 'New Tag'} · {role}", good=True)
     account = report["service_account"]
     display.info_row("Service account", account["sign_in"] or "not signed in", good=account["ready"])
     display.info_row("Most Tags", str(report["max_tags"]), good=True)
-    if chief and not account["ready"]:
-        display.next_action("Let Chief of Staff create Tags", "tag chief-of-staff sign-in")
+    if lead and not account["ready"]:
+        display.next_action("Let Lead create Tags", "tag lead sign-in")
     return 0
 
 
-def _chief_config_token(installation_root: Path, args) -> int:
+def _lead_config_token(installation_root: Path, args) -> int:
     """Save an app configuration token pair for the fallback, read from stdin, never from arguments."""
     try:
         import tag_creator
     except ImportError:
         from scripts import tag_creator
     if not args.stdin:
-        raise ValueError("Pipe the tokens in: printf '%s\\n%s\\n' TOKEN REFRESH_TOKEN | tag chief-of-staff config-token --stdin")
+        raise ValueError("Pipe the tokens in: printf '%s\\n%s\\n' TOKEN REFRESH_TOKEN | tag lead config-token --stdin")
     lines = [line.strip() for line in sys.stdin.read().splitlines() if line.strip()]
     if len(lines) != 2:
         raise ValueError("Give the configuration token and its refresh token, one per line")
-    chief = tag_chief.chief_of_staff(installation_root)
+    lead = tag_lead.lead_id(installation_root)
     values = {}
-    if chief:
-        path = tag_instances.resolve(installation_root, chief).home / "config/settings.json"
+    if lead:
+        path = tag_instances.resolve(installation_root, lead).home / "config/settings.json"
         values = read_config(path) if path.is_file() else {}
     fallback = tag_creator.ConfigTokenFallback(slack_cli_config.service_account_dir(installation_root, values))
     # Slack doesn't say when a pasted token expires; rotate it on first use.
@@ -2228,14 +2228,14 @@ def _chief_config_token(installation_root: Path, args) -> int:
     return 0
 
 
-def _chief_sign_in(installation_root: Path, args) -> int:
+def _lead_sign_in(installation_root: Path, args) -> int:
     """Sign the service account in to Slack CLI in its own folder, never the default one."""
     if args.json_output or not display.stdin_is_terminal():
-        raise ValueError("tag chief-of-staff sign-in needs a terminal: the Slack CLI shows a code to paste in Slack")
-    chief = tag_chief.chief_of_staff(installation_root)
-    if chief is None:
-        raise ValueError("No Tag is Chief of Staff yet. Run tag NAME chief-of-staff set first.")
-    context = tag_instances.resolve(installation_root, chief)
+        raise ValueError("tag lead sign-in needs a terminal: the Slack CLI shows a code to paste in Slack")
+    lead = tag_lead.lead_id(installation_root)
+    if lead is None:
+        raise ValueError("No Tag is Lead yet. Run tag NAME lead set first.")
+    context = tag_instances.resolve(installation_root, lead)
     config_path = context.home / "config/settings.json"
     values = read_config(config_path) if config_path.is_file() else {}
     folder = slack_cli_config.service_account_dir(installation_root, values)
@@ -2248,7 +2248,7 @@ def _chief_sign_in(installation_root: Path, args) -> int:
     display.header("Service account", f"Sign in as the Tag service account. Its sign-in stays in {display.short_path(folder)}.")
     slack = shutil.which("slack") or "slack"
     if subprocess.call([slack, "auth", "login", "--config-dir", str(folder), "--skip-update"]):
-        raise RuntimeError("Slack sign-in was not completed. Nothing was changed; run tag chief-of-staff sign-in again.")
+        raise RuntimeError("Slack sign-in was not completed. Nothing was changed; run tag lead sign-in again.")
     os.environ[slack_cli_config.CONFIG_DIR_ENV] = str(folder)
     try:
         import opentag_setup
@@ -2257,13 +2257,13 @@ def _chief_sign_in(installation_root: Path, args) -> int:
     team = values.get("SLACK_ENTERPRISE_ID") or values.get("SLACK_TEAM_ID", "")
     sign_ins = [item for item in opentag_setup.list_slack_sign_ins() if not team or item["id"] == team]
     if not sign_ins:
-        raise RuntimeError("The service account isn't signed in to Chief of Staff's workspace. "
-                           "Run tag chief-of-staff sign-in again and choose that workspace.")
+        raise RuntimeError("The service account isn't signed in to Lead's workspace. "
+                           "Run tag lead sign-in again and choose that workspace.")
     try:
         import tag_config as settings
     except ImportError:
         from scripts import tag_config as settings
-    settings.update_config(config_path, {"OPENTAG_CHIEF_SLACK_SIGN_IN": str(sign_ins[0]["id"])})
+    settings.update_config(config_path, {"OPENTAG_LEAD_SLACK_SIGN_IN": str(sign_ins[0]["id"])})
     display.info_row("Signed in", f"{sign_ins[0]['name']} ({sign_ins[0]['id']})", good=True)
     return 0
 
@@ -2544,13 +2544,13 @@ def _run_cli() -> int:
         parser.error("--activity-limit must be between 1 and 10000")
     if (args.no_start or args.test or args.review) and args.command != "setup":
         parser.error("--no-start, --test and --review are only for setup")
-    if args.arguments and args.command not in {"add", "memory", "config", "telemetry", "rename", "describe", "autostart", "chatgpt", "settings", "chief-of-staff"}:
-        parser.error("Only add, memory, config, telemetry, rename, describe, autostart, chatgpt, settings, and chief-of-staff accept additional positional arguments")
+    if args.arguments and args.command not in {"add", "memory", "config", "telemetry", "rename", "describe", "autostart", "chatgpt", "settings", "lead"}:
+        parser.error("Only add, memory, config, telemetry, rename, describe, autostart, chatgpt, settings, and lead accept additional positional arguments")
     if args.preset and args.command != "add":
         parser.error("--preset is only for add")
     if args.command in AGENT_REFUSED_COMMANDS and inside_agent_run():
-        # A Tag's agent must never create, reset or remove Tags; only Chief of Staff's bridge creates them.
-        print(f"tag {args.command} can't run inside a Tag's request. Ask Chief of Staff for a new Tag; "
+        # A Tag's agent must never create, reset or remove Tags; only Lead's bridge creates them.
+        print(f"tag {args.command} can't run inside a Tag's request. Ask Lead for a new Tag; "
               "a person approves it in Slack.", file=sys.stderr)
         return 2
     settings_ai = args.command == "settings" and args.arguments[:1] == ["ai"]
@@ -2561,7 +2561,7 @@ def _run_cli() -> int:
     api_options = (args.api_backend, args.api_kind, args.base_url, args.api_models, args.api_version)
     if any(option is not None for option in api_options) and not (settings_ai and args.arguments[1:2] == ["api"]):
         parser.error("--backend, --kind, --base-url, --models and --api-version are only for tag settings ai api")
-    if args.json_output and args.command not in {"list", "memory", "inspect", "status", "doctor", "config", "paths", "upgrade", "telemetry", "setup", "add", "rename", "describe", "abandon", "remove", "start", "stop", "restart", "autostart", "version", "logs", "chatgpt", "usage", "chief-of-staff"} and not settings_ai:
+    if args.json_output and args.command not in {"list", "memory", "inspect", "status", "doctor", "config", "paths", "upgrade", "telemetry", "setup", "add", "rename", "describe", "abandon", "remove", "start", "stop", "restart", "autostart", "version", "logs", "chatgpt", "usage", "lead"} and not settings_ai:
         parser.error("--json supports list, memory, inspect, status, doctor, config, paths, upgrade, telemetry, usage, chatgpt, settings ai, autostart, version, logs, setup, add, rename, describe, start, and stop/restart with --workspace")
     if args.json_output and args.follow:
         parser.error("--json cannot be combined with --follow")
@@ -2582,8 +2582,8 @@ def _run_cli() -> int:
         os.environ[SETUP_PROTOCOL_ENV] = "jsonl"
     if os.getenv(SETUP_PROTOCOL_ENV) == "jsonl" and args.command in {"setup", "add"}:
         _setup_ui().enter_protocol()
-    if args.stdin and args.command not in {"config", "chief-of-staff"}:
-        parser.error("--stdin is only for config set and chief-of-staff config-token")
+    if args.stdin and args.command not in {"config", "lead"}:
+        parser.error("--stdin is only for config set and lead config-token")
     if args.offline and args.command not in {"inspect", "doctor"}:
         parser.error("--offline supports inspect and doctor")
     if args.follow and args.command != "logs":
@@ -2741,12 +2741,12 @@ def _run_cli() -> int:
         if renamed and not args.json_output:
             display.info_row("Tag", f"Named '{renamed}' after its Slack team and app IDs", good=True)
         return _setup_result(result, renamed or context.tag_id, args.json_output)
-    if args.command == "chief-of-staff":
-        return _chief_command(installation_root, tag_id if explicit_tag else None, args)
+    if args.command == "lead":
+        return _lead_command(installation_root, tag_id if explicit_tag else None, args)
     if args.command == "list":
         if args.arguments:
             parser.error("list does not accept positional arguments")
-        chief, created = _migrate_chief(installation_root)
+        lead, created = _migrate_lead(installation_root)
         rows = []
         for item in tag_instances.discover(installation_root):
             record = dict(item)
@@ -2780,8 +2780,8 @@ def _run_cli() -> int:
                                   default_effort=agent_models.effective_effort(context.home, values),
                                   description=values.get("OPENTAG_BOT_DESCRIPTION") or None,
                                   channels=_channels(values, context.home),
-                                  chief_of_staff=context.tag_id == chief,
-                                  created_by_chief=context.tag_id in created)
+                                  lead=context.tag_id == lead,
+                                  created_by_lead=context.tag_id in created)
                 except (OSError, ValueError, RuntimeError) as exc:
                     record.update(valid=False, state="invalid_configuration", error=str(exc))
             else:
@@ -2806,8 +2806,8 @@ def _run_cli() -> int:
                     name = row.get("slack_name") or "New Tag"
                     alias = f" · tag {row['nickname']}" if row.get("nickname") else ""
                     main = " · main" if row.get("main") else ""
-                    if row.get("chief_of_staff"):
-                        main += f" · ★ {tag_chief.ROLE_NAME}"
+                    if row.get("lead"):
+                        main += f" · ★ {tag_lead.ROLE_NAME}"
                     model = f" · {row['default_model_label']}" if row.get("default_model_label") else ""
                     if model and row.get("default_effort"):
                         model += f" · {agent_models.effort_label(row['default_effort'])} thinking"
@@ -2860,7 +2860,7 @@ def _run_cli() -> int:
     os.environ.update(environment)
     _apply_slack_cli_setting(home)
     if args.command in {"start", "dev", "setup"}:
-        _migrate_chief(installation_root)
+        _migrate_lead(installation_root)
     if args.command == "usage":
         try:
             from . import agent_usage

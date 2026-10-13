@@ -12,13 +12,13 @@ different machines can work together and people can follow the exchange. Wait
 states follow A2A task vocabulary (submitted, completed, failed) so another
 transport can replace Slack later without changing the record.
 
-When an installation has a Chief of Staff (see ``tag_chief``), Tags work as a
+When an installation has a Lead (see ``tag_lead``), Tags work as a
 dispatcher and lanes instead:
 
-- Chief of Staff uses ``route`` to give a request to exactly one owner Tag. It
+- Lead uses ``route`` to give a request to exactly one owner Tag. It
   posts in the same thread, so the owner sees the whole thread. The owner then
   replies to the person itself. Nothing is combined or reworded.
-- Any other Tag may ``ask`` only Chief of Staff, for a judgment call. It still
+- Any other Tag may ``ask`` only Lead, for a judgment call. It still
   writes the answer itself.
 - A request makes at most MAX_TAG_HOPS Tag-to-Tag hops: route, then one
   escalation. A Tag answering another Tag can neither route nor ask.
@@ -50,7 +50,7 @@ MAX_TARGETS = 5
 MAX_TASK_CHARS = 3_000
 # A Tag that is answering another Tag, or combining replies, cannot ask again.
 MAX_DEPTH = 1
-# Route (Chief of Staff to the owner), then at most one escalation (owner to Chief of Staff).
+# Route (Lead to the owner), then at most one escalation (owner to Lead).
 MAX_TAG_HOPS = 2
 MAX_REASON_CHARS = 300
 MEMBER_ID = r"[UW][A-Z0-9]{2,20}"
@@ -99,11 +99,11 @@ def configured_peers() -> list[Peer]:
 class Role:
     """This Tag's place among the installation's Tags, as the agent's helper sees it.
 
-    ``chief`` is None when the installation has no Chief of Staff; Tags then ask
+    ``lead`` is None when the installation has no Lead; Tags then ask
     each other as before. The bridge checks the role again before acting.
     """
-    is_chief: bool
-    chief: Peer | None
+    is_lead: bool
+    lead: Peer | None
     lanes: list[Peer]
 
 
@@ -112,14 +112,14 @@ def current_role() -> Role:
     if not home or not own:
         return Role(False, None, [])
     try:
-        from tag_chief import chief_card, chief_of_staff, roster
+        from tag_lead import lead_card, lead_id, roster
     except ImportError:
-        from scripts.tag_chief import chief_card, chief_of_staff, roster
+        from scripts.tag_lead import lead_card, lead_id, roster
     root = Path(home)
     team = os.getenv("SLACK_TEAM_ID", "")
-    if chief_of_staff(root) == own:
+    if lead_id(root) == own:
         return Role(True, None, [Peer(card.name, card.user_id) for card in roster(root, own, team)])
-    card = chief_card(root, own)
+    card = lead_card(root, own)
     return Role(False, Peer(card.name, card.user_id) if card else None, [])
 
 
@@ -215,10 +215,10 @@ def record_request(targets: list[str], task: str, wait_minutes: int) -> str:
     if not 1 <= wait_minutes <= MAX_WAIT_MINUTES:
         raise HandoffRefused(f"Wait between 1 and {MAX_WAIT_MINUTES} minutes.")
     role = current_role()
-    if role.is_chief:
-        raise HandoffRefused("Chief of Staff doesn't collect answers from other Tags. Route the request to "
+    if role.is_lead:
+        raise HandoffRefused("Lead doesn't collect answers from other Tags. Route the request to "
                              "one owner with route, or answer it yourself.")
-    peers = [role.chief] if role.chief else configured_peers()
+    peers = [role.lead] if role.lead else configured_peers()
     chosen: list[Peer] = []
     for value in targets:
         peer = resolve_peer(value, peers)
@@ -234,14 +234,14 @@ def record_request(targets: list[str], task: str, wait_minutes: int) -> str:
 
 
 def record_route(target: str, reason: str) -> str:
-    """Chief of Staff gives this request to one owner Tag, which answers in this thread."""
+    """Lead gives this request to one owner Tag, which answers in this thread."""
     if int(os.getenv("OPENTAG_HANDOFF_DEPTH", "0") or 0) >= MAX_DEPTH:
         raise HandoffRefused("This run is answering another Tag, so it cannot route. Answer with what you have.")
     if not os.getenv("OPENTAG_HANDOFF_REQUESTS", ""):
         raise HandoffRefused("Routing is unavailable in this conversation.")
     role = current_role()
-    if not role.is_chief:
-        raise HandoffRefused("Only Chief of Staff routes requests. Answer it yourself, or ask Chief of Staff.")
+    if not role.is_lead:
+        raise HandoffRefused("Only Lead routes requests. Answer it yourself, or ask Lead.")
     reason = " ".join(reason.split())
     if not reason:
         raise HandoffRefused("Say in one sentence why this Tag should own the request.")
@@ -306,17 +306,17 @@ def route_text(route_id: str, target: dict[str, str], reason: str, requester: st
             f"_Routed {route_id} for <@{requester}>. You own this request._")
 
 
-def route_brief(own_name: str, chief_name: str, reason: str) -> str:
+def route_brief(own_name: str, lead_name: str, reason: str) -> str:
     return (
-        f"You are {own_name}. {chief_name} routed the request in this thread to you because: {reason}\n"
+        f"You are {own_name}. {lead_name} routed the request in this thread to you because: {reason}\n"
         "You own it end to end. Read the whole thread above, then answer the person who asked, here in this "
         "thread. Don't wait for other Tags and don't hand it back. If you need a judgment call only "
-        f"{chief_name} can make, you may ask {chief_name} once; you still write the answer."
+        f"{lead_name} can make, you may ask {lead_name} once; you still write the answer."
     )
 
 
 def routed_note(owner_name: str) -> str:
-    """Context for Chief of Staff when it is mentioned again in a thread it already routed."""
+    """Context for Lead when it is mentioned again in a thread it already routed."""
     return (f"Earlier in this thread you routed the request to {owner_name}, which owns it. "
             f"If this message continues that work, tell the person to mention {owner_name} directly. "
             "Route again only if the work has clearly moved to another lane, and say so.")
@@ -530,7 +530,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Ask other Tags for help from the current Slack channel.")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("peers", help="List the Tags this Tag may ask or route to.")
-    route = commands.add_parser("route", help="Chief of Staff only: give this request to one owner Tag.")
+    route = commands.add_parser("route", help="Lead only: give this request to one owner Tag.")
     route.add_argument("--to", required=True, help="The owner Tag's name.")
     route.add_argument("--reason", required=True, help="One sentence: why this Tag owns the request.")
     ask = commands.add_parser("ask", help="Ask one or more Tags; Tag continues when all reply.")
@@ -541,7 +541,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "peers":
             role = current_role()
-            peers = role.lanes if role.is_chief else [role.chief] if role.chief else configured_peers()
+            peers = role.lanes if role.is_lead else [role.lead] if role.lead else configured_peers()
             print("\n".join(peer.name for peer in peers) or "No other Tags are configured.")
         elif args.command == "route":
             print(record_route(args.to, args.reason))

@@ -26,10 +26,10 @@ RESERVED_NAMES = frozenset({
     "reset", "migrate", "upgrade", "rollback", "version", "paths",
     "doctor", "start", "stop", "restart", "status", "logs", "dev",
     "telemetry", "rename", "describe", "autostart", "chatgpt", "usage", "abandon", "remove",
-    "chief-of-staff",
+    "lead",
 })
 # Commands added after Tags could already use the name; such a Tag keeps working.
-LATE_RESERVED_NAMES = frozenset({"usage", "chief-of-staff"})
+LATE_RESERVED_NAMES = frozenset({"usage", "lead"})
 
 
 @dataclass(frozen=True)

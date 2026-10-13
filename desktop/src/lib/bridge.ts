@@ -183,14 +183,14 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
   const aiFor = (tag: string, row?: TagRow) => demoAIFor(aiDemo, sharedAI, tag, row);
   const rows: (TagRow & { home: string })[] = structuredClone(listExample.tags);
   rows.splice(1, 0, {
-    ...rows[0], id: "t0klovr1-a0rese02", slack_name: "Research Tag", state: "stopped", chief_of_staff: false, created_by_chief: true,
+    ...rows[0], id: "t0klovr1-a0rese02", slack_name: "Research Tag", state: "stopped", lead: false, created_by_lead: true,
     nickname: "research", main: false, keep_running: false,
     description: "Digs through docs and old threads to answer research questions.",
     default_model: "claude:claude-opus-5-5", default_model_label: "Claude · Opus 5.5", default_model_name: "Opus 5.5", default_effort: "max",
     channels: [{ id: "C0RESEARCH", name: "research" }],
   });
   rows.splice(2, 0, {
-    ...rows[0], id: "t0acme01-a0ops003", slack_name: "Ops Tag", slack_workspace: "T0ACME01", chief_of_staff: false,
+    ...rows[0], id: "t0acme01-a0ops003", slack_name: "Ops Tag", slack_workspace: "T0ACME01", lead: false,
     workspace_name: "Acme Inc", workspace_icon: null, main: false,
     description: "Keeps on-call notes and launch checklists up to date.",
     default_model: "codex:gpt-5.5-mini", default_model_label: "Codex · GPT-5.5 mini", default_model_name: "GPT-5.5 mini", default_effort: "medium",
@@ -234,9 +234,9 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
           running: rows.some((r) => r.state === "running"), scope: "installation", api_connections: structuredClone(apiDemo) });
       }
       if (first === "list") return json({ schema_version: 1, tags: rows });
-      if (first === "chief-of-staff") {
-        return json({ schema_version: 1, chief_of_staff: rows.find((r) => r.chief_of_staff)?.id ?? null, role: "Chief of Staff",
-          tags: rows.map((r) => ({ id: r.id, slack_name: r.slack_name ?? null, chief_of_staff: Boolean(r.chief_of_staff), created_by_chief: Boolean(r.created_by_chief) })),
+      if (first === "lead") {
+        return json({ schema_version: 1, lead: rows.find((r) => r.lead)?.id ?? null, role: "Lead",
+          tags: rows.map((r) => ({ id: r.id, slack_name: r.slack_name ?? null, lead: Boolean(r.lead), created_by_lead: Boolean(r.created_by_lead) })),
           max_tags: 10, service_account: { sign_in: null, config_dir: "~/Library/Application Support/Tag/shared/slack/service-account", ready: false } });
       }
       if (first === "telemetry") {
@@ -247,7 +247,7 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
       }
       if (first === "version") {
         return json({ ...versionExample, version: runtimeVersion,
-          capabilities: [...new Set([...versionExample.capabilities, "ai-connections", "shared-ai-connections", "logs-activity", "thinking-level", "describe", "telemetry-events", "api-connections", "chief-of-staff"])] });
+          capabilities: [...new Set([...versionExample.capabilities, "ai-connections", "shared-ai-connections", "logs-activity", "thinking-level", "describe", "telemetry-events", "api-connections", "lead"])] });
       }
       if (second === "settings" && args[2] === "ai" && args[3] === "api" && args[4] === "check") {
         await sleep(500);
@@ -333,7 +333,7 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
         row.nickname = args[2].toLowerCase().replace(/[^a-z0-9]+/g, "-");
       }
       if (row && second === "describe") row.description = args[2] || null;
-      if (row && second === "chief-of-staff" && args[2] === "set") rows.forEach((r) => { r.chief_of_staff = r === row; });
+      if (row && second === "lead" && args[2] === "set") rows.forEach((r) => { r.lead = r === row; });
       return { code: 0, stdout: "", stderr: "" };
     },
     follow: async (args, onLine, onExit) => {

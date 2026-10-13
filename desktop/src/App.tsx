@@ -299,7 +299,7 @@ export function App() {
         )}
         {screen.name === "tag" && (
           <TagDetail key={screen.opened ?? 0} api={api} tags={tags} initial={screen.id} initialTab={screen.tab} problems={watch.problems} back={home} add={add}
-            canDescribe={capabilities.includes("describe")} canChief={capabilities.includes("chief-of-staff")}
+            canDescribe={capabilities.includes("describe")} canLead={capabilities.includes("lead")}
             showSettings={() => setScreen({ name: "settings" })}
             finishSetup={(row) => setScreen({ name: "connect", args: [row.id, "setup"] })}
             openAI={() => capabilities.includes(SHARED_AI_CAPABILITY) ? setScreen({ name: "ai" }) : say("Update Tag to manage shared AI accounts in Settings.")} say={say} />

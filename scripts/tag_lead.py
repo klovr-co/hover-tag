@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Chief of Staff: the one Tag that routes work and creates new Tags.
+"""Lead: the one Tag that routes work and creates new Tags.
 
-Chief of Staff is a dispatcher, not an orchestrator. Each request has exactly
+Lead is a dispatcher, not an orchestrator. Each request has exactly
 one owner Tag, which handles it end to end and replies in the thread itself.
-Chief of Staff routes new, unclear or cross-lane requests to one owner in the
+Lead routes new, unclear or cross-lane requests to one owner in the
 same thread, so the owner sees the whole thread. It never rewords the owner's
-answer. Specialists can ask Chief of Staff for a judgment call, and nobody else.
+answer. Specialists can ask Lead for a judgment call, and nobody else.
 
 Installation state, in ``<TAG_HOME>/state``:
 
-- ``chief-of-staff.json``: which Tag holds the role, and which Tags it created.
+- ``lead.json``: which Tag holds the role, and which Tags it created.
   One file names one Tag, so only one Tag can hold the role.
 - ``tag-roster/<id>.json``: each Tag's public card (name, description, Slack
   member ID, channels), written by its bridge at startup. The agent's helper
@@ -39,8 +39,8 @@ except ImportError:
     from scripts.tag_memory import scope_lock, write_document
 
 SCHEMA_VERSION = 1
-ROLE_NAME = "Chief of Staff"
-MIGRATION_NAME = "chief-of-staff"
+ROLE_NAME = "Lead"
+MIGRATION_NAME = "lead"
 MIGRATION_VERSION = 1
 DEFAULT_MAX_TAGS = 10  # Free Slack workspaces allow 10 apps in total.
 APPROVAL_MINUTES = 60
@@ -63,8 +63,8 @@ OPEN_STATES = frozenset({"pending", "approved", "creating", "waiting_on_slack"})
 FINAL_STATES = frozenset({"rejected", "expired", "created", "failed", "refused"})
 
 
-class ChiefRefused(Exception):
-    """A refused Chief of Staff action; the message is safe to show the user."""
+class LeadRefused(Exception):
+    """A refused Lead action; the message is safe to show the user."""
 
 
 # Designation ----------------------------------------------------------------------
@@ -75,7 +75,7 @@ def _state(root: Path) -> Path:
 
 
 def record_path(root: Path) -> Path:
-    return _state(root) / "chief-of-staff.json"
+    return _state(root) / "lead.json"
 
 
 def _valid_id(value: object) -> str | None:
@@ -92,12 +92,12 @@ def read_record(root: Path) -> dict[str, Any]:
     return record
 
 
-def chief_of_staff(root: Path) -> str | None:
+def lead_id(root: Path) -> str | None:
     """The Tag ID that holds the role, or None when none is designated."""
     return _valid_id(read_record(root).get("id"))
 
 
-def created_by_chief(root: Path) -> list[str]:
+def created_by_lead(root: Path) -> list[str]:
     created = read_record(root).get("created")
     return [item for item in created if _valid_id(item)] if isinstance(created, list) else []
 
@@ -111,7 +111,7 @@ def _write_record(root: Path, change: Callable[[dict[str, Any]], None]) -> dict[
     return record
 
 
-def set_chief_of_staff(root: Path, tag_id: str) -> None:
+def set_lead(root: Path, tag_id: str) -> None:
     """Move the role to ``tag_id``. The previous holder loses it in the same write."""
     if not _valid_id(tag_id):
         raise ValueError("Choose a Tag by its ID or nickname")
@@ -119,8 +119,8 @@ def set_chief_of_staff(root: Path, tag_id: str) -> None:
     def change(record: dict[str, Any]) -> None:
         record.update(id=tag_id, set_at=time.time())
     _write_record(root, change)
-    if chief_of_staff(root) != tag_id:
-        raise RuntimeError("Tag couldn't save Chief of Staff. Nothing else changed; try again.")
+    if lead_id(root) != tag_id:
+        raise RuntimeError("Tag couldn't save Lead. Nothing else changed; try again.")
 
 
 def record_created(root: Path, tag_id: str) -> None:
@@ -159,7 +159,7 @@ def _migration_marker(root: Path) -> Path:
 def migrate(root: Path, tags: list[dict[str, Any]], main: str | None) -> str | None:
     """Migration v1: make sure one existing Tag holds the role.
 
-    ``tags`` are ``tag_instances.discover`` rows. The saved Chief of Staff is
+    ``tags`` are ``tag_instances.discover`` rows. The saved Lead is
     kept while it exists. Otherwise the main Tag gets the role, or the first
     Tag with a Slack app, or the first Tag. The migration never renames a Slack
     app or changes a Tag's settings. It is idempotent and checks itself on every
@@ -168,16 +168,16 @@ def migrate(root: Path, tags: list[dict[str, Any]], main: str | None) -> str | N
     """
     existing = [str(item["id"]) for item in tags
                 if item.get("valid") and Path(str(item.get("home", ""))).exists()]
-    current = chief_of_staff(root)
+    current = lead_id(root)
     chosen = current if current in existing else None
     if chosen is None and existing:
         with_app = [item for item in existing if _has_app(tags, item)]
         chosen = main if main in existing else (with_app or existing)[0]
-        set_chief_of_staff(root, chosen)
-    if chosen is not None and chief_of_staff(root) == chosen:
+        set_lead(root, chosen)
+    if chosen is not None and lead_id(root) == chosen:
         marker = _migration_marker(root)
         if not marker.exists():
-            write_document(marker, {"version": MIGRATION_VERSION, "completed_at": time.time(), "chief_of_staff": chosen})
+            write_document(marker, {"version": MIGRATION_VERSION, "completed_at": time.time(), "lead": chosen})
     return chosen
 
 
@@ -249,16 +249,16 @@ def cards(root: Path) -> list[Card]:
 
 
 def roster(root: Path, own_id: str, team: str = "") -> list[Card]:
-    """The Tags Chief of Staff may route to: every other Tag in the same Slack team. Flat by design."""
+    """The Tags Lead may route to: every other Tag in the same Slack team. Flat by design."""
     return [card for card in cards(root) if card.id != own_id and (not team or not card.team or card.team == team)]
 
 
-def chief_card(root: Path, own_id: str) -> Card | None:
-    """Chief of Staff's card, for a specialist that may escalate to it."""
-    chief = chief_of_staff(root)
-    if chief is None or chief == own_id:
+def lead_card(root: Path, own_id: str) -> Card | None:
+    """Lead's card, for a specialist that may escalate to it."""
+    lead = lead_id(root)
+    if lead is None or lead == own_id:
         return None
-    return next((card for card in cards(root) if card.id == chief), None)
+    return next((card for card in cards(root) if card.id == lead), None)
 
 
 def roster_text(entries: list[Card], channel: str) -> str:
@@ -276,7 +276,7 @@ def roster_text(entries: list[Card], channel: str) -> str:
 def _parse_routine(value: str) -> dict[str, str]:
     schedule, separator, prompt = value.partition("::")
     if not separator or not schedule.strip() or not prompt.strip():
-        raise ChiefRefused('Write each routine as "SCHEDULE::WHAT TO DO", for example "weekdays 09:00::Post the open bugs".')
+        raise LeadRefused('Write each routine as "SCHEDULE::WHAT TO DO", for example "weekdays 09:00::Post the open bugs".')
     return {"schedule": schedule.strip()[:80], "prompt": prompt.strip()[:1000]}
 
 
@@ -285,25 +285,25 @@ def validate_proposal(proposal: dict[str, Any]) -> dict[str, Any]:
     name = str(proposal.get("name") or "").strip()
     description = " ".join(str(proposal.get("description") or "").split())
     if not name or len(name) > NAME_LIMIT or "\n" in name:
-        raise ChiefRefused(f"Give the new Tag a one-line name of up to {NAME_LIMIT} characters.")
+        raise LeadRefused(f"Give the new Tag a one-line name of up to {NAME_LIMIT} characters.")
     if not description or len(description) > DESCRIPTION_LIMIT:
-        raise ChiefRefused(f"Describe the new Tag's lane in up to {DESCRIPTION_LIMIT} characters.")
+        raise LeadRefused(f"Describe the new Tag's lane in up to {DESCRIPTION_LIMIT} characters.")
     boundary = str(proposal.get("boundary") or "")
     if boundary not in BOUNDARIES:
-        raise ChiefRefused("A new Tag needs a real boundary: " + ", ".join(
+        raise LeadRefused("A new Tag needs a real boundary: " + ", ".join(
             f"{key} ({text})" for key, text in BOUNDARIES.items()) + ". Otherwise use a skill or a subagent.")
     why = " ".join(str(proposal.get("why_not_skill") or "").split())
     if len(why) < 10:
-        raise ChiefRefused("Say why a skill or an in-process subagent isn't enough.")
+        raise LeadRefused("Say why a skill or an in-process subagent isn't enough.")
     channels = list(dict.fromkeys(str(item) for item in proposal.get("channels") or []))
     if any(not re.fullmatch(CHANNEL_ID, item) for item in channels):
-        raise ChiefRefused("Name channels by their ID, such as C0123ABCD.")
+        raise LeadRefused("Name channels by their ID, such as C0123ABCD.")
     model = str(proposal.get("model") or "").strip()
     if model and not re.fullmatch(r"(codex|claude)(:[A-Za-z0-9._\-\[\]]+)?", model):
-        raise ChiefRefused("Choose a model such as codex:gpt-5.5 or claude:claude-sonnet-5-5, or leave it out.")
+        raise LeadRefused("Choose a model such as codex:gpt-5.5 or claude:claude-sonnet-5-5, or leave it out.")
     routines = proposal.get("routines") or []
     if not isinstance(routines, list) or len(routines) > 5:
-        raise ChiefRefused("Propose up to 5 starting routines.")
+        raise LeadRefused("Propose up to 5 starting routines.")
     routines = [_parse_routine(item) if isinstance(item, str) else _parse_routine(
         f"{item.get('schedule', '')}::{item.get('prompt', '')}" if isinstance(item, dict) else "") for item in routines]
     return {"name": name, "description": description, "boundary": boundary, "why_not_skill": why[:500],
@@ -316,10 +316,10 @@ def record_proposal(proposal: dict[str, Any]) -> str:
         from tag_handoff import append_request, current_role
     except ImportError:
         from scripts.tag_handoff import append_request, current_role
-    if not current_role().is_chief:
-        raise ChiefRefused(f"Only {ROLE_NAME} can create Tags. Ask {ROLE_NAME} for a new Tag instead.")
+    if not current_role().is_lead:
+        raise LeadRefused(f"Only {ROLE_NAME} can create Tags. Ask {ROLE_NAME} for a new Tag instead.")
     if int(os.getenv("OPENTAG_HANDOFF_DEPTH", "0") or 0) >= 1:
-        raise ChiefRefused("This run is answering another Tag, so it cannot create Tags.")
+        raise LeadRefused("This run is answering another Tag, so it cannot create Tags.")
     clean = validate_proposal(proposal)
     append_request({"kind": "propose", **clean})
     return (f"After this reply, Tag will post the proposal for {clean['name']} in this thread. "
@@ -361,11 +361,11 @@ class ProposalStore:
     def unfinished(self) -> list[dict[str, Any]]:
         return [record for record in self.all() if record.get("state") in OPEN_STATES]
 
-    def create(self, *, proposal: dict[str, Any], chief: str, team: str, channel: str, thread_ts: str,
+    def create(self, *, proposal: dict[str, Any], lead: str, team: str, channel: str, thread_ts: str,
                requester: str, now: float | None = None) -> dict[str, Any]:
         created = time.time() if now is None else now
         proposal_id = new_proposal_id()
-        record = {"schema": SCHEMA_VERSION, "id": proposal_id, "state": "pending", "chief": chief, "team": team,
+        record = {"schema": SCHEMA_VERSION, "id": proposal_id, "state": "pending", "lead": lead, "team": team,
                   "channel": channel, "thread_ts": thread_ts, "requester": requester, "created_at": created,
                   "expires_at": created + APPROVAL_MINUTES * 60, "proposal": proposal, "tag": None,
                   "card_ts": None, "step": None, "note": None}
@@ -425,22 +425,22 @@ def proposal_store(root: Path) -> ProposalStore:
     return ProposalStore(_state(root) / "tag-proposals")
 
 
-def check_limits(root: Path, proposal: dict[str, Any], *, chief: str, channel: str, allowed_channels: set[str],
+def check_limits(root: Path, proposal: dict[str, Any], *, lead: str, channel: str, allowed_channels: set[str],
                  existing_names: list[str], tag_count: int, max_tags: int) -> None:
-    """Installation limits for a new Tag. Raises ChiefRefused with what to do instead."""
-    if chief_of_staff(root) != chief:
-        raise ChiefRefused(f"Only {ROLE_NAME} can create Tags. Ask {ROLE_NAME} instead.")
+    """Installation limits for a new Tag. Raises LeadRefused with what to do instead."""
+    if lead_id(root) != lead:
+        raise LeadRefused(f"Only {ROLE_NAME} can create Tags. Ask {ROLE_NAME} instead.")
     if tag_count >= max_tags:
-        raise ChiefRefused(f"This installation already has {tag_count} Tags, the most {ROLE_NAME} may create "
-                           f"(OPENTAG_CHIEF_MAX_TAGS={max_tags}). Free Slack workspaces allow 10 apps in total.")
+        raise LeadRefused(f"This installation already has {tag_count} Tags, the most {ROLE_NAME} may create "
+                           f"(OPENTAG_LEAD_MAX_TAGS={max_tags}). Free Slack workspaces allow 10 apps in total.")
     if proposal_store(root).unfinished():
-        raise ChiefRefused("Another new Tag is still waiting for approval or being created. "
+        raise LeadRefused("Another new Tag is still waiting for approval or being created. "
                            "Finish that one first.")
     if proposal["name"].casefold() in {name.casefold() for name in existing_names}:
-        raise ChiefRefused(f"A Tag named {proposal['name']} already exists. Route the work to it instead.")
+        raise LeadRefused(f"A Tag named {proposal['name']} already exists. Route the work to it instead.")
     outside = [item for item in proposal["channels"] if item not in allowed_channels | {channel}]
     if outside:
-        raise ChiefRefused(f"A new Tag can only join channels {ROLE_NAME} is in. Not allowed: "
+        raise LeadRefused(f"A new Tag can only join channels {ROLE_NAME} is in. Not allowed: "
                            + ", ".join(f"<#{item}>" for item in outside) + ".")
 
 
@@ -465,9 +465,9 @@ def main(argv: list[str] | None = None) -> int:
         from tag_handoff import HandoffRefused
     except ImportError:
         from scripts.tag_handoff import HandoffRefused
-    parser = argparse.ArgumentParser(description="Chief of Staff's tools: see the Tags, and propose a new one.")
+    parser = argparse.ArgumentParser(description="Lead's tools: see the Tags, and propose a new one.")
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("roster", help="List the Tags Chief of Staff can route to.")
+    commands.add_parser("roster", help="List the Tags Lead can route to.")
     propose = commands.add_parser("propose", help="Propose a new Tag; a person approves it in Slack.")
     propose.add_argument("--name", required=True)
     propose.add_argument("--description", required=True, help="Its lane, in up to 140 characters.")
@@ -482,14 +482,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "roster":
             if root is None:
-                raise ChiefRefused("The roster is unavailable in this conversation.")
+                raise LeadRefused("The roster is unavailable in this conversation.")
             entries = roster(root, os.getenv("TAG_ID", ""))
             print(roster_text(entries, os.getenv("OPENTAG_CURRENT_CHANNEL_ID", "")))
         else:
             print(record_proposal({"name": args.name, "description": args.description, "boundary": args.boundary,
                                    "why_not_skill": args.why_not_skill, "channels": args.channel,
                                    "model": args.model, "routines": args.routine, "reason": args.reason}))
-    except (ChiefRefused, HandoffRefused) as exc:
+    except (LeadRefused, HandoffRefused) as exc:
         print(str(exc), file=sys.stderr)
         return 1
     return 0
@@ -502,10 +502,10 @@ if __name__ == "__main__":
 # Bridge side: one Tag's live view of the role ----------------------------------------
 
 
-class ChiefBridge:
+class LeadBridge:
     """What a bridge needs from the role. Every check reads the saved state again,
 
-    so moving Chief of Staff takes effect at once, without a restart.
+    so moving Lead takes effect at once, without a restart.
     """
 
     def __init__(self, root: Path, own_id: str, home: Path, *,
@@ -516,20 +516,20 @@ class ChiefBridge:
         self._create = create
 
     @classmethod
-    def from_environment(cls) -> "ChiefBridge | None":
+    def from_environment(cls) -> "LeadBridge | None":
         root, own, home = os.getenv("TAG_HOME", ""), os.getenv("TAG_ID", ""), os.getenv("TAG_INSTANCE_HOME", "")
         if not root or not _valid_id(own) or not home:
             return None
         return cls(Path(root), own, Path(home))
 
-    def is_chief(self) -> bool:
-        return chief_of_staff(self.root) == self.own_id
+    def is_lead(self) -> bool:
+        return lead_id(self.root) == self.own_id
 
     def lanes(self) -> list[Card]:
         return roster(self.root, self.own_id, os.getenv("SLACK_TEAM_ID", ""))
 
-    def chief(self) -> Card | None:
-        return chief_card(self.root, self.own_id)
+    def lead_card(self) -> Card | None:
+        return lead_card(self.root, self.own_id)
 
     def settings(self) -> dict[str, str]:
         """This Tag's saved settings, read fresh, so a later sign-in is seen without a restart."""
@@ -551,7 +551,7 @@ class ChiefBridge:
                    if item.get("valid") and Path(str(item.get("home", ""))).exists())
 
     def max_tags(self) -> int:
-        value = self.settings().get("OPENTAG_CHIEF_MAX_TAGS", "")
+        value = self.settings().get("OPENTAG_LEAD_MAX_TAGS", "")
         return int(value) if value.isdigit() and 1 <= int(value) <= 50 else DEFAULT_MAX_TAGS
 
     def check(self, proposal: dict[str, Any], channel: str) -> dict[str, Any]:
@@ -560,7 +560,7 @@ class ChiefBridge:
         values = self.settings()
         allowed = {item.strip() for item in values.get("SLACK_CHANNEL_IDS", "").split(",") if item.strip()}
         names = [card.name for card in cards(self.root)] + [values.get("OPENTAG_BOT_NAME", "")]
-        check_limits(self.root, clean, chief=self.own_id, channel=channel, allowed_channels=allowed,
+        check_limits(self.root, clean, lead=self.own_id, channel=channel, allowed_channels=allowed,
                      existing_names=[name for name in names if name], tag_count=self.tag_count(),
                      max_tags=self.max_tags())
         return clean
@@ -572,9 +572,9 @@ class ChiefBridge:
             import tag_creator
         except ImportError:
             from scripts import tag_creator
-        return tag_creator.create(self.root, record, chief_values=self.settings(), on_tag=on_tag)
+        return tag_creator.create(self.root, record, lead_values=self.settings(), on_tag=on_tag)
 
-    # Routes: which owner holds a thread Chief of Staff routed.
+    # Routes: which owner holds a thread Lead routed.
 
     def save_route(self, route_id: str, *, channel: str, thread_ts: str, owner: Card, requester: str) -> None:
         write_document(self.routes_root / f"{route_id}.json", {

@@ -114,46 +114,46 @@ describe("Tag detail", () => {
     expect((await screen.findByText(/Slack did not save the new name/)).closest(".edit-err")).toBeTruthy();
   });
 
-  it("shows each Tag's role, and moves Chief of Staff through the CLI when Tag supports it", async () => {
+  it("shows each Tag's role, and moves Lead through the CLI when Tag supports it", async () => {
     const api = demoBridge();
     const rows: TagRow[] = parseList((await api.tag(["list", "--json"])).stdout);
-    rows[0].chief_of_staff = false;
-    rows[0].created_by_chief = true;
-    const makeChief = vi.fn(async () => "");
+    rows[0].lead = false;
+    rows[0].created_by_lead = true;
+    const makeLead = vi.fn(async () => "");
     const say = vi.fn();
     const tags = { rows, busy: new Set<string>(), toggle: vi.fn(), workspace: vi.fn(), rename: vi.fn(), describe: vi.fn(),
-      makeChief, refresh: vi.fn(), remove: vi.fn() } as unknown as Tags;
-    const view = (canChief: boolean) => <TagDetail api={api} tags={tags} initial={rows[0].id} problems={{}} back={vi.fn()} add={vi.fn()}
-      showSettings={vi.fn()} finishSetup={vi.fn()} openAI={vi.fn()} say={say} canChief={canChief} />;
+      makeLead, refresh: vi.fn(), remove: vi.fn() } as unknown as Tags;
+    const view = (canLead: boolean) => <TagDetail api={api} tags={tags} initial={rows[0].id} problems={{}} back={vi.fn()} add={vi.fn()}
+      showSettings={vi.fn()} finishSetup={vi.fn()} openAI={vi.fn()} say={say} canLead={canLead} />;
     const { rerender } = render(view(false));
     fireEvent.click(screen.getByRole("tab", { name: "Details" }));
     expect(screen.queryByText("Role")).toBeNull();
     rerender(view(true));
-    expect(screen.getByText("Specialist · created by Chief of Staff")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Make Chief of Staff" }));
-    await vi.waitFor(() => expect(say).toHaveBeenCalledWith("Maya's Tag is now Chief of Staff"));
-    expect(makeChief).toHaveBeenCalledWith(rows[0]);
+    expect(screen.getByText("Specialist · created by Lead")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Make Lead" }));
+    await vi.waitFor(() => expect(say).toHaveBeenCalledWith("Maya's Tag is now Lead"));
+    expect(makeLead).toHaveBeenCalledWith(rows[0]);
   });
 
-  it("tells Chief of Staff how to let it create Tags when the service account isn't signed in", async () => {
+  it("tells Lead how to let it create Tags when the service account isn't signed in", async () => {
     const api = demoBridge();
     const rows: TagRow[] = parseList((await api.tag(["list", "--json"])).stdout);
     const tags = { rows, busy: new Set<string>(), toggle: vi.fn(), workspace: vi.fn(), rename: vi.fn(), describe: vi.fn(),
-      makeChief: vi.fn(), refresh: vi.fn(), remove: vi.fn() } as unknown as Tags;
+      makeLead: vi.fn(), refresh: vi.fn(), remove: vi.fn() } as unknown as Tags;
     render(<TagDetail api={api} tags={tags} initial={rows[0].id} problems={{}} back={vi.fn()} add={vi.fn()}
-      showSettings={vi.fn()} finishSetup={vi.fn()} openAI={vi.fn()} say={vi.fn()} canChief />);
+      showSettings={vi.fn()} finishSetup={vi.fn()} openAI={vi.fn()} say={vi.fn()} canLead />);
     fireEvent.click(screen.getByRole("tab", { name: "Details" }));
-    expect(screen.queryByRole("button", { name: "Make Chief of Staff" })).toBeNull();
-    expect((await screen.findByText("tag chief-of-staff sign-in")).closest(".role-acct")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Make Lead" })).toBeNull();
+    expect((await screen.findByText("tag lead sign-in")).closest(".role-acct")).toBeTruthy();
   });
 
-  it("the demo bridge moves Chief of Staff to exactly one Tag", async () => {
+  it("the demo bridge moves Lead to exactly one Tag", async () => {
     const api = demoBridge();
     const rows: TagRow[] = parseList((await api.tag(["list", "--json"])).stdout);
-    const other = rows.find((row) => !row.chief_of_staff && row.valid)!;
-    await api.tag([other.id, "chief-of-staff", "set", "--json"]);
+    const other = rows.find((row) => !row.lead && row.valid)!;
+    await api.tag([other.id, "lead", "set", "--json"]);
     const after = parseList((await api.tag(["list", "--json"])).stdout);
-    expect(after.filter((row) => row.chief_of_staff).map((row) => row.id)).toEqual([other.id]);
+    expect(after.filter((row) => row.lead).map((row) => row.id)).toEqual([other.id]);
   });
 
   it("shows the description but no Edit when the installed Tag can't change it", async () => {
