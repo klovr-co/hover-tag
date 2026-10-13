@@ -29,7 +29,9 @@ Opus 4.7 on return no thinking text unless the client asks for
   The first three Thinking steps get their own rows; later thinking joins a
   fourth counted row showing the latest summary, so tool steps keep theirs.
   Thinking never joins the "More steps" overflow row, which mixes tools; when
-  the task rows are full it updates an existing Thinking row instead.
+  the task rows are full it updates an existing Thinking row instead. While
+  thinking is on and no Thinking row exists yet, tool steps leave one slot free
+  for it, so the rows never pass the limit.
 - The private Activity record keeps every summary as the step's result.
 - `OPENTAG_SHOW_THINKING` (default `1`) is a per-Tag switch. At `0`, Tag stops
   asking either provider for summaries and drops any thinking it still gets.

@@ -3566,9 +3566,29 @@ class SlackAnswerStreamTests(unittest.TestCase):
         stream.activity({**event, "type": "activity_complete", "status": "completed",
                          "details": {"output": "Late plan"}})
 
-        self.assertEqual("Late plan", stream.task_groups["thinking:0"]["details"])
+        self.assertEqual(["Late plan"], stream.task_groups["thinking:0"]["details"])
         self.assertNotIn("details", stream.task_groups["overflow"])
+        # Later thoughts reuse that row, so the rows never pass the limit.
+        for index in range(3):
+            more = {**event, "activity_id": f"more-{index}"}
+            stream.activity({**more, "type": "activity_start"})
+            stream.activity({**more, "type": "activity_complete", "status": "completed",
+                             "details": {"output": f"Plan {index}"}})
+        self.assertEqual(slack_socket_agent.MAX_STREAM_TASKS, len(stream.task_groups))
+        self.assertEqual(4, stream.task_groups["thinking:0"]["count"])
 
+    def test_a_batch_of_long_summaries_keeps_the_latest(self) -> None:
+        limit = slack_socket_agent.MAX_STREAM_THINKING_CHARS
+        group = {"id": "g", "title": "Thinking", "count": 2, "active": 0, "failed": False, "compound": False,
+                 "details": ["a" * limit, "Latest summary"], "summarized": True}
+        details = slack_socket_agent.SlackAnswerStream._task_chunk(group)["details"]
+        self.assertEqual("\n\nLatest summary", details)
+        group["details"] = ["First", "b" * (limit * 2)]
+        details = slack_socket_agent.SlackAnswerStream._task_chunk(group)["details"]
+        self.assertTrue(details.startswith("\n\nbbb") and details.endswith("…"))
+        self.assertLessEqual(len(details), limit + 2)
+
+    @patch.dict(os.environ, {"OPENTAG_SHOW_THINKING": "0"})
     def test_task_groups_are_bounded(self) -> None:
         client = MagicMock()
         client.chat_startStream.return_value = {"ts": "3.45"}
