@@ -24,6 +24,9 @@ All notable changes to Tag are documented here.
 
 ### Fixed
 
+- A new Tag that isn't in any channel yet now starts. Before, `tag start` waited
+  for the Slack connection and gave up, even though setup said to invite the Tag
+  once it was running.
 - Tag now reads all of a long text file attached in Slack, such as a large
   HTML or log file. Before, it saw only the first 12,000 characters.
 

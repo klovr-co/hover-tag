@@ -71,6 +71,12 @@ class InvitationMemoryTests(unittest.TestCase):
         self.sync.assert_not_called()
         self.history.assert_not_called()
 
+    def test_a_tag_in_no_channels_yet_is_ready_and_waits_for_an_invitation(self):
+        self.channels.return_value = []
+        self.worker.tick()
+        self.assertTrue(self.worker.ready_for_requests())
+        self.assertEqual(self.env["SLACK_CHANNEL_IDS"], "")
+
     def test_failed_membership_lookup_does_not_reuse_stale_access(self):
         self.channels.side_effect = RuntimeError("sensitive-detail")
         self.worker.tick()
