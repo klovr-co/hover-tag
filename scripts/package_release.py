@@ -102,6 +102,11 @@ def main() -> None:
     parser.add_argument("--channel", choices=("release", "edge"), default="release")
     parser.add_argument("--commit-sha")
     parser.add_argument("--source-ref")
+    parser.add_argument(
+        "--source-branch",
+        help="maintenance branch (release/vX.Y.x) that built this release; "
+        "source_ref stays refs/heads/main so installed Tag versions accept it",
+    )
     parser.add_argument("--built-at")
     parser.add_argument("--version", help="version to stamp into the packaged archive")
     parser.add_argument("--posthog-host", default="", help=argparse.SUPPRESS)
@@ -140,6 +145,8 @@ def main() -> None:
         "version": version,
         "archive": {"name": archive.name, "sha256": digest},
     }
+    if args.source_branch:
+        provenance["source_branch"] = args.source_branch
     (args.output / "BUILD-PROVENANCE.json").write_text(
         json.dumps(provenance, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )

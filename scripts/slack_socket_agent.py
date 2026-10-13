@@ -152,6 +152,8 @@ APPROVAL_APPROVE_ACTION_ID = "opentag_approval_approve"
 APPROVAL_DENY_ACTION_ID = "opentag_approval_deny"
 APPROVAL_CHOICE_ACTION_PREFIX = "opentag_approval_choice_"
 APPROVAL_MORE_ACTION_ID = "opentag_approval_more"
+WAITING_QUEUE_ACTION_ID = "opentag_waiting_queue"
+WAITING_STEER_ACTION_ID = "opentag_waiting_steer"
 REPORT_ISSUE_ACTION_ID = "opentag_report_issue"
 FIX_WITH_AGENT_ACTION_ID = "opentag_fix_with_coding_agent"
 JOIN_COMMUNITY_ACTION_ID = "opentag_join_hover_community"
@@ -610,9 +612,15 @@ def download_thread_images(
 
 
 def download_thread_text_files(
-    messages: list[dict[str, Any]], budget: AttachmentBudget | None = None
+    messages: list[dict[str, Any]],
+    budget: AttachmentBudget | None = None,
+    attachment_dir: Path | None = None,
 ) -> list[str]:
-    """Read Slack snippets and text attachments into the current prompt only."""
+    """Read Slack snippets and text attachments into the current prompt.
+
+    A long file is inlined as a bounded preview; the full copy is saved in
+    ``attachment_dir`` so the backend can read the rest instead of guessing.
+    """
     lines: list[str] = []
     seen_file_ids: set[str] = set()
     token = require_env("SLACK_BOT_TOKEN")
@@ -634,7 +642,15 @@ def download_thread_text_files(
                     budget.record(len(data))
                 text = data.decode("utf-8", errors="replace").strip()
                 if len(text) > MAX_ATTACHMENT_TEXT_CHARS:
-                    text = text[:MAX_ATTACHMENT_TEXT_CHARS] + "\n[Attachment text truncated]"
+                    notice = "[Attachment text truncated]"
+                    if attachment_dir is not None:
+                        target = attachment_dir / stored_attachment_name(file, len(seen_file_ids))
+                        target.write_bytes(data)
+                        notice = (
+                            f"[Attachment text truncated after {MAX_ATTACHMENT_TEXT_CHARS:,} of {len(text):,} characters. "
+                            f"Read the full file at {target}]"
+                        )
+                    text = text[:MAX_ATTACHMENT_TEXT_CHARS] + "\n" + notice
                 if text:
                     lines.append(f"[Slack text attachment: {name}]\n{text}")
                 else:
@@ -952,7 +968,7 @@ def build_thread_texts(
     selected_messages = [{"files": files}]
     file_lines = [
         *oversized_lines,
-        *download_thread_text_files(selected_messages, budget),
+        *download_thread_text_files(selected_messages, budget, attachment_dir),
         *download_thread_images(selected_messages, attachment_dir, budget),
         *download_thread_binary_files(selected_messages, attachment_dir, budget),
     ]
@@ -2187,21 +2203,118 @@ ACTIVE_RUNS_LOCK = threading.Lock()
 
 
 THREAD_BUSY_MESSAGE = "I'm still working on an earlier request in this thread. Mention me again when I finish."
+WAITING_REQUEST_MESSAGE = "I'm still working on an earlier request in this thread."
+# Seconds a Queue or Steer choice stays available before the request must be sent again.
+WAITING_OFFER_SECONDS = 3600.0
 BUSY_THREADS: set[RunKey] = set()
 
 
-def reserve_thread(key: RunKey) -> bool:
-    """Claim a Slack thread for one request; False while an earlier request still runs."""
+@dataclass
+class WaitingRequest:
+    """A Slack request that arrived while its thread was busy."""
+
+    event: dict[str, Any]
+    body: dict[str, Any]
+    direct_message: bool
+    client: Any
+    logger: Any
+    offered_at: float = field(default_factory=time.monotonic)
+    # Set once the request has reached the thread reservation, which then owns passing the queue on.
+    settled: bool = False
+
+
+# Requests offered Queue or Steer, by offer ID, until the requester chooses.
+WAITING_OFFERS: dict[str, tuple[RunKey, WaitingRequest]] = {}
+# Requests that run, in order, after the thread's current request ends.
+QUEUED_REQUESTS: dict[RunKey, list[WaitingRequest]] = {}
+
+
+def reserve_thread(key: RunKey, queued: WaitingRequest | None = None) -> bool:
+    """Claim a Slack thread for one request; False while an earlier request still runs.
+
+    A queued request that loses the thread to a newer one goes back to the front
+    of the queue, so the request that holds the thread starts it next.
+    """
     with ACTIVE_RUNS_LOCK:
         if key in BUSY_THREADS:
+            if queued is not None:
+                QUEUED_REQUESTS.setdefault(key, []).insert(0, queued)
             return False
         BUSY_THREADS.add(key)
         return True
 
 
-def release_thread(key: RunKey) -> None:
+def _pop_queued_request(key: RunKey) -> WaitingRequest | None:
+    """Remove the next queued request; the caller holds ACTIVE_RUNS_LOCK."""
+    queue = QUEUED_REQUESTS.get(key)
+    if not queue:
+        return None
+    request = queue.pop(0)
+    if not queue:
+        QUEUED_REQUESTS.pop(key, None)
+    return request
+
+
+def release_thread(key: RunKey) -> WaitingRequest | None:
+    """Free a Slack thread and return the queued request that should run next."""
     with ACTIVE_RUNS_LOCK:
         BUSY_THREADS.discard(key)
+        return _pop_queued_request(key)
+
+
+def take_next_if_idle(key: RunKey) -> WaitingRequest | None:
+    """The next queued request, unless a request holds the thread and will start it itself."""
+    with ACTIVE_RUNS_LOCK:
+        return None if key in BUSY_THREADS else _pop_queued_request(key)
+
+
+def offer_waiting_request(key: RunKey, request: WaitingRequest) -> str:
+    offer_id = uuid.uuid4().hex
+    with ACTIVE_RUNS_LOCK:
+        for stale in [i for i, (_, r) in WAITING_OFFERS.items()
+                      if request.offered_at - r.offered_at > WAITING_OFFER_SECONDS]:
+            WAITING_OFFERS.pop(stale, None)
+        WAITING_OFFERS[offer_id] = (key, request)
+    return offer_id
+
+
+def take_waiting_request(offer_id: str) -> tuple[RunKey, WaitingRequest] | None:
+    with ACTIVE_RUNS_LOCK:
+        offer = WAITING_OFFERS.pop(offer_id, None)
+    if offer is None or time.monotonic() - offer[1].offered_at > WAITING_OFFER_SECONDS:
+        return None
+    return offer
+
+
+def queue_waiting_request(key: RunKey, request: WaitingRequest, *, first: bool = False) -> bool:
+    """Queue a request behind the thread's current one; False when the thread is already free."""
+    with ACTIVE_RUNS_LOCK:
+        if key not in BUSY_THREADS:
+            return False
+        queue = QUEUED_REQUESTS.setdefault(key, [])
+        if first:
+            queue.insert(0, request)
+        else:
+            queue.append(request)
+        return True
+
+
+def waiting_request_blocks(offer_id: str, team: str, channel: str, thread_ts: str,
+                           user_id: str) -> list[dict[str, Any]]:
+    value = json.dumps({"offer_id": offer_id, "team": team, "channel": channel,
+                        "thread_ts": thread_ts, "user": user_id}, separators=(",", ":"))
+    return [
+        {"type": "section", "text": {"type": "plain_text", "text":
+            f"{WAITING_REQUEST_MESSAGE}\nWhat should I do with your new message?"}},
+        {"type": "actions", "elements": [
+            {"type": "button", "action_id": WAITING_QUEUE_ACTION_ID, "style": "primary",
+             "text": {"type": "plain_text", "text": "Queue"}, "value": value},
+            {"type": "button", "action_id": WAITING_STEER_ACTION_ID,
+             "text": {"type": "plain_text", "text": "Steer"}, "value": value},
+        ]},
+        {"type": "context", "elements": [{"type": "mrkdwn", "text":
+            "*Queue:* answer after. *Steer:* stop and answer this now."}]},
+    ]
 
 
 def register_active_run(key: RunKey, run: ActiveBackendRun) -> None:
@@ -3455,7 +3568,10 @@ def create_app(
             raise RuntimeError(f"OPENTAG_PEER_TAGS is invalid: {exc}") from None
     # Other Tags whose bot messages this Tag accepts; everything else from bots is ignored.
     peer_ids = frozenset(peer.user_id for peer in peers)
-    handoff_store = handoff_store or tag_handoff.HandoffStore(instance_home() / "state" / "handoffs")
+    # Live-test automation only: Slack apps whose posts carry their user's identity. Empty by default.
+    test_app_ids = frozenset(app_id.strip() for app_id in os.getenv("OPENTAG_TEST_APP_IDS", "").split(",")
+                             if app_id.strip())
+    handoff_store =handoff_store or tag_handoff.HandoffStore(instance_home() / "state" / "handoffs")
     # A restart can end a combine run before it finishes; the next deadline scan picks it up again.
     handoff_store.requeue_combining()
     handled_peer_requests: set[tuple[str, str]] = set()
@@ -4306,6 +4422,12 @@ def create_app(
                 name=f"tag-handoff-{record['id']}", daemon=True,
             ).start()
 
+    def posted_by_test_app(event: dict[str, Any]) -> bool:
+        """Whether a listed test app posted this as a person, which Slack marks with a bot id."""
+        app_id = event.get("app_id") or (event.get("bot_profile") or {}).get("app_id")
+        user = event.get("user")
+        return bool(event.get("bot_id") and app_id in test_app_ids and user and user not in peer_ids)
+
     def handle_peer_message(event: dict[str, Any], body: dict[str, Any], client: Any, logger: Any) -> None:
         sender = event.get("user", "")
         if sender not in peer_ids:
@@ -4382,6 +4504,7 @@ def create_app(
         prior_error_reference: str | None = None,
         peer_request: tuple[str, str] | None = None,
         combine: dict[str, Any] | None = None,
+        queued: WaitingRequest | None = None,
     ) -> None:
         channel = event["channel"]
         thread_ts = event.get("thread_ts") or event["ts"]
@@ -4484,12 +4607,32 @@ def create_app(
 
         # Hold the thread until this request ends so two mentions cannot resume one conversation.
         thread_key = RunKey(team, channel, thread_ts)
-        if not reserve_thread(thread_key):
+        waiting = queued or (
+            WaitingRequest(event, body, direct_message, client, logger)
+            if peer_request is None and combine is None
+            else None
+        )
+        if queued is not None:
+            queued.settled = True
+        if not reserve_thread(thread_key, queued):
             indicator.clear()
-            client.chat_postMessage(
+            if queued is not None:
+                return  # Back at the front of the queue; the current request starts it next.
+            if waiting is None:
+                client.chat_postMessage(
+                    channel=channel,
+                    thread_ts=thread_ts,
+                    text=THREAD_BUSY_MESSAGE,
+                )
+                return
+            client.chat_postEphemeral(
                 channel=channel,
+                user=user_id,
                 thread_ts=thread_ts,
-                text=THREAD_BUSY_MESSAGE,
+                text=WAITING_REQUEST_MESSAGE,
+                blocks=waiting_request_blocks(
+                    offer_waiting_request(thread_key, waiting), team, channel, thread_ts, user_id,
+                ),
             )
             return
 
@@ -4933,11 +5076,82 @@ def create_app(
                 footer_blocks,
             )
         finally:
-            release_thread(thread_key)
             output_manifest.unlink(missing_ok=True)
             memory_receipts.unlink(missing_ok=True)
             if handoff_requests is not None:
                 handoff_requests.unlink(missing_ok=True)
+            next_request = release_thread(thread_key)
+            if next_request is not None:
+                start_waiting_request(next_request)
+
+    def run_queued_request(request: WaitingRequest) -> None:
+        """Run a queued request; if it ends before taking the thread, keep the queue moving."""
+        key = RunKey(request.body.get("team_id") or request.event.get("team") or "",
+                     request.event["channel"], request.event.get("thread_ts") or request.event["ts"])
+        try:
+            handle_invocation(request.event, request.body, request.client, request.logger,
+                              direct_message=request.direct_message, queued=request)
+        except Exception:  # noqa: BLE001 - one failed request must not strand those queued behind it
+            request.logger.exception("Could not run the queued Slack request")
+        finally:
+            if not request.settled:
+                following = take_next_if_idle(key)
+                if following is not None:
+                    start_waiting_request(following)
+
+    def start_waiting_request(request: WaitingRequest) -> None:
+        threading.Thread(target=run_queued_request, args=(request,),
+                         name="slack-queued-request", daemon=True).start()
+
+    @app.action(WAITING_QUEUE_ACTION_ID)
+    @app.action(WAITING_STEER_ACTION_ID)
+    def choose_waiting_request(ack: Any, body: dict[str, Any], client: Any, logger: Any,
+                               respond: Any) -> None:
+        ack()
+        user_id = body.get("user", {}).get("id", "")
+        channel = body.get("channel", {}).get("id", "")
+        body_team = body.get("team", {}).get("id", "") or body.get("team_id", "")
+        try:
+            action = body["actions"][0]
+            steer = action.get("action_id") == WAITING_STEER_ACTION_ID
+            metadata = json.loads(action["value"])
+            offer_id = metadata["offer_id"]
+            team = metadata["team"]
+            thread_ts = metadata["thread_ts"]
+            if not all(isinstance(value, str) and value for value in (
+                    offer_id, team, metadata["channel"], thread_ts, metadata["user"])):
+                raise ValueError("invalid waiting request metadata")
+            if (
+                body_team != team
+                or channel != metadata["channel"]
+                or user_id != metadata["user"]
+                or not slack_user_allowed(user_id, allowed_user_ids)
+                or not slack_conversation_allowed(
+                    channel,
+                    direct_message=is_direct_message_channel(channel),
+                )
+            ):
+                return
+            offer = take_waiting_request(offer_id)
+            if offer is None or offer[0] != RunKey(team, channel, thread_ts):
+                respond(text="This choice has expired. Mention me again to send your message.",
+                        response_type="ephemeral", replace_original=True)
+                return
+            key, request = offer
+            if not queue_waiting_request(key, request, first=steer):
+                text = "The earlier request has finished. Starting yours now."
+                start_waiting_request(request)
+            elif steer:
+                # The steering message's time keeps this from stopping a run that began after it.
+                stopped = cancel_active_run(key, request.event.get("ts"))
+                text = ("Stopping the current request. I'll answer yours next."
+                        if stopped else "I'll answer yours as soon as the current request ends.")
+            else:
+                text = "Queued. I'll answer it after the current request."
+            respond(text=text, blocks=[{"type": "section", "text": {"type": "plain_text", "text": text}}],
+                    response_type="ephemeral", replace_original=True)
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            logger.warning("Could not queue or steer the Slack request: %s", exc)
 
     @app.action(RETRY_ACTION_ID)
     def retry_request(ack: Any, body: dict[str, Any], client: Any, logger: Any) -> None:
@@ -5019,7 +5233,10 @@ def create_app(
         ):
             logger.warning("Ignoring Open Tag mention from unapproved Slack channel %s", channel)
             return
-        if event.get("bot_id") or event.get("user") in peer_ids:
+        if posted_by_test_app(event):
+            # handle_invocation still requires the poster to be an authorized user.
+            event = {key: value for key, value in event.items() if key not in {"bot_id", "bot_profile", "app_id"}}
+        elif event.get("bot_id") or event.get("user") in peer_ids:
             handle_peer_message(event, body, client, logger)
             return
         handle_invocation(event, body, client, logger, direct_message=False)

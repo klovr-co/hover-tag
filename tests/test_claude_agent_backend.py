@@ -575,6 +575,44 @@ class ClaudeAgentRunTests(unittest.TestCase):
         self.assertEqual("interrupted", status)
         self.assertEqual("interrupted", events[-2]["status"])
 
+    def test_stop_while_background_agents_work_ends_the_request(self) -> None:
+        async def script(client):
+            yield TaskStartedMessage("a1")
+            yield ResultMessage(result="Agents are working.")
+            yield AssistantMessage([{"id": "t1", "name": "Bash", "input": {"command": "sleep 60"}}],
+                                   parent_tool_use_id="agent")
+            self.control.write_text("run1", encoding="utf-8")
+            await client.interrupted.wait()
+            # Between turns Claude has nothing to abort and reports no result.
+            await asyncio.sleep(30)
+            yield ResultMessage(result="late")
+
+        started = time.monotonic()
+        (status, _detail), events = self.run_agent(script)
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertEqual("interrupted", status)
+        self.assertEqual({"type": "activity_complete", "activity_id": "t1", "label": "Running a command…",
+                          "status": "interrupted", "details": {}}, events[-2])
+        self.assertEqual({"type": "turn_complete", "status": "interrupted"}, events[-1])
+        self.assertTrue(FakeClient.instances[0].disconnected)
+
+    def test_unconfirmed_stop_is_bounded(self) -> None:
+        async def script(client):
+            yield AssistantMessage([{"id": "t1", "name": "Bash", "input": {"command": "sleep 60"}}])
+            self.control.write_text("run1", encoding="utf-8")
+            await client.interrupted.wait()
+            await asyncio.sleep(30)
+            yield ResultMessage(is_error=True, terminal_reason="aborted_tools")
+
+        with patch.object(claude_agent_backend, "INTERRUPT_GRACE_SECONDS", 0.05), patch.object(
+            claude_agent_backend, "CONTROL_POLL_SECONDS", 0.01
+        ):
+            started = time.monotonic()
+            (status, _detail), events = self.run_agent(script)
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertEqual("interrupted", status)
+        self.assertEqual({"type": "turn_complete", "status": "interrupted"}, events[-1])
+
     def test_idle_timeout_interrupts_and_reports_timeout(self) -> None:
         async def script(client):
             await client.interrupted.wait()
@@ -615,6 +653,27 @@ class ClaudeAgentRunTests(unittest.TestCase):
         answers = [event["text"] for event in events if event["type"] == "message_complete"]
         self.assertEqual(["All done."], answers)
         self.assertTrue(FakeClient.instances[0].disconnected)
+
+    def test_resume_after_a_stop_skips_the_stopped_tasks_empty_turn(self) -> None:
+        # The order Claude Code sends when a stopped background command's
+        # notification is still queued in the resumed conversation.
+        async def script(_client):
+            yield TaskNotificationMessage("shell", status="stopped")
+            yield SystemMessage("init", {"session_id": "s-1"})
+            yield ResultMessage(result="", num_turns=0, session_id="s-1")
+            yield SystemMessage("init", {"session_id": "s-1"})
+            for event in stream("m1", "4", stop_reason="end_turn"):
+                yield event
+            yield ResultMessage(result="4", session_id="s-1")
+
+        FakeClient.script = script
+        events: list[dict[str, Any]] = []
+        agent = ClaudeAgentRun(cwd=self.root, timeout=30, resume_session_id="s-1")
+        result = agent.run("prompt", model=None, reasoning_effort=None, emit=events.append)
+
+        self.assertEqual(("completed", ""), result)
+        self.assertEqual(["4"], [event["text"] for event in events if event["type"] == "message_complete"])
+        self.assertEqual(1, sum(event["type"] == "turn_complete" for event in events))
 
     def test_resumes_the_slack_threads_session_and_reports_it(self) -> None:
         async def script(_client):

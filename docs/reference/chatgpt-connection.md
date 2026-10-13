@@ -7,7 +7,7 @@ share the connection.
 ## Connect in the app
 
 1. Make sure Codex is installed on your Mac.
-2. Open **Settings** → **General** → **AI connections**.
+2. Open **Settings** → **AI** → **AI connections**.
 3. Next to Codex, choose **Change account**.
 4. Choose **ChatGPT account for all Tags**, then **Continue in browser**.
 5. In your browser, choose **Continue with ChatGPT** and allow Tag to use your

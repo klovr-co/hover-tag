@@ -119,15 +119,17 @@ class OpenTagAgentPromptTests(unittest.TestCase):
         previous_transport = os.environ.get("OPENTAG_TRANSPORT")
         os.environ["OPENTAG_TRANSPORT"] = "slack"
         try:
-            prompt = opentag_agent.build_prompt(
-                skill_dir=Path("/tmp/open-tag"),
-                workdir=Path("/tmp/workspace"),
-                channel_id="C123",
-                question="Use an installed local tool",
-                thread_text="",
-                attachments_dir=None,
-                allowed_scopes="file://local/tmp/workspace",
-            )
+            # CI interpreter paths are random and can contain "gws" by chance.
+            with patch.object(opentag_agent.sys, "executable", "/usr/bin/python3"):
+                prompt = opentag_agent.build_prompt(
+                    skill_dir=Path("/tmp/open-tag"),
+                    workdir=Path("/tmp/workspace"),
+                    channel_id="C123",
+                    question="Use an installed local tool",
+                    thread_text="",
+                    attachments_dir=None,
+                    allowed_scopes="file://local/tmp/workspace",
+                )
         finally:
             if previous_transport is None:
                 del os.environ["OPENTAG_TRANSPORT"]

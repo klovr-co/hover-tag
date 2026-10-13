@@ -478,7 +478,7 @@ flowchart LR
 | Choose a model | Pick one. The agent follows the model. | `tag NAME settings ai model claude:opus` |
 | Choose a thinking level | Pick one the model offers, or the model's default. | `tag NAME settings ai effort high` (or `default`) |
 | Apply | The app restarts a running Tag. | Add `--restart`, or confirm when asked. |
-| Connect accounts | Settings → General → **AI connections** | `tag settings ai sign-in codex\|claude` |
+| Connect accounts | Settings → AI → **AI connections** | `tag settings ai sign-in codex\|claude` |
 
 Accounts are shared by all Tags on the computer. If the saved model is no longer
 offered, the app and Slack's error message say so; pick another model.
@@ -570,6 +570,9 @@ flowchart LR
 | Check health | Home: *N of M online*; the Tag's Logs tab | `tag NAME status`, `tag NAME doctor`, `tag NAME logs` |
 | Start or stop | The Tag's switch; **Start all** / **Stop all** per workspace; the menu bar | `tag NAME start` / `stop`; `tag start --workspace TEAM` |
 | Keep running after login | Settings → General → **Keep Tags running** and **Open Tag at login** | `tag autostart on` |
+| Start, stop, or check memory | Settings → AI → **Memory** | `tag memory start` / `stop` / `status` |
+| Skip the built-in search model at install | Install → **Continue** → **Memory search** → **Your own endpoint** → **Continue** | `./install.sh --skip-memory-model` (or answer the prompt) |
+| Switch the search model later | Settings → AI → **Memory** → **Search model** | `tag memory embedding local\|custom`; `tag settings` → Workspace and memory |
 | Rename or describe | Details → **Rename** / description **Edit** | `tag NAME rename "Name"`, `tag NAME describe "…"` |
 | Change the model | Details → **Model** | `tag NAME settings ai model VALUE` |
 | Update | Settings → **Updates** → **Update Tag** updates the app and the runtime together; choose Stable, Beta, or Alpha | `tag upgrade`; `tag upgrade --channel beta` |
