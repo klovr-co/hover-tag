@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
 import { bridge, type AppInfo, type Bridge } from "./lib/bridge";
 import { compatibility, isDraft, parseJSON, parseList, status, type Group, type VersionInfo } from "./lib/protocol";
+import { setEmbedding } from "./lib/memory";
 import { checkUpdate, initialUpdate, installUpdate, updateReducer } from "./lib/updates";
 import { useTags } from "./lib/tags";
 import { TrackContext, useTelemetry, type AppEvents } from "./lib/telemetry";
@@ -13,21 +14,22 @@ import { glide } from "./lib/motion";
 import { Connect } from "./components/Connect";
 import { Home } from "./components/Home";
 import { QuickAdd } from "./components/QuickAdd";
-import { Installing, Starting, Welcome } from "./components/Install";
+import { Installing, NO_CUSTOM, Starting, Welcome, type InstallChoice } from "./components/Install";
 import { AI_CAPABILITY, API_CAPABILITY, SHARED_AI_CAPABILITY } from "./lib/ai";
 import { AISettings } from "./components/AISettings";
-import { Settings, type SettingsTab } from "./components/Settings";
+import { MemorySettings, Settings, type SettingsTab } from "./components/Settings";
 import { TagDetail, type Tab as TagTab } from "./components/TagDetail";
 import { Toast } from "./components/ui";
 
 type Screen =
   | { name: "loading" }
   | { name: "welcome" }
-  | { name: "installing"; attempt: number }
+  | ({ name: "installing"; attempt: number } & InstallChoice)
   | { name: "home" }
   | { name: "connect"; args: string[]; workspace?: string; workspaceName?: string; enterprise?: string | null }
   | { name: "settings"; tab?: SettingsTab; privacy?: boolean }
   | { name: "ai"; resume?: string[] }
+  | { name: "memory" }
   /** `opened` counts Slack links, so a second link resets an open Tag screen. */
   | { name: "tag"; id: string; tab?: TagTab; opened?: number }
   /** Settings > Replay onboarding: the first-run screens again, changing nothing. */
@@ -257,8 +259,16 @@ export function App() {
   }
   const home = () => { setScreen({ name: "home" }); void tags.refresh(); watch.recheck(); };
   // A reinstall keeps existing Tags: return to them instead of setting up a first Tag again.
-  const afterInstall = async (command: string) => {
+  const afterInstall = async (command: string, choice: InstallChoice = NO_CUSTOM) => {
     setInfo({ ...info, cli: command || info.cli || "tag" });
+    // The installer skipped the built-in model, so save the custom choice now; otherwise memory
+    // would fetch that model the first time it starts.
+    if (choice.skipModel && choice.baseUrl && choice.model) {
+      const saved = await setEmbedding(api, "custom", choice.apiKey, { model: choice.model, baseUrl: choice.baseUrl });
+      if (!saved.ok) say(`Memory will use the default search model until you fix this in Settings → AI. ${saved.error}`);
+    } else if (choice.skipModel) {
+      say("Set your search model in Settings → AI. Until then, memory downloads the built-in model when it starts.");
+    }
     const listed = await api.tag(["list", "--json"]).catch(() => null);
     let empty = false;
     // Only a list that reads cleanly may start first-Tag setup; otherwise Home shows the error and retries.
@@ -270,17 +280,17 @@ export function App() {
     setQuick({ workspace: group.key, workspaceName: group.label, workspaceIcon: group.icon, enterprise: group.enterprise,
       modelsFrom: group.rows.find((row) => row.valid && !isDraft(row))?.id ?? null });
   // These screens are always --flow-h tall and scroll inside, so moving between them never resizes the window.
-  const fixed = screen.name === "home" || screen.name === "settings" || screen.name === "ai";
+  const fixed = screen.name === "home" || screen.name === "settings" || screen.name === "ai" || screen.name === "memory";
   return (
     <TrackContext.Provider value={track}>
       <main ref={setRoot} className={`app${info.platform === "macos" ? " overlay" : ""}${screen.name === "home" ? " home" : ""}${fixed ? " fixed" : ""}${screen.name === "tag" ? " wide" : ""}`}>
         {screen.name === "replay" && <Welcome api={api} platform={info.platform} preview={() => setScreen({ name: "settings", tab: "about" })} />}
-        {screen.name === "welcome" && <Welcome api={api} platform={info.platform} install={() => setScreen({ name: "installing", attempt: 0 })} />}
+        {screen.name === "welcome" && <Welcome api={api} platform={info.platform} install={(choice) => setScreen({ name: "installing", attempt: 0, ...choice })} />}
         {screen.name === "installing" && (
-          <Installing key={screen.attempt} api={api}
-            retry={() => setScreen({ name: "installing", attempt: screen.attempt + 1 })}
+          <Installing key={screen.attempt} api={api} skipModel={screen.skipModel}
+            retry={() => setScreen({ ...screen, attempt: screen.attempt + 1 })}
             cancel={() => setScreen({ name: "welcome" })}
-            done={(command) => void afterInstall(command)} />
+            done={(command) => void afterInstall(command, screen)} />
         )}
         {screen.name === "home" && !tags.loaded && <Starting error={tags.error} retry={() => void tags.refresh()} />}
         {screen.name === "home" && tags.loaded && (
@@ -305,10 +315,12 @@ export function App() {
         {screen.name === "settings" && (
           <Settings key={screen.tab} initialTab={screen.tab} showPrivacy={screen.privacy} api={api} info={info} tags={tags} telemetry={telemetry} close={home} update={update} check={() => void check()}
             runUpdate={() => void runUpdate()} replay={() => setScreen({ name: "replay" })} switched={(done) => dispatchUpdate({ type: "updated", update: done })}
-            openAI={capabilities.includes(SHARED_AI_CAPABILITY) ? () => setScreen({ name: "ai" }) : undefined} />
+            openAI={capabilities.includes(SHARED_AI_CAPABILITY) ? () => setScreen({ name: "ai" }) : undefined}
+            openMemory={() => setScreen({ name: "memory" })} />
         )}
+        {screen.name === "memory" && <MemorySettings api={api} close={() => setScreen({ name: "settings", tab: "ai" })} />}
         {screen.name === "ai" && (
-          <AISettings api={api} tags={tags} apiConnections={capabilities.includes(API_CAPABILITY)} close={() => { watch.recheck(); setScreen(screen.resume ? { name: "connect", args: screen.resume } : { name: "settings" }); }} />
+          <AISettings api={api} tags={tags} apiConnections={capabilities.includes(API_CAPABILITY)} close={() => { watch.recheck(); setScreen(screen.resume ? { name: "connect", args: screen.resume } : { name: "settings", tab: "ai" }); }} />
         )}
         {screen.name === "tag" && (
           <TagDetail key={screen.opened ?? 0} api={api} tags={tags} initial={screen.id} initialTab={screen.tab} problems={watch.problems} back={home} add={add}

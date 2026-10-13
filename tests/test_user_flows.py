@@ -111,21 +111,30 @@ class FlowTests(unittest.TestCase):
         """Run tag start while another operation holds this Tag's start lock."""
         other = LifecycleLock(self.home / "state/start.lock").acquire()
         timer = threading.Timer(release_after, other.release) if release_after is not None else None
-        if timer:
-            timer.start()
+        pending_row, started = tag_cli.display.pending_row, []
+
+        def waiting(name, value):
+            # Release only once start is waiting, so a slow runner cannot free the lock before start looks.
+            pending_row(name, value)
+            if timer and not started:
+                started.append(True)
+                timer.start()
+
         try:
             # The one-time shared AI migration and ID rename are already done on set-up Tags.
             with patch.object(tag_cli, "START_LOCK_WAIT_SECONDS", wait), patch.object(
                 tag_cli, "_migrate_shared_ai"
             ), patch.object(tag_cli, "_rename", return_value=None), patch.object(tag_cli, "missing_runtime_dependencies", return_value=()), patch.object(
                 tag_cli, "slack_ready", return_value=True
-            ), patch.object(tag_cli, "ensure_shared_memory") as memory:
+            ), patch.object(tag_cli, "ensure_shared_memory") as memory, patch.object(
+                tag_cli.display, "pending_row", side_effect=waiting
+            ):
                 try:
                     return self.invoke(list(args)), memory
                 except RuntimeError as error:
                     return error, memory
         finally:
-            if timer:
+            if started:
                 timer.join()
             else:
                 other.release()

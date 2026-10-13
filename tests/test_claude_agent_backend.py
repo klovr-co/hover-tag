@@ -126,6 +126,53 @@ class ClaudeEventMapperTests(unittest.TestCase):
         )
         self.assertEqual({"type": "turn_complete", "status": "completed"}, events[-1])
 
+    def thinking_stream(self, message_id: str, *chunks: str, stop: bool = True) -> list[StreamEvent]:
+        events = [StreamEvent({"type": "message_start", "message": {"id": message_id}}),
+                  StreamEvent({"type": "content_block_start", "index": 0,
+                               "content_block": {"type": "thinking", "thinking": ""}})]
+        events.extend(StreamEvent({"type": "content_block_delta", "index": 0,
+                                   "delta": {"type": "thinking_delta", "thinking": chunk}}) for chunk in chunks)
+        if stop:
+            events.append(StreamEvent({"type": "content_block_stop", "index": 0}))
+        return events
+
+    def test_thinking_summary_becomes_a_completed_activity(self) -> None:
+        mapper = ClaudeEventMapper(thinking=True)
+        events = [event for message in [
+            *self.thinking_stream("m1", "Owners are under Roles; ", "read that first."),
+            *stream("m1", "Done.", stop_reason="end_turn"),
+            ResultMessage(result="Done."),
+        ] for event in mapper.map(claude_agent_backend.message_payload(message))]
+
+        activity = [event for event in events if event["type"].startswith("activity_")]
+        self.assertEqual([
+            {"type": "activity_start", "activity_id": "m1:thinking:0", "label": "Thinking…",
+             "wait_label": "Still thinking…", "details": {"tool": "Thinking"}},
+            {"type": "activity_complete", "activity_id": "m1:thinking:0", "label": "Thinking…",
+             "status": "completed", "details": {"output": "Owners are under Roles; read that first."}},
+        ], activity)
+        self.assertNotIn("Owners", json.dumps([e for e in events if e["type"].startswith("message_")]))
+
+    def test_thinking_stays_private_when_the_tag_does_not_share_it(self) -> None:
+        events = mapped([*self.thinking_stream("m1", "private plan"), ResultMessage(result="ok")])
+        self.assertNotIn("private plan", json.dumps(events))
+        self.assertFalse([event for event in events if event["type"].startswith("activity_")])
+
+    def test_empty_thinking_completes_without_details(self) -> None:
+        mapper = ClaudeEventMapper(thinking=True)
+        events = [event for message in self.thinking_stream("m1")
+                  for event in mapper.map(claude_agent_backend.message_payload(message))]
+        self.assertEqual({}, events[-1]["details"])
+
+    def test_interrupted_thinking_is_closed(self) -> None:
+        mapper = ClaudeEventMapper(thinking=True)
+        for message in self.thinking_stream("m1", "half a thought", stop=False):
+            mapper.map(claude_agent_backend.message_payload(message))
+        events = mapper.interrupted()
+        self.assertEqual("interrupted", events[0]["status"])
+        self.assertEqual({"output": "half a thought"}, events[0]["details"])
+        self.assertEqual({"type": "turn_complete", "status": "interrupted"}, events[-1])
+
     def test_waits_for_background_agents_before_completing(self) -> None:
         events = mapped([
             AssistantMessage([{"id": "t1", "name": "Agent", "input": {"run_in_background": True}}]),
@@ -385,6 +432,16 @@ class ClaudeAgentRunTests(unittest.TestCase):
         self.run_agent(script, model=settings.model, reasoning_effort=settings.reasoning_effort)
         self.assertEqual(("opus", "max"), (FakeClient.instances[0].options.model, FakeClient.instances[0].options.effort))
 
+    def test_requests_thinking_summaries_unless_the_tag_keeps_them_private(self) -> None:
+        async def script(_client):
+            yield ResultMessage(result="ok")
+
+        self.run_agent(script)
+        self.assertEqual({"thinking-display": "summarized"}, FakeClient.instances[0].options.extra_args)
+        with patch.dict(os.environ, {"OPENTAG_SHOW_THINKING": "0"}):
+            self.run_agent(script)
+        self.assertFalse(hasattr(FakeClient.instances[1].options, "extra_args"))
+
     def test_claude_auto_memory_is_disabled_for_tag_runs(self) -> None:
         async def script(_client):
             yield ResultMessage(result="ok")
@@ -575,6 +632,44 @@ class ClaudeAgentRunTests(unittest.TestCase):
         self.assertEqual("interrupted", status)
         self.assertEqual("interrupted", events[-2]["status"])
 
+    def test_stop_while_background_agents_work_ends_the_request(self) -> None:
+        async def script(client):
+            yield TaskStartedMessage("a1")
+            yield ResultMessage(result="Agents are working.")
+            yield AssistantMessage([{"id": "t1", "name": "Bash", "input": {"command": "sleep 60"}}],
+                                   parent_tool_use_id="agent")
+            self.control.write_text("run1", encoding="utf-8")
+            await client.interrupted.wait()
+            # Between turns Claude has nothing to abort and reports no result.
+            await asyncio.sleep(30)
+            yield ResultMessage(result="late")
+
+        started = time.monotonic()
+        (status, _detail), events = self.run_agent(script)
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertEqual("interrupted", status)
+        self.assertEqual({"type": "activity_complete", "activity_id": "t1", "label": "Running a command…",
+                          "status": "interrupted", "details": {}}, events[-2])
+        self.assertEqual({"type": "turn_complete", "status": "interrupted"}, events[-1])
+        self.assertTrue(FakeClient.instances[0].disconnected)
+
+    def test_unconfirmed_stop_is_bounded(self) -> None:
+        async def script(client):
+            yield AssistantMessage([{"id": "t1", "name": "Bash", "input": {"command": "sleep 60"}}])
+            self.control.write_text("run1", encoding="utf-8")
+            await client.interrupted.wait()
+            await asyncio.sleep(30)
+            yield ResultMessage(is_error=True, terminal_reason="aborted_tools")
+
+        with patch.object(claude_agent_backend, "INTERRUPT_GRACE_SECONDS", 0.05), patch.object(
+            claude_agent_backend, "CONTROL_POLL_SECONDS", 0.01
+        ):
+            started = time.monotonic()
+            (status, _detail), events = self.run_agent(script)
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertEqual("interrupted", status)
+        self.assertEqual({"type": "turn_complete", "status": "interrupted"}, events[-1])
+
     def test_idle_timeout_interrupts_and_reports_timeout(self) -> None:
         async def script(client):
             await client.interrupted.wait()
@@ -615,6 +710,27 @@ class ClaudeAgentRunTests(unittest.TestCase):
         answers = [event["text"] for event in events if event["type"] == "message_complete"]
         self.assertEqual(["All done."], answers)
         self.assertTrue(FakeClient.instances[0].disconnected)
+
+    def test_resume_after_a_stop_skips_the_stopped_tasks_empty_turn(self) -> None:
+        # The order Claude Code sends when a stopped background command's
+        # notification is still queued in the resumed conversation.
+        async def script(_client):
+            yield TaskNotificationMessage("shell", status="stopped")
+            yield SystemMessage("init", {"session_id": "s-1"})
+            yield ResultMessage(result="", num_turns=0, session_id="s-1")
+            yield SystemMessage("init", {"session_id": "s-1"})
+            for event in stream("m1", "4", stop_reason="end_turn"):
+                yield event
+            yield ResultMessage(result="4", session_id="s-1")
+
+        FakeClient.script = script
+        events: list[dict[str, Any]] = []
+        agent = ClaudeAgentRun(cwd=self.root, timeout=30, resume_session_id="s-1")
+        result = agent.run("prompt", model=None, reasoning_effort=None, emit=events.append)
+
+        self.assertEqual(("completed", ""), result)
+        self.assertEqual(["4"], [event["text"] for event in events if event["type"] == "message_complete"])
+        self.assertEqual(1, sum(event["type"] == "turn_complete" for event in events))
 
     def test_resumes_the_slack_threads_session_and_reports_it(self) -> None:
         async def script(_client):
