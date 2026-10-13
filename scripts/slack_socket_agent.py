@@ -68,7 +68,7 @@ try:
     from .tag_activity_details import sanitize_activity_details
     from .tag_approval_choices import sanitize_review_details
     from .tag_activity_labels import activity_title_for_status, readable_activity_title
-    from .agent_activity import THINKING_LABEL
+    from .agent_activity import THINKING_LABEL, show_thinking
     from .tag_paths import instance_home, tag_temp_dir
     from .record_output_artifact import channel_artifact_directory
     from . import slack_channels
@@ -111,7 +111,7 @@ except ImportError:  # Direct script execution does not create a package context
     from tag_activity_details import sanitize_activity_details
     from tag_approval_choices import sanitize_review_details
     from tag_activity_labels import activity_title_for_status, readable_activity_title
-    from agent_activity import THINKING_LABEL
+    from agent_activity import THINKING_LABEL, show_thinking
     from record_output_artifact import channel_artifact_directory
     from tag_paths import instance_home, tag_temp_dir
     import slack_channels
@@ -1858,8 +1858,14 @@ class SlackAnswerStream:
                 if thinking:
                     key = f"thinking:{min(self.thinking_rows, MAX_STREAM_THINKING_TASKS - 1)}"
                     self.thinking_rows += 1
-                if key not in self.task_groups and len(self.task_groups) >= MAX_STREAM_TASKS - 1:
-                    key = "overflow"
+                    if key not in self.task_groups and len(self.task_groups) >= MAX_STREAM_TASKS:
+                        # Thinking never joins the mixed overflow row, where its summary would sit under a tool title.
+                        key = next((k for k in reversed(self.task_groups) if k.startswith("thinking:")), key)
+                elif key not in self.task_groups:
+                    # Until a Thinking row exists, keep a slot free for it so the rows stay within the limit.
+                    reserved = 1 if show_thinking() and not any(k.startswith("thinking:") for k in self.task_groups) else 0
+                    if len(self.task_groups) >= MAX_STREAM_TASKS - 1 - reserved:
+                        key = "overflow"
                 self.tasks[item_id] = key
                 group = self.task_groups.get(key)
                 if group is not None:
@@ -1891,7 +1897,8 @@ class SlackAnswerStream:
                     group["title"] = title
                     group["compound"] = compound
                 if thinking and details.get("output"):
-                    group["details"] = details["output"]
+                    # Slack appends a task's details on every update, so send each summary once.
+                    group.setdefault("details", []).append(details["output"])
                 # Batch completions with the next start or final answer.
                 self.dirty_task_groups.add(key)
                 return
@@ -1913,6 +1920,9 @@ class SlackAnswerStream:
                         self.on_start()
                 else:
                     self.client.chat_appendStream(channel=self.channel, ts=self.ts, chunks=chunks)
+                for key in self.dirty_task_groups:
+                    if self.task_groups[key].pop("details", None):
+                        self.task_groups[key]["summarized"] = True
                 self.dirty_task_groups.clear()
             except Exception as exc:  # noqa: BLE001 - task UI is optional; answer delivery remains primary
                 self.task_updates_available = False
@@ -1941,10 +1951,17 @@ class SlackAnswerStream:
             status = "complete"
         chunk = {"type": "task_update", "id": group["id"], "title": title, "status": status}
         if group.get("details"):
-            summary = group["details"]
-            if len(summary) > MAX_STREAM_THINKING_CHARS:
-                summary = summary[:MAX_STREAM_THINKING_CHARS - 1].rstrip() + "…"
-            chunk["details"] = html.escape(summary, quote=False)
+            # Keep the newest summaries that fit; an oversized one is cut from its end.
+            kept: list[str] = []
+            for summary in reversed(group["details"]):
+                if len(summary) > MAX_STREAM_THINKING_CHARS:
+                    summary = summary[:MAX_STREAM_THINKING_CHARS - 1].rstrip() + "…"
+                if kept and sum(map(len, kept)) + 2 * len(kept) + len(summary) > MAX_STREAM_THINKING_CHARS:
+                    break
+                kept.insert(0, summary)
+            # Slack joins a task's details with nothing between, so later summaries start a new paragraph.
+            text = ("\n\n" if group.get("summarized") else "") + "\n\n".join(kept)
+            chunk["details"] = html.escape(text, quote=False)
         return chunk
 
     def append(self, text: str) -> None:
