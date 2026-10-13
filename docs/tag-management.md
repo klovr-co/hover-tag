@@ -117,7 +117,7 @@ naming. The steps become **AI**, **Workspace**, **Your app**, and
 To add another Tag to a workspace you already use, click **Add Tag** on that
 workspace's card on **Home**. Give it a name, a one-line description and a
 picture, then click **Create in Slack**. Tag uses your default model; click
-**Change** beside it to pick another, or change it later in the Tag's
+**Change** beside it to pick another model and its thinking level, or change them later in the Tag's
 **Details**. Tag starts it when it's ready. Invite it to a
 channel with `/invite`. For every setup choice, use **Add Tag** at the top of
 **Home** instead.

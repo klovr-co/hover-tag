@@ -174,7 +174,28 @@ describe("Choosing the model in the dialog", () => {
     expect(await screen.findByText("Maya's Tag is ready")).toBeTruthy();
     // The picked model thinks at its own default level, not the default model's.
     expect(sent[1]).toEqual({ answer: { value: "codex:gpt-5.5-mini", effort: "default" } });
-    expect(screen.getByText("Codex · GPT-5.5 mini")).toBeTruthy();
+    expect(screen.getByText("Codex · GPT-5.5 mini · Medium thinking")).toBeTruthy();
+  });
+
+  it("sets the thinking level in the same row, and keeps it only where the model offers it", async () => {
+    const { sent } = open(["profile", "models", "workspace", "approve_setup", "channels"], undefined, undefined, "t0klovr1-a0maya01");
+    await screen.findByDisplayValue("Maya's Tag");
+    fireEvent.click(screen.getByRole("button", { name: "Change" }));
+    // The default model's own level shows first.
+    const thinking = await screen.findByRole("button", { name: "Thinking level" }, { timeout: 3000 });
+    expect(thinking.textContent).toContain("Medium");
+    fireEvent.click(thinking);
+    fireEvent.click(screen.getByRole("option", { name: /Extra high/ }));
+    expect(screen.getByRole("button", { name: "Thinking level" }).textContent).toContain("Extra high");
+    // GPT-5.5 mini has no Extra high: it falls back to that model's own level.
+    fireEvent.click(screen.getByRole("button", { name: "Default model" }));
+    fireEvent.click(screen.getByRole("option", { name: /GPT-5\.5 mini/ }));
+    expect(screen.getByRole("button", { name: "Thinking level" }).textContent).toContain("Medium");
+    fireEvent.click(screen.getByRole("button", { name: "Thinking level" }));
+    fireEvent.click(screen.getByRole("option", { name: /High/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Create in Slack" }));
+    expect(await screen.findByText("Maya's Tag is ready")).toBeTruthy();
+    expect(sent[1]).toEqual({ answer: { value: "codex:gpt-5.5-mini", effort: "high" } });
   });
 
   it("without a Tag in the workspace to ask, says where to change it later", async () => {
@@ -188,6 +209,8 @@ describe("Choosing the model in the dialog", () => {
     const question = QUESTIONS.models as SetupQuestion;
     expect(quickAnswer(question, "T0KLOVR1", null, "claude:claude-opus-5-5")).toEqual({ answer: { value: "codex:gpt-5.5", effort: "medium" } });
     expect(quickAnswer(question, "T0KLOVR1", null, "codex:gpt-5.5-mini")).toEqual({ answer: { value: "codex:gpt-5.5-mini", effort: "default" } });
+    // A level chosen for the default model.
+    expect(quickAnswer(question, "T0KLOVR1", null, null, "xhigh")).toEqual({ answer: { value: "codex:gpt-5.5", effort: "xhigh" } });
   });
 });
 

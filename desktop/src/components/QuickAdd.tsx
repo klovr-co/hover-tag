@@ -7,7 +7,9 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { aiArgs, findModel, parseModels, parseStatus, type AIModels, type AIStatus } from "../lib/ai";
 import type { Bridge, Session } from "../lib/bridge";
-import { useFresh, reducedMotion } from "../lib/motion";
+import { effortLabel } from "../lib/home";
+import { choiceText } from "../lib/model";
+import { useFresh, usePresence, reducedMotion } from "../lib/motion";
 import { initialSetup, quickAnswer, setupReducer } from "../lib/setup";
 import { ModelMenu } from "./AI";
 import { ProfileFields, useProfileDraft } from "./Connect";
@@ -68,6 +70,7 @@ export function QuickAdd({ api, workspace, workspaceName, workspaceIcon, enterpr
   const [report, setReport] = useState<AIStatus | null>(null);
   const [picking, setPicking] = useState(false);
   const [picked, setPicked] = useState<string | null>(null);
+  const [effort, setEffort] = useState<string | null>(null);
   useEffect(() => {
     if (!modelsFrom) return;
     let live = true;
@@ -82,6 +85,16 @@ export function QuickAdd({ api, workspace, workspaceName, workspaceIcon, enterpr
   }, [api, modelsFrom]);
   const pickedEntry = models && picked ? findModel(models.groups, picked) : null;
   const pickedLabel = pickedEntry ? `${pickedEntry.group.name} · ${pickedEntry.entry.label}` : null;
+  // The thinking level applies to the model picked, or the default one; null is the model's own level.
+  const value = picked ?? models?.default.value ?? null;
+  const entry = models && value ? findModel(models.groups, value)?.entry ?? null : null;
+  const levels = entry?.efforts ?? [];
+  const level = effort && levels.includes(effort) ? effort : null;
+  const pick = (next: string) => {
+    const nextLevels = (models && findModel(models.groups, next)?.entry.efforts) || [];
+    if (effort && !nextLevels.includes(effort)) setEffort(null); // That model doesn't offer it: use its own.
+    setPicked(next);
+  };
 
   useEffect(() => {
     let live = true;
@@ -114,7 +127,7 @@ export function QuickAdd({ api, workspace, workspaceName, workspaceIcon, enterpr
   useEffect(() => {
     if (phase !== "creating" || !q || leaving) return;
     if (q.id === "profile") { setPhase("form"); return; } // Tag didn't accept the name: show why.
-    const quick = answered.current.has(q.id) ? null : quickAnswer(q, workspace, enterprise, picked);
+    const quick = answered.current.has(q.id) ? null : quickAnswer(q, workspace, enterprise, picked, level);
     if (!quick) { setLeaving("handoff"); pause(); return; }
     answered.current.add(q.id);
     if (q.id === "default_model") {
@@ -123,7 +136,7 @@ export function QuickAdd({ api, workspace, workspaceName, workspaceIcon, enterpr
       setModel(q.options?.[index] ?? null);
     }
     send(quick.answer);
-  }, [phase, q, leaving, workspace, enterprise, picked, send, pause]);
+  }, [phase, q, leaving, workspace, enterprise, picked, level, send, pause]);
 
   // Setup ended: finish what the dialog was doing.
   // Without a Tag to continue, it says so and can be closed rather than waiting forever.
@@ -174,7 +187,8 @@ export function QuickAdd({ api, workspace, workspaceName, workspaceIcon, enterpr
     model: "Load your models", create: "Create the Slack app", picture: "Add the picture",
     install: enterprise ? `Add it to ${workspaceName}` : `Install in ${workspaceName}`, connect: "Connect to this Mac", start: `Start ${name}`,
   };
-  const shown = model ?? pickedLabel;
+  const thinking = level ?? entry?.default_effort ?? null;
+  const shown = (model ?? pickedLabel) && choiceText((model ?? pickedLabel)!, thinking);
   const modelFresh = useFresh(shown);
   const picture = source(lastProfile.current?.preview, lastProfile.current?.preview_revision ?? lastProfile.current?.picture_label) ?? tagIcon;
   const title = phase === "done" ? (startError ? `${name} is in ${workspaceName}` : `${name} is ready`)
@@ -193,13 +207,14 @@ export function QuickAdd({ api, workspace, workspaceName, workspaceIcon, enterpr
               disabled={!!leaving} />
             {picking ? (
               <div className="quick-pick">
-                <ModelMenu models={models} report={report} value={picked ?? models?.default.value ?? null}
-                  disabled={!!leaving} onChange={setPicked} />
+                <ModelMenu models={models} report={report} value={value} disabled={!!leaving} onChange={pick} />
+                {levels.length > 0 && <EffortMenu levels={levels} value={thinking} own={entry?.default_effort ?? null}
+                  disabled={!!leaving} onChange={setEffort} />}
               </div>
             ) : (
               <div className="quick-model" role="note">
                 <Icon name="spark" size={14} />
-                <span>Model · <b className={modelFresh ? "fresh" : undefined}>{shown ?? "your account's default"}</b>
+                <span>Model · <b className={modelFresh ? "fresh" : undefined}>{shown ?? (thinking ? choiceText("your account's default", thinking) : "your account's default")}</b>
                   {!modelsFrom && <span className="muted"> · change it in its Details any time</span>}</span>
                 {modelsFrom && <button className="link" onClick={() => setPicking(true)} disabled={!!leaving}>Change</button>}
               </div>
@@ -246,6 +261,44 @@ export function QuickAdd({ api, workspace, workspaceName, workspaceIcon, enterpr
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+/** The thinking level, as a compact menu beside the model; the model's own level is marked Default. */
+function EffortMenu({ levels, value, own, onChange, disabled }: {
+  levels: string[]; value: string | null; own: string | null; onChange: (level: string) => void; disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const menu = usePresence(open ? true : null, 120);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: Event) => {
+      if (e instanceof KeyboardEvent ? e.key === "Escape" : !ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    window.addEventListener("mousedown", close);
+    window.addEventListener("keydown", close);
+    return () => { window.removeEventListener("mousedown", close); window.removeEventListener("keydown", close); };
+  }, [open]);
+  return (
+    <div className="mpick-wrap quick-effort" ref={ref}>
+      <button className="mpick" aria-haspopup="listbox" aria-expanded={open} aria-label="Thinking level" disabled={disabled}
+        onClick={() => setOpen(!open)}>
+        <span className="mv">{value ? effortLabel(value) : "Thinking"}</span>
+        <span className="caret"><Icon name="updown" /></span>
+      </button>
+      {menu.shown && (
+        <div className={`mmenu${menu.leaving ? " leaving" : ""}`} role="listbox" aria-label="Thinking level">
+          {levels.map((level) => (
+            <button key={level} className="mopt" role="option" aria-selected={level === value}
+              onClick={() => { onChange(level); setOpen(false); }}>
+              <span className="mck">{level === value && <Icon name="check" size={12} />}</span>{effortLabel(level)}
+              {level === own && <span className="mdef">Default</span>}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
