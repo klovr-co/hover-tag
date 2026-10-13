@@ -818,11 +818,10 @@ button.activity-artifact:hover { border-color: var(--link); color: var(--link); 
 .field.desc { display: block; height: auto; min-height: 0; padding: 7px 40px 7px 12px; font: inherit; font-size: 14px; line-height: 1.4; color: var(--text); resize: none; }
 .desc-count { position: absolute; right: 10px; bottom: 8px; font-size: 12px; color: var(--faint); }
 /* The picture and its two buttons come to the height of the name and description beside them. */
-.pic-col { flex: none; width: 118px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
-.pic-acts { display: flex; gap: 6px; width: 100%; }
-.pic-acts .p-btn { height: 28px; padding: 0 8px; gap: 6px; justify-content: center; font-size: 13px; }
-.pic-acts .p-btn:first-child { flex: 1; }
-.pic-acts .p-btn:last-child { flex: none; width: 30px; padding: 0; }
+.pic-col { flex: none; width: 88px; display: flex; flex-direction: column; gap: 8px; }
+.pic-col .avw2, .pic-col .pic { width: 88px; height: 88px; border-radius: 20px; }
+.pic-acts { display: flex; gap: 6px; }
+.pic-acts .p-btn { flex: 1; height: 28px; padding: 0; justify-content: center; }
 .mrow:has(.pic-col) { align-items: stretch; }
 .mrow:has(.pic-col) > div:last-child { display: flex; flex-direction: column; }
 .mrow:has(.pic-col) .desc-wrap { flex: 1; display: flex; }
