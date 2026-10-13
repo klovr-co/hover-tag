@@ -20,6 +20,8 @@ export interface QuickAddProps {
   workspace: string;
   workspaceName: string;
   workspaceIcon?: string | null;
+  /** Its Enterprise Grid organization, when it's in one. */
+  enterprise?: string | null;
   start: StartTag;
   /** The dialog is gone; `added` when a Tag was created. */
   close: (added: boolean) => void;
@@ -43,7 +45,7 @@ export function quickStep(phase: Phase, modelChosen: boolean, reported: string[]
   return Math.max(1, ...reported.map((step) => QUICK_STEPS.indexOf(step as typeof QUICK_STEPS[number])));
 }
 
-export function QuickAdd({ api, workspace, workspaceName, workspaceIcon, start, close, moreOptions, handOff }: QuickAddProps) {
+export function QuickAdd({ api, workspace, workspaceName, workspaceIcon, enterprise, start, close, moreOptions, handOff }: QuickAddProps) {
   const [state, dispatch] = useReducer(setupReducer, initialSetup);
   const session = useRef<Session | null>(null);
   const [phase, setPhase] = useState<Phase>("form");
@@ -90,7 +92,7 @@ export function QuickAdd({ api, workspace, workspaceName, workspaceIcon, start, 
   useEffect(() => {
     if (phase !== "creating" || !q || leaving) return;
     if (q.id === "profile") { setPhase("form"); return; } // Tag didn't accept the name: show why.
-    const quick = answered.current.has(q.id) ? null : quickAnswer(q, workspace);
+    const quick = answered.current.has(q.id) ? null : quickAnswer(q, workspace, enterprise);
     if (!quick) { setLeaving("handoff"); pause(); return; }
     answered.current.add(q.id);
     if (q.id === "default_model") {
@@ -98,7 +100,7 @@ export function QuickAdd({ api, workspace, workspaceName, workspaceIcon, start, 
       setModel(q.options?.[index] ?? null);
     }
     send(quick.answer);
-  }, [phase, q, leaving, workspace, send, pause]);
+  }, [phase, q, leaving, workspace, enterprise, send, pause]);
 
   // Setup ended: finish what the dialog was doing.
   // Without a Tag to continue, it says so and can be closed rather than waiting forever.

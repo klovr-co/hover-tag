@@ -17,6 +17,11 @@ const QUESTIONS: Record<string, object> = {
   approve_setup: { id: "approve_setup", kind: "choose", prompt: "Ready?", options: ["Create in Slack", "Edit", "Edit AI", "Back"],
     option_ids: ["create", "edit", "edit_ai", "back"], can_go_back: true },
   channels: { id: "channels", kind: "multi", prompt: "Choose channels", options: ["#general"], selected: [], allow_empty: true, can_go_back: false },
+  org: { id: "workspace", kind: "choose", prompt: "Which workspace?", options: ["Hover Tag Lab (organization)", "Sign in to another workspace", "Save and exit"],
+    option_ids: ["E0LAB", "sign_in", "exit"], workspaces: [{ id: "E0LAB", name: "Hover Tag Lab", kind: "organization" }], can_go_back: true },
+  org_workspace: { id: "org_workspace", kind: "choose", prompt: "Which workspace in Hover Tag Lab?", options: ["Workspace not listed?"],
+    option_ids: ["manual"], workspaces: [], can_go_back: true },
+  org_workspace_id: { id: "org_workspace_id", kind: "text", prompt: "Workspace address or ID (T…)", default: "", can_go_back: true },
   ai_connection: { id: "ai_connection", kind: "choose", prompt: "Connect an AI in Settings", options: ["Check connections again"], option_ids: ["check"] },
 };
 
@@ -56,12 +61,12 @@ function fakeSetup(order: string[], pausedTag: string | null = "new-tag") {
   return { api, sent };
 }
 
-function open(order: string[], pausedTag?: string | null) {
+function open(order: string[], pausedTag?: string | null, enterprise?: string) {
   const { api, sent } = fakeSetup(order, pausedTag);
   const props = {
     start: vi.fn(async () => ""), close: vi.fn(), moreOptions: vi.fn(), handOff: vi.fn(),
   };
-  render(<QuickAdd api={api} workspace="T0KLOVR1" workspaceName="Klovr" {...props} />);
+  render(<QuickAdd api={api} workspace="T0KLOVR1" workspaceName="Klovr" enterprise={enterprise} {...props} />);
   return { sent, ...props };
 }
 
@@ -125,6 +130,24 @@ describe("Quick add", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create in Slack" }));
     await vi.waitFor(() => expect(handOff).toHaveBeenCalledWith("new-tag"));
     expect(sent.at(-1)).toEqual({ answer: null, pause: true });
+  });
+});
+
+describe("Quick add in an Enterprise Grid organization", () => {
+  it("picks the workspace's organization, then the workspace by its ID", async () => {
+    const { sent, start } = open(["profile", "default_model", "org", "org_workspace", "org_workspace_id", "approve_setup", "channels"], undefined, "E0LAB");
+    await screen.findByDisplayValue("Maya's Tag");
+    fireEvent.click(screen.getByRole("button", { name: "Create in Slack" }));
+    expect(await screen.findByText("Maya's Tag is ready")).toBeTruthy();
+    expect(sent.slice(2)).toEqual([{ answer: "E0LAB" }, { answer: "manual" }, { answer: "T0KLOVR1" }, { answer: "create" }, { answer: [] }]);
+    expect(start).toHaveBeenCalled();
+  });
+
+  it("hands over rather than guess an organization it doesn't know", async () => {
+    const { handOff } = open(["profile", "default_model", "org"]);
+    await screen.findByDisplayValue("Maya's Tag");
+    fireEvent.click(screen.getByRole("button", { name: "Create in Slack" }));
+    await vi.waitFor(() => expect(handOff).toHaveBeenCalledWith("new-tag"));
   });
 });
 

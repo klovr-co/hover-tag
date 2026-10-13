@@ -25,7 +25,7 @@ type Screen =
   | { name: "welcome" }
   | { name: "installing"; attempt: number }
   | { name: "home" }
-  | { name: "connect"; args: string[]; workspace?: string; workspaceName?: string; presets?: "all" | "workspace"; profile?: { name: string; description: string } }
+  | { name: "connect"; args: string[]; workspace?: string; workspaceName?: string; enterprise?: string | null; presets?: "all" | "workspace"; profile?: { name: string; description: string } }
   | { name: "settings"; tab?: SettingsTab; privacy?: boolean }
   | { name: "ai"; resume?: string[] }
   /** `opened` counts Slack links, so a second link resets an open Tag screen. */
@@ -69,7 +69,7 @@ export function App() {
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [screen, setScreen] = useState<Screen>({ name: "loading" });
   // The quick-add dialog over Home, for one workspace.
-  const [quick, setQuick] = useState<{ workspace: string; workspaceName: string; workspaceIcon: string | null } | null>(null);
+  const [quick, setQuick] = useState<{ workspace: string; workspaceName: string; workspaceIcon: string | null; enterprise: string | null } | null>(null);
   const [bootError, setBootError] = useState("");
   const [bootAttempt, setBootAttempt] = useState(0);
   const [outdated, setOutdated] = useState(false);
@@ -265,7 +265,8 @@ export function App() {
     if (empty) setScreen({ name: "connect", args: ["setup"] }); else home();
   };
   const add = () => setScreen({ name: "connect", args: tags.rows.length ? ["add"] : ["setup"] });
-  const addTo = (workspace: string, workspaceName: string, workspaceIcon: string | null) => setQuick({ workspace, workspaceName, workspaceIcon });
+  const addTo = (group: { key: string; label: string; icon: string | null; enterprise: string | null }) =>
+    setQuick({ workspace: group.key, workspaceName: group.label, workspaceIcon: group.icon, enterprise: group.enterprise });
   // These screens are always --flow-h tall and scroll inside, so moving between them never resizes the window.
   const fixed = screen.name === "home" || screen.name === "settings" || screen.name === "ai";
   return (
@@ -292,11 +293,11 @@ export function App() {
         {screen.name === "home" && quick && (
           <QuickAdd api={api} {...quick} start={(id) => tags.start(id)}
             close={() => { setQuick(null); void tags.refresh(); }}
-            moreOptions={(tag, profile) => { setQuick(null); setScreen({ name: "connect", args: tag ? [tag, "setup"] : ["add"], workspace: quick.workspace, workspaceName: quick.workspaceName, presets: "workspace", profile }); }}
-            handOff={(tag) => { setQuick(null); setScreen({ name: "connect", args: [tag, "setup"], workspace: quick.workspace, workspaceName: quick.workspaceName }); }} />
+            moreOptions={(tag, profile) => { setQuick(null); setScreen({ name: "connect", args: tag ? [tag, "setup"] : ["add"], workspace: quick.workspace, workspaceName: quick.workspaceName, enterprise: quick.enterprise, presets: "workspace", profile }); }}
+            handOff={(tag) => { setQuick(null); setScreen({ name: "connect", args: [tag, "setup"], workspace: quick.workspace, workspaceName: quick.workspaceName, enterprise: quick.enterprise }); }} />
         )}
         {screen.name === "connect" && (
-          <Connect api={api} args={screen.args} workspace={screen.workspace} workspaceName={screen.workspaceName} presets={screen.presets} profile={screen.profile} start={(id, onLine) => tags.start(id, capabilities.includes("start-progress") ? onLine : undefined)} openAI={capabilities.includes(SHARED_AI_CAPABILITY) ? (resume) => setScreen({ name: "ai", resume }) : undefined} done={home}
+          <Connect api={api} args={screen.args} workspace={screen.workspace} workspaceName={screen.workspaceName} enterprise={screen.enterprise} presets={screen.presets} profile={screen.profile} start={(id, onLine) => tags.start(id, capabilities.includes("start-progress") ? onLine : undefined)} openAI={capabilities.includes(SHARED_AI_CAPABILITY) ? (resume) => setScreen({ name: "ai", resume }) : undefined} done={home}
             paused={() => { home(); say("Progress saved. Finish setup from Home any time."); }}
             usageNote={telemetry.announced ? { learnMore: learnUsage, seen: sawOnSetup } : undefined} />
         )}

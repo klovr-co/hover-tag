@@ -41,7 +41,7 @@ interface Props {
   runUpdate: () => void;
   add: () => void;
   /** Add a Tag straight to this Slack workspace (team ID), asking only for its name and look. */
-  addTo: (workspace: string, workspaceName: string, workspaceIcon: string | null) => void;
+  addTo: (group: { key: string; label: string; icon: string | null; enterprise: string | null }) => void;
   finishSetup: (row: TagRow) => void;
   open: (row: TagRow) => void;
   fixAI: (row: string) => void;
@@ -249,7 +249,7 @@ function WorkspaceCard({ group, tags, drag, movable, setTags, ...props }: Props 
         <span className="spacer" />
         {group.key && (
           <button className="link" aria-label={`Add a Tag to ${group.label}`} title={`Add a Tag to ${group.label}`}
-            onClick={() => props.addTo(group.key, group.label, group.icon)}>
+            onClick={() => props.addTo(group)}>
             <Icon name="plus" size={10} />Add Tag
           </button>
         )}

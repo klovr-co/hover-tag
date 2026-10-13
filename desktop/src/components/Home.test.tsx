@@ -161,7 +161,7 @@ describe("Tag rows", () => {
       update={{ status: "current", update: null, phase: null, error: "" }} outdated={false} runUpdate={vi.fn()}
       add={vi.fn()} addTo={addTo} finishSetup={vi.fn()} open={vi.fn()} fixAI={vi.fn()} showSettings={vi.fn()} now={noon} />);
     fireEvent.click(screen.getByRole("button", { name: /^Add a Tag to / }));
-    expect(addTo).toHaveBeenCalledWith(maya.slack_workspace, expect.any(String), maya.workspace_icon ?? null);
+    expect(addTo).toHaveBeenCalledWith(expect.objectContaining({ key: maya.slack_workspace }));
   });
 
   it("say once that usage data is on, with Learn more opening Settings", async () => {

@@ -31,15 +31,26 @@ def _match(target: str, entries: list[dict[str, Any]]) -> dict[str, Any] | None:
     return None
 
 
-def answer(event: dict[str, Any], *, workspace: str, name: str | None = None) -> Any:
-    """The reply to one setup question, or Unanswered."""
+def answer(event: dict[str, Any], *, workspace: str, name: str | None = None,
+           team: str = "", enterprise: str = "") -> Any:
+    """The reply to one setup question, or Unanswered.
+
+    ``team`` and ``enterprise`` come from a Tag already in the workspace. A
+    workspace in an organization is offered as its organization's sign-in, so
+    they pick that organization and then the workspace by its ID.
+    """
     qid = event.get("id")
     if qid == "profile":
         return {"name": name or event.get("name") or "", "description": event.get("description") or ""}
     if qid == "default_model":
         return event.get("default", 0)
     if qid == "workspace":
-        found = _match(workspace, event.get("workspaces") or [])
+        workspaces = event.get("workspaces") or []
+        found = _match(workspace, workspaces) or (_match(team, workspaces) if team else None)
+        if enterprise and team and not (found and found.get("kind") != "organization"):
+            organization = _match(enterprise, workspaces)
+            if organization and organization.get("kind") == "organization":
+                return organization["id"]
         if not found:
             known = ", ".join(f"{item['name']} ({item['id']})" for item in event.get("workspaces") or []) or "none"
             raise Unanswered(f"You aren't signed in to {workspace}. Signed in: {known}. "
@@ -47,6 +58,14 @@ def answer(event: dict[str, Any], *, workspace: str, name: str | None = None) ->
         if found.get("kind") == "organization":
             raise Unanswered(f"{found['name']} is an organization; run tag add to pick its workspace.")
         return found["id"]
+    if qid == "org_workspace" and team:
+        ids = event.get("option_ids") or []
+        if team in ids:
+            return team
+        if "manual" in ids:
+            return "manual"
+    if qid == "org_workspace_id" and team:
+        return team
     if qid == "approve_setup":
         return "create"
     if qid == "channels" and event.get("allow_empty"):
@@ -55,6 +74,7 @@ def answer(event: dict[str, Any], *, workspace: str, name: str | None = None) ->
 
 
 def drive(command: list[str], env: dict[str, str], *, workspace: str, name: str | None = None,
+          team: str = "", enterprise: str = "",
           forward: Callable[[dict[str, Any], str], None]) -> tuple[int, str | None]:
     """Run setup, answering its questions. Returns the exit code and why it stopped early, if it did.
 
@@ -75,7 +95,8 @@ def drive(command: list[str], env: dict[str, str], *, workspace: str, name: str 
                 forward(event, line)
                 continue
             try:
-                reply: dict[str, Any] = {"answer": answer(event, workspace=workspace, name=name)}
+                reply: dict[str, Any] = {"answer": answer(event, workspace=workspace, name=name,
+                                                          team=team, enterprise=enterprise)}
             except Unanswered as exc:
                 reason = str(exc)
                 reply = {"answer": None, "pause": True}

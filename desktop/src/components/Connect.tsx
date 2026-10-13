@@ -34,6 +34,8 @@ interface Props {
   workspace?: string;
   /** That workspace's name, for the name step. */
   workspaceName?: string;
+  /** Its Enterprise Grid organization, when it's in one. */
+  enterprise?: string | null;
   /** With a workspace: answer every obvious question (`all`, the default), or only the workspace (More options). */
   presets?: "all" | "workspace";
   /** What was typed in the quick-add dialog, to start the name step with. */
@@ -48,13 +50,16 @@ interface Props {
   usageNote?: { learnMore: () => void; seen: () => void };
 }
 
+/** The questions that pick the workspace, which More options still answers. */
+const WORKSPACE_QUESTIONS = new Set(["workspace", "org_workspace", "org_workspace_id"]);
+
 /** What a choose question's answer is: its stable ID when Tag gave them, else its index. */
 const answerFor = (question: SetupQuestion, id: string) => {
   const index = question.option_ids?.indexOf(id) ?? -1;
   return index >= 0 ? id : (question.options ?? []).indexOf(id);
 };
 
-export function Connect({ api, args, workspace, workspaceName, presets = "all", profile, done, paused, openAI, start, usageNote }: Props) {
+export function Connect({ api, args, workspace, workspaceName, enterprise, presets = "all", profile, done, paused, openAI, start, usageNote }: Props) {
   const [state, dispatch] = useReducer(setupReducer, initialSetup);
   const session = useRef<Session | null>(null);
   const [attempt, setAttempt] = useState(0);
@@ -118,7 +123,7 @@ export function Connect({ api, args, workspace, workspaceName, presets = "all", 
   useEffect(() => { if (q) setLaunched(false); }, [q]);
   // Each question is answered for you once at most; if Tag asks it again, it's yours to answer.
   const quickDone = useRef(new Set<string>());
-  const quick = workspace && q && !quickDone.current.has(q.id) && (presets === "all" || q.id === "workspace") ? quickAnswer(q, workspace) : null;
+  const quick = workspace && q && !quickDone.current.has(q.id) && (presets === "all" || WORKSPACE_QUESTIONS.has(q.id)) ? quickAnswer(q, workspace, enterprise) : null;
   useEffect(() => {
     if (!q || !quick) return;
     quickDone.current.add(q.id);

@@ -27,6 +27,22 @@ class AnswerTests(unittest.TestCase):
         with self.assertRaisesRegex(tag_quick_add.Unanswered, "organization"):
             tag_quick_add.answer({"id": "workspace", "workspaces": WORKSPACES}, workspace="Hover Sandbox")
 
+    def test_a_workspace_in_an_organization_goes_through_its_organization(self):
+        options = dict(workspace="T0LAB", team="T0LAB", enterprise="E0C6K31U308")
+        self.assertEqual(tag_quick_add.answer({"id": "workspace", "workspaces": WORKSPACES}, **options), "E0C6K31U308")
+        listed = {"id": "org_workspace", "option_ids": ["T0LAB", "manual"]}
+        self.assertEqual(tag_quick_add.answer(listed, **options), "T0LAB")
+        unlisted = {"id": "org_workspace", "option_ids": ["manual"]}
+        self.assertEqual(tag_quick_add.answer(unlisted, **options), "manual")
+        self.assertEqual(tag_quick_add.answer({"id": "org_workspace_id"}, **options), "T0LAB")
+
+    def test_an_organization_is_never_guessed_without_a_tag_in_it(self):
+        with self.assertRaises(tag_quick_add.Unanswered):
+            tag_quick_add.answer({"id": "workspace", "workspaces": WORKSPACES}, workspace="T0LAB")
+        with self.assertRaises(tag_quick_add.Unanswered):
+            tag_quick_add.answer({"id": "workspace", "workspaces": WORKSPACES}, workspace="T0LAB",
+                                 team="T0LAB", enterprise="E0SOMEWHEREELSE")
+
     def test_profile_uses_the_suggested_name_unless_one_is_given(self):
         event = {"id": "profile", "name": "Maya's Tag", "description": ""}
         self.assertEqual(tag_quick_add.answer(event, workspace="x"), {"name": "Maya's Tag", "description": ""})

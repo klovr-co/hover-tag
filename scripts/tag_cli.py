@@ -2133,8 +2133,17 @@ def _quick_add(command: list[str], environment: dict[str, str], args: argparse.N
         elif event.get("type") in {"message", "progress"} and event.get("text"):
             print(f"  {event['text']}", flush=True)
 
+    # A Tag already in the workspace knows its team ID and, in an organization, the organization's.
+    team = enterprise = ""
+    for tag_id in _workspace_tags(tag_home(), args.workspace):
+        path = tag_instances.resolve(tag_home(), tag_id).home / "config/settings.json"
+        values = read_config(path) if path.is_file() else {}
+        if values.get("SLACK_TEAM_ID"):
+            team, enterprise = values["SLACK_TEAM_ID"], values.get("SLACK_ENTERPRISE_ID", "")
+            break
     code, reason = tag_quick_add.drive(command, {**environment, SETUP_PROTOCOL_ENV: "jsonl"},
-                                       workspace=args.workspace, name=args.name, forward=forward)
+                                       workspace=args.workspace, name=args.name, team=team,
+                                       enterprise=enterprise, forward=forward)
     if reason:
         message = f"Setup paused: {reason} Your choices are saved; run {resume} to continue."
         if args.json_output:
@@ -2587,6 +2596,7 @@ def _run_cli() -> int:
                                   workspace_name=tag_instances.workspace_name(context.home),
                                   slack_name=_slack_name(context.home),
                                   slack_app_id=values.get("SLACK_APP_ID") or None,
+                                  slack_enterprise=values.get("SLACK_ENTERPRISE_ID") or None,
                                   has_app=bool(values.get("SLACK_APP_ID")) or (
                                       context.home / "integrations/slack-cli/tag-create.json").exists(),
                                   nickname=tag_instances.nickname(context.home),
