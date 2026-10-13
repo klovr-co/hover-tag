@@ -68,6 +68,7 @@ try:
     from .tag_activity_details import sanitize_activity_details
     from .tag_approval_choices import sanitize_review_details
     from .tag_activity_labels import activity_title_for_status, readable_activity_title
+    from .agent_activity import THINKING_LABEL
     from .tag_paths import instance_home, tag_temp_dir
     from .record_output_artifact import channel_artifact_directory
     from . import slack_channels
@@ -110,6 +111,7 @@ except ImportError:  # Direct script execution does not create a package context
     from tag_activity_details import sanitize_activity_details
     from tag_approval_choices import sanitize_review_details
     from tag_activity_labels import activity_title_for_status, readable_activity_title
+    from agent_activity import THINKING_LABEL
     from record_output_artifact import channel_artifact_directory
     from tag_paths import instance_home, tag_temp_dir
     import slack_channels
@@ -132,6 +134,9 @@ STREAM_APPEND_CHARS = 200
 STREAM_FLUSH_SECONDS = 0.35
 MAX_STREAM_TASKS = 12
 MAX_STREAM_ACTIVITY_EVENTS = 60
+# Thinking rows in Agent activity; later thinking joins the last row so tools keep their rows.
+MAX_STREAM_THINKING_TASKS = 4
+MAX_STREAM_THINKING_CHARS = 500
 ACTIVITY_DEBOUNCE_SECONDS = 0.25
 ACTIVITY_HOLD_SECONDS = 1.5
 ACTIVITY_WAIT_SECONDS = 12.0
@@ -1819,6 +1824,7 @@ class SlackAnswerStream:
         self.seen_tasks: set[str] = set()
         self.task_groups: dict[str, dict[str, Any]] = {}
         self.dirty_task_groups: set[str] = set()
+        self.thinking_rows = 0
         self.flush_timer: threading.Timer | None = None
         self.lock = threading.RLock()
 
@@ -1831,8 +1837,10 @@ class SlackAnswerStream:
             return
         if not isinstance(label, str) or label not in PUBLIC_LABELS:
             label = "Using a connected tool…"
-        tool = sanitize_activity_details(event.get("details")).get("tool", "")
-        title = readable_activity_title(tool, label)
+        details = sanitize_activity_details(event.get("details"))
+        thinking = label == THINKING_LABEL
+        tool = "" if thinking else details.get("tool", "")
+        title = "Thinking" if thinking else readable_activity_title(tool, label)
         compound = bool(re.search(r" (?:&&|\|\||\|) ", tool))
         item_id = hashlib.sha256(activity_id.encode("utf-8")).hexdigest()
         starting = event["type"] == "activity_start"
@@ -1847,6 +1855,9 @@ class SlackAnswerStream:
                     return
                 self.seen_tasks.add(item_id)
                 key = f"tool:{label}:{tool or title}"
+                if thinking:
+                    key = f"thinking:{min(self.thinking_rows, MAX_STREAM_THINKING_TASKS - 1)}"
+                    self.thinking_rows += 1
                 if key not in self.task_groups and len(self.task_groups) >= MAX_STREAM_TASKS - 1:
                     key = "overflow"
                 self.tasks[item_id] = key
@@ -1879,6 +1890,8 @@ class SlackAnswerStream:
                 if tool and tool != "Command" and key != "overflow":
                     group["title"] = title
                     group["compound"] = compound
+                if thinking and details.get("output"):
+                    group["details"] = details["output"]
                 # Batch completions with the next start or final answer.
                 self.dirty_task_groups.add(key)
                 return
@@ -1926,7 +1939,13 @@ class SlackAnswerStream:
             status = "error" if final else "in_progress"
         if request_completed:
             status = "complete"
-        return {"type": "task_update", "id": group["id"], "title": title, "status": status}
+        chunk = {"type": "task_update", "id": group["id"], "title": title, "status": status}
+        if group.get("details"):
+            summary = group["details"]
+            if len(summary) > MAX_STREAM_THINKING_CHARS:
+                summary = summary[:MAX_STREAM_THINKING_CHARS - 1].rstrip() + "…"
+            chunk["details"] = html.escape(summary, quote=False)
+        return chunk
 
     def append(self, text: str) -> None:
         if not text:

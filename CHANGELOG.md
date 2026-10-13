@@ -20,6 +20,11 @@ All notable changes to Tag are documented here.
   Steer stops the current request and answers the new one next, in the same
   conversation. Before, Tag asked you to mention it again later.
 
+- Thinking now shows in the Slack thread for Claude and Codex. Each time the
+  model thinks, Agent activity adds a **Thinking** step with the model's summary
+  of that thinking, and the app's Activity tab keeps every summary. Everyone in the thread can read
+  them; run `tag NAME config set OPENTAG_SHOW_THINKING 0` to keep them private.
+
 ### Fixed
 
 - With Claude, a message sent right after stopping a request that was running a

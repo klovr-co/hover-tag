@@ -231,7 +231,8 @@ Runtime behavior:
 
 - The bridge removes the mention before it sends the request to the agent.
 - Codex (App Server) and Claude (Agent SDK) stream answer text and show
-  **Agent activity**. Private reasoning and raw tool output stay out of Slack.
+  **Agent activity**. Raw tool output stays out of Slack. The model's thinking
+  summaries appear as **Thinking** steps unless `OPENTAG_SHOW_THINKING=0`.
 - One Slack thread runs one request at a time.
 - A failed request sends the requester a private message with the cause and
   recovery choices. See [Error reporting](reference/error-reporting.md).
@@ -643,7 +644,7 @@ not set up.
 | Channel restriction | Implemented | Channels the Tag joined (invitation policy) or a saved list. |
 | One conversation per thread | Implemented for Codex and Claude | Per requester; bounded by token and idle limits. Legacy transports start fresh. |
 | Thread text and attachments | Implemented | Bounded and untrusted. Earlier thread files can be reopened. |
-| Live activity and streamed answers | Implemented with App Server or Agent SDK | No private reasoning or raw tool output in Slack. |
+| Live activity and streamed answers | Implemented with App Server or Agent SDK | No raw tool output in Slack. Thinking summaries show as Thinking steps; `OPENTAG_SHOW_THINKING=0` turns them off. |
 | Approvals | Codex and Claude: scoped choices, including saved rules | Private to the requester; unanswered requests are denied. |
 | Stop a task | Implemented with App Server or Agent SDK | Slack's Stop button. |
 | Saved files | Implemented | Kept locally and attached in Slack by default; 15 MB per file. |

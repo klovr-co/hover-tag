@@ -27,10 +27,13 @@ try:
         APPROVAL_TIMEOUT_SECONDS,
         INTERRUPT_GRACE_SECONDS,
         MCP_SERVICE_NAMES,
+        THINKING_LABEL,
+        THINKING_TOOL,
         activity_label,
+        show_thinking,
         token_usage,
     )
-    from .tag_activity_details import item_activity_details
+    from .tag_activity_details import item_activity_details, preview
     from .tag_approval_choices import approval_choices, public_approval_choices, auto_review_details
 except ImportError:  # Direct script execution does not create a package context.
     import tag_chatgpt
@@ -41,10 +44,13 @@ except ImportError:  # Direct script execution does not create a package context
         APPROVAL_TIMEOUT_SECONDS,
         INTERRUPT_GRACE_SECONDS,
         MCP_SERVICE_NAMES,
+        THINKING_LABEL,
+        THINKING_TOOL,
         activity_label,
+        show_thinking,
         token_usage,
     )
-    from tag_activity_details import item_activity_details
+    from tag_activity_details import item_activity_details, preview
     from tag_approval_choices import approval_choices, public_approval_choices, auto_review_details
 
 
@@ -118,8 +124,10 @@ class CodexEventMapper:
     commentary. The run then starts a follow-up turn once they finish.
     """
 
-    def __init__(self, thread_id: str | None = None) -> None:
+    def __init__(self, thread_id: str | None = None, *, thinking: bool | None = None) -> None:
         self.thread_id = thread_id
+        # Reasoning items become Thinking activity with their summary; raw reasoning content never does.
+        self.thinking = show_thinking() if thinking is None else thinking
         self.subagents: set[str] = set()
         self.awaiting_subagents = False
         self.interim_ids: set[str] = set()
@@ -167,6 +175,11 @@ class CodexEventMapper:
         if item.get("type") == "subAgentActivity":
             self._track_subagent(item)
             return []
+        if item.get("type") == "reasoning":
+            if not self.thinking:
+                return []
+            return [{"type": "activity_start", "activity_id": item_id, "label": THINKING_LABEL,
+                     "wait_label": "Still thinking…", "details": {"tool": THINKING_TOOL}}]
         if item.get("type") == "agentMessage":
             phase = item.get("phase") if item.get("phase") in {"commentary", "final_answer"} else None
             if self.subagents:
@@ -221,6 +234,15 @@ class CodexEventMapper:
         if item.get("type") == "subAgentActivity":
             self._track_subagent(item)
             return []
+        if item.get("type") == "reasoning":
+            if not self.thinking:
+                return []
+            summary = item.get("summary")
+            parts = [part.strip() for part in summary if isinstance(part, str) and part.strip()] \
+                if isinstance(summary, list) else []
+            return [{"type": "activity_complete", "activity_id": item_id, "label": THINKING_LABEL,
+                     "status": "completed",
+                     "details": {"output": preview("\n\n".join(parts))} if parts else {}}]
         if item.get("type") == "agentMessage":
             raw_phase = item.get("phase")
             phase = raw_phase if raw_phase in {"commentary", "final_answer"} else self.message_phases.get(item_id)
@@ -482,6 +504,10 @@ class CodexAppServer:
                 turn_params["model"] = model
             if reasoning_effort:
                 turn_params["effort"] = reasoning_effort
+            if self.text_only_instructions is not None:
+                mapper.thinking = False
+            # The override stays on the thread's later turns, so "none" also stops summaries on resumed threads.
+            turn_params["summary"] = "auto" if mapper.thinking else "none"
             while True:
                 turn_result = self._request("turn/start", turn_params, mapper, emit, max_deadline)
                 turn = turn_result.get("turn") if isinstance(turn_result, dict) else None

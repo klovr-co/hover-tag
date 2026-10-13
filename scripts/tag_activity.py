@@ -1,7 +1,8 @@
 """Bounded, private records of Slack request activity.
 
 Tag stores public activity labels, bounded reply excerpts, and redacted tool-item previews.
-Raw App Server items, prompts, and reasoning never enter this store.
+Raw App Server items, prompts, and raw reasoning never enter this store; bounded thinking
+summaries do when the Tag shares them (OPENTAG_SHOW_THINKING).
 """
 from __future__ import annotations
 
@@ -20,12 +21,14 @@ from typing import Any
 
 try:
     from .agent_models import SUPPORTED_REASONING_EFFORTS
-    from .agent_activity import MCP_SERVICE_NAMES, MCP_TOOL_NAMES, activity_label, mcp_activity_label, token_usage
+    from .agent_activity import (MCP_SERVICE_NAMES, MCP_TOOL_NAMES, THINKING_LABEL, activity_label,
+                                 mcp_activity_label, token_usage)
     from .tag_activity_details import MAX_DETAIL_CHARS, MAX_TOOL_CHARS, sanitize_activity_details, preview
     from .tag_paths import instance_home, restrict_windows_acl
 except ImportError:  # Direct script execution does not create a package context.
     from agent_models import SUPPORTED_REASONING_EFFORTS
-    from agent_activity import MCP_SERVICE_NAMES, MCP_TOOL_NAMES, activity_label, mcp_activity_label, token_usage
+    from agent_activity import (MCP_SERVICE_NAMES, MCP_TOOL_NAMES, THINKING_LABEL, activity_label,
+                                mcp_activity_label, token_usage)
     from tag_activity_details import MAX_DETAIL_CHARS, MAX_TOOL_CHARS, sanitize_activity_details, preview
     from tag_paths import instance_home, restrict_windows_acl
 
@@ -86,6 +89,7 @@ def _public_labels() -> frozenset[str]:
         "python slack_post_message.py", "create-document.py", "unknown-command",
     ))
     labels = {label for item in examples if (label := activity_label(item))}
+    labels.add(THINKING_LABEL)
     for server in (*MCP_SERVICE_NAMES, "unrecognized"):
         for tool in (*MCP_TOOL_NAMES, "unrecognized"):
             labels.add(mcp_activity_label({"server": server, "tool": tool}))
@@ -596,7 +600,7 @@ def activity_detail_modal(record: dict[str, Any], index: int) -> dict[str, Any]:
         )}})
     blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": (
         "Common credentials are redacted and previews are shortened. "
-        "Private reasoning and prompts are not shown."
+        "Prompts are not shown."
     )}]})
     return {
         "type": "modal",
