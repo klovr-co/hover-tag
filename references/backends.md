@@ -107,7 +107,7 @@ complete response without a fake typewriter animation.
   labelled `THINKING_LABEL` (`scripts/agent_activity.py`) whose completed
   `details.output` is the provider's thinking summary, never raw reasoning.
   Claude asks the CLI for `--thinking-display summarized` and maps thinking
-  content blocks; Codex sends turn `summary: "auto"` and maps `reasoning`
+  content blocks; Codex sends turn `summary: "auto"` (`"none"` when disabled, so a resumed thread stops too) and maps `reasoning`
   items' `summary`. Both stop when `OPENTAG_SHOW_THINKING=0`.
 - Receive the thinking level as the backend-neutral `reasoning_effort`. The
   Tag's default level (`OPENTAG_DEFAULT_EFFORT`) is applied once, in

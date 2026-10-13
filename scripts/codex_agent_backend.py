@@ -506,9 +506,8 @@ class CodexAppServer:
                 turn_params["effort"] = reasoning_effort
             if self.text_only_instructions is not None:
                 mapper.thinking = False
-            elif mapper.thinking:
-                # Applies to this thread's later turns too, including follow-ups.
-                turn_params["summary"] = "auto"
+            # The override stays on the thread's later turns, so "none" also stops summaries on resumed threads.
+            turn_params["summary"] = "auto" if mapper.thinking else "none"
             while True:
                 turn_result = self._request("turn/start", turn_params, mapper, emit, max_deadline)
                 turn = turn_result.get("turn") if isinstance(turn_result, dict) else None

@@ -3534,6 +3534,23 @@ class SlackAnswerStreamTests(unittest.TestCase):
                          {key: thinking[-1][key] for key in ("title", "details")})
         self.assertIn("Read files · 6 steps", [chunk["title"] for chunk in chunks.values()])
 
+    def test_thinking_in_the_overflow_row_keeps_its_latest_summary(self) -> None:
+        client = MagicMock()
+        client.chat_startStream.return_value = {"ts": "3.45"}
+        stream = slack_socket_agent.SlackAnswerStream(
+            client, "C123", "1.23", "U123", "T123", MagicMock()
+        )
+        for index, label in enumerate(list(slack_socket_agent.PUBLIC_LABELS)[:slack_socket_agent.MAX_STREAM_TASKS - 1]):
+            if label != "Thinking…":
+                stream.activity({"type": "activity_start", "activity_id": f"item-{index}", "label": label})
+        event = {"type": "activity_start", "activity_id": "think", "label": "Thinking…",
+                 "details": {"tool": "Thinking"}}
+        stream.activity(event)
+        stream.activity({**event, "type": "activity_complete", "status": "completed",
+                         "details": {"output": "Late plan"}})
+
+        self.assertEqual("Late plan", stream.task_groups["overflow"]["details"])
+
     def test_task_groups_are_bounded(self) -> None:
         client = MagicMock()
         client.chat_startStream.return_value = {"ts": "3.45"}

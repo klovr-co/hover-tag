@@ -1888,7 +1888,7 @@ class SlackAnswerStream:
                 if tool and tool != "Command" and key != "overflow":
                     group["title"] = title
                     group["compound"] = compound
-                if thinking and key != "overflow" and details.get("output"):
+                if thinking and details.get("output"):
                     group["details"] = details["output"]
                 # Batch completions with the next start or final answer.
                 self.dirty_task_groups.add(key)

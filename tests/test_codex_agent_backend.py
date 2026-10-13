@@ -648,10 +648,11 @@ for line in sys.stdin:
         with patch.dict(os.environ, {"OPENTAG_SHOW_THINKING": "0"}):
             _result, _events, requests = self.run_server("ok")
         turn = next(request for request in requests if request["method"] == "turn/start")
-        self.assertNotIn("summary", turn["params"])
+        # An explicit override, since an earlier "auto" stays on a resumed thread.
+        self.assertEqual("none", turn["params"]["summary"])
         _result, _events, requests = self.run_server("ok", text_only_instructions="Summarize.")
         turn = next(request for request in requests if request["method"] == "turn/start")
-        self.assertNotIn("summary", turn["params"])
+        self.assertEqual("none", turn["params"]["summary"])
 
     def test_missing_conversation_is_replaced_by_a_saved_fresh_one(self) -> None:
         result, events, requests = self.run_server("missing", resume_thread_id="gone")
