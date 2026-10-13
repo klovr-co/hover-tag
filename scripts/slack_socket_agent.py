@@ -1892,7 +1892,10 @@ class SlackAnswerStream:
                     group["title"] = title
                     group["compound"] = compound
                 if thinking and details.get("output"):
-                    group["details"] = details["output"]
+                    # Slack appends a task's details on every update, so send each summary once.
+                    group["details"] = (group.get("details", "") + ("\n\n" if group.get("summarized") else "")
+                                        + details["output"])
+                    group["summarized"] = True
                 # Batch completions with the next start or final answer.
                 self.dirty_task_groups.add(key)
                 return
@@ -1914,6 +1917,8 @@ class SlackAnswerStream:
                         self.on_start()
                 else:
                     self.client.chat_appendStream(channel=self.channel, ts=self.ts, chunks=chunks)
+                for key in self.dirty_task_groups:
+                    self.task_groups[key].pop("details", None)
                 self.dirty_task_groups.clear()
             except Exception as exc:  # noqa: BLE001 - task UI is optional; answer delivery remains primary
                 self.task_updates_available = False

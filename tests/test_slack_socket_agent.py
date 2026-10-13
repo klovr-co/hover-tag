@@ -3524,15 +3524,30 @@ class SlackAnswerStreamTests(unittest.TestCase):
             stream.activity({**read, "type": "activity_complete", "status": "completed"})
 
         self.assertTrue(stream.finish("Done"))
-        chunks = {chunk["id"]: chunk for call in client.chat_startStream.call_args_list
-                  + client.chat_appendStream.call_args_list
-                  for chunk in call.kwargs.get("chunks", []) if chunk["type"] == "task_update"}
+        sent = [chunk for call in client.chat_startStream.call_args_list + client.chat_appendStream.call_args_list
+                for chunk in call.kwargs.get("chunks", []) if chunk["type"] == "task_update"]
+        chunks = {chunk["id"]: chunk for chunk in sent}
         thinking = [chunk for chunk in chunks.values() if chunk["title"].startswith("Thought")]
         self.assertEqual(slack_socket_agent.MAX_STREAM_THINKING_TASKS, len(thinking))
-        self.assertEqual("Plan &lt;@U1&gt; step 0", thinking[0]["details"])
-        self.assertEqual({"title": "Thought · 3 steps", "details": "Plan &lt;@U1&gt; step 5"},
-                         {key: thinking[-1][key] for key in ("title", "details")})
+        self.assertEqual("Thought · 3 steps", thinking[-1]["title"])
+        # Slack appends a task's details on every update, so each summary goes out exactly once.
+        summaries = [chunk["details"] for chunk in sent if chunk.get("details")]
+        self.assertEqual([f"Plan &lt;@U1&gt; step {index}" for index in range(6)], [text.strip() for text in summaries])
+        # A later summary in the same row starts a new paragraph, as Slack joins them with nothing between.
+        self.assertTrue(all(text.startswith("\n\n") for text in summaries[4:]))
         self.assertIn("Read files · 6 steps", [chunk["title"] for chunk in chunks.values()])
+
+    def test_last_thought_before_the_answer_is_sent_once(self) -> None:
+        client = MagicMock()
+        client.chat_startStream.return_value = {"ts": "3.45"}
+        stream = slack_socket_agent.SlackAnswerStream(client, "C123", "1.23", "U123", "T123", MagicMock())
+        event = {"activity_id": "think", "label": "Thinking…", "details": {"tool": "Thinking"}}
+        stream.activity({**event, "type": "activity_start"})
+        stream.activity({**event, "type": "activity_complete", "status": "completed", "details": {"output": "Final plan"}})
+        self.assertTrue(stream.finish("Done"))
+        sent = [chunk.get("details") for call in client.chat_startStream.call_args_list + client.chat_appendStream.call_args_list
+                for chunk in call.kwargs.get("chunks", []) if chunk["type"] == "task_update"]
+        self.assertEqual(["Final plan"], [text for text in sent if text])
 
     def test_thinking_stays_out_of_the_overflow_row(self) -> None:
         client = MagicMock()
