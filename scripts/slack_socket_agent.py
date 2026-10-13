@@ -3568,7 +3568,10 @@ def create_app(
             raise RuntimeError(f"OPENTAG_PEER_TAGS is invalid: {exc}") from None
     # Other Tags whose bot messages this Tag accepts; everything else from bots is ignored.
     peer_ids = frozenset(peer.user_id for peer in peers)
-    handoff_store = handoff_store or tag_handoff.HandoffStore(instance_home() / "state" / "handoffs")
+    # Live-test automation only: Slack apps whose posts carry their user's identity. Empty by default.
+    test_app_ids = frozenset(app_id.strip() for app_id in os.getenv("OPENTAG_TEST_APP_IDS", "").split(",")
+                             if app_id.strip())
+    handoff_store =handoff_store or tag_handoff.HandoffStore(instance_home() / "state" / "handoffs")
     # A restart can end a combine run before it finishes; the next deadline scan picks it up again.
     handoff_store.requeue_combining()
     handled_peer_requests: set[tuple[str, str]] = set()
@@ -4419,6 +4422,12 @@ def create_app(
                 name=f"tag-handoff-{record['id']}", daemon=True,
             ).start()
 
+    def posted_by_test_app(event: dict[str, Any]) -> bool:
+        """Whether a listed test app posted this as a person, which Slack marks with a bot id."""
+        app_id = event.get("app_id") or (event.get("bot_profile") or {}).get("app_id")
+        user = event.get("user")
+        return bool(event.get("bot_id") and app_id in test_app_ids and user and user not in peer_ids)
+
     def handle_peer_message(event: dict[str, Any], body: dict[str, Any], client: Any, logger: Any) -> None:
         sender = event.get("user", "")
         if sender not in peer_ids:
@@ -5224,7 +5233,10 @@ def create_app(
         ):
             logger.warning("Ignoring Open Tag mention from unapproved Slack channel %s", channel)
             return
-        if event.get("bot_id") or event.get("user") in peer_ids:
+        if posted_by_test_app(event):
+            # handle_invocation still requires the poster to be an authorized user.
+            event = {key: value for key, value in event.items() if key not in {"bot_id", "bot_profile", "app_id"}}
+        elif event.get("bot_id") or event.get("user") in peer_ids:
             handle_peer_message(event, body, client, logger)
             return
         handle_invocation(event, body, client, logger, direct_message=False)
