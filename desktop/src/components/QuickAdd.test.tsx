@@ -139,6 +139,7 @@ describe("Quick add in an Enterprise Grid organization", () => {
     await screen.findByDisplayValue("Maya's Tag");
     fireEvent.click(screen.getByRole("button", { name: "Create in Slack" }));
     expect(await screen.findByText("Maya's Tag is ready")).toBeTruthy();
+    expect(screen.getByText("Add it to Klovr")).toBeTruthy(); // As the full setup says for an organization.
     expect(sent.slice(2)).toEqual([{ answer: "E0LAB" }, { answer: "manual" }, { answer: "T0KLOVR1" }, { answer: "create" }, { answer: [] }]);
     expect(start).toHaveBeenCalled();
   });

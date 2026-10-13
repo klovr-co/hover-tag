@@ -151,7 +151,7 @@ export function QuickAdd({ api, workspace, workspaceName, workspaceIcon, enterpr
   const at = quickStep(phase, model !== null || answered.current.has("default_model"), (state.creating ?? []).map((s) => s.step));
   const labels: Record<string, string> = {
     model: "Load your models", create: "Create the Slack app", picture: "Add the picture",
-    install: `Install in ${workspaceName}`, connect: "Connect to this Mac", start: `Start ${name}`,
+    install: enterprise ? `Add it to ${workspaceName}` : `Install in ${workspaceName}`, connect: "Connect to this Mac", start: `Start ${name}`,
   };
   const modelFresh = useFresh(model);
   const picture = source(lastProfile.current?.preview, lastProfile.current?.preview_revision ?? lastProfile.current?.picture_label) ?? tagIcon;
