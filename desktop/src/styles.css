@@ -817,7 +817,9 @@ button.activity-artifact:hover { border-color: var(--link); color: var(--link); 
 .desc-wrap { position: relative; margin-top: 8px; }
 .field.desc { display: block; height: auto; min-height: 0; padding: 7px 40px 7px 12px; font: inherit; font-size: 14px; line-height: 1.4; color: var(--text); resize: none; }
 .desc-count { position: absolute; right: 10px; bottom: 8px; font-size: 12px; color: var(--faint); }
-.pic-acts { display: flex; gap: 6px; margin-top: 10px; }
+.pic-col { flex: none; width: 104px; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.pic-acts { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+.pic-acts .p-btn { width: 100%; justify-content: center; padding: 0 8px; }
 
 .slk { width: auto; height: 132px; border-radius: 9px; overflow: hidden; display: flex; background: #fff; color: #1d1c1d; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; box-shadow: 0 6px 18px rgba(16, 40, 70, .16), 0 0 0 1px rgba(0, 0, 0, .06); position: relative; text-align: left; }
 .slk .send { width: 19px; height: 19px; border-radius: 4px; background: #007a5a; display: grid; place-items: center; margin-left: auto; }
