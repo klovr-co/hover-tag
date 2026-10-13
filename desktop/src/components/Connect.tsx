@@ -329,19 +329,10 @@ export function ProfileFields({ api, question, draft, sendInPlace, onEnter, disa
   return (
     <>
       <div className="card mrow">
-        {/* The picture and what changes it, together on the left. */}
-        <div className="pic-col">
-          <span className={`avw2${dragging ? " dragging" : ""}${rolling ? " rolling" : ""}`}>
-            <img key={preview ?? ""} className="pic fresh" src={preview ?? tagIcon} alt={`${name || "Tag"}'s picture`}
-              style={question?.picture === "custom" ? { background: "#fff" } : undefined} />
-          </span>
-          <div className="pic-acts">
-            <button className="p-btn soft sm" aria-label="Shuffle picture" title="Shuffle picture" disabled={busy || locked}
-              onClick={() => { setBusy(true); setRolling(true); sendInPlace("shuffle"); }}><Icon name="dice" size={16} />Shuffle</button>
-            <button className="p-btn soft sm" aria-label="Upload your own" title="Upload your own" disabled={busy || locked}
-              onClick={() => void upload()}><Icon name="upload" size={16} /></button>
-          </div>
-        </div>
+        <span className={`avw2${dragging ? " dragging" : ""}${rolling ? " rolling" : ""}`}>
+          <img key={preview ?? ""} className="pic fresh" src={preview ?? tagIcon} alt={`${name || "Tag"}'s picture`}
+            style={question?.picture === "custom" ? { background: "#fff" } : undefined} />
+        </span>
         <div style={{ flex: 1, minWidth: 0 }}>
           <label className="at-field">
             <span className="at-pill">@<span className="at-grow" data-v={name}>
@@ -356,6 +347,10 @@ export function ProfileFields({ api, question, draft, sendInPlace, onEnter, disa
               value={description} disabled={disabled} onChange={(e) => { setDescription(e.target.value.replace(/[\r\n]+/g, " ")); fitText(e.currentTarget); }}
               onKeyDown={(e) => { if (e.key === "Enter") e.preventDefault(); }} />
             {description.length > max - 30 && <span className="desc-count">{max - description.length}</span>}
+          </div>
+          <div className="pic-acts">
+            <button className="p-btn soft sm" disabled={busy || locked} onClick={() => { setBusy(true); setRolling(true); sendInPlace("shuffle"); }}><Icon name="dice" size={16} />Shuffle picture</button>
+            <button className="p-btn quiet sm" disabled={busy || locked} onClick={() => void upload()}><Icon name="upload" size={16} />Upload your own</button>
           </div>
         </div>
       </div>

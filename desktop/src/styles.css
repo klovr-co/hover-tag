@@ -817,17 +817,7 @@ button.activity-artifact:hover { border-color: var(--link); color: var(--link); 
 .desc-wrap { position: relative; margin-top: 8px; }
 .field.desc { display: block; height: auto; min-height: 0; padding: 7px 40px 7px 12px; font: inherit; font-size: 14px; line-height: 1.4; color: var(--text); resize: none; }
 .desc-count { position: absolute; right: 10px; bottom: 8px; font-size: 12px; color: var(--faint); }
-/* The picture and its two buttons come to the height of the name and description beside them. */
-.pic-col { flex: none; width: 118px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
-.pic-col .avw2, .pic-col .pic { width: 88px; height: 88px; border-radius: 20px; }
-.pic-acts { display: flex; gap: 6px; width: 100%; }
-.pic-acts .p-btn { height: 28px; padding: 0 8px; gap: 6px; justify-content: center; font-size: 13px; }
-.pic-acts .p-btn:first-child { flex: 1; }
-.pic-acts .p-btn:last-child { flex: none; width: 30px; padding: 0; }
-.mrow:has(.pic-col) { align-items: stretch; }
-.mrow:has(.pic-col) > div:last-child { display: flex; flex-direction: column; }
-.mrow:has(.pic-col) .desc-wrap { flex: 1; display: flex; }
-.mrow:has(.pic-col) .field.desc { flex: 1; }
+.pic-acts { display: flex; gap: 6px; margin-top: 10px; }
 
 .slk { width: auto; height: 132px; border-radius: 9px; overflow: hidden; display: flex; background: #fff; color: #1d1c1d; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; box-shadow: 0 6px 18px rgba(16, 40, 70, .16), 0 0 0 1px rgba(0, 0, 0, .06); position: relative; text-align: left; }
 .slk .send { width: 19px; height: 19px; border-radius: 4px; background: #007a5a; display: grid; place-items: center; margin-left: auto; }
