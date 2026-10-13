@@ -68,7 +68,7 @@ function fakeSetup(order: string[], pausedTag: string | null = "new-tag") {
 function open(order: string[], pausedTag?: string | null, enterprise?: string, modelsFrom?: string) {
   const { api, sent } = fakeSetup(order, pausedTag);
   const props = {
-    start: vi.fn(async () => ""), close: vi.fn(), moreOptions: vi.fn(), handOff: vi.fn(),
+    start: vi.fn(async () => ""), close: vi.fn(), handOff: vi.fn(),
   };
   render(<QuickAdd api={api} workspace="T0KLOVR1" workspaceName="Klovr" enterprise={enterprise} modelsFrom={modelsFrom} {...props} />);
   return { sent, ...props };
@@ -83,6 +83,8 @@ describe("Quick add", () => {
     const name = await screen.findByLabelText("Name, as people mention it in Slack") as HTMLInputElement;
     await vi.waitFor(() => expect(name.value).toBe("Maya's Tag"));
     expect(screen.getByText("your account's default")).toBeTruthy();
+    // One short form: no detour to the full setup.
+    expect(screen.queryByRole("button", { name: "More options" })).toBeNull();
     fireEvent.change(name, { target: { value: "Docs Tag" } });
     fireEvent.change(screen.getByLabelText("Description"), { target: { value: "Finds answers in our docs" } });
     fireEvent.click(screen.getByRole("button", { name: "Create in Slack" }));
@@ -118,14 +120,6 @@ describe("Quick add", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(sent).toEqual([{ answer: null, pause: true }]);
     await vi.waitFor(() => expect(close).toHaveBeenCalledWith(false));
-  });
-
-  it("More options continues in the full setup with what was typed", async () => {
-    const { sent, moreOptions } = open(ALL);
-    fireEvent.change(await screen.findByDisplayValue("Maya's Tag"), { target: { value: "Docs Tag" } });
-    fireEvent.click(screen.getByRole("button", { name: "More options" }));
-    expect(sent).toEqual([{ answer: null, pause: true }]);
-    await vi.waitFor(() => expect(moreOptions).toHaveBeenCalledWith("new-tag", { name: "Docs Tag", description: "" }));
   });
 
   it("hands a question it can't answer to the full setup", async () => {
@@ -165,15 +159,6 @@ describe("Quick add without a Tag to continue", () => {
     expect(handOff).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Done" }));
     await vi.waitFor(() => expect(close).toHaveBeenCalledWith(false));
-  });
-});
-
-describe("More options without a draft Tag", () => {
-  it("starts the full setup afresh with what was typed", async () => {
-    const { moreOptions } = open(ALL, null);
-    fireEvent.change(await screen.findByDisplayValue("Maya's Tag"), { target: { value: "Docs Tag" } });
-    fireEvent.click(screen.getByRole("button", { name: "More options" }));
-    await vi.waitFor(() => expect(moreOptions).toHaveBeenCalledWith("", { name: "Docs Tag", description: "" }));
   });
 });
 

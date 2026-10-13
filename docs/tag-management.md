@@ -119,8 +119,8 @@ workspace's card on **Home**. Give it a name, a one-line description and a
 picture, then click **Create in Slack**. Tag uses your default model; click
 **Change** beside it to pick another, or change it later in the Tag's
 **Details**. Tag starts it when it's ready. Invite it to a
-channel with `/invite`. Click **More options** for the full setup with the
-workspace already chosen.
+channel with `/invite`. For every setup choice, use **Add Tag** at the top of
+**Home** instead.
 
 In the terminal: `tag setup` for your first Tag, `tag add` for another. Then
 run the `tag NAME start` command it prints. Choose **Use an existing app** on

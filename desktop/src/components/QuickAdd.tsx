@@ -29,14 +29,12 @@ export interface QuickAddProps {
   start: StartTag;
   /** The dialog is gone; `added` when a Tag was created. */
   close: (added: boolean) => void;
-  /** Continue in the full setup for this draft Tag ("" when setup didn't name one), keeping what was typed. */
-  moreOptions: (tag: string, profile: { name: string; description: string }) => void;
   /** Setup asked something the dialog doesn't answer: show it in the full setup. */
   handOff: (tag: string) => void;
 }
 
 type Phase = "form" | "creating" | "starting" | "done" | "failed";
-type Leaving = "cancel" | "more" | "handoff" | null;
+type Leaving = "cancel" | "handoff" | null;
 
 /** The steps the dialog shows while creating, in order; Tag reports all but the first and last. */
 export const QUICK_STEPS = ["model", "create", "picture", "install", "connect", "start"] as const;
@@ -49,7 +47,7 @@ export function quickStep(phase: Phase, modelChosen: boolean, reported: string[]
   return Math.max(1, ...reported.map((step) => QUICK_STEPS.indexOf(step as typeof QUICK_STEPS[number])));
 }
 
-export function QuickAdd({ api, workspace, workspaceName, workspaceIcon, enterprise, modelsFrom, start, close, moreOptions, handOff }: QuickAddProps) {
+export function QuickAdd({ api, workspace, workspaceName, workspaceIcon, enterprise, modelsFrom, start, close, handOff }: QuickAddProps) {
   const [state, dispatch] = useReducer(setupReducer, initialSetup);
   const session = useRef<Session | null>(null);
   const [phase, setPhase] = useState<Phase>("form");
@@ -132,10 +130,9 @@ export function QuickAdd({ api, workspace, workspaceName, workspaceIcon, enterpr
   const [lost, setLost] = useState(false);
   useEffect(() => {
     if (!state.outcome || leaving === "cancel") return;
-    if (leaving === "more" || leaving === "handoff" || (state.outcome === "paused" && phase !== "form")) {
-      if (!state.tag && leaving === "more") { moreOptions("", draft.answer()); return; }
-      if (!state.tag) { setLost(true); setPhase("failed"); return; }
-      if (leaving === "more") moreOptions(state.tag, draft.answer()); else handOff(state.tag);
+    if (leaving === "handoff" || (state.outcome === "paused" && phase !== "form")) {
+      if (state.tag) handOff(state.tag);
+      else { setLost(true); setPhase("failed"); }
       return;
     }
     if (state.outcome === "complete") setPhase((current) => current === "creating" ? "starting" : current);
@@ -170,7 +167,6 @@ export function QuickAdd({ api, workspace, workspaceName, workspaceIcon, enterpr
     setPhase("creating");
     send(draft.answer());
   };
-  const more = () => { setLeaving("more"); pause(); };
 
   const name = draft.name.trim() || "your Tag";
   const at = quickStep(phase, model !== null || answered.current.has("default_model"), (state.creating ?? []).map((s) => s.step));
@@ -211,7 +207,6 @@ export function QuickAdd({ api, workspace, workspaceName, workspaceIcon, enterpr
             {!lastProfile.current && !state.outcome && <div className="dlg-note" role="status"><Spinner small label="Getting ready" />Getting ready…</div>}
             {state.error && <ErrorLine>{state.error}</ErrorLine>}
             <div className="foot">
-              <button className="link" onClick={more} disabled={!!leaving}>More options</button>
               <span className="spacer" />
               <button className="p-btn quiet" onClick={dismiss}>Cancel</button>
               <Primary title="Create in Slack" disabled={!profileQuestion || !!draft.nameError || draft.busy || !!leaving} onClick={create} />

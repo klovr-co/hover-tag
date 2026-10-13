@@ -36,10 +36,6 @@ interface Props {
   workspaceName?: string;
   /** Its Enterprise Grid organization, when it's in one. */
   enterprise?: string | null;
-  /** With a workspace: answer every obvious question (`all`, the default), or only the workspace (More options). */
-  presets?: "all" | "workspace";
-  /** What was typed in the quick-add dialog, to start the name step with. */
-  profile?: { name: string; description: string };
   done: () => void;
   /** Setup was cancelled; its progress is saved. */
   paused: () => void;
@@ -50,8 +46,6 @@ interface Props {
   usageNote?: { learnMore: () => void; seen: () => void };
 }
 
-/** The questions that pick the workspace, which More options still answers. */
-const WORKSPACE_QUESTIONS = new Set(["workspace", "org_workspace", "org_workspace_id"]);
 
 /** What a choose question's answer is: its stable ID when Tag gave them, else its index. */
 const answerFor = (question: SetupQuestion, id: string) => {
@@ -59,7 +53,7 @@ const answerFor = (question: SetupQuestion, id: string) => {
   return index >= 0 ? id : (question.options ?? []).indexOf(id);
 };
 
-export function Connect({ api, args, workspace, workspaceName, enterprise, presets = "all", profile, done, paused, openAI, start, usageNote }: Props) {
+export function Connect({ api, args, workspace, workspaceName, enterprise, done, paused, openAI, start, usageNote }: Props) {
   const [state, dispatch] = useReducer(setupReducer, initialSetup);
   const session = useRef<Session | null>(null);
   const [attempt, setAttempt] = useState(0);
@@ -123,7 +117,7 @@ export function Connect({ api, args, workspace, workspaceName, enterprise, prese
   useEffect(() => { if (q) setLaunched(false); }, [q]);
   // Each question is answered for you once at most; if Tag asks it again, it's yours to answer.
   const quickDone = useRef(new Set<string>());
-  const quick = workspace && q && !quickDone.current.has(q.id) && (presets === "all" || WORKSPACE_QUESTIONS.has(q.id)) ? quickAnswer(q, workspace, enterprise) : null;
+  const quick = workspace && q && !quickDone.current.has(q.id) ? quickAnswer(q, workspace, enterprise) : null;
   useEffect(() => {
     if (!q || !quick) return;
     quickDone.current.add(q.id);
@@ -181,7 +175,7 @@ export function Connect({ api, args, workspace, workspaceName, enterprise, prese
       );
     }
     if ((state.creating || (launched && !q) || (quick && q?.id === "approve_setup")) && approve.current) return <Create question={approve.current} state={state} running send={send} picture={picture} />;
-    if (quick || (workspace && presets === "all" && !q)) return <FlowBody title="Adding a Tag" lead="Using your default model. Change it any time in the Tag's Details."
+    if (quick || (workspace && !q)) return <FlowBody title="Adding a Tag" lead="Using your default model. Change it any time in the Tag's Details."
       art={keyArt}>
       <div className="notice info" role="status"><Spinner /><span>{state.status}</span></div>
     </FlowBody>;
@@ -192,7 +186,7 @@ export function Connect({ api, args, workspace, workspaceName, enterprise, prese
     </FlowBody>;
     switch (q.id) {
       case "profile": return <Meet key="profile" api={api} question={q} send={send} sendInPlace={sendInPlace}
-        quickTo={workspace && presets === "all" ? workspaceName || "this workspace" : undefined} initial={profile}
+        quickTo={workspace ? workspaceName || "this workspace" : undefined}
         existing={() => { dispatch({ type: "existing" }); send("existing"); }} />;
       case "ai_connection": return <FlowBody title="Connect an AI in Settings" lead="Your AI accounts are shared by all Tags. Connect Codex or Claude, then return to choose this Tag's model."
         foot={<><BackIf question={q} back={back} /><span className="spacer" />
@@ -217,7 +211,7 @@ export function Connect({ api, args, workspace, workspaceName, enterprise, prese
   };
   return (
     <>
-      <FlowSky state={state} picture={picture} direction={direction.current} quick={!!workspace && presets === "all"} cancel={state.outcome ? undefined : cancel} />
+      <FlowSky state={state} picture={picture} direction={direction.current} quick={!!workspace} cancel={state.outcome ? undefined : cancel} />
       {/* One canvas for every step: a fixed panel, so the window never resizes between them. */}
       <div className={`flow-panel ${direction.current}`}>
         {body()}
@@ -270,13 +264,12 @@ const BackIf = ({ question, back }: { question: SetupQuestion; back: () => void 
 
 const EDIT_LEAD = "You’re still signed in. Done takes you back to Create.";
 
-function Meet({ api, question, send, sendInPlace, existing, quickTo, initial }: {
+function Meet({ api, question, send, sendInPlace, existing, quickTo }: {
   api: Bridge; question: SetupQuestion; send: (a: unknown) => void; sendInPlace: (a: unknown) => void; existing: () => void;
   /** Added from a workspace card: this step is the only one, so it creates the Tag there. */
   quickTo?: string;
-  initial?: { name: string; description: string };
 }) {
-  const draft = useProfileDraft(question, initial);
+  const draft = useProfileDraft(question);
   const finish = () => { if (!draft.nameError) send(draft.answer()); };
   return (
     <div className="body roomy">
@@ -297,9 +290,9 @@ function Meet({ api, question, send, sendInPlace, existing, quickTo, initial }: 
 }
 
 /** What the person has typed for the Your Tag step, kept while Tag sends a new picture. */
-export function useProfileDraft(question: SetupQuestion | null, initial?: { name: string; description: string }) {
-  const [name, setName] = useState(initial?.name || question?.name || "");
-  const [description, setDescription] = useState(initial?.description ?? question?.description ?? "");
+export function useProfileDraft(question: SetupQuestion | null) {
+  const [name, setName] = useState(question?.name ?? "");
+  const [description, setDescription] = useState(question?.description ?? "");
   const [busy, setBusy] = useState(false);
   const [rolling, setRolling] = useState(false);
   // The first profile question fills in the suggestions; later ones only bring a new picture or an error.
@@ -308,7 +301,6 @@ export function useProfileDraft(question: SetupQuestion | null, initial?: { name
     setBusy(false); setRolling(false);
     if (question && !seeded.current) {
       seeded.current = true;
-      if (initial) return;
       setName(question.name ?? "");
       setDescription(question.description ?? "");
     }

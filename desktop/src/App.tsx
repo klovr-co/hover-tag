@@ -25,7 +25,7 @@ type Screen =
   | { name: "welcome" }
   | { name: "installing"; attempt: number }
   | { name: "home" }
-  | { name: "connect"; args: string[]; workspace?: string; workspaceName?: string; enterprise?: string | null; presets?: "all" | "workspace"; profile?: { name: string; description: string } }
+  | { name: "connect"; args: string[]; workspace?: string; workspaceName?: string; enterprise?: string | null }
   | { name: "settings"; tab?: SettingsTab; privacy?: boolean }
   | { name: "ai"; resume?: string[] }
   /** `opened` counts Slack links, so a second link resets an open Tag screen. */
@@ -295,11 +295,10 @@ export function App() {
         {screen.name === "home" && quick && (
           <QuickAdd api={api} {...quick} start={(id) => tags.start(id)}
             close={() => { setQuick(null); void tags.refresh(); }}
-            moreOptions={(tag, profile) => { setQuick(null); setScreen({ name: "connect", args: tag ? [tag, "setup"] : ["add"], workspace: quick.workspace, workspaceName: quick.workspaceName, enterprise: quick.enterprise, presets: "workspace", profile }); }}
             handOff={(tag) => { setQuick(null); setScreen({ name: "connect", args: [tag, "setup"], workspace: quick.workspace, workspaceName: quick.workspaceName, enterprise: quick.enterprise }); }} />
         )}
         {screen.name === "connect" && (
-          <Connect api={api} args={screen.args} workspace={screen.workspace} workspaceName={screen.workspaceName} enterprise={screen.enterprise} presets={screen.presets} profile={screen.profile} start={(id, onLine) => tags.start(id, capabilities.includes("start-progress") ? onLine : undefined)} openAI={capabilities.includes(SHARED_AI_CAPABILITY) ? (resume) => setScreen({ name: "ai", resume }) : undefined} done={home}
+          <Connect api={api} args={screen.args} workspace={screen.workspace} workspaceName={screen.workspaceName} enterprise={screen.enterprise} start={(id, onLine) => tags.start(id, capabilities.includes("start-progress") ? onLine : undefined)} openAI={capabilities.includes(SHARED_AI_CAPABILITY) ? (resume) => setScreen({ name: "ai", resume }) : undefined} done={home}
             paused={() => { home(); say("Progress saved. Finish setup from Home any time."); }}
             usageNote={telemetry.announced ? { learnMore: learnUsage, seen: sawOnSetup } : undefined} />
         )}
