@@ -243,6 +243,20 @@ class RealCaseImportTests(unittest.TestCase):
             self.assertTrue(cases[0].reachable)
 
 
+class OperatingPointTests(unittest.TestCase):
+    def test_precision_at_recall_and_recall_at_precision(self) -> None:
+        expected = {str(i): i < 10 for i in range(20)}
+        # Positives score 0.55-0.99, negatives 0.0-0.6: one negative overlaps at 0.6.
+        rows = [{"id": str(i), "outcome": "score", "probability": 0.55 + i * 0.045 if i < 10 else (i - 10) / 15}
+                for i in range(20)]
+        point = harness.operating_points(expected, rows)
+        self.assertEqual(1.0, point["precision_at_recall"])
+        self.assertEqual(0.8, point["recall_at_precision"])  # At 0.6 the overlapping negative makes 8/9.
+        self.assertEqual(0.61, point["best_threshold"])
+        none = harness.operating_points({"a": True, "b": False}, [{"id": "b", "outcome": "score", "probability": 0.9}])
+        self.assertEqual((0.0, None), (none["recall_at_precision"], none["best_threshold"]))
+
+
 class PaidRunGuardTests(unittest.TestCase):
     def run_score(self, scorer, *, max_usd: float = 1.0, out_path: Path, cases=None) -> float:
         name, all_cases = harness.load_cases()

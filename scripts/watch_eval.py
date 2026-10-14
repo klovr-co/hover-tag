@@ -487,6 +487,26 @@ def recommend(expected: dict[str, bool], rows: list[dict[str, Any]], target: flo
     return None
 
 
+FULL_SWEEP = tuple(round(step / 100, 2) for step in range(100))
+
+
+def operating_points(expected: dict[str, bool], rows: list[dict[str, Any]],
+                     min_recall: float = 0.5, min_precision: float = 0.95) -> dict[str, Any]:
+    """Precision at recall >= min_recall, and recall at precision >= min_precision (with its threshold)."""
+    sweep = [metrics(expected, rows, threshold) for threshold in FULL_SWEEP]
+    by_precision = [m for m in sweep if m.recall is not None and m.recall >= min_recall and m.precision is not None]
+    by_recall = [m for m in sweep if m.precision is not None and m.precision >= min_precision]
+    best_p = max(by_precision, key=lambda m: (m.precision, m.recall), default=None)
+    best_r = max(by_recall, key=lambda m: (m.recall, -m.threshold), default=None)
+    return {
+        "precision_at_recall": best_p.precision if best_p else None,
+        "precision_threshold": best_p.threshold if best_p else None,
+        "recall_at_precision": best_r.recall if best_r else 0.0,
+        "best_threshold": best_r.threshold if best_r else None,
+        "scored": sum(r.get("outcome") == "score" for r in rows if r["id"] in expected),
+    }
+
+
 def _fmt(value: float | None) -> str:
     return "  n/a" if value is None else f"{value:5.3f}"
 
@@ -568,6 +588,8 @@ def main(argv: list[str] | None = None) -> int:
     report_parser = commands.add_parser("report", help="Precision, recall and threshold sweep; no network.")
     report_parser.add_argument("scores", type=Path)
     report_parser.add_argument("--target-precision", type=float, default=DEFAULT_TARGET_PRECISION)
+    compare_parser = commands.add_parser("compare", help="Operating points per prompt variant; no network.")
+    compare_parser.add_argument("scores", nargs="+", help="name=path pairs of score files.")
     export_parser = commands.add_parser("export", help="Labelled cases and scores from a Tag's score log; no network.")
     export_parser.add_argument("log", type=Path)
     export_parser.add_argument("--cases", type=Path, required=True)
@@ -624,6 +646,18 @@ def main(argv: list[str] | None = None) -> int:
         cases = [case for case in cases if not case.borderline]
     if args.command in {None, "plan"}:
         plan(cases, assistant_name, sys.stdout)
+        return 0
+    if args.command == "compare":
+        expected = {case.id: case.expected for case in cases}
+        print(f"{len(expected)} cases ({sum(expected.values())} should reply). P@R>=0.5 | R@P>=0.95 @ threshold")
+        for pair in args.scores:
+            name, _, path = pair.partition("=")
+            rows = [row for row in _recorded(Path(path)) if row["id"] in expected]
+            for provider in sorted({row["provider"] for row in rows}):
+                point = operating_points(expected, [r for r in rows if r["provider"] == provider])
+                cost = sum(r.get("usd", 0) for r in rows if r["provider"] == provider)
+                print(f"  {name:14} {provider:17} n={point['scored']:4}  P@R.5 {_fmt(point['precision_at_recall'])}"
+                      f"  R@P.95 {_fmt(point['recall_at_precision'])} @ {point['best_threshold']}  ${cost:.4f}")
         return 0
     if args.command == "report":
         report(cases, _recorded(args.scores), sys.stdout, target=args.target_precision)
