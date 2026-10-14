@@ -198,7 +198,8 @@ The app loads these details on demand and reuses finished results while the feed
 is open. Both Codex App Server and Claude Agent SDK use the same stored event
 contract. Older records work without a rewrite; missing input and result previews are omitted. Error reports match the exact saved reference and request routing;
 older runs without a reference show a report only when routing and the run's time
-window give one unambiguous match. Prompts and private reasoning are not added.
+window give one unambiguous match. Prompts and raw reasoning are not added; a
+Thinking step's result is the model's thinking summary unless `OPENTAG_SHOW_THINKING=0`.
 
 ### Starting a Tag
 

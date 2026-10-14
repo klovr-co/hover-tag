@@ -126,6 +126,53 @@ class ClaudeEventMapperTests(unittest.TestCase):
         )
         self.assertEqual({"type": "turn_complete", "status": "completed"}, events[-1])
 
+    def thinking_stream(self, message_id: str, *chunks: str, stop: bool = True) -> list[StreamEvent]:
+        events = [StreamEvent({"type": "message_start", "message": {"id": message_id}}),
+                  StreamEvent({"type": "content_block_start", "index": 0,
+                               "content_block": {"type": "thinking", "thinking": ""}})]
+        events.extend(StreamEvent({"type": "content_block_delta", "index": 0,
+                                   "delta": {"type": "thinking_delta", "thinking": chunk}}) for chunk in chunks)
+        if stop:
+            events.append(StreamEvent({"type": "content_block_stop", "index": 0}))
+        return events
+
+    def test_thinking_summary_becomes_a_completed_activity(self) -> None:
+        mapper = ClaudeEventMapper(thinking=True)
+        events = [event for message in [
+            *self.thinking_stream("m1", "Owners are under Roles; ", "read that first."),
+            *stream("m1", "Done.", stop_reason="end_turn"),
+            ResultMessage(result="Done."),
+        ] for event in mapper.map(claude_agent_backend.message_payload(message))]
+
+        activity = [event for event in events if event["type"].startswith("activity_")]
+        self.assertEqual([
+            {"type": "activity_start", "activity_id": "m1:thinking:0", "label": "Thinking…",
+             "wait_label": "Still thinking…", "details": {"tool": "Thinking"}},
+            {"type": "activity_complete", "activity_id": "m1:thinking:0", "label": "Thinking…",
+             "status": "completed", "details": {"output": "Owners are under Roles; read that first."}},
+        ], activity)
+        self.assertNotIn("Owners", json.dumps([e for e in events if e["type"].startswith("message_")]))
+
+    def test_thinking_stays_private_when_the_tag_does_not_share_it(self) -> None:
+        events = mapped([*self.thinking_stream("m1", "private plan"), ResultMessage(result="ok")])
+        self.assertNotIn("private plan", json.dumps(events))
+        self.assertFalse([event for event in events if event["type"].startswith("activity_")])
+
+    def test_empty_thinking_completes_without_details(self) -> None:
+        mapper = ClaudeEventMapper(thinking=True)
+        events = [event for message in self.thinking_stream("m1")
+                  for event in mapper.map(claude_agent_backend.message_payload(message))]
+        self.assertEqual({}, events[-1]["details"])
+
+    def test_interrupted_thinking_is_closed(self) -> None:
+        mapper = ClaudeEventMapper(thinking=True)
+        for message in self.thinking_stream("m1", "half a thought", stop=False):
+            mapper.map(claude_agent_backend.message_payload(message))
+        events = mapper.interrupted()
+        self.assertEqual("interrupted", events[0]["status"])
+        self.assertEqual({"output": "half a thought"}, events[0]["details"])
+        self.assertEqual({"type": "turn_complete", "status": "interrupted"}, events[-1])
+
     def test_waits_for_background_agents_before_completing(self) -> None:
         events = mapped([
             AssistantMessage([{"id": "t1", "name": "Agent", "input": {"run_in_background": True}}]),
@@ -384,6 +431,16 @@ class ClaudeAgentRunTests(unittest.TestCase):
             settings = slack_socket_agent.default_agent_settings(agent_models.discover_tag_models("claude"))
         self.run_agent(script, model=settings.model, reasoning_effort=settings.reasoning_effort)
         self.assertEqual(("opus", "max"), (FakeClient.instances[0].options.model, FakeClient.instances[0].options.effort))
+
+    def test_requests_thinking_summaries_unless_the_tag_keeps_them_private(self) -> None:
+        async def script(_client):
+            yield ResultMessage(result="ok")
+
+        self.run_agent(script)
+        self.assertEqual({"thinking-display": "summarized"}, FakeClient.instances[0].options.extra_args)
+        with patch.dict(os.environ, {"OPENTAG_SHOW_THINKING": "0"}):
+            self.run_agent(script)
+        self.assertFalse(hasattr(FakeClient.instances[1].options, "extra_args"))
 
     def test_claude_auto_memory_is_disabled_for_tag_runs(self) -> None:
         async def script(_client):
