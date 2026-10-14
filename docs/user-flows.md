@@ -231,7 +231,8 @@ Runtime behavior:
 
 - The bridge removes the mention before it sends the request to the agent.
 - Codex (App Server) and Claude (Agent SDK) stream answer text and show
-  **Agent activity**. Private reasoning and raw tool output stay out of Slack.
+  **Agent activity**. Raw tool output stays out of Slack. The model's thinking
+  summaries appear as **Thinking** steps unless `OPENTAG_SHOW_THINKING=0`.
 - One Slack thread runs one request at a time.
 - A failed request sends the requester a private message with the cause and
   recovery choices. See [Error reporting](reference/error-reporting.md).
@@ -474,11 +475,11 @@ flowchart LR
 
 | Step | App | Terminal |
 | --- | --- | --- |
-| See choices | The Tag → **Details** → **Model** lists models from connected accounts, grouped by agent. | `tag NAME settings ai models` |
+| See choices | The Tag → **Details** → **Model** lists models from connected accounts, grouped by agent. Each account's list is saved, so it shows at once, and is updated in the background once a day. | `tag NAME settings ai models` (add `--refresh` to read the lists again) |
 | Choose a model | Pick one. The agent follows the model. | `tag NAME settings ai model claude:opus` |
 | Choose a thinking level | Pick one the model offers, or the model's default. | `tag NAME settings ai effort high` (or `default`) |
 | Apply | The app restarts a running Tag. | Add `--restart`, or confirm when asked. |
-| Connect accounts | Settings → General → **AI connections** | `tag settings ai sign-in codex\|claude` |
+| Connect accounts | Settings → AI → **AI connections** | `tag settings ai sign-in codex\|claude` |
 
 Accounts are shared by all Tags on the computer. If the saved model is no longer
 offered, the app and Slack's error message say so; pick another model.
@@ -570,6 +571,9 @@ flowchart LR
 | Check health | Home: *N of M online*; the Tag's Logs tab | `tag NAME status`, `tag NAME doctor`, `tag NAME logs` |
 | Start or stop | The Tag's switch; **Start all** / **Stop all** per workspace; the menu bar | `tag NAME start` / `stop`; `tag start --workspace TEAM` |
 | Keep running after login | Settings → General → **Keep Tags running** and **Open Tag at login** | `tag autostart on` |
+| Start, stop, or check memory | Settings → AI → **Memory** | `tag memory start` / `stop` / `status` |
+| Skip the built-in search model at install | Install → **Continue** → **Memory search** → **Your own endpoint** → **Continue** | `./install.sh --skip-memory-model` (or answer the prompt) |
+| Switch the search model later | Settings → AI → **Memory** → **Search model** | `tag memory embedding local\|custom`; `tag settings` → Workspace and memory |
 | Rename or describe | Details → **Rename** / description **Edit** | `tag NAME rename "Name"`, `tag NAME describe "…"` |
 | Change the model | Details → **Model** | `tag NAME settings ai model VALUE` |
 | Update | Settings → **Updates** → **Update Tag** updates the app and the runtime together; choose Stable, Beta, or Alpha | `tag upgrade`; `tag upgrade --channel beta` |
@@ -640,7 +644,7 @@ not set up.
 | Channel restriction | Implemented | Channels the Tag joined (invitation policy) or a saved list. |
 | One conversation per thread | Implemented for Codex and Claude | Per requester; bounded by token and idle limits. Legacy transports start fresh. |
 | Thread text and attachments | Implemented | Bounded and untrusted. Earlier thread files can be reopened. |
-| Live activity and streamed answers | Implemented with App Server or Agent SDK | No private reasoning or raw tool output in Slack. |
+| Live activity and streamed answers | Implemented with App Server or Agent SDK | No raw tool output in Slack. Thinking summaries show as Thinking steps; `OPENTAG_SHOW_THINKING=0` turns them off. |
 | Approvals | Codex and Claude: scoped choices, including saved rules | Private to the requester; unanswered requests are denied. |
 | Stop a task | Implemented with App Server or Agent SDK | Slack's Stop button. |
 | Saved files | Implemented | Kept locally and attached in Slack by default; 15 MB per file. |

@@ -40,8 +40,10 @@ The Tag desktop app and the CLI use the same Tags, settings, and lifecycle: the 
 | Describe | Details → description **Edit** | `tag NAME describe "…"` |
 | Model and thinking level | Details → **Model** | `tag NAME settings ai model VALUE [--effort LEVEL]` |
 | Routines | The Tag → **Routines** | `tag NAME routine list\|show\|add\|edit\|pause\|resume\|remove\|run-now`; see [Routines](../concepts/routines.md) |
-| AI accounts | Settings → General → **AI connections** | `tag settings ai`, `tag settings ai sign-in codex\|claude` |
+| AI accounts | Settings → AI → **AI connections** | `tag settings ai`, `tag settings ai sign-in codex\|claude` |
 | Keep Tags running | Settings → General → **Keep Tags running** | `tag autostart on` |
+| Search model (Default or Custom) | Settings → AI → **Search model** | `tag memory embedding local\|custom` |
+| Memory on or off | Settings → AI → **Memory** | `tag memory start` / `stop`; `tag memory status --json` also reports `embedding`, including `embedding.download` while the built-in model downloads; `tag memory download` restarts that download |
 | Open at login | Settings → General → **Open Tag at login** | Not needed; `tag autostart on` runs without the app |
 | Update | Settings → **Updates** → **Update Tag** | `tag upgrade` |
 | Release channel | Settings → **Updates** → Stable, Beta, or Alpha | `tag upgrade --channel stable\|beta\|alpha\|edge` |
@@ -123,7 +125,13 @@ MFS is shared by the installation. `tag NAME stop`, restart, reset, and
 failed startup leave shared memory and other Tags running. Inspect it with
 `tag memory status`; after stopping every Tag bridge, an installation-owned
 service can be stopped explicitly with `tag memory stop`. Tag refuses to stop
-an externally managed MFS process.
+an externally managed MFS process. `tag memory embedding [status|local|custom]` chooses how memory computes search
+embeddings (`custom` takes `--base-url` and `--embedding-model`, and a key on
+stdin); see [Choosing the search model after
+install](installation-details.md#choosing-the-search-model-after-install).
+`tag memory start` also works with no Tags,
+for example after you remove the last one: MFS runs from its own state folder,
+not from a Tag's workspace.
 
 An upgrade restarts each previously running Tag, leaving stopped Tags stopped
 and shared MFS online. `--no-restart` defers activation until you restart those
@@ -269,12 +277,12 @@ Only when no agent is connected does setup list them, because one is required:
 each shows **Not signed in**, **Sign-in expired**, **Usage limit reached**,
 **Not installed**, or **Update needed**, with the action that fixes it. Account
 changes and connection details are in `tag settings` → AI & models, or
-the Tag app → Settings → General → **AI connections**.
+the Tag app → Settings → AI → **AI connections**.
 
 ### AI & models
 
 Change these later in `tag settings` → **AI & models**, in the app's Settings →
-General → **AI connections**, or with `tag NAME settings ai`:
+AI → **AI connections**, or with `tag NAME settings ai`:
 
 ```sh
 tag settings ai                     # check connections now
@@ -570,7 +578,22 @@ running without starting them now. A start made by the login service follows
 the recorded choice instead of changing it, so stopping a Tag while the
 service is starting it leaves the Tag off. Each restart counts until the Tag has
 stayed up for five minutes, so a Tag that crashes right after starting also
-backs off. `tag autostart off` removes the service and leaves running
+backs off.
+
+The same service keeps shared memory (MFS) running. It restarts MFS, with the
+same back-off, when a kept Tag needs it (its `MFS_URL` is the local server Tag
+manages) or when `tag memory start` was the last thing you ran. `tag memory
+stop` records that it should stay off. A remote `MFS_URL` is never started by
+Tag. `tag memory status` and `tag autostart --json` report `keep_running` for
+memory. Without `tag autostart on`, nothing restarts MFS: a stopped server stays
+down until you run `tag memory start` or `tag start`.
+
+On Linux, systemd starts a user service at boot only while the account has
+linger on. `tag autostart on` and the service itself try `loginctl
+enable-linger`; if the system needs an administrator, `tag autostart` shows
+"Only after you log in" with the command to run, `sudo loginctl enable-linger
+USER`, and `--json` reports it as `linger`. `tag autostart off` leaves linger as
+it is. `tag autostart off` removes the service and leaves running
 Tags as they are; the service is set up so that stopping it never stops the
 Tags it started. The service runs Tag's stable launcher, so upgrades take
 effect without registering it again. Its output is in
@@ -717,7 +740,7 @@ version until that channel catches up.
 ## ChatGPT account connection
 
 A ChatGPT plan is one shared Codex connection for all Tags. Connect it in
-the Tag app → Settings → General → **AI connections**, or with
+the Tag app → Settings → AI → **AI connections**, or with
 `tag settings ai sign-in codex --method chatgpt --restart`. `tag chatgpt status
 --json` inspects it, and `tag settings ai sign-in codex --method codex` returns
 to the computer's Codex sign-in. `--restart` stops running Tags during sign-in
@@ -728,7 +751,7 @@ and starts them again afterwards. See
 
 Use [Models](api-connections.md) to configure
 Codex/Azure or Claude API keys, endpoints, model lists, and advisory budgets.
-In the app, open **Settings → General → AI connections → Add your own API**. In a
+In the app, open **Settings → AI → AI connections → Add your own API**. In a
 terminal, run `tag [NAME] settings ai api set|check|clear`; the key is read
 from stdin.
 `tag usage` and `tag NAME usage --json` report the current UTC month.

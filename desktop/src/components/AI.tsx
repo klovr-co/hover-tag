@@ -5,10 +5,10 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ACTION_LABEL, CLAUDE_SHARED_NOTE, CODEX_METHODS, isUrgent, primaryAction, statusLine,
-  findModel, type AIModels, type AIStatus, type Connection, type ModelEntry, type SignInState,
+  findModel, type AIModels, type AIStatus, type Connection, type ModelEntry, type ModelGroup, type SignInState,
 } from "../lib/ai";
 import { useNight } from "../lib/appearance";
-import { reducedMotion, usePresence } from "../lib/motion";
+import { reducedMotion, useListMotion, usePresence } from "../lib/motion";
 import { effortLabel } from "../lib/home";
 import { choiceText, type ModelChoice } from "../lib/model";
 import claude from "../assets/agents/claude.png";
@@ -168,10 +168,12 @@ export function ChangeAccount({ connection, running, choose, cancel }: {
 
 // ---- The model picker, thinking level and save bar, shared by Tag detail and AI & models ----
 
-/** Every connected account's models, grouped by agent; picking a model picks its agent. */
-export function ModelMenu({ models, report, value, onChange, below, inline, disabled }: {
+/** Every connected account's models, grouped by agent; picking a model picks its agent.
+ *  With `onRefresh`, the open menu ends in a quiet "Refresh list" that reads the accounts' lists again. */
+export function ModelMenu({ models, report, value, onChange, below, inline, disabled, onRefresh, refreshing, refreshError }: {
   models: AIModels | null; report: AIStatus | null; value: string | null; onChange: (value: string) => void;
   below?: boolean; inline?: boolean; disabled?: boolean;
+  onRefresh?: () => void; refreshing?: boolean; refreshError?: string;
 }) {
   const [open, setOpen] = useState(false);
   const menu = usePresence(open ? true : null, 120);
@@ -210,13 +212,7 @@ export function ModelMenu({ models, report, value, onChange, below, inline, disa
               <div key={c.backend}>
                 <div className="mgroup" role="presentation"><AgentMark backend={c.backend} size={20} />{c.name}
                   {c.state === "limited" && <em>Usage limit reached</em>}</div>
-                {group?.models.map((m) => (
-                    <button key={m.value} className="mopt" role="option" aria-selected={m.value === value}
-                      onClick={() => { onChange(m.value); setOpen(false); }}>
-                      <span className="mck">{m.value === value && <Icon name="check" size={12} />}</span>{m.label}
-                      {m.default && <span className="mdef">Default</span>}
-                    </button>
-                  ))}
+                {group && <ModelOptions group={group} value={value} pick={(next) => { onChange(next); setOpen(false); }} />}
                 {value && !offered && backend === c.backend && (
                   <button className="mopt" role="option" aria-selected="true" disabled>
                     <span className="mck"><Icon name="check" size={12} /></span><s>{label}</s><span className="mdef">No longer offered</span>
@@ -225,10 +221,30 @@ export function ModelMenu({ models, report, value, onChange, below, inline, disa
               </div>
             );
           })}
+          {onRefresh && (
+            <div className="mfoot">
+              {refreshError && !refreshing && <span className="mferr" role="status" key={refreshError}>{refreshError}</span>}
+              <button className="mrefresh" onClick={onRefresh} disabled={refreshing} aria-busy={refreshing || undefined}>
+                {refreshing ? <><span className="spin" />Refreshing…</> : <><Icon name="refresh" size={12} />Refresh list</>}
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>
   );
+}
+
+/** One agent's models in the open menu; models a refresh adds slide in, and ones it drops slide out. */
+function ModelOptions({ group, value, pick }: { group: ModelGroup; value: string | null; pick: (value: string) => void }) {
+  const listed = useListMotion(group.models, (m) => m.value);
+  return <>{listed.map(({ item: m, state }) => (
+    <button key={m.value} className={`mopt${state === "enter" ? " entering" : state === "leave" ? " leaving" : ""}`} role="option"
+      aria-selected={m.value === value} disabled={state === "leave"} onClick={() => pick(m.value)}>
+      <span className="mck">{m.value === value && <Icon name="check" size={12} />}</span>{m.label}
+      {m.default && <span className="mdef">Default</span>}
+    </button>
+  ))}</>;
 }
 
 /** "{Model} isn't available from your connected accounts." when the saved model is gone. */
