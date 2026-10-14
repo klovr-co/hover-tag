@@ -138,14 +138,23 @@ def case_state(case: Case, assistant_name: str) -> dict[str, Any]:
     )
 
 
-def estimated_tokens(provider: str, state: dict[str, Any]) -> int:
+def estimated_tokens(provider: str, state: dict[str, Any], variant: str = "") -> int:
     spec = watch_classifier.PROVIDERS[provider]
-    payload = spec.payload(state, spec.default_model)
+    build = _variant(variant, provider)[0] if variant else spec.payload
+    payload = build(state, spec.default_model)
     return -(-len(json.dumps(payload, ensure_ascii=False)) // CHARS_PER_TOKEN)
 
 
 def cost_usd(provider: str, tokens: int) -> float:
     return tokens * watch_classifier.PROVIDERS[provider].usd_per_million_input / 1_000_000
+
+
+def _variant(variant: str, provider: str):
+    try:
+        from scripts import watch_prompt_variants
+    except ImportError:
+        import watch_prompt_variants
+    return watch_prompt_variants.get(variant, provider)
 
 
 def plan(cases: list[Case], assistant_name: str, out: TextIO) -> dict[str, dict[str, float]]:
@@ -185,6 +194,7 @@ def score_run(
     timeout: float = 20.0,
     log: TextIO = sys.stderr,
     scorer: Callable[..., watch_classifier.Score] = watch_classifier.score,
+    variant: str = "",
 ) -> float:
     """Score each case once, appending to ``out_path``; returns this run's spend."""
     done = {(row["provider"], row["id"]) for row in _recorded(out_path)}
@@ -197,12 +207,13 @@ def score_run(
                 continue
             state = case_state(case, assistant_name)
             # Assume the next call costs at least as much as the last one actually did.
-            estimate = max(cost_usd(provider, estimated_tokens(provider, state)), last_call_usd)
+            estimate = max(cost_usd(provider, estimated_tokens(provider, state, variant)), last_call_usd)
             if spent + estimate > max_usd:
                 raise BudgetStop(f"Stopped before ${max_usd:.2f}: spent ${spent:.4f}, next call ~${estimate:.4f}")
-            row: dict[str, Any] = {"provider": provider, "id": case.id}
+            row: dict[str, Any] = {"provider": provider, "id": case.id, **({"variant": variant} if variant else {})}
+            hooks = dict(zip(("payload", "parse"), _variant(variant, provider))) if variant else {}
             try:
-                answer = scorer(state, provider=provider, api_key=api_key, model=model, timeout=timeout)
+                answer = scorer(state, provider=provider, api_key=api_key, model=model, timeout=timeout, **hooks)
             except watch_classifier.ClassifierRefusal:
                 row["outcome"] = "refusal"
                 spent += estimate
@@ -230,10 +241,12 @@ def score_run(
                 spent += call_usd
                 last_call_usd = call_usd
                 row.update(outcome="score", probability=answer.probability, model=answer.model,
-                           input_tokens=tokens, usd=round(call_usd, 8))
+                           input_tokens=tokens, usd=round(call_usd, 8),
+                           **({"cached_tokens": answer.cached_tokens} if answer.cached_tokens is not None else {}))
             handle.write(json.dumps(row) + "\n")
             handle.flush()
-            usage = (f" usage {row['input_tokens']} tokens vs ~{estimated_tokens(provider, state)} estimated"
+            usage = (f" usage {row['input_tokens']} tokens vs ~{estimated_tokens(provider, state, variant)} estimated"
+                     + (f" ({row['cached_tokens']} cached)" if row.get("cached_tokens") is not None else "")
                      if row.get("input_tokens") is not None else
                      " (no usage reported; counted the estimate)" if row["outcome"] == "score" else "")
             print(f"{provider} {case.id}: {row['outcome']} {row.get('probability', '')}{usage} "
@@ -549,6 +562,7 @@ def main(argv: list[str] | None = None) -> int:
                               help="Owner-only file holding the provider key (or TAG_EVAL_KEY_FILE).")
     score_parser.add_argument("--limit", type=int, default=0, help="Score at most this many new cases.")
     score_parser.add_argument("--cases", default="", help="Comma-separated case IDs to score.")
+    score_parser.add_argument("--variant", default="", help="Prompt variant from watch_prompt_variants.")
     score_parser.add_argument("--confirm-paid", action="store_true",
                               help="Required: acknowledge that this calls a paid API.")
     report_parser = commands.add_parser("report", help="Precision, recall and threshold sweep; no network.")
@@ -641,7 +655,7 @@ def main(argv: list[str] | None = None) -> int:
         cases = [case for case in cases if case.id not in done][:args.limit]
     try:
         spent = score_run(cases, assistant_name, provider=args.provider, api_key=api_key,
-                          out_path=args.out, max_usd=args.max_usd, model=args.model)
+                          out_path=args.out, max_usd=args.max_usd, model=args.model, variant=args.variant)
     except BudgetStop as exc:
         print(exc, file=sys.stderr)
         return 2

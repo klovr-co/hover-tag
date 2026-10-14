@@ -87,6 +87,7 @@ class Score:
     probability: float
     model: str
     input_tokens: int | None = None
+    cached_tokens: int | None = None
 
 
 @dataclass(frozen=True)
@@ -211,6 +212,16 @@ def _input_tokens(result: dict[str, Any]) -> int | None:
     return tokens if isinstance(tokens, int) and not isinstance(tokens, bool) else None
 
 
+def cached_tokens(result: Any) -> int | None:
+    """Cached input tokens, when the provider reports them (OpenAI style or flat)."""
+    usage = result.get("usage") if isinstance(result, dict) else None
+    if not isinstance(usage, dict):
+        return None
+    details = usage.get("input_tokens_details")
+    value = details.get("cached_tokens") if isinstance(details, dict) else usage.get("cached_tokens")
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
 def jev_payload(state: dict[str, Any], model: str) -> dict[str, Any]:
     return {
         "state": state,
@@ -321,8 +332,13 @@ def score(
     api_key: str,
     model: str = "",
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    payload: Callable[[dict[str, Any], str], dict[str, Any]] | None = None,
+    parse: Callable[[Any, str], Score] | None = None,
 ) -> Score:
-    """Ask one provider for the probability that Tag is addressed and a reply is welcome."""
+    """Ask one provider for the probability that Tag is addressed and a reply is welcome.
+
+    ``payload`` and ``parse`` let offline evaluations try other prompts; production uses the defaults.
+    """
     try:
         spec = PROVIDERS[provider]
     except KeyError:
@@ -332,7 +348,7 @@ def score(
     model = model or spec.default_model
     request = urllib.request.Request(
         spec.url,
-        data=json.dumps(spec.payload(state, model)).encode("utf-8"),
+        data=json.dumps((payload or spec.payload)(state, model)).encode("utf-8"),
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
@@ -344,7 +360,9 @@ def score(
             result = json.loads(response.read().decode("utf-8"))
     except Exception as exc:  # noqa: BLE001 - callers fail closed on any provider failure
         raise ClassifierError(f"{spec.label} request failed: {type(exc).__name__}") from exc
-    return spec.parse(result, model)
+    answer = (parse or spec.parse)(result, model)
+    cached = cached_tokens(result)
+    return answer if cached is None else Score(answer.probability, answer.model, answer.input_tokens, cached)
 
 
 def evaluate(
