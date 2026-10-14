@@ -25,7 +25,7 @@ DEFAULTS = {
     "OPENTAG_TRANSPORT": "slack", "OPENTAG_TIMEOUT_SECONDS": "420",
     "OPENTAG_MAX_TIMEOUT_SECONDS": "3600",
     "OPENTAG_BACKEND_ATTEMPTS": "3", "OPENTAG_SLACK_STREAMING": "1",
-    "OPENTAG_SLACK_DM_ENABLED": "1",
+    "OPENTAG_SLACK_DM_ENABLED": "1", "OPENTAG_SHOW_THINKING": "1",
     "OPENTAG_WATCH_CHANNEL_IDS": "", "OPENTAG_WATCH_NAMES": "",
     "OPENTAG_WATCH_QUIET_HOURS": "19:00-08:00", "OPENTAG_WATCH_DAILY_LIMIT": "5",
     "OPENTAG_WATCH_COOLDOWN_HOURS": "24",
@@ -85,6 +85,7 @@ LABELS = {
     "MFS_SLACK_CONNECTOR_CONFIG": "Slack history connector config",
     "OPENTAG_BACKEND_ATTEMPTS": "Retry attempts", "OPENTAG_SLACK_STREAMING": "Stream replies (1 on, 0 off)",
     "OPENTAG_SLACK_DM_ENABLED": "Direct messages (1 on, 0 off)",
+    "OPENTAG_SHOW_THINKING": "Show thinking summaries in Agent activity (1 on, 0 off)",
     "OPENTAG_WATCH_CHANNEL_IDS": "Watched channels: answer without an @mention (experimental; comma-separated IDs)",
     "OPENTAG_WATCH_NAMES": "Other names people call this Tag (comma-separated)",
     "OPENTAG_WATCH_QUIET_HOURS": "Watching quiet hours, this computer's time (HH:MM-HH:MM, empty for none)",
@@ -235,7 +236,7 @@ def validation_error(key: str, value: str) -> str | None:
         return "Use a slack:// connector URI"
     if key == "MFS_SLACK_CONNECTOR_CONFIG" and value and not Path(value).is_absolute():
         return "Use an absolute connector configuration path"
-    if key in {"OPENTAG_SLACK_STREAMING", "OPENTAG_SLACK_DM_ENABLED"} and value not in {"0", "1"}:
+    if key in {"OPENTAG_SLACK_STREAMING", "OPENTAG_SLACK_DM_ENABLED", "OPENTAG_SHOW_THINKING"} and value not in {"0", "1"}:
         return "Use 0 or 1"
     if key == "OPENTAG_WATCH_CHANNEL_IDS" and value.strip() and not all(
             re.fullmatch(r"[CG][A-Z0-9]+", item.strip()) for item in value.split(",")):

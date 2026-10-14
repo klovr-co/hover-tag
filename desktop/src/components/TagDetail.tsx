@@ -37,6 +37,8 @@ interface Props {
   say: (text: string) => void;
   /** The installed Tag can change descriptions (`describe` capability). */
   canDescribe?: boolean;
+  /** The installed Tag can read model lists again (`saved-models` capability). */
+  canRefreshModels?: boolean;
 }
 
 const PRESENCE = { online: "var(--green)", offline: "transparent", setup: "var(--amber)", attention: "var(--red)" };
@@ -48,7 +50,7 @@ export const shortPath = (path: string) => path.replace(/^(\/Users\/[^/]+|\/home
 /** A channel's name for people, or its ID while Tag hasn't recorded one. */
 const channelName = (channel: { id: string; name: string | null }) => channel.name ?? channel.id;
 
-export function TagDetail({ api, tags, initial, initialTab = "activity", problems, back, add, showSettings, finishSetup, openAI, say, canDescribe = false }: Props) {
+export function TagDetail({ api, tags, initial, initialTab = "activity", problems, back, add, showSettings, finishSetup, openAI, say, canDescribe = false, canRefreshModels = false }: Props) {
   const rows = tags.rows;
   const start = rows.find((row) => row.id === initial);
   const [workspace, setWorkspace] = useState(start?.slack_workspace ?? "");
@@ -138,7 +140,7 @@ export function TagDetail({ api, tags, initial, initialTab = "activity", problem
           {sel.kind === "channel"
             ? <ChannelPane key={`${group.key}:${sel.id}:${hideErrors}`} hideErrors={hideErrors} setHideErrors={setHideErrors} api={api} channel={channels.find((c) => c.id === sel.id)!} rows={live} team={group.key} open={(id) => choose({ kind: "tag", id })} />
             : <TagPane key={`${sel.id}:${hideErrors}`} hideErrors={hideErrors} setHideErrors={setHideErrors} api={api} tags={tags} row={group.rows.find((r) => r.id === sel.id)!} tab={tab} setTab={setTab}
-              problem={problems[sel.id] ?? null} finishSetup={finishSetup} openAI={openAI} say={say} canDescribe={canDescribe} />}
+              problem={problems[sel.id] ?? null} finishSetup={finishSetup} openAI={openAI} say={say} canDescribe={canDescribe} canRefreshModels={canRefreshModels} />}
         </div>
       </div>
     </>
@@ -256,9 +258,9 @@ function dayLabel(at: Date, now: Date) {
   return diff === 0 ? "Today" : diff === 1 ? "Yesterday" : at.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
 }
 
-function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, say, canDescribe, hideErrors, setHideErrors }: FilterProps & {
+function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, say, canDescribe, canRefreshModels, hideErrors, setHideErrors }: FilterProps & {
   api: Bridge; tags: Tags; row: TagRow; tab: Tab; setTab: (tab: Tab) => void; problem: string | null;
-  finishSetup: (row: TagRow) => void; openAI: (tag: string) => void; say: (text: string) => void; canDescribe: boolean;
+  finishSetup: (row: TagRow) => void; openAI: (tag: string) => void; say: (text: string) => void; canDescribe: boolean; canRefreshModels: boolean;
 }) {
   const state = status(row);
   const [activity, setActivity] = useState<ActivityItem[] | null>(null);
@@ -365,7 +367,7 @@ function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, sa
           </>
         )}
         {tab === "logs" && <Logs text={logView} copyLog={copyLog} />}
-        {tab === "details" && <Details api={api} tags={tags} row={row} copyLog={copyLog} openAI={() => openAI(row.id)} say={say} canDescribe={canDescribe} />}
+        {tab === "details" && <Details api={api} tags={tags} row={row} copyLog={copyLog} openAI={() => openAI(row.id)} say={say} canDescribe={canDescribe} canRefreshModels={canRefreshModels} />}
       </div>
       {on && tab === "activity" && (
         <div className="sl-compose">
@@ -591,8 +593,9 @@ function Activity({ api, row, items, showLogs, problem, openAI, hideErrors, hasM
 
 const DESCRIPTION_LIMIT = 140;
 
-function Details({ api, tags, row, copyLog, openAI, say, canDescribe }: {
+function Details({ api, tags, row, copyLog, openAI, say, canDescribe, canRefreshModels }: {
   api: Bridge; tags: Tags; row: TagRow; copyLog: () => Promise<boolean>; openAI: () => void; say: (text: string) => void; canDescribe: boolean;
+  canRefreshModels: boolean;
 }) {
   const name = title(row);
   const choice = useModelChoice(api, row.id, {
@@ -673,7 +676,8 @@ function Details({ api, tags, row, copyLog, openAI, say, canDescribe }: {
             <span className="meta">Connect an AI account in Settings to choose a model. <button className="link" style={{ padding: 0 }} onClick={openAI}>Open Settings</button></span>
           ) : (
             <>
-              <ModelMenu models={choice.models} report={choice.report} value={choice.value} onChange={choice.pick} below disabled={choice.save !== "idle" && choice.save !== "saved"} />
+              <ModelMenu models={choice.models} report={choice.report} value={choice.value} onChange={choice.pick} below disabled={choice.save !== "idle" && choice.save !== "saved"}
+                onRefresh={canRefreshModels ? () => void choice.refresh() : undefined} refreshing={choice.refreshing} refreshError={choice.refreshError} />
               <ModelWarning models={choice.models} value={choice.value} label={saved?.label ?? ""} tail="Pick another so new tasks don't fail." />
               <ThinkingRow entry={choice.entry} value={choice.level} onChange={choice.pickEffort} disabled={choice.save === "saving" || choice.save === "restarting"} />
               <p className="mcap">Applies to all requests to this Tag.</p>

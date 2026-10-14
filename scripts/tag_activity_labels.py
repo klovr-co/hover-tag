@@ -147,7 +147,7 @@ PAST_VERBS = {
     "Resetting": "Reset", "Merging": "Merged", "Rebasing": "Rebased", "Building": "Built",
     "Counting": "Counted", "Processing": "Processed", "Viewing": "Viewed", "Using": "Used", "Sending": "Sent",
     "Posting": "Posted", "Querying": "Queried", "Downloading": "Downloaded", "Uploading": "Uploaded",
-    "Inspecting": "Inspected", "Looking": "Looked", "Writing": "Wrote",
+    "Inspecting": "Inspected", "Looking": "Looked", "Writing": "Wrote", "Thinking": "Thought",
 }
 
 

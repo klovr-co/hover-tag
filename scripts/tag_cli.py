@@ -38,12 +38,18 @@ try:
     import tag_display as display
     import tag_autostart as autostart
     import agent_models
+    import preload_mfs_model
+    import tag_model_download
+    import tag_embedding
 except ImportError:
     from scripts.tag_paths import initialize_instance, initialize_workspace, runtime_environment, tag_home
     from scripts import tag_instances, tag_telemetry
     from scripts.tag_locks import LifecycleLock
     from scripts import tag_locks
     from scripts import agent_models
+    from scripts import preload_mfs_model
+    from scripts import tag_model_download
+    from scripts import tag_embedding
     from scripts.tag_config import read_config
     from scripts import tag_credentials
     from scripts import tag_welcome
@@ -64,7 +70,7 @@ CAPABILITIES = (
     "list", "setup-jsonl", "setup-back", "rename", "workspace-lifecycle",
     "autostart", "autostart-keep", "logs-json", "upgrade-json", "install-progress",
     "ai-connections", "shared-ai-connections", "thinking-level", "logs-activity", "activity-details", "setup-v2", "abandon-setup", "remove-tag",
-    "describe", "telemetry-events", "start-progress", "api-connections",
+    "describe", "telemetry-events", "start-progress", "api-connections", "saved-models",
 )
 UPDATE_CHECK_INTERVAL_SECONDS = 24 * 60 * 60
 COMMANDS = tuple(sorted(tag_instances.RESERVED_NAMES))
@@ -715,6 +721,14 @@ def ensure_shared_memory(
     finish_connector_removals(context.shared_mfs_home, environment)
 
 
+def startup_attempts(environment: dict[str, str], shared: Path) -> int:
+    """Seconds to wait for MFS to become healthy. The first start also needs the search model,
+    so a download still running (started by the installer) gets all the time it needs."""
+    if "OPENTAG_MFS_STARTUP_ATTEMPTS" in environment:
+        return int(environment["OPENTAG_MFS_STARTUP_ATTEMPTS"])
+    return 3600 if tag_model_download.active(shared) else 90
+
+
 def _ensure_shared_memory_running(
     context: tag_instances.InstanceContext, environment: dict[str, str]
 ) -> None:
@@ -745,14 +759,17 @@ def _ensure_shared_memory_running(
             stop_process(context.home, "mfs", state_dir=shared)
         if not healthy(url):
             instance_id = uuid.uuid4().hex
-            child_environment = dict(environment, TAG_MFS_STATE_DIR=str(shared), TAG_MFS_PROCESS_ID=instance_id)
+            child_environment = dict(environment, TAG_MFS_STATE_DIR=str(shared), TAG_MFS_PROCESS_ID=instance_id,
+                                     **tag_embedding.server_environment(shared))
             start_process(
                 context.home, "mfs",
                 [sys.executable, str(ROOT / "scripts/tag_mfs_server.py"), "run"],
-                environment=child_environment, state_dir=shared, cwd=context.workspace,
+                # MFS serves every Tag, so it never runs in one Tag's workspace: that
+                # folder is gone once the Tag is removed.
+                environment=child_environment, state_dir=shared, cwd=shared,
                 metadata={"slack_runtime_version": tag_mfs_runtime.VERSION, "instance_id": instance_id},
             )
-        attempts = int(environment.get("OPENTAG_MFS_STARTUP_ATTEMPTS", "90"))
+        attempts = startup_attempts(environment, shared)
         for _ in range(attempts):
             process = process_for(shared / "mfs.json")
             if healthy(url) and tag_mfs_runtime.active(shared, process):
@@ -904,8 +921,104 @@ def load_connector_config(path: Path) -> dict[str, object]:
         return tomllib.load(handle)
 
 
-def sync_configured_slack_memory(environment: dict[str, str] | None = None) -> None:
+def _embedding_report(shared: Path) -> dict[str, object]:
+    """Which embedding provider memory uses, reading the same configuration the managed MFS will."""
+    provider, model = preload_mfs_model.configured_embedding(tag_embedding.managed_config(shared))
+    local = preload_mfs_model.uses_local_model(provider)
+    return {"provider": provider, "model": model, "local": local,
+            # The built-in model downloads in the background after install; only it matters for the built-in model.
+            "download": tag_model_download.report(shared) if local else None,
+            "choices": tag_embedding.choices(shared), "current": tag_embedding.current_provider(shared),
+            "reindex_pending": tag_embedding.reindex_pending(shared)}
+
+
+def _memory_embedding(context, args, home: Path, installation_root: Path) -> int:
+    """`tag memory embedding [status|local|custom]`: how memory computes its search embeddings."""
+    shared = context.shared_mfs_home
+    choice = args.arguments[1] if len(args.arguments) > 1 else "status"
+    if choice not in {"status", "local", tag_embedding.CUSTOM}:
+        raise RuntimeError("Choose local or custom")
+    reindexing, note = False, ""
+    if choice != "status":
+        shared.mkdir(parents=True, exist_ok=True, mode=0o700)
+        was_running = process_for(shared / "mfs.json") is not None
+        if choice == tag_embedding.CUSTOM:
+            try:
+                import tag_api
+            except ImportError:
+                from scripts import tag_api
+            # The key is optional (a local server needs none), so only read one when it can be given.
+            key = (tag_api.read_key(args.json_output) if args.stdin or display.stdin_is_terminal() else "") \
+                or tag_embedding.saved_key(shared) or ""
+            tag_embedding.set_custom(shared, key, model=args.embedding_model or "",
+                                     base_url=args.base_url or "", verify=tag_embedding.probe)
+        else:
+            tag_embedding.set_local(shared)
+        # MFS keeps one index per search model, so the new one starts empty.
+        tag_embedding.mark_reindex(shared)
+        if was_running:
+            config_path = context.home / "config/settings.json"
+            values = read_config(config_path) if config_path.is_file() else {}
+            environment = instance_environment(context, values)
+            stop_process(home, "mfs", state_dir=shared)
+            ensure_shared_memory(context, environment)
+            try:
+                reindex_slack_memory(shared, environment)
+                reindexing = True
+            except RuntimeError as error:
+                note = f"Memory restarted with the new search model, but re-indexing didn't start: {error}"
+        else:
+            note = "Takes effect the next time memory starts; Slack memory is indexed again then."
+    report = {"schema_version": 1, "embedding": _embedding_report(shared), "reindexing": reindexing, "note": note}
+    if args.json_output:
+        print(json.dumps(report))
+    else:
+        display.header("Memory search model", "Shared by every Tag in this installation.")
+        embedding = report["embedding"]
+        display.info_row("Search model", "Default (built in)" if embedding["local"] else f"Custom ({embedding['model']})")
+        if reindexing:
+            display.info_row("Index", "Rebuilding from your Slack channels; search is partial until it finishes", good=True)
+        if note:
+            print("  " + note)
+    return 0
+
+
+def _queued_job(response: dict[str, object]) -> str | None:
+    return str(response["job_id"]) if response.get("job_id") else None
+
+
+JOB_FINISHED = {"succeeded", "partial"}
+JOB_ENDED = JOB_FINISHED | {"failed", "cancelled"}
+
+
+def reindex_slack_memory(shared: Path, environment: dict[str, str] | None = None) -> bool:
+    """Import every channel again after a search-model change; True once MFS reports that done.
+
+    MFS runs the import in the background, so the marker stays until the queued job
+    succeeds. A failed or cancelled job (or one MFS no longer knows) is queued again,
+    and a still-running one is left alone.
+    """
+    job = tag_embedding.reindex_job(shared)
+    if job:
+        try:
+            status = str(_mfs_send("GET", f"/v1/jobs/{urllib.parse.quote(job, safe='')}", environment=environment).get("status", ""))
+        except MfsRequestError:
+            status = ""
+        if status in JOB_FINISHED:
+            tag_embedding.clear_reindex(shared)
+            return True
+        if status and status not in JOB_ENDED:
+            return False
+    job = sync_configured_slack_memory(environment, full=True)
+    if job:
+        tag_embedding.record_reindex_job(shared, job)
+    return False
+
+
+def sync_configured_slack_memory(environment: dict[str, str] | None = None, *, full: bool = False) -> str | None:
     """Register and incrementally sync the connector approved during setup.
+
+    Returns the MFS job that was queued, or None when nothing new was started.
 
     Talks to the MFS server's HTTP API directly (POST /v1/add), as the `mfs`
     client did, so no separate client program is needed on any platform.
@@ -914,11 +1027,10 @@ def sync_configured_slack_memory(environment: dict[str, str] | None = None) -> N
     uri = source.get("MFS_SLACK_CONNECTOR_URI", "").strip()
     config = Path(source.get("MFS_SLACK_CONNECTOR_CONFIG", "")).expanduser()
     if not uri or not config.is_file():
-        return
+        return None
     settings = load_connector_config(config)
     try:
-        mfs_post_json("/v1/add", {"target": uri, "config": settings, "full": False, "process": False}, source)
-        return
+        return _queued_job(mfs_post_json("/v1/add", {"target": uri, "config": settings, "full": full, "process": False}, source))
     except MfsRequestError as error:
         failure = error
     if failure.code == "connector_already_registered":
@@ -926,12 +1038,12 @@ def sync_configured_slack_memory(environment: dict[str, str] | None = None) -> N
         # conflict, so update that same registered connector instead of
         # pretending that its old configuration describes new channel consent.
         try:
-            mfs_post_json("/v1/add", {"target": uri, "update": True, "config": settings}, source)
-            return
+            body = {"target": uri, "update": True, "config": settings, "process": False}
+            return _queued_job(mfs_post_json("/v1/add", dict(body, full=True) if full else body, source))
         except MfsRequestError as error:
             failure = error
     if failure.code == "sync_already_running":
-        return
+        return None
     if "environment variable MFS_SLACK_TOKEN is not set" in failure.detail:
         raise MfsHistoryCredentialUnavailable(MFS_HISTORY_CREDENTIAL_MESSAGE)
     if "no plugin for slack" in failure.detail.lower():
@@ -1786,16 +1898,24 @@ def _autostart_command(installation_root: Path, args, parser) -> int:
         if item.get("valid") and Path(str(item["home"])).exists():
             home = tag_instances.resolve(installation_root, str(item["id"])).home
             tags.append({"tag": str(item["id"]), "keep_running": autostart.wanted(home) is True})
-    result = {"schema_version": 1, **result, "tags": tags}
+    memory = {"keep_running": autostart.memory_needed(installation_root, sys.modules[__name__])}
+    result = {"schema_version": 1, **result, "memory": memory, "tags": tags}
     if args.json_output:
         print(json.dumps(result, indent=2))
         return 0
     display.header("Autostart", "Start your Tags after you log in, and restart them if they stop.")
     display.info_row("Login service", "On" if result["enabled"] else "Off", good=result["enabled"])
     display.info_row("Mechanism", result["mechanism"])
+    if "linger" in result:
+        # A systemd user service starts at boot only while the account has linger on.
+        linger = result["linger"]
+        display.info_row("Starts at boot", "Yes" if linger["enabled"] else f"Only after you log in · run {linger['command']}",
+                         good=linger["enabled"])
     for tag in tags:
         display.info_row(tag["tag"], "kept running" if tag["keep_running"] else "left off",
                          good=tag["keep_running"])
+    display.info_row("Memory", "kept running" if memory["keep_running"] else "left off",
+                     good=memory["keep_running"])
     if seeded:
         display.info_row("Kept running", "Tags already running: " + ", ".join(seeded), good=True)
     display.next_action("Choose which Tags run", "tag NAME start  ·  tag NAME stop",
@@ -2120,6 +2240,39 @@ def _setup_result(code: int, tag_id: str, protocol: bool) -> int:
     return code
 
 
+def _quick_add(command: list[str], environment: dict[str, str], args: argparse.Namespace, resume: str) -> int:
+    """Run setup for ``tag add --workspace``, answering the questions that have an obvious answer."""
+    try:
+        import tag_quick_add
+    except ImportError:
+        from scripts import tag_quick_add
+
+    def forward(event: dict, line: str) -> None:
+        if args.json_output:
+            _setup_ui().emit(event)
+        elif event.get("type") in {"message", "progress"} and event.get("text"):
+            print(f"  {event['text']}", flush=True)
+
+    # A Tag already in the workspace knows its team ID and, in an organization, the organization's.
+    team = enterprise = ""
+    for tag_id in _workspace_tags(tag_home(), args.workspace):
+        path = tag_instances.resolve(tag_home(), tag_id).home / "config/settings.json"
+        values = read_config(path) if path.is_file() else {}
+        if values.get("SLACK_TEAM_ID"):
+            team, enterprise = values["SLACK_TEAM_ID"], values.get("SLACK_ENTERPRISE_ID", "")
+            break
+    code, reason = tag_quick_add.drive(command, {**environment, SETUP_PROTOCOL_ENV: "jsonl"},
+                                       workspace=args.workspace, name=args.name, team=team,
+                                       enterprise=enterprise, forward=forward)
+    if reason:
+        message = f"Setup paused: {reason} Your choices are saved; run {resume} to continue."
+        if args.json_output:
+            _setup_ui().message(message)
+        else:
+            print(message, file=sys.stderr)
+    return code
+
+
 def _setup_step(args: argparse.Namespace, installation_root: Path, *, raw_tag: str | None) -> int:
     """Drive JSON-lines setup one question per command, for agents and scripts."""
     try:
@@ -2284,7 +2437,8 @@ def _settings_ai(context, args) -> int:
     api = {"backend": args.api_backend, "kind": args.api_kind, "base_url": args.base_url,
            "models": args.api_models, "api_version": args.api_version}
     return tag_ai.cli(args.arguments[1:], target, json_output=args.json_output, restart=args.restart,
-                      method=args.method, account=args.account, effort=args.effort, api=api)
+                      method=args.method, account=args.account, effort=args.effort, api=api,
+                      refresh=args.refresh)
 
 
 def _run_cli() -> int:
@@ -2301,7 +2455,7 @@ def _run_cli() -> int:
                                      ),
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("command", nargs="?", choices=COMMANDS)
-    parser.add_argument("arguments", nargs="*", help="memory: start | status | stop; config: init | show | keys | set KEY VALUE; chatgpt: status | login [ACCOUNT] | use ACCOUNT | logout [ACCOUNT] | use-codex; settings: ai [status | models | sign-in codex|claude | resume | model VALUE | effort LEVEL|default | api [status | set | clear | check]]")
+    parser.add_argument("arguments", nargs="*", help="memory: start | status | stop; config: init | show | keys | set KEY VALUE; chatgpt: status | login [ACCOUNT] | use ACCOUNT | logout [ACCOUNT] | use-codex; settings: ai [status | models [--refresh] | sign-in codex|claude | resume | model VALUE | effort LEVEL|default | api [status | set | clear | check]]")
     parser.add_argument("--offline", action="store_true")
     parser.add_argument("--json", action="store_true", dest="json_output", help="structured output for inspect, status, doctor, config, paths, upgrade, usage, and chatgpt")
     parser.add_argument("--consent", action="store_true", help="chatgpt login: request plan permission again")
@@ -2309,11 +2463,13 @@ def _run_cli() -> int:
     parser.add_argument("--account", help="settings ai sign-in codex --method chatgpt: renew this saved account")
     parser.add_argument("--effort", metavar="LEVEL", help="settings ai model VALUE: also save this thinking level, or default for the model's own")
     parser.add_argument("--restart", action="store_true", help="settings ai: restart a running Tag to apply the change")
+    parser.add_argument("--refresh", action="store_true", help="settings ai models: read each account's models now instead of the saved list")
     parser.add_argument("--backend", dest="api_backend", choices=("codex", "claude"), help="settings ai api: the agent that uses the API")
     parser.add_argument("--kind", dest="api_kind", choices=("openai", "anthropic", "azure"), help="settings ai api set: the provider's API (azure is Codex only)")
     parser.add_argument("--base-url", dest="base_url", metavar="URL", help="settings ai api set: the API base URL (HTTPS); empty for the provider's default")
     parser.add_argument("--models", dest="api_models", metavar="A,B", help="settings ai api set: model IDs, or Azure deployment names, comma-separated")
     parser.add_argument("--api-version", dest="api_version", metavar="VERSION", help="settings ai api set --kind azure: the Azure API version")
+    parser.add_argument("--embedding-model", dest="embedding_model", metavar="NAME", help="memory embedding custom: the embedding model's name")
     parser.add_argument("--stdin", action="store_true", help="read a config value from stdin")
     parser.add_argument("--from", dest="source", type=Path)
     parser.add_argument("--no-start", action="store_true", help=argparse.SUPPRESS)
@@ -2339,7 +2495,8 @@ def _run_cli() -> int:
     parser.add_argument("--nickname", help="rename: short name for commands (default: derived from the new name)")
     parser.add_argument("--delete-app", action="store_true", help="remove: also permanently delete the Tag's Slack app")
     parser.add_argument("--confirm-app", help="remove --delete-app: the App ID to delete, typed to confirm")
-    parser.add_argument("--workspace", help="start, stop, restart: every Tag in this Slack workspace (team ID or name)")
+    parser.add_argument("--workspace", help="start, stop, restart: every Tag in this Slack workspace (team ID or name); add: create the new Tag there without asking")
+    parser.add_argument("--name", help="add --workspace: the new Tag's name (default: the suggested one)")
     raw_arguments = sys.argv[1:]
     explicit_tag = bool(
         raw_arguments
@@ -2365,9 +2522,17 @@ def _run_cli() -> int:
         parser.error("settings accepts only ai, for example tag settings ai --json")
     if (args.method or args.account or args.restart or args.effort is not None) and not settings_ai:
         parser.error("--method, --account, --effort and --restart are only for tag settings ai")
+    if args.refresh and not (settings_ai and args.arguments[1:] == ["models"]):
+        parser.error("--refresh is only for tag settings ai models")
     api_options = (args.api_backend, args.api_kind, args.base_url, args.api_models, args.api_version)
-    if any(option is not None for option in api_options) and not (settings_ai and args.arguments[1:2] == ["api"]):
-        parser.error("--backend, --kind, --base-url, --models and --api-version are only for tag settings ai api")
+    memory_embedding = args.command == "memory" and args.arguments[:1] == ["embedding"]
+    if args.embedding_model is not None and not memory_embedding:
+        parser.error("--embedding-model is only for tag memory embedding")
+    if any(option is not None for option in api_options) and not (settings_ai and args.arguments[1:2] == ["api"]) \
+            and not (memory_embedding and args.base_url is not None and not any(
+                option is not None for option in (args.api_backend, args.api_kind, args.api_models, args.api_version))):
+        parser.error("--backend, --kind, --base-url, --models and --api-version are only for tag settings ai api "
+                     "(--base-url also works with tag memory embedding custom)")
     if args.json_output and args.command not in {"list", "memory", "inspect", "status", "doctor", "config", "paths", "upgrade", "telemetry", "setup", "add", "rename", "describe", "abandon", "remove", "start", "stop", "restart", "autostart", "version", "logs", "chatgpt", "usage"} and not settings_ai:
         parser.error("--json supports list, memory, inspect, status, doctor, config, paths, upgrade, telemetry, usage, chatgpt, settings ai, autostart, version, logs, setup, add, rename, describe, start, and stop/restart with --workspace")
     if args.json_output and args.follow:
@@ -2378,8 +2543,10 @@ def _run_cli() -> int:
         parser.error("--delete-app and --confirm-app are only for remove")
     if args.nickname and args.command != "rename":
         parser.error("--nickname is only for rename")
-    if args.workspace and args.command not in {"start", "stop", "restart"}:
-        parser.error("--workspace is only for start, stop, and restart")
+    if args.workspace and args.command not in {"start", "stop", "restart", "add"}:
+        parser.error("--workspace is only for start, stop, restart, and add")
+    if args.name and not (args.command == "add" and args.workspace):
+        parser.error("--name is only for add --workspace")
     if args.workspace and explicit_tag:
         parser.error("--workspace selects Tags itself; don't also name a Tag")
     if args.json_output and args.command in {"setup", "add"}:
@@ -2389,8 +2556,8 @@ def _run_cli() -> int:
         os.environ[SETUP_PROTOCOL_ENV] = "jsonl"
     if os.getenv(SETUP_PROTOCOL_ENV) == "jsonl" and args.command in {"setup", "add"}:
         _setup_ui().enter_protocol()
-    if args.stdin and args.command != "config":
-        parser.error("--stdin is only for config set")
+    if args.stdin and args.command not in {"config", "memory"}:
+        parser.error("--stdin is only for config set and memory embedding")
     if args.offline and args.command not in {"inspect", "doctor"}:
         parser.error("--offline supports inspect and doctor")
     if args.follow and args.command != "logs":
@@ -2516,7 +2683,7 @@ def _run_cli() -> int:
     if args.command == "add":
         if args.arguments:
             parser.error("add does not accept a name; the workspace alias is chosen during onboarding")
-        if not display.stdin_is_terminal() and not args.json_output:
+        if not display.stdin_is_terminal() and not args.json_output and not args.workspace:
             print(
                 "Interactive setup requires a terminal. Use tag inspect --json and tag config set for automation.",
                 file=sys.stderr,
@@ -2532,7 +2699,11 @@ def _run_cli() -> int:
         display.info_row("Home", display.short_path(context.home), good=True)
         display.info_row("Command", context.command("setup"), good=True)
         command = [sys.executable, str(ROOT / "scripts/tag_cli.py"), *context.command_arguments("setup")]
-        result = subprocess.call(command, env={**instance_environment(context), DEFER_RENAME_ENV: "1"})
+        environment = {**instance_environment(context), DEFER_RENAME_ENV: "1"}
+        if args.workspace:
+            result = _quick_add(command, environment, args, context.command("setup"))
+        else:
+            result = subprocess.call(command, env=environment)
         renamed = _rename(installation_root, context.tag_id) if result == 0 else None
         if renamed and not args.json_output:
             display.info_row("Tag", f"Named '{renamed}' after its Slack team and app IDs", good=True)
@@ -2556,6 +2727,7 @@ def _run_cli() -> int:
                                   workspace_name=tag_instances.workspace_name(context.home),
                                   slack_name=_slack_name(context.home),
                                   slack_app_id=values.get("SLACK_APP_ID") or None,
+                                  slack_enterprise=values.get("SLACK_ENTERPRISE_ID") or None,
                                   has_app=bool(values.get("SLACK_APP_ID")) or (
                                       context.home / "integrations/slack-cli/tag-create.json").exists(),
                                   nickname=tag_instances.nickname(context.home),
@@ -2668,14 +2840,33 @@ def _run_cli() -> int:
             print(usage['coverage'])
         return 0
     if args.command == "memory":
-        action = args.arguments[0] if len(args.arguments) == 1 else "status" if not args.arguments else ""
-        if action not in {"start", "status", "stop"}:
-            parser.error("memory accepts start, status, or stop")
+        action = args.arguments[0] if args.arguments else "status"
+        if action == "embedding":
+            if len(args.arguments) > 2:
+                parser.error("memory embedding accepts status, local, or custom")
+            return _memory_embedding(context, args, home, installation_root)
+        if len(args.arguments) > 1 or action not in {"start", "status", "stop", "download"}:
+            parser.error("memory accepts start, status, stop, download, or embedding")
+        if action == "download":
+            shared = context.shared_mfs_home
+            if not _embedding_report(shared)["local"]:
+                raise RuntimeError("Memory uses a custom search model, so there is nothing to download")
+            if not tag_model_download.active(shared):
+                tag_model_download.start_background(sys.executable, ROOT / "scripts/preload_mfs_model.py", installation_root, os.environ)
         if action == "start":
             config_path = context.home / "config/settings.json"
             values = read_config(config_path) if config_path.is_file() else {}
             environment = instance_environment(context, values)
+            if os.getenv(autostart.SUPERVISED_ENV) != "1":
+                # Recorded even if this start fails: the login service retries with backoff.
+                autostart.set_memory_wanted(context.shared_mfs_home, True)
             ensure_shared_memory(context, environment)
+            # A search-model change made while memory was stopped waits for this start to import again.
+            if tag_embedding.reindex_pending(context.shared_mfs_home):
+                try:
+                    reindex_slack_memory(context.shared_mfs_home, environment)
+                except RuntimeError as error:
+                    print(f"Memory started, but re-indexing didn't start yet: {error}", file=sys.stderr)
         migrate_legacy_mfs_record(tag_instances.resolve(installation_root))
         context.shared_mfs_home.mkdir(parents=True, exist_ok=True, mode=0o700)
         managed = process_for(context.shared_mfs_home / "mfs.json") is not None
@@ -2688,12 +2879,22 @@ def _run_cli() -> int:
             if not managed:
                 raise RuntimeError("The running memory service is not owned by this Tag installation")
             stop_process(home, "mfs", state_dir=context.shared_mfs_home)
+            autostart.set_memory_wanted(context.shared_mfs_home, False)
             result.update(managed=False, healthy=False)
+        result["keep_running"] = autostart.memory_needed(installation_root, sys.modules[__name__])
+        result["embedding"] = _embedding_report(context.shared_mfs_home)
         if args.json_output:
             print(json.dumps(result, indent=2))
         else:
             display.header("Memory", "Shared by every Tag in this installation.")
             display.info_row("Service", "Managed and running" if result["managed"] else "Not managed", good=result["managed"])
+            display.info_row("Restarts", "Kept running by tag autostart" if result["keep_running"]
+                             else "Not restarted if it stops")
+            display.info_row("Search model", "Default (built in)" if result["embedding"]["local"]
+                             else f"Custom ({result['embedding']['model']})")
+            download = result["embedding"]["download"]
+            if download and download["message"]:
+                display.info_row("Download", download["message"], good=False)
             display.info_row("Active Tags", ", ".join(bridges) if bridges else "None")
             detail = log_tail(home, "mfs", 20, state_dir=context.shared_mfs_home)
             if detail:
@@ -3144,7 +3345,13 @@ def _run_cli() -> int:
             if os.getenv("SLACK_CHANNEL_POLICY") == "invited":
                 reconcile_invitation_memory(home)
             else:
-                sync_configured_slack_memory()
+                # A changed search model means a new, empty index: import everything again once.
+                shared_memory = context.shared_mfs_home
+                if tag_embedding.reindex_pending(shared_memory):
+                    if reindex_slack_memory(shared_memory):
+                        sync_configured_slack_memory()
+                else:
+                    sync_configured_slack_memory()
             # Don't wait for the first import: Tag answers now, and history search covers each
             # channel once memory has imported it. One check still picks up renamed channels.
             try:

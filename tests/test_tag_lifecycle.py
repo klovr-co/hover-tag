@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -123,6 +125,194 @@ class TagLifecycleTests(unittest.TestCase):
         self.assertIn("startup failed: <redacted>", output.getvalue())
         self.assertNotIn(secret, output.getvalue())
 
+    def test_memory_status_json_says_which_embedding_provider_memory_uses(self) -> None:
+        for configured, local in (("openai", False), ("onnx", True)):
+            with self.subTest(provider=configured), patch.dict(
+                os.environ, {"TAG_HOME": str(self.root)}, clear=False
+            ), patch.object(sys, "argv", ["tag", "memory", "status", "--json"]), patch.object(
+                tag_cli, "healthy", return_value=False
+            ), patch.object(
+                tag_cli.preload_mfs_model, "configured_embedding", return_value=(configured, "model-x")
+            ), redirect_stdout(StringIO()) as output:
+                self.assertEqual(tag_cli.main(), 0)
+            embedding = json.loads(output.getvalue())["embedding"]
+            self.assertEqual({key: embedding[key] for key in ("provider", "model", "local")},
+                             {"provider": configured, "model": "model-x", "local": local})
+            self.assertEqual([c["id"] for c in embedding["choices"]], ["onnx", "custom"])
+
+    def memory_status(self, *flags: str, provider: str = "onnx", action: str = "status") -> str:
+        with patch.dict(os.environ, {"TAG_HOME": str(self.root)}, clear=False), patch.object(
+            sys, "argv", ["tag", "memory", action, *flags]
+        ), patch.object(tag_cli, "healthy", return_value=False), patch.object(
+            tag_cli.preload_mfs_model, "configured_embedding", return_value=(provider, "model-x")
+        ), redirect_stdout(StringIO()) as output:
+            self.assertEqual(tag_cli.main(), 0)
+        return output.getvalue()
+
+    def test_memory_status_reports_the_background_model_download(self) -> None:
+        shared = self.root / "shared/mfs"
+        tag_cli.tag_model_download.write(shared, "downloading", model="bge-m3", done=300 * 1_048_576,
+                                         total=600 * 1_048_576, pid=os.getpid())
+        download = json.loads(self.memory_status("--json"))["embedding"]["download"]
+        self.assertEqual((download["state"], download["percent"]), ("downloading", 50))
+        self.assertIn("Search is off until it finishes", download["message"])
+        text = " ".join(self.memory_status().split())
+        self.assertIn("Download", text)
+        self.assertIn("300 of 600 MB", text)
+
+    def test_memory_status_has_no_download_when_there_is_none_or_a_custom_model_is_used(self) -> None:
+        self.assertIsNone(json.loads(self.memory_status("--json"))["embedding"]["download"])
+        shared = self.root / "shared/mfs"
+        tag_cli.tag_model_download.write(shared, "downloading", model="bge-m3", done=1, total=2, pid=os.getpid())
+        self.assertIsNone(json.loads(self.memory_status("--json", provider="openai"))["embedding"]["download"])
+
+    def test_memory_download_starts_the_background_download_and_reports_it(self) -> None:
+        with patch.object(tag_cli.tag_model_download, "start_background") as start:
+            start.side_effect = lambda *a, **k: tag_cli.tag_model_download.write(
+                self.root / "shared/mfs", "downloading", model="bge-m3", pid=os.getpid())
+            output = self.memory_status("--json", action="download")
+        start.assert_called_once()
+        self.assertEqual(Path(start.call_args.args[1]).name, "preload_mfs_model.py")
+        # Progress is kept with the installation's shared memory files, not inside one Tag's home.
+        self.assertEqual(Path(start.call_args.args[2]), self.root)
+        self.assertEqual(json.loads(output)["embedding"]["download"]["state"], "downloading")
+
+    def test_memory_download_does_not_start_a_second_download(self) -> None:
+        tag_cli.tag_model_download.write(self.root / "shared/mfs", "downloading", model="bge-m3", pid=os.getpid())
+        with patch.object(tag_cli.tag_model_download, "start_background") as start:
+            self.memory_status("--json", action="download")
+        start.assert_not_called()
+
+    def test_memory_download_refuses_when_a_custom_search_model_is_used(self) -> None:
+        with patch.object(tag_cli.tag_model_download, "start_background") as start, \
+                self.assertRaisesRegex(RuntimeError, "custom search model"):
+            self.memory_status(provider="openai", action="download")
+        start.assert_not_called()
+
+    def test_memory_waits_for_a_running_model_download_before_giving_up_on_starting(self) -> None:
+        shared = self.root / "shared/mfs"
+        self.assertEqual(tag_cli.startup_attempts({}, shared), 90)
+        tag_cli.tag_model_download.write(shared, "downloading", model="bge-m3", done=1, total=2, pid=os.getpid())
+        self.assertGreater(tag_cli.startup_attempts({}, shared), 600)
+        # An explicit limit (tests, scripts) is always honored.
+        self.assertEqual(tag_cli.startup_attempts({"OPENTAG_MFS_STARTUP_ATTEMPTS": "5"}, shared), 5)
+
+    def run_embedding(self, *words: str, stdin: str = "", running: bool = False, key_check=None,
+                      provider: str = "openai", job: str = "job-1"):
+        shared = self.root / "shared/mfs"
+        ctx = patch.dict(os.environ, {"TAG_HOME": str(self.root), "MFS_HOME": str(self.root / "user-mfs")}, clear=False)
+        with ctx, patch.object(sys, "argv", ["tag", "memory", "embedding", *words, "--json"]), \
+                patch.object(sys, "stdin", StringIO(stdin)), \
+                patch.object(tag_cli, "healthy", return_value=running), \
+                patch.object(tag_cli, "process_for", return_value=object() if running else None), \
+                patch.object(tag_cli, "stop_process") as stop, \
+                patch.object(tag_cli, "ensure_shared_memory") as ensure, \
+                patch.object(tag_cli, "sync_configured_slack_memory", return_value=job) as sync, \
+                patch.object(tag_cli.tag_embedding, "probe", key_check or (lambda *args: 768)), \
+                patch.object(tag_cli.preload_mfs_model, "configured_embedding", return_value=(provider, "embed-x")), \
+                redirect_stdout(StringIO()) as output:
+            code = tag_cli.main()
+        return code, output.getvalue(), shared, stop, ensure, sync
+
+    ARGS = ("custom", "--base-url", "https://api.example.invalid/v1", "--embedding-model", "embed-x")
+
+    def test_memory_embedding_custom_saves_the_choice_without_printing_the_key(self) -> None:
+        code, output, shared, stop, ensure, sync = self.run_embedding(
+            *self.ARGS, "--stdin", stdin='{"api_key": "sk-test-synthetic"}\n')
+        self.assertEqual(code, 0)
+        self.assertNotIn("sk-test-synthetic", output)
+        report = json.loads(output)["embedding"]
+        self.assertEqual((report["current"], report["provider"], report["model"]), ("custom", "openai", "embed-x"))
+        self.assertEqual(tag_cli.tag_embedding.saved_key(shared), "sk-test-synthetic")
+        # Memory wasn't running: nothing to restart, but the next start must re-index.
+        stop.assert_not_called()
+        sync.assert_not_called()
+        self.assertTrue(tag_cli.tag_embedding.reindex_pending(shared))
+
+    def test_memory_embedding_custom_needs_no_key_and_no_stdin(self) -> None:
+        code, output, shared, *_ = self.run_embedding(*self.ARGS)
+        self.assertEqual(code, 0)
+        self.assertIsNone(tag_cli.tag_embedding.saved_key(shared))
+        self.assertEqual(tag_cli.tag_embedding.choice(shared)["base_url"], "https://api.example.invalid/v1")
+        self.assertEqual(tag_cli.tag_embedding.choice(shared)["dim"], 768)
+
+    def test_memory_embedding_restarts_running_memory_and_reindexes(self) -> None:
+        code, output, shared, stop, ensure, sync = self.run_embedding(*self.ARGS, running=True)
+        self.assertEqual(code, 0)
+        stop.assert_called_once()
+        ensure.assert_called_once()
+        sync.assert_called_once()
+        self.assertTrue(sync.call_args.kwargs["full"])
+        # The import runs in the background, so the marker stays until MFS reports the job done.
+        self.assertEqual(tag_cli.tag_embedding.reindex_job(shared), "job-1")
+        self.assertTrue(json.loads(output)["reindexing"])
+
+    def test_reindex_marker_waits_for_the_job_and_retries_a_failed_one(self):
+        shared = self.root / "shared/mfs"
+        shared.mkdir(parents=True)
+        tag_cli.tag_embedding.mark_reindex(shared)
+        with patch.object(tag_cli, "sync_configured_slack_memory", return_value="job-1") as sync:
+            self.assertFalse(tag_cli.reindex_slack_memory(shared))
+        sync.assert_called_once_with(None, full=True)
+        self.assertEqual(tag_cli.tag_embedding.reindex_job(shared), "job-1")
+        for status, done, queued in (("running", False, False), ("pending", False, False),
+                                     ("failed", False, True), ("cancelled", False, True),
+                                     ("", False, True), ("succeeded", True, False), ("partial", True, False)):
+            with self.subTest(status=status), \
+                    patch.object(tag_cli, "_mfs_send", return_value={"status": status}), \
+                    patch.object(tag_cli, "sync_configured_slack_memory", return_value="job-2") as sync:
+                tag_cli.tag_embedding.record_reindex_job(shared, "job-1")
+                self.assertEqual(tag_cli.reindex_slack_memory(shared), done)
+                self.assertEqual(sync.called, queued)
+                self.assertEqual(tag_cli.tag_embedding.reindex_pending(shared), not done)
+                self.assertEqual(tag_cli.tag_embedding.reindex_job(shared), "job-2" if queued else None if done else "job-1")
+
+    def test_reindex_keeps_the_marker_when_the_job_status_is_unknown(self):
+        shared = self.root / "shared/mfs"
+        shared.mkdir(parents=True)
+        tag_cli.tag_embedding.record_reindex_job(shared, "job-1")
+        error = tag_cli.MfsRequestError(404, "error", "job not found")
+        with patch.object(tag_cli, "_mfs_send", side_effect=error), \
+                patch.object(tag_cli, "sync_configured_slack_memory", return_value=None):
+            self.assertFalse(tag_cli.reindex_slack_memory(shared))
+        self.assertTrue(tag_cli.tag_embedding.reindex_pending(shared))
+
+    def test_memory_embedding_rejected_endpoint_changes_nothing(self) -> None:
+        def reject(*_args):
+            raise ValueError("api.example.invalid rejected that key.")
+        with self.assertRaisesRegex(ValueError, "rejected"):
+            self.run_embedding(*self.ARGS, "--stdin", stdin="sk-test-synthetic\n", key_check=reject)
+        self.assertIsNone(tag_cli.tag_embedding.managed_config(self.root / "shared/mfs"))
+
+    def test_memory_embedding_refuses_unknown_choices_such_as_the_removed_presets(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "Choose local or custom"):
+            self.run_embedding("openai", "--stdin", stdin="sk-test-synthetic\n")
+
+    def test_memory_embedding_local_switches_back_and_reindexes_again(self) -> None:
+        self.run_embedding(*self.ARGS, "--stdin", stdin="sk-test-synthetic\n")
+        code, output, shared, stop, ensure, sync = self.run_embedding("local", running=True, provider="onnx")
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(output)["embedding"]["local"], True)
+        self.assertNotIn("OPENAI_BASE_URL", tag_cli.tag_embedding.server_environment(shared))
+        sync.assert_called_once()
+
+    def test_memory_start_gives_mfs_the_chosen_provider(self) -> None:
+        shared = self.root / "shared/mfs"
+        tag_cli.tag_embedding.set_custom(shared, "sk-test-synthetic", model="embed-x", base_url="https://api.example.invalid/v1", verify=lambda *a: 768)
+        context = tag_instances.resolve(self.root)
+        with patch.object(tag_cli, "healthy", return_value=False), \
+                patch.object(tag_cli, "mfs_server_executable", return_value="mfs-server"), \
+                patch.object(tag_cli, "start_process") as start, \
+                patch.object(tag_cli, "process_for", return_value=None), \
+                patch.object(tag_cli.tag_mfs_runtime, "active", return_value=True), \
+                patch.object(tag_cli, "finish_connector_removals"):
+            with self.assertRaises(RuntimeError):  # the fake never becomes healthy
+                tag_cli.ensure_shared_memory(context, {"OPENTAG_MFS_STARTUP_ATTEMPTS": "1"})
+        environment = start.call_args.kwargs["environment"]
+        self.assertEqual(environment["OPENAI_API_KEY"], "sk-test-synthetic")
+        self.assertEqual(environment["OPENAI_BASE_URL"], "https://api.example.invalid/v1")
+        self.assertEqual(environment["MFS_SERVER_CONFIG"], str(shared / "server.toml"))
+
     def test_memory_start_uses_saved_mfs_settings_before_onboarding_completes(self) -> None:
         config = self.home / "config/settings.json"
         config.write_text('{"MFS_URL":"http://localhost:13619"}', encoding="utf-8")
@@ -138,7 +328,37 @@ class TagLifecycleTests(unittest.TestCase):
         self.assertEqual(environment["MFS_URL"], "http://localhost:13619")
         self.assertEqual(environment["TAG_INSTANCE_HOME"], str(self.home))
 
-    def test_shared_memory_start_reuses_the_installation_lock_and_workspace(self) -> None:
+    def run_memory_start(self, reindex):
+        with patch.dict(os.environ, {"TAG_HOME": str(self.root)}, clear=False), \
+                patch.object(sys, "argv", ["tag", "memory", "start"]), \
+                patch.object(tag_cli, "ensure_shared_memory"), \
+                patch.object(tag_cli, "process_for", return_value=None), \
+                patch.object(tag_cli, "healthy", return_value=True), \
+                patch.object(tag_cli, "reindex_slack_memory", side_effect=reindex) as run, \
+                redirect_stdout(StringIO()), patch("sys.stderr", StringIO()) as errors:
+            code = tag_cli.main()
+        return code, run, errors.getvalue()
+
+    def test_memory_start_runs_a_reindex_left_by_a_model_change(self) -> None:
+        shared = tag_instances.resolve(self.root).shared_mfs_home
+        code, run, _ = self.run_memory_start(lambda *_: False)
+        self.assertEqual(code, 0)
+        run.assert_not_called()  # nothing pending
+        tag_cli.tag_embedding.mark_reindex(shared)
+        code, run, _ = self.run_memory_start(lambda *_: False)
+        self.assertEqual(code, 0)
+        run.assert_called_once()
+        self.assertEqual(run.call_args.args[0], shared)
+
+    def test_memory_start_still_succeeds_when_the_reindex_cannot_start(self) -> None:
+        shared = tag_instances.resolve(self.root).shared_mfs_home
+        tag_cli.tag_embedding.mark_reindex(shared)
+        code, _, errors = self.run_memory_start(RuntimeError("Slack history indexing could not start (no token)"))
+        self.assertEqual(code, 0)
+        self.assertIn("no token", errors)
+        self.assertTrue(tag_cli.tag_embedding.reindex_pending(shared))
+
+    def test_shared_memory_start_reuses_the_installation_lock_and_state_folder(self) -> None:
         context = tag_instances.resolve(self.root)
         environment = {
             "MFS_URL": "http://127.0.0.1:13619",
@@ -155,7 +375,28 @@ class TagLifecycleTests(unittest.TestCase):
 
         self.assertFalse((context.shared_mfs_home / "start.lock").exists())
         self.assertEqual(start.call_args.kwargs["state_dir"], context.shared_mfs_home)
-        self.assertEqual(start.call_args.kwargs["cwd"], context.workspace)
+        self.assertEqual(start.call_args.kwargs["cwd"], context.shared_mfs_home)
+
+    def test_shared_memory_starts_after_the_last_tag_is_removed(self) -> None:
+        # MFS is shared by every Tag, so it must not need any Tag's workspace folder.
+        shutil.rmtree(self.home)
+        context = tag_instances.resolve(self.root)
+        self.assertFalse(context.workspace.exists())
+        environment = {"MFS_URL": "http://127.0.0.1:13619", "OPENTAG_MFS_STARTUP_ATTEMPTS": "1"}
+
+        def launch(*_args, **kwargs):
+            subprocess.run([sys.executable, "-c", "pass"], cwd=kwargs["cwd"], check=True)
+
+        with patch.object(
+            tag_cli, "healthy", side_effect=[False, False, True]
+        ), patch.object(
+            tag_cli, "mfs_server_executable", return_value="/bin/mfs-server"
+        ), patch.object(tag_cli, "replace_unmanaged_local_mfs"), patch.object(
+            tag_cli, "start_process", side_effect=launch
+        ), patch.object(tag_cli.tag_mfs_runtime, "active", return_value=True):
+            tag_cli.ensure_shared_memory(context, environment)
+
+        self.assertFalse(context.workspace.exists())
 
     @unittest.skipIf(os.name == "nt", "Tag finds the listener with lsof only on macOS and Linux")
     def test_local_mfs_listener_matches_the_resolved_configured_address(self) -> None:
@@ -555,6 +796,7 @@ class TagLifecycleTests(unittest.TestCase):
                                  (200, {"job_id": "j2"}))
         self.sync()
         self.assertEqual(requests[1]["body"]["update"], True)
+        self.assertIs(requests[1]["body"]["process"], False)  # queued, like the first add
         self.assertEqual(requests[1]["body"]["target"], "slack://tag-test")
         self.assertIn("config", requests[1]["body"])
 

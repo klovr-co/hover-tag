@@ -1,6 +1,7 @@
 // Tag detail: the feed shows only Tag's own records, and model changes wait for a click.
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { AIModels } from "../lib/ai";
 import { type Bridge, demoBridge } from "../lib/bridge";
 import { parseList, type TagRow } from "../lib/protocol";
 import type { Tags } from "../lib/tags";
@@ -8,7 +9,7 @@ import { activityText, TagDetail } from "./TagDetail";
 
 afterEach(cleanup);
 
-async function open(tab?: string, canDescribe = false, configure?: (api: Bridge, rows: TagRow[]) => void) {
+async function open(tab?: string, canDescribe = false, configure?: (api: Bridge, rows: TagRow[]) => void, canRefreshModels = false) {
   const api = demoBridge();
   const rows: TagRow[] = parseList((await api.tag(["list", "--json"])).stdout);
   configure?.(api, rows);
@@ -20,7 +21,7 @@ async function open(tab?: string, canDescribe = false, configure?: (api: Bridge,
   const tags = { rows, busy: new Set<string>(), toggle: vi.fn(), workspace: vi.fn(), rename: vi.fn(async () => ""), describe, refresh: vi.fn(), remove } as unknown as Tags;
   const say = vi.fn();
   render(<TagDetail api={api} tags={tags} initial={rows[0].id} problems={{}} back={vi.fn()} add={vi.fn()} showSettings={vi.fn()}
-    finishSetup={vi.fn()} openAI={vi.fn()} say={say} canDescribe={canDescribe} />);
+    finishSetup={vi.fn()} openAI={vi.fn()} say={say} canDescribe={canDescribe} canRefreshModels={canRefreshModels} />);
   if (tab) fireEvent.click(screen.getByRole("tab", { name: tab }));
   return { calls, say, rows, remove, describe };
 }
@@ -351,4 +352,76 @@ it("counts a Tag's channels instead of listing them in the header", async () => 
   cleanup();
   await open(undefined, false, (_api, rows) => { rows[0].channels = [{ id: "C1", name: "launch" }]; });
   expect(document.querySelector(".sl-mhead .sub")?.textContent).toMatch(/ · in #launch$/);
+});
+
+describe("Refresh list in the model menu", () => {
+  type Answer = { code: number; stdout: string; stderr: string };
+  /** `models --refresh` waits for `answer`; `change` edits the list it then returns. */
+  function refreshing(change: (models: AIModels) => AIModels | Answer) {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const configure = (api: Bridge) => {
+      const run = api.tag;
+      api.tag = async (args) => {
+        if (!args.includes("--refresh")) return run(args);
+        await gate;
+        const listed = await run(args.filter((a) => a !== "--refresh"));
+        const next = change(JSON.parse(listed.stdout) as AIModels);
+        return "code" in next ? next : { ...listed, stdout: JSON.stringify(next) };
+      };
+    };
+    return { configure, release };
+  }
+
+  async function openMenu() {
+    fireEvent.click(await screen.findByRole("button", { name: "Default model" }, { timeout: 5000 }));
+    return screen.getByRole("listbox", { name: "Default model" });
+  }
+
+  it("reads the accounts' lists again and shows the new model in place", async () => {
+    const refresh = refreshing((models) => ({ ...models, refresh_failed: [], groups: models.groups.map((g) => g.backend !== "codex" ? g
+      : { ...g, cached: false, models: [...g.models, { value: "codex:gpt-6", model: "gpt-6", label: "GPT-6", default: false, efforts: [], default_effort: null }] }) }));
+    const { calls } = await open("Details", false, refresh.configure, true);
+    const menu = await openMenu();
+    expect(within(menu).queryByRole("option", { name: /GPT-6/ })).toBeNull();
+    fireEvent.click(within(menu).getByRole("button", { name: "Refresh list" }));
+    const busy = within(menu).getByRole("button", { name: "Refreshing…" });
+    expect((busy as HTMLButtonElement).disabled).toBe(true);
+    expect(calls).toContainEqual([expect.any(String), "settings", "ai", "models", "--refresh", "--json"]);
+    // The list stays usable while it refreshes.
+    expect(within(menu).getByRole("option", { name: /GPT-5\.5(?! mini)/ })).toBeTruthy();
+    await act(async () => refresh.release());
+    expect(await within(menu).findByRole("option", { name: /GPT-6/ }, { timeout: 5000 })).toBeTruthy();
+    expect(within(menu).getByRole("button", { name: "Refresh list" })).toBeTruthy();
+    expect(within(menu).queryByRole("status")).toBeNull();
+  });
+
+  it("keeps the list it shows when the refresh fails", async () => {
+    const refresh = refreshing(() => ({ code: 1, stdout: "", stderr: "Codex didn't start" }));
+    await open("Details", false, refresh.configure, true);
+    const menu = await openMenu();
+    const before = within(menu).getAllByRole("option").map((o) => o.textContent);
+    fireEvent.click(within(menu).getByRole("button", { name: "Refresh list" }));
+    await act(async () => refresh.release());
+    expect((await within(menu).findByRole("status", {}, { timeout: 5000 })).textContent).toBe("Couldn't refresh the list. Showing the saved one.");
+    expect(within(menu).getAllByRole("option").map((o) => o.textContent)).toEqual(before);
+    expect(within(menu).getByRole("button", { name: "Refresh list" })).toBeTruthy();
+  });
+
+  it("names the account whose list couldn't be read, and keeps its saved list", async () => {
+    const refresh = refreshing((models) => ({ ...models, refresh_failed: ["codex"] }));
+    await open("Details", false, refresh.configure, true);
+    const menu = await openMenu();
+    fireEvent.click(within(menu).getByRole("button", { name: "Refresh list" }));
+    await act(async () => refresh.release());
+    expect((await within(menu).findByRole("status", {}, { timeout: 5000 })).textContent).toBe("Couldn't refresh Codex. Showing the saved list.");
+    expect(within(menu).getByRole("option", { name: /GPT-5\.5(?! mini)/ })).toBeTruthy();
+  });
+
+  it("isn't offered by a Tag that can't refresh its lists", async () => {
+    await open("Details");
+    const menu = await openMenu();
+    expect(within(menu).getAllByRole("option").length).toBeGreaterThan(0);
+    expect(within(menu).queryByRole("button", { name: /Refresh/ })).toBeNull();
+  });
 });

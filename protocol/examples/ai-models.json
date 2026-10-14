@@ -11,7 +11,9 @@
          "efforts": ["low", "medium", "high", "xhigh"], "default_effort": "medium"},
         {"value": "codex:gpt-5.5-mini", "model": "gpt-5.5-mini", "label": "GPT-5.5 mini", "default": false,
          "efforts": ["low", "medium", "high"], "default_effort": "medium"}
-      ]
+      ],
+      "cached": true,
+      "fetched_at": "2026-10-12T09:30:00+00:00"
     },
     {
       "backend": "claude",
@@ -23,7 +25,9 @@
          "efforts": ["low", "medium", "high", "xhigh", "max"], "default_effort": "high"},
         {"value": "claude:claude-sonnet-5-5", "model": "claude-sonnet-5-5", "label": "Sonnet 5.5", "default": false,
          "efforts": ["low", "medium", "high", "max"], "default_effort": "high"}
-      ]
+      ],
+      "cached": false,
+      "fetched_at": "2026-10-12T10:15:04+00:00"
     }
   ],
   "default": {
@@ -36,5 +40,8 @@
     "chosen": true
   },
   "unavailable": [],
-  "suggested": "codex:gpt-5.5"
+  "suggested": "codex:gpt-5.5",
+  "cached": true,
+  "cached_at": "2026-10-12T09:30:00+00:00",
+  "refresh_failed": []
 }
