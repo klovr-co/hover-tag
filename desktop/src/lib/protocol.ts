@@ -4,6 +4,8 @@
 // file only reads what `tag … --json` prints. Tests parse the shared examples
 // in protocol/examples, the same files the CLI tests check.
 
+import type { Sprite } from "./sprite";
+
 /** Newest incompatible protocol this app understands. */
 export const APP_PROTOCOL = 1;
 
@@ -29,6 +31,10 @@ export interface TagRow {
   has_app?: boolean;
   nickname?: string | null;
   avatar?: string | null;
+  /** The picture setup gave the Tag in Slack; a waterdrop carries the sprite to animate it. */
+  picture?: { kind: "waterdrop" | "custom" | string; index?: number; sprite?: Sprite } | null;
+  /** Path to activity-now.json: what the running Tag is doing right now. */
+  activity_now?: string | null;
   keep_running?: boolean;
   main?: boolean;
   error?: string;

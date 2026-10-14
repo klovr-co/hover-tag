@@ -191,7 +191,7 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
   });
   rows.splice(2, 0, {
     ...rows[0], id: "t0acme01-a0ops003", slack_name: "Ops Tag", slack_workspace: "T0ACME01",
-    workspace_name: "Acme Inc", workspace_icon: null, main: false,
+    workspace_name: "Acme Inc", workspace_icon: null, main: false, picture: { kind: "custom" },
     description: "Keeps on-call notes and launch checklists up to date.",
     default_model: "codex:gpt-5.5-mini", default_model_label: "Codex · GPT-5.5 mini", default_model_name: "GPT-5.5 mini", default_effort: "medium",
     channels: [{ id: "C0GENERAL2", name: "general" }, { id: "C0LAUNCHOPS", name: "launch-ops" }],

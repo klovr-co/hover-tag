@@ -1973,6 +1973,34 @@ def _refresh_avatar(home: Path, values: dict[str, str]) -> str:
     return slack_profile_icon.refresh_safely(home, values)
 
 
+def _picture(home: Path) -> dict | None:
+    """The picture setup gave the Tag in Slack; a waterdrop includes its sprite for Tag.app.
+
+    None when Tag did not choose it: an existing Slack app keeps its own picture.
+    """
+    try:
+        from . import tag_waterdrop
+    except ImportError:
+        import tag_waterdrop
+    try:
+        if json.loads((home / "config/setup-progress.json").read_text(encoding="utf-8")).get("app_path") == "existing":
+            return None
+    except (OSError, ValueError, AttributeError):
+        pass
+    try:
+        state = json.loads((home / "integrations/slack-cli/assets/tag-picture.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(state, dict):
+        return None
+    if state.get("picture") == "waterdrop" and isinstance(state.get("index"), int) and not isinstance(state["index"], bool):
+        index = state["index"] % tag_waterdrop.WATERDROP_RECIPE_COUNT
+        return {"kind": "waterdrop", "index": index, "sprite": tag_waterdrop.sprite(index)}
+    if state.get("picture") == "custom":
+        return {"kind": "custom"}
+    return None
+
+
 def _workspace_icon(home: Path) -> str | None:
     """The saved Slack workspace icon, for apps that show it beside the workspace name."""
     try:
@@ -2560,6 +2588,8 @@ def _run_cli() -> int:
                                       context.home / "integrations/slack-cli/tag-create.json").exists(),
                                   nickname=tag_instances.nickname(context.home),
                                   avatar=_avatar(context.home, values),
+                                  picture=_picture(context.home),
+                                  activity_now=str(context.home / "state/activity-now.json"),
                                   workspace_icon=_workspace_icon(context.home),
                                   keep_running=autostart.wanted(context.home) is True,
                                   main=context.tag_id == tag_id,

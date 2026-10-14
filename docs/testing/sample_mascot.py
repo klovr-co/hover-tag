@@ -1,4 +1,4 @@
-"""Print a terminal sprite module sampled from the supplied reference image.
+"""Print the sprite data (scripts/tag_mascot.json) sampled from the supplied reference image.
 
 Usage: uv run --with pillow python docs/testing/sample_mascot.py IMAGE
 No image or source files are modified. Sample 7x7 medians near the centers of
@@ -28,7 +28,6 @@ symbols = "ABCDEFGHIJKLMNOPQRSTUVWX"
 colors = {symbols[i]: "#%02x%02x%02x" % tuple(palette[i * 3:i * 3 + 3]) for i in range(24)}
 data = list(indexed.tobytes())
 sprite = ["".join(symbols[i] for i in data[row * columns:(row + 1) * columns]) for row in range(rows)]
-source = '"""Pixel-center samples from the user-supplied blue droplet reference.\n\nReproduce with docs/testing/sample_mascot.py; no runtime image dependency.\n"""\n\n'
-source += "PALETTE = " + repr(colors) + "\n\nPIXELS = (\n"
-source += "".join("    " + repr(row) + ",\n" for row in sprite) + ")\n"
+source = "{\n  \"palette\": {\n" + ",\n".join(f'    "{key}": "{value}"' for key, value in colors.items())
+source += "\n  },\n  \"pixels\": [\n" + ",\n".join(f'    "{row}"' for row in sprite) + "\n  ]\n}\n"
 print(json.dumps({"source": source, "columns": columns, "rows": rows}))

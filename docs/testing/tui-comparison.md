@@ -54,7 +54,8 @@ For this redesign, `.context/tui/comparison.html` displays all four before/after
 pairs and the narrow-terminal checks. The original 28-row baseline transcripts
 are rendered with blank padding on 44-row canvases to match the taller new UI.
 
-Reproduce the mascot's data module by running `docs/testing/sample_mascot.py`
-with the supplied reference image path. The helper prints source data without
-writing files; only this development helper needs Pillow. The runtime imports
-the resulting palette and grid from `scripts/tag_mascot.py`.
+Reproduce the mascot's data by running `docs/testing/sample_mascot.py`
+with the supplied reference image path. The helper prints the contents of
+`scripts/tag_mascot.json` without writing files; only this development helper
+needs Pillow. The runtime reads the palette and grid through
+`scripts/tag_mascot.py`, and Tag.app imports the same JSON file.

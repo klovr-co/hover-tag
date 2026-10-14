@@ -8,6 +8,7 @@ import { checkUpdate, initialUpdate, installUpdate, updateReducer } from "./lib/
 import { useTags } from "./lib/tags";
 import { TrackContext, useTelemetry, type AppEvents } from "./lib/telemetry";
 import { useWatch } from "./lib/watch";
+import { MoodContext, useMoods } from "./lib/mood";
 import { deepLinkTarget } from "./lib/deeplink";
 import { glide } from "./lib/motion";
 import { Connect } from "./components/Connect";
@@ -17,7 +18,7 @@ import { AI_CAPABILITY, API_CAPABILITY, SHARED_AI_CAPABILITY } from "./lib/ai";
 import { AISettings } from "./components/AISettings";
 import { Settings, type SettingsTab } from "./components/Settings";
 import { TagDetail, type Tab as TagTab } from "./components/TagDetail";
-import { Toast } from "./components/ui";
+import { source, Toast } from "./components/ui";
 
 type Screen =
   | { name: "loading" }
@@ -79,6 +80,8 @@ export function App() {
     ai: installed && capabilities.includes(AI_CAPABILITY),
     activity: installed && capabilities.includes("logs-activity"),
   });
+  // Every Tag's waterdrop plays what that Tag is doing, on every screen.
+  const moods = useMoods(tags.rows, { busy: tags.busy, problems: watch.problems, activity: watch.activity, url: source });
   const telemetry = useTelemetry(api, !!info?.cli);
   const { track } = telemetry;
   const [root, setRoot] = useState<HTMLElement | null>(null);
@@ -265,47 +268,49 @@ export function App() {
   const fixed = screen.name === "home" || screen.name === "settings" || screen.name === "ai";
   return (
     <TrackContext.Provider value={track}>
-      <main ref={setRoot} className={`app${info.platform === "macos" ? " overlay" : ""}${screen.name === "home" ? " home" : ""}${fixed ? " fixed" : ""}${screen.name === "tag" ? " wide" : ""}`}>
-        {screen.name === "replay" && <Welcome api={api} platform={info.platform} preview={() => setScreen({ name: "settings", tab: "about" })} />}
-        {screen.name === "welcome" && <Welcome api={api} platform={info.platform} install={() => setScreen({ name: "installing", attempt: 0 })} />}
-        {screen.name === "installing" && (
-          <Installing key={screen.attempt} api={api}
-            retry={() => setScreen({ name: "installing", attempt: screen.attempt + 1 })}
-            cancel={() => setScreen({ name: "welcome" })}
-            done={(command) => void afterInstall(command)} />
-        )}
-        {screen.name === "home" && !tags.loaded && <Starting error={tags.error} retry={() => void tags.refresh()} />}
-        {screen.name === "home" && tags.loaded && (
-          <Home api={api} tags={tags} reports={watch.reports} problems={watch.problems} activity={watch.activity}
-            firstName={info.firstName ?? null} update={update} outdated={outdated} runUpdate={() => void runUpdate()}
-            add={add} usageNote={telemetry.announced} seenUsageNote={sawOnHome}
-            finishSetup={(row) => setScreen({ name: "connect", args: [row.id, "setup"] })}
-            open={(row) => setScreen({ name: "tag", id: row.id })}
-            fixAI={() => capabilities.includes(SHARED_AI_CAPABILITY) ? setScreen({ name: "ai" }) : say("Update Tag to manage shared AI accounts in Settings.")}
-            showSettings={(tab, privacy) => setScreen({ name: "settings", tab, privacy })} />
-        )}
-        {screen.name === "connect" && (
-          <Connect api={api} args={screen.args} start={(id, onLine) => tags.start(id, capabilities.includes("start-progress") ? onLine : undefined)} openAI={capabilities.includes(SHARED_AI_CAPABILITY) ? (resume) => setScreen({ name: "ai", resume }) : undefined} done={home}
-            paused={() => { home(); say("Progress saved. Finish setup from Home any time."); }}
-            usageNote={telemetry.announced ? { learnMore: learnUsage, seen: sawOnSetup } : undefined} />
-        )}
-        {screen.name === "settings" && (
-          <Settings key={screen.tab} initialTab={screen.tab} showPrivacy={screen.privacy} api={api} info={info} tags={tags} telemetry={telemetry} close={home} update={update} check={() => void check()}
-            runUpdate={() => void runUpdate()} replay={() => setScreen({ name: "replay" })} switched={(done) => dispatchUpdate({ type: "updated", update: done })}
-            openAI={capabilities.includes(SHARED_AI_CAPABILITY) ? () => setScreen({ name: "ai" }) : undefined} />
-        )}
-        {screen.name === "ai" && (
-          <AISettings api={api} tags={tags} apiConnections={capabilities.includes(API_CAPABILITY)} close={() => { watch.recheck(); setScreen(screen.resume ? { name: "connect", args: screen.resume } : { name: "settings" }); }} />
-        )}
-        {screen.name === "tag" && (
-          <TagDetail key={screen.opened ?? 0} api={api} tags={tags} initial={screen.id} initialTab={screen.tab} problems={watch.problems} back={home} add={add}
-            canDescribe={capabilities.includes("describe")}
-            showSettings={() => setScreen({ name: "settings" })}
-            finishSetup={(row) => setScreen({ name: "connect", args: [row.id, "setup"] })}
-            openAI={() => capabilities.includes(SHARED_AI_CAPABILITY) ? setScreen({ name: "ai" }) : say("Update Tag to manage shared AI accounts in Settings.")} say={say} />
-        )}
-        <Toast text={toast} />
-      </main>
+      <MoodContext.Provider value={moods}>
+        <main ref={setRoot} className={`app${info.platform === "macos" ? " overlay" : ""}${screen.name === "home" ? " home" : ""}${fixed ? " fixed" : ""}${screen.name === "tag" ? " wide" : ""}`}>
+          {screen.name === "replay" && <Welcome api={api} platform={info.platform} preview={() => setScreen({ name: "settings", tab: "about" })} />}
+          {screen.name === "welcome" && <Welcome api={api} platform={info.platform} install={() => setScreen({ name: "installing", attempt: 0 })} />}
+          {screen.name === "installing" && (
+            <Installing key={screen.attempt} api={api}
+              retry={() => setScreen({ name: "installing", attempt: screen.attempt + 1 })}
+              cancel={() => setScreen({ name: "welcome" })}
+              done={(command) => void afterInstall(command)} />
+          )}
+          {screen.name === "home" && !tags.loaded && <Starting error={tags.error} retry={() => void tags.refresh()} />}
+          {screen.name === "home" && tags.loaded && (
+            <Home api={api} tags={tags} reports={watch.reports} problems={watch.problems} activity={watch.activity}
+              firstName={info.firstName ?? null} update={update} outdated={outdated} runUpdate={() => void runUpdate()}
+              add={add} usageNote={telemetry.announced} seenUsageNote={sawOnHome}
+              finishSetup={(row) => setScreen({ name: "connect", args: [row.id, "setup"] })}
+              open={(row) => setScreen({ name: "tag", id: row.id })}
+              fixAI={() => capabilities.includes(SHARED_AI_CAPABILITY) ? setScreen({ name: "ai" }) : say("Update Tag to manage shared AI accounts in Settings.")}
+              showSettings={(tab, privacy) => setScreen({ name: "settings", tab, privacy })} />
+          )}
+          {screen.name === "connect" && (
+            <Connect api={api} args={screen.args} start={(id, onLine) => tags.start(id, capabilities.includes("start-progress") ? onLine : undefined)} openAI={capabilities.includes(SHARED_AI_CAPABILITY) ? (resume) => setScreen({ name: "ai", resume }) : undefined} done={home}
+              paused={() => { home(); say("Progress saved. Finish setup from Home any time."); }}
+              usageNote={telemetry.announced ? { learnMore: learnUsage, seen: sawOnSetup } : undefined} />
+          )}
+          {screen.name === "settings" && (
+            <Settings key={screen.tab} initialTab={screen.tab} showPrivacy={screen.privacy} api={api} info={info} tags={tags} telemetry={telemetry} close={home} update={update} check={() => void check()}
+              runUpdate={() => void runUpdate()} replay={() => setScreen({ name: "replay" })} switched={(done) => dispatchUpdate({ type: "updated", update: done })}
+              openAI={capabilities.includes(SHARED_AI_CAPABILITY) ? () => setScreen({ name: "ai" }) : undefined} />
+          )}
+          {screen.name === "ai" && (
+            <AISettings api={api} tags={tags} apiConnections={capabilities.includes(API_CAPABILITY)} close={() => { watch.recheck(); setScreen(screen.resume ? { name: "connect", args: screen.resume } : { name: "settings" }); }} />
+          )}
+          {screen.name === "tag" && (
+            <TagDetail key={screen.opened ?? 0} api={api} tags={tags} initial={screen.id} initialTab={screen.tab} problems={watch.problems} back={home} add={add}
+              canDescribe={capabilities.includes("describe")}
+              showSettings={() => setScreen({ name: "settings" })}
+              finishSetup={(row) => setScreen({ name: "connect", args: [row.id, "setup"] })}
+              openAI={() => capabilities.includes(SHARED_AI_CAPABILITY) ? setScreen({ name: "ai" }) : say("Update Tag to manage shared AI accounts in Settings.")} say={say} />
+          )}
+          <Toast text={toast} />
+        </main>
+      </MoodContext.Provider>
     </TrackContext.Provider>
   );
 }
