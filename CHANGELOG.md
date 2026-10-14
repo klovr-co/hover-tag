@@ -66,6 +66,17 @@ All notable changes to Tag are documented here.
 - Tag now reads all of a long text file attached in Slack, such as a large
   HTML or log file. Before, it saw only the first 12,000 characters.
 
+### Changed
+
+- Choosing a model is now immediate. Tag saves each signed-in account's model
+  list once for all Tags instead of starting Codex and Claude every time setup
+  or the app lists models, and reads accounts without a saved list at the same
+  time instead of one after another. A list older than a day is updated in the
+  background, and signing in with another account drops its saved list. To
+  read the lists now, choose **Refresh list** at the bottom of a Tag's model
+  menu in the app, or run `tag NAME settings ai models --refresh`. If an
+  account can't be read, its saved list stays.
+
 ## [0.3.0] - 2026-10-08
 
 The 0.3 line introduces **Tag** as a desktop app for macOS. The

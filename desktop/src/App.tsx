@@ -14,7 +14,7 @@ import { glide } from "./lib/motion";
 import { Connect } from "./components/Connect";
 import { Home } from "./components/Home";
 import { Installing, NO_CUSTOM, Starting, Welcome, type InstallChoice } from "./components/Install";
-import { AI_CAPABILITY, API_CAPABILITY, SHARED_AI_CAPABILITY } from "./lib/ai";
+import { AI_CAPABILITY, API_CAPABILITY, SAVED_MODELS_CAPABILITY, SHARED_AI_CAPABILITY } from "./lib/ai";
 import { AISettings } from "./components/AISettings";
 import { MemorySettings, Settings, type SettingsTab } from "./components/Settings";
 import { TagDetail, type Tab as TagTab } from "./components/TagDetail";
@@ -311,7 +311,7 @@ export function App() {
         )}
         {screen.name === "tag" && (
           <TagDetail key={screen.opened ?? 0} api={api} tags={tags} initial={screen.id} initialTab={screen.tab} problems={watch.problems} back={home} add={add}
-            canDescribe={capabilities.includes("describe")}
+            canDescribe={capabilities.includes("describe")} canRefreshModels={capabilities.includes(SAVED_MODELS_CAPABILITY)}
             showSettings={() => setScreen({ name: "settings" })}
             finishSetup={(row) => setScreen({ name: "connect", args: [row.id, "setup"] })}
             openAI={() => capabilities.includes(SHARED_AI_CAPABILITY) ? setScreen({ name: "ai" }) : say("Update Tag to manage shared AI accounts in Settings.")} say={say} />

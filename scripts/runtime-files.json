@@ -45,6 +45,7 @@
     "scripts/mfs_ls.py",
     "scripts/mfs_scope_policy.py",
     "scripts/mfs_search.py",
+    "scripts/model_catalog.py",
     "scripts/opentag_agent.py",
     "scripts/opentag_doctor.py",
     "scripts/opentag_process_env.py",
