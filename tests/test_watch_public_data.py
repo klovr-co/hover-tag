@@ -81,8 +81,9 @@ class AmiMappingTests(unittest.TestCase):
             for speaker, words in (("A", ["Shall", "we", "start", "?"]), ("B", ["Yeah", "C", "can", "you", "present"]),
                                    ("C", ["Mm-hmm", "."]), ("D", ["Sure", "thing", "now"])):
                 start = {"A": 1, "B": 2, "C": 3, "D": 4}[speaker]
+                punc = ' punc="true"'
                 body = "".join(f'<w nite:id="m.{speaker}.words{i}" starttime="{start + i / 10}"'
-                               f'{" punc=\"true\"" if w in "?." else ""}>{w}</w>' for i, w in enumerate(words))
+                               f'{punc if w in "?." else ""}>{w}</w>' for i, w in enumerate(words))
                 self.write(root, f"words/m.{speaker}.words.xml", f"<nite:root {nite}>{body}</nite:root>")
             def act(speaker, kind, addressee, last):
                 attr = f' addressee="{addressee}"' if addressee else ""
