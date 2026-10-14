@@ -46,7 +46,7 @@ it shows is listed in `capabilities`; otherwise it offers to upgrade Tag.
 
 `tag list --json` returns `tags`, one object per Tag with `id`, `valid`,
 `state`, `slack_workspace`, `workspace_name`, `workspace_icon`, `slack_name`,
-`slack_app_id`, `has_app`, `nickname`, `avatar`, `keep_running`, `main`, `description`, `default_model`,
+`slack_app_id`, `slack_enterprise` (the organization's ID for a workspace in an Enterprise Grid organization, else `null`), `has_app`, `nickname`, `avatar`, `keep_running`, `main`, `description`, `default_model`,
 `default_model_label`, `default_model_name`, `default_effort`, and `channels`. `state` is
 `running`, `stopped`, `not_configured`, `setup_incomplete`, `needs_attention`,
 `invalid_configuration`, or `invalid_tag`; treat unknown states as needing

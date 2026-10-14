@@ -6,6 +6,11 @@ All notable changes to Tag are documented here.
 
 ### Added
 
+- Add a Tag to a workspace you already use in one step. On Home, click **Add
+  Tag** on the workspace's card: a dialog asks only for the name, description
+  and picture, then creates and starts the Tag with your default model, or the
+  model and thinking level you pick under **Change**. In the terminal, `tag add --workspace T0ABC123` (a team ID or name) does the
+  same; it pauses with progress saved if something needs your input.
 - Let one Tag ask other Tags for help and combine their answers. Tag posts one
   request that mentions every Tag, links it to your thread in both directions,
   shows their progress as steps, and writes the final answer once all have replied or the deadline passes. Each
@@ -30,9 +35,9 @@ All notable changes to Tag are documented here.
 - With Claude, a message sent right after stopping a request that was running a
   command now gets an answer. Before, Tag replied "Open Tag finished without
   output."
-
-### Fixed
-
+- A new Tag that isn't in any channel yet now starts. Before, `tag start` waited
+  for the Slack connection and gave up, even though setup said to invite the Tag
+  once it was running.
 - `tag autostart` now keeps memory (MFS) running too. If MFS stops, the login
   service restarts it with the same back-off it uses for Tags, whether it was
   started by a Tag or by `tag memory start`. On Linux, Tag turns on systemd
