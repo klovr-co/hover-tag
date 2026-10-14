@@ -288,10 +288,12 @@ class UsageTests(unittest.TestCase):
                 forward({"type": "usage", "input_tokens": 10, "output_tokens": 1, "cost_usd": .01})
                 return "completed", ""
             self.assertEqual(run_rich_events(start, errors=(RuntimeError,), backend_name="Claude"), 0)
-            # Activity receives token counts; cost and provider scope stay in the ledger.
+            # The bridge receives token counts and the cost estimate, which it uses only to
+            # stop routine runs at their budget; provider scope stays in the ledger.
             emit.assert_called_once()
             self.assertEqual("usage", emit.call_args.args[0])
-            self.assertEqual({"usage"}, set(emit.call_args.kwargs))
+            self.assertEqual({"usage", "cost_usd"}, set(emit.call_args.kwargs))
+            self.assertEqual(emit.call_args.kwargs["cost_usd"], .01)
             self.assertEqual(agent_usage.report(Path(tmp), {})["input_tokens"], 10)
 
 

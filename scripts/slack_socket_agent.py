@@ -22,6 +22,7 @@ import urllib.request
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -74,6 +75,8 @@ try:
     from . import slack_channels
     from . import tag_memory
     from . import tag_handoff
+    from . import tag_routines
+    from .tag_routine_scheduler import RoutineScheduler
 except ImportError:  # Direct script execution does not create a package context.
     import slack_identity
     from agent_models import (
@@ -117,6 +120,8 @@ except ImportError:  # Direct script execution does not create a package context
     import slack_channels
     import tag_memory
     import tag_handoff
+    import tag_routines
+    from tag_routine_scheduler import RoutineScheduler
 
 
 MENTION_RE = re.compile(r"<@[^>]+>")
@@ -127,6 +132,18 @@ MAX_ATTACHMENT_TEXT_CHARS = 12_000
 MAX_OUTPUT_FILE_BYTES = 15 * 1024 * 1024
 MAX_OUTPUT_ARTIFACTS = 10
 OUTPUT_ARTIFACT_MANIFEST_PREFIX = ".opentag-output-artifacts-"
+# Routines are checked against the wall clock this often, so sleep and restarts don't matter.
+ROUTINE_CHECK_SECONDS = 20
+ROUTINE_FAILURE_TEXT = {
+    "authentication_failure": "The coding agent isn't signed in.",
+    "missing_executable": "The coding agent isn't installed on this computer.",
+    "rate_limit": "The AI provider's usage limit was reached.",
+    "idle_timeout": "The coding agent stopped responding.",
+    "maximum_runtime": "The run reached its time limit.",
+    "unexpected_backend_exit": "The coding agent stopped unexpectedly.",
+    "model_unavailable": "The Tag's model isn't available.",
+    "unsupported_tool": "The coding agent tried a tool Tag doesn't support.",
+}
 MAX_GENERATED_IMAGES = 10
 MAX_REPLY_CHARS = 3_800
 STREAM_START_CHARS = 40
@@ -2360,8 +2377,24 @@ def register_active_run(key: RunKey, run: ActiveBackendRun) -> None:
 
 def unregister_active_run(key: RunKey, run: ActiveBackendRun) -> None:
     with ACTIVE_RUNS_LOCK:
-        if ACTIVE_RUNS.get(key) is run:
-            ACTIVE_RUNS.pop(key, None)
+        # Also drop aliases, such as a routine thread created after the run started.
+        for candidate in [k for k, value in ACTIVE_RUNS.items() if value is run]:
+            ACTIVE_RUNS.pop(candidate, None)
+
+
+def alias_active_run(existing: RunKey, alias: RunKey) -> bool:
+    """Let approvals in a thread posted mid-run reach a run registered under another key."""
+    with ACTIVE_RUNS_LOCK:
+        run = ACTIVE_RUNS.get(existing)
+        if run is None:
+            return False
+        ACTIVE_RUNS[alias] = run
+        return True
+
+
+def active_run(key: RunKey) -> ActiveBackendRun | None:
+    with ACTIVE_RUNS_LOCK:
+        return ACTIVE_RUNS.get(key)
 
 
 def cancel_active_run(key: RunKey, event_ts: str | None = None) -> bool:
@@ -2542,6 +2575,7 @@ def run_backend_events(
     on_session: Callable[[str], None] | None = None,
     thread_new_text: str | None = None,
     on_context: Callable[[int], None] | None = None,
+    run_limits: dict[str, float | int] | None = None,
 ) -> tuple[str, bool]:
     """Consume normalized lifecycle events and forward only final-answer text."""
     if max_timeout is None:
@@ -2625,6 +2659,7 @@ def run_backend_events(
         memory_receipts=str(memory_receipts) if memory_receipts else None,
         handoff_requests=str(handoff_requests) if handoff_requests else None,
         handoff_depth=handoff_depth,
+        run_limits=run_limits,
     )
     try:
         process = subprocess.Popen(
@@ -2793,6 +2828,11 @@ def run_backend_events(
         return detail, False
     answer = "".join(final_messages) or "".join(delta_text)
     return (answer or "Open Tag finished without output."), True
+
+
+def slack_escape(text: str) -> str:
+    """Show text literally in Slack mrkdwn: no mentions, links or broadcasts."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def post_final_reply(
@@ -5189,6 +5229,221 @@ def create_app(
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
             logger.warning("Could not queue or steer the Slack request: %s", exc)
 
+    workspace_ids: list[str] = []
+
+    def workspace_id(client: Any) -> str:
+        if not workspace_ids:
+            workspace_ids.append(str(client.auth_test().get("team_id") or ""))
+        return workspace_ids[0]
+
+    def post_routine_root(client: Any, routine: dict[str, Any], text: str,
+                          blocks: list[dict[str, Any]] | None = None) -> str:
+        posted = client.chat_postMessage(channel=routine["channel"], text=text, mrkdwn=True, blocks=blocks,
+                                         unfurl_links=False, unfurl_media=False)
+        return posted["ts"]
+
+    def run_routine(routine: dict[str, Any], trigger: str, slot: datetime | None,
+                    last_success: str | None) -> dict[str, Any]:
+        """Run one routine through the normal request path and return its run record.
+
+        The routine's channel is the only place it posts. Nothing is posted until
+        there is something to say: a reply, an approval request, or a failure.
+        A reply of NO_REPLY posts nothing and is kept only in run history.
+        """
+        client = app.client
+        logger = app.logger
+        channel, owner = routine["channel"], routine["owner"]
+        limits = routine["limits"]
+        team = selected_team or workspace_id(client)
+        started = datetime.now(timezone.utc)
+        name = routine["name"]
+        # The name is the operator's text; escape it so it can't mention @channel or link.
+        header = f"⏰ *{slack_escape(name)}*"
+
+        def record(outcome: str, diagnostic: str = "", **extra: Any) -> dict[str, Any]:
+            return tag_routines.run_record(routine, trigger=trigger, slot=slot, outcome=outcome, started=started,
+                                           ended=datetime.now(timezone.utc), diagnostic=diagnostic, **extra)
+
+        def refuse(diagnostic: str, *, notify: bool) -> dict[str, Any]:
+            if notify:
+                try:
+                    post_routine_root(client, routine, f"{header} didn't run: {diagnostic}")
+                except Exception as exc:  # noqa: BLE001 - the run history still records it
+                    logger.warning("Could not post routine notice: %s", exc)
+            return record("failed", diagnostic)
+
+        # A channel the Tag no longer uses gets nothing, not even this notice.
+        if not slack_channel_allowed(channel):
+            return refuse("its channel isn't one of the Tag's channels any more.", notify=False)
+        if not slack_user_allowed(owner, allowed_user_ids):
+            return refuse("its owner isn't allowed to use this Tag any more.", notify=True)
+        question = tag_routines.run_prompt(routine, trigger=trigger, slot=slot, last_success=last_success)
+        configured_team = os.getenv("SLACK_TEAM_ID", "").strip()
+        configured_channels = (os.getenv("SLACK_CHANNEL_IDS", "").strip()
+                               or os.getenv("SLACK_CHANNEL_ID", "").strip())
+        scope_plan = plan_search_scopes(
+            request_text=question, current_channel_id=channel, caller_id=owner, team_id=configured_team,
+            configured_channels=configured_channels, allowed_scopes=os.getenv("MFS_ALLOWED_SCOPES", ""),
+            client=client, intent=SearchIntent("current"))
+        search_grant = plan_search_scopes(
+            request_text=question, current_channel_id=channel, caller_id=owner, team_id=configured_team,
+            configured_channels=configured_channels, allowed_scopes=os.getenv("MFS_ALLOWED_SCOPES", ""),
+            client=client, intent=SearchIntent("all"))
+        agent_settings = default_settings
+        request_backend = agent_settings.backend or backend
+        run_key = RunKey(team, channel, f"routine-{uuid.uuid4().hex}")
+        root: dict[str, str] = {}
+        tools_used: list[str] = []
+        usage: dict[str, Any] = {}
+        limit_hit: list[str] = []
+        error_codes: list[str] = []
+        activity_run_id: str | None = None
+        if rich_events_selected(request_backend):
+            try:
+                activity_run_id = activity_store.create(
+                    team=team, channel=channel, thread_ts="", request_ts="", requester=owner,
+                    reasoning_effort=agent_settings.reasoning_effort,
+                    trigger={"type": "routine", "routine_id": routine["id"], "name": name, "trigger": trigger})
+            except OSError as exc:
+                logger.warning("Could not start Tag activity record: %s", exc)
+
+        def ensure_root(text: str) -> str:
+            if "ts" not in root:
+                root["ts"] = post_routine_root(client, routine, text)
+                alias_active_run(run_key, RunKey(team, channel, root["ts"]))
+                if activity_run_id is not None:
+                    try:
+                        activity_store.set_thread(activity_run_id, root["ts"])
+                    except OSError:
+                        logger.warning("Could not link routine activity to its thread")
+            return root["ts"]
+
+        def on_approval(approval: dict[str, Any]) -> None:
+            thread = ensure_root(f"{header} needs <@{owner}>'s approval to continue.")
+            post_backend_approval(client, team=team, channel=channel, thread_ts=thread, user_id=owner,
+                                  approval=approval, backend=request_backend)
+
+        def trace(event: dict[str, Any]) -> None:
+            if activity_run_id is not None:
+                try:
+                    activity_store.observe(activity_run_id, event)
+                except OSError:
+                    pass
+            if event.get("type") == "activity_start":
+                label = event.get("label")
+                if isinstance(label, str) and label in PUBLIC_LABELS and label not in tools_used:
+                    tools_used.append(label)
+                return
+            if event.get("type") != "usage":
+                return
+            counts = event.get("usage") if isinstance(event.get("usage"), dict) else {}
+            tokens = sum(value for key in ("input_tokens", "output_tokens")
+                         if isinstance(value := counts.get(key), int))
+            usage["tokens"] = tokens
+            # Cached context is re-read every turn and costs little; the token limit counts new tokens.
+            cached = counts.get("cache_read_input_tokens")
+            fresh = tokens - (cached if isinstance(cached, int) and 0 <= cached <= tokens else 0)
+            cost = event.get("cost_usd")
+            if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+                usage["cost_usd"] = round(float(cost), 4)
+            over = (usage.get("cost_usd", 0) > limits["max_budget_usd"] if "cost_usd" in usage
+                    else fresh > limits["max_tokens"])
+            if over and not limit_hit:
+                limit_hit.append("cost" if "cost_usd" in usage else "tokens")
+                if (run := active_run(run_key)) is not None:
+                    run.cancel()
+
+        def capture_error(code: str | None, _detail: str) -> None:
+            if code:
+                error_codes.append(code)
+
+        def finish_activity(outcome: str) -> None:
+            nonlocal activity_run_id
+            if activity_run_id is not None:
+                try:
+                    activity_store.finish(activity_run_id, outcome)
+                except OSError:
+                    pass
+
+        output_manifest = default_workdir() / f"{OUTPUT_ARTIFACT_MANIFEST_PREFIX}{uuid.uuid4().hex}.json"
+        answer, succeeded, finished = "", False, False
+        try:
+            with tempfile.TemporaryDirectory(prefix="slack-routine-", dir=tag_temp_dir()) as raw_dir:
+                attachment_dir = Path(raw_dir)
+                generated_images_dir(attachment_dir).mkdir(parents=True)
+                (attachment_dir / "results" / "artifacts").mkdir()
+                answer, succeeded = run_backend_events(
+                    request_backend, team, channel, run_key.thread_ts, owner, question, "", attachment_dir,
+                    min(timeout, limits["timeout_seconds"]), lambda _text: None,
+                    model=agent_settings.model, reasoning_effort=agent_settings.reasoning_effort,
+                    on_approval=on_approval, fast_mode=agent_settings.fast_mode,
+                    output_manifest=output_manifest, max_timeout=limits["timeout_seconds"],
+                    scope_plan=scope_plan, slack_search_grant=search_grant, on_trace_event=trace,
+                    run_limits={"max_turns": limits["max_turns"], "max_budget_usd": limits["max_budget_usd"]},
+                    on_error=capture_error,
+                )
+                finished = True
+                finish_activity("completed" if succeeded else "failed")
+                extra = {"tools_used": tools_used or None, "cost_usd": usage.get("cost_usd"),
+                         "tokens": usage.get("tokens"), "activity_run_id": activity_run_id}
+                # Limits come from error codes and only for runs that failed: a reply that
+                # merely talks about turns or budgets is still a reply.
+                if not succeeded and (limit_hit or "error_max_budget_usd" in error_codes):
+                    outcome = "budget_exceeded"
+                    diagnostic = (f"Stopped at the per-run limit of {limits['max_tokens']:,} new tokens."
+                                  if limit_hit == ["tokens"] else
+                                  f"Stopped at the per-run spend limit of ${limits['max_budget_usd']:.2f}.")
+                elif not succeeded and "maximum_runtime" in error_codes:
+                    outcome, diagnostic = "timeout", f"Stopped at the {limits['timeout_seconds'] // 60}-minute limit."
+                elif not succeeded and "error_max_turns" in error_codes:
+                    outcome, diagnostic = "failed", f"Stopped at the limit of {limits['max_turns']} turns."
+                elif succeeded and tag_routines.is_no_reply(answer):
+                    if "ts" in root:
+                        client.chat_postMessage(channel=channel, thread_ts=root["ts"], text="Nothing new to report.")
+                    return record("no_reply", **extra)
+                elif succeeded:
+                    answer = without_bot_mentions(client, logger, answer)
+                    chunks = split_reply(to_mrkdwn(f"{header}\n\n{answer}"), max_chars=MAX_REPLY_CHARS)
+                    if "ts" in root:
+                        post_final_reply(client, channel, root["ts"], answer)
+                    else:
+                        ensure_root(chunks[0])
+                        for chunk in chunks[1:]:
+                            client.chat_postMessage(channel=channel, thread_ts=root["ts"], text=chunk, mrkdwn=True)
+                    deliver_output_artifacts(client, channel, root["ts"], output_manifest, default_workdir(), logger)
+                    if activity_run_id is not None:
+                        try:
+                            activity_store.save_reply(activity_run_id, answer)
+                        except OSError:
+                            pass
+                    return record("posted", slack_ts=root["ts"], **extra)
+                else:
+                    outcome = "failed"
+                    # The channel sees only a fixed phrase; details stay in the error report.
+                    diagnostic = ROUTINE_FAILURE_TEXT.get(classify_failure(answer, None).category,
+                                                          "The coding agent reported an error.")
+                reference = new_error_reference()
+                logger.error("Routine %s failed [%s]: %s", routine["id"], reference, answer)
+                text = f"{header} didn't finish. {diagnostic} Reference `{reference}`."
+                if "ts" in root:
+                    client.chat_postMessage(channel=channel, thread_ts=root["ts"], text=text)
+                else:
+                    ensure_root(text)
+                return record(outcome, f"{diagnostic} Reference {reference}.", slack_ts=root.get("ts"), **extra)
+        finally:
+            if not finished:
+                finish_activity("failed")
+            output_manifest.unlink(missing_ok=True)
+
+    def announce_auto_pause(routine: dict[str, Any], failures: int) -> None:
+        post_routine_root(app.client, routine,
+                          f"⏰ *{slack_escape(routine['name'])}* is paused after {failures} failed runs in a row. "
+                          f"<@{routine['owner']}> can check it with `tag routine show` and resume it "
+                          "with `tag routine resume`, or in Tag.app.")
+
+    app.tag_routine_scheduler = RoutineScheduler(
+        instance_home(), run_routine, on_auto_pause=announce_auto_pause, logger=getattr(app, "logger", None))
+
     @app.action(RETRY_ACTION_ID)
     def retry_request(ack: Any, body: dict[str, Any], client: Any, logger: Any) -> None:
         ack()
@@ -5430,9 +5685,20 @@ def main() -> None:
         invitation_memory = InvitationMemory(instance_home())
         invitation_memory.start()
     next_handoff_check = 0.0
+    next_routine_check = 0.0
     try:
         connection.connect()
+        try:
+            app.tag_routine_scheduler.recover()
+        except Exception as exc:  # noqa: BLE001 - routines must never stop the bridge
+            app.logger.warning("Could not recover routine runs: %s", exc)
         while not shutdown_requested.is_set():
+            if time.monotonic() >= next_routine_check:
+                next_routine_check = time.monotonic() + ROUTINE_CHECK_SECONDS
+                try:
+                    app.tag_routine_scheduler.tick()
+                except Exception as exc:  # noqa: BLE001 - keep the bridge running
+                    app.logger.warning("Could not check routines: %s", exc)
             if time.monotonic() >= next_handoff_check:
                 next_handoff_check = time.monotonic() + 30
                 try:

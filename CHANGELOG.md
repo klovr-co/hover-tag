@@ -6,6 +6,15 @@ All notable changes to Tag are documented here.
 
 ### Added
 
+- Routines: a Tag can now do work on a schedule without anyone asking, such as
+  a weekly digest posted in a channel. Add them in Tag.app → the Tag →
+  **Routines**, or with `tag NAME routine add`. Each routine posts only in its
+  own channel, acts for an owner who must be allowed to use the Tag, asks that
+  owner before risky actions, and has per-run spend, turn and time limits.
+  A reply of `NO_REPLY` posts nothing. Missed runs after sleep are recorded and
+  caught up once, and a routine that fails five times in a row pauses itself.
+  See [Routines](docs/concepts/routines.md).
+
 - Let one Tag ask other Tags for help and combine their answers. Tag posts one
   request that mentions every Tag, links it to your thread in both directions,
   shows their progress as steps, and writes the final answer once all have replied or the deadline passes. Each

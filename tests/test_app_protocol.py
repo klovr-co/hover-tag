@@ -53,6 +53,28 @@ class ProtocolTests(unittest.TestCase):
         documented = set(re.findall(r"^\| `([a-z0-9-]+)` \|", DOC.read_text(encoding="utf-8"), re.M))
         self.assertEqual(documented, set(tag_cli.CAPABILITIES))
 
+    def test_routine_commands_provide_what_apps_read(self) -> None:
+        home = tag_instances.create(self.root, "t1-a1").home
+        tag_config.save_config(home / "config/settings.json", {
+            "SLACK_TEAM_ID": "T1", "SLACK_APP_ID": "A1", "SLACK_CHANNEL_IDS": "C0LAUNCH1",
+            "SLACK_ALLOWED_USER_IDS": "U0MAYA001"})
+        added = self.cli("t1-a1", "routine", "add", "--name", "Weekly PR digest", "--schedule", "mon 09:00",
+                         "--timezone", "Europe/London", "--channel", "C0LAUNCH1", "--prompt", "Summarise PRs.",
+                         "--via", "tag-app", "--json")
+        promised_row = example("routine-list.json")["routines"][0]
+        self.assertProvides(added["routine"], promised_row, "tag routine add --json")
+        listed = self.cli("t1-a1", "routine", "list", "--json")
+        self.assertProvides(listed, example("routine-list.json"), "tag routine list --json")
+        self.assertProvides(listed["routines"][0], promised_row, "tag routine list --json rows")
+        self.assertProvides(listed["routines"][0]["limits"], promised_row["limits"], "routine limits")
+        self.assertProvides(listed["routines"][0]["approval"], promised_row["approval"], "routine approval")
+        shown = self.cli("t1-a1", "routine", "show", "Weekly PR digest", "--json")
+        self.assertProvides(shown, example("routine-show.json"), "tag routine show --json")
+        paused = self.cli("t1-a1", "routine", "pause", added["routine"]["id"], "--json")
+        self.assertIsNone(paused["routine"]["next_run"])
+        removed = self.cli("t1-a1", "routine", "remove", added["routine"]["id"], "--json")
+        self.assertEqual(removed["removed"], added["routine"]["id"])
+
     def test_list_rows_provide_what_apps_read(self) -> None:
         home = tag_instances.create(self.root, "t1-a1").home
         tag_config.save_config(home / "config/settings.json", {"SLACK_TEAM_ID": "T1", "SLACK_APP_ID": "A1"})

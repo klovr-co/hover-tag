@@ -123,6 +123,13 @@ complete response without a fake typewriter animation.
   `thread/tokenUsage/updated.tokenUsage.total`; Claude maps the SDK result's
   `usage`. The runner accumulates reported usage across retry attempts; duplicate
   snapshots replace earlier snapshots within an attempt. Missing usage is unknown.
+  When the cost can be estimated (Claude's reported cost, or Codex token prices
+  from API connections), the runner adds a cumulative `cost_usd`; the bridge uses
+  it only to stop routine runs at their spend limit, and Activity keeps tokens only.
+- Routine runs pass `OPENTAG_RUN_MAX_TURNS` and `OPENTAG_RUN_MAX_BUDGET_USD` to the
+  backend process. Claude applies them as the SDK's `max_turns` and
+  `max_budget_usd`; Codex has no equivalent, so the bridge enforces spend from
+  `usage` events and time with the run's maximum runtime.
 - Finish a request only when the agent's background sub-agents have finished.
   A turn that ends with sub-agents still running is not the answer: its text is
   commentary, the session stays open within the request's maximum runtime, and
