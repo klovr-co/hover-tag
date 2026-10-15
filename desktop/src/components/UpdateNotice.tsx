@@ -111,7 +111,6 @@ export function UpdateNotice({ state, outdated, run, settings, defer }: {
         <span className="ic"><Icon name="spark" size={16} /></span>
         <div style={{ flex: 1 }}>
           <div className="t">Tag {version} is ready</div>
-          <div className="d">App and Tags update together.</div>
         </div>
         <div className="act">
           {/* One child, so the notice keeps its actions on the same row as the text. */}
