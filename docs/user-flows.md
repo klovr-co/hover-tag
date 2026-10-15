@@ -475,7 +475,7 @@ flowchart LR
 
 | Step | App | Terminal |
 | --- | --- | --- |
-| See choices | The Tag → **Details** → **Model** lists models from connected accounts, grouped by agent. | `tag NAME settings ai models` |
+| See choices | The Tag → **Details** → **Model** lists models from connected accounts, grouped by agent. Each account's list is saved, so it shows at once, and is updated in the background once a day. | `tag NAME settings ai models` (add `--refresh` to read the lists again) |
 | Choose a model | Pick one. The agent follows the model. | `tag NAME settings ai model claude:opus` |
 | Choose a thinking level | Pick one the model offers, or the model's default. | `tag NAME settings ai effort high` (or `default`) |
 | Apply | The app restarts a running Tag. | Add `--restart`, or confirm when asked. |
