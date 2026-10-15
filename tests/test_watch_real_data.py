@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import tempfile
 import unittest
 from collections import Counter
@@ -99,7 +100,8 @@ class RebuildTests(unittest.TestCase):
                 data.main(["--dir", str(root), "rebuild"])
             self.assertIn("Refused 1", err.getvalue())
             self.assertEqual({}, json.loads((root / "work/rebuilt.json").read_text(encoding="utf-8"))["cases"])
-            self.assertEqual(0o600, (root / "work/rebuilt.json").stat().st_mode & 0o777)
+            if os.name != "nt":  # Windows has no POSIX permission bits.
+                self.assertEqual(0o600, (root / "work/rebuilt.json").stat().st_mode & 0o777)
 
 
 class CleanAndAgreeTests(unittest.TestCase):

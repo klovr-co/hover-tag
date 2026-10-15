@@ -29,6 +29,7 @@ import os
 import re
 import sys
 import urllib.error
+from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -488,6 +489,64 @@ def recommend(expected: dict[str, bool], rows: list[dict[str, Any]], target: flo
 
 
 FULL_SWEEP = tuple(round(step / 100, 2) for step in range(100))
+INCLUSIVE_RE = re.compile(r"\b(?:anyone|anybody|any one|someone|somebody|everyone|everybody|you all|y'all|"
+                          r"all of you|team|folks|guys)\b", re.I)
+
+
+def rule_name(state: dict[str, Any]) -> bool:
+    """R1: the message names the Tag as a word, outside code."""
+    names = channel_watch.watch_names({"OPENTAG_BOT_NAME": state.get("assistant", {}).get("name", "Tag")})
+    return channel_watch.names_tag(state.get("current_message", ""), names)
+
+
+def rule_continuation(state: dict[str, Any]) -> bool:
+    """R2: Tag wrote the latest earlier message other than the requester's own run, and the requester spoke before it."""
+    history = state.get("thread_history", [])
+    position = len(history) - 1
+    while position >= 0 and history[position]["author"] == "requester":
+        position -= 1
+    return (position >= 0 and history[position]["author"] == "tag"
+            and any(entry["author"] == "requester" for entry in history[:position]))
+
+
+def classifier_only_type(state: dict[str, Any]) -> str:
+    """Why a positive needed the classifier: an inclusive question, implicit address in a Tag thread, or other."""
+    if INCLUSIVE_RE.search(state.get("current_message", "")):
+        return "inclusive"
+    if any(entry["author"] == "tag" for entry in state.get("thread_history", [])):
+        return "implicit address"
+    return "other"
+
+
+def rules_table(cases: list[Case], assistant_name: str, scores: list[dict[str, Any]],
+                thresholds: tuple[float, ...] = (0.9, 0.95)) -> dict[str, Any]:
+    """Precision/recall for R1, R2, R1 or R2, the classifier, and rules OR classifier. Counts only."""
+    probability = {row["id"]: row.get("probability") for row in scores if row.get("outcome") == "score"}
+    states = {case.id: case_state(case, assistant_name) for case in cases}
+    expected = {case.id: case.expected for case in cases}
+
+    def evaluate(fires: dict[str, bool]) -> dict[str, Any]:
+        tp = sum(fires[i] and expected[i] for i in expected)
+        fp = sum(fires[i] and not expected[i] for i in expected)
+        fn = sum(not fires[i] and expected[i] for i in expected)
+        return {"precision": tp / (tp + fp) if tp + fp else None, "recall": tp / (tp + fn) if tp + fn else None,
+                "tp": tp, "fp": fp, "fn": fn}
+
+    r1 = {i: rule_name(states[i]) for i in expected}
+    r2 = {i: rule_continuation(states[i]) for i in expected}
+    rules = {i: r1[i] or r2[i] for i in expected}
+    table: dict[str, Any] = {"cases": len(expected), "positives": sum(expected.values()),
+                             "scored": sum(probability.get(i) is not None for i in expected),
+                             "R1 name": evaluate(r1), "R2 continuation": evaluate(r2), "R1 or R2": evaluate(rules)}
+    for threshold in thresholds:
+        clf = {i: probability.get(i) is not None and probability[i] >= threshold for i in expected}
+        table[f"classifier @{threshold}"] = evaluate(clf)
+        table[f"rules or classifier @{threshold}"] = evaluate({i: rules[i] or clf[i] for i in expected})
+        only = [i for i in expected if expected[i] and clf[i] and not rules[i]]
+        table[f"classifier-only true positives @{threshold}"] = dict(Counter(classifier_only_type(states[i]) for i in only))
+        table[f"classifier-only false positives @{threshold}"] = sum(
+            1 for i in expected if not expected[i] and clf[i] and not rules[i])
+    return table
 
 
 def operating_points(expected: dict[str, bool], rows: list[dict[str, Any]],
@@ -588,6 +647,9 @@ def main(argv: list[str] | None = None) -> int:
     report_parser = commands.add_parser("report", help="Precision, recall and threshold sweep; no network.")
     report_parser.add_argument("scores", type=Path)
     report_parser.add_argument("--target-precision", type=float, default=DEFAULT_TARGET_PRECISION)
+    rules_parser = commands.add_parser("rules", help="Deterministic rules alone and with the classifier; no network.")
+    rules_parser.add_argument("scores", type=Path)
+    rules_parser.add_argument("--provider", default="openai-decisions")
     compare_parser = commands.add_parser("compare", help="Operating points per prompt variant; no network.")
     compare_parser.add_argument("scores", nargs="+", help="name=path pairs of score files.")
     export_parser = commands.add_parser("export", help="Labelled cases and scores from a Tag's score log; no network.")
@@ -647,6 +709,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command in {None, "plan"}:
         plan(cases, assistant_name, sys.stdout)
         return 0
+    if args.command == "rules":
+        rows = [row for row in _recorded(args.scores) if row["provider"] == args.provider]
+        print(json.dumps(rules_table(cases, assistant_name, rows), indent=1))
+        return 0
     if args.command == "compare":
         expected = {case.id: case.expected for case in cases}
         print(f"{len(expected)} cases ({sum(expected.values())} should reply). P@R>=0.5 | R@P>=0.95 @ threshold")
@@ -669,7 +735,7 @@ def main(argv: list[str] | None = None) -> int:
     key_setting = watch_classifier.PROVIDERS[args.provider].key_setting
     if args.key_file:
         try:
-            if args.key_file.stat().st_mode & 0o077:
+            if os.name != "nt" and args.key_file.stat().st_mode & 0o077:  # POSIX permission bits only.
                 parser.error(f"{args.key_file} must be readable only by its owner (chmod 600)")
             api_key = args.key_file.read_text(encoding="utf-8").strip()
         except OSError as exc:

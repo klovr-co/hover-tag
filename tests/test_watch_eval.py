@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import tempfile
 import unittest
 import urllib.error
@@ -235,8 +236,9 @@ class RealCaseImportTests(unittest.TestCase):
             added, errors = harness.import_real([self.item(), self.item(channel="CSECRET")], out, self.ALLOWED)
             self.assertEqual((1, 1), (added, len(errors)))
             harness.import_real([self.item(expected=False)], out, self.ALLOWED)  # Same ID replaces.
-            self.assertEqual(0o700, out.parent.stat().st_mode & 0o777)
-            self.assertEqual(0o600, out.stat().st_mode & 0o777)
+            if os.name != "nt":  # Windows has no POSIX permission bits.
+                self.assertEqual(0o700, out.parent.stat().st_mode & 0o777)
+                self.assertEqual(0o600, out.stat().st_mode & 0o777)
             _, cases = harness.load_cases(out)
             self.assertEqual(1, len(cases))
             self.assertFalse(cases[0].expected)
@@ -255,6 +257,47 @@ class OperatingPointTests(unittest.TestCase):
         self.assertEqual(0.61, point["best_threshold"])
         none = harness.operating_points({"a": True, "b": False}, [{"id": "b", "outcome": "score", "probability": 0.9}])
         self.assertEqual((0.0, None), (none["recall_at_precision"], none["best_threshold"]))
+
+
+class RuleTests(unittest.TestCase):
+    @staticmethod
+    def state(message: str, *authors: str, name: str = "Tag") -> dict:
+        return {"assistant": {"name": name}, "current_message": message,
+                "thread_history": [{"author": author, "text": "x"} for author in authors]}
+
+    def test_r1_names_the_tag_outside_code(self) -> None:
+        self.assertTrue(harness.rule_name(self.state("Tag, thoughts?")))
+        self.assertTrue(harness.rule_name(self.state("what does iris's tag say", name="Iris's Tag")))
+        self.assertFalse(harness.rule_name(self.state("run `tag --help`")))
+        self.assertFalse(harness.rule_name(self.state("ask Sam")))
+
+    def test_r2_needs_tag_last_and_the_requester_talking_to_it(self) -> None:
+        r2 = harness.rule_continuation
+        self.assertTrue(r2(self.state("shorter", "requester", "tag")))
+        self.assertTrue(r2(self.state("and casual", "requester", "tag", "requester")))  # Requester's own run.
+        self.assertFalse(r2(self.state("ok", "tag")))  # Requester never spoke to Tag.
+        self.assertFalse(r2(self.state("ok", "participant", "tag")))  # Tag answered someone else.
+        self.assertFalse(r2(self.state("sure", "requester", "tag", "participant")))  # Moved on.
+        self.assertFalse(r2(self.state("ship", "requester", "tag", "another_bot")))
+        self.assertFalse(r2(self.state("hi")))
+
+    def test_rules_table_counts_and_classifier_only_types(self) -> None:
+        cases = [
+            harness.Case("named", "x", True, {}, [], self.state("Tag, help")),
+            harness.Case("continued", "x", True, {}, [], self.state("more", "requester", "tag")),
+            harness.Case("anyone", "x", True, {}, [], self.state("does anyone know?")),
+            harness.Case("implicit", "x", True, {}, [], self.state("and the rest?", "tag", "participant")),
+            harness.Case("aside", "x", False, {}, [], self.state("Tag is great")),
+            harness.Case("chat", "x", False, {}, [], self.state("lunch?", "participant")),
+        ]
+        scores = [{"id": i, "outcome": "score", "probability": p} for i, p in
+                  (("named", 0.99), ("continued", 0.2), ("anyone", 0.96), ("implicit", 0.92), ("aside", 0.1), ("chat", 0.93))]
+        table = harness.rules_table(cases, "Tag", scores)
+        self.assertEqual({"precision": 2 / 3, "recall": 0.5, "tp": 2, "fp": 1, "fn": 2}, table["R1 or R2"])
+        self.assertEqual((4, 2), (table["rules or classifier @0.9"]["tp"], table["rules or classifier @0.9"]["fp"]))
+        self.assertEqual({"inclusive": 1, "implicit address": 1}, table["classifier-only true positives @0.9"])
+        self.assertEqual(1, table["classifier-only false positives @0.9"])
+        self.assertEqual({"inclusive": 1}, table["classifier-only true positives @0.95"])
 
 
 class PaidRunGuardTests(unittest.TestCase):
@@ -287,9 +330,10 @@ class PaidRunGuardTests(unittest.TestCase):
             key.chmod(0o644)
             base = ["score", "--provider", "openai-decisions", "--out", str(Path(directory) / "s.jsonl"),
                     "--max-usd", "0.5", "--confirm-paid", "--key-file", str(key)]
-            with self.assertRaises(SystemExit):
-                harness.main(base)
-            run.assert_not_called()
+            if os.name != "nt":  # Owner-only is a POSIX check.
+                with self.assertRaises(SystemExit):
+                    harness.main(base)
+                run.assert_not_called()
             key.chmod(0o600)
             self.assertEqual(0, harness.main([*base, "--limit", "4"]))
             self.assertEqual("sk-SECRET", run.call_args.kwargs["api_key"])

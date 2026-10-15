@@ -133,7 +133,8 @@ class WatchStateTests(unittest.TestCase):
         self.assertTrue(reloaded.is_engaged("C1", "1.0"))
         self.assertTrue(reloaded.noticed("C1"))
         self.assertEqual("cooldown", reloaded.blocked("C2", "1.0", limit=5, today="d"))
-        self.assertEqual(stat.S_IMODE(self.path.parent.stat().st_mode), 0o700)
+        if os.name != "nt":  # Windows has no POSIX permission bits.
+            self.assertEqual(stat.S_IMODE(self.path.parent.stat().st_mode), 0o700)
         self.clock.now += channel_watch.THREAD_RETENTION_SECONDS + 1
         reloaded.engage("C1", "5.0")
         self.assertFalse(reloaded.is_engaged("C1", "1.0"))
@@ -161,7 +162,8 @@ class ScoreLogTests(unittest.TestCase):
             self.assertEqual(["score", "label"], [row["type"] for row in rows])
             self.assertEqual(entry_id, rows[1]["id"])
             self.assertFalse(rows[1]["expected"])
-            self.assertEqual(0o600, stat.S_IMODE(path.stat().st_mode))
+            if os.name != "nt":  # Windows has no POSIX permission bits.
+                self.assertEqual(0o600, stat.S_IMODE(path.stat().st_mode))
             with patch.object(channel_watch, "SCORE_LOG_MAX_BYTES", 10), patch.object(
                 channel_watch, "SCORE_LOG_KEEP_LINES", 1
             ):
@@ -191,7 +193,8 @@ class DraftTests(unittest.TestCase):
                     return "completed", ""
 
                 runner.run.side_effect = run
-                with patch("scripts.codex_agent_backend.CodexAppServer", return_value=runner) as codex, patch(
+                with patch("scripts.opentag_agent.executable_command", side_effect=lambda command: command), \
+                        patch("scripts.codex_agent_backend.CodexAppServer", return_value=runner) as codex, patch(
                     "scripts.claude_agent_backend.ClaudeAgentRun", return_value=runner
                 ) as claude:
                     text = channel_watch.draft_reply(
