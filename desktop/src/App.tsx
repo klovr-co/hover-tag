@@ -5,7 +5,7 @@ import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState }
 import { bridge, type AppInfo, type Bridge } from "./lib/bridge";
 import { compatibility, isDraft, parseJSON, parseList, status, type VersionInfo } from "./lib/protocol";
 import { setEmbedding } from "./lib/memory";
-import { checkUpdate, initialUpdate, installUpdate, updateReducer } from "./lib/updates";
+import { checkUpdate, initialUpdate, installUpdate, updateReducer, useDeferral } from "./lib/updates";
 import { useTags } from "./lib/tags";
 import { TrackContext, useTelemetry, type AppEvents } from "./lib/telemetry";
 import { useWatch } from "./lib/watch";
@@ -43,6 +43,8 @@ const SCREEN_EVENT: Partial<Record<Screen["name"], AppEvents["app_screen_viewed"
 const NEEDED = ["list", "setup-jsonl"];
 /** How often Tag checks for a complete product update. */
 const APP_UPDATE_HOURS = 6;
+/** While a release waits for its Tag.app builds, look again soon so the banner appears as soon as it can. */
+const PREPARING_RECHECK_MINUTES = 5;
 const DEVELOPMENT_UPDATES = "Updates are off in development builds. Use the installed Tag.app to update.";
 /** Window widths: everyday screens, and Tag detail's Slack layout. */
 export const WIDTH = 520;
@@ -74,6 +76,7 @@ export function App() {
   const [outdated, setOutdated] = useState(false);
   const [capabilities, setCapabilities] = useState<string[]>([]);
   const [update, dispatchUpdate] = useReducer(updateReducer, initialUpdate);
+  const deferral = useDeferral();
   const [toast, setToast] = useState<string | null>(null);
   const installed = !!info?.cli && !["loading", "welcome", "installing"].includes(screen.name);
   const tags = useTags(api, installed);
@@ -171,6 +174,13 @@ export function App() {
     const timer = setInterval(() => void check(), APP_UPDATE_HOURS * 3600 * 1000);
     return () => clearInterval(timer);
   }, [api, info?.cli, info?.development, screen.name, check]);
+
+  const preparing = update.status === "current" && !!update.update?.preparing;
+  useEffect(() => {
+    if (!preparing || screen.name !== "home") return;
+    const timer = setInterval(() => void check(), PREPARING_RECHECK_MINUTES * 60 * 1000);
+    return () => clearInterval(timer);
+  }, [preparing, screen.name, check]);
 
   const runUpdate = useCallback(async () => {
     if (!api || !info || info.development) return;
@@ -287,7 +297,7 @@ export function App() {
         {screen.name === "home" && !tags.loaded && <Starting error={tags.error} retry={() => void tags.refresh()} />}
         {screen.name === "home" && tags.loaded && (
           <Home api={api} tags={tags} reports={watch.reports} problems={watch.problems} activity={watch.activity}
-            firstName={info.firstName ?? null} update={update} outdated={outdated} runUpdate={() => void runUpdate()}
+            firstName={info.firstName ?? null} update={update} outdated={outdated} runUpdate={() => void runUpdate()} defer={deferral}
             add={add} usageNote={telemetry.announced} seenUsageNote={sawOnHome}
             finishSetup={(row) => setScreen({ name: "connect", args: [row.id, "setup"] })}
             open={(row) => setScreen({ name: "tag", id: row.id })}

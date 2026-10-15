@@ -287,6 +287,12 @@ button.opt:hover:not(:disabled) { background: var(--fill); }
 
 /* Notices */
 .notice { display: flex; gap: 12px; align-items: flex-start; padding: 12px 12px 12px 14px; border-radius: 10px; border: 1px solid var(--amber-line); background: var(--amber-bg); position: relative; overflow: hidden; }
+.notice.menuable { overflow: visible; }
+.notice .pair { display: inline-flex; align-items: center; gap: 2px; }
+.split { position: relative; display: inline-flex; align-items: center; }
+.split .p-btn.quiet { padding: 0 8px; }
+.split .p-btn.caret { padding: 0 4px; margin-left: -4px; }
+.split .menu { right: 0; top: calc(100% + 4px); min-width: 0; white-space: nowrap; }
 .notice.info { border-color: color-mix(in srgb, var(--blue) 30%, transparent); background: color-mix(in srgb, var(--blue) 8%, transparent); }
 .notice.ok { border-color: color-mix(in srgb, var(--green) 35%, transparent); background: color-mix(in srgb, var(--green) 10%, transparent); }
 .notice.bad { border-color: var(--red-line); background: var(--red-bg); }
