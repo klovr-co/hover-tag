@@ -18,7 +18,7 @@ flowchart TD
 
 | Problem | What it means | Fix |
 | --- | --- | --- |
-| The install screen says **Installation stopped** | A download or install step failed. The failed step shows the cause. | Check your internet connection and disk space (about 650 MB), then choose **Try again**. It is safe to retry. **Copy details** copies the installer log for a report. |
+| The install screen says **Installation stopped** | A download or install step failed. The failed step shows the cause. | Check your internet connection and disk space (about 1.8 GB), then choose **Try again**. It is safe to retry. **Copy details** copies the installer log for a report. |
 | macOS won't open Tag | Gatekeeper blocks apps that aren't signed and notarized | Download Tag again from the [releases page](https://github.com/klovr-co/hover-tag/releases). Don't bypass the warning for a build you didn't expect. |
 | `tag: command not found` after the terminal installer | Its command directory isn't on your PATH | Add `~/.local/bin` (macOS and Linux) or `%LOCALAPPDATA%\Tag\bin` (Windows) to your PATH, then open a new terminal. |
 | `TAG_HOME must be an absolute path` | `TAG_HOME` is set to a relative path | Unset it, or set it to a full path. |
@@ -72,7 +72,7 @@ no setup, and a failed one is retried on the next start.
 | Slack app installation asks for approval | Workspace or Enterprise app approval is enabled | Submit the Slack app request to a workspace owner or app manager. Tag can't bypass workspace policy. Setup resumes where it stopped. |
 | Generated image is described but not attached | The app lacks `files:write`, the result is unsupported or over 15 MB, or the backend did not save it in the prompted result directory | Reinstall the app from the current manifest, retry with PNG/JPEG/GIF/WebP, and inspect Tag logs for the per-file upload error. |
 | **Open filename** reports that a local file could not be opened | The file was moved or deleted, its path no longer resolves inside the workspace, or the Tag host has no active desktop application for that file type | Confirm the file still exists in the configured workspace and open it directly on the Tag host to verify its desktop file association. |
-| Agent missing | No supported backend is installed and signed in | Install and sign in to Codex CLI (`codex login status`) or Claude Code (`claude auth status`) in the same shell that starts Tag, or use `tag settings ai` (the app: Settings → General → AI connections), which checks both and offers sign-in. A disconnected account's models disappear from the default-model picker. |
+| Agent missing | No supported backend is installed and signed in | Install and sign in to Codex CLI (`codex login status`) or Claude Code (`claude auth status`) in the same shell that starts Tag, or use `tag settings ai` (the app: Settings → AI → AI connections), which checks both and offers sign-in. A disconnected account's models disappear from the default-model picker. |
 | Bridge immediately stops | Runtime dependency or configuration failed after preflight | Run `tag logs`, or open the Tag's **Logs** tab in the app. |
 | Mention is denied | The caller is not in the Slack user allowlist | Add their exact member ID to `SLACK_ALLOWED_USER_IDS` only if the owner intends to share access. |
 | Mention receives no reply | Slack did not emit an event or the bridge rejected the channel | Confirm Socket Mode is connected, mention your Tag from an authorized human account, and verify the channel is in `SLACK_CHANNEL_IDS`. |

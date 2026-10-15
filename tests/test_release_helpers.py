@@ -52,6 +52,10 @@ class ReleaseHelperTests(unittest.TestCase):
         self.assertIn("Invoke-Native { & $uv venv --python $python $venv }", script)
         self.assertIn("Invoke-Native { & $uv pip install --python $runtimePython -r", script)
         self.assertIn("requirements-runtime.txt", script)
+        # -SkipMemoryModel must not leak TAG_SKIP_MFS_MODEL into the caller's session.
+        self.assertIn("$previousSkip = $env:TAG_SKIP_MFS_MODEL", script)
+        self.assertIn("$env:TAG_SKIP_MFS_MODEL = $previousSkip", script)
+        self.assertIn("} finally {\n        $env:TAG_SKIP_MFS_MODEL = $previousSkip", script)
 
     def test_windows_bootstrap_needs_no_system_python(self) -> None:
         root = Path(__file__).resolve().parents[1]

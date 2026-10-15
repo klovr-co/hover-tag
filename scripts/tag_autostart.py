@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Keep chosen Tags running: each Tag remembers whether it should be on, and a
 small per-user login service starts those Tags and restarts them if they stop.
+The same service keeps the shared memory server (MFS) running while a kept Tag
+needs it or `tag memory start` asked for it, because Tags can't search without it.
 
 `tag start` and `tag stop` record the choice, so the CLI, Tag.app and the
 service always agree. The service is the operating system's own mechanism:
@@ -27,8 +29,11 @@ except ImportError:
     from scripts.tag_locks import LifecycleLock
 
 INTENT = "state/keep-running.json"
+# Beside the shared MFS record: whether `tag memory start` or `tag memory stop` came last.
+MEMORY_INTENT = "keep-running.json"
 LABEL = "team.hover.tag.supervisor"
 WINDOWS_VALUE = "Tag"
+DEFAULT_MFS_URL = "http://127.0.0.1:13619"
 CHECK_SECONDS = 60
 MAX_BACKOFF_SECONDS = 3600
 # A Tag that stays up this long has recovered; until then restarts back off,
@@ -47,22 +52,62 @@ PATH_RECORD = "state/autostart-path.json"
 MAX_RECORDED_DIRECTORIES = 64
 
 
-def wanted(home: Path) -> bool | None:
-    """Whether the person last asked this Tag to run; None if never recorded."""
+def _read_intent(path: Path) -> bool | None:
     try:
-        record = json.loads((home / INTENT).read_text(encoding="utf-8"))
+        record = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     value = record.get("running") if isinstance(record, dict) else None
     return value if isinstance(value, bool) else None
 
 
-def set_wanted(home: Path, running: bool) -> None:
-    path = home / INTENT
+def _write_intent(path: Path, running: bool) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     temporary = path.with_name(path.name + ".tmp")
     temporary.write_text(json.dumps({"version": 1, "running": running}) + "\n", encoding="utf-8")
     os.replace(temporary, path)
+
+
+def wanted(home: Path) -> bool | None:
+    """Whether the person last asked this Tag to run; None if never recorded."""
+    return _read_intent(home / INTENT)
+
+
+def set_wanted(home: Path, running: bool) -> None:
+    _write_intent(home / INTENT, running)
+
+
+def memory_wanted(shared: Path) -> bool | None:
+    """Whether the person last started (True) or stopped (False) shared memory by hand."""
+    return _read_intent(shared / MEMORY_INTENT)
+
+
+def set_memory_wanted(shared: Path, running: bool) -> None:
+    _write_intent(shared / MEMORY_INTENT, running)
+
+
+def memory_needed(installation_root: Path, lifecycle) -> bool:
+    """Whether shared memory should be running, and Tag is the one to run it.
+
+    That is so when `tag memory start` was the last word, or a kept Tag needs
+    it. An endpoint Tag doesn't manage (a remote MFS) is never started here.
+    """
+    if memory_wanted(tag_instances.shared_mfs_home(installation_root)) is True:
+        return True
+    for item in tag_instances.discover(installation_root):
+        if not item.get("valid") or not Path(str(item["home"])).exists():
+            continue
+        home = tag_instances.resolve(installation_root, str(item["id"])).home
+        if wanted(home) is not True:
+            continue
+        settings = home / "config/settings.json"
+        try:
+            values = lifecycle.read_config(settings) if settings.is_file() else {}
+        except (OSError, ValueError):
+            values = {}
+        if lifecycle.local_mfs_endpoint(values.get("MFS_URL", DEFAULT_MFS_URL)):
+            return True
+    return False
 
 
 def _directories(path: str) -> list[str]:
@@ -144,6 +189,52 @@ def _systemd_available() -> bool:
     probe = subprocess.run(["systemctl", "--user", "show-environment"],
                            capture_output=True, text=True, check=False)
     return probe.returncode == 0
+
+
+def linger_enabled() -> bool | None:
+    """Whether systemd keeps this account's user services across logout and boot.
+
+    Without it, a user service starts only after the person logs in, so a
+    rebooted server stays down until someone signs in. None when unknown.
+    """
+    if not shutil.which("loginctl"):
+        return None
+    try:
+        result = subprocess.run(["loginctl", "show-user", str(os.getuid()), "--property=Linger", "--value"],
+                                capture_output=True, text=True, check=False, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    answer = result.stdout.strip().lower()
+    if result.returncode or answer not in {"yes", "no"}:
+        return None
+    return answer == "yes"
+
+
+def linger_command() -> str:
+    """The command that turns linger on when Tag could not do it without administrator rights."""
+    return f"sudo loginctl enable-linger {os.environ.get('USER') or 'USER'}"
+
+
+def linger_status(kind: str) -> bool | None:
+    """The linger setting for the systemd mechanism; other mechanisms have none."""
+    return linger_enabled() if kind == "systemd" else None
+
+
+def ensure_linger(kind: str) -> bool | None:
+    """Try, without a prompt, to turn linger on so the service starts at boot.
+
+    Many systems let a person do this for their own account; some ask for an
+    administrator. The result is checked rather than assumed.
+    """
+    current = linger_status(kind)
+    if current is not False:
+        return current
+    try:
+        subprocess.run(["loginctl", "enable-linger"], stdin=subprocess.DEVNULL,
+                       capture_output=True, text=True, check=False, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return linger_enabled()
 
 
 def _suffix(installation_root: Path) -> str:
@@ -254,9 +345,16 @@ def status(installation_root: Path) -> dict:
         path = {"launchd": _launchd_plist, "systemd": _systemd_unit,
                 "xdg-autostart": _xdg_entry}[kind](installation_root)
         enabled = path.is_file()
-    return {"enabled": enabled, "mechanism": kind,
-            "path": str(path) if path else None,
-            "log": str(installation_root / "state/supervisor.log")}
+    result = {"enabled": enabled, "mechanism": kind,
+              "path": str(path) if path else None,
+              "log": str(installation_root / "state/supervisor.log")}
+    return _with_linger(result, linger_status(kind))
+
+
+def _with_linger(result: dict, enabled: bool | None) -> dict:
+    if enabled is not None:
+        result["linger"] = {"enabled": enabled, "command": None if enabled else linger_command()}
+    return result
 
 
 def enable(installation_root: Path, source_root: Path) -> dict:
@@ -294,6 +392,7 @@ def enable(installation_root: Path, source_root: Path) -> dict:
         _check(subprocess.run(["systemctl", "--user", "enable", "--now", name],
                               capture_output=True, text=True, check=False), "systemctl enable")
         subprocess.run(["systemctl", "--user", "restart", name], capture_output=True, check=False)
+        ensure_linger(kind)
     elif kind == "xdg-autostart":
         entry = _xdg_entry(installation_root)
         entry.parent.mkdir(parents=True, exist_ok=True)
@@ -421,12 +520,16 @@ def _release(installation_root: Path) -> str | None:
 
 
 class Supervisor:
-    """Start wanted Tags that aren't running, backing off after failures."""
+    """Start wanted Tags and shared memory that aren't running, backing off after failures."""
 
-    def __init__(self, installation_root: Path, lifecycle, start, *, clock=time.monotonic):
+    MEMORY = "memory"  # the key memory's backoff is kept under, beside the Tag IDs
+
+    def __init__(self, installation_root: Path, lifecycle, start, *, start_memory=None,
+                 clock=time.monotonic):
         self.root = installation_root
         self.lifecycle = lifecycle
         self.start = start  # (tag_id) -> exit code
+        self.start_memory = start_memory  # () -> exit code
         self.clock = clock
         self.failures: dict[str, int] = {}  # starts since the Tag was last stable
         self.retry_at: dict[str, float] = {}
@@ -443,24 +546,44 @@ class Supervisor:
             if wanted(context.home) is not True:
                 self._forget(tag_id)
                 continue
-            if self.lifecycle.process_for(context.home / "state/slack.json") is not None:
-                if self.clock() - self.started_at.get(tag_id, float("-inf")) >= STABLE_SECONDS:
-                    self._forget(tag_id)
-                continue
-            if self.clock() < self.retry_at.get(tag_id, 0):
-                continue
-            attempted.append(tag_id)
-            # Every start counts until the Tag proves stable, so crash loops back off too.
-            count = self.failures[tag_id] = self.failures.get(tag_id, 0) + 1
-            if self.start(tag_id) == 0:
-                self.started_at[tag_id] = self.clock()
-            if count > 1 or tag_id not in self.started_at:
-                self.retry_at[tag_id] = self.clock() + min(CHECK_SECONDS * 2 ** count, MAX_BACKOFF_SECONDS)
+            running = self.lifecycle.process_for(context.home / "state/slack.json") is not None
+            if self._due(tag_id, running):
+                attempted.append(tag_id)
+                self._attempt(tag_id, self.start)
         return attempted
 
-    def _forget(self, tag_id: str) -> None:
+    def check_memory(self) -> bool:
+        """One pass over shared memory. Returns whether it tried to start it."""
+        if self.start_memory is None:
+            return False
+        if not memory_needed(self.root, self.lifecycle):
+            self._forget(self.MEMORY)
+            return False
+        running = self.lifecycle.process_for(tag_instances.shared_mfs_home(self.root) / "mfs.json") is not None
+        if not self._due(self.MEMORY, running):
+            return False
+        self._attempt(self.MEMORY, lambda _key: self.start_memory())
+        return True
+
+    def _due(self, key: str, running: bool) -> bool:
+        """Whether a wanted service that is `running` or not should be started now."""
+        if running:
+            if self.clock() - self.started_at.get(key, float("-inf")) >= STABLE_SECONDS:
+                self._forget(key)
+            return False
+        return self.clock() >= self.retry_at.get(key, 0)
+
+    def _attempt(self, key: str, start) -> None:
+        # Every start counts until the service proves stable, so crash loops back off too.
+        count = self.failures[key] = self.failures.get(key, 0) + 1
+        if start(key) == 0:
+            self.started_at[key] = self.clock()
+        if count > 1 or key not in self.started_at:
+            self.retry_at[key] = self.clock() + min(CHECK_SECONDS * 2 ** count, MAX_BACKOFF_SECONDS)
+
+    def _forget(self, key: str) -> None:
         for record in (self.failures, self.retry_at, self.started_at):
-            record.pop(tag_id, None)
+            record.pop(key, None)
 
 
 def run(installation_root: Path, lifecycle, source_root: Path) -> int:
@@ -476,35 +599,44 @@ def run(installation_root: Path, lifecycle, source_root: Path) -> int:
         me = psutil.Process()
         _write(_pid_path(installation_root), json.dumps({"pid": me.pid, "created": me.create_time()}))
         command = service_command(installation_root, source_root)[:-2]
+        kind = mechanism()
+        if ensure_linger(kind) is False:
+            # Upgraded installations get this too, without running `tag autostart on` again.
+            print("Not starting at boot: this account does not keep user services running after "
+                  f"logout. Run: {linger_command()}", flush=True)
 
-        def start(tag_id: str) -> int:
-            print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} starting {tag_id}", flush=True)
+        def launch(label: str, arguments: list[str]) -> int:
+            print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} starting {label}", flush=True)
             # The supervisor has no console; don't let its children open one on Windows.
             hidden = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
             try:
-                result = subprocess.run([*command, tag_id, "start"], stdin=subprocess.DEVNULL,
+                result = subprocess.run([*command, *arguments], stdin=subprocess.DEVNULL,
                                         env={**os.environ, SUPERVISED_ENV: "1",
                                              "PATH": tool_path(installation_root)},
                                         capture_output=True, text=True, check=False, **hidden)
             except (OSError, subprocess.SubprocessError) as error:
                 # For example, the launcher is briefly missing during an upgrade.
                 # Count it as a failed start; the loop backs off and tries again.
-                print(f"  {tag_id} could not be started: {error}", flush=True)
+                print(f"  {label} could not be started: {error}", flush=True)
                 return 1
             if result.returncode:
                 tail = (result.stderr or result.stdout).strip().splitlines()[-3:]
-                print(f"  {tag_id} did not start (exit {result.returncode}): {' / '.join(tail)}", flush=True)
+                print(f"  {label} did not start (exit {result.returncode}): {' / '.join(tail)}", flush=True)
             return result.returncode
 
-        supervisor = Supervisor(installation_root, lifecycle, start)
+        supervisor = Supervisor(
+            installation_root, lifecycle, lambda tag_id: launch(tag_id, [tag_id, "start"]),
+            start_memory=lambda: launch("shared memory", ["memory", "start"]))
         release = _release(installation_root)
         while True:
+            # Memory first: a Tag started below finds it already up.
+            supervisor.check_memory()
             supervisor.check()
             time.sleep(CHECK_SECONDS)
             if _release(installation_root) != release:
                 # An upgrade changed the code; let the service manager start the new one.
                 print("Tag was upgraded; restarting the supervisor.", flush=True)
-                if mechanism() in {"windows-run", "xdg-autostart"}:
+                if kind in {"windows-run", "xdg-autostart"}:
                     # Nothing restarts us here: hand the lock to a new supervisor.
                     lock.release()
                     held = False

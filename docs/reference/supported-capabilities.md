@@ -10,7 +10,7 @@ unavailable behavior.
 | Respond to app mentions | Implemented | The caller must be in `SLACK_ALLOWED_USER_IDS`. |
 | Read the current thread | Implemented | Tag fetches one page containing up to 30 messages. |
 | Read supported attachments | Implemented | Includes [forwarded Slack files](../concepts/workspaces-and-tools.md#use-a-forwarded-slack-file). Either backend can open [earlier thread files](../concepts/workspaces-and-tools.md#use-earlier-files-in-a-thread) shared in the current channel when a request needs them, up to 15 MB each. Text content is truncated at 12,000 characters per item; downloaded image or text files are limited to 15 MiB. |
-| Stream answer text | Implemented | Codex App Server and the Claude Agent SDK stream only final-answer text; commentary and reasoning stay private. |
+| Stream answer text | Implemented | Codex App Server and the Claude Agent SDK stream only final-answer text. Commentary stays private, and the model's thinking appears only as summaries in Agent activity (see [Watch Tag work](#watch-tag-work)). |
 | Watch live activity | Implemented with App Server or Agent SDK | Readable tool steps appear in the Slack thread while the agent works. See [Watch Tag work](#watch-tag-work). |
 | Inspect saved activity | Implemented with App Server or Agent SDK | The app's Activity tab lists delivered replies, newest at the bottom, grouped by Slack thread (**N earlier replies** expands a group). Each entry has an AI-written one-sentence summary (a local excerpt while it's pending or if it fails), the model, saved thinking level, elapsed time, reported token usage, and output file chips. Its step count opens the saved tool steps. **Show errors** reveals failed requests. Each channel also has an Activity tab across the workspace's Tags. In the CLI, `tag NAME logs --json` includes the same records (filter with `--activity-channel`, `--hide-errors` and `--activity-limit`), and `tag NAME logs --activity RUN_ID` shows one run's tool previews and error reports. Expired records can't be rebuilt. |
 | Continue with thread context | Implemented | A later mention continues the thread's agent conversation (see below); a fresh conversation receives one page of up to 30 messages. |
@@ -29,7 +29,7 @@ unavailable behavior.
 | Show model and duration | Implemented | Finished replies show the agent, the model the agent reports it actually used (including when the account default was used), thinking level, Fast Mode, and how long the request took, for example `Claude · Opus 5.5 · high thinking · 1m 12s`. The legacy Codex exec and Claude print transports do not report a model, so their replies show the chosen model instead. |
 | Switch models between backends | Implemented | The app's Details tab and `tag settings ai model` list models from connected backends. `OPENTAG_DEFAULT_MODEL` selects Codex or Claude for all requests to that Tag. Slack per-user overrides are retired. |
 | Tag default thinking level | Implemented for both | `OPENTAG_DEFAULT_EFFORT` (or `tag settings ai effort`) sets the default model's thinking level when that model offers it; Codex receives it as the App Server turn `effort` and Claude as the Agent SDK `effort` option. Models without thinking levels, such as Claude Haiku, ignore it. All requesters use the Tag's thinking level. |
-| Connect agents in setup and Settings | Implemented for both | Setup and Settings → General → AI connections detect Codex and Claude Code, show each connection's state, and offer browser sign-in (including a shared ChatGPT plan for Codex), reconnect, account changes, or install guides. Sign-in reports progress and can be cancelled and retried. One connected agent is required; both are optional. |
+| Connect agents in setup and Settings | Implemented for both | Setup and Settings → AI → AI connections detect Codex and Claude Code, show each connection's state, and offer browser sign-in (including a shared ChatGPT plan for Codex), reconnect, account changes, or install guides. Sign-in reports progress and can be cancelled and retried. One connected agent is required; both are optional. |
 | Claude Code backend | Supported | Uses the Claude Agent SDK with the local Claude sign-in or an [API connection](api-connections.md); supports streaming, activity, private scoped approvals, Stop, timeouts, and model settings; approval scope differences are listed below. |
 | Continue a conversation per Slack thread | Implemented for both | Later mentions in one Slack thread resume the same Codex thread or Claude session, so earlier tool results and reasoning carry forward. Only the requester who started a conversation continues it. A conversation continues until it reaches `OPENTAG_THREAD_MAX_CONTEXT_TOKENS` (default 150000) or sits idle `OPENTAG_THREAD_IDLE_HOURS` (default 4); set either with `tag config set`. Continued requests send only new thread messages, and standing instructions are never repeated in the conversation. Tag titles each conversation with its latest reply summary and groups the thread's replies into one Activity entry in the app. The legacy Codex exec and Claude print transports start a new conversation each time. |
 | Background sub-agents | Implemented for both | A request finishes only after its background sub-agents finish. Claude wakes itself when they report back; for Codex, Tag starts the follow-up turn. Interim "I'll report back" text is not posted as the answer. |
@@ -75,7 +75,8 @@ For the approval walkthrough, example message, and Stop controls, see
 You can follow a Codex or Claude task directly in its Slack thread. Tag starts with a
 working indicator, then shows **Agent activity** as tools run: reading a file,
 running a script, reviewing changes, or updating a document. This is the visible
-progress of the task; Tag does not show private reasoning.
+progress of the task. Agent activity also shows a **Thinking** step whenever
+the model thinks, with the model's summary of that thinking under the step.
 
 Here is an illustrative file task. On the website, the final assistant message
 moves from the working indicator through two tool steps to the answer.
@@ -93,8 +94,19 @@ moves from the working indicator through two tool steps to the answer.
 
 Steps use short command or file descriptions instead of raw tool payloads.
 Repeated work is grouped with a count, keeping the activity compact. The latest
-action stays visible between tool calls; Tag does not add a new “thinking” row
-every time it waits.
+action stays visible between tool calls.
+
+Thinking steps show the summary the provider returns: Claude Agent SDK
+thinking summaries, or Codex App Server reasoning summaries. Raw thinking and
+raw reasoning content never leave the backend. A step can stay empty when the
+model or connection returns no summary. Everyone who can read the thread can
+read these summaries. A long
+task shows its first three Thinking steps, then groups later thinking into a
+fourth step that shows the latest summary, so tool steps keep their rows. The
+app's Activity tab keeps every summary. To keep thinking private, run
+`tag NAME config set OPENTAG_SHOW_THINKING 0`; Tag then stops asking either
+provider for summaries. The legacy Codex exec and Claude print transports show
+no thinking.
 
 When the task succeeds, **Agent activity** shows complete and the answer appears
 in the same message. A failed or stopped task keeps its failure or interruption

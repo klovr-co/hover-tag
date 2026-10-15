@@ -5,7 +5,8 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { APPEARANCES, APPEARANCE_LABEL, setAppearance, useAppearance } from "../lib/appearance";
 import type { AppInfo, Bridge } from "../lib/bridge";
 import { parseConnections } from "../lib/ai";
-import { parseJSON } from "../lib/protocol";
+import { embeddingText, memoryDetail, parseMemory, setEmbedding, type MemoryStatus } from "../lib/memory";
+import { KEEP_RUNNING_DETAIL, parseJSON } from "../lib/protocol";
 import type { Tags } from "../lib/tags";
 import { useTrack, type Telemetry } from "../lib/telemetry";
 import {
@@ -20,7 +21,7 @@ import { CompactSky, ErrorLine, Icon, Primary, Secondary, Spinner, Switch, tagIc
 const DOCS = "https://www.hover.team/tag/";
 const HOVER = "https://hover.team";
 
-export type SettingsTab = "general" | "updates" | "about";
+export type SettingsTab = "general" | "ai" | "updates" | "about";
 /** Closes a short screen with a quiet river along the bottom of its panel, so the space above reads as finished. */
 export function RiverFoot({ api }: { api?: Bridge }) {
   return (
@@ -32,8 +33,8 @@ export function RiverFoot({ api }: { api?: Bridge }) {
   );
 }
 
-const SETTINGS_TABS: SettingsTab[] = ["general", "updates", "about"];
-const TAB_LABEL: Record<SettingsTab, string> = { general: "General", updates: "Updates", about: "About" };
+const SETTINGS_TABS: SettingsTab[] = ["general", "ai", "updates", "about"];
+const TAB_LABEL: Record<SettingsTab, string> = { general: "General", ai: "AI", updates: "Updates", about: "About" };
 
 function SetRow({ label, detail, children }: { label: ReactNode; detail: ReactNode; children?: ReactNode }) {
   return (
@@ -156,9 +157,10 @@ interface SettingsProps {
   switched: (done: ProductUpdate) => void;
   /** Opens Settings → AI & models. */
   openAI?: () => void;
+  openMemory?: () => void;
 }
 
-export function Settings({ api, info, tags, telemetry, close, replay, initialTab, showPrivacy, update, check, runUpdate, switched, openAI }: SettingsProps) {
+export function Settings({ api, info, tags, telemetry, close, replay, initialTab, showPrivacy, update, check, runUpdate, switched, openAI, openMemory }: SettingsProps) {
   const privacy = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!showPrivacy) return;
@@ -211,7 +213,7 @@ export function Settings({ api, info, tags, telemetry, close, replay, initialTab
   return (
     <>
       <CompactSky title="Settings" sub={`Tag ${version}`} back={close} />
-      <div className={tab === "general" ? "body settings" : "body settings river"}>
+      <div className={tab === "general" || tab === "ai" ? "body settings" : "body settings river"}>
         <div className="segc tabs" role="tablist" aria-label="Settings">
           {SETTINGS_TABS.map((t) => (
             <button key={t} role="tab" aria-selected={tab === t} onClick={() => setTab(t)}>
@@ -237,22 +239,28 @@ export function Settings({ api, info, tags, telemetry, close, replay, initialTab
               </div>
             </SetRow>
             <SetRow label="Keep Tags running"
-              detail="Start the Tags you switched on after you log in, and restart any that stop. Works even when this app is closed.">
+              detail={KEEP_RUNNING_DETAIL}>
               <Switch on={tags.keepRunning} busy={keepBusy} label="Keep Tags running"
                 onClick={async () => { setKeepBusy(true); await tags.setAutostart(!tags.keepRunning); setKeepBusy(false); }} />
             </SetRow>
           </div>
         </div>
-        {openAI && (
-          <div className="section">
-            <div className="sec-head"><h3>AI connections</h3></div>
-            <div className="card"><AISummaryRow api={api} tags={tags} open={openAI} /></div>
-          </div>
-        )}
         <div className="section" ref={privacy}>
           <div className="sec-head"><h3>Privacy</h3></div>
           <div className="card"><UsageDataRow api={api} telemetry={telemetry} setError={setError} /></div>
         </div>
+        </>}
+        {tab === "ai" && <>
+        {openAI && (
+          <div className="section">
+            <div className="card"><AISummaryRow api={api} tags={tags} open={openAI} /></div>
+          </div>
+        )}
+        {openMemory && (
+          <div className="section">
+            <div className="card"><MemorySummaryRow api={api} open={openMemory} /></div>
+          </div>
+        )}
         </>}
         {tab === "updates" && <div className="section">
           <div className={update.status === "failed" ? "card upd-card failed" : "card upd-card"}>
@@ -281,7 +289,7 @@ export function Settings({ api, info, tags, telemetry, close, replay, initialTab
             <div className="txt"><span className="label" style={{ fontSize: 14.5 }}>Enjoying Tag?</span><CommunityLinks api={api} /></div>
           </div>
         </div>}
-        {tab !== "general" && <RiverFoot api={api} />}
+        {tab !== "general" && tab !== "ai" && <RiverFoot api={api} />}
         </div>
         {(error || update.error || tags.error) && <ErrorLine>{error || update.error || tags.error}</ErrorLine>}
       </div>
@@ -311,6 +319,145 @@ export function UsageDataRow({ api, telemetry, setError }: { api: Bridge; teleme
       }} />}
     </SetRow>
   );
+}
+
+/** Settings → General: the shared memory every Tag searches, with its state and a way to start or stop it. */
+export function MemoryRow({ api, setError }: { api: Bridge; setError: (message: string) => void }) {
+  const [memory, setMemory] = useState<MemoryStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const load = async (args: string[]) => {
+    const result = await api.tag(args);
+    if (result.code !== 0) throw new Error(result.stderr.trim().split("\n").pop() || "Couldn't reach memory.");
+    setMemory(parseMemory(result.stdout));
+  };
+  useEffect(() => {
+    let live = true;
+    void api.tag(["memory", "status", "--json"]).then((r) => { if (live && r.code === 0) setMemory(parseMemory(r.stdout)); }).catch(() => {});
+    return () => { live = false; };
+  }, [api]);
+  if (!memory) return null; // An older Tag without `memory --json` simply has no row.
+  return <>
+    <SetRow label="Memory service" detail={memoryDetail(memory)}>
+      <Switch on={memory.healthy} busy={busy} label="Memory" onClick={async () => {
+        setBusy(true);
+        setError("");
+        try { await load(["memory", memory.healthy ? "stop" : "start", "--json"]); }
+        catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+        finally { setBusy(false); }
+      }} />
+    </SetRow>
+    {memory.embedding && <SearchModelRow api={api} embedding={memory.embedding} setError={setError}
+      changed={() => void api.tag(["memory", "status", "--json"]).then((r) => { if (r.code === 0) setMemory(parseMemory(r.stdout)); })} />}
+  </>;
+}
+
+/** How memory computes search embeddings: the built-in Default, or an endpoint you name. */
+export function SearchModelRow({ api, embedding, setError, changed }: {
+  api: Bridge; embedding: NonNullable<MemoryStatus["embedding"]>; setError: (message: string) => void; changed: () => void;
+}) {
+  const custom = embedding.choices.find((c) => c.custom);
+  const [picked, setPicked] = useState(embedding.current);
+  const [url, setUrl] = useState(custom?.baseUrl ?? "");
+  const [model, setModel] = useState(custom?.model ?? "");
+  const [key, setKey] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState("");
+  // Start from what is configured, so changing one field is a small edit, not a retype.
+  const reset = (id: string) => { setPicked(id); setKey(""); setUrl(custom?.baseUrl ?? ""); setModel(custom?.model ?? ""); };
+  // The state above already starts from the configured choice; only a change of it resets the form.
+  const first = useRef(true);
+  useEffect(() => {
+    if (first.current) { first.current = false; return; }
+    reset(embedding.current);
+  }, [embedding.current, custom?.baseUrl, custom?.model]);
+  const choice = embedding.choices.find((c) => c.id === picked);
+  if (!choice) return null;
+  const switching = picked !== embedding.current
+    || (choice.custom && (url !== choice.baseUrl || model !== choice.model || key.trim() !== ""));
+  const missing = choice.custom && (!url.trim() || !model.trim());
+  const apply = async () => {
+    setBusy(true);
+    setError("");
+    const result = await setEmbedding(api, choice.custom ? "custom" : "local", key.trim(), { model: model.trim(), baseUrl: url.trim() });
+    setBusy(false);
+    if (!result.ok) { setError(result.error); reset(embedding.current); return; }
+    setNote(result.reindexing ? "Re-indexing your channels; search is partial until it finishes." : result.note);
+    changed();
+  };
+  return <>
+    <div className="r set model-head" style={{ padding: "13px 14px 6px" }}>
+      <div className="txt"><span className="label" style={{ fontSize: 14.5 }}>Search model</span>
+        {note && <span className="sub wrap">{note}</span>}</div>
+    </div>
+    <div className="model-choices" role="radiogroup" aria-label="Search model">
+      {embedding.choices.map((c) => (
+        <button key={c.id} className={`opt${c.id === picked ? " sel" : ""}`} role="radio" aria-checked={c.id === picked}
+          aria-label={c.label} disabled={busy} onClick={() => reset(c.id)}>
+          <span className="radio-dot" aria-hidden="true" />
+          <span className="txt"><span className="label">{c.label}{c.id === embedding.current && <i className="chip-now">In use</i>}</span>
+            <span className="sub wrap">{c.id === embedding.current && c.custom && c.model ? `${c.model} at ${c.baseUrl}` : c.detail}</span></span>
+        </button>
+      ))}
+    </div>
+    {(choice.custom || switching) && (
+      <div className="model-edit">
+        {choice.custom && <>
+          <label className="fl2"><span>Endpoint address</span>
+            <input className="field" value={url} placeholder="https://api.openai.com/v1"
+              aria-label="Endpoint address" spellCheck={false} disabled={busy} onChange={(e) => setUrl(e.target.value)} />
+          </label>
+          <div className="pick-pair">
+            <label className="fl2"><span>Model name</span>
+              <input className="field" value={model} placeholder="text-embedding-3-small"
+                aria-label="Model name" spellCheck={false} disabled={busy} onChange={(e) => setModel(e.target.value)} />
+            </label>
+            <label className="fl2"><span>API key <i>optional</i></span>
+              <input className="field" type="password" value={key}
+                placeholder={choice.keySaved ? "Saved. Paste to replace" : "Local needs none"} aria-label="API key (optional)"
+                autoComplete="new-password" spellCheck={false} disabled={busy} onChange={(e) => setKey(e.target.value)} />
+            </label>
+          </div>
+        </>}
+        <p>{choice.custom ? "Tag tests it first. " : ""}Switching re-indexes your channels.</p>
+        <Primary small title={busy ? "Switching…" : picked === embedding.current ? "Save changes" : `Switch to ${choice.label}`}
+          disabled={busy || missing || !switching} onClick={() => void apply()} />
+      </div>
+    )}
+  </>;
+}
+
+/** Settings → AI: a row into the Memory page, like the AI connections row above it. */
+export function MemorySummaryRow({ api, open }: { api: Bridge; open: () => void }) {
+  const [summary, setSummary] = useState("");
+  useEffect(() => {
+    let live = true;
+    void api.tag(["memory", "status", "--json"]).then((r) => {
+      if (live && r.code === 0) setSummary(embeddingText(parseMemory(r.stdout)).replace(/\.$/, ""));
+    }).catch(() => {});
+    return () => { live = false; };
+  }, [api]);
+  return (
+    <div className="r set click" role="button" tabIndex={0} aria-label="Open memory" onClick={open}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } }}
+      style={{ padding: "13px 14px", gap: 16, borderRadius: "inherit" }}>
+      <div className="txt"><span className="label" style={{ fontSize: 14.5 }}>Memory</span>
+        <span className="sub wrap">{summary || "Shared search for all Tags"}</span></div>
+      <span className="chev" aria-hidden="true"><Icon name="right" size={13} /></span>
+    </div>
+  );
+}
+
+/** The Memory page: the service and the search model, away from the Settings list. */
+export function MemorySettings({ api, close }: { api: Bridge; close: () => void }) {
+  const [error, setError] = useState("");
+  return <>
+    <CompactSky title="Memory" sub="Shared by all your Tags" back={close} />
+    <div className="body river">
+      <div className="section"><div className="card"><MemoryRow api={api} setError={setError} /></div></div>
+      {error && <ErrorLine>{error}</ErrorLine>}
+      <RiverFoot />
+    </div>
+  </>;
 }
 
 /** The Settings row that opens AI & models, with a summary for the main Tag. */
