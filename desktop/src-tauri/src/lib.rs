@@ -283,8 +283,12 @@ fn installer_command(app: &AppHandle, channel: &str) -> Result<Command, String> 
 }
 
 #[tauri::command]
-fn install_start(app: AppHandle, sessions: State<Arc<Sessions>>, channel: String, output: Channel<Output>) -> Result<u32, String> {
+fn install_start(app: AppHandle, sessions: State<Arc<Sessions>>, channel: String, skip_memory_model: Option<bool>, output: Channel<Output>) -> Result<u32, String> {
     let mut command = installer_command(&app, &channel)?;
+    if skip_memory_model == Some(true) {
+        // The installer skips the local search-model download when this is set.
+        command.env("TAG_SKIP_MFS_MODEL", "1");
+    }
     command
         .env("TAG_INSTALL_PROGRESS", "jsonl")
         .env("NO_COLOR", "1")
@@ -292,6 +296,7 @@ fn install_start(app: AppHandle, sessions: State<Arc<Sessions>>, channel: String
         .env("PYTHONUTF8", "1")
         .env("PYTHONIOENCODING", "utf-8")
         .env("PATH", cli::tool_path());
+    cli::clean_appimage_env(&mut command);
     let saved = cli::saved_command_file(&config_dir(&app));
     sessions.start(command, true, output, move |line| {
         // Remember the exact command the installer reported, so PATH never matters.

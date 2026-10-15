@@ -84,9 +84,11 @@ class InvitationMemory:
             # Remove lost membership from live access before any index operation.
             self.restrict(unrelated + scopes, ids)
             if not channels:
-                self.ready_event.clear()
+                # Ready with no channels: the empty allowlist admits none, DMs work, and
+                # the first invitation is confirmed live. A new Tag starts and waits for it.
                 self.last_signature = None
                 self.status("no_joined_channels")
+                self.ready_event.set()
                 return  # Never send an empty connector allowlist to MFS.
             signature = (tuple(sorted(scopes)), values.get("MFS_SLACK_HISTORY_DAYS", "30"),
                          values.get("MFS_SLACK_TOKEN"), values.get("MFS_URL"), values.get("MFS_TOKEN"))

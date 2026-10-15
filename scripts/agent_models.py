@@ -169,8 +169,14 @@ def fetch_codex_model_catalog() -> list[dict[str, Any]] | None:
         return None
 
 
-def discover_codex_models() -> list[CodexModelOption]:
-    """Prefer live account metadata; cached ordering never establishes a default."""
+def discover_codex_models(
+    fetch: Callable[[], list[dict[str, Any]] | None] | None = None,
+) -> list[CodexModelOption]:
+    """Prefer live account metadata; cached ordering never establishes a default.
+
+    ``fetch`` supplies the account's catalog, such as a saved one, instead of
+    reading it from Codex now.
+    """
     configured = [
         value.strip()
         for value in os.getenv("OPENTAG_CODEX_MODELS", "").split(",")
@@ -185,7 +191,7 @@ def discover_codex_models() -> list[CodexModelOption]:
     if plan_connection:
         configured_fast_mode = False
     discovered: dict[str, CodexModelOption] = {}
-    live_models = fetch_codex_model_catalog()
+    live_models = (fetch or fetch_codex_model_catalog)()
     try:
         if live_models is not None:
             payload = {"models": [{
@@ -300,7 +306,9 @@ def fetch_claude_model_catalog() -> list[dict[str, Any]] | None:
         return None
 
 
-def discover_claude_models() -> list[ModelOption]:
+def discover_claude_models(
+    fetch: Callable[[], list[dict[str, Any]] | None] | None = None,
+) -> list[ModelOption]:
     """Offer the Claude account's live catalog; the CLI resolves its own default."""
     configured = [
         value.strip()
@@ -308,7 +316,7 @@ def discover_claude_models() -> list[ModelOption]:
         if value.strip()
     ]
     discovered: dict[str, ModelOption] = {}
-    for item in fetch_claude_model_catalog() or []:
+    for item in (fetch or fetch_claude_model_catalog)() or []:
         model_id = item.get("model")
         if not isinstance(model_id, str) or not model_id:
             continue
@@ -339,15 +347,17 @@ def discover_claude_models() -> list[ModelOption]:
     return list(discovered.values())
 
 
-def discover_models(backend: str) -> list[ModelOption]:
+def discover_models(backend: str, fetch: Callable[[], list[dict[str, Any]] | None] | None = None,
+                    ) -> list[ModelOption]:
+    """A backend's models; ``fetch`` supplies the account's raw catalog (see model_catalog)."""
     if agent_connection.active(backend):
         agent_connection.validate(backend)
         return [ModelOption(name, name, (), is_default=index == 0, backend=backend)
                 for index, name in enumerate(agent_connection.models(backend))]
     if backend == "codex":
-        return discover_codex_models()
+        return discover_codex_models(fetch)
     if backend == "claude":
-        return discover_claude_models()
+        return discover_claude_models(fetch)
     return []
 
 

@@ -8,6 +8,8 @@ import { parseJSON } from "./protocol";
 export const AI_CAPABILITY = "ai-connections";
 export const SHARED_AI_CAPABILITY = "shared-ai-connections";
 export const API_CAPABILITY = "api-connections";
+/** Saved model lists and `settings ai models --refresh`. */
+export const SAVED_MODELS_CAPABILITY = "saved-models";
 
 export type ConnectionState =
   | "connected" | "signed_out" | "expired" | "limited" | "not_installed" | "unsupported" | "misconfigured" | string;
@@ -104,6 +106,9 @@ export interface ModelGroup {
   backend: string;
   name: string;
   models: ModelEntry[];
+  /** From the account's saved list, and when that list was read (saved-models). */
+  cached?: boolean;
+  fetched_at?: string | null;
 }
 
 export interface AIModels {
@@ -111,6 +116,10 @@ export interface AIModels {
   default: ModelChoice;
   unavailable: { backend: string; name: string; reason: string }[];
   suggested: string | null;
+  cached?: boolean;
+  cached_at?: string | null;
+  /** Backends whose live read failed, so their saved list was kept. */
+  refresh_failed?: string[];
 }
 
 export type SignInStep = "stopping" | "browser" | "waiting" | "verifying" | "restarting" | string;

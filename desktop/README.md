@@ -15,8 +15,9 @@ command's JSON interface, described in
 
 ## Develop
 
-Needs Node 22 and a Rust toolchain. On Linux, also install
-`libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev`.
+Needs Node 22 and a Rust toolchain. On Debian or Ubuntu, also install
+`build-essential pkg-config libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev libgtk-3-dev patchelf`,
+plus [uv](https://docs.astral.sh/uv/) to regenerate icons.
 
 ```sh
 npm install

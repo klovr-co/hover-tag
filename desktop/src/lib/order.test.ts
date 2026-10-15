@@ -7,7 +7,7 @@ import { arrange, move, ordered, savedOrder, useOrder } from "./order";
 afterEach(() => window.localStorage.clear());
 
 const row = (id: string) => ({ id }) as TagRow;
-const group = (key: string, ids: string[]): Group => ({ key, label: key, icon: null, rows: ids.map(row) });
+const group = (key: string, ids: string[]): Group => ({ key, label: key, icon: null, enterprise: null, rows: ids.map(row) });
 
 describe("Home order", () => {
   it("puts saved items first and keeps new ones in their natural order", () => {
