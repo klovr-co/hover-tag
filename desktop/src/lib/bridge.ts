@@ -530,7 +530,7 @@ async function demoSignIn(ai: AIStatus, args: string[], onLine: (line: string) =
     if (cancelled) return;
     const index = ai.connections.findIndex((c) => c.backend === backend);
     const connection: Connection = { ...ai.connections[index], state: "connected", detail: "",
-      account: backend === "claude" ? "Claude Max · maya@klovr.co" : args.includes("chatgpt") ? "ChatGPT plan · maya@klovr.co" : "ChatGPT sign-in",
+      account: backend === "claude" ? "Claude Max · maya@klovr.co" : args.includes("chatgpt") ? "ChatGPT plan · maya@klovr.co" : "Codex sign-in on this Mac",
       method: backend === "claude" ? "claude" : args.includes("chatgpt") ? "chatgpt" : "codex",
       shared: true, actions: ["change_account"] };
     ai.connections[index] = connection;

@@ -11,7 +11,7 @@
       "installed": true,
       "version": "0.157.1",
       "method": "codex",
-      "account": "ChatGPT sign-in",
+      "account": "Codex sign-in on this Mac",
       "detail": "",
       "shared": true,
       "actions": ["change_account"],
