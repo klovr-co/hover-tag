@@ -179,7 +179,9 @@ export function App() {
     return () => clearInterval(timer);
   }, [api, info?.cli, info?.development, screen.name, check]);
 
-  const preparing = update.status === "current" && !!update.update?.preparing;
+  // Keep looking while the last good check found a release still being prepared, including during
+  // a recheck and after one fails; only a successful check without it (or an available update) stops this.
+  const preparing = ["current", "checking", "idle"].includes(update.status) && !!update.update?.preparing;
   useEffect(() => {
     if (!preparing || screen.name !== "home") return;
     const timer = setInterval(() => void check(), PREPARING_RECHECK_MINUTES * 60 * 1000);
