@@ -27,6 +27,8 @@ oauth_config:
       - groups:history
       - groups:read
       - im:history
+      - reactions:read
+      - reactions:write
       - team:read
       - users:read
 settings:
@@ -34,7 +36,10 @@ settings:
     bot_events:
       - app_home_opened
       - app_mention
+      - message.channels
+      - message.groups
       - message.im
+      - reaction_added
       - agent_session_stopped
   interactivity:
     is_enabled: true

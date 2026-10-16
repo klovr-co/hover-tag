@@ -1,0 +1,157 @@
+{
+  "schema_version": 1,
+  "assistant_name": "Tag",
+  "description": "SYNTHETIC hard cases for categories that real Slack data covers thinly: 'tag' used as a verb or for the product, talk about Tag, and Tag-to-bot chatter. Written by hand, not taken from any workspace. Keep separate from real data: report as its own subset and never use it to set a threshold. Format and labelling rules as conversations.json; the assistant is named 'Tag', so most cases name it and reach the classifier.",
+  "cases": [
+    {"id": "verb-tag-release", "category": "tag_verb", "expected": false,
+     "message": "I'll tag the release once QA signs off"},
+    {"id": "verb-tag-me", "category": "tag_verb", "expected": false,
+     "thread": [{"author": "participant:Sam", "text": "I'll write up the incident notes tonight"}],
+     "message": "nice, tag me when they're up"},
+    {"id": "verb-tag-photos", "category": "tag_verb", "expected": false,
+     "message": "can someone tag the offsite photos with everyone's names before Friday"},
+    {"id": "verb-git-tag", "category": "tag_verb", "expected": false,
+     "message": "forgot to push the tag again, doing it now"},
+    {"id": "verb-tag-as-bug", "category": "tag_verb", "expected": false,
+     "thread": [{"author": "participant:Priya", "text": "the export button does nothing on Safari"}],
+     "message": "Priya can you tag that as a bug in Linear?"},
+    {"id": "verb-tag-design", "category": "tag_verb", "expected": false,
+     "message": "tag design on the copy review, they had opinions last time"},
+    {"id": "verb-tagging-scheme", "category": "tag_verb", "expected": false,
+     "message": "our tagging scheme for support tickets is a mess"},
+    {"id": "verb-retag", "category": "tag_verb", "expected": false,
+     "message": "retagged the docker images, old ones are gone"},
+    {"id": "verb-price-tag", "category": "tag_verb", "expected": false,
+     "message": "that price tag is wild for a CRM"},
+    {"id": "verb-tag-team", "category": "tag_verb", "expected": false,
+     "message": "Sam and I will tag team the demo tomorrow"},
+    {"id": "verb-ask-tag-to-tag", "category": "tag_verb", "expected": true,
+     "message": "Tag, can you tag these three tickets as billing?",
+     "note": "Names the assistant and asks it to do the tagging."},
+    {"id": "verb-tag-the-pr-continuation", "category": "tag_verb", "expected": true,
+     "thread": [
+       {"author": "requester", "text": "{tag} which PRs are ready to merge?"},
+       {"author": "tag", "text": "Two: the retry fix and the onboarding copy change."}
+     ],
+     "message": "tag both of them ready-for-human"},
+    {"id": "verb-tag-name-lowercase", "category": "tag_verb", "expected": false,
+     "message": "remind me to tag v2.4 after lunch",
+     "note": "A note to self, not addressed to the assistant."},
+    {"id": "verb-tag-question-to-person", "category": "tag_verb", "expected": false,
+     "message": "Sam, do we tag releases from main or from the release branch?"},
+
+    {"id": "about-tag-to-person-praise", "category": "about_tag", "expected": false,
+     "message": "Sam you should try Tag for the weekly report, it saved me an hour"},
+    {"id": "about-tag-third-person-complaint", "category": "about_tag", "expected": false,
+     "message": "Tag keeps summarising too much, I need to tweak its instructions"},
+    {"id": "about-tag-roadmap", "category": "about_tag", "expected": false,
+     "message": "next sprint we want Tag to support calendar invites"},
+    {"id": "about-tag-pricing", "category": "about_tag", "expected": false,
+     "message": "how much does Tag cost us per month in tokens?",
+     "note": "Debatable: could be a question to Tag. Labelled false because it asks about Tag in the third person, to the team."},
+    {"id": "about-tag-demo-plan", "category": "about_tag", "expected": false,
+     "message": "for the investor demo I'll show Tag answering a thread, then Tag.app"},
+    {"id": "about-tag-quote", "category": "about_tag", "expected": false,
+     "thread": [{"author": "participant:Priya", "text": "what did the assistant say about the outage?"}],
+     "message": "Tag said it was the cache, but I'm not sure"},
+    {"id": "about-tag-bug-report", "category": "about_tag", "expected": false,
+     "message": "filed a bug: Tag replied twice in #ops this morning"},
+    {"id": "about-tag-compare", "category": "about_tag", "expected": false,
+     "message": "Tag vs the Claude app for research: Tag wins when it needs our files"},
+    {"id": "about-tag-who-set-up", "category": "about_tag", "expected": false,
+     "message": "who set up Tag in this channel?"},
+    {"id": "about-tag-meta-direct", "category": "about_tag", "expected": true,
+     "message": "Tag, people say you're slow today, is something wrong?",
+     "note": "About Tag, but addressed to it."},
+    {"id": "about-tag-feedback-to-tag", "category": "about_tag", "expected": true,
+     "thread": [
+       {"author": "requester", "text": "{tag} summarise the launch thread"},
+       {"author": "tag", "text": "Launch moved to the 14th; pricing page still needs legal review."}
+     ],
+     "message": "too long, Tag, keep these to one line"},
+    {"id": "about-tag-thanks-in-thread", "category": "about_tag", "expected": true,
+     "thread": [
+       {"author": "requester", "text": "{tag} what's blocking the release?"},
+       {"author": "tag", "text": "Only the license scan; it should finish in ten minutes."}
+     ],
+     "message": "thanks Tag, that's exactly what I needed"},
+    {"id": "about-tag-in-thread-to-person", "category": "about_tag", "expected": false,
+     "thread": [
+       {"author": "requester", "text": "{tag} draft the onboarding email"},
+       {"author": "tag", "text": "Draft: 'Welcome aboard! Here's how to get started...'"},
+       {"author": "participant:Sam", "text": "this is good, did you edit it?"}
+     ],
+     "message": "nope, Tag wrote all of it",
+     "note": "In a Tag thread, but answering Sam about Tag."},
+
+    {"id": "bot-ci-reply-after-tag", "category": "tag_bot", "expected": false,
+     "thread": [
+       {"author": "requester", "text": "{tag} rerun the flaky test"},
+       {"author": "tag", "text": "I asked CIBot to rerun it."},
+       {"author": "another_bot", "text": "CIBot: rerun queued. Reply 'cancel' to stop it."}
+     ],
+     "message": "cancel"},
+    {"id": "bot-pager-ack", "category": "tag_bot", "expected": false,
+     "thread": [
+       {"author": "another_bot", "text": "PagerBot: INC-311 assigned to you. Reply 'ack' to acknowledge."},
+       {"author": "tag", "text": "I can summarise the related alerts if useful."}
+     ],
+     "message": "ack",
+     "note": "Tag spoke last, but 'ack' answers PagerBot."},
+    {"id": "bot-other-tag-question", "category": "tag_bot", "expected": false,
+     "thread": [
+       {"author": "requester", "text": "{tag} ask Sam's Tag for the Q3 numbers"},
+       {"author": "another_bot", "text": "Sam's Tag: Q3 revenue was 1.2M. Do you also want the churn figure?"}
+     ],
+     "message": "yes please, churn too",
+     "note": "Answers the other Tag's question, not this one."},
+    {"id": "bot-deploy-approve", "category": "tag_bot", "expected": false,
+     "thread": [
+       {"author": "tag", "text": "The fix is merged. DeployBot will ask for approval next."},
+       {"author": "another_bot", "text": "DeployBot: deploy #92 waiting. Reply 'approve' or 'hold'."}
+     ],
+     "message": "hold, it's Friday"},
+    {"id": "bot-chatgpt-followup", "category": "tag_bot", "expected": false,
+     "thread": [
+       {"author": "another_bot", "text": "ChatGPT: here are five taglines for the launch..."},
+       {"author": "tag", "text": "Happy to compare these with last year's if you want."}
+     ],
+     "message": "make number 3 punchier",
+     "note": "Edits the other bot's list; Tag only offered a comparison."},
+    {"id": "bot-two-bots-thanks", "category": "tag_bot", "expected": false,
+     "thread": [
+       {"author": "another_bot", "text": "StatusBot: all systems operational."},
+       {"author": "tag", "text": "Confirmed: no open incidents."}
+     ],
+     "message": "cool",
+     "note": "Debatable: a reaction to both bots; no reply is invited."},
+    {"id": "bot-tag-back-to-tag", "category": "tag_bot", "expected": true,
+     "thread": [
+       {"author": "requester", "text": "{tag} why did the build fail?"},
+       {"author": "another_bot", "text": "CIBot: build #77 failed at lint."},
+       {"author": "tag", "text": "Lint failed on an unused import in billing.py."}
+     ],
+     "message": "can you fix it and push?",
+     "note": "Tag explained last; the follow-up is for Tag."},
+    {"id": "bot-compare-answers", "category": "tag_bot", "expected": true,
+     "thread": [
+       {"author": "another_bot", "text": "Sam's Tag: the launch is on the 14th."},
+       {"author": "tag", "text": "My notes say the 15th."}
+     ],
+     "message": "Tag, which one is right?"},
+    {"id": "bot-resume-tag-after-bot", "category": "tag_bot", "expected": true,
+     "thread": [
+       {"author": "requester", "text": "{tag} draft the status update"},
+       {"author": "tag", "text": "Draft: 'This week we shipped retries and fixed export.'"},
+       {"author": "another_bot", "text": "GrammarBot: 1 suggestion: 'shipped' → 'released'."}
+     ],
+     "message": "ignore the grammar bot, Tag, just add the hiring update",
+     "note": "Explicitly goes back to Tag after the other bot."},
+    {"id": "bot-inclusive-with-bots", "category": "tag_bot", "expected": true,
+     "thread": [
+       {"author": "another_bot", "text": "StandupBot: what's everyone working on today?"}
+     ],
+     "message": "anyone else blocked on the API keys?",
+     "note": "Inclusive question in a thread with another bot; Tag isn't in this thread, so it's out of today's scope."}
+  ]
+}

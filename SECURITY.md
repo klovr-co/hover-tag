@@ -11,7 +11,8 @@ The agent backend inherits the bridge process environment, including
 `SLACK_BOT_TOKEN`, `MFS_TOKEN`, and unrelated ambient credentials. Tag removes
 `SLACK_APP_TOKEN`, `SLACK_CHANNEL_ID`, `SLACK_CHANNEL_IDS`, and
 `SLACK_ALLOWED_USER_IDS` before
-starting backend work, but it does not broker the remaining credentials.
+starting backend work, along with the optional channel-watching classifier keys
+(`OPENTAG_TYPESAFE_API_KEY`, `OPENTAG_OPENAI_DECISIONS_API_KEY`) and settings, but it does not broker the remaining credentials.
 
 Consequently, Slack and MFS helper allowlists are guardrails for normal agent
 operation, not hardened capability controls: an agent with shell access can use
@@ -26,6 +27,21 @@ choose to invoke the cross-channel helper, but that helper can search only the
 bridge-generated grant; failures deny expansion. This is still an application
 guardrail under ADR 0001, not a credential broker or hardened isolation
 boundary.
+
+## Channel watching
+
+Watching, when an owner turns it on for a channel, answers some messages that
+nobody @mentioned. Anyone in the channel can write text that games its
+classifier, so the classifier is a noise filter, not a security control.
+Watched replies have reduced capability instead. They come from a text-only run:
+
+- no tools, shell, files, workspace, memory, search or credentials;
+- only the identity-minimized thread as input;
+- answers stay in the same thread, and links and mentions are refused.
+
+Actions need a person to confirm with **Take this on** or an @mention, which
+starts a normal run. See
+[ADR 0010](docs/adr/0010-channel-watching.md).
 
 ## Local storage
 
