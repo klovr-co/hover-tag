@@ -245,6 +245,11 @@ class WaitingRequestTests(unittest.TestCase):
         self.assertEqual("U1", self.client.chat_postEphemeral.call_args.kwargs["user"])
         self.assertEqual("1.0", self.client.chat_postEphemeral.call_args.kwargs["thread_ts"])
 
+    def test_mention_while_busy_leaves_the_running_request_status_alone(self) -> None:
+        self.mention_while_busy()
+        self.client.api_call.assert_not_called()
+        self.client.assistant_threads_setStatus.assert_not_called()
+
     def test_queue_runs_the_request_after_the_current_one(self) -> None:
         button = self.mention_while_busy()
         respond = self.choose(button, slack_socket_agent.WAITING_QUEUE_ACTION_ID)
@@ -282,6 +287,21 @@ class WaitingRequestTests(unittest.TestCase):
         respond = self.choose(button, slack_socket_agent.WAITING_STEER_ACTION_ID, user="U2")
         respond.assert_not_called()
         self.assertEqual(1, len(slack_socket_agent.WAITING_OFFERS))
+
+    def test_mention_while_stopping_queues_first_without_offering_a_choice(self) -> None:
+        earlier = slack_socket_agent.WaitingRequest({"ts": "1.2"}, {}, False, None, None)
+        self.assertTrue(slack_socket_agent.reserve_thread(self.key))
+        self.assertTrue(slack_socket_agent.queue_waiting_request(self.key, earlier))
+        with patch.object(slack_socket_agent, "thread_stopping", return_value=True):
+            self.app.events["app_mention"](
+                {"channel": "C1", "ts": "1.5", "thread_ts": "1.0", "user": "U1", "text": "<@BOT> try again"},
+                {"team_id": "T1"}, self.client, MagicMock())
+        kwargs = self.client.chat_postEphemeral.call_args.kwargs
+        self.assertEqual(slack_socket_agent.STOPPING_REQUEST_MESSAGE, kwargs["text"])
+        self.assertNotIn("blocks", kwargs)
+        self.assertEqual({}, slack_socket_agent.WAITING_OFFERS)
+        self.assertEqual("1.5", slack_socket_agent.release_thread(self.key).event["ts"])
+        self.assertEqual("1.2", slack_socket_agent.release_thread(self.key).event["ts"])
 
     def test_queued_request_that_loses_the_thread_waits_at_the_front(self) -> None:
         self.assertTrue(slack_socket_agent.reserve_thread(self.key))
@@ -3058,6 +3078,17 @@ class SlackWorkingIndicatorTests(unittest.TestCase):
             client.assistant_threads_setStatus.call_args.kwargs["status"],
         )
 
+    def test_stop_request_shows_stopping_over_later_activity(self) -> None:
+        client = MagicMock()
+        indicator = slack_socket_agent.WorkingIndicator(client, "C123", "1.23", MagicMock())
+        indicator.native = indicator.legacy_status = True
+
+        indicator.stop_requested()
+        indicator.activity("activity_start", "a1", "Reading files…")
+
+        self.assertEqual("Stopping…", client.assistant_threads_setStatus.call_args.kwargs["status"])
+        self.assertEqual("Stopping…", indicator.current_status())
+
     def test_uses_native_slack_loading_status(self) -> None:
         client = MagicMock()
         indicator = slack_socket_agent.WorkingIndicator(client, "C123", "1.23", MagicMock())
@@ -4436,6 +4467,38 @@ class SlackCancellationTests(unittest.TestCase):
             self.assertTrue(slack_socket_agent.cancel_active_run(key))
             self.assertEqual("new", new.control_file.read_text(encoding="utf-8"))
             self.assertFalse(old.control_file.exists())
+
+    def test_stop_request_is_reported_once_before_the_backend_exits(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir, patch(
+            "scripts.slack_socket_agent.threading.Timer"
+        ):
+            key = slack_socket_agent.RunKey("T123", "C123", "1.23")
+            process = MagicMock()
+            process.poll.return_value = None
+            stopping = MagicMock()
+            run = slack_socket_agent.ActiveBackendRun(
+                process, Path(raw_dir) / "control", "run", on_stop_requested=stopping
+            )
+            slack_socket_agent.register_active_run(key, run)
+            self.assertFalse(slack_socket_agent.thread_stopping(key))
+
+            self.assertTrue(slack_socket_agent.cancel_active_run(key))
+            self.assertTrue(slack_socket_agent.cancel_active_run(key))
+
+            stopping.assert_called_once_with()
+            self.assertTrue(slack_socket_agent.thread_stopping(key))
+            slack_socket_agent.unregister_active_run(key, run)
+            self.assertFalse(slack_socket_agent.thread_stopping(key))
+
+    def test_late_slack_delivery_is_logged_and_prompt_delivery_is_not(self) -> None:
+        event = {"ts": "100.0", "channel": "C1", "thread_ts": "90.0"}
+        with patch("builtins.print") as printed:
+            self.assertEqual(2.0, slack_socket_agent.log_slack_delivery_lag(event, "message", now=102.0))
+            printed.assert_not_called()
+            self.assertEqual(40.0, slack_socket_agent.log_slack_delivery_lag(event, "message", now=140.0))
+        self.assertIn("Slack delivered a message 40s after it was sent (channel C1, thread 90.0)",
+                      printed.call_args.args[0])
+        self.assertIsNone(slack_socket_agent.log_slack_delivery_lag({"ts": "bad"}, "message"))
 
     def test_delayed_stop_event_cannot_cancel_a_newer_run(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
