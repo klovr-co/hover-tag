@@ -319,6 +319,9 @@ button.opt:hover:not(:disabled) { background: var(--fill); }
 .empty p { margin: 0 0 10px; color: var(--muted); font-size: 14px; }
 
 .toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: #1d232b; color: #fff; font-size: 13px; font-weight: 500; padding: 7px 14px; border-radius: 999px; box-shadow: 0 8px 24px rgba(0, 0, 0, .2); white-space: nowrap; z-index: 30; animation: rise .24s cubic-bezier(.22, 1, .36, 1); }
+/* On a Tag's screen it centres over the Tag, clear of the sidebar, and wraps to two lines rather than cutting off. */
+.app.wide .toast { left: calc(144px + 50%); width: max-content; max-width: calc(100% - 320px); white-space: normal; text-align: center; border-radius: 16px;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 @keyframes rise { from { opacity: 0; transform: translate(-50%, 6px); } }
 
 /* Home */
@@ -597,6 +600,9 @@ button.hello:hover b { text-decoration: underline; text-underline-offset: 2px; }
 .savebar .t + button, .ch-confirm .sub + button { margin-left: auto; }
 .savebar.ok .t { color: var(--ok-text); }
 .savebar.busy .t { color: var(--muted); font-weight: 500; }
+/* A save bar under settings stays in view at the bottom of the scroll area, so a change made
+   higher up still shows it's waiting to be saved. */
+.sl-kv dd.mdd > .savebar, .savebar.float { position: sticky; bottom: 10px; z-index: 2; }
 @keyframes rise2 { from { opacity: 0; transform: translateY(6px); } }
 .veil2 { position: fixed; inset: 0; z-index: 40; background: rgba(8, 22, 36, .34); display: grid; place-items: center; padding: 22px; animation: fadein .16s ease-out; }
 @media (prefers-color-scheme: dark) {
@@ -812,6 +818,51 @@ button.activity-artifact:hover { border-color: var(--link); color: var(--link); 
 .sl-kv dd.mdd { display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
 .sl-kv dd.mdd .mpick-wrap { max-width: 360px; }
 .sl-kv dd.mdd .mcap { margin: 0; font-size: 13px; } .sl-kv dd.mdd .mcap .link { padding: 0; }
+.sl-kv dd.pdd { gap: 14px; }
+.pagent { display: flex; flex-direction: column; gap: 10px; }
+.pagent + .pagent { padding-top: 14px; border-top: 1px solid var(--line); }
+.phead { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--ink); }
+.pset .tlab { font-size: 13px; font-weight: 600; color: var(--muted); }
+.psel { height: 36px; font-size: 13.5px; font-weight: 600; padding: 0 8px; }
+.sl-kv dd.pdd .mcap, .sl-kv dd.pdd .mwarn { margin: 0; font-size: 13px; }
+.pdet.fresh { animation: rise2 .22s var(--ease); }
+.psaved { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 8px; }
+.psaved li { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 6px 0 10px; font-size: 13px; transition: opacity .18s var(--ease); }
+.psaved li + li { border-top: 1px solid var(--line); }
+.psaved .pkind { flex: none; color: var(--muted); font-size: 12px; font-weight: 600; }
+.psaved .pdec { flex: none; min-width: 44px; text-align: center; border-radius: 5px; padding: 1px 6px; font-size: 11.5px; font-weight: 700; }
+.pdec.allow { color: var(--ok-text); background: color-mix(in srgb, var(--ok-text) 12%, transparent); }
+.pdec.ask { color: var(--warn-text); background: color-mix(in srgb, var(--warn-text) 12%, transparent); }
+.pdec.block { color: var(--bad-text); background: color-mix(in srgb, var(--bad-text) 12%, transparent); }
+.psaved.global { background: var(--fill); border-color: transparent; }
+.padd { display: flex; align-items: center; gap: 8px; }
+.padd .segc { flex: none; }
+.padd .field { height: 32px; flex: 1; width: 0; min-width: 0; font-size: 13px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.padd .p-btn { flex: none; min-width: 56px; }
+.pglobal { align-self: flex-start; margin-left: -6px; align-items: baseline; text-align: left; }
+.pglist { display: flex; flex-direction: column; gap: 10px; animation: rise2 .22s var(--ease); }
+.prules { display: flex; flex-direction: column; gap: 10px; }
+.pgroup { display: flex; flex-direction: column; gap: 6px; }
+.pglab { font-size: 12px; font-weight: 600; color: var(--muted); }
+/* A folded row: Rules and its counts, which opens the editor below it. */
+.psum { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 38px; padding: 0 10px 0 12px; border: 1px solid var(--line); border-radius: 8px; text-align: left; font-size: 13.5px; color: var(--ink); transition: background .16s var(--ease); }
+.psum:hover { background: var(--fill); }
+.psum .m { flex: 1; min-width: 0; color: var(--muted); font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.psum .link { flex: none; padding: 0; }
+.psum svg, .pglobal svg { transition: transform .2s var(--ease); transform: rotate(-90deg); }
+.psum[aria-expanded="true"] svg, .pglobal[aria-expanded="true"] svg { transform: none; }
+.pmore { display: flex; flex-direction: column; gap: 12px; animation: rise2 .22s var(--ease); }
+.pallcard { display: flex; flex-direction: column; gap: 12px; padding: 14px; }
+.pallcard > .segc { align-self: flex-start; }
+.psaved code { flex: 1; width: 0; min-width: 0; overflow-wrap: anywhere; padding: 7px 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--ink); }
+.psaved .link { flex: none; margin-left: auto; }
+.psaved li.going { opacity: .45; }
+/* Only while sliding: no min-height, so the row can fold to nothing, and room for a rule that wraps.
+   Neither limit outlasts the animation, so a long rule shows in full once it's in. */
+.psaved li.entering, .psaved li.leaving { min-height: 0; --row-max: 120px; }
+.psaved li.entering { overflow: hidden; animation: row-in .32s var(--ease); }
+.psaved li.leaving { overflow: hidden; pointer-events: none; animation: row-out .22s var(--ease) forwards; }
+.pwhy { display: block; margin-top: 2px; font-size: 12px; opacity: .85; overflow-wrap: anywhere; }
 .sl-empty { margin: auto; text-align: center; color: var(--muted); max-width: 320px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
 
 /* ── Add a Tag ── */
@@ -1020,9 +1071,9 @@ button.list-item:hover { background: var(--fill); }
 .hello.fresh { animation: rise2 .24s var(--ease); }
 /* Tags added on Home open a gap and slide in; removed ones close theirs. */
 .r.entering { overflow: hidden; animation: row-in .32s var(--ease); }
-@keyframes row-in { from { max-height: 0; padding-top: 0; padding-bottom: 0; opacity: 0; } to { max-height: 72px; } }
+@keyframes row-in { from { max-height: 0; padding-top: 0; padding-bottom: 0; opacity: 0; } to { max-height: var(--row-max, 72px); } }
 .r-leave { overflow: hidden; pointer-events: none; animation: row-out .22s var(--ease) forwards; }
-@keyframes row-out { from { max-height: 72px; } to { max-height: 0; opacity: 0; } }
+@keyframes row-out { from { max-height: var(--row-max, 72px); } to { max-height: 0; opacity: 0; } }
 /* Your own API: a Tag that starts using one slides in and its agent mark hops; switching back closes its row.
    Check results grow out of the row. */
 .api-row.entering { overflow: hidden; animation: api-in .32s var(--ease); }
@@ -1121,7 +1172,9 @@ button.list-item:hover { background: var(--fill); }
   .api-progress span:last-child,
   .sky .sum .sq, .flow-panel > .body > *, .r.starting .badge, .confetti, .notice.info .bar, .usage-note, .avw2.rolling .pic,
   .empty img, .tags-row, .r.click:hover .av, .sl-item:hover img, .track .tnode img,
-  .quick-model b.fresh, .quick-made img, .quick-check { animation: none !important; }
+  .quick-model b.fresh, .quick-made img, .quick-check, .pdet.fresh,
+  .psaved li.entering, .psaved li.leaving, .pglist, .pmore { animation: none !important; }
+  .psaved li, .pglobal svg, .psum svg, .psum { transition: none; }
   .sl-msg.working > div > p { animation: none; background: none; color: inherit; }
   .desc-line.marquee { text-overflow: ellipsis; -webkit-mask: none; mask: none; }
   .desc-line.marquee > span, .r.click:hover .desc-line.marquee > span, .r.click:focus-visible .desc-line.marquee > span { display: inline; transform: none; transition: none; }

@@ -70,7 +70,7 @@ CAPABILITIES = (
     "list", "setup-jsonl", "setup-back", "rename", "workspace-lifecycle",
     "autostart", "autostart-keep", "logs-json", "upgrade-json", "install-progress",
     "ai-connections", "shared-ai-connections", "thinking-level", "logs-activity", "activity-details", "setup-v2", "abandon-setup", "remove-tag",
-    "describe", "telemetry-events", "start-progress", "api-connections", "saved-models",
+    "describe", "telemetry-events", "start-progress", "api-connections", "saved-models", "permission-rules",
 )
 UPDATE_CHECK_INTERVAL_SECONDS = 24 * 60 * 60
 COMMANDS = tuple(sorted(tag_instances.RESERVED_NAMES))
@@ -2455,7 +2455,7 @@ def _run_cli() -> int:
                                      ),
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("command", nargs="?", choices=COMMANDS)
-    parser.add_argument("arguments", nargs="*", help="memory: start | status | stop; config: init | show | keys | set KEY VALUE; chatgpt: status | login [ACCOUNT] | use ACCOUNT | logout [ACCOUNT] | use-codex; settings: ai [status | models [--refresh] | sign-in codex|claude | resume | model VALUE | effort LEVEL|default | api [status | set | clear | check]]")
+    parser.add_argument("arguments", nargs="*", help="memory: start | status | stop; config: init | show | keys | set KEY VALUE; chatgpt: status | login [ACCOUNT] | use ACCOUNT | logout [ACCOUNT] | use-codex; settings: ai [status | models [--refresh] | sign-in codex|claude | resume | model VALUE | effort LEVEL|default | permissions [codex-sandbox=V ...] | permissions allow|block|remove codex|claude RULE | rules [allow|block|remove codex|claude RULE] | api [status | set | clear | check]]")
     parser.add_argument("--offline", action="store_true")
     parser.add_argument("--json", action="store_true", dest="json_output", help="structured output for inspect, status, doctor, config, paths, upgrade, usage, and chatgpt")
     parser.add_argument("--consent", action="store_true", help="chatgpt login: request plan permission again")
@@ -2573,10 +2573,11 @@ def _run_cli() -> int:
     if args.limit is not None and args.limit < 1:
         parser.error("--limit must be at least 1")
     installation_root = tag_home()
-    global_ai = settings_ai and args.arguments[1:2] in (["connections"], ["sign-in"], ["resume"])
+    global_ai = settings_ai and args.arguments[1:2] in (["connections"], ["sign-in"], ["resume"], ["rules"])
     if global_ai:
         if explicit_tag:
-            parser.error("AI connections are shared by all Tags. Use tag settings ai " + " ".join(args.arguments[1:]))
+            what = "Rules for all Tags are" if args.arguments[1] == "rules" else "AI connections are"
+            parser.error(f"{what} shared by all Tags. Use tag settings ai " + " ".join(args.arguments[1:]))
         try:
             import tag_ai
         except ImportError:

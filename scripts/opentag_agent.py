@@ -19,8 +19,8 @@ from typing import Any
 
 try:
     from agent_activity import token_usage
-    import agent_connection, agent_usage
-    from tag_paths import codex_workspace_args, tag_temp_dir
+    import agent_connection, agent_permissions, agent_usage
+    from tag_paths import codex_workspace_args, owns_workspace, tag_temp_dir
     from codex_agent_backend import CodexAppServer, CodexAppServerError
     from claude_agent_backend import ClaudeAgentError, ClaudeAgentRun
     from record_output_artifact import channel_artifact_directory
@@ -28,8 +28,8 @@ try:
     import tag_handoff
 except ImportError:
     from scripts.agent_activity import token_usage
-    from scripts import agent_connection, agent_usage
-    from scripts.tag_paths import codex_workspace_args, tag_temp_dir
+    from scripts import agent_connection, agent_permissions, agent_usage
+    from scripts.tag_paths import codex_workspace_args, owns_workspace, tag_temp_dir
     from scripts.codex_agent_backend import CodexAppServer, CodexAppServerError
     from scripts.claude_agent_backend import ClaudeAgentError, ClaudeAgentRun
     from scripts.record_output_artifact import channel_artifact_directory
@@ -971,7 +971,13 @@ def claude_stream_command(
         cmd.extend(["--model", model])
     if attachments_dir:
         cmd.extend(["--add-dir", str(attachments_dir)])
-    return cmd
+    return cmd + claude_rule_args(workdir)
+
+
+def claude_rule_args(workdir: Path) -> list[str]:
+    """The all-Tags Claude rules; claude -p skips approvals, but still follows their blocks."""
+    agent_permissions.check_claude_folder(workdir)
+    return ["--settings", json.dumps(agent_permissions.claude_settings())]
 
 
 def run_claude_events(
@@ -1071,6 +1077,7 @@ def run_claude(
         cmd.extend(["--model", model])
     if attachments_dir:
         cmd.extend(["--add-dir", str(attachments_dir)])
+    cmd.extend(claude_rule_args(workdir))
     result = subprocess.run(
         executable_command(cmd),
         cwd=workdir,
@@ -1192,6 +1199,14 @@ def main() -> int:
             not args.event_stream or codex_event_transport() != "app-server"
         ):
             raise tag_chatgpt.ChatGPTError("ChatGPT plan usage requires the app-server event transport; run tag config set OPENTAG_CODEX_TRANSPORT app-server.")
+        if args.backend == "codex" and owns_workspace(workdir):
+            # Codex reads the all-Tags rules from a copy in the Tag's folder.
+            agent_permissions.sync_codex_all_tags(workdir)
+        elif args.backend == "codex" and agent_permissions.codex_all_tags_restricts():
+            raise ValueError("Codex rules for all Tags can't apply to a Tag working in a folder of yours "
+                             f"({workdir}); give it its own folder, or remove those rules.")
+        if not args.event_stream or (codex_event_transport() if args.backend == "codex" else claude_event_transport()) not in {"app-server", "sdk"}:
+            agent_permissions.check_legacy_transport(args.backend, workdir=workdir)
         if args.event_stream:
             if args.backend == "codex":
                 if codex_event_transport() == "app-server":

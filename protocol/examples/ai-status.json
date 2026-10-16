@@ -46,5 +46,158 @@
   "default_effort": "medium",
   "effort_levels": ["low", "medium", "high", "xhigh"],
   "effort_chosen": false,
+  "permissions": {
+    "own_folder": true,
+    "codex": {
+      "sandbox": "workspace-write",
+      "approvals": "",
+      "reviewer": "auto_review",
+      "rules": {
+        "tag": [
+          {
+            "kind": "command",
+            "value": "npm run build",
+            "decision": "allow"
+          },
+          {
+            "kind": "command",
+            "value": "git push",
+            "decision": "block"
+          }
+        ],
+        "folder": [],
+        "all_tags": [
+          {
+            "kind": "command",
+            "value": "rm -rf",
+            "decision": "block"
+          }
+        ],
+        "personal": [
+          {
+            "kind": "host",
+            "value": "api.github.com",
+            "decision": "allow"
+          }
+        ]
+      }
+    },
+    "claude": {
+      "mode": "auto",
+      "rules": {
+        "tag": [
+          {
+            "kind": "rule",
+            "value": "Bash(git status:*)",
+            "decision": "allow"
+          },
+          {
+            "kind": "folder",
+            "value": "/Users/maya/Projects/site",
+            "decision": "allow"
+          }
+        ],
+        "folder": [],
+        "all_tags": [
+          {
+            "kind": "rule",
+            "value": "Bash(rm -rf:*)",
+            "decision": "block"
+          }
+        ],
+        "personal": [
+          {
+            "kind": "rule",
+            "value": "WebFetch",
+            "decision": "ask"
+          }
+        ]
+      }
+    },
+    "options": {
+      "codex": {
+        "sandbox": [
+          {
+            "value": "read-only",
+            "label": "Read only",
+            "detail": "Reads files and runs commands that don't change anything."
+          },
+          {
+            "value": "workspace-write",
+            "label": "Workspace write",
+            "detail": "Changes files only in its folder."
+          },
+          {
+            "value": "danger-full-access",
+            "label": "Full access",
+            "detail": "No sandbox: changes anything on this computer as you."
+          }
+        ],
+        "approvals": [
+          {
+            "value": "",
+            "label": "Default",
+            "detail": "Uses approval_policy from your own Codex config: on request unless you changed it."
+          },
+          {
+            "value": "untrusted",
+            "label": "Untrusted",
+            "detail": "Asks before commands that aren't known to be safe."
+          },
+          {
+            "value": "on-request",
+            "label": "On request",
+            "detail": "Codex decides when to ask, mostly to go beyond the sandbox."
+          },
+          {
+            "value": "never",
+            "label": "Never",
+            "detail": "Never asks. Anything the sandbox blocks fails."
+          }
+        ],
+        "reviewer": [
+          {
+            "value": "auto_review",
+            "label": "Auto review",
+            "detail": "Codex's reviewer decides. You can retry what it denies."
+          },
+          {
+            "value": "user",
+            "label": "User",
+            "detail": "Each request comes to you privately in Slack."
+          }
+        ]
+      },
+      "claude": {
+        "mode": [
+          {
+            "value": "default",
+            "label": "Default",
+            "detail": "Asks before file changes and commands."
+          },
+          {
+            "value": "acceptEdits",
+            "label": "Accept edits",
+            "detail": "Changes files in its folder. Asks before commands."
+          },
+          {
+            "value": "auto",
+            "label": "Auto",
+            "detail": "Checks riskier actions itself and asks you when unsure."
+          },
+          {
+            "value": "dontAsk",
+            "label": "Don't ask",
+            "detail": "Never asks. Does only what's already allowed and refuses the rest."
+          },
+          {
+            "value": "bypassPermissions",
+            "label": "Bypass permissions",
+            "detail": "Skips approvals. Only deny rules and hooks can stop it."
+          }
+        ]
+      }
+    }
+  },
   "checked_at": "2026-10-04T09:30:00+00:00"
 }

@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from . import tag_chatgpt, agent_connection, agent_usage, agent_gateway
+    from . import tag_chatgpt, agent_connection, agent_permissions, agent_usage, agent_gateway
     from .opentag_process_env import text_only_environment
     from .agent_activity import (
         APPROVAL_POLL_SECONDS,
@@ -34,11 +34,12 @@ try:
         token_usage,
     )
     from .tag_activity_details import item_activity_details, preview
-    from .tag_approval_choices import approval_choices, public_approval_choices, auto_review_details
+    from .tag_approval_choices import approval_choices, public_approval_choices, auto_review_details, mark_primary
+    from .tag_paths import owns_workspace
 except ImportError:  # Direct script execution does not create a package context.
     import tag_chatgpt
     from opentag_process_env import text_only_environment
-    import agent_connection, agent_usage, agent_gateway
+    import agent_connection, agent_permissions, agent_usage, agent_gateway
     from agent_activity import (
         APPROVAL_POLL_SECONDS,
         APPROVAL_TIMEOUT_SECONDS,
@@ -51,7 +52,8 @@ except ImportError:  # Direct script execution does not create a package context
         token_usage,
     )
     from tag_activity_details import item_activity_details, preview
-    from tag_approval_choices import approval_choices, public_approval_choices, auto_review_details
+    from tag_approval_choices import approval_choices, public_approval_choices, auto_review_details, mark_primary
+    from tag_paths import owns_workspace
 
 
 # Prompts are controlled by Tag, while completed tool and image events may
@@ -378,6 +380,10 @@ class CodexAppServer:
         self.seen_auto_reviews: set[str] = set()
         self.held_auto_review_messages: list[dict[str, Any]] = []
         self.waiting_for_subagents = False
+        # Rules saved from Slack during this run. Codex reads the Tag's rules file
+        # only when a thread starts, so Tag answers matching requests itself until then.
+        self.saved_prefixes: list[list[str]] = []
+        self.saved_hosts: dict[tuple[str, str], str] = {}
 
     def model_catalog(self) -> list[dict[str, Any]]:
         """Read models for the signed-in account without creating a thread or turn."""
@@ -436,12 +442,12 @@ class CodexAppServer:
                 max_deadline,
             )
             self._notify("initialized", {})
+            self._check_tag_rules(mapper, emit, max_deadline)
             # Saved threads let sub-agents load their parent's context and let a
             # Slack thread resume its conversation; summaries stay out of history.
             thread_params: dict[str, Any] = {
                 "cwd": str(self.cwd),
-                "sandbox": "workspace-write",
-                "approvalsReviewer": "auto_review",
+                **agent_permissions.codex_thread(),
                 "ephemeral": self.text_only_instructions is not None,
                 "serviceName": "tag_slack_bridge",
             }
@@ -543,8 +549,9 @@ class CodexAppServer:
                 self._request("initialize", {"clientInfo": self._client_info(),
                     "capabilities": {"experimentalApi": True}}, mapper, emit, max_deadline)
                 self._notify("initialized", {})
+                self._check_tag_rules(mapper, emit, max_deadline)
                 resumed = self._request("thread/resume", {"threadId": self.thread_id,
-                    "cwd": str(self.cwd), "sandbox": "workspace-write", "approvalsReviewer": "auto_review"},
+                    "cwd": str(self.cwd), **agent_permissions.codex_thread()},
                     mapper, emit, max_deadline)
                 resumed_thread = resumed.get("thread") if isinstance(resumed, dict) else None
                 if not isinstance(resumed_thread, dict) or resumed_thread.get("id") != self.thread_id:
@@ -578,7 +585,7 @@ class CodexAppServer:
         if not self.resume_thread_id or self.text_only_instructions is not None:
             return None
         params: dict[str, Any] = {"threadId": self.resume_thread_id, "cwd": str(self.cwd),
-                                  "sandbox": "workspace-write", "approvalsReviewer": "auto_review"}
+                                  **agent_permissions.codex_thread()}
         if model:
             params["model"] = model
         if instructions:
@@ -958,6 +965,63 @@ class CodexAppServer:
             or method in {"turn/started", "turn/diff/updated", "turn/plan/updated"}
         )
 
+    def _check_tag_rules(self, mapper: Any, emit: Callable[[dict[str, Any]], None], deadline: float) -> None:
+        """Fail closed when Codex wouldn't load the Tag's own block or ask rules (Codex before 0.162)."""
+        if not agent_permissions.codex_tag_restricts(self.cwd):
+            return
+        folder = (self.cwd / ".codex").resolve()
+        try:
+            result = self._request("config/read", {"cwd": str(self.cwd), "includeLayers": True}, mapper, emit, deadline)
+        except CodexAppServerError:
+            result = None
+        layers = result.get("layers") if isinstance(result, dict) else None
+        if not isinstance(layers, list) or not any(
+                isinstance(layer, dict) and isinstance(name := layer.get("name"), dict)
+                and name.get("type") == "project" and isinstance(name.get("dotCodexFolder"), str)
+                and Path(name["dotCodexFolder"]).resolve() == folder and not layer.get("disabledReason")
+                for layer in layers):
+            raise CodexAppServerError(
+                "This Tag has Codex rules that block or ask, but this Codex doesn't read a Tag's own rules. "
+                "Update Codex, or remove those rules in Tag.app.")
+
+    def _save_rule(self, rule: dict[str, Any]) -> bool:
+        """Save an Always allow or deny rule to the Tag's own Codex rules, not the global file."""
+        try:
+            if rule["kind"] == "command":
+                agent_permissions.save_codex_command(self.cwd, rule["words"], rule["decision"])
+                if rule["decision"] == "allow":
+                    self.saved_prefixes.append(list(rule["words"]))
+            else:
+                agent_permissions.save_codex_host(self.cwd, rule["host"], rule["protocol"], rule["decision"])
+                self.saved_hosts[(rule["host"], rule["protocol"])] = rule["decision"]
+        except (OSError, ValueError):
+            return False
+        return True
+
+    def _saved_answer(self, choices: list[dict[str, Any]], params: dict[str, Any]) -> dict[str, Any] | None:
+        """Answer a request a rule saved earlier in this run already decides, as Codex would next time."""
+        context = params.get("networkApprovalContext")
+        if context is not None:
+            # A network request: only a host saved for it decides, never a command prefix.
+            target = (context.get("host"), context.get("protocol")) if isinstance(context, dict) else None
+            decision = self.saved_hosts.get(target) if target and all(isinstance(v, str) for v in target) else None
+            # Denying is always safe; allowing waits for any rule that asks about the host.
+            if decision is None or decision == "allow" and agent_permissions.codex_holds(self.cwd, host=target[0]):
+                return None
+            label = "Always allow this host" if decision == "allow" else "Always deny this host"
+            plain = "Allow for this task" if decision == "allow" else "Deny"
+            match = next((c for c in choices if c["label"] == plain), None)
+            return match["result"] if match else next((c["result"] for c in choices if c["label"] == label), None)
+        command = params.get("command")
+        # Only a plain command can match a prefix: `git push && rm -rf ~` must still ask.
+        if not isinstance(command, str) or re.search(r"[;&|`$()<>\\'\"*?{}\[\]~\x00-\x1f\x7f]", command):
+            return None
+        words = [word for word in command.split(" ") if word]
+        if (not any(words[:len(p)] == p for p in self.saved_prefixes)
+                or agent_permissions.codex_holds(self.cwd, words=words)):
+            return None
+        return next((c["result"] for c in choices if c["label"] in ("Allow for this task", "Allow once")), None)
+
     def _resolve_server_request(
         self,
         message: dict[str, Any],
@@ -978,7 +1042,13 @@ class CodexAppServer:
             approval_id = uuid.uuid4().hex
             request_params = params if isinstance(params, dict) else {}
             choices = approval_choices(method, request_params)
+            if not owns_workspace(self.cwd):
+                # Tag keeps Codex rules only in a Tag's own folder, never in a folder of yours.
+                choices = mark_primary([dict(c, id=str(i)) for i, c in enumerate(c for c in choices if not c.get("save"))])
             result = self._approval_result(method, request_params, False)
+            if (answer := self._saved_answer(choices, request_params)) is not None:
+                self._send({"id": request_id, "result": answer})
+                return True
             if choices:
                 emit({
                     "type": "approval_request", "approval_id": approval_id,
@@ -995,6 +1065,11 @@ class CodexAppServer:
                 self._check_control()
                 if choice is not None and not self.interrupt_sent and time.monotonic() < deadline:
                     result = choice["result"]
+                    if choice.get("save") and not self._save_rule(choice["save"]):
+                        # Not saved: an allow still runs this once; a block still refuses.
+                        if choice["save"]["decision"] == "allow":
+                            result = next((c["result"] for c in choices if c["label"] == "Allow once"), result)
+                        emit({"type": "status", "text": "Couldn't save that rule for this Tag, so it applies to this request only."})
             self._send({"id": request_id, "result": result})
             return True
         responses: dict[str, dict[str, Any]] = {

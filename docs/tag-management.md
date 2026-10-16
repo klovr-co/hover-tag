@@ -234,6 +234,9 @@ doesn't have this. Remove the Tag and add a new one instead.
 | Rename | Details → **Rename** | `tag NAME rename "Name"` |
 | Describe | Details → **Edit** | `tag NAME describe "…"` |
 | Model | Details → **Model** | `tag NAME settings ai model VALUE` |
+| Permissions | Details → **Permissions** | `tag NAME settings ai permissions codex-sandbox=… claude-mode=…` |
+| Rules for one Tag | Details → **Permissions** → **Rules** | `tag NAME settings ai permissions block codex 'git push'` (or `allow`, `remove`) |
+| Rules for all Tags | Settings → AI → **AI connections** → **Rules for all Tags** | `tag settings ai rules block codex 'git push'` (or `allow`, `remove`) |
 | AI accounts | Settings → AI → **AI connections** | `tag settings ai` |
 | Keep Tags running | Settings → General → **Keep Tags running** | `tag autostart on` |
 | Start or stop memory | Settings → AI → **Memory** | `tag memory start` / `stop` / `status` |

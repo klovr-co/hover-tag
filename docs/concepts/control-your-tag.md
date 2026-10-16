@@ -57,15 +57,17 @@ buttons only when Codex sends it a supported approval request.
    | **Allow once** | Approve the pending command or file change. |
    | **Allow for this turn** | Grant the requested permissions for the current agent turn. |
    | **Allow for this task** | Use Codex's session-scoped approval for this Tag task, including follow-up turns. It does not carry over to later Slack requests. |
-   | **Always allow this prefix** | Save Codex's proposed command-prefix rule for future matching commands. |
-   | **Always allow this host** / **Always deny this host** | Save Codex's proposed network rule for that host. |
+   | **Always allow this prefix** | Save Codex's proposed command-prefix rule for this Tag's future matching commands. |
+   | **Always allow this host** / **Always deny this host** | Save Codex's proposed network rule for that host, for this Tag. |
    | **Deny** | Refuse the action; Codex may continue with another approach. |
    | **Deny and stop** | Refuse the action and interrupt the agent turn. |
 
    Not every request offers every choice. Tag respects Codex's explicit choice
    list when provided. Persistent choices appear only when Codex proposes a rule;
    review the complete prefix or host in the private prompt before confirming it.
-   These rules are saved by Codex and can affect future Codex runs.
+   Tag saves these rules in the Tag's own Codex rules, not your global ones, so
+   they affect only this Tag's future requests. See
+   [Choose what a Tag may do without asking](#choose-what-a-tag-may-do-without-asking).
 3. Tag replaces the controls with an acknowledgment that your choice was sent
    to Codex. The task's activity and final response show what happened next.
 
@@ -110,9 +112,86 @@ Saved choices ask for confirmation, then go to this Tag's workspace
 settings are not changed. Remove the line from that file to revoke it.
 
 Claude has no **Approve retry** choice. The same requester and expiry rules
-apply, and unanswered or unavailable requests are denied. The operator can choose another
-mode with `OPENTAG_CLAUDE_PERMISSION_MODE`; see the
-[backend reference](../../references/backends.md).
+apply, and unanswered or unavailable requests are denied.
+
+## Choose what a Tag may do without asking
+
+In Tag.app, open the Tag's **Details** and find **Permissions**. Codex and
+Claude work differently, so each keeps its own settings.
+
+Each choice uses the agent's own name for it.
+
+- **Codex sandbox** (`sandbox_mode`) — **Read only**, **Workspace write**
+  (default: changes files only in its folder), or **Full access** (no
+  sandbox).
+- **Codex approval policy** (`approval_policy`) — **Default** (whatever your
+  own Codex config says, on request unless you changed it), **Untrusted**
+  (asks before commands that aren't known to be safe), **On request** (Codex
+  decides when to ask, mostly to go beyond the sandbox), or **Never**.
+- **Codex approvals reviewer** (`approvals_reviewer`) — **Auto review**
+  (default; Codex's reviewer decides, and you can retry what it denies) or
+  **User**: you, privately in Slack. Hidden when the approval policy is
+  Never.
+- **Claude mode** (`--permission-mode`) — **Default** (asks before file
+  changes and commands), **Accept edits**, **Auto** (Tag's default), **Don't
+  ask**, or **Bypass permissions** (skips approvals; only deny rules and hooks
+  can stop it).
+
+A running Tag restarts to use the change. From the terminal, run
+`tag NAME settings ai permissions codex-sandbox=read-only claude-mode=default --restart`.
+See the [backend reference](../../references/backends.md) for the settings
+behind each choice.
+
+Only the agent the Tag's model runs on is shown, since every Slack request
+uses that model. Switch the model to a Claude one and Claude's settings appear
+instead; each agent keeps its own. **Rules** opens the agent's rules.
+
+### Rules
+
+Rules allow or block one command or tool, whatever the mode. Each Tag follows
+four sets, which add up:
+
+| Rules | Where you change them |
+| --- | --- |
+| For this Tag | The Tag's **Details → Permissions → Rules**. **Always allow** in Slack adds here too. |
+| In its folder | Other rule files in the Tag's folder: `.codex/rules/*.rules` and `.claude/settings.json`. The agent reads them too; Tag shows them but doesn't change them. |
+| For all Tags | **Settings → AI connections → Rules for all Tags** |
+| Your own | Your own Codex (`~/.codex/rules`) and Claude Code (`~/.claude/settings.json`) rules. Tag shows them but never changes them, since they also apply when you use Codex or Claude Code yourself. |
+
+To add one, choose **Block** or **Allow**, type a Codex command start
+(`git push`) or a Claude rule (`Bash(git push:*)`), and click **Add**.
+**Remove** takes one away. A change applies from the next request, with no
+restart. A block anywhere wins over an allow anywhere, in every mode, Bypass
+permissions and Full access included. So "Bypass permissions, but never
+`git push`" is a Block rule.
+
+From the terminal:
+
+```sh
+tag NAME settings ai permissions block codex 'git push'      # this Tag
+tag NAME settings ai permissions remove codex 'git push'
+tag settings ai rules allow claude 'WebFetch(domain:github.com)'  # all Tags
+tag settings ai rules                                         # list them
+```
+
+A Tag's rules live in its folder: `.codex/rules/tag.rules` and
+`.claude/settings.local.json`. Codex reads them only from version 0.162. With
+an older Codex, a Tag whose Codex rules block or ask (its own, for all Tags, or
+other files in its folder) stops with a message to update Codex rather than run
+without them. **Rules** also
+lists other rule files in the Tag's folder, which the agent reads too.
+
+The agent's own tools don't change its rules: Codex's sandbox keeps `.codex`
+read-only (except with Full access), and Tag blocks Claude's file edits to
+`.claude/settings.local.json` and `.claude/settings.json`. With Full access or Bypass
+permissions, a shell command could still change them. If one of Claude's settings files can't be read, the
+Tag stops with a message rather than run without its blocks.
+
+Codex rules need the Tag's own folder. If a Tag works in a folder of yours
+(`OPENTAG_WORKDIR`), Tag keeps no Codex rules there, since they would also
+change your own Codex in that folder: it doesn't add or remove them, and the Tag
+won't run Codex while the Codex rules for all Tags block or ask about something,
+or can't be read.
 
 ## Follow a task as it works
 
