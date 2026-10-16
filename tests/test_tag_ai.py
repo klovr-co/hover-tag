@@ -107,7 +107,7 @@ class ConnectionTests(Fixture):
     def test_reports_each_state_with_the_action_to_offer(self) -> None:
         cases = [
             ("codex missing", dict(installed=("claude",)), "codex", "not_installed", ["install"], None),
-            ("codex chatgpt", {}, "codex", "connected", ["change_account"], "ChatGPT sign-in"),
+            ("codex chatgpt", {}, "codex", "connected", ["change_account"], "Codex sign-in on this Mac"),
             ("codex api key", dict(codex_status=done(0, "Logged in using an API key")), "codex", "connected",
              ["change_account"], "API key"),
             ("codex signed out", dict(codex_status=done(1)), "codex", "signed_out", ["sign_in"], None),

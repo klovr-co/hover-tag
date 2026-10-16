@@ -17,7 +17,7 @@ describe("AI status", () => {
   it("reads connections and words their state", () => {
     const report = parseStatus("warning\n" + JSON.stringify(status));
     expect(report.usable).toEqual(["codex"]);
-    expect(statusLine(codex)).toEqual({ text: "Connected · ChatGPT sign-in", tone: "good" });
+    expect(statusLine(codex)).toEqual({ text: "Connected · Codex sign-in on this Mac", tone: "good" });
     expect(statusLine(claude)).toEqual({ text: "Sign-in expired", tone: "warn" });
     expect(choiceLabel(report.default_model)).toBe("Codex · GPT-5.5");
   });
