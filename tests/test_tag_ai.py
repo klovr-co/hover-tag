@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from scripts import agent_models, model_catalog, setup_ui, tag_ai, tag_chatgpt, tag_config
+from scripts import agent_models, agent_permissions, model_catalog, setup_ui, tag_ai, tag_chatgpt, tag_config
 from scripts.tag_locks import LifecycleLock
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -491,6 +491,81 @@ class CommandTests(Fixture):
         self.assertIn("Maya's Tag uses it next time it starts.", output)
         self.assertEqual([], calls)
 
+    def test_each_agents_permissions_save_on_their_own(self) -> None:
+        self.machine()
+        with patch.dict(os.environ, {"CODEX_HOME": str(self.home / "codex"), "CLAUDE_CONFIG_DIR": str(self.home / "claude"),
+                                     "TAG_HOME": str(self.home / "install")}):
+            result = tag_ai.report(self.home, tag_config.load_config(self.config), tag_id="maya", running=False)
+        none = {"tag": [], "folder": [], "all_tags": [], "personal": []}
+        # Unset approvals follow the operator's own Codex config, shown as "".
+        self.assertEqual(({"sandbox": "workspace-write", "approvals": "", "reviewer": "auto_review", "rules": none},
+                          {"mode": "auto", "rules": none}),
+                         (result["permissions"]["codex"], result["permissions"]["claude"]))
+        target, calls = self.target(running=True)
+        code, output = self.run_cli(["permissions", "codex-sandbox=read-only", "claude-mode=acceptEdits"], target, json_output=True)
+        result = json.loads(output)
+        promised = json.loads((EXAMPLES / "ai-permissions.json").read_text(encoding="utf-8"))
+        self.assertEqual(set(promised), set(result))
+        self.assertEqual(set(promised["permissions"]), set(result["permissions"]))
+        for backend in ("codex", "claude"):
+            self.assertEqual(set(promised["permissions"][backend]), set(result["permissions"][backend]))
+            self.assertEqual(set(promised["permissions"][backend]["rules"]), set(result["permissions"][backend]["rules"]))
+        rule_keys = {key for agent in ("codex", "claude") for rules in promised["permissions"][agent]["rules"].values()
+                     for rule in rules for key in rule}
+        self.assertEqual({"kind", "value", "decision"}, rule_keys)
+        # The choices and their words are the ones Tag shows; the example spells them out.
+        self.assertEqual(promised["permissions"]["options"], result["permissions"]["options"])
+        # Reading permissions returns the same report, at the top level.
+        code, output = self.run_cli(["permissions"], target, json_output=True)
+        self.assertEqual({"schema_version", *promised["permissions"]}, set(json.loads(output)))
+        self.assertEqual((0, "read-only", "acceptEdits", True, []),
+                         (code, result["permissions"]["codex"]["sandbox"], result["permissions"]["claude"]["mode"],
+                          result["restart_required"], calls))
+        saved = tag_config.load_config(self.config)
+        self.assertEqual(("read-only", "acceptEdits"), (saved["OPENTAG_CODEX_SANDBOX"], saved["OPENTAG_CLAUDE_PERMISSION_MODE"]))
+        self.assertNotIn("OPENTAG_CODEX_APPROVALS", saved)
+        code, output = self.run_cli(["permissions", "codex-approvals=never"], target, json_output=True, restart=True)
+        self.assertEqual((True, ["restart"]), (json.loads(output)["restarted"], calls))
+        code, output = self.run_cli(["permissions"], target)
+        self.assertIn("Codex · Read only · approval policy: never", output)
+        self.assertIn("Claude · Accept edits", output)
+        with self.assertRaisesRegex(ValueError, "claude-mode: Choose default"):
+            self.run_cli(["permissions", "claude-mode=plan"], target)
+        with self.assertRaisesRegex(ValueError, "codex-sandbox=VALUE"):
+            self.run_cli(["permissions", "sandbox=read-only"], target)
+        self.assertEqual("acceptEdits", tag_config.load_config(self.config)["OPENTAG_CLAUDE_PERMISSION_MODE"])
+
+    def test_a_tags_own_rules_are_added_and_removed_for_each_agent(self) -> None:
+        self.machine()
+        target, calls = self.target(running=True)
+        with patch.dict(os.environ, {"CODEX_HOME": str(self.home / "codex"), "CLAUDE_CONFIG_DIR": str(self.home / "claude"),
+                                     "TAG_HOME": str(self.home / "install")}):
+            code, output = self.run_cli(["permissions", "block", "claude", "Bash(git push:*)"], target, json_output=True)
+            self.assertEqual((0, [{"kind": "rule", "value": "Bash(git push:*)", "decision": "block"}], []),
+                             (code, json.loads(output)["permissions"]["claude"]["rules"]["tag"], calls))
+            code, output = self.run_cli(["permissions", "allow", "codex", "npm run build"], target)
+            self.assertIn("Allowed npm run build for Maya's Tag's Codex", output)
+            code, output = self.run_cli(["permissions"], target)
+            self.assertIn("Claude · Auto · rules: 1 for this Tag", output)
+            self.assertIn("codex · for this Tag · allow · npm run build", output)
+            # Rules for all Tags are shared, so they're edited without a Tag name.
+            everyone = tag_ai.Target(self.home / "install", "", lambda: False, lambda action: 0, "Your Tags")
+            code, output = self.run_cli(["rules", "block", "codex", "git push"], everyone, json_output=True)
+            self.assertEqual(["git push"], [r["value"] for r in json.loads(output)["rules"]["codex"]["all_tags"]])
+            promised = json.loads((EXAMPLES / "ai-rules.json").read_text(encoding="utf-8"))
+            self.assertEqual((set(promised), set(promised["rules"]["codex"])),
+                             (set(json.loads(output)), set(json.loads(output)["rules"]["codex"])))
+            code, output = self.run_cli(["permissions"], target)
+            self.assertIn("codex · for all Tags · block · git push", output)
+            with self.assertRaisesRegex(ValueError, "shared"):
+                self.run_cli(["rules"], target)
+            code, output = self.run_cli(["permissions", "remove", "codex", "npm run build"], target, json_output=True)
+            self.assertEqual([], json.loads(output)["permissions"]["codex"]["rules"]["tag"])
+            with self.assertRaisesRegex(ValueError, "has no Codex rule"):
+                self.run_cli(["permissions", "remove", "codex", "npm run build"], target)
+            with self.assertRaisesRegex(ValueError, "Choose codex or claude"):
+                self.run_cli(["permissions", "allow", "gemini", "x"], target)
+
     def test_sign_in_streams_json_lines_and_restarts_around_a_plan_change(self) -> None:
         plan = {"id": "oaiapp_one", "email": "one@example.test", "signed_in": True, "plan_enabled": True,
                 "usage_paused": False}
@@ -674,6 +749,46 @@ class ThinkingLevelTests(Fixture):
         levels = next(options for prompt, options in prompts if prompt == "Thinking level")
         self.assertEqual(["Low", "Medium · model default", "High", "Extra high", "Model default", "Cancel"], levels)
         self.assertEqual("high", self.saved()["OPENTAG_DEFAULT_EFFORT"])
+
+    def test_menu_blocks_and_removes_a_rule_for_this_tag(self) -> None:
+        target = tag_ai.Target(self.home, "maya", lambda: False, lambda action: 0, "Maya's Tag")
+        prompts: list[str] = []
+        steps = iter(["Change permissions", "Claude rules for this Tag", "Block something", "Back"])
+
+        def choose(prompt, options, **_):
+            prompts.append(prompt)
+            return options.index(next(steps))
+
+        with patch.object(tag_ai.ui, "choose", side_effect=choose), patch.object(tag_ai.ui, "message"), \
+                patch.dict(os.environ, {"TAG_HOME": str(self.home / "install")}), \
+                patch.object(tag_ai.ui, "text", return_value="Bash(git push:*)"), \
+                patch.object(tag_ai.ui.display, "header"), patch.object(tag_ai, "connections", return_value=[]):
+            tag_ai.settings_menu(target)
+        self.assertEqual(["AI & models", "Permissions", "Claude rules", "AI & models"], prompts)
+        rules = agent_permissions.claude_tag_file(tag_ai.workdir(self.home, tag_config.load_config(self.config)))
+        self.assertEqual(["Bash(git push:*)"], json.loads(rules.read_text(encoding="utf-8"))["permissions"]["deny"])
+
+    def test_menu_skips_the_reviewer_when_codex_never_asks(self) -> None:
+        target = tag_ai.Target(self.home, "maya", lambda: False, lambda action: 0, "Maya's Tag")
+        menus: list[list[str]] = []
+        steps = iter(["Change permissions", "Codex approval policy", "Never ·", "Change permissions", "Cancel", "Back"])
+
+        def choose(prompt, options, **_):
+            if prompt == "Permissions":
+                menus.append(options)
+            step = next(steps)
+            return next(i for i, option in enumerate(options) if option.startswith(step))
+
+        with patch.object(tag_ai.ui, "choose", side_effect=choose), patch.object(tag_ai.ui, "message"), \
+                patch.dict(os.environ, {"TAG_HOME": str(self.home / "install")}), \
+                patch.object(tag_ai.ui.display, "header"), patch.object(tag_ai, "connections", return_value=[]):
+            tag_ai.settings_menu(target)
+        self.assertEqual(["Codex sandbox", "Codex approval policy", "Codex approvals reviewer", "Claude permission mode"],
+                         menus[0][:4])
+        # With approval policy never, nothing is reviewed, so Tag.app and the CLI don't offer the reviewer.
+        self.assertEqual(["Codex sandbox", "Codex approval policy", "Claude permission mode"], menus[1][:3])
+        self.assertNotIn("Codex approvals reviewer", menus[1])
+        self.assertEqual("never", self.saved()["OPENTAG_CODEX_APPROVALS"])
 
     def test_an_older_config_without_the_new_settings_behaves_as_before(self) -> None:
         tag_config.save_config(self.config, {"OPENTAG_BACKEND": "codex", "OPENTAG_DEFAULT_MODEL": "codex:gpt-5.5"})

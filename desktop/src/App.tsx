@@ -15,7 +15,7 @@ import { Connect } from "./components/Connect";
 import { Home } from "./components/Home";
 import { QuickAdd } from "./components/QuickAdd";
 import { Installing, NO_CUSTOM, Starting, Welcome, type InstallChoice } from "./components/Install";
-import { AI_CAPABILITY, API_CAPABILITY, SAVED_MODELS_CAPABILITY, SHARED_AI_CAPABILITY } from "./lib/ai";
+import { AI_CAPABILITY, API_CAPABILITY, RULES_CAPABILITY, SAVED_MODELS_CAPABILITY, SHARED_AI_CAPABILITY } from "./lib/ai";
 import { AISettings } from "./components/AISettings";
 import { MemorySettings, Settings, type SettingsTab } from "./components/Settings";
 import { TagDetail, type Tab as TagTab } from "./components/TagDetail";
@@ -320,7 +320,7 @@ export function App() {
         )}
         {screen.name === "memory" && <MemorySettings api={api} close={() => setScreen({ name: "settings", tab: "ai" })} />}
         {screen.name === "ai" && (
-          <AISettings api={api} tags={tags} apiConnections={capabilities.includes(API_CAPABILITY)} close={() => { watch.recheck(); setScreen(screen.resume ? { name: "connect", args: screen.resume } : { name: "settings", tab: "ai" }); }} />
+          <AISettings api={api} tags={tags} apiConnections={capabilities.includes(API_CAPABILITY)} rules={capabilities.includes(RULES_CAPABILITY)} close={() => { watch.recheck(); setScreen(screen.resume ? { name: "connect", args: screen.resume } : { name: "settings", tab: "ai" }); }} />
         )}
         {screen.name === "tag" && (
           <TagDetail key={screen.opened ?? 0} api={api} tags={tags} initial={screen.id} initialTab={screen.tab} problems={watch.problems} back={home} add={add}

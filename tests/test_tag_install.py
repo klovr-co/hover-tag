@@ -489,9 +489,23 @@ class TagHomeTests(unittest.TestCase):
                 "CODEX_HOME": "global-config",
             }):
                 args = codex_workspace_args(home / "workspace")
-                self.assertIn('mcp_servers.example=', args[1])
+                self.assertIn('mcp_servers.example=', args[3])
+                # Only the Tag's folder is trusted, so Codex reads its own rules there.
+                self.assertEqual('projects={ %s = { trust_level = "trusted" } }' % json.dumps(str((home / "workspace").resolve())), args[1])
                 self.assertEqual(os.environ["CODEX_HOME"], "global-config")
                 self.assertEqual(codex_workspace_args(home / "another-project"), [])
+            # A Tag pointed at a folder of yours keeps its MCP servers there, but gets no trust.
+            with patch.dict(os.environ, {"TAG_HOME": str(home.parent), "TAG_INSTANCE_HOME": str(home),
+                                         "OPENTAG_WORKDIR": str(home / "workspace")}):
+                self.assertTrue(any("trust_level" in a for a in codex_workspace_args(home / "workspace")))
+            mine = home / "mine"
+            (mine / ".codex").mkdir(parents=True)
+            (mine / ".codex/config.toml").write_text('[mcp_servers.example]\ncommand="python"\n', encoding="utf-8")
+            with patch.dict(os.environ, {"TAG_HOME": str(home.parent), "TAG_INSTANCE_HOME": str(home),
+                                         "OPENTAG_WORKDIR": str(mine)}):
+                args = codex_workspace_args(mine)
+                self.assertTrue(any("mcp_servers.example=" in a for a in args))
+                self.assertFalse(any("trust_level" in a for a in args))
 
     def test_config_is_data_not_executable_shell(self):
         with tempfile.TemporaryDirectory() as temp:

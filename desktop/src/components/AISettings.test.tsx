@@ -35,6 +35,68 @@ describe("Shared AI settings", () => {
   });
 });
 
+describe("Rules for all Tags", () => {
+  it("adds and removes a rule every Tag follows, and only shows your own", async () => {
+    const api = demoBridge();
+    const run = vi.spyOn(api, "tag");
+    const tags = { rows: [], refresh: vi.fn() } as unknown as Tags;
+    render(<AISettings api={api} tags={tags} close={vi.fn()} rules />);
+    expect(await screen.findByText("rm -rf")).toBeTruthy();
+    expect(run).toHaveBeenCalledWith(["settings", "ai", "rules", "--json"]);
+    fireEvent.change(screen.getByRole("textbox", { name: "Command start" }), { target: { value: "git push --force" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    await vi.waitFor(() => expect(run).toHaveBeenCalledWith(["settings", "ai", "rules", "block", "codex", "git push --force", "--json"]));
+    expect(await screen.findByText("git push --force")).toBeTruthy();
+    expect(await screen.findByText("Blocked git push --force for every Tag.")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("radio", { name: "Claude" }));
+    expect(await screen.findByText("Bash(rm -rf:*)")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Also follows 1 of your own" }));
+    expect(screen.getByText("WebFetch")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Remove WebFetch" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Remove Bash(rm -rf:*)" }));
+    await vi.waitFor(() => expect(run).toHaveBeenCalledWith(["settings", "ai", "rules", "remove", "claude", "Bash(rm -rf:*)", "--json"]));
+    await vi.waitFor(() => expect(screen.queryByText("Bash(rm -rf:*)")).toBeNull());
+  });
+
+  it("lets a rule be changed again after the change couldn't run", async () => {
+    const api = demoBridge();
+    const run = api.tag;
+    api.tag = (args) => (args[3] === "remove" ? Promise.reject(new Error("Tag isn't installed")) : run(args));
+    const tags = { rows: [], refresh: vi.fn() } as unknown as Tags;
+    render(<AISettings api={api} tags={tags} close={vi.fn()} rules />);
+    const remove = await screen.findByRole<HTMLButtonElement>("button", { name: "Remove rm -rf" });
+    fireEvent.click(remove);
+    expect(await screen.findByText(/Tag isn't installed/)).toBeTruthy();
+    expect(remove.disabled).toBe(false);
+    expect(screen.getByRole<HTMLInputElement>("textbox", { name: "Command start" }).disabled).toBe(false);
+  });
+
+  it("shows unreadable rules for all Tags as unreadable, and can't add to them", async () => {
+    const api = demoBridge();
+    const run = api.tag;
+    api.tag = async (args) => {
+      const result = await run(args);
+      if (args.join(" ") !== "settings ai rules --json") return result;
+      const report = JSON.parse(result.stdout);
+      report.rules.codex.all_tags = null;
+      return { ...result, stdout: JSON.stringify(report) };
+    };
+    const tags = { rows: [], refresh: vi.fn() } as unknown as Tags;
+    render(<AISettings api={api} tags={tags} close={vi.fn()} rules />);
+    expect(await screen.findByText(/Couldn't read these Codex rules/)).toBeTruthy();
+    expect(screen.queryByText("None yet.")).toBeNull();
+    expect(screen.getByRole<HTMLInputElement>("textbox", { name: "Command start" }).disabled).toBe(true);
+  });
+
+  it("stays hidden when the installed Tag can't change rules", async () => {
+    const tags = { rows: [], refresh: vi.fn() } as unknown as Tags;
+    render(<AISettings api={demoBridge()} tags={tags} close={vi.fn()} />);
+    await screen.findByText("Shared by all your Tags");
+    expect(screen.queryByText("Rules for all Tags")).toBeNull();
+  });
+});
+
 describe("Your own API", () => {
   const tags = () => ({ rows: [{ id: "t0klovr1-a0maya01", slack_name: "Maya's Tag", valid: true, state: "running" },
     { id: "t0ops", slack_name: "Ops Tag", valid: true, state: "stopped" }], refresh: vi.fn() }) as unknown as Tags;

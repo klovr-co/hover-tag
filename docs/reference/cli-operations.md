@@ -39,6 +39,9 @@ The Tag desktop app and the CLI use the same Tags, settings, and lifecycle: the 
 | Rename | Details → **Rename** | `tag NAME rename "Name"` |
 | Describe | Details → description **Edit** | `tag NAME describe "…"` |
 | Model and thinking level | Details → **Model** | `tag NAME settings ai model VALUE [--effort LEVEL]` |
+| Permissions | Details → **Permissions** | `tag NAME settings ai permissions codex-sandbox=… claude-mode=…` |
+| Rules for one Tag | Details → **Permissions** → **Rules** | `tag NAME settings ai permissions allow\|block\|remove codex\|claude RULE`; `tag NAME settings ai permissions` lists them |
+| Rules for all Tags | Settings → AI → **AI connections** → **Rules for all Tags** | `tag settings ai rules [allow\|block\|remove codex\|claude RULE]` |
 | AI accounts | Settings → AI → **AI connections** | `tag settings ai`, `tag settings ai sign-in codex\|claude` |
 | Keep Tags running | Settings → General → **Keep Tags running** | `tag autostart on` |
 | Search model (Default or Custom) | Settings → AI → **Search model** | `tag memory embedding local\|custom` |
@@ -303,6 +306,9 @@ tag settings ai models              # models from connected accounts
 tag settings ai model claude:opus   # save the default model
 tag settings ai effort high         # save the default thinking level
 tag settings ai effort default      # use the model's own thinking level
+tag NAME settings ai permissions claude-mode=default codex-sandbox=read-only
+tag NAME settings ai permissions block codex 'git push'   # a rule for this Tag only
+tag settings ai rules block codex 'git push'              # a rule for every Tag (no Tag name)
 tag settings ai sign-in claude      # sign in, reconnect, or change account
 tag settings ai sign-in codex --method chatgpt --restart
 ```
