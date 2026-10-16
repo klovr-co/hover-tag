@@ -70,6 +70,28 @@ class InvitationMemoryTests(unittest.TestCase):
         self.assertEqual(self.env["MFS_ALLOWED_SCOPES"], "file://local/keep")
         self.sync.assert_not_called()
         self.history.assert_not_called()
+        self.assertTrue(self.worker.ready_for_requests())
+
+    def test_losing_every_channel_after_sync_stays_ready_with_no_access(self):
+        self.channels.return_value = [SlackChannel("CONE", "one", False, True)]
+        self.worker.tick()
+        self.channels.return_value = []
+        self.worker.tick()
+        self.assertTrue(self.worker.ready_for_requests())
+        self.assertEqual(self.env["SLACK_CHANNEL_IDS"], "")
+        self.assertIsNone(self.worker.last_signature)
+
+    def test_refresh_checks_membership_without_waiting_for_the_minute(self):
+        self.channels.return_value = []
+        calls = []
+        self.worker.tick = lambda: (calls.append(1), self.worker.stop() if len(calls) == 2 else None)
+        self.worker.start()
+        self.worker.thread.join(0.2)
+        self.assertEqual(len(calls), 1)  # Idle: the next check is a minute away.
+        self.worker.refresh()
+        self.worker.thread.join(2)
+        self.assertEqual(len(calls), 2)
+        self.assertFalse(self.worker.thread.is_alive())
 
     def test_failed_membership_lookup_does_not_reuse_stale_access(self):
         self.channels.side_effect = RuntimeError("sensitive-detail")
