@@ -463,7 +463,12 @@ def _codex_prefix_line(words: list[str], decision: str) -> str:
     return f"prefix_rule(pattern=[{', '.join(json.dumps(w) for w in words)}], decision=\"{native}\")"
 
 
-def _codex_lines_without(path: Path, kind: str, value: str) -> tuple[list[str], bool]:
+_PROTOCOL_LITERAL = re.compile(r"""protocol\s*=\s*(?:"([^"]*)"|'([^']*)')""")
+
+
+def _codex_lines_without(path: Path, kind: str, value: str,
+                         protocol: str | None = None) -> tuple[list[str], bool]:
+    """The file's lines minus the rule for `value`. With a `protocol`, a host rule for another protocol stays."""
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except FileNotFoundError:
@@ -473,7 +478,9 @@ def _codex_lines_without(path: Path, kind: str, value: str) -> tuple[list[str], 
     kept = []
     for line in lines:
         found = [rule for rule, _ in _codex_text_rules(line.strip())]
-        if not any(r["kind"] == kind and r["value"] == value for r in found):
+        other = _PROTOCOL_LITERAL.search(line)
+        if not any(r["kind"] == kind and r["value"] == value for r in found) or (
+                protocol is not None and other and (other.group(1) or other.group(2)) != protocol):
             kept.append(line)
         elif len(found) > 1 or ";" in line:
             # Never drop the other rules on that line along with this one.
@@ -481,9 +488,9 @@ def _codex_lines_without(path: Path, kind: str, value: str) -> tuple[list[str], 
     return kept, len(kept) != len(lines)
 
 
-def _save_codex(path: Path, kind: str, value: str, line: str) -> None:
+def _save_codex(path: Path, kind: str, value: str, line: str, protocol: str | None = None) -> None:
     with _locked(path):
-        lines, _ = _codex_lines_without(path, kind, value)
+        lines, _ = _codex_lines_without(path, kind, value, protocol)
         _write(path, "\n".join([*lines, line]) + "\n")
 
 
@@ -498,7 +505,8 @@ def save_codex_host(workdir: Path, host: str, protocol: str, decision: str) -> N
         raise ValueError("Codex sent a host rule Tag can't save")
     native = {"allow": "allow", "block": "deny"}[decision]
     _save_codex(codex_tag_file(workdir), "host", host, f"network_rule(host={json.dumps(host)}, "
-                f"protocol={json.dumps(CODEX_PROTOCOLS[protocol])}, decision={json.dumps(native)})")
+                f"protocol={json.dumps(CODEX_PROTOCOLS[protocol])}, decision={json.dumps(native)})",
+                CODEX_PROTOCOLS[protocol])
 
 
 def _rule_file(backend: str, workdir: Path | None) -> Path:

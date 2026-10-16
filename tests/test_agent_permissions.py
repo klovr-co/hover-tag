@@ -115,7 +115,8 @@ class TagRuleTests(unittest.TestCase):
                          json.loads(path.read_text(encoding="utf-8")))
         agent_permissions.remove_rule("claude", self.tag, "WebFetch")
         self.assertEqual(["Bash(git push:*)"], json.loads(path.read_text(encoding="utf-8"))["permissions"]["allow"])
-        self.assertEqual(0o600, path.stat().st_mode & 0o777)
+        if os.name != "nt":  # Windows has no POSIX file modes.
+            self.assertEqual(0o600, path.stat().st_mode & 0o777)
         agent_permissions.add_rule("codex", self.tag, "allow", "git push")
         agent_permissions.add_rule("codex", self.tag, "block", "git push")
         agent_permissions.save_codex_host(self.tag, "api.example.com", "https", "allow")
@@ -128,6 +129,17 @@ class TagRuleTests(unittest.TestCase):
         for backend, missing in (("claude", "Bash(rm:*)"), ("codex", "rm")):
             with self.assertRaisesRegex(ValueError, "has no"):
                 agent_permissions.remove_rule(backend, self.tag, missing)
+
+    def test_saving_a_host_rule_keeps_the_same_host_on_other_protocols(self) -> None:
+        agent_permissions.save_codex_host(self.tag, "api.example.com", "https", "block")
+        agent_permissions.save_codex_host(self.tag, "api.example.com", "http", "allow")
+        text = agent_permissions.codex_tag_file(self.tag).read_text(encoding="utf-8")
+        self.assertIn('protocol="https", decision="deny"', text)
+        self.assertIn('protocol="http", decision="allow"', text)
+        agent_permissions.save_codex_host(self.tag, "api.example.com", "https", "allow")
+        text = agent_permissions.codex_tag_file(self.tag).read_text(encoding="utf-8")
+        self.assertNotIn("deny", text)
+        self.assertEqual(2, text.count("network_rule"))
 
     def test_a_line_with_other_rules_is_never_rewritten(self) -> None:
         path = self.write(agent_permissions.codex_tag_file(self.tag),

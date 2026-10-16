@@ -191,7 +191,8 @@ Codex rules need the Tag's own folder. If a Tag works in a folder of yours
 (`OPENTAG_WORKDIR`), Tag keeps no Codex rules there, since they would also
 change your own Codex in that folder: it doesn't add or remove them, and the Tag
 won't run Codex while the Codex rules for all Tags block or ask about something,
-or can't be read.
+or can't be read. It also won't run Codex there while the folder's own Codex rules
+block or ask and your Codex doesn't trust the folder, since Codex would skip them.
 
 ## Follow a task as it works
 

@@ -980,6 +980,10 @@ class CodexAppServer:
                 and name.get("type") == "project" and isinstance(name.get("dotCodexFolder"), str)
                 and Path(name["dotCodexFolder"]).resolve() == folder and not layer.get("disabledReason")
                 for layer in layers):
+            if not owns_workspace(self.cwd):
+                raise CodexAppServerError(
+                    f"{self.cwd} has Codex rules that block or ask, but Codex doesn't read them there. "
+                    "Trust that folder in your own Codex config, or remove those rules.")
             raise CodexAppServerError(
                 "This Tag has Codex rules that block or ask, but this Codex doesn't read a Tag's own rules. "
                 "Update Codex, or remove those rules in Tag.app.")

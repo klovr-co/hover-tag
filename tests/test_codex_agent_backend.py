@@ -723,8 +723,15 @@ for line in sys.stdin:
                     outcome = str(error)
                 return outcome, [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
 
-        outcome, requests = run("old", "block")
+        with patch("scripts.codex_agent_backend.owns_workspace", return_value=True):
+            outcome, requests = run("old", "block")
         self.assertIn("doesn't read a Tag's own rules", str(outcome))
+        self.assertNotIn("thread/start", [r["method"] for r in requests])
+        # In a folder of the operator's, updating Codex or using Tag.app can't help, so the message says what can.
+        with patch("scripts.codex_agent_backend.owns_workspace", return_value=False):
+            outcome, requests = run("old", "block")
+        self.assertIn("Trust that folder in your own Codex config", str(outcome))
+        self.assertNotIn("Tag.app", str(outcome))
         self.assertNotIn("thread/start", [r["method"] for r in requests])
         outcome, requests = run("trusted", "block")
         self.assertEqual(("completed", ""), outcome)

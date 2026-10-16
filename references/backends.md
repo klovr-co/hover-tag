@@ -91,7 +91,8 @@ Tag keeps Codex rules and trust only in a Tag's own default folder. A Tag whose
 `OPENTAG_WORKDIR` points at a folder of the operator's gets neither, since they
 would also change the operator's own Codex sessions there: Always allow offers
 no saved Codex rule, `permissions allow|block|remove codex` is refused, and a
-run is refused while the all-Tags Codex rules block or ask, or can't be read.
+run is refused while the all-Tags Codex rules block or ask, or can't be read, or
+while that folder's own Codex rules block or ask and Codex hasn't been told to trust the folder.
 
 Set `OPENTAG_CLAUDE_TRANSPORT=print` to roll back to the previous print mode:
 
