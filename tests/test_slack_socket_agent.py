@@ -3089,6 +3089,18 @@ class SlackWorkingIndicatorTests(unittest.TestCase):
         self.assertEqual("Stopping…", client.assistant_threads_setStatus.call_args.kwargs["status"])
         self.assertEqual("Stopping…", indicator.current_status())
 
+    def test_late_stop_request_after_clear_shows_nothing(self) -> None:
+        client = MagicMock()
+        indicator = slack_socket_agent.WorkingIndicator(client, "C123", "1.23", MagicMock())
+        indicator.native = indicator.legacy_status = True
+        indicator.clear()
+        client.reset_mock()
+
+        indicator.stop_requested()
+
+        self.assertFalse(indicator.stopping)
+        client.assistant_threads_setStatus.assert_not_called()
+
     def test_uses_native_slack_loading_status(self) -> None:
         client = MagicMock()
         indicator = slack_socket_agent.WorkingIndicator(client, "C123", "1.23", MagicMock())
@@ -4489,6 +4501,19 @@ class SlackCancellationTests(unittest.TestCase):
             self.assertTrue(slack_socket_agent.thread_stopping(key))
             slack_socket_agent.unregister_active_run(key, run)
             self.assertFalse(slack_socket_agent.thread_stopping(key))
+
+    def test_failed_control_write_kills_the_backend_before_showing_the_stop(self) -> None:
+        order: list[str] = []
+        process = MagicMock()
+        process.poll.return_value = None
+        control = MagicMock()
+        control.write_text.side_effect = OSError("disk full")
+        run = slack_socket_agent.ActiveBackendRun(
+            process, control, "run", on_stop_requested=lambda: order.append("callback")
+        )
+        with patch.object(run, "force_stop", side_effect=lambda: order.append("kill")):
+            run.cancel()
+        self.assertEqual(["kill", "callback"], order)
 
     def test_late_slack_delivery_is_logged_and_prompt_delivery_is_not(self) -> None:
         event = {"ts": "100.0", "channel": "C1", "thread_ts": "90.0"}

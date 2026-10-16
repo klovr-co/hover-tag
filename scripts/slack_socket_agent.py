@@ -1461,6 +1461,7 @@ class WorkingIndicator:
         self.preparing_answer = False
         self.public_status: str | None = None
         self.stopping = False
+        self.done = False
         self.last_status: str | None = None
         self.last_status_at = float("-inf")
         self.lock = threading.RLock()
@@ -1633,6 +1634,8 @@ class WorkingIndicator:
     def stop_requested(self) -> None:
         """Show at once that a stop is in progress until the backend exits."""
         with self.lock:
+            if self.done:
+                return  # The request ended; a late stop must not replace the final reply.
             self.stopping = True
             if self.legacy_status or self.message_ts is not None:
                 try:
@@ -1762,6 +1765,8 @@ class WorkingIndicator:
 
     def clear(self, *, complete_session: bool = True) -> None:
         with self.lock:
+            if complete_session:
+                self.done = True
             if self.activity_timer is not None:
                 self.activity_timer.cancel()
                 self.activity_timer = None
@@ -2162,13 +2167,13 @@ class ActiveBackendRun:
                 self.kill_timer = threading.Timer(CANCEL_GRACE_SECONDS, self.force_stop)
                 self.kill_timer.daemon = True
                 self.kill_timer.start()
+        if should_force_stop:
+            self.force_stop()  # Kill first; the Slack call below can be slow.
         if self.on_stop_requested is not None:
             try:
                 self.on_stop_requested()
             except Exception:  # noqa: BLE001 - showing the stop must not block it
                 pass
-        if should_force_stop:
-            self.force_stop()
 
     def force_stop(self) -> None:
         if self.process.poll() is not None:
