@@ -1,4 +1,5 @@
 // One product update: adopt the app's initial channel, then respect saved choices.
+import { useCallback, useState } from "react";
 import type { Bridge } from "./bridge";
 import { parseJSON } from "./protocol";
 import { failureLine } from "./tags";
@@ -179,3 +180,23 @@ export function updateReducer(state: UpdateState, action: UpdateAction): UpdateS
 
 /** The version an update is going to, for notices. */
 export const targetVersion = (state: UpdateState) => state.update?.version ?? "";
+
+// ---- Putting an update off ------------------------------------------------------
+
+const SKIPPED_KEY = "tag.skipped-update";
+
+function savedSkip(): string | null {
+  try { return window.localStorage.getItem(SKIPPED_KEY); } catch { return null; }
+}
+
+/** "Later" hides the Home banner until the app restarts; "Skip this version" hides it until a newer
+ *  release is published and is remembered on this computer. Settings always offers the update. */
+export function useDeferral() {
+  const [later, setLater] = useState<string | null>(null);
+  const [skipped, setSkipped] = useState<string | null>(savedSkip);
+  const skip = useCallback((version: string) => {
+    setSkipped(version);
+    try { window.localStorage.setItem(SKIPPED_KEY, version); } catch { /* applies until the app closes */ }
+  }, []);
+  return { deferred: (version: string) => !!version && (version === later || version === skipped), later: setLater, skip };
+}
