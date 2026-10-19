@@ -27,6 +27,15 @@ the same thread starts their own. A conversation starts fresh after 4 idle
 hours or when it grows too large. A fresh conversation reads one page of up to
 30 thread messages, so restate an important detail if it seems lost.
 
+An owner can also turn on experimental channel watching for a channel. Tag then
+answers messages that name it, and threads it's already in, without an
+@mention. To decide, it sends the message and up to ten recent messages from
+that thread to the selected classifier, TypeSafe Jev or OpenAI Decisions.
+Member IDs, files, attachments and the rest of the channel are not included.
+A watched reply knows only that thread: it can't search, read files, use
+memory or take actions. It stays in the thread, says why Tag replied, and
+offers **Take this on** for anything more. Explicit mentions work as before.
+
 Tag can also reopen files shared earlier in the thread and images it made
 before. See [Use earlier files in a thread](workspaces-and-tools.md#use-earlier-files-in-a-thread).
 

@@ -99,6 +99,8 @@ REQUIRED_APP_SETTINGS = {
     "file access": "files:read",
     "file delivery": "files:write",
     "direct-message event": "message.im",
+    "public channel message event": "message.channels",
+    "private channel message event": "message.groups",
     "direct-message history": "im:history",
 }
 
@@ -224,7 +226,8 @@ def missing_app_settings(manifest: str, *, enterprise: bool = False) -> list[str
     ]
 
 
-EVENT_SETTINGS = ("app mentions", "App Home event (app_home_opened)", "agent stop event", "direct-message event")
+EVENT_SETTINGS = ("app mentions", "App Home event (app_home_opened)", "agent stop event", "direct-message event",
+                  "public channel message event", "private channel message event")
 APP_HOME_SETTINGS = ("Home tab enabled", "Messages tab enabled")
 
 
@@ -269,6 +272,10 @@ def print_manual_steps(missing: list[str]) -> None:
             ui.message("Add agent_session_stopped to enable the native Stop button.", indent="      ")
         if "direct-message event" in missing:
             ui.message("Add message.im to receive direct messages.", indent="      ")
+        for label in ("public channel message event", "private channel message event"):
+            if label in missing:
+                ui.message(f"Add {REQUIRED_APP_SETTINGS[label]} for optional replies to untagged messages.",
+                           indent="      ")
     if "Home tab enabled" in missing:
         ui.message("App Home → Show Tabs → enable Home Tab.", indent="    ")
     if "Messages tab enabled" in missing:

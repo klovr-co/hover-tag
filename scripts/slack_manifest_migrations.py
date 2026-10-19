@@ -29,14 +29,17 @@ except ImportError:
 
 ROOT = Path(__file__).resolve().parents[1]
 # 4: team:read, so Tag.app can show the Slack workspace icon.
-MIGRATION_VERSION = 4
+# 5: message.channels, message.groups, reaction_added and optional reactions:read/write,
+#    for opt-in channel watching.
+MIGRATION_VERSION = 5
 DM_SCOPE = "im:history"
 REQUIRED_MANIFEST = yaml.safe_load((ROOT / "slack-app-manifest.yaml").read_text(encoding="utf-8"))
 REQUIRED_BOT_SCOPES = tuple(REQUIRED_MANIFEST["oauth_config"]["scopes"]["bot"])
 # Requested like the others, but never worth stopping a start for: team:read only
 # shows the workspace icon. If Slack (or an admin) hasn't granted it yet, Tag starts
 # anyway and asks again at most once a day.
-OPTIONAL_BOT_SCOPES = frozenset({"team:read"})
+# Channel watching stays off until reactions:read and reactions:write are granted.
+OPTIONAL_BOT_SCOPES = frozenset({"team:read", "reactions:read", "reactions:write"})
 NEEDED_BOT_SCOPES = tuple(scope for scope in REQUIRED_BOT_SCOPES if scope not in OPTIONAL_BOT_SCOPES)
 OPTIONAL_RETRY = timedelta(hours=24)
 OPTIONAL_KEYS = {"optional_pending", "optional_checked_at", "optional_error"}

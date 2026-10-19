@@ -26,11 +26,18 @@ DEFAULTS = {
     "OPENTAG_MAX_TIMEOUT_SECONDS": "3600",
     "OPENTAG_BACKEND_ATTEMPTS": "3", "OPENTAG_SLACK_STREAMING": "1",
     "OPENTAG_SLACK_DM_ENABLED": "1", "OPENTAG_SHOW_THINKING": "1",
+    "OPENTAG_WATCH_CHANNEL_IDS": "", "OPENTAG_WATCH_NAMES": "",
+    "OPENTAG_WATCH_QUIET_HOURS": "19:00-08:00", "OPENTAG_WATCH_DAILY_LIMIT": "5",
+    "OPENTAG_WATCH_COOLDOWN_HOURS": "24",
+    "OPENTAG_WATCH_CLASSIFIER": "typesafe-jev", "OPENTAG_WATCH_CLASSIFIER_TIMEOUT_SECONDS": "5",
+    "OPENTAG_JEV_MODEL": "jev-latest", "OPENTAG_JEV_THRESHOLD": "0.9",
+    "OPENTAG_DECISIONS_MODEL": "gpt-6-luna", "OPENTAG_DECISIONS_THRESHOLD": "0.9",
     "OPENTAG_FILE_DELIVERY": "local+slack",
     "OPENTAG_THREAD_MAX_CONTEXT_TOKENS": "150000", "OPENTAG_THREAD_IDLE_HOURS": "4",
     "MFS_URL": "http://127.0.0.1:13619", "MFS_SLACK_HISTORY_DAYS": "30",
 }
 BACKENDS = frozenset({"codex", "claude"})
+QUIET_HOURS_RE = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]-(?:[01][0-9]|2[0-3]):[0-5][0-9]")
 DEFAULT_MODEL_RE = re.compile(r"(?:codex|claude)(?::[A-Za-z0-9][A-Za-z0-9._\[\]-]{0,99})?")
 REQUIRED = ("OPENTAG_BACKEND", "MFS_URL", "MFS_ALLOWED_SCOPES",
             "SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_ALLOWED_USER_IDS",
@@ -47,7 +54,13 @@ PUBLIC = frozenset((*DEFAULTS, "MFS_ALLOWED_SCOPES", "OPENTAG_WORKDIR",
                     "OPENTAG_DEFAULT_EFFORT", "OPENTAG_BOT_DESCRIPTION",
                     "OPENTAG_PEER_TAGS"))
 EDITABLE = PUBLIC - {"OPENTAG_WORKDIR"} | {
-    "SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "MFS_TOKEN", "MFS_SLACK_TOKEN", "MFS_HOME"
+    "SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "MFS_TOKEN", "MFS_SLACK_TOKEN", "MFS_HOME",
+    # Channel-watching classifier keys: private, and kept from the agent like Slack access settings.
+    "OPENTAG_TYPESAFE_API_KEY", "OPENTAG_OPENAI_DECISIONS_API_KEY",
+}
+CLASSIFIER_PROVIDERS = {
+    "typesafe-jev": ("OPENTAG_TYPESAFE_API_KEY", "TypeSafe API key"),
+    "openai-decisions": ("OPENTAG_OPENAI_DECISIONS_API_KEY", "OpenAI Decisions API key"),
 }
 LABELS = {
     "OPENTAG_BACKEND": "Agent", "OPENTAG_BOT_NAME": "Bot name",
@@ -73,6 +86,18 @@ LABELS = {
     "OPENTAG_BACKEND_ATTEMPTS": "Retry attempts", "OPENTAG_SLACK_STREAMING": "Stream replies (1 on, 0 off)",
     "OPENTAG_SLACK_DM_ENABLED": "Direct messages (1 on, 0 off)",
     "OPENTAG_SHOW_THINKING": "Show thinking summaries in Agent activity (1 on, 0 off)",
+    "OPENTAG_WATCH_CHANNEL_IDS": "Watched channels: answer without an @mention (experimental; comma-separated IDs)",
+    "OPENTAG_WATCH_NAMES": "Other names people call this Tag (comma-separated)",
+    "OPENTAG_WATCH_QUIET_HOURS": "Watching quiet hours, this computer's time (HH:MM-HH:MM, empty for none)",
+    "OPENTAG_WATCH_DAILY_LIMIT": "Unprompted replies per watched channel per day",
+    "OPENTAG_WATCH_COOLDOWN_HOURS": "Hours to stay quiet in a channel after a 👎 or stop",
+    "OPENTAG_WATCH_CLASSIFIER": "Watching classifier (typesafe-jev or openai-decisions)",
+    "OPENTAG_WATCH_CLASSIFIER_TIMEOUT_SECONDS": "Classifier timeout (seconds)",
+    "OPENTAG_JEV_MODEL": "Jev model", "OPENTAG_JEV_THRESHOLD": "Jev reply threshold (0.5 to 1)",
+    "OPENTAG_TYPESAFE_API_KEY": "TypeSafe API key",
+    "OPENTAG_DECISIONS_MODEL": "OpenAI Decisions model",
+    "OPENTAG_DECISIONS_THRESHOLD": "OpenAI Decisions reply threshold (0.5 to 1)",
+    "OPENTAG_OPENAI_DECISIONS_API_KEY": "OpenAI Decisions API key",
     "OPENTAG_FILE_DELIVERY": "File delivery (local or local+slack)",
     "OPENTAG_TRANSPORT": "Chat service",
     "OPENTAG_PEER_TAGS": "Other Tags this Tag may ask (Name=MEMBERID, comma-separated)",
@@ -213,6 +238,40 @@ def validation_error(key: str, value: str) -> str | None:
         return "Use an absolute connector configuration path"
     if key in {"OPENTAG_SLACK_STREAMING", "OPENTAG_SLACK_DM_ENABLED", "OPENTAG_SHOW_THINKING"} and value not in {"0", "1"}:
         return "Use 0 or 1"
+    if key == "OPENTAG_WATCH_CHANNEL_IDS" and value.strip() and not all(
+            re.fullmatch(r"[CG][A-Z0-9]+", item.strip()) for item in value.split(",")):
+        return "Use comma-separated Slack channel IDs, or leave empty to watch no channels"
+    if key == "OPENTAG_WATCH_NAMES" and any(
+            not item.strip() or len(item.strip()) > 35
+            or any(unicodedata.category(character) in {"Cc", "Zl", "Zp"} for character in item)
+            for item in value.split(",") if value.strip()):
+        return "Use comma-separated names of 1 to 35 characters"
+    if key == "OPENTAG_WATCH_QUIET_HOURS" and value and not QUIET_HOURS_RE.fullmatch(value):
+        return "Use HH:MM-HH:MM in 24-hour time, or leave empty for no quiet hours"
+    if key == "OPENTAG_WATCH_DAILY_LIMIT" and not (value.isascii() and value.isdigit() and 1 <= int(value) <= 50):
+        return "Use a whole number from 1 to 50"
+    if key == "OPENTAG_WATCH_COOLDOWN_HOURS" and not (value.isascii() and value.isdigit() and 1 <= int(value) <= 168):
+        return "Use a whole number of hours from 1 to 168"
+    if key == "OPENTAG_WATCH_CLASSIFIER" and value not in CLASSIFIER_PROVIDERS:
+        return "Choose " + " or ".join(CLASSIFIER_PROVIDERS)
+    if key == "OPENTAG_JEV_MODEL" and not re.fullmatch(r"jev-[A-Za-z0-9.-]+", value):
+        return "Use a Jev model name such as jev-latest"
+    if key == "OPENTAG_DECISIONS_MODEL" and not re.fullmatch(r"gpt-[A-Za-z0-9.-]+", value):
+        return "Use an OpenAI Decisions model name such as gpt-6-luna"
+    if key in {"OPENTAG_JEV_THRESHOLD", "OPENTAG_DECISIONS_THRESHOLD"}:
+        try:
+            valid = 0.5 <= float(value) <= 1
+        except ValueError:
+            valid = False
+        if not valid:
+            return "Use a number from 0.5 to 1"
+    if key == "OPENTAG_WATCH_CLASSIFIER_TIMEOUT_SECONDS":
+        try:
+            valid = 0 < float(value) <= 30
+        except ValueError:
+            valid = False
+        if not valid:
+            return "Use a number greater than 0 and at most 30"
     if key == "SLACK_CHANNEL_POLICY" and value not in {"selected", "invited"}:
         return "Choose selected or invited"
     if key in {"SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "MFS_SLACK_TOKEN"}:
@@ -268,6 +327,11 @@ def config_errors(values: dict[str, str]) -> dict[str, str]:
             continue
         if key in EDITABLE and (error := validation_error(key, value)):
             errors[key] = error
+    if values.get("OPENTAG_WATCH_CHANNEL_IDS", "").strip():
+        provider = values.get("OPENTAG_WATCH_CLASSIFIER") or DEFAULTS["OPENTAG_WATCH_CLASSIFIER"]
+        key, label = CLASSIFIER_PROVIDERS.get(provider, ("", ""))
+        if key and not values.get(key, "").strip():
+            errors[key] = f"{label} is required when channel watching uses {provider}"
     return errors
 
 

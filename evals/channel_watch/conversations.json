@@ -1,0 +1,220 @@
+{
+  "schema_version": 1,
+  "assistant_name": "Tag",
+  "description": "Labelled Slack conversations for the channel-watching classifier. `expected` is whether Tag should reply. Authors are roles: requester (the Tag's authorized owner, who sent `message`), tag, participant (another person; `participant:NAME` names them), and another_bot. `{tag}`, `{requester}` and `{participant}` in history text become Slack member mentions, so the real identity minimization runs. `message` never contains a member mention: those bypass the classifier. Labels follow the criteria in scripts/watch_classifier.py; `note` explains the hard ones.",
+  "cases": [
+    {"id": "direct-name-question", "category": "direct", "expected": true,
+     "message": "Tag, what's the difference between our staging and prod configs?"},
+    {"id": "direct-name-trailing", "category": "direct", "expected": true,
+     "message": "can you pull last week's error counts, Tag?"},
+    {"id": "direct-greeting", "category": "direct", "expected": true,
+     "message": "morning Tag 👋"},
+    {"id": "direct-opinion", "category": "direct", "expected": true,
+     "message": "Tag what do you think of this headline: \"Ship faster with fewer meetings\"",
+     "note": "An opinion request qualifies; no concrete task is needed."},
+
+    {"id": "continue-shorter", "category": "continuation", "expected": true,
+     "thread": [
+       {"author": "requester", "text": "{tag} draft a launch note for the pricing change"},
+       {"author": "tag", "text": "Here's a draft: \"Starting 1 November, Team plans include unlimited projects...\""}
+     ],
+     "message": "make it shorter"},
+    {"id": "continue-two-step", "category": "continuation", "expected": true,
+     "thread": [
+       {"author": "requester", "text": "{tag} draft a launch note for the pricing change"},
+       {"author": "tag", "text": "Here's a draft: \"Starting 1 November, Team plans include unlimited projects...\""},
+       {"author": "requester", "text": "make it shorter"}
+     ],
+     "message": "and more casual",
+     "note": "Tag did not author the previous message, but the exchange is still with Tag."},
+    {"id": "continue-correction", "category": "continuation", "expected": true,
+     "thread": [
+       {"author": "requester", "text": "{tag} how many signups did we get yesterday?"},
+       {"author": "tag", "text": "There were 412 signups yesterday, up 8% on the day before."}
+     ],
+     "message": "no, I meant paid signups"},
+    {"id": "continue-thanks", "category": "continuation", "expected": true,
+     "thread": [
+       {"author": "requester", "text": "{tag} summarize the incident doc"},
+       {"author": "tag", "text": "The outage lasted 42 minutes and was caused by an expired certificate..."}
+     ],
+     "message": "thanks! can you add the timeline too?"},
+    {"id": "continue-fragment", "category": "continuation", "expected": true,
+     "thread": [
+       {"author": "requester", "text": "{tag} which regions had the most churn last quarter?"},
+       {"author": "tag", "text": "EMEA had the highest churn at 4.1%, followed by APAC at 3.6%."}
+     ],
+     "message": "why EMEA?"},
+    {"id": "continue-after-participant-reaction", "category": "continuation", "expected": true,
+     "thread": [
+       {"author": "requester", "text": "{tag} give me three name ideas for the new dashboard"},
+       {"author": "tag", "text": "1. Pulse 2. Lookout 3. Northstar"},
+       {"author": "participant:Sam", "text": "ha, Lookout is fun"}
+     ],
+     "message": "give me three more in that style",
+     "note": "A participant reacted, but the request continues the exchange with Tag."},
+
+    {"id": "inclusive-anyone", "category": "inclusive", "expected": true,
+     "message": "anyone know where the Q3 board deck lives?"},
+    {"id": "inclusive-you-all", "category": "inclusive", "expected": true,
+     "message": "what do you all think about moving standup to 10?"},
+    {"id": "inclusive-everyone", "category": "inclusive", "expected": true,
+     "message": "quick poll for everyone: tabs or spaces for the new repo?"},
+    {"id": "inclusive-anyone-in-thread", "category": "inclusive", "expected": true,
+     "thread": [
+       {"author": "participant:Priya", "text": "The nightly export failed again"},
+       {"author": "requester", "text": "ugh, third time this week"}
+     ],
+     "message": "does anyone have an idea why it keeps failing at 2am?",
+     "note": "An inclusive question inside a human thread still invites Tag."},
+    {"id": "inclusive-team", "category": "inclusive", "expected": true,
+     "message": "team, any objections to freezing the API on Friday?",
+     "note": "Debatable: 'team' may mean only the humans. Labelled true because Tag is a channel participant."},
+
+    {"id": "person-by-name", "category": "another_person", "expected": false,
+     "message": "Sam, can you review my PR before lunch?"},
+    {"id": "person-reply-in-thread", "category": "another_person", "expected": false,
+     "thread": [
+       {"author": "participant:Priya", "text": "I can take the migration if you handle the docs"}
+     ],
+     "message": "deal, I'll start on the docs tonight"},
+    {"id": "person-after-tag-shift", "category": "another_person", "expected": false,
+     "thread": [
+       {"author": "requester", "text": "{tag} what's our current p95 latency?"},
+       {"author": "tag", "text": "p95 latency over the last 24 hours is 340 ms."},
+       {"author": "participant:Sam", "text": "that's higher than last week, did the cache change ship?"}
+     ],
+     "message": "yeah it shipped Tuesday, I'll roll it back",
+     "note": "The conversation shifted to Sam; the reply answers Sam."},
+    {"id": "person-human-group", "category": "another_person", "expected": false,
+     "message": "designers only please: which of the two mocks do you prefer?"},
+    {"id": "person-named-question", "category": "another_person", "expected": false,
+     "thread": [
+       {"author": "tag", "text": "I've posted the weekly metrics summary above."}
+     ],
+     "message": "Priya, does this match what you saw in Looker?",
+     "note": "Tag spoke last, but the question is for Priya."},
+    {"id": "person-pronoun-you", "category": "another_person", "expected": false,
+     "thread": [
+       {"author": "participant:Sam", "text": "I'm going to be out Thursday"}
+     ],
+     "message": "no worries, do you want me to cover your on-call?"},
+
+    {"id": "bot-reply-to-deploy-bot", "category": "another_bot", "expected": false,
+     "thread": [
+       {"author": "another_bot", "text": "Deploy #812 to production is waiting for approval. Reply 'approve' to continue."}
+     ],
+     "message": "approve"},
+    {"id": "bot-question-to-other-bot", "category": "another_bot", "expected": false,
+     "thread": [
+       {"author": "another_bot", "text": "PagerBot: incident INC-204 opened. Ask me for the runbook."}
+     ],
+     "message": "show me the runbook"},
+    {"id": "bot-after-tag-earlier", "category": "another_bot", "expected": false,
+     "thread": [
+       {"author": "requester", "text": "{tag} what's blocking the release?"},
+       {"author": "tag", "text": "Two failing checks: the e2e suite and the license scan."},
+       {"author": "requester", "text": "rerun the license scan"},
+       {"author": "another_bot", "text": "CIBot: license scan rerun queued. Reply 'status' for progress."}
+     ],
+     "message": "status",
+     "note": "Tag appeared earlier; the recent exchange is with the CI bot."},
+
+    {"id": "about-tag-praise", "category": "about_tag", "expected": false,
+     "message": "honestly Tag has saved me hours this week"},
+    {"id": "about-tag-to-person", "category": "about_tag", "expected": false,
+     "thread": [
+       {"author": "participant:Sam", "text": "how did you get that summary so fast?"}
+     ],
+     "message": "I asked Tag, it reads the whole thread for you"},
+    {"id": "about-tag-complaint", "category": "about_tag", "expected": false,
+     "message": "Tag got the dates wrong in yesterday's summary, need to double-check its work"},
+    {"id": "about-tag-plan", "category": "about_tag", "expected": false,
+     "message": "I'll have Tag draft the release notes later"},
+    {"id": "about-tag-third-person-question", "category": "about_tag", "expected": false,
+     "thread": [
+       {"author": "participant:Priya", "text": "can Tag read private channels?"}
+     ],
+     "message": "only the ones it's been invited to",
+     "note": "Answers Priya's question about Tag."},
+
+    {"id": "aside-narration", "category": "aside", "expected": false,
+     "message": "heading into back-to-backs, back at 3"},
+    {"id": "aside-fyi", "category": "aside", "expected": false,
+     "message": "fyi the office wifi password changed"},
+    {"id": "aside-after-tag-done", "category": "aside", "expected": false,
+     "thread": [
+       {"author": "requester", "text": "{tag} export the churn table to CSV"},
+       {"author": "tag", "text": "Done, churn.csv is attached."},
+       {"author": "participant:Sam", "text": "nice, I'll use it for the board deck"}
+     ],
+     "message": "cool, I'll send you the template tonight",
+     "note": "Addressed to Sam after the Tag exchange finished."},
+
+    {"id": "resume-tag-by-name", "category": "resume", "expected": true,
+     "thread": [
+       {"author": "requester", "text": "{tag} what's our current p95 latency?"},
+       {"author": "tag", "text": "p95 latency over the last 24 hours is 340 ms."},
+       {"author": "participant:Sam", "text": "that's higher than last week"},
+       {"author": "requester", "text": "yeah, the cache change"}
+     ],
+     "message": "Tag, can you break that down by endpoint?"},
+    {"id": "resume-explicit-back", "category": "resume", "expected": true,
+     "thread": [
+       {"author": "requester", "text": "{tag} draft the customer email about the outage"},
+       {"author": "tag", "text": "Draft: \"Yesterday between 14:02 and 14:44 UTC...\""},
+       {"author": "participant:Priya", "text": "let's not give exact times"},
+       {"author": "requester", "text": "agreed"}
+     ],
+     "message": "ok back to the draft: drop the exact times and soften the opening",
+     "note": "Resumes the exchange with Tag after a human aside."},
+
+    {"id": "inclusive-anyone-tag-thread", "category": "inclusive", "expected": true,
+     "thread": [
+       {"author": "requester", "text": "{tag} how should we name the new billing tiers?"},
+       {"author": "tag", "text": "Options: Starter / Team / Scale, or Solo / Crew / Fleet."},
+       {"author": "participant:Sam", "text": "meh, neither feels right"}
+     ],
+     "message": "anyone have a better idea?",
+     "note": "Inclusive question in a thread Tag is part of."},
+    {"id": "inclusive-you-all-tag-thread", "category": "inclusive", "expected": true,
+     "thread": [
+       {"author": "requester", "text": "{tag} list three ways to cut our CI time"},
+       {"author": "tag", "text": "1. Cache dependencies 2. Split the e2e suite 3. Skip docs-only changes"}
+     ],
+     "message": "what do you all think of option 2?"},
+    {"id": "named-but-for-person", "category": "another_person", "expected": false,
+     "message": "Sam, Tag's summary missed the Q3 numbers, can you add them to the doc?",
+     "note": "Names Tag, but asks Sam."},
+    {"id": "named-someone-elses-tag", "category": "about_tag", "expected": false,
+     "message": "Priya, can you ask your Tag to pull the churn numbers?",
+     "note": "Names a Tag, but means Priya's, and asks Priya."},
+    {"id": "offer-accepted", "category": "continuation", "expected": true,
+     "thread": [
+       {"author": "requester", "text": "{tag} did the export finish?"},
+       {"author": "tag", "text": "I can check the export logs. Want me to take this on?"}
+     ],
+     "message": "yes please"},
+    {"id": "offer-declined", "category": "continuation", "expected": false,
+     "thread": [
+       {"author": "requester", "text": "{tag} did the export finish?"},
+       {"author": "tag", "text": "I can check the export logs. Want me to take this on?"}
+     ],
+     "message": "no thanks, Sam already checked",
+     "note": "A reply to Tag, but declining: no reply is welcome."},
+
+    {"id": "edge-tag-other-meaning", "category": "edge", "expected": false,
+     "message": "remember to tag the release in GitHub before you leave",
+     "note": "'tag' is a verb, not the assistant."},
+    {"id": "edge-code-snippet", "category": "edge", "expected": false,
+     "message": "```git tag -a v2.3.0 -m 'release'```"},
+    {"id": "edge-rhetorical", "category": "edge", "expected": false,
+     "message": "who scheduled three meetings at 9am, honestly",
+     "note": "Rhetorical complaint; no reply invited."},
+    {"id": "edge-self-note", "category": "edge", "expected": false,
+     "message": "note to self: renew the domain before the 20th"},
+    {"id": "edge-anyone-human-experience", "category": "edge", "expected": true,
+     "message": "is anyone else seeing the build fail on main?",
+     "note": "Debatable: an inclusive question; Tag can check CI. Labelled true per the criteria."}
+  ]
+}

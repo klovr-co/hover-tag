@@ -640,6 +640,7 @@ not set up.
 |---|---|---|
 | Mentions and threaded replies | Implemented | The mention must target a running Tag's app. |
 | Direct messages | Implemented, on by default | Allowed senders only. `OPENTAG_SLACK_DM_ENABLED=0` turns it off. |
+| Channel watching | Experimental, off by default | Per channel, after a visible notice. Tag answers messages that name it, and threads it's in, without an @mention. It uses a text-only run with no tools, files or memory, replies in the thread with a label, and acts only after **Take this on** or an @mention. The classifier (TypeSafe Jev or OpenAI Decisions) filters noise; it is not a safety boundary. Quiet hours, a daily cap, a 👎/stop cooldown, and one unprompted reply per thread apply. |
 | Caller authorization | Implemented | `SLACK_ALLOWED_USER_IDS` is required and fails closed. Setup sets the owner. |
 | Channel restriction | Implemented | Channels the Tag joined (invitation policy) or a saved list. |
 | One conversation per thread | Implemented for Codex and Claude | Per requester; bounded by token and idle limits. Legacy transports start fresh. |

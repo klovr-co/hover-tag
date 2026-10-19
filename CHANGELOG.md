@@ -6,6 +6,15 @@ All notable changes to Tag are documented here.
 
 ### Added
 
+- Experimental channel watching: let Tag answer, without an @mention, messages
+  that name it and threads it's already in. Off by default and turned on per
+  channel from the Home tab or `tag config`. Tag posts a notice first. Watched
+  replies come from a text-only run with no tools, files or memory, stay in the
+  thread, say why Tag replied, and offer **Take this on** before any action.
+  Anyone can click **Don't do this here**. Quiet hours, a daily cap, and a
+  cooldown after 👎 apply. Each Tag chooses TypeSafe Jev or OpenAI Decisions to
+  filter messages, with its own key and threshold. Tag adds Slack's channel
+  message and reaction events to existing apps automatically.
 - Add a Tag to a workspace you already use in one step. On Home, click **Add
   Tag** on the workspace's card: a dialog asks only for the name, description
   and picture, then creates and starts the Tag with your default model, or the
