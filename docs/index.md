@@ -1,4 +1,4 @@
-# Multiplayer AI, right in Slack.
+# An AI team member, right in Slack.
 
 Bring your Codex or Claude Code agent into the thread. Mention @Tag, and it reads the
 conversation, does the work, and replies where the whole team can follow along.
