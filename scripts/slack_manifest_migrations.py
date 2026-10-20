@@ -29,7 +29,8 @@ except ImportError:
 
 ROOT = Path(__file__).resolve().parents[1]
 # 4: team:read, so Tag.app can show the Slack workspace icon.
-MIGRATION_VERSION = 4
+# 5: member_joined_channel, so Tag notices an invitation at once.
+MIGRATION_VERSION = 5
 DM_SCOPE = "im:history"
 REQUIRED_MANIFEST = yaml.safe_load((ROOT / "slack-app-manifest.yaml").read_text(encoding="utf-8"))
 REQUIRED_BOT_SCOPES = tuple(REQUIRED_MANIFEST["oauth_config"]["scopes"]["bot"])

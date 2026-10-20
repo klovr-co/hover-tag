@@ -4542,6 +4542,47 @@ class SlackCancellationTests(unittest.TestCase):
             self.assertFalse(run.cancel_requested)
             self.assertFalse(run.control_file.exists())
 
+    def test_only_tags_own_channel_join_refreshes_invitations(self) -> None:
+        fake_app = FakeApp()
+        fake_app.tag_refresh_invitations = MagicMock()
+        with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+            os.environ, {"SLACK_BOT_TOKEN": "xoxb-test"}, clear=True
+        ):
+            slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+            handler = fake_app.events["member_joined_channel"]
+            body = {"authorizations": [{"user_id": "UBOT"}]}
+            handler({"user": "USOMEONE", "channel": "C1"}, body, MagicMock())
+            fake_app.tag_refresh_invitations.assert_not_called()
+            handler({"user": "UBOT", "channel": "C1"}, body, MagicMock())
+            fake_app.tag_refresh_invitations.assert_called_once_with()
+
+    def test_channel_join_without_invitation_memory_is_ignored(self) -> None:
+        fake_app = FakeApp()
+        with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+            os.environ, {"SLACK_BOT_TOKEN": "xoxb-test"}, clear=True
+        ):
+            slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+            fake_app.events["member_joined_channel"]({"user": "UBOT", "channel": "C1"}, {}, MagicMock())
+
+    def test_channel_join_without_authorizations_checks_identity_and_fails_closed(self) -> None:
+        fake_app = FakeApp()
+        fake_app.tag_refresh_invitations = MagicMock()
+        client = MagicMock()
+        client.auth_test.return_value = {"user_id": "UBOT"}
+        with patch.object(slack_socket_agent, "App", return_value=fake_app), patch.dict(
+            os.environ, {"SLACK_BOT_TOKEN": "xoxb-test"}, clear=True
+        ):
+            slack_socket_agent.create_app("claude", 30, frozenset({"UOWNER"}))
+            handler = fake_app.events["member_joined_channel"]
+            handler({"user": "USOMEONE", "channel": "C1"}, {}, client)
+            fake_app.tag_refresh_invitations.assert_not_called()
+            handler({"user": "UBOT", "channel": "C1"}, {}, client)
+            fake_app.tag_refresh_invitations.assert_called_once_with()
+            fake_app.tag_refresh_invitations.reset_mock()
+            client.auth_test.side_effect = RuntimeError("slack down")
+            handler({"user": "UBOT", "channel": "C1"}, {}, client)
+            fake_app.tag_refresh_invitations.assert_not_called()
+
     def test_stop_event_targets_team_channel_and_thread(self) -> None:
         fake_app = FakeApp()
         client = MagicMock()

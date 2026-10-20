@@ -108,6 +108,7 @@ Profile-picture selection and upload require Slack CLI 4.7 or newer.
    - `users:read` — verify app identity and caller visibility for cross-channel search.
 5. Open **Event Subscriptions** and subscribe to Bot Events:
    - `app_mention`
+   - `member_joined_channel` — notice an invitation at once instead of at the next one-minute membership check. Tag still checks every minute, so an app without it works, just slower.
    - `message.im`
    - `app_home_opened`
    - `agent_session_stopped`
