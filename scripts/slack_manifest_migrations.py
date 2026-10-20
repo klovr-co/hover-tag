@@ -165,6 +165,14 @@ def remote_manifest(slack: str, project: Path, app_id: str) -> dict:
     return _json_output(result.stdout)
 
 
+class BotTokenRejected(RuntimeError):
+    """Slack says the saved bot token is dead: revoked, rotated, or from a removed install."""
+
+
+# What auth.test answers for a token that will never work again, as opposed to a passing Slack error.
+_DEAD_TOKEN_ERRORS = frozenset({"invalid_auth", "token_revoked", "token_expired", "account_inactive", "not_authed"})
+
+
 def granted_bot_scopes(token: str) -> set[str]:
     request = urllib.request.Request(
         "https://slack.com/api/auth.test",
@@ -177,7 +185,10 @@ def granted_bot_scopes(token: str) -> set[str]:
     except (OSError, UnicodeError, json.JSONDecodeError, urllib.error.URLError) as exc:
         raise RuntimeError("Slack permissions could not be verified; check the connection and retry") from exc
     if not isinstance(payload, dict) or not payload.get("ok"):
-        raise RuntimeError("Slack rejected the bot token; reconnect it with `tag setup`")
+        message = "Slack rejected the bot token; reconnect it with `tag setup`"
+        if isinstance(payload, dict) and payload.get("error") in _DEAD_TOKEN_ERRORS:
+            raise BotTokenRejected(message)
+        raise RuntimeError(message)
     return {item.strip() for item in header.split(",") if item.strip()}
 
 
@@ -431,8 +442,15 @@ def _reconcile(home: Path, config_path: Path, values: dict[str, str], receipt: d
     project = home / "integrations/slack-cli"
     remote = remote_manifest(slack, project, app_id)
     migrated, changed = migrate_manifest(remote, enterprise=bool(enterprise_id))
-    scopes = granted_bot_scopes(values["SLACK_BOT_TOKEN"])
-    if enterprise_id:
+    rejected = False
+    try:
+        scopes = granted_bot_scopes(values["SLACK_BOT_TOKEN"])
+    except BotTokenRejected:
+        rejected = True
+        # Nothing to ask the person: the credential handoff below issues a fresh token
+        # through Slack CLI, as it does after any app update.
+        scopes = set()
+    if enterprise_id and not rejected:
         slack_identity.validate(values["SLACK_BOT_TOKEN"], team_id=team_id, app_id=app_id,
                                 enterprise_id=enterprise_id, label="Bot token", api=slack_channels.slack_api)
     if not changed and set(REQUIRED_BOT_SCOPES).issubset(scopes):

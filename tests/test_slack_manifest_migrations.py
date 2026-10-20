@@ -210,6 +210,37 @@ class SlackManifestMigrationTests(unittest.TestCase):
                 self.assertFalse(migrations.reconcile(home, config, self.values() | fresh))
                 inspect.assert_not_called()
 
+    def test_rejected_bot_token_is_replaced_through_slack_cli_instead_of_stopping_the_start(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home, config = self.linked_home(Path(directory))
+            current = migrations.migrate_manifest(self.manifest())[0]
+            fresh = {"SLACK_APP_TOKEN": "xapp-fresh-token", "SLACK_BOT_TOKEN": "xoxb-fresh-token"}
+            dead = migrations.BotTokenRejected("Slack rejected the bot token; reconnect it with `tag setup`")
+            with patch.object(migrations.shutil, "which", return_value="/bin/slack"), patch.object(
+                migrations, "remote_manifest", side_effect=[current, current]
+            ), patch.object(
+                migrations, "granted_bot_scopes", side_effect=[dead, set(migrations.REQUIRED_BOT_SCOPES)]
+            ), patch.object(migrations, "_run") as run, patch.object(
+                migrations.slack_credentials, "receive", return_value=fresh
+            ) as receive:
+                self.assertTrue(migrations.reconcile(home, config, self.values()))
+            run.assert_not_called()  # The manifest was already current: only the token is renewed.
+            receive.assert_called_once()
+            self.assertEqual(migrations.settings.read_config(config)["SLACK_BOT_TOKEN"], "xoxb-fresh-token")
+
+    def test_auth_test_tells_a_dead_token_from_a_passing_slack_error(self):
+        class Response:
+            headers = {}
+            def __init__(self, payload): self.payload = payload
+            def __enter__(self): return self
+            def __exit__(self, *exc): return False
+            def read(self): return json.dumps(self.payload).encode()
+        for error, expected in (("token_revoked", migrations.BotTokenRejected), ("ratelimited", RuntimeError)):
+            with patch.object(migrations.urllib.request, "urlopen", return_value=Response({"ok": False, "error": error})):
+                with self.assertRaises(expected) as caught:
+                    migrations.granted_bot_scopes("xoxb-old")
+                self.assertEqual(type(caught.exception) is migrations.BotTokenRejected, expected is migrations.BotTokenRejected)
+
     def test_current_manifest_with_stale_grant_refreshes_without_sync(self):
         with tempfile.TemporaryDirectory() as directory:
             home, config = self.linked_home(Path(directory))
