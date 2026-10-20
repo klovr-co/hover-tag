@@ -5354,7 +5354,7 @@ def create_app(
         handle_invocation(event, body, client, logger, direct_message=False)
 
     @app.event("member_joined_channel")
-    def handle_member_joined_channel(event: dict[str, Any], body: dict[str, Any]) -> None:
+    def handle_member_joined_channel(event: dict[str, Any], body: dict[str, Any], client: Any) -> None:
         """Pick up a new invitation now rather than at the next membership poll."""
         refresh = getattr(app, "tag_refresh_invitations", None)
         if refresh is None:
@@ -5362,7 +5362,12 @@ def create_app(
         # Slack sends this for anyone joining a channel Tag is in; only Tag's own
         # invitation changes what Tag may serve.
         bot_ids = {a.get("user_id") for a in body.get("authorizations") or [] if isinstance(a, dict)}
-        if bot_ids and event.get("user") not in bot_ids:
+        if not bot_ids:
+            try:
+                bot_ids = {client.auth_test().get("user_id")}
+            except Exception:  # noqa: BLE001 - unknown identity: leave it to the next poll
+                return
+        if event.get("user") not in bot_ids:
             return
         refresh()
 

@@ -171,7 +171,7 @@ class InvitationMemoryTests(unittest.TestCase):
 
         with patch.object(self.worker, "tick", side_effect=tick), patch.object(
             self.worker.stop_event, "is_set", side_effect=[False, False, True]
-        ), patch.object(self.worker.stop_event, "wait"), patch.object(
+        ), patch.object(self.worker.wake_event, "wait"), patch.object(
             memory.threading, "Thread"
         ) as thread:
             self.worker.start()
