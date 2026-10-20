@@ -3,7 +3,7 @@
 // Tag.app: installs Tag on first run, then lists, starts and adds Tags.
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
 import { bridge, type AppInfo, type Bridge } from "./lib/bridge";
-import { compatibility, isDraft, parseJSON, parseList, status, type VersionInfo } from "./lib/protocol";
+import { compatibility, isDraft, parseJSON, parseList, status, type Group, type VersionInfo } from "./lib/protocol";
 import { setEmbedding } from "./lib/memory";
 import { checkUpdate, initialUpdate, installUpdate, updateReducer } from "./lib/updates";
 import { useTags } from "./lib/tags";
@@ -13,8 +13,9 @@ import { deepLinkTarget } from "./lib/deeplink";
 import { glide } from "./lib/motion";
 import { Connect } from "./components/Connect";
 import { Home } from "./components/Home";
+import { QuickAdd } from "./components/QuickAdd";
 import { Installing, NO_CUSTOM, Starting, Welcome, type InstallChoice } from "./components/Install";
-import { AI_CAPABILITY, API_CAPABILITY, SHARED_AI_CAPABILITY } from "./lib/ai";
+import { AI_CAPABILITY, API_CAPABILITY, SAVED_MODELS_CAPABILITY, SHARED_AI_CAPABILITY } from "./lib/ai";
 import { AISettings } from "./components/AISettings";
 import { MemorySettings, Settings, type SettingsTab } from "./components/Settings";
 import { TagDetail, type Tab as TagTab } from "./components/TagDetail";
@@ -25,7 +26,7 @@ type Screen =
   | { name: "welcome" }
   | ({ name: "installing"; attempt: number } & InstallChoice)
   | { name: "home" }
-  | { name: "connect"; args: string[] }
+  | { name: "connect"; args: string[]; workspace?: string; workspaceName?: string; enterprise?: string | null }
   | { name: "settings"; tab?: SettingsTab; privacy?: boolean }
   | { name: "ai"; resume?: string[] }
   | { name: "memory" }
@@ -69,6 +70,9 @@ export function App() {
   const [api, setApi] = useState<Bridge | null>(null);
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [screen, setScreen] = useState<Screen>({ name: "loading" });
+  // The quick-add dialog over Home, for one workspace.
+  const [quick, setQuick] = useState<{ workspace: string; workspaceName: string; workspaceIcon: string | null; enterprise: string | null;
+    modelsFrom: string | null } | null>(null);
   const [bootError, setBootError] = useState("");
   const [bootAttempt, setBootAttempt] = useState(0);
   const [outdated, setOutdated] = useState(false);
@@ -244,11 +248,12 @@ export function App() {
   }, [api, screen.name, tags.error]);
 
   // Setups that never reached Slack are set aside once the setup flow has ended.
+  // The quick-add dialog runs a setup on Home, so nothing is set aside while it's open.
   useEffect(() => {
-    if (screen.name !== "home" && screen.name !== "tag") return;
+    if ((screen.name !== "home" && screen.name !== "tag") || quick) return;
     const timer = setTimeout(() => void tags.discardDrafts(), 2000);
     return () => clearTimeout(timer);
-  }, [screen.name, tags.rows, tags.discardDrafts]);
+  }, [screen.name, tags.rows, tags.discardDrafts, quick]);
   if (!api || !info || screen.name === "loading") {
     return <main ref={setRoot} className="app"><Starting error={bootError} retry={() => setBootAttempt((value) => value + 1)} /></main>;
   }
@@ -271,6 +276,9 @@ export function App() {
     if (empty) setScreen({ name: "connect", args: ["setup"] }); else home();
   };
   const add = () => setScreen({ name: "connect", args: tags.rows.length ? ["add"] : ["setup"] });
+  const addTo = (group: Group) =>
+    setQuick({ workspace: group.key, workspaceName: group.label, workspaceIcon: group.icon, enterprise: group.enterprise,
+      modelsFrom: group.rows.find((row) => row.valid && !isDraft(row))?.id ?? null });
   // These screens are always --flow-h tall and scroll inside, so moving between them never resizes the window.
   const fixed = screen.name === "home" || screen.name === "settings" || screen.name === "ai" || screen.name === "memory";
   return (
@@ -288,14 +296,19 @@ export function App() {
         {screen.name === "home" && tags.loaded && (
           <Home api={api} tags={tags} reports={watch.reports} problems={watch.problems} activity={watch.activity}
             firstName={info.firstName ?? null} update={update} outdated={outdated} runUpdate={() => void runUpdate()}
-            add={add} usageNote={telemetry.announced} seenUsageNote={sawOnHome}
+            add={add} addTo={addTo} usageNote={telemetry.announced} seenUsageNote={sawOnHome}
             finishSetup={(row) => setScreen({ name: "connect", args: [row.id, "setup"] })}
             open={(row) => setScreen({ name: "tag", id: row.id })}
             fixAI={() => capabilities.includes(SHARED_AI_CAPABILITY) ? setScreen({ name: "ai" }) : say("Update Tag to manage shared AI accounts in Settings.")}
             showSettings={(tab, privacy) => setScreen({ name: "settings", tab, privacy })} />
         )}
+        {screen.name === "home" && quick && (
+          <QuickAdd api={api} {...quick} start={(id) => tags.start(id)}
+            close={() => { setQuick(null); void tags.refresh(); }}
+            handOff={(tag) => { setQuick(null); setScreen({ name: "connect", args: [tag, "setup"], workspace: quick.workspace, workspaceName: quick.workspaceName, enterprise: quick.enterprise }); }} />
+        )}
         {screen.name === "connect" && (
-          <Connect api={api} args={screen.args} start={(id, onLine) => tags.start(id, capabilities.includes("start-progress") ? onLine : undefined)} openAI={capabilities.includes(SHARED_AI_CAPABILITY) ? (resume) => setScreen({ name: "ai", resume }) : undefined} done={home}
+          <Connect api={api} args={screen.args} workspace={screen.workspace} workspaceName={screen.workspaceName} enterprise={screen.enterprise} start={(id, onLine) => tags.start(id, capabilities.includes("start-progress") ? onLine : undefined)} openAI={capabilities.includes(SHARED_AI_CAPABILITY) ? (resume) => setScreen({ name: "ai", resume }) : undefined} done={home}
             paused={() => { home(); say("Progress saved. Finish setup from Home any time."); }}
             usageNote={telemetry.announced ? { learnMore: learnUsage, seen: sawOnSetup } : undefined} />
         )}
@@ -311,7 +324,7 @@ export function App() {
         )}
         {screen.name === "tag" && (
           <TagDetail key={screen.opened ?? 0} api={api} tags={tags} initial={screen.id} initialTab={screen.tab} problems={watch.problems} back={home} add={add}
-            canDescribe={capabilities.includes("describe")}
+            canDescribe={capabilities.includes("describe")} canRefreshModels={capabilities.includes(SAVED_MODELS_CAPABILITY)}
             showSettings={() => setScreen({ name: "settings" })}
             finishSetup={(row) => setScreen({ name: "connect", args: [row.id, "setup"] })}
             openAI={() => capabilities.includes(SHARED_AI_CAPABILITY) ? setScreen({ name: "ai" }) : say("Update Tag to manage shared AI accounts in Settings.")} say={say} />

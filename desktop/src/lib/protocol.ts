@@ -25,6 +25,8 @@ export interface TagRow {
   slack_name?: string | null;
   /** The Slack app Tag created or linked; null before setup reaches that step. */
   slack_app_id?: string | null;
+  /** The Enterprise Grid organization the workspace belongs to; null outside one. */
+  slack_enterprise?: string | null;
   /** False for a setup that never reached Slack: nothing exists there to continue or delete. */
   has_app?: boolean;
   nickname?: string | null;
@@ -107,6 +109,8 @@ export interface Group {
   key: string;
   label: string;
   icon: string | null;
+  /** The workspace's Enterprise Grid organization, when it's in one. */
+  enterprise: string | null;
   rows: TagRow[];
 }
 
@@ -121,6 +125,7 @@ export function groups(rows: TagRow[]): Group[] {
     key,
     label: members[0].workspace_name || key || "Not connected yet",
     icon: members.find((row) => row.workspace_icon)?.workspace_icon ?? null,
+    enterprise: members.find((row) => row.slack_enterprise)?.slack_enterprise ?? null,
     rows: members,
   }));
 }

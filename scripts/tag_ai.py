@@ -29,6 +29,7 @@ from typing import Any
 
 try:
     import agent_models
+    import model_catalog
     import setup_ui as ui
     import tag_api
     import tag_chatgpt
@@ -36,7 +37,7 @@ try:
     from opentag_process_env import without_telemetry_environment
     from tag_paths import default_workspace
 except ImportError:
-    from scripts import agent_models, setup_ui as ui, tag_api, tag_chatgpt, tag_config as settings
+    from scripts import agent_models, model_catalog, setup_ui as ui, tag_api, tag_chatgpt, tag_config as settings
     from scripts.opentag_process_env import without_telemetry_environment
     from scripts.tag_paths import default_workspace
 
@@ -308,39 +309,83 @@ def tag_environment(home: Path, values: dict[str, str]):
                 os.environ[key] = value
 
 
-def models(home: Path, values: dict[str, str], ready: list[str] | None = None) -> dict[str, Any]:
-    """Each usable backend's live catalog, grouped by backend, and whether the default is offered.
+def models(home: Path, values: dict[str, str], ready: list[str] | None = None, *,
+           refresh: bool = False, expect: str | None = None) -> dict[str, Any]:
+    """Each usable backend's catalog, grouped by backend, and whether the default is offered.
 
     Every group starts with the account's own default (the bare backend), which
-    is what a Tag without a chosen model uses.
+    is what a Tag without a chosen model uses. An account's saved catalog is
+    used when there is one (``cached_at`` says when it was read); the others
+    are read live, all at once, and saved. A saved catalog older than a day is
+    read again in the background. ``refresh`` reads every catalog live now.
+    A saved catalog without ``expect``, by default the Tag's chosen model, is
+    read live again before that model is called unavailable.
     """
     if ready is None:
         ready = usable(connections(home), values)
+    names = [backend for backend in allowed(values) if backend in ready]
+    default_backend = values.get("OPENTAG_BACKEND") or "codex"
+    choice = default_choice(home, values)
+    choice["chosen"] = bool(values.get("OPENTAG_DEFAULT_MODEL"))
+    expect = expect or (choice["value"] if choice["chosen"] else None)
+    with tag_environment(home, values):
+        found = _discover(names, live=names if refresh else ())
+        if expect:
+            backend = agent_models.parse_model_choice(expect, default_backend)[0]
+            options, source = found.get(backend, ([], None))
+            if source and source.cached and agent_models.choice_key(expect, default_backend) not in {
+                    backend, *(option.value for option in options)}:
+                found.update(_discover([backend], live=[backend]))
+        # Old saved catalogs are offered now and read again for next time.
+        if old := [name for name, (_, source) in found.items() if source and source.stale]:
+            model_catalog.refresh_in_background(old)
     groups: list[dict[str, Any]] = []
     discovered: list[agent_models.ModelOption] = []
-    with tag_environment(home, values):
-        for name in [backend for backend in allowed(values) if backend in ready]:
-            options = agent_models.discover_models(name)
-            discovered.extend(options)
-            # The account's own default model decides what the bare backend offers.
-            account = next((option for option in options if option.is_default), None)
-            entries = [{"value": name, "model": None, "label": "Account default", "default": False,
-                        **_levels(account)}]
-            # Claude's placeholder for an unreported catalog is that same account default.
-            entries += [{"value": option.value, "model": option.model_id, "label": option.label,
-                         "default": option.is_default, **_levels(option)}
-                        for option in options if option.model_id != "default"]
-            groups.append({"backend": name, "name": agent_models.backend_display_name(name), "models": entries})
+    for name in names:
+        options, source = found[name]
+        discovered.extend(options)
+        # The account's own default model decides what the bare backend offers.
+        account = next((option for option in options if option.is_default), None)
+        entries = [{"value": name, "model": None, "label": "Account default", "default": False,
+                    **_levels(account)}]
+        # Claude's placeholder for an unreported catalog is that same account default.
+        entries += [{"value": option.value, "model": option.model_id, "label": option.label,
+                     "default": option.is_default, **_levels(option)}
+                    for option in options if option.model_id != "default"]
+        fetched_at = source.fetched_at.isoformat(timespec="seconds") if source and source.fetched_at else None
+        groups.append({"backend": name, "name": agent_models.backend_display_name(name), "models": entries,
+                       "cached": bool(source and source.cached), "fetched_at": fetched_at})
     if settings.config_path(home).is_file():
         agent_models.remember_model_names(discovered, agent_models.model_names_path(home), account_defaults=True)
     offered = {entry["value"] for group in groups for entry in group["models"]}
-    choice = default_choice(home, values)
     choice["available"] = choice["value"] in offered
-    choice["chosen"] = bool(values.get("OPENTAG_DEFAULT_MODEL"))
     unavailable = [{"backend": backend.key, "name": backend.name, "reason": "not_connected"}
                    for backend in BACKENDS if backend.key not in ready]
+    cached = [group["fetched_at"] for group in groups if group["cached"]]
     return {"schema_version": 1, "groups": groups, "default": choice, "unavailable": unavailable,
-            "suggested": suggested_default(groups, choice)}
+            "suggested": suggested_default(groups, choice),
+            "cached": bool(cached), "cached_at": min(cached) if cached else None,
+            # Backends whose live read failed, so their saved catalog was kept.
+            "refresh_failed": [name for name in names if found[name][1] and found[name][1].failed]}
+
+
+def refresh_models(home: Path, values: dict[str, str], ready: list[str] | None = None) -> dict[str, Any]:
+    """Read every connected account's catalog live and save it for the next ``models``.
+
+    ``models`` already refreshes old catalogs in the background; this is for
+    someone who knows the list changed (see ``model_catalog.MAX_AGE_SECONDS``).
+    """
+    return models(home, values, ready, refresh=True)
+
+
+def _discover(names: list[str], *, live=()) -> dict[str, tuple[list[agent_models.ModelOption], Any]]:
+    """Each backend's models and the catalog source they came from (None for a Tag's own API), at once."""
+    def one(name: str):
+        source = model_catalog.Source(name, live=name in live) if model_catalog.cacheable(name) else None
+        return agent_models.discover_models(name, source), source
+
+    with ThreadPoolExecutor(max_workers=max(1, len(names))) as pool:
+        return dict(zip(names, pool.map(one, names)))
 
 
 def _levels(option: agent_models.ModelOption | None) -> dict[str, Any]:
@@ -416,7 +461,8 @@ def save_default_model(home: Path, value: str, *, ready: list[str] | None = None
     if model:
         names = agent_models.load_model_names(agent_models.model_names_path(home))
         if value not in names:
-            offered = {entry["value"] for group in models(home, values, ready)["groups"] for entry in group["models"]}
+            catalog = models(home, values, ready, expect=value)
+            offered = {entry["value"] for group in catalog["groups"] for entry in group["models"]}
             if value not in offered:
                 raise ValueError(f"{model} isn't available from your connected {name} account. Pick another model.")
     changes = {"OPENTAG_DEFAULT_MODEL": value}
@@ -566,6 +612,7 @@ def sign_in(home: Path, backend_key: str, *, method: str | None = None, account:
         _browser_login([executable, *backend.login_command], "claude", emit=emit,
                        cancelled=cancelled, timeout=timeout)
     _progress(emit, backend.key, "verifying")
+    model_catalog.forget(backend.key)  # Another account's models are wrong, not just old.
     result = connection(home, backend.key)
     if result["state"] != "connected":
         raise SignInError(f"Sign-in finished, but {backend.name} still isn't ready: "
@@ -660,7 +707,11 @@ def _print_progress(event: dict[str, Any]) -> None:
 
 
 def _choose_model(home: Path, values: dict[str, str], found: list[dict[str, Any]], ready: list[str]) -> tuple[str, str]:
-    """Choose model and effort together; legacy clients can still choose just a model."""
+    """Choose model and effort together; legacy clients can still choose just a model.
+
+    The accounts' saved catalogs make this immediate; only an account without
+    one is read now.
+    """
     ui.message("Loading models from your accounts…")
     catalog = models(home, values, ready)
     entries = [(entry["value"], f"{group['name']} · {entry['label']}")
@@ -679,7 +730,8 @@ def _choose_model(home: Path, values: dict[str, str], found: list[dict[str, Any]
         answer = ui.ask_client("choose", "Default model", qid="default_model", options=labels,
                                default=default, option_ids=ids, groups=catalog["groups"],
                                connections=found, tag_name=values.get("OPENTAG_BOT_NAME") or "Tag",
-                               supports_effort=True, default_effort=effort or None)
+                               supports_effort=True, default_effort=effort or None,
+                               cached_at=catalog["cached_at"])
         if isinstance(answer, dict):
             effort = answer.get("effort", "default")
             if not isinstance(effort, str):
@@ -714,7 +766,7 @@ def _choose_model(home: Path, values: dict[str, str], found: list[dict[str, Any]
 
 USAGE = ("tag settings ai connections | sign-in codex|claude [--method chatgpt|codex] "
          "[--account ID] | resume [--restart] [--json]; "
-         "tag [TAG] settings ai status | models | model VALUE [--effort LEVEL|default] | "
+         "tag [TAG] settings ai status | models [--refresh] | model VALUE [--effort LEVEL|default] | "
          "effort LEVEL|default [--restart] [--json]; " + tag_api.USAGE)
 
 
@@ -736,7 +788,7 @@ def _restart_note(target: Target) -> str:
 
 def cli(arguments: list[str], target: Target, *, json_output: bool = False, restart: bool = False,
         method: str | None = None, account: str | None = None, effort: str | None = None,
-        api: dict[str, Any] | None = None) -> int:
+        api: dict[str, Any] | None = None, refresh: bool = False) -> int:
     action = arguments[0] if arguments else "status"
     if action == "api":
         if not target.tag_id:
@@ -745,6 +797,8 @@ def cli(arguments: list[str], target: Target, *, json_output: bool = False, rest
     values = settings.load_config(settings.config_path(target.home))
     if effort is not None and action != "model":
         raise ValueError("--effort is only for tag settings ai model VALUE")
+    if refresh and action != "models":
+        raise ValueError("--refresh is only for tag settings ai models")
     if action == "connections" and len(arguments) == 1:
         found = connections(target.home)
         result = {"schema_version": 1, "connections": found,
@@ -777,7 +831,7 @@ def cli(arguments: list[str], target: Target, *, json_output: bool = False, rest
             ui.message("No AI is connected. Run tag settings ai sign-in codex or claude.")
         return 0 if result["usable"] else 1
     if action == "models" and len(arguments) == 1:
-        result = models(target.home, values)
+        result = refresh_models(target.home, values) if refresh else models(target.home, values)
         if json_output:
             print(json.dumps(result, indent=2))
         else:
