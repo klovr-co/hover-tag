@@ -1,11 +1,40 @@
 // Copyright 2026 klovr.co
 // SPDX-License-Identifier: Apache-2.0
 // One update notice on Home that does the work in place: ready, required,
-// updating, up to date, and Try again when an update stopped halfway.
-import { targetVersion, type UpdateState } from "../lib/updates";
+// updating, up to date, and Try again when an update stopped halfway. A release
+// whose Tag.app builds aren't published yet still gets a notice, without a button.
+import { useEffect, useRef, useState } from "react";
+import { preparingText, targetVersion, type UpdateState } from "../lib/updates";
 import { Icon, Spinner } from "./ui";
 
-export function UpdateNotice({ state, outdated, run, settings }: { state: UpdateState; outdated: boolean; run: () => void; settings: () => void }) {
+export interface Deferral { deferred: (version: string) => boolean; later: (version: string) => void; skip: (version: string) => void }
+
+/** Later, with a small arrow beside it for Skip this version. */
+function PutOff({ later, skip }: { later: () => void; skip: () => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: Event) => {
+      if (e instanceof KeyboardEvent ? e.key === "Escape" : !ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    window.addEventListener("mousedown", close);
+    window.addEventListener("keydown", close);
+    return () => { window.removeEventListener("mousedown", close); window.removeEventListener("keydown", close); };
+  }, [open]);
+  return (
+    <span className="split" ref={ref}>
+      <button className="p-btn quiet sm" onClick={later}>Later</button>
+      <button className="p-btn quiet sm caret" aria-label="More ways to put this update off" aria-haspopup="menu" aria-expanded={open}
+        onClick={() => setOpen(!open)}><Icon name="chevdown" size={12} /></button>
+      {open && <div className="menu" role="menu"><button role="menuitem" onClick={skip}>Skip version</button></div>}
+    </span>
+  );
+}
+
+export function UpdateNotice({ state, outdated, run, settings, defer }: {
+  state: UpdateState; outdated: boolean; run: () => void; settings: () => void; defer?: Deferral;
+}) {
   const version = targetVersion(state);
   const current = state.update?.current ?? "";
   if (state.status === "updating") {
@@ -75,15 +104,34 @@ export function UpdateNotice({ state, outdated, run, settings }: { state: Update
       </div>
     );
   }
+  if (available && defer?.deferred(version)) return null;
   if (available) {
     return (
-      <div className="notice info">
+      <div className={defer ? "notice info menuable" : "notice info"}>
         <span className="ic"><Icon name="spark" size={16} /></span>
         <div style={{ flex: 1 }}>
           <div className="t">Tag {version} is ready</div>
-          <div className="d">One update for the app and your Tags. Your settings are kept.</div>
         </div>
-        <div className="act"><button className="p-btn soft sm" onClick={run}>Update Tag</button></div>
+        <div className="act">
+          {/* One child, so the notice keeps its actions on the same row as the text. */}
+          <span className="pair">
+            <button className="p-btn soft sm" onClick={run}>Update Tag</button>
+            {defer && <PutOff later={() => defer.later(version)} skip={() => defer.skip(version)} />}
+          </span>
+        </div>
+      </div>
+    );
+  }
+  const preparing = state.status === "current" ? state.update?.preparing : undefined;
+  if (preparing) {
+    return (
+      <div className="notice info" role="status">
+        <span className="ic"><Icon name="spark" size={16} /></span>
+        <div style={{ flex: 1 }}>
+          <div className="t">Tag {preparing} is on its way</div>
+          <div className="d">{preparingText(preparing)}</div>
+        </div>
+        <div className="act" style={{ color: "var(--muted)" }}><Spinner small label="Preparing" /></div>
       </div>
     );
   }
