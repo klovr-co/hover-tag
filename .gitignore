@@ -14,3 +14,6 @@ node_modules
 
 # Generated images kept by local test runs
 /artifacts/
+
+# Vite dependency pre-bundle cache
+.vite/
