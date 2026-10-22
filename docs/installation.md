@@ -10,9 +10,20 @@ Download Tag from the [Tag guide](https://www.hover.team/tag/) or from
 | Your computer | Download | Then |
 | --- | --- | --- |
 | Mac | `Tag-VERSION-macos.dmg` | Open it and drag Tag to **Applications**. |
+| Linux (Ubuntu, Debian) | `Tag-VERSION-linux-amd64.deb` | Open it in your software installer, or run `sudo apt install ./Tag-VERSION-linux-amd64.deb`. |
+| Linux (other distributions) | `Tag-VERSION-linux-x86_64.AppImage` | Make it executable (`chmod +x`) and run it. |
 
-Windows and Linux: coming soon. Until then, use the terminal installer. See
+Each Linux download has a checksum in `DESKTOP-SHA256SUMS-linux` on the same
+release page. Check it with `sha256sum -c DESKTOP-SHA256SUMS-linux`.
+
+The AppImage needs FUSE to open. If it fails with a FUSE or `fusermount`
+error, run it as `./Tag-VERSION-linux-x86_64.AppImage --appimage-extract-and-run`.
+
+Windows: coming soon. Until then, use the terminal installer. See
 [Install from a terminal](#install-from-a-terminal).
+
+The Linux app needs a desktop session. On a server without a display, use the
+terminal installer.
 
 During the 0.3 beta, downloads are prereleases.
 
@@ -23,7 +34,7 @@ Keep your computer online until it finishes.
 
 ![Tag's welcome screen, with Install Tag](assets/screenshots/welcome.png)
 
-Tag shows each step with a progress bar. **Preparing local memory** takes
+Tag shows each step with a progress bar. **Preparing memory** takes
 the longest.
 
 ![Tag installing the runtime, with each step and a progress bar](assets/screenshots/installing.png)
@@ -64,9 +75,12 @@ running**.
 ## Before you begin
 
 - [ ] A computer that can stay awake and online while Tag answers: macOS 12 or
-  later for the desktop app. The terminal installer also supports Windows 10
-  or 11 and 64-bit Linux.
-- [ ] About 650 MB of free disk space.
+  later or 64-bit Linux with a desktop for the desktop app. The terminal
+  installer also supports Windows 10 or 11 and Linux without a desktop.
+- [ ] About 1.8 GB of free disk space. A measured install used 1.8 GB: about
+  1 GB for Tag's runtime and packages, and 560 MB for the local
+  [memory model](reference/installation-details.md#memory-embedding-model).
+  The installer also needs up to 1 GB of temporary package cache.
 - [ ] An AI account. Use Codex or Claude Code if you have one. You can also
   connect a [ChatGPT plan](reference/chatgpt-connection.md) or an
   [API key](reference/api-connections.md) during setup.
@@ -97,6 +111,35 @@ Invoke-WebRequest https://raw.githubusercontent.com/klovr-co/hover-tag/main/inst
 Then run `tag setup` and `tag start`. For install options, coding-agent setup,
 where files live, and running from source, see
 [Installation details](reference/installation-details.md).
+
+The installer starts downloading Tag's built-in memory model
+(`gpahal/bge-m3-onnx-int8`, about 560 MB) from `huggingface.co` in the background and
+finishes without waiting for it, so the computer needs outbound access to that host.
+Tag works meanwhile, but memory search isn't available until the download finishes.
+Tag.app shows the progress on Home, and `tag memory status` shows it in the terminal; if
+it stops, **Try again** or `tag memory download` restarts it. If your memory
+search uses your own embedding model, such as OpenAI or Ollama, skip the download:
+`./install.sh --skip-memory-model` (or `TAG_SKIP_MFS_MODEL=1 ./install.sh`; on
+Windows, `install.ps1 -SkipMemoryModel`). In Tag.app, choose **Your own endpoint** on the
+**Memory search** screen (after **Continue**) and give its address, model and key; the terminal installer asks the
+same question when you run it interactively. See
+[Memory embedding model](reference/installation-details.md#memory-embedding-model).
+
+### Keep Tag running on a server
+
+On Linux, `tag autostart on` registers a systemd user service that starts your
+Tags and the memory server (MFS) and restarts either if it stops. A user service
+starts at boot, before anyone logs in, only if the account has *linger* turned
+on. `tag autostart on` tries to turn it on for you. If your system asks for an
+administrator, it prints the exact command to run, which is:
+
+```sh
+sudo loginctl enable-linger "$USER"
+```
+
+Check it with `loginctl show-user "$USER" --property=Linger`. Without linger the
+service starts after your first login following a reboot. See
+[Keeping Tags running](reference/cli-operations.md#keeping-tags-running).
 
 ## Update Tag
 

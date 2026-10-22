@@ -287,6 +287,8 @@ button.opt:hover:not(:disabled) { background: var(--fill); }
 .notice .t { font-weight: 600; color: var(--ink); font-size: 14.5px; }
 .notice .d { font-size: 13px; color: var(--muted); margin-top: 1px; }
 /* Reported errors keep their line breaks, and long Tag IDs wrap instead of running off the edge. */
+.dl-bar { height: 5px; border-radius: 3px; margin-top: 8px; background: color-mix(in srgb, var(--blue) 16%, transparent); overflow: hidden; }
+.dl-bar > span { display: block; height: 100%; border-radius: 3px; background: var(--blue); transition: width .6s var(--ease); }
 .notice .d.selectable { white-space: pre-line; overflow-wrap: anywhere; }
 .notice .act { align-self: center; display: flex; gap: 8px; align-items: center; }
 /* With two or more actions, the message keeps the full width and the actions sit under it on the right. */
@@ -451,7 +453,8 @@ button.hello:hover b { text-decoration: underline; text-underline-offset: 2px; }
 .home-body > .home-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; margin: 0 -16px; padding: 0 16px 2px; }
 .body.settings > .settings-pane { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; margin: 0 -16px; padding: 0 16px; }
 .install .facts { gap: 14px; margin-top: 4px; }
-.install .install-main { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; }
+.install .install-main { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }
+.install .install-main > * { flex: none; }
 .install .install-main > .steps { overflow: auto; }
 .install .install-main > .steps .st { padding: 7px 14px; }
 .install .install-main > .logbox { flex: 1; max-height: none; }
@@ -568,6 +571,12 @@ button.hello:hover b { text-decoration: underline; text-underline-offset: 2px; }
 .mopt:hover:not(:disabled) .mck, .mopt:hover:not(:disabled) .mdef { color: #fff; }
 .mopt:disabled { color: var(--muted); cursor: default; }
 .mopt:disabled .mdef { color: var(--warn-text); font-weight: 600; }
+/* Refresh list: the open menu's quiet last line, for someone who knows a new model is out. */
+.mfoot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 5px; padding: 6px 4px 1px 8px; border-top: 1px solid var(--line); }
+.mrefresh { display: inline-flex; align-items: center; gap: 5px; padding: 2px 4px; border-radius: 5px; font-size: 12px; color: var(--faint); flex: none; }
+.mrefresh:disabled { cursor: default; }
+.mrefresh .spin { width: 11px; height: 11px; border-width: 1.5px; }
+.mferr { margin-right: auto; font-size: 12px; color: var(--warn-text); line-height: 1.3; }
 .mnote { padding: 3px 10px 8px 34px; font-size: 13px; color: var(--muted); }
 /* The message gets its own line; Cancel and Save sit under it on the right. */
 .savebar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 8px; padding: 12px 12px 12px 14px; border-radius: 10px; background: var(--pop); border: 1px solid var(--line-strong); box-shadow: var(--shadow-card); animation: rise2 .22s cubic-bezier(.22, 1, .36, 1); min-height: 50px; }
@@ -582,6 +591,36 @@ button.hello:hover b { text-decoration: underline; text-underline-offset: 2px; }
 }
 :where(:root[data-theme="dark"]) .veil2 { background: rgba(0, 6, 12, .55); }
 @keyframes fadein { from { opacity: 0; } }
+.model-edit { padding: 0 14px 13px; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; animation: rise2 .22s var(--ease); }
+.model-edit p { margin: 0; font-size: 12.5px; color: var(--muted); }
+.model-edit .field { height: 36px; font-size: 13.5px; width: 100%; }
+/* Same fields as the install screen's own endpoint: address full width, model and key side by side. */
+.model-edit > .fl2, .model-edit > .pick-pair { align-self: stretch; }
+.model-edit select.field { padding-right: 8px; }
+.model-choices { padding: 0 8px 8px; display: flex; flex-direction: column; gap: 2px; }
+.model-choices .opt { border-radius: 9px; padding: 9px 10px; gap: 10px; align-items: flex-start; transition: background .12s; }
+.model-choices .opt + .opt::before { display: none; }
+.model-choices .label { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; color: var(--ink); }
+.radio-dot { width: 16px; height: 16px; margin-top: 2px; border-radius: 50%; border: 1.5px solid var(--line-strong); flex: none; position: relative; transition: border-color .16s; }
+.radio-dot::after { content: ""; position: absolute; inset: 3px; border-radius: 50%; background: var(--blue); transform: scale(0); transition: transform .2s var(--spring); }
+.opt[aria-checked="true"] .radio-dot { border-color: var(--blue); }
+.opt[aria-checked="true"] .radio-dot::after { transform: scale(1); }
+.pick-cards { display: flex; flex-direction: column; gap: 10px; }
+.pick-card { border: 1.5px solid var(--line-strong); border-radius: 12px; background: #fff; transition: border-color .16s, box-shadow .16s; overflow: hidden; }
+.pick-card.on { border-color: var(--blue); box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 14%, transparent); }
+.pick-card .opt { align-items: flex-start; padding: 13px 14px; border-radius: 0; }
+.pick-card .opt .label { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14.5px; color: var(--ink); }
+.pick-card .opt .sub { font-size: 13px; }
+.pick-card.on .opt:hover { background: transparent; }
+.pick-fields { padding: 2px 14px 14px 42px; display: flex; flex-direction: column; gap: 10px; animation: rise2 .22s var(--ease); }
+.pick-fields p { margin: 0; font-size: 12.5px; color: var(--muted); }
+.pick-fields.flat { padding: 0; animation: none; }
+.pick-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.notice .d code { white-space: nowrap; }
+.fl2 { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; font-weight: 600; color: var(--ink); min-width: 0; }
+.fl2 i { font-style: normal; font-weight: 400; color: var(--muted); margin-left: 4px; }
+.fl2 .field { height: 36px; font-size: 13.5px; font-weight: 400; }
+.chip-now { font-style: normal; font-size: 11px; font-weight: 600; color: var(--blue); background: color-mix(in srgb, var(--blue) 12%, transparent); border-radius: 6px; padding: 1px 6px; }
 .dlg { width: 100%; max-width: 432px; background: var(--pop); border-radius: 12px; border: 1px solid var(--line-strong); box-shadow: 0 30px 80px rgba(0, 20, 40, .35); padding: 18px 18px 16px; display: flex; flex-direction: column; gap: 12px; animation: rise2 .22s cubic-bezier(.22, 1, .36, 1); cursor: default; }
 .dlg h3 { margin: 0; font-size: 17px; font-weight: 600; color: var(--ink); letter-spacing: -.2px; }
 .dlg p { margin: 0; font-size: 14px; color: var(--text); line-height: 1.5; }
@@ -910,6 +949,11 @@ button.list-item:hover { background: var(--fill); }
 .menu { animation: menu-in .14s var(--ease); transform-origin: top right; }
 @keyframes menu-in { from { opacity: 0; transform: scale(.97) translateY(-3px); } }
 .mmenu { transform-origin: bottom center; } .mmenu.below { transform-origin: top center; }
+/* Refresh list fades darker on hover. Models the refresh adds open a gap and slide in; dropped ones close theirs. */
+.mrefresh { transition: color .16s; }
+.mrefresh:hover:not(:disabled) { color: var(--muted); }
+.mopt.entering { overflow: hidden; animation: row-in .32s var(--ease); }
+.mopt.leaving { overflow: hidden; pointer-events: none; animation: row-out .22s var(--ease) forwards; }
 .activity-token-tooltip { animation: fadein .12s ease-out; }
 /* Choices: checks and radios change colour; the switch's knob slides across. */
 .box { transition: background-color .14s, border-color .14s; }
@@ -989,6 +1033,23 @@ button.list-item:hover { background: var(--fill); }
 .veil2.leaving .dlg { animation: dlg-out .16s ease-in forwards; }
 @keyframes fade-away { to { opacity: 0; } }
 @keyframes dlg-out { to { opacity: 0; transform: translateY(6px) scale(.98); } }
+/* Quick add: a dialog over Home. Its steps tick like Create's; the model line settles in when
+   setup names it, and the finished Tag hops beside a check. */
+.dlg.quick-dlg { max-width: 460px; }
+.quick-head { display: flex; align-items: center; gap: 9px; }
+.quick-dlg .recap-top, .quick-dlg .steps { border: 1px solid var(--line); border-radius: 10px; }
+.quick-dlg .recap-top { padding: 12px 14px; }
+.quick-model { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--text); }
+.quick-model .muted { color: var(--muted); }
+.quick-model .link { margin-left: auto; }
+.quick-pick { display: flex; gap: 8px; }
+.quick-pick > .mpick-wrap:first-child { flex: 1; min-width: 0; }
+.quick-pick .quick-effort { flex: none; width: 128px; }
+.quick-model b.fresh { display: inline-block; animation: rise2 .24s var(--ease); }
+.quick-made img { animation: hop .5s var(--spring); }
+.quick-check { margin-left: auto; flex: none; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--green); color: #fff; }
+.dlg p.quick-hint { font-size: 13.5px; color: var(--muted); }
 /* Play: Shuffle rolls through looks. */
 .avw2.rolling .pic { animation: roll .36s steps(3) infinite; }
 @keyframes roll { 33% { filter: hue-rotate(120deg); transform: translateY(-3px); } 66% { filter: hue-rotate(240deg); transform: translateY(2px); } }
@@ -1000,8 +1061,10 @@ button.list-item:hover { background: var(--fill); }
 .r.click:hover .desc-line.marquee, .r.click:focus-visible .desc-line.marquee { -webkit-mask: none; mask: none; }
 
 @media (prefers-reduced-motion: reduce) {
-  .api-row.entering, .api-leave, .api-check, .api-models, .api-saved, .api-azure, .api-hint,
-  .flow-panel > .body > *, .confetti, .usage-note, .avw2.rolling .pic, .track .tnode img { animation: none !important; }
+  .radio-dot::after, .model-choices .opt, .opt[aria-checked="true"] .radio-dot::after { transition: none; }
+  .pick-fields, .api-row.entering, .api-leave, .api-check, .api-models, .api-saved, .api-azure, .api-hint, .model-edit,
+  .flow-panel > .body > *, .confetti, .usage-note, .avw2.rolling .pic, .track .tnode img,
+  .quick-model b.fresh, .quick-made img { animation: none !important; }
   .sl-msg.working > div > p { animation: none; background: none; color: inherit; }
   .desc-line.marquee { text-overflow: ellipsis; -webkit-mask: none; mask: none; }
   .desc-line.marquee > span, .r.click:hover .desc-line.marquee > span, .r.click:focus-visible .desc-line.marquee > span { display: inline; transform: none; transition: none; }

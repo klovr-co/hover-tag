@@ -18,6 +18,7 @@ import { useNight } from "../lib/appearance";
 import { ordered, useOrder, useReorder } from "../lib/order";
 import { useFresh, useListMotion } from "../lib/motion";
 import { Avatar, ErrorLine, Icon, MOON, Primary, Sky, Switch, tagIcon, WorkspaceMark } from "./ui";
+import { ModelDownloadNotice } from "./ModelDownload";
 import { UpdateNotice } from "./UpdateNotice";
 
 export const HOW_TAG_WORKS = "https://hover.team/tag";
@@ -40,6 +41,8 @@ interface Props {
   outdated: boolean;
   runUpdate: () => void;
   add: () => void;
+  /** Add a Tag straight to this Slack workspace (team ID), asking only for its name and look. */
+  addTo: (group: Group) => void;
   finishSetup: (row: TagRow) => void;
   open: (row: TagRow) => void;
   fixAI: (row: string) => void;
@@ -124,6 +127,7 @@ export function Home(props: Props) {
         </div>
       </Sky>
       <div className="body home-body">
+        <ModelDownloadNotice api={props.api} />
         <UpdateNotice state={update} outdated={outdated} run={props.runUpdate} settings={() => props.showSettings("updates")} />
         {/* The window stays one height; a long Tag list scrolls here, under the update banner. */}
         <div className="home-scroll" ref={art.ref}>
@@ -245,6 +249,12 @@ function WorkspaceCard({ group, tags, drag, movable, setTags, ...props }: Props 
         <h3>{group.label}</h3>
         <span className="meta">{running} of {group.rows.length} online</span>
         <span className="spacer" />
+        {group.key && (
+          <button className="link" aria-label={`Add a Tag to ${group.label}`} title={`Add a Tag to ${group.label}`}
+            onClick={() => props.addTo(group)}>
+            <Icon name="plus" size={10} />Add Tag
+          </button>
+        )}
         {group.key && (
           <button className="link" disabled={tags.busy.has(group.key)} aria-label={`${all ? "Stop" : "Start"} all Tags in ${group.label}`}
             onClick={() => void tags.workspace(group.key, all ? "stop" : "start")}>

@@ -27,6 +27,8 @@ export interface TagRow {
   slack_name?: string | null;
   /** The Slack app Tag created or linked; null before setup reaches that step. */
   slack_app_id?: string | null;
+  /** The Enterprise Grid organization the workspace belongs to; null outside one. */
+  slack_enterprise?: string | null;
   /** False for a setup that never reached Slack: nothing exists there to continue or delete. */
   has_app?: boolean;
   nickname?: string | null;
@@ -80,6 +82,10 @@ export const STATUS_LABEL: Record<Status, string> = {
   attention: "Needs attention",
 };
 
+/** Settings → General: the one switch that keeps Tags and the memory they search running. */
+export const KEEP_RUNNING_DETAIL =
+  "Start the Tags you switched on after you log in, and restart any that stop, along with the memory they search. Works even when this app is closed.";
+
 /** What went wrong with a Tag that needs attention, in its own words when Tag gave one. */
 export function problemText(row: TagRow) {
   if (row.error) return row.error;
@@ -98,7 +104,7 @@ export function problemHelp(row: TagRow, aiProblem: string | null) {
       ? "Its AI sign-in needs fixing first. Then turn it off and on again."
       : "It's still running but stopped hearing from Slack. Turn it off and on again; if that doesn't help, check the logs.";
   }
-  if (row.services?.mfs === false) return "Tag can't reach its memory service. Turn it off and on again, or check the logs.";
+  if (row.services?.mfs === false) return "Tag can't reach its memory service. With Keep Tags running on, Tag restarts it within a minute. Otherwise turn it off and on again, or check the logs.";
   return "Turn it off and on again, or check the logs to see why.";
 }
 
@@ -109,6 +115,8 @@ export interface Group {
   key: string;
   label: string;
   icon: string | null;
+  /** The workspace's Enterprise Grid organization, when it's in one. */
+  enterprise: string | null;
   rows: TagRow[];
 }
 
@@ -123,6 +131,7 @@ export function groups(rows: TagRow[]): Group[] {
     key,
     label: members[0].workspace_name || key || "Not connected yet",
     icon: members.find((row) => row.workspace_icon)?.workspace_icon ?? null,
+    enterprise: members.find((row) => row.slack_enterprise)?.slack_enterprise ?? null,
     rows: members,
   }));
 }
@@ -271,8 +280,8 @@ export const INSTALL_STEPS = [
   { step: "tools", title: "Getting installation tools", detail: "A small, verified download", weight: 0.1 },
   { step: "python", title: "Preparing Python", detail: "A private copy, so your system stays untouched", weight: 0.15 },
   { step: "download", title: "Downloading Tag", detail: "The latest release, checked before it's used", weight: 0.1 },
-  { step: "components", title: "Installing components", detail: "Slack connection and local search", weight: 0.3 },
-  { step: "memory", title: "Preparing local memory", detail: "Downloads a search model, the longest step", weight: 0.3 },
+  { step: "components", title: "Installing components", detail: "Slack connection and local search", weight: 0.5 },
+  { step: "memory", title: "Preparing memory", detail: "The search model downloads in the background after install", weight: 0.1 },
   { step: "command", title: "Finishing up", detail: "Adding the tag command", weight: 0.05 },
 ] as const;
 
