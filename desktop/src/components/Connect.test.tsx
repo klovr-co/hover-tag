@@ -11,7 +11,7 @@ vi.mock("@tauri-apps/api/core", () => ({ convertFileSrc: (path: string) => `asse
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 const codex = { backend: "codex", name: "Codex", provider: "OpenAI models", state: "connected", installed: true, method: "codex",
-  account: "ChatGPT sign-in", detail: "", shared: true, actions: ["change_account"], install_url: "https://learn.chatgpt.com/docs/codex/cli", allowed: true };
+  account: "Codex sign-in on this Mac", detail: "", shared: true, actions: ["change_account"], install_url: "https://learn.chatgpt.com/docs/codex/cli", allowed: true };
 const QUESTIONS: Record<string, object> = {
   profile: { id: "profile", kind: "profile_picture", prompt: "Meet your new Tag", name: "Maya's Tag", name_limit: 35, description: "",
     description_limit: 140, preview: null, picture: "waterdrop", error: null, editing: false, can_use_existing: true, can_go_back: false },

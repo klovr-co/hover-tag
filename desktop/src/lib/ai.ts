@@ -217,7 +217,7 @@ const LABEL: Record<string, string> = {
   misconfigured: "API needs attention",
 };
 
-/** The status line under a backend's name, e.g. "Connected · ChatGPT sign-in". */
+/** The status line under a backend's name, e.g. "Connected · Codex sign-in on this Mac". */
 export function statusLine(connection: Connection): { text: string; tone: Tone } {
   if (connection.state === "connected") {
     return { text: `Connected${connection.account ? ` · ${connection.account}` : ""}`, tone: "good" };

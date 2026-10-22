@@ -231,6 +231,10 @@ def process_for(path: Path):
     return None
 
 
+# Seconds a new service may take to fail before it counts as started.
+STARTUP_GRACE_SECONDS = 1.5
+
+
 def start_process(
     home: Path,
     name: str,
@@ -265,7 +269,11 @@ def start_process(
     identity = {"pid": child.pid, "created": process.create_time(),
                 "command_marker": Path(marker_source).name, **(metadata or {})}
     record.write_text(json.dumps(identity), encoding="utf-8")
-    time.sleep(0.3)
+    # A slow runner (Windows CI) can take over 0.3 s to start and fail, so wait for the exit itself.
+    try:
+        child.wait(timeout=STARTUP_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        pass
     if child.poll() is not None:
         record.unlink(missing_ok=True)
         detail = log_tail(home, name, 20, state_dir=state)

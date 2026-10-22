@@ -225,7 +225,8 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
   let runtimeVersion = productVersion.trim();
   let desktopVersion = runtimeVersion;
   let savedChannel = runtimeVersion.includes("-alpha") ? "alpha" : runtimeVersion.includes("-beta") ? "beta" : "stable";
-  const targetVersion = new URLSearchParams(location.search).get("update") ? "0.4.0-alpha.1" : runtimeVersion;
+  const updateDemo = new URLSearchParams(location.search).get("update");
+  const targetVersion = updateDemo ? "0.4.0-alpha.1" : runtimeVersion;
   let keepRunning = false;
   let memoryRunning = true;
   let embedding = "onnx";
@@ -496,7 +497,8 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
     quit: async () => {},
     markMigrated: async () => {},
     markChannelInitialized: async () => {},
-    checkAppUpdate: async () => desktopVersion !== targetVersion ? { version: targetVersion } : null,
+    // ?update=preparing: the release is out but its Tag.app builds aren't published yet.
+    checkAppUpdate: async () => desktopVersion !== targetVersion && updateDemo !== "preparing" ? { version: targetVersion } : null,
     installAppUpdate: async () => { desktopVersion = targetVersion; await sleep(1500); },
     pickImage: async () => null,
     onFileDrop: () => () => {},
@@ -591,7 +593,7 @@ async function demoSignIn(ai: AIStatus, args: string[], onLine: (line: string) =
     if (cancelled) return;
     const index = ai.connections.findIndex((c) => c.backend === backend);
     const connection: Connection = { ...ai.connections[index], state: "connected", detail: "",
-      account: backend === "claude" ? "Claude Max · maya@klovr.co" : args.includes("chatgpt") ? "ChatGPT plan · maya@klovr.co" : "ChatGPT sign-in",
+      account: backend === "claude" ? "Claude Max · maya@klovr.co" : args.includes("chatgpt") ? "ChatGPT plan · maya@klovr.co" : "Codex sign-in on this Mac",
       method: backend === "claude" ? "claude" : args.includes("chatgpt") ? "chatgpt" : "codex",
       shared: true, actions: ["change_account"] };
     ai.connections[index] = connection;

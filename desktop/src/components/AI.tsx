@@ -52,6 +52,36 @@ interface RowProps {
   open: (url: string) => void;
 }
 
+/** A ⋯ button that opens a short list of less common actions. */
+function MoreMenu({ label, items, disabled }: { label: string; items: { title: string; onClick: () => void }[]; disabled?: boolean }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: Event) => {
+      if (e instanceof KeyboardEvent ? e.key === "Escape" : !ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    window.addEventListener("mousedown", close);
+    window.addEventListener("keydown", close);
+    return () => { window.removeEventListener("mousedown", close); window.removeEventListener("keydown", close); };
+  }, [open]);
+  return (
+    <div className="more-wrap" ref={ref}>
+      <button className="p-btn quiet sm more-btn" aria-haspopup="menu" aria-expanded={open} aria-label={label}
+        disabled={disabled} onClick={() => setOpen(!open)}>
+        <Icon name="more" size={18} />
+      </button>
+      {open && (
+        <div className="menu" role="menu" aria-label={label}>
+          {items.map((item) => (
+            <button key={item.title} role="menuitem" onClick={() => { setOpen(false); item.onClick(); }}>{item.title}</button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** One agent: its own app icon, one status line, and the one thing to do next. */
 export function ConnectionRow({ connection: c, signIn, opened, busy, quiet, act, cancel, check, open }: RowProps) {
   const running = signIn?.backend === c.backend && !!signIn.step;
@@ -68,6 +98,11 @@ export function ConnectionRow({ connection: c, signIn, opened, busy, quiet, act,
   let tone = "";
   let line: ReactNode;
   let acts: ReactNode = null;
+  // Reconnect and Resume renew the saved account; this is the way to a different one.
+  const another = c.actions.includes("change_account")
+    ? <MoreMenu label={`More options for ${c.name}`} disabled={busy && !running}
+        items={[{ title: "Change account", onClick: () => run("change_account") }]} />
+    : null;
   if (running) {
     tone = "busy";
     line = <><span className="spin" />{signIn.text || "Waiting for your browser…"}</>;
@@ -75,23 +110,23 @@ export function ConnectionRow({ connection: c, signIn, opened, busy, quiet, act,
   } else if (failed) {
     tone = "bad";
     line = <><Icon name="warn" /><span>Sign-in didn't finish. {result?.error ?? ""}</span></>;
-    acts = button("ink", "Try again", () => run(c.state === "expired" ? "reconnect" : "sign_in"));
+    acts = <>{button("ink", "Try again", () => run(c.state === "expired" ? "reconnect" : "sign_in"))}{another}</>;
   } else switch (c.state) {
     case "connected":
       tone = "ok";
       line = <><i className="dot" /><b>Connected</b>{c.account && <span className="acct">· {c.account}</span>}</>;
-      if (c.actions.includes("change_account")) acts = button("soft", "Change account", () => run("change_account"));
+      acts = another;
       break;
     case "expired":
       tone = "warn";
       line = <><Icon name="warn" />Sign-in expired</>;
-      acts = button("ink", "Reconnect", () => run("reconnect"));
+      acts = <>{button("ink", "Reconnect", () => run("reconnect"))}{another}</>;
       break;
     case "limited":
       tone = "warn";
       line = <><Icon name="warn" />Usage limit reached</>;
       acts = <><button className="link" onClick={() => open("https://chatgpt.com/settings/usage")}>Review usage</button>
-        {button("soft", "Resume", () => run("resume"))}</>;
+        {button("soft", "Resume", () => run("resume"))}{another}</>;
       break;
     case "not_installed":
       line = <><i className="dot" />Not installed</>;
@@ -126,7 +161,8 @@ export function ChangeAccount({ connection, running, choose, cancel }: {
   connection: Connection; running: boolean;
   choose: (method?: string) => void; cancel: () => void;
 }) {
-  const [method, setMethod] = useState<string>("chatgpt");
+  // Start on the account Codex uses now, so changing it doesn't begin on the other option.
+  const [method, setMethod] = useState<string>(connection.method === "codex" ? "codex" : "chatgpt");
   const codex = connection.backend === "codex";
   const stops = running;
   const back = codex && method === "codex" && connection.method === "chatgpt";
