@@ -41,6 +41,41 @@ describe("useTags", () => {
     expect(result.current.error).toBe("");
   });
 
+  it("clears a start failure once that Tag is running, however it started", async () => {
+    const api = demoBridge();
+    const listed = (state: string) => ({ code: 0, stderr: "", stdout: JSON.stringify({ tags: [
+      { id: "pa", state, configured: true, slack_app_id: "A1", slack_workspace: "T1" },
+      { id: "other", state: "stopped", configured: true, slack_app_id: "A2", slack_workspace: "T1" },
+    ] }) });
+    let state = "stopped";
+    api.tag = async (args: string[]) => args[0] === "list" ? listed(state)
+      : { code: 1, stdout: "", stderr: "Invitation memory could not be prepared.\n" };
+    const { result } = renderHook(() => useTags(api, false));
+    await act(async () => { await result.current.refresh(); });
+    await act(async () => { await result.current.toggle(result.current.rows[0]); });
+    expect(result.current.error).toContain("Invitation memory could not be prepared.");
+    await act(async () => { await result.current.refresh(); });
+    expect(result.current.error).toContain("Invitation memory could not be prepared.");
+    state = "running"; // Started from the command line, or by Keep Tags running.
+    await act(async () => { await result.current.refresh(); });
+    expect(result.current.error).toBe("");
+  });
+
+  it("keeps a start failure while only a different Tag is running", async () => {
+    const api = demoBridge();
+    api.tag = async (args: string[]) => args[0] === "list"
+      ? { code: 0, stderr: "", stdout: JSON.stringify({ tags: [
+          { id: "pa", state: "stopped", configured: true, slack_app_id: "A1", slack_workspace: "T1" },
+          { id: "other", state: "running", configured: true, slack_app_id: "A2", slack_workspace: "T1" },
+        ] }) }
+      : { code: 1, stdout: "", stderr: "Couldn't start.\n" };
+    const { result } = renderHook(() => useTags(api, false));
+    await act(async () => { await result.current.refresh(); });
+    await act(async () => { await result.current.toggle(result.current.rows[0]); });
+    await act(async () => { await result.current.refresh(); });
+    expect(result.current.error).toContain("Couldn't start.");
+  });
+
   it("keeps action failures when the list recovers, then clears the stale list failure", async () => {
     const api = demoBridge();
     const working = api.tag;
