@@ -151,13 +151,13 @@ def _codex_connection(home: Path, executable: str, version: str | None) -> dict[
                            actions=("sign_in",), method="codex", **common)
     if result.returncode == 0:
         text = (result.stdout + result.stderr).lower()
-        account = "API key" if "api key" in text else "ChatGPT sign-in" if "chatgpt" in text else "Signed in"
+        account = "API key" if "api key" in text else "Codex sign-in on this Mac" if "chatgpt" in text else "Signed in"
         return _connection(backend, "connected", method="codex", account=account,
                            actions=("change_account",), **common)
     codex_home = Path(os.getenv("CODEX_HOME", str(Path.home() / ".codex"))).expanduser()
     if (codex_home / "auth.json").is_file():
         return _connection(backend, "expired", method="codex", detail="Sign in to Codex again.",
-                           actions=("reconnect",), **common)
+                           actions=("reconnect", "change_account"), **common)
     return _connection(backend, "signed_out", method="codex", actions=("sign_in",), **common)
 
 

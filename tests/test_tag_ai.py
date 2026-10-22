@@ -107,7 +107,7 @@ class ConnectionTests(Fixture):
     def test_reports_each_state_with_the_action_to_offer(self) -> None:
         cases = [
             ("codex missing", dict(installed=("claude",)), "codex", "not_installed", ["install"], None),
-            ("codex chatgpt", {}, "codex", "connected", ["change_account"], "ChatGPT sign-in"),
+            ("codex chatgpt", {}, "codex", "connected", ["change_account"], "Codex sign-in on this Mac"),
             ("codex api key", dict(codex_status=done(0, "Logged in using an API key")), "codex", "connected",
              ["change_account"], "API key"),
             ("codex signed out", dict(codex_status=done(1)), "codex", "signed_out", ["sign_in"], None),
@@ -133,6 +133,8 @@ class ConnectionTests(Fixture):
         self.machine(codex_status=done(1), claude_status=done(1, json.dumps({"loggedIn": False})))
         self.assertEqual(["expired", "expired"], [item["state"] for item in tag_ai.connections(self.home)])
         self.assertEqual(["reconnect"], tag_ai.connection(self.home, "claude")["actions"])
+        # An expired Codex sign-in can still be swapped for another account.
+        self.assertEqual(["reconnect", "change_account"], tag_ai.connection(self.home, "codex")["actions"])
 
     def test_chatgpt_plan_is_shared_by_all_tags(self) -> None:
         account = {"id": "oaiapp_one", "email": "one@example.test", "signed_in": True, "plan_enabled": True,

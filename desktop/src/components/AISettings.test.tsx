@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { demoBridge } from "../lib/bridge";
 import type { Tags } from "../lib/tags";
@@ -13,10 +13,33 @@ describe("Shared AI settings", () => {
     const tags = { rows: [], refresh: vi.fn() } as unknown as Tags;
     render(<AISettings api={api} tags={tags} close={vi.fn()} />);
     expect(await screen.findByText("Shared by all your Tags")).toBeTruthy();
-    await screen.findAllByRole("button", { name: "Change account" });
+    await screen.findByRole("button", { name: "More options for Codex" });
     expect(run).toHaveBeenCalledWith(["settings", "ai", "connections", "--json"]);
     expect(screen.queryByRole("combobox")).toBeNull();
     expect(screen.queryByText("Default model")).toBeNull();
+  });
+
+  it("keeps Change account in a ⋯ menu that Escape closes", async () => {
+    const api = demoBridge();
+    const tags = { rows: [], refresh: vi.fn() } as unknown as Tags;
+    render(<AISettings api={api} tags={tags} close={vi.fn()} />);
+    const more = await screen.findByRole("button", { name: "More options for Codex" });
+    expect(screen.queryByRole("button", { name: "Change account" })).toBeNull();
+    fireEvent.click(more);
+    expect(more.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByRole("menuitem", { name: "Change account" })).toBeTruthy();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("opens Change account on the sign-in Codex uses now", async () => {
+    const api = demoBridge();
+    const tags = { rows: [], refresh: vi.fn() } as unknown as Tags;
+    render(<AISettings api={api} tags={tags} close={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "More options for Codex" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Change account" }));
+    expect(screen.getByRole("radio", { name: /Codex sign-in on this Mac/ }).getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByRole("radio", { name: /ChatGPT account for all Tags/ }).getAttribute("aria-checked")).toBe("false");
   });
 
   it("changes a provider through the global command and explains all running Tags pause", async () => {
@@ -24,7 +47,8 @@ describe("Shared AI settings", () => {
     const setup = vi.spyOn(api, "setup");
     const tags = { rows: [], refresh: vi.fn() } as unknown as Tags;
     render(<AISettings api={api} tags={tags} close={vi.fn()} />);
-    fireEvent.click((await screen.findAllByRole("button", { name: "Change account" }))[0]);
+    fireEvent.click(await screen.findByRole("button", { name: "More options for Codex" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Change account" }));
     const dialog = screen.getByRole("dialog");
     expect(dialog.textContent).toContain("Running Tags pause");
     const radio = screen.getByRole("radio", { name: /ChatGPT account/ });
@@ -32,6 +56,54 @@ describe("Shared AI settings", () => {
     fireEvent.click(screen.getByRole("button", { name: /Continue in browser/ }));
     await vi.waitFor(() => expect(setup).toHaveBeenCalled());
     expect(setup.mock.calls[0][0]).toEqual(["settings", "ai", "sign-in", "codex", "--method", "chatgpt", "--restart"]);
+  });
+});
+
+describe("An expired shared ChatGPT account", () => {
+  it("still offers Change account, so Codex's own sign-in can be chosen", async () => {
+    const api = demoBridge();
+    const real = api.tag.bind(api);
+    vi.spyOn(api, "tag").mockImplementation(async (args, ...rest) => {
+      const result = await real(args, ...rest);
+      if (args.join(" ") !== "settings ai connections --json") return result;
+      const report = JSON.parse(result.stdout);
+      report.connections = report.connections.map((c: { backend: string }) => c.backend !== "codex" ? c
+        : { ...c, state: "expired", method: "chatgpt", detail: "Sign in to ChatGPT again.", actions: ["reconnect", "change_account"] });
+      return { ...result, stdout: JSON.stringify(report) };
+    });
+    const setup = vi.spyOn(api, "setup");
+    const tags = { rows: [], refresh: vi.fn() } as unknown as Tags;
+    render(<AISettings api={api} tags={tags} close={vi.fn()} />);
+    const row = within(await screen.findByLabelText("Codex"));
+    expect(await row.findByRole("button", { name: "Reconnect" })).toBeTruthy();
+    expect(row.queryByRole("menuitem")).toBeNull();
+    fireEvent.click(row.getByRole("button", { name: "More options for Codex" }));
+    fireEvent.click(row.getByRole("menuitem", { name: "Change account" }));
+    expect(screen.getByRole("radio", { name: /ChatGPT account for all Tags/ }).getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(screen.getByRole("radio", { name: /Codex sign-in on this Mac/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Continue in browser|Use Codex sign-in/ }));
+    await vi.waitFor(() => expect(setup).toHaveBeenCalled());
+    expect(setup.mock.calls[0][0]).toEqual(["settings", "ai", "sign-in", "codex", "--method", "codex", "--restart"]);
+  });
+
+  it("offers Change account when Codex's own sign-in has expired", async () => {
+    const api = demoBridge();
+    const real = api.tag.bind(api);
+    vi.spyOn(api, "tag").mockImplementation(async (args, ...rest) => {
+      const result = await real(args, ...rest);
+      if (args.join(" ") !== "settings ai connections --json") return result;
+      const report = JSON.parse(result.stdout);
+      report.connections = report.connections.map((c: { backend: string }) => c.backend !== "codex" ? c
+        : { ...c, state: "expired", method: "codex", detail: "Sign in to Codex again.", actions: ["reconnect", "change_account"] });
+      return { ...result, stdout: JSON.stringify(report) };
+    });
+    const tags = { rows: [], refresh: vi.fn() } as unknown as Tags;
+    render(<AISettings api={api} tags={tags} close={vi.fn()} />);
+    const row = within(await screen.findByLabelText("Codex"));
+    expect(await row.findByRole("button", { name: "Reconnect" })).toBeTruthy();
+    fireEvent.click(row.getByRole("button", { name: "More options for Codex" }));
+    fireEvent.click(row.getByRole("menuitem", { name: "Change account" }));
+    expect(screen.getByRole("radio", { name: /Codex sign-in on this Mac/ }).getAttribute("aria-checked")).toBe("true");
   });
 });
 
@@ -148,7 +220,7 @@ describe("Your own API", () => {
   it("stays hidden when the installed Tag can't manage API connections", async () => {
     const api = demoBridge();
     render(<AISettings api={api} tags={tags()} close={vi.fn()} />);
-    await screen.findAllByRole("button", { name: "Change account" });
+    await screen.findByRole("button", { name: "More options for Codex" });
     expect(screen.queryByRole("button", { name: /Add your own API/ })).toBeNull();
   });
 });
