@@ -10,6 +10,7 @@ import { ActivityDetails, StepsToggle } from "./ActivityDetails";
 import { ActivityArtifacts } from "./ActivityArtifacts";
 import { ActivityTokens } from "./ActivityTokens";
 import { useModelChoice } from "../lib/model";
+import { usePresence } from "../lib/motion";
 import { collapseRepeats, groups, parseJSON, problemHelp, problemText, status, title, type Group, type TagRow } from "../lib/protocol";
 import type { Tags } from "../lib/tags";
 import teamArt from "../assets/art/tag-team.png";
@@ -268,6 +269,7 @@ function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, sa
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
   const [logText, setLogText] = useState("");
+  const failure = usePresence(tags.error || null);
   const [logView, setLogView] = useState("");
   const request = useRef(0);
   const load = useCallback(async () => {
@@ -347,7 +349,7 @@ function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, sa
       </div>
       <div key={tab} className="sl-body" role="tabpanel">
         {/* Rename, description, remove and start/stop report failures here, not only on Home. */}
-        {tags.error && <ErrorLine>{tags.error}</ErrorLine>}
+        {failure.shown && <ErrorLine leaving={failure.leaving} onDismiss={() => tags.setError("")}>{failure.shown}</ErrorLine>}
         {tab === "activity" && <Activity hasMore={hasMore} loading={loading} loadOlder={() => setLimit((value) => value + 50)} hideErrors={hideErrors} api={api} row={row} items={activity} copyLog={copyLog} showLogs={() => setTab("logs")} problem={problem} openAI={() => openAI(row.id)} />}
         {tab === "channels" && (
           <>
