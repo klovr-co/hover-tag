@@ -3310,6 +3310,9 @@ def _run_cli() -> int:
             )
             manifest_changed = slack_manifest_migrations.reconcile(home, config_path, values)
             if manifest_changed:
+                values = read_config(config_path)
+            history_repaired = slack_manifest_migrations.repair_history_credential(home, config_path, values)
+            if manifest_changed or history_repaired:
                 # A migration may rotate credentials; preflight and the bridge
                 # must use the saved replacement during this same start.
                 values = read_config(config_path)

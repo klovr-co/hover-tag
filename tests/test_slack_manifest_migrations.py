@@ -300,6 +300,52 @@ class SlackManifestMigrationTests(unittest.TestCase):
                     migrations.reconcile(home, config, self.values())
             self.assertFalse((home / "state/slack-manifest-migrations.json").exists())
 
+    def test_history_credential_copied_from_the_bot_token_follows_the_reinstall(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home, config = self.linked_home(Path(directory))
+            migrations.settings.update_config(config, {"MFS_SLACK_TOKEN": "xoxb-test-token"})
+            fresh = {"SLACK_APP_TOKEN": "xapp-fresh-token", "SLACK_BOT_TOKEN": "xoxb-fresh-token"}
+            migrations._save_credentials(home, config, fresh)
+            saved = migrations.settings.read_config(config)
+            self.assertEqual("xoxb-fresh-token", saved["MFS_SLACK_TOKEN"])
+            self.assertEqual("xoxb-fresh-token", (home / "config/credentials/mfs-slack-token").read_text())
+
+    def test_separate_history_credential_is_kept_when_the_bot_token_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home, config = self.linked_home(Path(directory))
+            migrations.settings.update_config(config, {"MFS_SLACK_TOKEN": "xoxp-person-token"})
+            migrations._save_credentials(home, config, {"SLACK_APP_TOKEN": "xapp-f", "SLACK_BOT_TOKEN": "xoxb-f"})
+            self.assertEqual("xoxp-person-token", migrations.settings.read_config(config)["MFS_SLACK_TOKEN"])
+            self.assertFalse((home / "config/credentials/mfs-slack-token").exists())
+
+    def test_history_credential_revoked_by_an_earlier_reinstall_is_repaired(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home, config = self.linked_home(Path(directory))
+            values = self.values() | {"MFS_SLACK_TOKEN": "xoxb-revoked"}
+            migrations.settings.save_config(config, values)
+            def scopes(token):
+                if token == "xoxb-revoked":
+                    raise migrations.BotTokenRejected("dead")
+                return set(migrations.REQUIRED_BOT_SCOPES)
+            with patch.object(migrations, "granted_bot_scopes", side_effect=scopes):
+                self.assertTrue(migrations.repair_history_credential(home, config, values))
+                repaired = migrations.settings.read_config(config)
+                self.assertEqual("xoxb-test-token", repaired["MFS_SLACK_TOKEN"])
+                self.assertFalse(migrations.repair_history_credential(home, config, repaired))  # Idempotent.
+            self.assertEqual("xoxb-test-token", (home / "config/credentials/mfs-slack-token").read_text())
+
+    def test_history_credential_is_kept_when_it_works_or_slack_cannot_say(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home, config = self.linked_home(Path(directory))
+            for history, outcome in (("xoxb-other-working", set()), ("xoxb-unknown", RuntimeError("offline")),
+                                     ("xoxp-person-token", migrations.BotTokenRejected("dead"))):
+                values = self.values() | {"MFS_SLACK_TOKEN": history}
+                migrations.settings.save_config(config, values)
+                with patch.object(migrations, "granted_bot_scopes", side_effect=lambda token: (_ for _ in ()).throw(outcome)
+                                  if isinstance(outcome, Exception) else outcome):
+                    self.assertFalse(migrations.repair_history_credential(home, config, values))
+                self.assertEqual(history, migrations.settings.read_config(config)["MFS_SLACK_TOKEN"])
+
     def test_auth_test_tells_a_dead_token_from_a_passing_slack_error(self):
         class Response:
             headers = {}
