@@ -140,6 +140,14 @@ class TagRuleTests(unittest.TestCase):
         text = agent_permissions.codex_tag_file(self.tag).read_text(encoding="utf-8")
         self.assertNotIn("deny", text)
         self.assertEqual(2, text.count("network_rule"))
+        # The protocol is the call's own argument, not the same words in a justification.
+        path = agent_permissions.codex_tag_file(self.tag)
+        path.write_text('network_rule(host="api.example.com", justification="not protocol=\'http\'", '
+                        'protocol="https", decision="deny")\n', encoding="utf-8")
+        agent_permissions.save_codex_host(self.tag, "api.example.com", "https", "allow")
+        text = path.read_text(encoding="utf-8")
+        self.assertNotIn("deny", text)
+        self.assertEqual(1, text.count("network_rule"))
 
     def test_a_line_with_other_rules_is_never_rewritten(self) -> None:
         path = self.write(agent_permissions.codex_tag_file(self.tag),

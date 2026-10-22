@@ -463,7 +463,23 @@ def _codex_prefix_line(words: list[str], decision: str) -> str:
     return f"prefix_rule(pattern=[{', '.join(json.dumps(w) for w in words)}], decision=\"{native}\")"
 
 
-_PROTOCOL_LITERAL = re.compile(r"""protocol\s*=\s*(?:"([^"]*)"|'([^']*)')""")
+def _codex_line_protocol(line: str) -> str | None:
+    """The `protocol` argument of the line's `network_rule(...)`, read from the call itself:
+    the same words in a justification don't count."""
+    try:
+        nodes = ast.walk(ast.parse(line.strip()))
+    except Exception:  # noqa: BLE001 - a line Tag can't parse has no protocol it can trust
+        return None
+    for node in nodes:
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "network_rule":
+            for keyword in node.keywords:
+                if keyword.arg == "protocol":
+                    try:
+                        value = ast.literal_eval(keyword.value)
+                    except Exception:  # noqa: BLE001
+                        return None
+                    return value if isinstance(value, str) else None
+    return None
 
 
 def _codex_lines_without(path: Path, kind: str, value: str,
@@ -478,9 +494,9 @@ def _codex_lines_without(path: Path, kind: str, value: str,
     kept = []
     for line in lines:
         found = [rule for rule, _ in _codex_text_rules(line.strip())]
-        other = _PROTOCOL_LITERAL.search(line)
+        other = _codex_line_protocol(line) if protocol is not None else None
         if not any(r["kind"] == kind and r["value"] == value for r in found) or (
-                protocol is not None and other and (other.group(1) or other.group(2)) != protocol):
+                other is not None and other != protocol):
             kept.append(line)
         elif len(found) > 1 or ";" in line:
             # Never drop the other rules on that line along with this one.
