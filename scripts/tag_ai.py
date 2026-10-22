@@ -157,7 +157,7 @@ def _codex_connection(home: Path, executable: str, version: str | None) -> dict[
     codex_home = Path(os.getenv("CODEX_HOME", str(Path.home() / ".codex"))).expanduser()
     if (codex_home / "auth.json").is_file():
         return _connection(backend, "expired", method="codex", detail="Sign in to Codex again.",
-                           actions=("reconnect",), **common)
+                           actions=("reconnect", "change_account"), **common)
     return _connection(backend, "signed_out", method="codex", actions=("sign_in",), **common)
 
 

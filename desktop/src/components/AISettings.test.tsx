@@ -85,6 +85,26 @@ describe("An expired shared ChatGPT account", () => {
     await vi.waitFor(() => expect(setup).toHaveBeenCalled());
     expect(setup.mock.calls[0][0]).toEqual(["settings", "ai", "sign-in", "codex", "--method", "codex", "--restart"]);
   });
+
+  it("offers Change account when Codex's own sign-in has expired", async () => {
+    const api = demoBridge();
+    const real = api.tag.bind(api);
+    vi.spyOn(api, "tag").mockImplementation(async (args, ...rest) => {
+      const result = await real(args, ...rest);
+      if (args.join(" ") !== "settings ai connections --json") return result;
+      const report = JSON.parse(result.stdout);
+      report.connections = report.connections.map((c: { backend: string }) => c.backend !== "codex" ? c
+        : { ...c, state: "expired", method: "codex", detail: "Sign in to Codex again.", actions: ["reconnect", "change_account"] });
+      return { ...result, stdout: JSON.stringify(report) };
+    });
+    const tags = { rows: [], refresh: vi.fn() } as unknown as Tags;
+    render(<AISettings api={api} tags={tags} close={vi.fn()} />);
+    const row = within(await screen.findByLabelText("Codex"));
+    expect(await row.findByRole("button", { name: "Reconnect" })).toBeTruthy();
+    fireEvent.click(row.getByRole("button", { name: "More options for Codex" }));
+    fireEvent.click(row.getByRole("menuitem", { name: "Change account" }));
+    expect(screen.getByRole("radio", { name: /Codex sign-in on this Mac/ }).getAttribute("aria-checked")).toBe("true");
+  });
 });
 
 describe("Your own API", () => {

@@ -133,6 +133,8 @@ class ConnectionTests(Fixture):
         self.machine(codex_status=done(1), claude_status=done(1, json.dumps({"loggedIn": False})))
         self.assertEqual(["expired", "expired"], [item["state"] for item in tag_ai.connections(self.home)])
         self.assertEqual(["reconnect"], tag_ai.connection(self.home, "claude")["actions"])
+        # An expired Codex sign-in can still be swapped for another account.
+        self.assertEqual(["reconnect", "change_account"], tag_ai.connection(self.home, "codex")["actions"])
 
     def test_chatgpt_plan_is_shared_by_all_tags(self) -> None:
         account = {"id": "oaiapp_one", "email": "one@example.test", "signed_in": True, "plan_enabled": True,
