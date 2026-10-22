@@ -483,9 +483,6 @@ def _reconcile(home: Path, config_path: Path, values: dict[str, str], receipt: d
     # The credential handoff refreshes the installation itself. It captures
     # output and closes stdin, so background upgrades never wait for input.
     credentials = _receive(project, team_id, app_id, enterprise_id)
-    if enterprise_id:
-        slack_identity.validate(credentials["SLACK_BOT_TOKEN"], team_id=team_id, app_id=app_id,
-                                enterprise_id=enterprise_id, label="Bot token", api=slack_channels.slack_api)
     settings.update_config(config_path, credentials)
     progress["refreshed"] = True
     granted = granted_bot_scopes(credentials["SLACK_BOT_TOKEN"])
@@ -503,8 +500,13 @@ def _reconcile(home: Path, config_path: Path, values: dict[str, str], receipt: d
 
 
 def _receive(project: Path, team_id: str, app_id: str, enterprise_id: str) -> dict[str, str]:
-    return slack_credentials.receive(project, team_id, app_id,
+    """Fresh credentials from the handoff, checked before anything saves them."""
+    credentials = slack_credentials.receive(project, team_id, app_id,
         **({"enterprise_id": enterprise_id} if enterprise_id else {}))
+    if enterprise_id:
+        slack_identity.validate(credentials["SLACK_BOT_TOKEN"], team_id=team_id, app_id=app_id,
+                                enterprise_id=enterprise_id, label="Bot token", api=slack_channels.slack_api)
+    return credentials
 
 
 def enable_org_deployment(project: Path, app_id: str, enterprise_id: str) -> None:
