@@ -228,6 +228,50 @@ class SlackManifestMigrationTests(unittest.TestCase):
             receive.assert_called_once()
             self.assertEqual(migrations.settings.read_config(config)["SLACK_BOT_TOKEN"], "xoxb-fresh-token")
 
+    def test_uninstalled_app_is_reinstalled_before_its_settings_are_synced(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home, config = self.linked_home(Path(directory))
+            current = migrations.migrate_manifest(self.manifest())[0]
+            reinstalled = {"SLACK_APP_TOKEN": "xapp-reinstalled", "SLACK_BOT_TOKEN": "xoxb-reinstalled"}
+            fresh = {"SLACK_APP_TOKEN": "xapp-fresh-token", "SLACK_BOT_TOKEN": "xoxb-fresh-token"}
+            dead = migrations.BotTokenRejected("Slack rejected the bot token; reconnect it with `tag setup`")
+            uninstalled = subprocess.CompletedProcess([], 1, "", "A valid installation of this app is required"
+                                                      " to take this action (installation_required)\n"
+                                                      "Suggestion\n   Install the app with `slack install`\n")
+            synced = subprocess.CompletedProcess([], 0, "", "")
+            with patch.object(migrations.shutil, "which", return_value="/bin/slack"), patch.object(
+                migrations, "remote_manifest", side_effect=[self.manifest(), current]
+            ), patch.object(
+                migrations, "granted_bot_scopes", side_effect=[dead, set(migrations.REQUIRED_BOT_SCOPES)]
+            ), patch.object(migrations, "_sync_command", return_value=["slack", "manifest", "sync"]), patch.object(
+                migrations, "_run", side_effect=[uninstalled, synced]
+            ) as run, patch.object(
+                migrations.slack_credentials, "receive", side_effect=[reinstalled, fresh]
+            ) as receive:
+                self.assertTrue(migrations.reconcile(home, config, self.values()))
+            self.assertEqual(2, run.call_count)  # The sync is retried once the app is installed again.
+            self.assertEqual(2, receive.call_count)  # Reinstall, then refresh for the new permissions.
+            self.assertEqual(migrations.settings.read_config(config)["SLACK_BOT_TOKEN"], "xoxb-fresh-token")
+            self.assertTrue((home / "state/slack-manifest-migrations.json").is_file())
+
+    def test_sync_still_fails_when_the_reinstalled_app_cannot_be_synced(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home, config = self.linked_home(Path(directory))
+            uninstalled = subprocess.CompletedProcess([], 1, "", "(installation_required)\n"
+                                                      "Install the app with `slack install`\n")
+            with patch.object(migrations.shutil, "which", return_value="/bin/slack"), patch.object(
+                migrations, "remote_manifest", return_value=self.manifest()
+            ), patch.object(
+                migrations, "granted_bot_scopes", return_value=set()
+            ), patch.object(migrations, "_sync_command", return_value=["slack", "manifest", "sync"]), patch.object(
+                migrations, "_run", return_value=uninstalled
+            ), patch.object(
+                migrations.slack_credentials, "receive", return_value={"SLACK_APP_TOKEN": "xapp-a", "SLACK_BOT_TOKEN": "xoxb-a"}
+            ):
+                with self.assertRaisesRegex(RuntimeError, "Slack app settings migration failed"):
+                    migrations.reconcile(home, config, self.values())
+            self.assertFalse((home / "state/slack-manifest-migrations.json").exists())
+
     def test_auth_test_tells_a_dead_token_from_a_passing_slack_error(self):
         class Response:
             headers = {}
