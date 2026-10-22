@@ -308,7 +308,7 @@ class SlackManifestMigrationTests(unittest.TestCase):
             migrations._save_credentials(home, config, fresh)
             saved = migrations.settings.read_config(config)
             self.assertEqual("xoxb-fresh-token", saved["MFS_SLACK_TOKEN"])
-            self.assertEqual("xoxb-fresh-token", (home / "config/credentials/mfs-slack-token").read_text())
+            self.assertEqual("xoxb-fresh-token", (home / "config/credentials/mfs-slack-token").read_text(encoding="utf-8"))
 
     def test_separate_history_credential_is_kept_when_the_bot_token_changes(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -332,7 +332,7 @@ class SlackManifestMigrationTests(unittest.TestCase):
                 repaired = migrations.settings.read_config(config)
                 self.assertEqual("xoxb-test-token", repaired["MFS_SLACK_TOKEN"])
                 self.assertFalse(migrations.repair_history_credential(home, config, repaired))  # Idempotent.
-            self.assertEqual("xoxb-test-token", (home / "config/credentials/mfs-slack-token").read_text())
+            self.assertEqual("xoxb-test-token", (home / "config/credentials/mfs-slack-token").read_text(encoding="utf-8"))
 
     def test_history_credential_is_kept_when_it_works_or_slack_cannot_say(self):
         with tempfile.TemporaryDirectory() as directory:
