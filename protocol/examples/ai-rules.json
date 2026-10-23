@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "ok": true,
+  "scope": "installation",
+  "rules": {
+    "codex": {
+      "all_tags": [
+        {
+          "kind": "command",
+          "value": "rm -rf",
+          "decision": "block"
+        }
+      ],
+      "personal": [
+        {
+          "kind": "host",
+          "value": "api.github.com",
+          "decision": "allow"
+        }
+      ]
+    },
+    "claude": {
+      "all_tags": [
+        {
+          "kind": "rule",
+          "value": "Bash(rm -rf:*)",
+          "decision": "block"
+        }
+      ],
+      "personal": [
+        {
+          "kind": "rule",
+          "value": "WebFetch",
+          "decision": "ask"
+        }
+      ]
+    }
+  }
+}

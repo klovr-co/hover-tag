@@ -2042,6 +2042,7 @@ class SlackApprovalTests(unittest.TestCase):
         choices = public_approval_choices(approval_choices("item/commandExecution/requestApproval", {
             "availableDecisions": ["acceptForSession", {"applyNetworkPolicyAmendment": {
                 "network_policy_amendment": {"host": "forms.google.com", "action": "allow"}}}],
+            "networkApprovalContext": {"host": "forms.google.com", "protocol": "https"},
         }))
         blocks = slack_socket_agent.approval_button_blocks(
             team="T1", channel="C1", thread_ts="1", user_id="U1", approval_id="a" * 32,

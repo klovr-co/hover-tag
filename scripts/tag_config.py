@@ -10,10 +10,12 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 try:
+    import agent_permissions
     from agent_models import SUPPORTED_REASONING_EFFORTS
     from mfs_scope_policy import canonical_uri, parse_scopes
     from tag_handoff import parse_peers
 except ImportError:
+    from scripts import agent_permissions
     from scripts.agent_models import SUPPORTED_REASONING_EFFORTS
     from scripts.mfs_scope_policy import canonical_uri, parse_scopes
     from scripts.tag_handoff import parse_peers
@@ -45,6 +47,7 @@ PUBLIC = frozenset((*DEFAULTS, "MFS_ALLOWED_SCOPES", "OPENTAG_WORKDIR",
                     "OPENTAG_CODEX_MODELS", "OPENTAG_CODEX_REASONING_EFFORTS",
                     "OPENTAG_CLAUDE_MODELS", "OPENTAG_DEFAULT_MODEL", "OPENTAG_BACKENDS",
                     "OPENTAG_DEFAULT_EFFORT", "OPENTAG_BOT_DESCRIPTION",
+                    "OPENTAG_CODEX_SANDBOX", "OPENTAG_CODEX_APPROVALS", "OPENTAG_CODEX_REVIEWER",
                     "OPENTAG_PEER_TAGS"))
 EDITABLE = PUBLIC - {"OPENTAG_WORKDIR"} | {
     "SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "MFS_TOKEN", "MFS_SLACK_TOKEN", "MFS_HOME"
@@ -57,7 +60,10 @@ LABELS = {
     "OPENTAG_BACKENDS": "Backends users can choose (codex,claude)",
     "OPENTAG_CODEX_TRANSPORT": "Codex transport (exec or app-server)",
     "OPENTAG_CLAUDE_TRANSPORT": "Claude transport (print or sdk)",
-    "OPENTAG_CLAUDE_PERMISSION_MODE": "Claude permission mode",
+    "OPENTAG_CLAUDE_PERMISSION_MODE": "Claude permission mode (default, acceptEdits, auto, dontAsk, or bypassPermissions)",
+    "OPENTAG_CODEX_SANDBOX": "Codex sandbox (read-only, workspace-write, or danger-full-access)",
+    "OPENTAG_CODEX_APPROVALS": "Codex approval policy (untrusted, on-request, or never; empty for Codex's own setting)",
+    "OPENTAG_CODEX_REVIEWER": "Codex approvals reviewer (auto_review or user)",
     "SLACK_APP_TOKEN": "Slack app token", "SLACK_BOT_TOKEN": "Slack bot token",
     "SLACK_ALLOWED_USER_IDS": "Owners", "SLACK_CHANNEL_ID": "Legacy channel restriction",
     "SLACK_CHANNEL_IDS": "Selected channels", "SLACK_TEAM_ID": "Slack workspace",
@@ -190,8 +196,8 @@ def validation_error(key: str, value: str) -> str | None:
         return "Choose exec or app-server"
     if key == "OPENTAG_CLAUDE_TRANSPORT" and value not in {"print", "sdk"}:
         return "Choose print or sdk"
-    if key == "OPENTAG_CLAUDE_PERMISSION_MODE" and value not in {"auto", "acceptEdits", "default", "dontAsk", "bypassPermissions"}:
-        return "Choose auto, acceptEdits, default, dontAsk, or bypassPermissions"
+    if key in agent_permissions.KEYS and (error := agent_permissions.validation_error(key, value)):
+        return error
     if key == "OPENTAG_FILE_DELIVERY" and value not in {"local", "local+slack"}:
         return "Choose local or local+slack"
     if key == "OPENTAG_PEER_TAGS" and value.strip():

@@ -12,7 +12,8 @@ import setupExample from "../../../protocol/examples/setup.jsonl?raw";
 import startExample from "../../../protocol/examples/start-progress.jsonl?raw";
 import aiStatusExample from "../../../protocol/examples/ai-status.json";
 import aiModelsExample from "../../../protocol/examples/ai-models.json";
-import type { AIStatus, ApiConnection, Connection } from "./ai";
+import type { AIStatus, ApiConnection, Connection, PermissionRule } from "./ai";
+import type { RuleBackend } from "./permissions";
 import type { ActivityItem } from "./home";
 import { windowFitter } from "./fit";
 
@@ -179,6 +180,19 @@ async function tauriBridge(): Promise<Bridge> {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const demoFail = (error: string) => ({ code: 1, stdout: JSON.stringify({ schema_version: 1, ok: false, error }), stderr: "" });
+
+/** The demo's allow, block, or remove for one rule list; a string is the CLI's error. */
+function demoRule(list: PermissionRule[], verb: string, backend: RuleBackend, rule: string, who: string): PermissionRule[] | string {
+  if (verb === "remove") {
+    return list.some((r) => r.value === rule) ? list.filter((r) => r.value !== rule) : `${who} has no ${backend} rule ${rule}`;
+  }
+  if (backend === "claude" ? !/^[A-Z][\w-]*(\(.+\))?$/.test(rule) : rule.startsWith("-")) {
+    return backend === "claude" ? "Write a Claude rule, like: Bash(git push:*)" : "Write the start of a command, like: git push";
+  }
+  return [...list.filter((r) => r.value !== rule), { kind: backend === "claude" ? "rule" : "command", value: rule, decision: verb as "allow" | "block" }];
+}
+
 export function demoBridge(options: { installed?: boolean } = {}): Bridge {
   const sharedAI = structuredClone(aiStatusExample) as AIStatus;
   const aiDemo = new Map<string, AIStatus>();
@@ -240,6 +254,21 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
     tag: async (args) => {
       await sleep(250);
       const [first, second] = args;
+      if (first === "settings" && second === "ai" && args[2] === "rules" && sharedAI.permissions) {
+        // One shared list; each Tag's report reads it, so the Tag page follows along.
+        if (["allow", "block", "remove"].includes(args[3])) {
+          const [verb, backend, rule] = [args[3], args[4] as RuleBackend, args[5]];
+          const rules = sharedAI.permissions[backend].rules!;
+          const changed = demoRule(rules.all_tags ?? [], verb, backend, rule, "All Tags");
+          if (typeof changed === "string") return demoFail(changed);
+          rules.all_tags = changed;
+        }
+        const shared = (backend: RuleBackend) => {
+          const { all_tags = [], personal = [] } = sharedAI.permissions![backend].rules ?? {};
+          return { all_tags, personal };
+        };
+        return json({ schema_version: 1, ok: true, scope: "installation", rules: { codex: shared("codex"), claude: shared("claude") } });
+      }
       if (first === "settings" && second === "ai" && args[2] === "connections") {
         return json({ connections: sharedAI.connections, usable: sharedAI.connections.filter((c) => c.state === "connected").map((c) => c.backend),
           running: rows.some((r) => r.state === "running"), scope: "installation", api_connections: structuredClone(apiDemo) });
@@ -253,7 +282,7 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
       }
       if (first === "version") {
         return json({ ...versionExample, version: runtimeVersion,
-          capabilities: [...new Set([...versionExample.capabilities, "ai-connections", "shared-ai-connections", "logs-activity", "thinking-level", "describe", "telemetry-events", "api-connections", "saved-models"])] });
+          capabilities: [...new Set([...versionExample.capabilities, "ai-connections", "shared-ai-connections", "logs-activity", "thinking-level", "describe", "telemetry-events", "api-connections", "saved-models", "permission-rules"])] });
       }
       if (second === "settings" && args[2] === "ai" && args[3] === "api" && args[4] === "check") {
         await sleep(500);
@@ -290,6 +319,33 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
           const restart = args.includes("--restart") && running;
           return json({ schema_version: 1, ok: true, default_model: ai.default_model, default_effort: effort,
             restart_required: running && !restart, restarted: restart });
+        }
+        if (action === "permissions" && ai.permissions && ["allow", "block", "remove"].includes(args[4])) {
+          const [verb, backend, rule] = [args[4], args[5] as RuleBackend, args[6]];
+          const next = structuredClone(ai.permissions);
+          const rules = next[backend].rules ?? { tag: [], all_tags: [], personal: [] };
+          const changed = demoRule(rules.tag ?? [], verb, backend, rule, "This Tag");
+          if (typeof changed === "string") return demoFail(changed);
+          next[backend].rules = { ...rules, tag: changed };
+          ai.permissions = next;
+          return json({ schema_version: 1, ok: true, permissions: next });
+        }
+        if (action === "permissions" && ai.permissions) {
+          const settings = args.slice(4).filter((a) => !a.startsWith("--"));
+          const next = structuredClone(ai.permissions);
+          for (const item of settings) {
+            const [name, picked] = item.split("=");
+            const [backend, key] = name === "claude-mode" ? ["claude", "mode"] : ["codex", name.replace("codex-", "")];
+            const options = (next.options as Record<string, Record<string, { value: string }[]> | undefined>)[backend]?.[key];
+            if (!options?.some((o) => o.value === picked)) {
+              return { code: 1, stdout: JSON.stringify({ schema_version: 1, ok: false, error: `${name}: choose another value` }), stderr: "" };
+            }
+            (next as unknown as Record<string, Record<string, string>>)[backend][key] = picked;
+          }
+          ai.permissions = next;
+          const running = rows.find((r) => r.id === first)?.state === "running";
+          const restart = args.includes("--restart") && running;
+          return json({ schema_version: 1, ok: true, permissions: next, restart_required: running && !restart, restarted: restart });
         }
       }
       if (first === "memory") {
@@ -463,6 +519,11 @@ function demoAIFor(aiDemo: Map<string, AIStatus>, shared: AIStatus, tag: string,
   }
   const ai = aiDemo.get(tag)!;
   ai.connections = shared.connections;
+  for (const backend of ["codex", "claude"] as const) {
+    const own = ai.permissions?.[backend].rules;
+    const all = shared.permissions?.[backend].rules;
+    if (own && all) own.all_tags = all.all_tags;
+  }
   ai.usable = shared.connections.filter((c) => c.state === "connected").map((c) => c.backend);
   return ai;
 }
