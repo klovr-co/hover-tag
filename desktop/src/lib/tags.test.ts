@@ -61,6 +61,35 @@ describe("useTags", () => {
     expect(result.current.error).toBe("");
   });
 
+  it("clears a start failure when the refresh right after it already shows the Tag running", async () => {
+    const api = demoBridge();
+    let state = "stopped";
+    api.tag = async (args: string[]) => {
+      if (args[0] === "list") return { code: 0, stderr: "", stdout: JSON.stringify({ tags: [
+        { id: "pa", state, configured: true, slack_app_id: "A1", slack_workspace: "T1" }] }) };
+      state = "running"; // Keep Tags running started it while this start was failing.
+      return { code: 1, stdout: "", stderr: "Couldn't start.\n" };
+    };
+    const { result } = renderHook(() => useTags(api, false));
+    await act(async () => { await result.current.refresh(); });
+    let ok = true;
+    await act(async () => { ok = await result.current.toggle(result.current.rows[0]); });
+    expect(ok).toBe(false);
+    expect(result.current.error).toBe("");
+  });
+
+  it("can dismiss an action failure but not a list failure", async () => {
+    const api = demoBridge();
+    const { result } = renderHook(() => useTags(api, false));
+    act(() => result.current.setError("Couldn't stop this Tag."));
+    expect(result.current.dismissible).toBe(true);
+    act(() => result.current.setError(""));
+    api.tag = async () => { throw "offline"; };
+    await act(async () => { await result.current.refresh(); });
+    expect(result.current.error).toContain("Couldn't read your Tags.");
+    expect(result.current.dismissible).toBe(false);
+  });
+
   it("keeps a start failure while only a different Tag is running", async () => {
     const api = demoBridge();
     api.tag = async (args: string[]) => args[0] === "list"

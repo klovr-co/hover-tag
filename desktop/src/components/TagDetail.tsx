@@ -350,7 +350,7 @@ function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, sa
       </div>
       <div key={tab} className="sl-body" role="tabpanel">
         {/* Rename, description, remove and start/stop report failures here, not only on Home. */}
-        {failure.shown && <ErrorLine leaving={failure.leaving} onDismiss={() => tags.setError("")}>{failure.shown}</ErrorLine>}
+        {failure.shown && <ErrorLine leaving={failure.leaving} onDismiss={tags.dismissible ? () => tags.setError("") : undefined}>{failure.shown}</ErrorLine>}
         {tab === "activity" && <Activity hasMore={hasMore} loading={loading} loadOlder={() => setLimit((value) => value + 50)} hideErrors={hideErrors} api={api} row={row} items={activity} copyLog={copyLog} showLogs={() => setTab("logs")} problem={problem} openAI={() => openAI(row.id)} />}
         {tab === "channels" && (
           <>

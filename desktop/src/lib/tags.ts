@@ -131,27 +131,32 @@ export function useTags(api: Bridge | null, enabled: boolean) {
   }, [api, rows, loaded, keepRunning]);
 
   /** Run a Tag command, keeping `key` busy meanwhile. Returns what went wrong, or "". */
-  const attempt = useCallback(async (key: string, args: string[], fallback: string) => {
+  const attempt = useCallback(async (key: string, args: string[], fallback: string, publish?: (failure: string) => void) => {
     if (!api) return fallback;
     mark(key, true);
+    let failure = "";
     try {
       const result = await api.tag(args);
-      return result.code === 0 ? "" : failureLine(result, fallback);
+      failure = result.code === 0 ? "" : failureLine(result, fallback);
     } catch (error) {
       // Tag couldn't be run at all, for example after it was uninstalled.
-      return `${fallback} ${String(error)}`;
+      failure = `${fallback} ${String(error)}`;
     } finally {
+      // Publish before refreshing, so the refresh can already clear a start failure.
+      publish?.(failure);
       mark(key, false);
       await refresh();
     }
+    return failure;
   }, [api, refresh]);
 
   /** Run a command whose failure Home shows. */
   const run = useCallback(async (key: string, args: string[], fallback: string, starting = "") => {
     if (!api) return false;
-    const failure = await attempt(key, args, fallback);
-    failedStart.current = failure ? starting : "";
-    setError(failure);
+    const failure = await attempt(key, args, fallback, (failure) => {
+      failedStart.current = failure ? starting : "";
+      setError(failure);
+    });
     return !failure;
   }, [api, attempt]);
 
@@ -219,7 +224,8 @@ export function useTags(api: Bridge | null, enabled: boolean) {
   }, [run]);
 
   return {
-    rows, loaded, busy, error: error || refreshError, setError, keepRunning,
+    // Only an action's failure can be dismissed; a list failure stays until the list loads.
+    rows, loaded, busy, error: error || refreshError, dismissible: !!error, setError, keepRunning,
     refresh, refreshAutostart, start, toggle, workspace, all, rename, describe, discardDrafts, remove, setAutostart,
   };
 }
