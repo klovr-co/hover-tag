@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import routineList from "../../../protocol/examples/routine-list.json";
 import routineShow from "../../../protocol/examples/routine-show.json";
-import { cliError, emptyForm, formArgs, formOf, formProblem, outcomeGood, outcomeText, routineLine, type Routine, type RoutineDetail, type RoutineList } from "./routines";
+import { cliError, emptyForm, formArgs, formOf, formProblem, outcomeGood, outcomeText, routineLine, triggerText, type Routine, type RoutineDetail, type RoutineList } from "./routines";
 
 const list = routineList as unknown as RoutineList;
 const routine = list.routines[0] as Routine;
@@ -28,6 +28,8 @@ describe("routine line", () => {
     expect(routineLine({ ...routine, running: true }, true)).toBe("mon 09:00 · #launch · running now");
     expect(outcomeText({ ...routine.last_run!, outcome: "missed", count: 3 })).toBe("Missed 3 runs");
     expect(outcomeText({ ...routine.last_run!, outcome: "something-new" })).toBe("Needs attention");
+    const stopped = { ...routine.last_run!, outcome: "cancelled", trigger: "retry" };
+    expect([outcomeText(stopped), triggerText(stopped), outcomeGood(stopped)]).toEqual(["Stopped", " · tried again", true]);
   });
 });
 

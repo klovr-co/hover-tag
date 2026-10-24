@@ -5,11 +5,11 @@
 import routineListExample from "../../../protocol/examples/routine-list.json";
 import { parseJSON } from "./protocol";
 
-export type RunOutcome = "posted" | "no_reply" | "failed" | "budget_exceeded" | "timeout" | "skipped" | "missed" | "interrupted" | "blocked";
+export type RunOutcome = "posted" | "no_reply" | "failed" | "budget_exceeded" | "timeout" | "skipped" | "missed" | "interrupted" | "blocked" | "cancelled";
 
 export interface RoutineRun {
   run_id: string;
-  trigger: "schedule" | "catch-up" | "run-now" | string;
+  trigger: "schedule" | "catch-up" | "run-now" | "retry" | string;
   scheduled_for: string | null;
   started: string | null;
   ended: string | null;
@@ -42,7 +42,11 @@ export interface Routine {
   attention: boolean;
 }
 
-export interface RoutineList { tag_running: boolean; routines: Routine[]; limits: { per_tag: number; per_channel: number } }
+/** Whether the running Tag is checking its routines; ``problem`` says what is wrong when it isn't. */
+export interface SchedulerStatus { ok: boolean; problem: string | null; last_check: string | null }
+export interface RoutineList {
+  tag_running: boolean; scheduler?: SchedulerStatus; routines: Routine[]; limits: { per_tag: number; per_channel: number };
+}
 export interface RoutineDetail { routine: Routine; upcoming: string[]; history: RoutineRun[] }
 
 /** What someone fills in to add or change a routine. */
@@ -53,8 +57,13 @@ export const SCHEDULE_EXAMPLES = ["weekdays 09:00", "mon 09:00", "every 2h", "mo
 const OUTCOME: Record<string, string> = {
   posted: "Posted", no_reply: "Nothing new", failed: "Failed", budget_exceeded: "Stopped at its spend limit",
   timeout: "Stopped at its time limit", skipped: "Skipped", missed: "Missed", interrupted: "Interrupted", blocked: "Needs approval",
+  cancelled: "Stopped",
 };
-const GOOD = new Set(["posted", "no_reply"]);
+const GOOD = new Set(["posted", "no_reply", "cancelled"]);
+const TRIGGER: Record<string, string> = { "run-now": " · run by hand", "catch-up": " · caught up", retry: " · tried again" };
+
+/** How a run started, when it wasn't simply on time. */
+export const triggerText = (run: RoutineRun) => TRIGGER[run.trigger] ?? "";
 
 export const outcomeText = (run: RoutineRun) =>
   (OUTCOME[run.outcome] ?? "Needs attention") + (run.outcome === "missed" && run.count && run.count > 1 ? ` ${run.count} runs` : "");
@@ -146,7 +155,7 @@ export function demoRoutines() {
     const routines = listFor(tag, first);
     const [action, reference] = args;
     const find = () => routines.find((r) => r.id === reference || r.name.toLowerCase() === (reference ?? "").toLowerCase());
-    if (action === "list") return { ok: true, tag_running: running, routines, invalid: 0, limits: routineListExample.limits };
+    if (action === "list") return { ok: true, tag_running: running, scheduler: routineListExample.scheduler, routines, invalid: 0, limits: routineListExample.limits };
     if (action === "add") {
       const name = option(args, "--name") ?? "";
       if (routines.some((r) => r.name.toLowerCase() === name.toLowerCase())) return fail(`A routine named '${name}' already exists`);

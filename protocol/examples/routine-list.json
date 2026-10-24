@@ -3,6 +3,7 @@
   "ok": true,
   "tag": "t0klovr1-a0rese02",
   "tag_running": true,
+  "scheduler": {"ok": true, "problem": null, "last_check": "2026-10-13T09:00:20+00:00", "last_clock_jump": null},
   "invalid": 0,
   "limits": {"per_tag": 10, "per_channel": 3, "min_interval_seconds": 3600},
   "routines": [
@@ -24,7 +25,7 @@
                    "hash": "9b0c6d0f2f3c4e7a8f1d2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f70"},
       "running": false,
       "next_run": "2026-10-19T08:03:00+00:00",
-      "last_run": {"run_id": "5d1c0e8b2a7f4e3c9b6a1d0f8e7c6b5a", "trigger": "schedule",
+      "last_run": {"run_id": "r-3f9a1c2e7b:20261012T080300Z", "trigger": "schedule",
                    "scheduled_for": "2026-10-12T08:03:00+00:00", "started": "2026-10-12T08:03:04+00:00",
                    "ended": "2026-10-12T08:04:41+00:00", "outcome": "posted",
                    "prompt_sha256": "1f0e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",

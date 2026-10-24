@@ -5,6 +5,12 @@
 Tag.app runs the same commands with ``--json``. Creating or editing a routine
 here counts as the operator's approval of exactly what was saved; the running
 bridge picks up the change on its next check, without a restart.
+
+When the coding agent runs these commands for someone in Slack, the bridge
+names that person in ``OPENTAG_CALLER_ID``: they can change only their own
+routines, and their edits are approved in their name. A routine's own run
+(``OPENTAG_ROUTINE_ID``) can't add or change routines, as in nanobot. Like the
+rest of Tag's approvals this makes changes evident, not impossible (ADR 0001).
 """
 from __future__ import annotations
 
@@ -12,7 +18,7 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -27,8 +33,11 @@ except ImportError:
     from scripts.tag_routine_scheduler import schedule_key
 
 ACTIONS = ("list", "show", "add", "edit", "pause", "resume", "remove", "run-now")
+CHANGES = frozenset({"add", "edit", "pause", "resume", "remove", "run-now"})
 ATTENTION = frozenset({"failed", "budget_exceeded", "timeout", "blocked", "missed", "interrupted"})
 OPERATOR = "local-operator"
+# A running Tag checks its routines every 20 seconds; this long without a check is a problem.
+STALE_CHECK = timedelta(minutes=3)
 
 
 def parser() -> argparse.ArgumentParser:
@@ -159,6 +168,51 @@ def _fields(args: argparse.Namespace, values: dict[str, str], channels: list[dic
     return fields
 
 
+def scheduler_status(home: Path, tag_id: str, running: bool, now: datetime) -> dict[str, Any]:
+    """Whether the running bridge is checking routines, from what its scheduler last saved."""
+    health = routines_lib.scheduler_health(home)
+    problem = None
+    if running:
+        try:
+            last = datetime.fromisoformat(health["last_tick"]) if health["last_tick"] else None
+        except (TypeError, ValueError):
+            last = None
+        if health["last_error"]:
+            problem = f"Routines aren't running: {health['last_error']}"
+        elif last is not None and now - last > STALE_CHECK:
+            problem = (f"The Tag is running but hasn't checked its routines since "
+                       f"{last.astimezone().strftime('%a %H:%M')}. Restart it with tag {tag_id} restart.")
+    return {"ok": problem is None, "problem": problem, "last_check": health["last_tick"],
+            "last_clock_jump": health["last_clock_jump"]}
+
+
+def _caller() -> str:
+    return os.environ.get("OPENTAG_CALLER_ID", "").strip()
+
+
+def _check_caller(action: str, routine: dict[str, Any] | None) -> None:
+    """Refuse changes from a routine's own run, and from anyone in Slack but the routine's owner."""
+    if action not in CHANGES:
+        return
+    if os.environ.get("OPENTAG_ROUTINE_ID", "").strip():
+        raise routines_lib.RoutineError("A routine run can't add or change routines. Ask in Slack, or use "
+                                        "the tag routine commands or Tag.app.")
+    caller = _caller()
+    if caller and routine is not None and routine["owner"] != caller:
+        raise routines_lib.RoutineError(f"Only its owner, <@{routine['owner']}>, can change this routine.")
+
+
+def _resume_problem(routine: dict[str, Any], values: dict[str, str], channels: list[dict[str, Any]]) -> str | None:
+    """What would stop a routine running if it were resumed now (as Agno refuses to re-enable)."""
+    allowed = [item.strip() for item in values.get("SLACK_ALLOWED_USER_IDS", "").split(",") if item.strip()]
+    if allowed and routine["owner"] not in allowed:
+        return "Its owner isn't allowed to use this Tag any more. Change the owner with tag routine edit --owner."
+    ids = {row["id"] for row in channels}
+    if ids and routine["channel"] not in ids and values.get("SLACK_CHANNEL_POLICY", "") != "invited":
+        return "Its channel isn't one of this Tag's channels any more. Choose another with tag routine edit --channel."
+    return None
+
+
 def summary(routine: dict[str, Any], state: dict[str, Any], channels: dict[str, str | None],
             now: datetime) -> dict[str, Any]:
     history = state.get("history") or []
@@ -205,16 +259,22 @@ def run(home: Path, tag_id: str, argv: list[str], *, values: dict[str, str],
     moment = now()
 
     def describe(routine: dict[str, Any]) -> dict[str, Any]:
-        return summary(routine, states.load(routine["id"]), names, moment)
+        return summary(routine, states.peek(routine["id"]), names, moment)
 
     def output(payload: dict[str, Any]) -> None:
         print(json.dumps({"schema_version": 1, "ok": True, "tag": tag_id, **payload}, indent=2, ensure_ascii=False))
 
     running = tag_running(home)
+    caller = _caller()
+    by, via = (caller, "slack") if caller else (OPERATOR, getattr(args, "via", "cli"))
+    if args.action == "add":
+        _check_caller("add", None)
     if args.action == "list":
         rows = [describe(r) for r in store.load()]
+        scheduler = scheduler_status(home, tag_id, running, moment)
         if args.json_output:
-            output({"tag_running": running, "routines": rows, "invalid": store.invalid_count(),
+            output({"tag_running": running, "scheduler": scheduler, "routines": rows,
+                    "invalid": store.invalid_count(),
                     "limits": {"per_tag": routines_lib.MAX_ROUTINES_PER_TAG,
                                "per_channel": routines_lib.MAX_ROUTINES_PER_CHANNEL,
                                "min_interval_seconds": routines_lib.MIN_INTERVAL_SECONDS}})
@@ -229,6 +289,8 @@ def run(home: Path, tag_id: str, argv: list[str], *, values: dict[str, str],
             display.info_row(row["name"], f"{row['schedule']} · {where} · {state}", good=not row["attention"])
         if rows and not running:
             display.paragraph("This Tag is stopped, so its routines won't run until it starts.", "tag start")
+        elif rows and scheduler["problem"]:
+            display.paragraph(scheduler["problem"])
         display.next_action("Add a routine", f'tag {tag_id} routine add --name "…" --schedule "weekdays 09:00" '
                                              '--channel "#…" --prompt "…"')
         return 0
@@ -247,8 +309,8 @@ def run(home: Path, tag_id: str, argv: list[str], *, values: dict[str, str],
                 raw["channel"] = resolve_channel(str(raw["channel"]), channels, values.get("SLACK_CHANNEL_POLICY", ""))
             raw.setdefault("timezone", local_timezone())
             allowed = [item.strip() for item in values.get("SLACK_ALLOWED_USER_IDS", "").split(",") if item.strip()]
-            if "owner" not in raw and len(allowed) == 1:
-                raw["owner"] = allowed[0]
+            if "owner" not in raw and (caller or len(allowed) == 1):
+                raw["owner"] = caller or allowed[0]
             if allowed and raw.get("owner") not in allowed:
                 raise routines_lib.RoutineError("The owner must be one of the people allowed to use this Tag")
         else:
@@ -258,14 +320,19 @@ def run(home: Path, tag_id: str, argv: list[str], *, values: dict[str, str],
                 missing.append("--prompt")
             if missing:
                 raise routines_lib.RoutineError("routine add needs " + ", ".join(missing))
+            if caller and args.owner is None:
+                args.owner = caller
             raw = _fields(args, values, channels, None)
-        routine = store.add(raw, by=OPERATOR, via=args.via, now=moment)
+        if caller and raw.get("owner") != caller:
+            raise routines_lib.RoutineError("From Slack you can add routines only for yourself.")
+        routine = store.add(raw, by=by, via=via, now=moment)
         return _done(args, tag_id, "Added", describe(routine), running, output)
 
     routine = store.get(args.routine)
+    _check_caller(args.action, routine)
     if args.action == "show":
         row = describe(routine)
-        state = states.load(routine["id"])
+        state = states.peek(routine["id"])
         upcoming = ([t.isoformat() for t in routines_lib.upcoming(routine, moment)] if routine["enabled"] else [])
         if args.json_output:
             output({"tag_running": running, "routine": row, "upcoming": upcoming,
@@ -295,9 +362,11 @@ def run(home: Path, tag_id: str, argv: list[str], *, values: dict[str, str],
         changes = _fields(args, values, channels, routine)
         if not changes:
             raise routines_lib.RoutineError("Nothing to change. Give at least one option, such as --schedule")
-        updated = store.update(routine["id"], changes, by=OPERATOR, via=args.via, now=moment)
+        updated = store.update(routine["id"], changes, by=by, via=via, now=moment)
         return _done(args, tag_id, "Saved", describe(updated), running, output)
     if args.action in {"pause", "resume"}:
+        if args.action == "resume" and (problem := _resume_problem(routine, values, channels)):
+            raise routines_lib.RoutineError(problem)
         updated = store.set_enabled(routine["id"], args.action == "resume")
         return _done(args, tag_id, "Paused" if args.action == "pause" else "Resumed", describe(updated),
                      running, output)
@@ -314,7 +383,7 @@ def run(home: Path, tag_id: str, argv: list[str], *, values: dict[str, str],
         raise routines_lib.RoutineError(f"Start the Tag first: tag {tag_id} start")
     if not routines_lib.approved(routine):
         raise routines_lib.RoutineError("This routine changed after it was approved. Save it again to approve it")
-    routines_lib.request_run(home, routine["id"])
+    routines_lib.request_run(home, routine["id"], by=by)
     if args.json_output:
         output({"requested": routine["id"]})
     else:

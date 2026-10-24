@@ -3,7 +3,7 @@ slack-bolt==1.30.0
 questionary==2.1.1
 PyYAML==6.0.3
 psutil==7.0.0
-python-dateutil==2.9.0.post0
+cronsim==2.7
 tzdata==2026.5
 tomli==2.2.1; python_version < "3.11"
 mfs-server[slack]==0.4.6

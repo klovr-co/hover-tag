@@ -43,6 +43,8 @@ class RoutineRunTests(unittest.TestCase):
             "prompt": "Summarise merged PRs.", "owner": "UOWNER"}), by="local-operator", via="cli")
         env = {"SLACK_BOT_TOKEN": "xoxb-test", "SLACK_CHANNEL_IDS": "C0123ABCDE", "SLACK_TEAM_ID": "T1",
                "OPENTAG_WORKDIR": str(self.workdir), "TAG_INSTANCE_HOME": str(root / "home")}
+        self.definitions = tag_routines.RoutineStore(root / "home")
+        self.definitions.save([self.routine])
         self.patches = [
             patch.dict(os.environ, env, clear=True),
             patch.object(agent_models, "discover_codex_models", return_value=[]),
@@ -241,6 +243,111 @@ class RoutineRunTests(unittest.TestCase):
             self.run_routine(behaviour)
         records = [self.store.get(p.stem) for p in self.store.root.glob("*.json")]
         self.assertEqual([r["outcome"] for r in records], ["failed"])
+
+    # Scenarios from other schedulers' test suites (Hermes Agent, OpenClaw, nanobot, Agno).
+
+    def test_an_empty_answer_is_a_failure_not_a_post(self):
+        # Hermes: test_tick_marks_empty_response_as_error.
+        for answer in ("", "  \n "):
+            with self.subTest(answer=answer):
+                self.client.chat_postMessage.reset_mock()
+                record = self.run_routine(lambda kwargs: (answer, True))
+                self.assertEqual(record["outcome"], "failed")
+                self.assertIn("empty", record["diagnostic"])
+                self.assertNotIn("PR digest*\n\n", "".join(self.posted_texts()))
+
+    def test_a_note_after_the_silence_marker_still_posts_nothing(self):
+        record = self.run_routine(lambda kwargs: ("NO_REPLY\n\nNothing merged since yesterday.", True))
+        self.assertEqual(record["outcome"], "no_reply")
+        self.client.chat_postMessage.assert_not_called()
+
+    def test_a_routine_paused_or_removed_while_it_runs_posts_nothing(self):
+        # OpenClaw: removing a job during its run cancels it; an ordinary edit doesn't.
+        for change in ("pause", "remove", "edit"):
+            with self.subTest(change=change):
+                self.definitions.save([self.routine])
+                self.client.chat_postMessage.reset_mock()
+
+                def behaviour(kwargs):
+                    if change == "pause":
+                        self.definitions.set_enabled(self.routine["id"], False)
+                    elif change == "remove":
+                        self.definitions.remove(self.routine["id"])
+                    else:
+                        self.definitions.update(self.routine["id"], {"name": "Renamed"}, by="local-operator",
+                                                via="cli")
+                    return "Three PRs merged.", True
+
+                record = self.run_routine(behaviour)
+                if change == "edit":
+                    self.assertEqual(record["outcome"], "posted")
+                else:
+                    self.assertEqual(record["outcome"], "cancelled")
+                    self.client.chat_postMessage.assert_not_called()
+
+    def test_a_run_stopped_by_a_person_is_cancelled_not_failed(self):
+        # nanobot: test_run_history_records_job_cancellation.
+        def behaviour(kwargs):
+            kwargs["on_cancelled"]()
+            return "Stopped. Actions completed before the stop were not rolled back.", False
+
+        record = self.run_routine(behaviour)
+        self.assertEqual(record["outcome"], "cancelled")
+        self.assertNotIn("didn't finish", "".join(self.posted_texts()))
+
+    def test_a_rate_limited_run_says_nothing_until_its_retry_fails(self):
+        def behaviour(kwargs):
+            kwargs["on_error"]("rate_limit", "429 Too Many Requests")
+            return "429 Too Many Requests", False
+
+        first = self.run_routine(behaviour)
+        self.assertEqual((first["outcome"], first.get("rate_limited")), ("failed", True))
+        self.client.chat_postMessage.assert_not_called()
+        retry = self.run_routine(behaviour, trigger="retry")
+        self.assertEqual((retry["outcome"], retry.get("rate_limited")), ("failed", None))
+        self.assertIn("usage limit", self.posted_texts()[0])
+
+    def test_an_error_after_the_reply_posted_still_counts_as_posted(self):
+        # Hermes: test_run_one_job_exception_after_delivery_does_not_redeliver.
+        with patch.object(slack_socket_agent, "deliver_output_artifacts", side_effect=RuntimeError("upload failed")):
+            record = self.run_routine(lambda kwargs: ("Three PRs merged.", True))
+        self.assertEqual(record["outcome"], "posted")
+        self.assertIn("files", record["diagnostic"])
+        self.assertEqual(len(self.posted_texts()), 1)
+
+    def test_refused_runs_ask_to_pause_and_the_pause_notice_respects_the_channel(self):
+        # Agno: an owner whose grant was revoked is refused; the run is recorded and the schedule disabled.
+        elsewhere = tag_routines.approve({**self.routine, "channel": "C0ELSEWHERE"}, by="local-operator", via="cli")
+        record = self.run_routine(lambda kwargs: self.fail("must not run"), routine=elsewhere)
+        self.assertIn("channel", record["pause_reason"])
+        self.fake_app.tag_routine_scheduler.on_auto_pause({**elsewhere, "enabled": False,
+                                                           "paused_reason": record["pause_reason"]})
+        self.client.chat_postMessage.assert_not_called()
+        self.fake_app.tag_routine_scheduler.on_auto_pause({**self.routine, "enabled": False,
+                                                           "paused_reason": "Paused after 5 failed runs in a row."})
+        self.assertIn("Paused after 5 failed runs", self.posted_texts()[0])
+
+    def test_a_crash_inside_tag_tells_the_channel(self):
+        record = tag_routines.run_record(self.routine, trigger="schedule", slot=SLOT, outcome="failed",
+                                         diagnostic="Tag hit an internal error (RuntimeError).")
+        self.fake_app.tag_routine_scheduler.on_crash(self.routine, record)
+        self.assertIn("didn't finish", self.posted_texts()[0])
+        elsewhere = {**self.routine, "channel": "C0ELSEWHERE"}
+        self.client.chat_postMessage.reset_mock()
+        self.fake_app.tag_routine_scheduler.on_crash(elsewhere, record)
+        self.client.chat_postMessage.assert_not_called()
+
+    def test_the_agent_knows_it_is_inside_a_routine_run(self):
+        self.run_routine(lambda kwargs: ("Done.", True))
+        self.assertEqual(self.calls[0]["kwargs"]["routine_id"], self.routine["id"])
+        from scripts import opentag_process_env
+        marked = opentag_process_env.backend_environment(
+            {"OPENTAG_ROUTINE_ID": "stale"}, transport="slack", conversation_id="C1", caller_id="U1",
+            routine_id=self.routine["id"])
+        self.assertEqual(marked["OPENTAG_ROUTINE_ID"], self.routine["id"])
+        unmarked = opentag_process_env.backend_environment(
+            {"OPENTAG_ROUTINE_ID": "stale"}, transport="slack", conversation_id="C1", caller_id="U1")
+        self.assertNotIn("OPENTAG_ROUTINE_ID", unmarked)
 
     def test_owner_must_still_be_allowed_and_the_channel_is_told(self):
         stranger = tag_routines.approve({**self.routine, "owner": "USTRANGER"}, by="local-operator", via="cli")

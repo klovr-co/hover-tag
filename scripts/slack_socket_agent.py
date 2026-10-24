@@ -2576,6 +2576,8 @@ def run_backend_events(
     thread_new_text: str | None = None,
     on_context: Callable[[int], None] | None = None,
     run_limits: dict[str, float | int] | None = None,
+    routine_id: str | None = None,
+    on_cancelled: Callable[[], None] | None = None,
 ) -> tuple[str, bool]:
     """Consume normalized lifecycle events and forward only final-answer text."""
     if max_timeout is None:
@@ -2660,6 +2662,7 @@ def run_backend_events(
         handoff_requests=str(handoff_requests) if handoff_requests else None,
         handoff_depth=handoff_depth,
         run_limits=run_limits,
+        routine_id=routine_id,
     )
     try:
         process = subprocess.Popen(
@@ -2811,6 +2814,8 @@ def run_backend_events(
         control_file.unlink(missing_ok=True)
         approval_dir_context.cleanup()
 
+    if active_run.cancel_requested and on_cancelled is not None:
+        on_cancelled()
     if active_run.cancel_requested and terminal_status == "interrupted":
         return "Stopped. Actions completed before the stop were not rolled back.", False
     if active_run.cancel_requested:
@@ -5270,7 +5275,20 @@ def create_app(
                     post_routine_root(client, routine, f"{header} didn't run: {diagnostic}")
                 except Exception as exc:  # noqa: BLE001 - the run history still records it
                     logger.warning("Could not post routine notice: %s", exc)
-            return record("failed", diagnostic)
+            # Running again won't help, so the scheduler pauses it now (as Agno disables such schedules).
+            return record("failed", diagnostic, pause_reason=f"Paused because {diagnostic}")
+
+        def withdrawn() -> str | None:
+            """Why the reply shouldn't post: the routine was paused or removed while it ran."""
+            try:
+                current = {item["id"]: item for item in tag_routines.RoutineStore(instance_home()).load()}
+            except (tag_routines.RoutineError, tag_routines.RoutineSchemaError):
+                return None
+            if routine["id"] not in current:
+                return "Removed while it ran, so nothing was posted."
+            if not current[routine["id"]]["enabled"]:
+                return "Paused while it ran, so nothing was posted."
+            return None
 
         # A channel the Tag no longer uses gets nothing, not even this notice.
         if not slack_channel_allowed(channel):
@@ -5297,6 +5315,7 @@ def create_app(
         usage: dict[str, Any] = {}
         limit_hit: list[str] = []
         error_codes: list[str] = []
+        cancelled: list[bool] = []
         activity_run_id: str | None = None
         if rich_events_selected(request_backend):
             try:
@@ -5380,12 +5399,18 @@ def create_app(
                     output_manifest=output_manifest, max_timeout=limits["timeout_seconds"],
                     scope_plan=scope_plan, slack_search_grant=search_grant, on_trace_event=trace,
                     run_limits={"max_turns": limits["max_turns"], "max_budget_usd": limits["max_budget_usd"]},
-                    on_error=capture_error,
+                    on_error=capture_error, routine_id=routine["id"], on_cancelled=lambda: cancelled.append(True),
                 )
                 finished = True
                 finish_activity("completed" if succeeded else "failed")
                 extra = {"tools_used": tools_used or None, "cost_usd": usage.get("cost_usd"),
                          "tokens": usage.get("tokens"), "activity_run_id": activity_run_id}
+                if (reason := withdrawn()) is not None:
+                    return record("cancelled", reason, **extra)
+                if cancelled and not limit_hit:
+                    # Someone stopped it in Slack: not a failure, and nothing more to say.
+                    return record("cancelled", "Stopped by someone in Slack.", **extra)
+                category = classify_failure(answer, error_codes[-1] if error_codes else None).category
                 # Limits come from error codes and only for runs that failed: a reply that
                 # merely talks about turns or budgets is still a reply.
                 if not succeeded and (limit_hit or "error_max_budget_usd" in error_codes):
@@ -5397,6 +5422,11 @@ def create_app(
                     outcome, diagnostic = "timeout", f"Stopped at the {limits['timeout_seconds'] // 60}-minute limit."
                 elif not succeeded and "error_max_turns" in error_codes:
                     outcome, diagnostic = "failed", f"Stopped at the limit of {limits['max_turns']} turns."
+                elif not succeeded and category == "rate_limit" and trigger != "retry":
+                    # Tried again in a minute; the channel hears about it only if that fails too.
+                    return record("failed", ROUTINE_FAILURE_TEXT["rate_limit"], rate_limited=True, **extra)
+                elif succeeded and not answer.strip():
+                    outcome, diagnostic = "failed", "The coding agent finished with an empty answer."
                 elif succeeded and tag_routines.is_no_reply(answer):
                     if "ts" in root:
                         client.chat_postMessage(channel=channel, thread_ts=root["ts"], text="Nothing new to report.")
@@ -5404,24 +5434,34 @@ def create_app(
                 elif succeeded:
                     answer = without_bot_mentions(client, logger, answer)
                     chunks = split_reply(to_mrkdwn(f"{header}\n\n{answer}"), max_chars=MAX_REPLY_CHARS)
-                    if "ts" in root:
-                        post_final_reply(client, channel, root["ts"], answer)
-                    else:
-                        ensure_root(chunks[0])
-                        for chunk in chunks[1:]:
-                            client.chat_postMessage(channel=channel, thread_ts=root["ts"], text=chunk, mrkdwn=True)
-                    deliver_output_artifacts(client, channel, root["ts"], output_manifest, default_workdir(), logger)
+                    posted, problem = False, ""
+                    try:
+                        if "ts" in root:
+                            post_final_reply(client, channel, root["ts"], answer)
+                            posted = True
+                        else:
+                            ensure_root(chunks[0])
+                            posted = True
+                            for chunk in chunks[1:]:
+                                client.chat_postMessage(channel=channel, thread_ts=root["ts"], text=chunk,
+                                                        mrkdwn=True)
+                        deliver_output_artifacts(client, channel, root["ts"], output_manifest, default_workdir(),
+                                                 logger)
+                    except Exception as exc:  # noqa: BLE001 - once the reply is out, it counts as posted
+                        if not posted:
+                            raise
+                        logger.warning("Routine %s posted, then failed to finish: %s", routine["id"], exc)
+                        problem = "Posted, but the rest of the reply or its files couldn't be sent."
                     if activity_run_id is not None:
                         try:
                             activity_store.save_reply(activity_run_id, answer)
                         except OSError:
                             pass
-                    return record("posted", slack_ts=root["ts"], **extra)
+                    return record("posted", problem, slack_ts=root["ts"], **extra)
                 else:
                     outcome = "failed"
                     # The channel sees only a fixed phrase; details stay in the error report.
-                    diagnostic = ROUTINE_FAILURE_TEXT.get(classify_failure(answer, None).category,
-                                                          "The coding agent reported an error.")
+                    diagnostic = ROUTINE_FAILURE_TEXT.get(category, "The coding agent reported an error.")
                 reference = new_error_reference()
                 logger.error("Routine %s failed [%s]: %s", routine["id"], reference, answer)
                 text = f"{header} didn't finish. {diagnostic} Reference `{reference}`."
@@ -5435,14 +5475,26 @@ def create_app(
                 finish_activity("failed")
             output_manifest.unlink(missing_ok=True)
 
-    def announce_auto_pause(routine: dict[str, Any], failures: int) -> None:
+    def announce_auto_pause(routine: dict[str, Any]) -> None:
+        if not slack_channel_allowed(routine["channel"]):
+            return  # The Tag left that channel: it hears nothing more from this routine.
+        reason = routine.get("paused_reason") or "It was paused."
         post_routine_root(app.client, routine,
-                          f"⏰ *{slack_escape(routine['name'])}* is paused after {failures} failed runs in a row. "
+                          f"⏰ *{slack_escape(routine['name'])}* is paused. {slack_escape(reason)} "
                           f"<@{routine['owner']}> can check it with `tag routine show` and resume it "
                           "with `tag routine resume`, or in Tag.app.")
 
+    def announce_crash(routine: dict[str, Any], record: dict[str, Any]) -> None:
+        if not slack_channel_allowed(routine["channel"]):
+            return
+        reference = new_error_reference()
+        app.logger.error("Routine %s crashed [%s]: %s", routine["id"], reference, record.get("diagnostic"))
+        post_routine_root(app.client, routine, f"⏰ *{slack_escape(routine['name'])}* didn't finish. "
+                                               f"Tag hit an internal error. Reference `{reference}`.")
+
     app.tag_routine_scheduler = RoutineScheduler(
-        instance_home(), run_routine, on_auto_pause=announce_auto_pause, logger=getattr(app, "logger", None))
+        instance_home(), run_routine, on_auto_pause=announce_auto_pause, on_crash=announce_crash,
+        logger=getattr(app, "logger", None))
 
     @app.action(RETRY_ACTION_ID)
     def retry_request(ack: Any, body: dict[str, Any], client: Any, logger: Any) -> None:

@@ -8,7 +8,8 @@ import type { Bridge } from "../lib/bridge";
 import { parseJSON, title, type TagRow } from "../lib/protocol";
 import { useFresh, useListMotion } from "../lib/motion";
 import {
-  cliError, emptyForm, formArgs, formOf, formProblem, outcomeGood, outcomeText, routineLine, SCHEDULE_EXAMPLES, when,
+  cliError, emptyForm, formArgs, formOf, formProblem, outcomeGood, outcomeText, routineLine, SCHEDULE_EXAMPLES, triggerText,
+  when,
   type Routine, type RoutineDetail, type RoutineForm, type RoutineList,
 } from "../lib/routines";
 import { ErrorLine, fitText, Icon, Switch } from "./ui";
@@ -60,6 +61,9 @@ export function Routines({ api, row, say }: { api: Bridge; row: TagRow; say: Say
       </p>
       {!list.tag_running && list.routines.length > 0 && (
         <p className="meta rt-note"><Icon name="warn" />{title(row)} is stopped, so its routines wait until it starts.</p>
+      )}
+      {list.tag_running && list.routines.length > 0 && list.scheduler?.problem && (
+        <p className="meta rt-note"><Icon name="warn" />{list.scheduler.problem}</p>
       )}
       {error && <ErrorLine>{error}</ErrorLine>}
       <RoutineRows routines={list.routines} render={(item, state) => (
@@ -180,7 +184,7 @@ function RoutineHistory({ api, tag, routine }: { api: Bridge; tag: string; routi
       {runs.map((run) => (
         <li key={run.run_id} className={outcomeGood(run) ? "good" : "bad"}>
           <span className="rt-when">{when(run.started ?? run.scheduled_for, routine.timezone)}</span>
-          <span className="rt-outcome">{outcomeText(run)}{run.trigger === "run-now" ? " · run by hand" : run.trigger === "catch-up" ? " · caught up" : ""}</span>
+          <span className="rt-outcome">{outcomeText(run)}{triggerText(run)}</span>
           {run.diagnostic && <span className="rt-diag selectable">{run.diagnostic}</span>}
         </li>
       ))}

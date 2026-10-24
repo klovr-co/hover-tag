@@ -27,7 +27,7 @@
   },
   "upcoming": ["2026-10-19T08:03:00+00:00", "2026-10-26T09:03:00+00:00"],
   "history": [
-    {"run_id": "8a7b6c5d4e3f20112233445566778899", "trigger": "schedule",
+    {"run_id": "r-3f9a1c2e7b:20261005T080300Z", "trigger": "schedule",
      "scheduled_for": "2026-10-05T08:03:00+00:00", "started": null, "ended": null, "outcome": "missed",
      "prompt_sha256": "1f0e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
      "approval_hash": "9b0c6d0f2f3c4e7a8f1d2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f70",

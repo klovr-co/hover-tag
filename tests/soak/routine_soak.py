@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Soak test for routines: a real bridge process, a scripted backend, a jumping clock.
 
-    uv run --with slack-bolt==1.30.0 --with python-dateutil==2.9.0.post0 --with psutil==7.0.0 \\
+    uv run --with slack-bolt==1.30.0 --with cronsim==2.7 --with psutil==7.0.0 \\
         python tests/soak/routine_soak.py [--report report.json]
 
 It needs no Slack and no AI account. The bridge child runs the real create_app,
@@ -329,7 +329,7 @@ def check(soak: Soak) -> dict:
     flaky = current["Flaky"]
     if flaky["enabled"] or "failed runs in a row" not in (flaky.get("paused_reason") or ""):
         failures.append("Flaky: was not auto-paused")
-    if not any("is paused after" in p["text"] for p in posts):
+    if not any("failed runs in a row" in p["text"] for p in posts):
         failures.append("Flaky: no auto-pause notice")
     slow = states.load(soak.routines["Slow"]["id"])["history"]
     if not any(e["outcome"] == "interrupted" for e in slow):

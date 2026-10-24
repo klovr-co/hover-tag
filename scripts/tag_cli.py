@@ -58,7 +58,7 @@ except ImportError:
     from scripts import tag_autostart as autostart
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNTIME_DEPENDENCIES = ("dateutil", "mfs_server", "psutil", "slack_bolt")
+RUNTIME_DEPENDENCIES = ("cronsim", "mfs_server", "psutil", "slack_bolt")
 UPGRADE_CHANNELS = ("stable", "beta", "alpha", "edge")
 # How long tag start waits for a setup, start or stop that holds the Tag's locks.
 START_LOCK_WAIT_SECONDS = 90

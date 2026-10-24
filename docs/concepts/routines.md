@@ -44,7 +44,9 @@ Routines run at most once an hour. A time on the hour, such as 09:00, starts a
 few minutes later (the same few minutes every time) so routines don't all
 start at once; add `exact` to the end to keep it on the hour. When the clocks
 go forward past a routine's time it runs when the gap ends, and when they go
-back it runs once.
+back it runs once. Intervals such as `every 1d` count hours, so after a clock
+change they run an hour earlier or later by the clock; use `daily 09:00` to
+keep the time.
 
 ## What a run does
 
@@ -54,13 +56,23 @@ that a reply of `NO_REPLY` means there is nothing to post.
 
 - **A reply** is posted as a new message in the routine's channel, headed with
   the routine's name.
-- **`NO_REPLY`** posts nothing. The run still appears in history.
+- **`NO_REPLY`** posts nothing, also when the reply adds a short note on
+  another line. The run still appears in history. An empty reply counts as a
+  failure.
 - **An action that needs approval**, such as pushing code, asks the owner in a
   thread in the routine's channel, exactly as during a normal request. If
   nobody answers, the action is denied. The routine's prompt is never
   approval.
 - **A failure** posts a short message with an error reference. Details stay
-  in `tag NAME logs` and the error report.
+  in `tag NAME logs` and the error report. When the AI provider's usage limit
+  is reached, Tag tries once more a minute later and says nothing unless that
+  fails too.
+- **Pausing or removing** a routine while it runs means its reply isn't
+  posted.
+
+A run can't add or change routines. When you ask the Tag in Slack to change a
+routine, it can change only routines you own, and the change is approved in
+your name.
 
 Each run is limited to $0.50 of estimated spend, 40 turns, and 20 minutes by
 default, and to 2,000,000 tokens when Tag can't estimate cost. Change them with
@@ -79,11 +91,15 @@ the latest one once if it was due in the last seven days. Use
 | History entry | Meaning |
 | --- | --- |
 | Posted / Nothing new | The run finished. |
-| Failed, Stopped at its spend or time limit | The run stopped. Five failures in a row pause the routine and say so in its channel. |
+| Failed, Stopped at its spend or time limit | The run stopped. Five failures in a row pause the routine and say so in its channel; resuming it starts the count again. If its channel or owner is no longer allowed, it pauses at once. |
 | Missed | The computer was asleep or the Tag was stopped. |
 | Skipped | The previous run was still going, or a newer run replaced it while it waited. A Tag runs two routines at a time; others wait their turn, one waiting run per routine. |
-| Interrupted | The Tag stopped during the run. It isn't run again, so nothing posts twice. |
-| Needs approval | The routine changed after it was approved. Save it again to approve it. |
+| Interrupted | The Tag stopped during the run. It isn't run again, so nothing posts twice. It counts as a failure, so a routine that stops the Tag every time is paused. |
+| Stopped | Someone stopped the run, or paused or removed the routine while it ran. |
+| Needs approval | The routine changed after it was approved. Save it again to approve it, then resume it. |
+
+If a running Tag stops checking its routines, for example because
+`routines.json` can't be read, `tag NAME routine list` and Tag.app say so.
 
 `tag NAME routine show NAME` lists the next five run times and the history.
 Runs also appear in the Tag's Activity, marked with the routine's name; Tag

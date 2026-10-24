@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 from zoneinfo import ZoneInfo
 
 from scripts import tag_routines as routines
@@ -261,6 +262,247 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(routines.take_requests(self.home), [])
         with self.assertRaises(routines.RoutineError):
             routines.request_run(self.home, "../escape")
+
+    # Scenarios from other schedulers' test suites (Hermes Agent, OpenClaw, nanobot, Agno).
+
+    def test_damaged_and_unknown_routines_survive_edits_to_the_others(self):
+        good = self.store.add(self.raw, by="local-operator", via="cli")
+        data = json.loads((self.home / "routines.json").read_text(encoding="utf-8"))
+        damaged = [{"name": "broken"}, {**data["routines"][0], "id": "r-00000000ff", "name": "From a newer Tag",
+                                        "colour": "blue"}]
+        data["routines"].extend(damaged)
+        (self.home / "routines.json").write_text(json.dumps(data), encoding="utf-8")
+        self.store.update(good["id"], {"prompt": "Changed"}, by="local-operator", via="cli")
+        self.store.set_enabled(good["id"], False)
+        self.store.add({**self.raw, "name": "Second"}, by="local-operator", via="cli")
+        self.store.remove("Second")
+        saved = json.loads((self.home / "routines.json").read_text(encoding="utf-8"))["routines"]
+        self.assertEqual(saved[1:], damaged)
+        self.assertEqual(self.store.invalid_count(), 2)
+
+    def test_a_schedule_without_text_is_one_damaged_routine(self):
+        good = self.store.add(self.raw, by="local-operator", via="cli")
+        data = json.loads((self.home / "routines.json").read_text(encoding="utf-8"))
+        data["routines"].append({**data["routines"][0], "id": "r-00000000ee", "name": "Odd", "schedule": {}})
+        data["routines"].append({**data["routines"][0], "id": "r-00000000dd", "name": "Odder", "schedule": 7})
+        (self.home / "routines.json").write_text(json.dumps(data), encoding="utf-8")
+        self.assertEqual([r["id"] for r in self.store.load()], [good["id"]])
+
+    def test_saving_the_same_interval_again_keeps_its_timing(self):
+        added = self.store.add({**self.raw, "schedule": "every 2h"}, by="local-operator", via="cli",
+                               now=datetime(2026, 1, 1, 8, 30, tzinfo=UTC))
+        for text in ("every 2h", "Every 2h", " every  2h "):
+            edited = self.store.update(added["id"], {"schedule": text}, by="local-operator", via="cli",
+                                       now=datetime(2026, 1, 2, 8, 30, tzinfo=UTC))
+            self.assertEqual(edited["anchor"], added["anchor"], text)
+
+    def test_resume_refuses_a_routine_that_changed_after_approval(self):
+        added = self.store.add(self.raw, by="local-operator", via="cli")
+        self.store.set_enabled(added["id"], False)
+        data = json.loads((self.home / "routines.json").read_text(encoding="utf-8"))
+        data["routines"][0]["prompt"] = "Edited by hand"
+        (self.home / "routines.json").write_text(json.dumps(data), encoding="utf-8")
+        with self.assertRaisesRegex(routines.RoutineError, "approve"):
+            self.store.set_enabled(added["id"], True)
+        self.assertFalse(self.store.get(added["id"])["enabled"])
+
+    def test_a_rejected_add_writes_nothing(self):
+        with self.assertRaises(routines.RoutineError):
+            self.store.add({**self.raw, "schedule": "every 5m"}, by="local-operator", via="cli")
+        self.assertFalse((self.home / "routines.json").exists())
+
+    def test_saves_reach_the_disk_before_they_replace_the_file(self):
+        with mock.patch.object(routines.os, "fsync", wraps=routines.os.fsync) as fsync:
+            self.store.add(self.raw, by="local-operator", via="cli")
+        self.assertGreaterEqual(fsync.call_count, 1)
+
+
+class StateStoreTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.home = Path(self.temp.name)
+        self.states = routines.RoutineStateStore(self.home)
+        self.item = routines.approve(routine(), by="local-operator", via="cli")
+        self.path = self.home / routines.STATE_DIR / f"{self.item['id']}.json"
+        self.path.parent.mkdir(parents=True)
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def record(self, outcome, **extra):
+        return routines.run_record(self.item, trigger="schedule", slot=None, outcome=outcome, **extra)
+
+    def test_a_damaged_state_file_is_kept_aside_not_overwritten(self):
+        self.path.write_text('{"schema_version": 1, "history": [', encoding="utf-8")
+        self.assertEqual(self.states.peek(self.item["id"])["history"], [])
+        state = self.states.update(self.item["id"], lambda s: routines.add_run(s, self.record("posted")))
+        kept = list(self.path.parent.glob(f"{self.item['id']}.corrupt-*.json"))
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(kept[0].read_text(encoding="utf-8"), '{"schema_version": 1, "history": [')
+        self.assertEqual([h["outcome"] for h in state["history"]], ["failed", "posted"])
+        self.assertIn(kept[0].name, state["history"][0]["diagnostic"])
+        self.assertEqual(state["consecutive_failures"], 0)
+
+    def test_a_state_file_from_a_newer_tag_is_refused(self):
+        newer = {"schema_version": routines.STATE_SCHEMA_VERSION + 1, "history": [{"outcome": "posted"}]}
+        self.path.write_text(json.dumps(newer), encoding="utf-8")
+        with self.assertRaises(routines.RoutineSchemaError):
+            self.states.update(self.item["id"], lambda s: routines.add_run(s, self.record("posted")))
+        self.assertEqual(json.loads(self.path.read_text(encoding="utf-8")), newer)
+        self.assertEqual(self.states.peek(self.item["id"])["history"], [])
+
+    def test_malformed_history_entries_are_dropped_and_old_files_start_at_zero_failures(self):
+        self.path.write_text(json.dumps({"schema_version": 1, "history": [
+            None, {"note": "no outcome"}, {"outcome": "posted", "started": "2026-01-01T00:00:00+00:00"}]}),
+            encoding="utf-8")
+        state = self.states.load(self.item["id"])
+        self.assertEqual([h["outcome"] for h in state["history"]], ["posted"])
+        self.assertEqual(state["consecutive_failures"], 0)
+
+    def test_interrupted_runs_count_as_failures_and_cancelled_or_rate_limited_ones_do_not(self):
+        state = routines.empty_state()
+        routines.add_run(state, self.record("interrupted"))
+        routines.add_run(state, self.record("cancelled"))
+        routines.add_run(state, self.record("failed", rate_limited=True))
+        self.assertEqual(state["consecutive_failures"], 1)
+        routines.add_run(state, self.record("failed"))
+        self.assertEqual(state["consecutive_failures"], 2)
+
+    def test_each_scheduled_run_has_one_id_per_slot(self):
+        slot = datetime(2026, 10, 13, 9, 3, tzinfo=UTC)
+        first = routines.run_record(self.item, trigger="schedule", slot=slot, outcome="posted")
+        again = routines.run_record(self.item, trigger="catch-up", slot=slot, outcome="posted")
+        self.assertEqual(first["run_id"], again["run_id"])
+        self.assertIn(self.item["id"], first["run_id"])
+        by_hand = routines.run_record(self.item, trigger="run-now", slot=None, outcome="posted")
+        self.assertNotEqual(by_hand["run_id"], first["run_id"])
+
+
+class DaylightSavingTests(unittest.TestCase):
+    """Daylight-saving cases, in the spirit of OpenClaw's schedule tests and APScheduler's DST tests.
+
+    Our rule: a time skipped by a change runs when the gap ends; a repeated time runs
+    once, at its first occurrence; intervals count elapsed time.
+    """
+
+    CASES = [
+        # (zone, schedule, after (UTC), expected local times)
+        ("America/New_York", "daily 02:30 exact", datetime(2027, 3, 13, 12, tzinfo=UTC),
+         ["2027-03-14 03:00", "2027-03-15 02:30"]),
+        ("America/New_York", "daily 01:30 exact", datetime(2027, 11, 6, 12, tzinfo=UTC),
+         ["2027-11-07 01:30 -0400", "2027-11-08 01:30 -0500"]),
+        ("Australia/Lord_Howe", "daily 02:15 exact", datetime(2026, 10, 3, 0, tzinfo=UTC),
+         ["2026-10-04 02:30", "2026-10-05 02:15"]),
+        ("Australia/Lord_Howe", "daily 01:45 exact", datetime(2026, 4, 4, 0, tzinfo=UTC),
+         ["2026-04-05 01:45 +1100", "2026-04-06 01:45 +1030"]),
+        ("Australia/Sydney", "daily 02:30 exact", datetime(2026, 10, 3, 0, tzinfo=UTC),
+         ["2026-10-04 03:00", "2026-10-05 02:30"]),
+        ("Australia/Sydney", "daily 02:30 exact", datetime(2026, 4, 4, 0, tzinfo=UTC),
+         ["2026-04-05 02:30 +1100", "2026-04-06 02:30 +1000"]),
+        ("Africa/Cairo", "daily 00:30 exact", datetime(2024, 4, 25, 12, tzinfo=UTC),
+         ["2024-04-26 01:00", "2024-04-27 00:30"]),
+        ("Asia/Hebron", "daily 00:00 exact", datetime(2022, 3, 26, 12, tzinfo=UTC),
+         ["2022-03-27 01:00", "2022-03-28 00:00"]),
+        ("America/Sao_Paulo", "daily 00:00 exact", datetime(2018, 11, 3, 12, tzinfo=UTC),
+         ["2018-11-04 01:00", "2018-11-05 00:00"]),
+        ("America/Santiago", "daily 00:15 exact", datetime(2026, 9, 5, 12, tzinfo=UTC),
+         ["2026-09-06 01:00", "2026-09-07 00:15"]),
+        ("America/Santiago", "daily 23:30 exact", datetime(2026, 4, 4, 12, tzinfo=UTC),
+         ["2026-04-04 23:30 -0300", "2026-04-05 23:30 -0400"]),
+        # A gap that crosses midnight moves the run to the next day, and so to the next weekday.
+        ("America/Nuuk", "daily 23:30 exact", datetime(2024, 3, 30, 12, tzinfo=UTC),
+         ["2024-03-31 00:00", "2024-03-31 23:30"]),
+        ("America/Nuuk", "sat 23:30 exact", datetime(2024, 3, 30, 12, tzinfo=UTC),
+         ["2024-03-31 00:00", "2024-04-06 23:30"]),
+        # Samoa skipped 30 December 2011 entirely.
+        ("Pacific/Apia", "daily 09:00 exact", datetime(2011, 12, 29, 0, tzinfo=UTC),
+         ["2011-12-29 09:00", "2011-12-31 00:00", "2011-12-31 09:00"]),
+        ("Europe/London", "monthly last 09:30", datetime(2028, 2, 1, tzinfo=UTC),
+         ["2028-02-29 09:30", "2028-03-31 09:30"]),
+    ]
+
+    def test_daylight_saving_vectors(self):
+        for zone, schedule, after, expected in self.CASES:
+            with self.subTest(zone=zone, schedule=schedule):
+                item = routine(schedule=schedule, timezone=zone)
+                times = routines.upcoming(item, after, len(expected))
+                with_offset = any(len(text) > 16 for text in expected)
+                shown = [t.astimezone(ZoneInfo(zone)).strftime("%Y-%m-%d %H:%M" + (" %z" if with_offset else ""))
+                         for t in times]
+                self.assertEqual(shown, expected)
+
+    def test_two_times_that_land_in_one_gap_post_once(self):
+        for schedule in ("daily 02:00,03:00", "daily 02:15,03:15 exact", "daily 02:15,03:30 exact"):
+            with self.subTest(schedule=schedule):
+                item = routine(schedule=schedule, timezone="America/New_York")
+                times = routines.upcoming(item, datetime(2027, 3, 14, 5, tzinfo=UTC), 3)
+                gaps = [b - a for a, b in zip(times, times[1:])]
+                self.assertGreaterEqual(min(gaps), timedelta(minutes=30), local(times, NEW_YORK))
+
+    def test_a_start_inside_the_repeated_hour_still_gets_a_future_time(self):
+        item = routine(schedule="daily 01:45 exact")
+        second_pass = datetime(2027, 11, 7, 6, 35, tzinfo=UTC)  # 01:35 EST, the second 01:35
+        following = routines.next_run(item, second_pass)
+        self.assertGreater(following, second_pass)
+        self.assertEqual(local([following], NEW_YORK), ["2027-11-08 01:45 EST"])
+
+    def test_a_year_of_daily_runs_keeps_the_clock_time(self):
+        item = routine(schedule="daily 09:00")
+        offset = routines.stagger_minutes(item["id"], item["schedule"])
+        times = routines.upcoming(item, datetime(2027, 1, 1, tzinfo=UTC), 365)
+        self.assertEqual({t.astimezone(NEW_YORK).strftime("%H:%M") for t in times}, {f"09:0{offset}"})
+        self.assertEqual(len({t.astimezone(NEW_YORK).date() for t in times}), 365)
+
+    def test_next_run_is_the_same_from_any_start_before_it(self):
+        for zone, schedule in (("America/New_York", "daily 01:30,02:30 exact"), ("Europe/London", "weekdays 09:00"),
+                               ("Australia/Lord_Howe", "daily 02:15 exact"), ("America/New_York", "every 2h")):
+            with self.subTest(zone=zone, schedule=schedule):
+                item = routine(schedule=schedule, timezone=zone)
+                start = datetime(2027, 3, 12, tzinfo=UTC) if zone != "Australia/Lord_Howe" else datetime(
+                    2026, 10, 2, tzinfo=UTC)
+                times = routines.upcoming(item, start, 8)
+                for earlier, later in zip([start] + times, times):
+                    probe = earlier
+                    while probe < later:
+                        self.assertEqual(routines.next_run(item, probe), later, probe)
+                        probe += timedelta(minutes=7)
+
+    def test_an_interval_without_a_saved_anchor_keeps_a_stable_one(self):
+        raw = {"name": "x", "schedule": "every 2h", "timezone": "UTC", "channel": "C0123ABCDE",
+               "prompt": "p", "owner": "U0123ABC", "id": "r-0123456789"}
+        first = routines.validate_routine(raw, now=datetime(2026, 1, 1, tzinfo=UTC))
+        later = routines.validate_routine(raw, now=datetime(2026, 1, 1, 0, 3, tzinfo=UTC))
+        self.assertEqual(first["anchor"], later["anchor"])
+
+    def test_a_start_time_without_a_zone_means_utc(self):
+        raw = {"name": "x", "schedule": "every 2h", "timezone": "Asia/Tokyo", "channel": "C0123ABCDE",
+               "prompt": "p", "owner": "U0123ABC", "anchor": "2026-01-01T10:05:00"}
+        item = routines.validate_routine(raw)
+        self.assertEqual(item["anchor"], "2026-01-01T10:05:00+00:00")
+        self.assertEqual(routines.next_run(item, datetime(2026, 1, 1, tzinfo=UTC)),
+                         datetime(2026, 1, 1, 10, 5, tzinfo=UTC))
+
+
+class SilenceTests(unittest.TestCase):
+    """Nothing-to-report replies, following Hermes Agent's matcher for scheduled runs."""
+
+    def test_the_marker_alone_or_on_its_own_first_or_last_line_is_silence(self):
+        for answer in ("NO_REPLY", "no_reply.", "**NO_REPLY**", "`NO_REPLY`", "NO REPLY", "[NO_REPLY]",
+                       "NO_REPLY\n\nNothing merged since yesterday.", "Checked 4 repos.\n\nNO_REPLY",
+                       "[NO_REPLY] nothing new", "[SILENT]"):
+            with self.subTest(answer=answer):
+                self.assertTrue(routines.is_no_reply(answer))
+
+    def test_a_marker_inside_real_content_is_delivered(self):
+        for answer in ("", "   ", "Three PRs merged. I didn't need NO_REPLY today.",
+                       "NO_REPLY would be wrong: the build is red.\nDetails below.", "Silent retry succeeded."):
+            with self.subTest(answer=answer):
+                self.assertFalse(routines.is_no_reply(answer))
+
+    def test_the_preamble_says_not_to_schedule_more_work(self):
+        text = routines.run_prompt(routine(prompt="Every Monday, list open PRs."), trigger="schedule",
+                                   slot=None, last_success=None)
+        self.assertIn("Don't add or change routines", text)
 
 
 if __name__ == "__main__":

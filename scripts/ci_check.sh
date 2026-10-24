@@ -29,7 +29,7 @@ if [ "$mode" != --tests-only ]; then
 fi
 
 if [ "$mode" != --policy-only ]; then
-    uv run --with "$SLACK_BOLT_SPEC" --with "$PY_YAML_SPEC" --with "$QUESTIONARY_SPEC" --with "PyJWT[crypto]==2.10.1" --with psutil==7.0.0 --with tomli==2.2.1 --with python-dateutil==2.9.0.post0 --with tzdata==2026.5 \
+    uv run --with "$SLACK_BOLT_SPEC" --with "$PY_YAML_SPEC" --with "$QUESTIONARY_SPEC" --with "PyJWT[crypto]==2.10.1" --with psutil==7.0.0 --with tomli==2.2.1 --with cronsim==2.7 --with tzdata==2026.5 \
         python -m unittest discover -s tests -v
 fi
 

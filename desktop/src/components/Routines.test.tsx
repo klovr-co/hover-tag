@@ -29,6 +29,22 @@ describe("Routines", () => {
     expect(screen.getByText(/mon 09:00 · #launch · next/)).toBeTruthy();
   });
 
+  it("says when the running Tag has stopped checking its routines", async () => {
+    const api = demoBridge();
+    const rows: TagRow[] = parseList((await api.tag(["list", "--json"])).stdout);
+    const run = api.tag;
+    api.tag = async (args) => {
+      const result = await run(args);
+      if (!args.includes("list") || !args.includes("routine")) return result;
+      const list = JSON.parse(result.stdout);
+      list.tag_running = true;
+      list.scheduler = { ok: false, problem: "Routines aren't running: Can't read routines.json", last_check: null };
+      return { ...result, stdout: JSON.stringify(list) };
+    };
+    render(<Routines api={api} row={rows[0]} say={vi.fn()} />);
+    expect(await screen.findByText(/Routines aren't running: Can't read routines.json/)).toBeTruthy();
+  });
+
   it("pauses with the switch and says so", async () => {
     const { row, calls, say } = await open();
     fireEvent.click(await screen.findByRole("switch", { name: "Pause Weekly PR digest" }));

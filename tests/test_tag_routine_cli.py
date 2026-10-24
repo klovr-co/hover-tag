@@ -130,6 +130,88 @@ class RoutineCliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("won't run", text)
 
+    # Scenarios from other schedulers' test suites (nanobot, Agno, Hermes Agent, OpenClaw).
+
+    def test_a_routine_run_cannot_add_or_change_routines(self):
+        # nanobot: "cannot schedule new jobs from within a cron job execution".
+        _, added = self.add()
+        routine_id = added["routine"]["id"]
+        with mock.patch.dict("os.environ", {"OPENTAG_ROUTINE_ID": routine_id, "OPENTAG_CALLER_ID": "U0123ABC"}):
+            for argv in (("edit", routine_id, "--prompt", "More"), ("pause", routine_id), ("remove", routine_id),
+                         ("run-now", routine_id), ("add", "--name", "x", "--schedule", "daily 09:00",
+                                                   "--channel", "C0123ABCDE", "--prompt", "p")):
+                with self.subTest(argv=argv), self.assertRaisesRegex(routines.RoutineError, "routine run"):
+                    self.cli(*argv)
+            _, shown = self.cli("show", routine_id, "--json")
+        self.assertEqual(shown["routine"]["prompt"], "Summarise PRs.")
+
+    def test_from_slack_only_the_owner_changes_a_routine_and_approves_as_themselves(self):
+        # Agno: an agent can't rewrite another user's schedule.
+        values = {**VALUES, "SLACK_ALLOWED_USER_IDS": "U0123ABC,U0OTHER99"}
+        _, added = self.cli("add", "--name", "PR digest", "--schedule", "weekdays 09:00", "--timezone", "UTC",
+                            "--channel", "C0123ABCDE", "--prompt", "p", "--owner", "U0123ABC", "--json",
+                            values=values)
+        routine_id = added["routine"]["id"]
+        with mock.patch.dict("os.environ", {"OPENTAG_CALLER_ID": "U0OTHER99"}):
+            with self.assertRaisesRegex(routines.RoutineError, "Only its owner"):
+                self.cli("edit", routine_id, "--prompt", "Mine now", values=values)
+            with self.assertRaisesRegex(routines.RoutineError, "Only its owner"):
+                self.cli("pause", routine_id, values=values)
+            with self.assertRaisesRegex(routines.RoutineError, "for yourself"):
+                self.cli("add", "--name", "x", "--schedule", "daily 09:00", "--timezone", "UTC",
+                         "--channel", "C0123ABCDE", "--prompt", "p", "--owner", "U0123ABC", values=values)
+        with mock.patch.dict("os.environ", {"OPENTAG_CALLER_ID": "U0123ABC"}):
+            _, edited = self.cli("edit", routine_id, "--prompt", "Better", "--json", values=values)
+        self.assertEqual((edited["routine"]["approval"]["by"], edited["routine"]["approval"]["via"]),
+                         ("U0123ABC", "slack"))
+
+    def test_resume_checks_what_would_stop_the_routine_running(self):
+        _, added = self.add()
+        routine_id = added["routine"]["id"]
+        self.cli("pause", routine_id)
+        with self.assertRaisesRegex(routines.RoutineError, "allowed to use"):
+            self.cli("resume", routine_id, values={**VALUES, "SLACK_ALLOWED_USER_IDS": "U0SOMEONE"})
+        data = json.loads((self.home / "routines.json").read_text(encoding="utf-8"))
+        data["routines"][0]["channel"] = "C0GONE0000"
+        data["routines"][0]["approval"]["hash"] = routines.approval_hash(data["routines"][0])
+        (self.home / "routines.json").write_text(json.dumps(data), encoding="utf-8")
+        with self.assertRaisesRegex(routines.RoutineError, "channel"):
+            self.cli("resume", routine_id)
+
+    def test_show_survives_odd_history_entries(self):
+        _, added = self.add()
+        routine_id = added["routine"]["id"]
+        path = self.home / routines.STATE_DIR / f"{routine_id}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"schema_version": 1, "history": [None, {"note": "x"}, {"outcome": "posted"}]}),
+                        encoding="utf-8")
+        code, text = self.cli("show", routine_id)
+        self.assertEqual(code, 0)
+        _, shown = self.cli("show", routine_id, "--json")
+        self.assertEqual([h["outcome"] for h in shown["history"]], ["posted"])
+
+    def test_a_scheduler_that_stopped_checking_is_shown(self):
+        # Hermes: a failing tick is saved and shown in status, and cleared on recovery.
+        self.add()
+        routines.write_scheduler_health(self.home, {"last_tick": "2026-10-13T11:00:00+00:00",
+                                                    "last_error": "Can't read routines.json", "routine_errors": {}})
+        _, listed = self.cli("list", "--json")
+        self.assertFalse(listed["scheduler"]["ok"])
+        self.assertIn("Can't read", listed["scheduler"]["problem"])
+        code, text = self.cli("list")
+        self.assertIn("Can't read", text)
+        routines.write_scheduler_health(self.home, {"last_tick": "2026-10-13T11:59:40+00:00", "last_error": None,
+                                                    "routine_errors": {}})
+        _, listed = self.cli("list", "--json")
+        self.assertTrue(listed["scheduler"]["ok"])
+
+    def test_adding_while_stopped_says_it_wont_run_yet(self):
+        self.running = False
+        code, text = self.cli("add", "--name", "PR digest", "--schedule", "weekdays 09:00", "--timezone",
+                              "Europe/London", "--channel", "#eng-updates", "--prompt", "Summarise PRs.")
+        self.assertEqual(code, 0)
+        self.assertIn("won't run", text)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -46,7 +46,7 @@ def text_only_environment(source: Mapping[str, str]) -> dict[str, str]:
     """Preserve provider auth while blanking task/bridge data, also for SDK env merges."""
     clean = without_telemetry_environment(source)
     return {key: "" if key not in clean or key.startswith(("SLACK_", "MFS_"))
-            or key in {"OPENTAG_CALLER_ID", "OPENTAG_CURRENT_CHANNEL_ID",
+            or key in {"OPENTAG_CALLER_ID", "OPENTAG_CURRENT_CHANNEL_ID", "OPENTAG_ROUTINE_ID",
                        "OPENTAG_SLACK_SEARCH_GRANT", "OPENTAG_SLACK_CHANNEL_LABELS"}
             else value for key, value in source.items()}
 
@@ -84,6 +84,7 @@ def backend_environment(
     handoff_requests: str | None = None,
     handoff_depth: int = 0,
     run_limits: Mapping[str, float | int] | None = None,
+    routine_id: str | None = None,
 ) -> dict[str, str]:
     clean = without_telemetry_environment(
         isolated_environment(source, transport=transport)
@@ -117,6 +118,11 @@ def backend_environment(
     else:
         clean.pop("OPENTAG_HANDOFF_REQUESTS", None)
     clean["OPENTAG_HANDOFF_DEPTH"] = str(handoff_depth)
+    # Set only for a routine's own run, so tag routine commands can refuse to change routines from it.
+    if routine_id:
+        clean["OPENTAG_ROUTINE_ID"] = routine_id
+    else:
+        clean.pop("OPENTAG_ROUTINE_ID", None)
     # Per-run limits come only from the bridge (routine runs), never from the environment.
     for name, key in RUN_LIMIT_ENV.items():
         value = (run_limits or {}).get(key)
