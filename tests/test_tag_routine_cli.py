@@ -201,6 +201,10 @@ class RoutineCliTests(unittest.TestCase):
         code, text = self.cli("list")
         self.assertIn("Can't read", text)
         routines.write_scheduler_health(self.home, {"last_tick": "2026-10-13T11:59:40+00:00", "last_error": None,
+                                                    "routine_errors": {"r-0123456789": "This schedule has no next run"}})
+        _, listed = self.cli("list", "--json")
+        self.assertIn("1 routine can't be scheduled: This schedule has no next run", listed["scheduler"]["problem"])
+        routines.write_scheduler_health(self.home, {"last_tick": "2026-10-13T11:59:40+00:00", "last_error": None,
                                                     "routine_errors": {}})
         _, listed = self.cli("list", "--json")
         self.assertTrue(listed["scheduler"]["ok"])

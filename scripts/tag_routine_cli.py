@@ -182,6 +182,10 @@ def scheduler_status(home: Path, tag_id: str, running: bool, now: datetime) -> d
         elif last is not None and now - last > STALE_CHECK:
             problem = (f"The Tag is running but hasn't checked its routines since "
                        f"{last.astimezone().strftime('%a %H:%M')}. Restart it with tag {tag_id} restart.")
+        elif errors := health["routine_errors"]:
+            first = next(iter(errors.values()))
+            problem = (f"{len(errors)} routine{'s' if len(errors) != 1 else ''} can't be scheduled: {first}. "
+                       "Check it with tag routine show, or save it again with tag routine edit.")
     return {"ok": problem is None, "problem": problem, "last_check": health["last_tick"],
             "last_clock_jump": health["last_clock_jump"]}
 
