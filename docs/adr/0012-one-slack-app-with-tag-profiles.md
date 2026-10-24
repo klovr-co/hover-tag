@@ -4,9 +4,9 @@
 - Date: 2026-10-15
 - Issue: [#232](https://github.com/klovr-co/hover-tag/issues/232), PR [#238](https://github.com/klovr-co/hover-tag/pull/238)
 - Related: [ADR 0001](0001-credential-boundary.md), [ADR 0005](0005-multiple-tag-instances.md),
-  [ADR 0009](0009-thread-scoped-agent-conversations.md), [ADR 0011](0011-lead-tag.md),
+  [ADR 0009](0009-thread-scoped-agent-conversations.md), [ADR 0011](0011-chief-of-tag.md),
   [handoffs](../../references/handoffs.md)
-- Changes ADR 0011: Lead creates profiles, not Slack apps.
+- Changes ADR 0011: Chief-of-Tag creates profiles, not Slack apps.
 
 ## Context
 
@@ -23,15 +23,15 @@ picture, instructions, working folder, model and memory. Slack's
 
 ## Decision
 
-**One Slack app, "Tag", belongs to the Lead instance.** Lead (called Chief of
-Staff in #232) is the app's default profile. Only Lead's instance holds the
-app's `xapp-` and `xoxb-` tokens and runs the Socket Mode connection.
+**One Slack app, "Tag", belongs to the Chief-of-Tag instance.** Chief-of-Tag
+is the app's default profile. Only Chief-of-Tag's instance holds the app's
+`xapp-` and `xoxb-` tokens and runs the Socket Mode connection.
 
 **A profile is a Tag instance without its own Slack app.** It keeps everything
 in its instance home except Slack tokens: name, picture, description,
 working folder, backend settings, routines, memory, agent sessions and backend
 credentials. `tag list` shows `kind: "profile"`. Its roster card names
-Lead's app and has no bot member ID.
+Chief-of-Tag's app and has no bot member ID.
 
 **People name the profile in the message.**
 
@@ -40,10 +40,10 @@ Lead's app and has no bot member ID.
   or `,`, or come after `ask`. The match is exact and ignores case. A name
   found anywhere else in the text doesn't count, so "ask the designer
   whether…" is not a call.
-- With no name, Lead picks one owner as in ADR 0011: route, never split or
+- With no name, Chief-of-Tag picks one owner as in ADR 0011: route, never split or
   combine, and at most two hops.
 - DMs to the app work the same way.
-- Profile names must be unique in the installation and can't be `lead`, `tag`
+- Profile names must be unique in the installation and can't be `chief-of-tag`, `tag`
   or a reserved command. Tag refuses a name that matches a workspace member's
   display name, because Slack's policy forbids impersonating users.
 
@@ -62,7 +62,7 @@ the app, not the profile.
 **Threads stay with their owner profile.**
 
 - The first profile to answer in a thread owns it. The owner is saved in
-  Lead's `state/thread-owners/<team>-<channel>-<thread_ts>.json`, written with
+  Chief-of-Tag's `state/thread-owners/<team>-<channel>-<thread_ts>.json`, written with
   `scope_lock`.
 - A later `@Tag` in that thread without a name goes to the owner. Naming a
   different profile hands the thread to that profile, and the bridge posts
@@ -81,13 +81,13 @@ the app, not the profile.
 **Handoffs (#177) and routing between profiles run in-process.**
 
 - A route or escalation between two profiles doesn't go through Slack.
-  Lead's bridge posts the same visible marker line as today, as the sending
+  Chief-of-Tag's bridge posts the same visible marker line as today, as the sending
   profile, and starts the owner's run directly. This removes the unverified
   dependency on Slack delivering `app_mention` for a bot's own mention.
 - Handoff and route records gain `from_profile` and `to_profile`. Status
   lines, results and activity entries name the profile, not the app.
 - The hop limit and `OPENTAG_HANDOFF_DEPTH` are unchanged.
-- An owner still accepts a route only from Lead, checked against the profile
+- An owner still accepts a route only from Chief-of-Tag, checked against the profile
   ID, not the Slack user.
 
 **Approvals (#208) are attributed to the profile.**
@@ -103,25 +103,25 @@ the app, not the profile.
 
 **Creating a Tag means creating a profile.**
 
-- Lead proposes a profile in the thread with the same checks as ADR 0011:
+- Chief-of-Tag proposes a profile in the thread with the same checks as ADR 0011:
   a real boundary, unique name, one open proposal, and 60-minute expiry.
   The requester approves or rejects it.
 - On approval, Tag creates the instance with
   `tag add --profile --preset FILE`, with no Slack app step, starts it and
   saves starting routines. No admin approval, service account or app
   configuration token is involved, and profiles don't count against the
-  app cap. `OPENTAG_LEAD_MAX_TAGS` stays the safety cap (default 10).
+  app cap. `OPENTAG_CHIEF_MAX_TAGS` stays the safety cap (default 10).
 - Only a person creates a Tag with its own Slack app, in Tag.app or with
   `tag add`, when it needs a separate Slack identity or Slack permissions.
 
 **Mixed mode, no automatic migration.**
 
-- Existing Tags with their own app keep working unchanged. Lead routes to them
+- Existing Tags with their own app keep working unchanged. Chief-of-Tag routes to them
   through Slack, as in ADR 0011.
 - Nothing is converted, renamed or reinstalled automatically. To turn on
-  profiles, a person runs `tag lead profiles enable`. It adds
-  `chat:write.customize` to Lead's manifest. Slack then asks for a reinstall
-  to grant the new scope, which a person does. Until then, Lead proposes
+  profiles, a person runs `tag chief-of-tag profiles enable`. It adds
+  `chat:write.customize` to Chief-of-Tag's manifest. Slack then asks for a reinstall
+  to grant the new scope, which a person does. Until then, Chief-of-Tag proposes
   nothing.
 - A person can convert an app Tag to a profile later with
   `tag NAME profile convert`, which leaves the old Slack app in place
@@ -130,10 +130,10 @@ the app, not the profile.
 ## Trade-offs
 
 - **No @mention per profile.** People type the name instead. Slack
-  autocomplete doesn't help, and a typo goes to Lead, which routes it. A
+  autocomplete doesn't help, and a typo goes to Chief-of-Tag, which routes it. A
   profile can't be paged with a Slack notification by mention, and other apps
   can't trigger one.
-- **Slack actions are not a per-profile boundary.** Lead's bot token is the
+- **Slack actions are not a per-profile boundary.** Chief-of-Tag's bot token is the
   only token, and ADR 0001 already says backends inherit it. Any profile's
   backend can post as any name, read any channel the app is in, or call any
   method the token allows. Per-profile channel lists, allowed users and name
@@ -143,8 +143,8 @@ the app, not the profile.
   before.
 - **Slack shows one app.** Slack's audit logs, analytics, app settings and
   channel membership count one app. Every profile can post in every channel
-  Lead is in. A profile's channel list limits only where it answers.
-- **One connection and one process.** Lead's bridge serves every profile, so
+  Chief-of-Tag is in. A profile's channel list limits only where it answers.
+- **One connection and one process.** Chief-of-Tag's bridge serves every profile, so
   restarting or stopping it stops them all. `tag NAME stop` on a profile
   turns off its runs; it doesn't stop a process. Runs keep their own backend
   process per request, so concurrency limits stay per profile.
@@ -163,16 +163,16 @@ the app, not the profile.
    every post helper accepts, and the `profile-messages` record. Move
    `bot_id` own-message checks to that record.
 3. **Message dispatch.** Add the name parser, `thread-owners`, and dispatch in
-   Lead's bridge: named profile, owner of the thread, else Lead. Run each
+   Chief-of-Tag's bridge: named profile, owner of the thread, else Chief-of-Tag. Run each
    profile's backend with that profile's home, settings and sessions.
 4. **In-process routing and handoffs.** Teach `route` and `ask` between
    profiles to start runs directly. Add profile IDs to the records and
    attribute status, activity and approvals.
-5. **Creation.** Point Lead's proposal flow at `tag add --profile`. Take the
+5. **Creation.** Point Chief-of-Tag's proposal flow at `tag add --profile`. Take the
    service-account, Slack CLI and `apps.manifest.create` paths out of the
    approval flow. Either drop that code from #238 or keep it behind
    `tag add` for app Tags (open question below).
-6. **Enable and convert.** `tag lead profiles enable` (manifest scope plus
+6. **Enable and convert.** `tag chief-of-tag profiles enable` (manifest scope plus
    reinstall step for a person) and `tag NAME profile convert`.
 7. **Docs and Tag.app.** Update ADR 0011's status, the handoffs reference,
    CLI and app-protocol docs, CHANGELOG, and the Details tab's profile view
@@ -189,5 +189,3 @@ name) wait for an explicit go-ahead.
   keep it for creating app Tags from Tag.app?
 - Should a custom picture upload go to a Tag-hosted public URL, or stay
   URL-only?
-- Name: the code calls the role Lead; #232 and this change say Chief of
-  Staff.

@@ -1,7 +1,7 @@
 """Which Slack CLI sign-in Tag uses, kept apart from this computer's default.
 
 The Slack CLI keeps its sign-ins in a system config folder (``~/.slack`` by
-default). Tags that Lead creates are owned by a service account, so
+default). Tags that Chief-of-Tag creates are owned by a service account, so
 Slack apps don't belong to one person. That account signs in to its own
 folder, passed to every Slack CLI command with ``--config-dir``, so it never
 replaces the operator's own sign-in.
@@ -28,8 +28,8 @@ def flags() -> list[str]:
 
 
 def service_account_dir(installation_root: Path, values: dict[str, str] | None = None) -> Path:
-    """The service account's own Slack CLI folder; ``OPENTAG_LEAD_SLACK_CONFIG`` overrides it."""
-    override = (values or {}).get("OPENTAG_LEAD_SLACK_CONFIG", "").strip()
+    """The service account's own Slack CLI folder; ``OPENTAG_CHIEF_SLACK_CONFIG`` overrides it."""
+    override = (values or {}).get("OPENTAG_CHIEF_SLACK_CONFIG", "").strip()
     if override and Path(override).is_absolute():
         return Path(override)
     return installation_root.expanduser().absolute() / "shared/slack/service-account"

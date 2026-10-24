@@ -45,13 +45,13 @@ export interface TagRow {
   default_effort?: string | null;
   /** The channels the Tag answers in; `name` is null until Tag has recorded it. */
   channels?: { id: string; name: string | null }[];
-  /** The one Tag that routes requests and alone creates Tags (capability lead). */
-  lead?: boolean;
-  /** Whether Lead created this Tag. */
-  created_by_lead?: boolean;
+  /** The one Tag that routes requests and alone creates Tags (capability chief). */
+  chief_of_tag?: boolean;
+  /** Whether Chief-of-Tag created this Tag. */
+  created_by_chief?: boolean;
 }
 
-export const LEAD = "Lead";
+export const CHIEF_OF_TAG = "Chief-of-Tag";
 
 /** A setup that stopped before any Slack app existed; there is nothing worth resuming. */
 export const isDraft = (row: TagRow) => status(row) === "setup" && row.has_app === false;

@@ -1,6 +1,6 @@
 """Create an approved Tag by driving ``tag add --json``, as Tag.app does.
 
-Only Lead's bridge calls this, after a person approves the proposal
+Only Chief-of-Tag's bridge calls this, after a person approves the proposal
 in Slack. The driver answers setup's questions from the proposal. When setup
 needs something only a person can do, such as an admin approving the install,
 the driver saves progress and returns that one step. ``resume`` continues the
@@ -31,10 +31,10 @@ from typing import Any, Callable
 
 try:
     import slack_cli_config
-    import tag_lead
+    import tag_chief
     from tag_memory import write_document
 except ImportError:
-    from scripts import slack_cli_config, tag_lead
+    from scripts import slack_cli_config, tag_chief
     from scripts.tag_memory import write_document
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -46,11 +46,11 @@ HUMAN_STEPS = {
     "app_install": ("Slack needs a workspace admin to approve installing *{name}*. Ask an admin to approve "
                     "the request in Slack (Manage apps → Requests), then press *Check again*."),
     "slack_login": ("The Tag service account isn't signed in to Slack on this computer. Run "
-                    "`tag lead sign-in` once, then press *Check again*."),
+                    "`tag chief-of-tag sign-in` once, then press *Check again*."),
     "service_account": ("The Tag service account isn't signed in to Slack on this computer. Run "
-                        "`tag lead sign-in` once, then press *Check again*."),
+                        "`tag chief-of-tag sign-in` once, then press *Check again*."),
     "workspace": ("The Tag service account isn't signed in to this workspace. Run "
-                  "`tag lead sign-in` and choose this workspace, then press *Check again*."),
+                  "`tag chief-of-tag sign-in` and choose this workspace, then press *Check again*."),
     "org_workspace": ("The service account signed in to a Slack organization. Finish choosing the workspace in "
                       "Tag.app or with `tag {tag} setup`, then press *Check again*."),
     "ai_connection": ("No AI connection is ready for *{name}*. Connect one in Tag.app Settings or with "
@@ -185,28 +185,28 @@ def step_message(step: str, proposal: dict[str, Any], tag: str | None, prompt: s
     return template.format(name=proposal["name"], tag=tag or "NAME", prompt=prompt)
 
 
-def create(root: Path, record: dict[str, Any], *, lead_values: dict[str, str],
+def create(root: Path, record: dict[str, Any], *, chief_values: dict[str, str],
            on_tag: Callable[[str], None], run: Callable[..., dict[str, Any]] = drive,
            finish: Callable[[Path, str, dict[str, Any]], list[str]] | None = None,
            fallback: "ConfigTokenFallback | None" = None) -> Outcome:
     """Create the Tag for an approved proposal, or continue one that waited for a person."""
     proposal = record["proposal"]
-    if tag_lead.lead_id(root) != record.get("lead"):
-        raise tag_lead.LeadRefused(f"Only {tag_lead.ROLE_NAME} can create Tags. Nothing was created.")
+    if tag_chief.chief_id(root) != record.get("chief"):
+        raise tag_chief.ChiefRefused(f"Only {tag_chief.ROLE_NAME} can create Tags. Nothing was created.")
     tag = record.get("tag")
     if tag and setup_complete(root, tag):
         # A person finished setup in Tag.app or the CLI after the fallback; just start it.
         notes = (finish or finish_tag)(root, tag, {**proposal, "requester": record.get("requester")})
         return Outcome("created", tag, f"Created *{proposal['name']}*. Mention it directly, or ask me and I'll route to it.",
                        notes=notes)
-    sign_in = lead_values.get("OPENTAG_LEAD_SLACK_SIGN_IN", "")
-    folder = slack_cli_config.service_account_dir(root, lead_values)
+    sign_in = chief_values.get("OPENTAG_CHIEF_SLACK_SIGN_IN", "")
+    folder = slack_cli_config.service_account_dir(root, chief_values)
     if not sign_in:
         fallback = fallback or ConfigTokenFallback(folder)
         if not tag and fallback.available():
-            return fallback.create(root, proposal, lead_values, on_tag=on_tag)
+            return fallback.create(root, proposal, chief_values, on_tag=on_tag)
         return Outcome("waiting_on_slack", tag, step_message("service_account", proposal, tag), "service_account")
-    model = proposal.get("model") or lead_values.get("OPENTAG_DEFAULT_MODEL", "")
+    model = proposal.get("model") or chief_values.get("OPENTAG_DEFAULT_MODEL", "")
     answers = Answers(proposal, sign_in=sign_in, model=model, resume=bool(tag))
     environment = setup_environment(root, folder)
     with tempfile.TemporaryDirectory(prefix="tag-create-") as directory:
@@ -214,7 +214,7 @@ def create(root: Path, record: dict[str, Any], *, lead_values: dict[str, str],
             command = tag_cli(tag, "setup", "--json")
         else:
             preset = {"OPENTAG_BOT_NAME": proposal["name"], "OPENTAG_BOT_DESCRIPTION": proposal["description"],
-                      "SLACK_ALLOWED_USER_IDS": lead_values.get("SLACK_ALLOWED_USER_IDS", ""),
+                      "SLACK_ALLOWED_USER_IDS": chief_values.get("SLACK_ALLOWED_USER_IDS", ""),
                       slack_cli_config.TAG_SETTING: str(folder)}
             if model:
                 preset["OPENTAG_DEFAULT_MODEL"] = model
@@ -260,7 +260,7 @@ def finish_tag(root: Path, tag: str, proposal: dict[str, Any], *,
     """Record, keep running and start a new Tag, and hand over its starting routines."""
     call = call or (lambda command: subprocess.run(command, capture_output=True, text=True, check=False,
                                                     env={**os.environ, "TAG_HOME": str(root)}, timeout=300))
-    tag_lead.record_created(root, tag)
+    tag_chief.record_created(root, tag)
     notes = []
     call(tag_cli("autostart", "keep", tag, "--json"))
     started = call(tag_cli(tag, "start", "--json"))
@@ -307,7 +307,7 @@ def save_routines(root: Path, tag: str, proposal: dict[str, Any]) -> str:
         from scripts import tag_instances
     home = tag_instances.resolve(root, tag).home
     routines = routine_definitions(proposal)
-    write_document(home / ROUTINES_FILE, {"schema_version": 1, "source": "lead",
+    write_document(home / ROUTINES_FILE, {"schema_version": 1, "source": "chief-of-tag",
                                           "approved_by": proposal.get("requester"), "routines": routines})
     return f"Its {len(routines)} starting routine(s) are saved and are set up when routines are available."
 
@@ -329,7 +329,7 @@ class ConfigTokenFallback:
     """``apps.manifest.create`` with an app configuration token that is rotated before it expires.
 
     A person creates the first token pair at api.slack.com/apps and saves it
-    with ``tag lead config-token``. Access tokens last 12 hours;
+    with ``tag chief-of-tag config-token``. Access tokens last 12 hours;
     each refresh token works once, so the new pair is saved before it is used.
     """
 
@@ -365,18 +365,18 @@ class ConfigTokenFallback:
         rotated = self.api("tooling.tokens.rotate", "", {"refresh_token": str(record["refresh_token"])})
         if not rotated.get("ok") or not rotated.get("token") or not rotated.get("refresh_token"):
             raise RuntimeError(f"Slack didn't renew the app configuration token ({rotated.get('error', 'unknown')}). "
-                               "Save a new one with tag lead config-token.")
+                               "Save a new one with tag chief-of-tag config-token.")
         self.save(str(rotated["token"]), str(rotated["refresh_token"]), float(rotated.get("exp") or self.clock() + 43200))
         return str(rotated["token"])
 
-    def create(self, root: Path, proposal: dict[str, Any], lead_values: dict[str, str], *,
+    def create(self, root: Path, proposal: dict[str, Any], chief_values: dict[str, str], *,
                on_tag: Callable[[str], None]) -> Outcome:
         try:
             import slack_app_create, tag_config, tag_instances
         except ImportError:
             from scripts import slack_app_create, tag_config, tag_instances
         manifest = slack_app_create.manifest_for(proposal["name"], description=proposal["description"],
-                                                 enterprise=bool(lead_values.get("SLACK_ENTERPRISE_ID")))
+                                                 enterprise=bool(chief_values.get("SLACK_ENTERPRISE_ID")))
         created = self.api("apps.manifest.create", self.token(), {"manifest": json.dumps(manifest)})
         app_id = created.get("app_id")
         if not created.get("ok") or not isinstance(app_id, str):
@@ -391,9 +391,9 @@ class ConfigTokenFallback:
         initialize_instance(context.home)
         tag_config.update_config(context.home / "config/settings.json", {key: value for key, value in {
             "OPENTAG_BOT_NAME": proposal["name"], "OPENTAG_BOT_DESCRIPTION": proposal["description"],
-            "OPENTAG_DEFAULT_MODEL": proposal.get("model") or lead_values.get("OPENTAG_DEFAULT_MODEL", ""),
-            "SLACK_ALLOWED_USER_IDS": lead_values.get("SLACK_ALLOWED_USER_IDS", ""),
-            "SLACK_TEAM_ID": lead_values.get("SLACK_TEAM_ID", ""), "SLACK_APP_ID": app_id,
+            "OPENTAG_DEFAULT_MODEL": proposal.get("model") or chief_values.get("OPENTAG_DEFAULT_MODEL", ""),
+            "SLACK_ALLOWED_USER_IDS": chief_values.get("SLACK_ALLOWED_USER_IDS", ""),
+            "SLACK_TEAM_ID": chief_values.get("SLACK_TEAM_ID", ""), "SLACK_APP_ID": app_id,
         }.items() if value})
         link = created.get("oauth_authorize_url")
         install = f"<{link}|install it>" if isinstance(link, str) and link.startswith("https://") else (

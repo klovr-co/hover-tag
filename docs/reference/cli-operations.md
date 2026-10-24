@@ -152,41 +152,41 @@ begin with `tag inspect --json` to inspect what is already configured.
 Slack runtime agents load the runtime contract; Tag does not bundle an admin
 skill into their workspace.
 
-## Lead
+## Chief-of-Tag
 
-One Tag per installation is Lead
-([ADR 0011](../adr/0011-lead-tag.md)). Mention it with new, unclear or
+One Tag per installation is Chief-of-Tag
+([ADR 0011](../adr/0011-chief-of-tag.md)). Mention it with new, unclear or
 cross-lane work. It routes each request to one owner Tag, which answers in the
 same thread itself. It is the only Tag that creates Tags, and a person
 approves each one in Slack. Upgrading gives the role to the main Tag; it never
 renames a Slack app.
 
 ```sh
-tag lead                    # Who holds the role, and the service account
-tag research lead set       # Move the role to another Tag
-tag lead sign-in            # Once: sign the service account in to Slack
+tag chief-of-tag                    # Who holds the role, and the service account
+tag research chief-of-tag set       # Move the role to another Tag
+tag chief-of-tag sign-in            # Once: sign the service account in to Slack
 ```
 
-`tag list` marks the Tag with ★ Lead, and Tag.app's Details shows
-the same role with **Make Lead**. A Tag's agent can't run these
+`tag list` marks the Tag with ★ Chief-of-Tag, and Tag.app's Details shows
+the same role with **Make Chief-of-Tag**. A Tag's agent can't run these
 commands, or `tag add`, `setup`, `reset`, `remove` or `abandon`, from inside a
 request.
 
 ### The service account
 
-Tags that Lead creates belong to a service account, not one person.
+Tags that Chief-of-Tag creates belong to a service account, not one person.
 The service account signs in to its own Slack CLI folder, so your own Slack
 CLI sign-in (`~/.slack`), which other scripts may depend on, is never
 replaced:
 
 1. Create the service account in the workspace and finish joining it.
-2. Run `tag lead sign-in` in a terminal. It runs
+2. Run `tag chief-of-tag sign-in` in a terminal. It runs
    `slack auth login --config-dir <TAG_HOME>/shared/slack/service-account`.
    Paste the `/slackauthticket` line in Slack while signed in as the service
    account, then enter the code. Tag saves the sign-in as
-   `OPENTAG_LEAD_SLACK_SIGN_IN` on Lead.
+   `OPENTAG_CHIEF_SLACK_SIGN_IN` on Chief-of-Tag.
 3. To keep the folder elsewhere, for example in a sandbox, first set
-   `tag NAME config set OPENTAG_LEAD_SLACK_CONFIG /absolute/folder`.
+   `tag NAME config set OPENTAG_CHIEF_SLACK_CONFIG /absolute/folder`.
 
 To check the folder by hand, add `--config-dir` to any Slack CLI command, for
 example `slack auth list --config-dir <folder>`. Never run plain
@@ -194,26 +194,26 @@ example `slack auth list --config-dir <folder>`. Never run plain
 
 Each created Tag keeps the folder in `OPENTAG_SLACK_CLI_CONFIG`, so renames,
 manifest updates and `tag NAME remove --delete-app` use the same account. The
-new Tag's owners are Lead's owners, not the service account.
+new Tag's owners are Chief-of-Tag's owners, not the service account.
 
 **Fallback.** Without the service account's sign-in, Tag can create the app
 with an app configuration token from api.slack.com/apps. Save the token and
 its refresh token with
-`printf '%s\n%s\n' TOKEN REFRESH | tag lead config-token --stdin`.
+`printf '%s\n%s\n' TOKEN REFRESH | tag chief-of-tag config-token --stdin`.
 Tag renews the token before each use. A person then installs the app from the
-link Lead posts and adds its app-level token in Tag.app or with
+link Chief-of-Tag posts and adds its app-level token in Tag.app or with
 `tag NAME setup`. Tokens never go in Slack.
 
 ### Limits
 
-- `OPENTAG_LEAD_MAX_TAGS` caps the Tags in the installation (default 10, the
+- `OPENTAG_CHIEF_MAX_TAGS` caps the Tags in the installation (default 10, the
   number of apps a free Slack workspace allows).
 - One proposal is open at a time.
-- A new Tag uses Lead's model unless the proposal names another.
-- A new Tag joins only channels Lead is in.
+- A new Tag uses Chief-of-Tag's model unless the proposal names another.
+- A new Tag joins only channels Chief-of-Tag is in.
 - A proposal expires after 60 minutes.
 - A proposal must name a real boundary: credentials, memory, parallel work,
-  identity, or a different owner or runtime. Otherwise Lead uses a
+  identity, or a different owner or runtime. Otherwise Chief-of-Tag uses a
   skill or a subagent.
 
 ## Removing a Tag in detail

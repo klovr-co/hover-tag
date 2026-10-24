@@ -73,7 +73,7 @@ try:
     from . import slack_channels
     from . import tag_memory
     from . import tag_handoff
-    from . import tag_lead
+    from . import tag_chief
 except ImportError:  # Direct script execution does not create a package context.
     import slack_identity
     from agent_models import (
@@ -116,7 +116,7 @@ except ImportError:  # Direct script execution does not create a package context
     import slack_channels
     import tag_memory
     import tag_handoff
-    import tag_lead
+    import tag_chief
 
 
 MENTION_RE = re.compile(r"<@[^>]+>")
@@ -3420,7 +3420,7 @@ def print_live_summary(backend: str, allowed_user_ids: frozenset[str]) -> None:
 
 
 def publish_roster_card(client: Any) -> None:
-    """Publish this Tag's public card, so Lead can route to it and it can escalate."""
+    """Publish this Tag's public card, so Chief-of-Tag can route to it and it can escalate."""
     root, own = os.getenv("TAG_HOME", ""), os.getenv("TAG_ID", "")
     if not root or not own:
         return
@@ -3435,7 +3435,7 @@ def publish_roster_card(client: Any) -> None:
     except (OSError, ValueError):
         names = {}
     ids = [item.strip() for item in os.getenv("SLACK_CHANNEL_IDS", "").split(",") if item.strip()]
-    tag_lead.save_card(
+    tag_chief.save_card(
         Path(root), own, user_id=str(identity.get("user_id") or ""), team=team,
         name=os.getenv("OPENTAG_BOT_NAME", "") or "Tag", description=os.getenv("OPENTAG_BOT_DESCRIPTION", ""),
         channels=[{"id": channel, "name": names.get(channel)} for channel in dict.fromkeys(ids)],
@@ -3446,7 +3446,7 @@ def publish_roster_card(client: Any) -> None:
 def tag_proposal_blocks(record: dict[str, Any], status: str | None = None) -> list[dict[str, Any]]:
     """The approval card for a proposed Tag; ``status`` replaces the buttons once it is decided."""
     blocks: list[dict[str, Any]] = [{"type": "section", "text": {"type": "mrkdwn",
-                                     "text": tag_lead.approval_text(record)[:2900]}}]
+                                     "text": tag_chief.approval_text(record)[:2900]}}]
     if status is not None:
         blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": status[:2900]}]})
         return blocks
@@ -3482,7 +3482,7 @@ def create_app(
     activity_store: ActivityStore | None = None,
     peers: list[tag_handoff.Peer] | None = None,
     handoff_store: tag_handoff.HandoffStore | None = None,
-    lead: tag_lead.LeadBridge | None = None,
+    chief: tag_chief.ChiefBridge | None = None,
 ) -> App:
     retire_slack_settings()
     if max_timeout is None:
@@ -3525,13 +3525,13 @@ def create_app(
             peers = tag_handoff.parse_peers(os.getenv("OPENTAG_PEER_TAGS", ""))
         except ValueError as exc:
             raise RuntimeError(f"OPENTAG_PEER_TAGS is invalid: {exc}") from None
-    lead = lead if lead is not None else tag_lead.LeadBridge.from_environment()
+    chief = chief if chief is not None else tag_chief.ChiefBridge.from_environment()
 
     def current_peers() -> list[tag_handoff.Peer]:
-        """Configured peers, plus the installation's Tags: every lane for Lead, else Lead."""
+        """Configured peers, plus the installation's Tags: every lane for Chief-of-Tag, else Chief-of-Tag."""
         found = list(peers)
-        if lead is not None:
-            cards = lead.lanes() if lead.is_lead() else [card for card in [lead.lead_card()] if card]
+        if chief is not None:
+            cards = chief.lanes() if chief.is_chief() else [card for card in [chief.chief_card()] if card]
             known = {peer.user_id for peer in found}
             found += [tag_handoff.Peer(card.name, card.user_id) for card in cards if card.user_id not in known]
         return found
@@ -4324,10 +4324,10 @@ def create_app(
         requester: str, question: str, request: dict[str, Any],
     ) -> None:
         targets = [target for target in request["targets"] if target.get("user_id") in current_peer_ids()]
-        if lead is not None and lead.is_lead():
-            targets = []  # Lead routes to one owner; it never collects answers.
-        elif lead is not None and (escalation := lead.lead_card()) is not None:
-            # With a Lead, asking is escalation only: one judgment call, to Lead.
+        if chief is not None and chief.is_chief():
+            targets = []  # Chief-of-Tag routes to one owner; it never collects answers.
+        elif chief is not None and (escalation := chief.chief_card()) is not None:
+            # With a Chief-of-Tag, asking is escalation only: one judgment call, to Chief-of-Tag.
             targets = [target for target in targets if target.get("user_id") == escalation.user_id][:1]
         if not targets:
             return
@@ -4394,10 +4394,10 @@ def create_app(
                 target=combine_handoff, args=(record, client, logger),
                 name=f"tag-handoff-{record['id']}", daemon=True,
             ).start()
-        if lead is not None:
+        if chief is not None:
             expire_proposals(client, logger)
 
-    # Lead: route to one owner, and create Tags a person approves ------------
+    # Chief-of-Tag: route to one owner, and create Tags a person approves ------------
 
     def post_in_thread(client: Any, logger: Any, channel: str, thread_ts: str, text: str,
                        blocks: list[dict[str, Any]] | None = None) -> dict[str, Any] | None:
@@ -4405,16 +4405,16 @@ def create_app(
             return client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=text, unfurl_links=False,
                                            unfurl_media=False, **({"blocks": blocks} if blocks else {}))
         except Exception as exc:  # noqa: BLE001 - the caller's state is already saved
-            logger.warning("Could not post a Lead update: %s", exc)
+            logger.warning("Could not post a Chief-of-Tag update: %s", exc)
             return None
 
     def start_route(client: Any, logger: Any, channel: str, thread_ts: str, requester: str,
                     request: dict[str, Any]) -> None:
         """Hand this thread to one owner Tag. Its own reply answers the person; nothing is combined."""
-        if lead is None or not lead.is_lead():
-            post_in_thread(client, logger, channel, thread_ts, "Only Lead routes requests, so I kept this one.")
+        if chief is None or not chief.is_chief():
+            post_in_thread(client, logger, channel, thread_ts, "Only Chief-of-Tag routes requests, so I kept this one.")
             return
-        owner = next((card for card in lead.lanes() if card.user_id == request["target"]["user_id"]), None)
+        owner = next((card for card in chief.lanes() if card.user_id == request["target"]["user_id"]), None)
         if owner is None:
             post_in_thread(client, logger, channel, thread_ts,
                            f"{request['target']['name']} isn't a Tag I can route to, so nothing was handed over.")
@@ -4429,14 +4429,14 @@ def create_app(
         posted = post_in_thread(client, logger, channel, thread_ts, tag_handoff.route_text(
             route_id, {"user_id": owner.user_id}, reason, requester))
         if posted is not None:
-            lead.save_route(route_id, channel=channel, thread_ts=thread_ts, owner=owner, requester=requester)
+            chief.save_route(route_id, channel=channel, thread_ts=thread_ts, owner=owner, requester=requester)
 
     def accept_route(event: dict[str, Any], body: dict[str, Any], client: Any, logger: Any,
                      route: re.Match[str], sender: str) -> None:
-        """Take ownership of a thread Lead routed here, and answer the person in it."""
-        coordinator = lead.lead_card() if lead is not None else None
+        """Take ownership of a thread Chief-of-Tag routed here, and answer the person in it."""
+        coordinator = chief.chief_card() if chief is not None else None
         if coordinator is None or sender != coordinator.user_id or not event.get("thread_ts"):
-            logger.info("Ignoring a route from %s, which is not Lead", sender or "(unknown)")
+            logger.info("Ignoring a route from %s, which is not Chief-of-Tag", sender or "(unknown)")
             return
         route_id, requester = route.groups()
         with handled_peer_lock:
@@ -4457,23 +4457,23 @@ def create_app(
     def start_proposal(client: Any, logger: Any, team: str, channel: str, thread_ts: str, requester: str,
                        proposal: dict[str, Any]) -> None:
         """Post a proposed Tag for the requester to approve. Nothing reaches Slack before that."""
-        if lead is None or not lead.is_lead():
+        if chief is None or not chief.is_chief():
             post_in_thread(client, logger, channel, thread_ts,
-                           "Only Lead can create Tags. Nothing was created; ask Lead.")
+                           "Only Chief-of-Tag can create Tags. Nothing was created; ask Chief-of-Tag.")
             return
         try:
-            clean = lead.check(proposal, channel)
-        except tag_lead.LeadRefused as exc:
+            clean = chief.check(proposal, channel)
+        except tag_chief.ChiefRefused as exc:
             post_in_thread(client, logger, channel, thread_ts, f"I can't propose that Tag: {exc}")
             return
-        record = lead.proposals.create(proposal=clean, lead=lead.own_id, team=team, channel=channel,
+        record = chief.proposals.create(proposal=clean, chief=chief.own_id, team=team, channel=channel,
                                         thread_ts=thread_ts, requester=requester)
         posted = post_in_thread(client, logger, channel, thread_ts,
                                 f"Proposed new Tag: {clean['name']}", tag_proposal_blocks(record))
         if posted is None:
-            lead.proposals.transition(record["id"], {"pending"}, "failed", note="card_not_posted")
+            chief.proposals.transition(record["id"], {"pending"}, "failed", note="card_not_posted")
             return
-        lead.proposals.set_fields(record["id"], card_ts=posted.get("ts"))
+        chief.proposals.set_fields(record["id"], card_ts=posted.get("ts"))
 
     def update_card(client: Any, logger: Any, record: dict[str, Any], status: str) -> None:
         if not record.get("card_ts"):
@@ -4485,24 +4485,24 @@ def create_app(
             logger.warning("Could not update the Tag proposal card %s: %s", record["id"], exc)
 
     def run_creation(proposal_id: str, client: Any, logger: Any) -> None:
-        record = lead.proposals.transition(proposal_id, {"approved", "waiting_on_slack"}, "creating")
+        record = chief.proposals.transition(proposal_id, {"approved", "waiting_on_slack"}, "creating")
         if record is None:
             return  # Someone else is already creating it, or it was decided.
         try:
-            outcome = lead.create(record, on_tag=lambda tag: lead.proposals.set_fields(proposal_id, tag=tag))
-        except tag_lead.LeadRefused as exc:
-            lead.proposals.transition(proposal_id, {"creating"}, "refused", note=str(exc))
+            outcome = chief.create(record, on_tag=lambda tag: chief.proposals.set_fields(proposal_id, tag=tag))
+        except tag_chief.ChiefRefused as exc:
+            chief.proposals.transition(proposal_id, {"creating"}, "refused", note=str(exc))
             post_in_thread(client, logger, record["channel"], record["thread_ts"], str(exc))
             return
         except Exception as exc:  # noqa: BLE001 - report instead of leaving it creating
             logger.warning("Could not create Tag for proposal %s: %s", proposal_id, exc)
-            lead.proposals.transition(proposal_id, {"creating"}, "waiting_on_slack", step="error")
+            chief.proposals.transition(proposal_id, {"creating"}, "waiting_on_slack", step="error")
             text = (f"Creating {record['proposal']['name']} stopped before it finished. Progress is saved; "
                     "press Check again to continue.")
             post_in_thread(client, logger, record["channel"], record["thread_ts"], text,
                            tag_creation_step_blocks(record, text))
             return
-        lead.proposals.transition(proposal_id, {"creating"}, outcome.state, tag=outcome.tag, step=outcome.step)
+        chief.proposals.transition(proposal_id, {"creating"}, outcome.state, tag=outcome.tag, step=outcome.step)
         text = " ".join([outcome.message, *outcome.notes])
         blocks = tag_creation_step_blocks(record, text) if outcome.state == "waiting_on_slack" else None
         post_in_thread(client, logger, record["channel"], record["thread_ts"], text, blocks)
@@ -4510,15 +4510,15 @@ def create_app(
     recovered = threading.Event()
 
     def expire_proposals(client: Any, logger: Any) -> None:
-        for record in lead.proposals.claim_expired():
-            if record.get("lead") == lead.own_id:
+        for record in chief.proposals.claim_expired():
+            if record.get("chief") == chief.own_id:
                 update_card(client, logger, record, "This request expired. Nothing was created.")
-        if recovered.is_set() or not lead.is_lead():
+        if recovered.is_set() or not chief.is_chief():
             return
         # Only on the first scan after startup: a creation in flight now is never "interrupted".
         recovered.set()
-        for record in lead.proposals.interrupted():
-            if record.get("lead") != lead.own_id:
+        for record in chief.proposals.interrupted():
+            if record.get("chief") != chief.own_id:
                 continue
             text = (f"Tag restarted while creating {record['proposal']['name']}. Progress is saved; "
                     "press Check again to continue.")
@@ -4536,7 +4536,7 @@ def create_app(
         try:
             action = body["actions"][0]
             proposal_id = json.loads(action["value"])["proposal"]
-            record = lead.proposals.get(proposal_id) if lead is not None else None
+            record = chief.proposals.get(proposal_id) if chief is not None else None
         except (KeyError, IndexError, TypeError, ValueError):
             record, action = None, {}
         if record is None or record.get("channel") != channel:
@@ -4550,19 +4550,19 @@ def create_app(
             return
         action_id = action.get("action_id")
         if action_id == TAG_CREATE_REJECT_ACTION_ID:
-            if decided := lead.proposals.transition(proposal_id, {"pending"}, "rejected"):
+            if decided := chief.proposals.transition(proposal_id, {"pending"}, "rejected"):
                 update_card(client, logger, decided, f"Rejected by <@{user_id}>. Nothing was created.")
             return
-        if not lead.is_lead() or record.get("lead") != lead.own_id:
-            if decided := lead.proposals.transition(proposal_id, {"pending", "waiting_on_slack"}, "refused"):
-                update_card(client, logger, decided, "This Tag is no longer Lead, so nothing was created.")
+        if not chief.is_chief() or record.get("chief") != chief.own_id:
+            if decided := chief.proposals.transition(proposal_id, {"pending", "waiting_on_slack"}, "refused"):
+                update_card(client, logger, decided, "This Tag is no longer Chief-of-Tag, so nothing was created.")
             return
         if action_id == TAG_CREATE_APPROVE_ACTION_ID:
             if float(record.get("expires_at") or 0) <= time.time():
-                if decided := lead.proposals.transition(proposal_id, {"pending"}, "expired"):
+                if decided := chief.proposals.transition(proposal_id, {"pending"}, "expired"):
                     update_card(client, logger, decided, "This request expired. Nothing was created.")
                 return
-            decided = lead.proposals.transition(proposal_id, {"pending"}, "approved", note=f"approved by {user_id}")
+            decided = chief.proposals.transition(proposal_id, {"pending"}, "approved", note=f"approved by {user_id}")
             if decided is None:
                 return
             update_card(client, logger, decided, f"Approved by <@{user_id}>. Creating {decided['proposal']['name']}…")
@@ -4681,8 +4681,8 @@ def create_app(
             return
         team = body.get("team_id") or event.get("team") or ""
         question = strip_mention(event.get("text", ""))
-        if lead is not None and handoff_depth == 0 and not direct_message and lead.is_lead():
-            if routed := lead.route_for_thread(channel, thread_ts):
+        if chief is not None and handoff_depth == 0 and not direct_message and chief.is_chief():
+            if routed := chief.route_for_thread(channel, thread_ts):
                 question = f"{tag_handoff.routed_note(routed['owner_name'])}\n\n{question}"
         configured_team = os.getenv("SLACK_TEAM_ID", "").strip()
         policy_team = team if not configured_team or configured_team == team else ""
@@ -4822,7 +4822,7 @@ def create_app(
         memory_receipts = tag_temp_dir() / f"memory-receipts-{uuid.uuid4().hex}.jsonl"
         handoff_requests = (
             tag_temp_dir() / f"handoff-request-{uuid.uuid4().hex}.jsonl"
-            if (current_peer_ids() or (lead is not None and lead.is_lead()))
+            if (current_peer_ids() or (chief is not None and chief.is_chief()))
             and handoff_depth == 0 and not direct_message
             else None
         )
@@ -5462,7 +5462,7 @@ def main() -> None:
                 try:
                     publish_roster_card(app.client)
                 except Exception as exc:  # noqa: BLE001 - routing waits for the next try
-                    app.logger.warning("Could not publish this Tag's card for Lead: %s", exc)
+                    app.logger.warning("Could not publish this Tag's card for Chief-of-Tag: %s", exc)
             if time.monotonic() >= next_handoff_check:
                 next_handoff_check = time.monotonic() + 30
                 try:
