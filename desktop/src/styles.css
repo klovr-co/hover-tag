@@ -312,6 +312,14 @@ button.opt:hover:not(:disabled) { background: var(--fill); }
 @keyframes spin { to { transform: rotate(360deg); } }
 .err-line { color: var(--red); display: flex; gap: 6px; align-items: flex-start; font-size: 13.5px; line-height: 1.4; }
 .err-line svg { flex: none; margin-top: 2px; }
+.err-line .err-text { flex: 1; }
+.err-x { flex: none; display: grid; place-items: center; width: 22px; height: 22px; margin: -2px -4px 0 0; padding: 0; border: 0; border-radius: 6px;
+  background: transparent; color: inherit; opacity: .6; cursor: pointer; transition: opacity .15s var(--ease), background-color .15s var(--ease), transform .15s var(--ease); }
+.err-x svg { margin: 0; }
+.err-x:hover, .err-x:focus-visible { opacity: 1; background: color-mix(in srgb, currentColor 12%, transparent); }
+.err-x:active { transform: scale(.96); }
+.err-line.leaving { pointer-events: none; animation: err-out .16s var(--ease) forwards; }
+@keyframes err-out { to { opacity: 0; transform: translateY(-3px); } }
 
 .empty { text-align: center; padding: 22px 24px 26px; display: flex; flex-direction: column; align-items: center; gap: 6px; }
 .empty img { width: 100%; max-width: 400px; image-rendering: pixelated; margin-bottom: 6px; }
@@ -1135,6 +1143,7 @@ button.list-item:hover { background: var(--fill); }
   .sl-msg.working > div > p { animation: none; background: none; color: inherit; }
   .desc-line.marquee { text-overflow: ellipsis; -webkit-mask: none; mask: none; }
   .desc-line.marquee > span, .r.click:hover .desc-line.marquee > span, .r.click:focus-visible .desc-line.marquee > span { display: inline; transform: none; transition: none; }
+  .err-x:active { transform: none; }
   *, *::before, *::after { animation-duration: 0s !important; transition-duration: 0s !important; }
   .tnode img { animation: none !important; }
   .slk .veil { animation: none !important; opacity: 1; }

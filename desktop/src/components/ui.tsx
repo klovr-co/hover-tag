@@ -274,8 +274,13 @@ export function fitText(el: HTMLTextAreaElement | null) {
   el.style.height = `${el.scrollHeight + el.offsetHeight - el.clientHeight}px`;
 }
 
-export function ErrorLine({ children }: { children: ReactNode }) {
-  return <div className="err-line selectable" role="alert"><Icon name="warn" />{children}</div>;
+export function ErrorLine({ children, onDismiss, leaving = false }: { children: ReactNode; onDismiss?: () => void; leaving?: boolean }) {
+  return (
+    <div className={leaving ? "err-line selectable leaving" : "err-line selectable"} role="alert">
+      <Icon name="warn" /><span className="err-text">{children}</span>
+      {onDismiss && <button className="err-x" aria-label="Dismiss" title="Dismiss" onClick={onDismiss}><Icon name="close" size={12} /></button>}
+    </div>
+  );
 }
 
 /** A short message at the bottom of the window. */

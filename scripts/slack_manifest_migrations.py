@@ -23,8 +23,10 @@ try:
     import slack_channels
     import slack_credentials
     import tag_config as settings
+    import tag_credentials
 except ImportError:
     from scripts import slack_identity, slack_channels, slack_app_create, slack_credentials, tag_config as settings
+    from scripts import tag_credentials
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -472,7 +474,7 @@ def _reconcile(home: Path, config_path: Path, values: dict[str, str], receipt: d
             if result.returncode and _NOT_INSTALLED in f"{result.stdout}{result.stderr}":
                 # Slack only syncs settings for an installed app. Reinstall it with its
                 # current settings through the credential handoff, then sync again.
-                settings.update_config(config_path, _receive(project, team_id, app_id, enterprise_id))
+                _save_credentials(home, config_path, _receive(project, team_id, app_id, enterprise_id))
                 progress["refreshed"] = True
                 result = _run(sync, cwd=migration_project)
             if result.returncode:
@@ -483,7 +485,7 @@ def _reconcile(home: Path, config_path: Path, values: dict[str, str], receipt: d
     # The credential handoff refreshes the installation itself. It captures
     # output and closes stdin, so background upgrades never wait for input.
     credentials = _receive(project, team_id, app_id, enterprise_id)
-    settings.update_config(config_path, credentials)
+    _save_credentials(home, config_path, credentials)
     progress["refreshed"] = True
     granted = granted_bot_scopes(credentials["SLACK_BOT_TOKEN"])
     progress["granted"] = granted
@@ -496,6 +498,46 @@ def _reconcile(home: Path, config_path: Path, values: dict[str, str], receipt: d
     pending = OPTIONAL_BOT_SCOPES - granted
     _save_receipt(marker, receipt, pending,
                   ("Slack reinstalled the app without " + ", ".join(sorted(pending))) if pending else "")
+    return True
+
+
+def _save_credentials(home: Path, config_path: Path, credentials: dict[str, str]) -> None:
+    """Save fresh tokens, and the history credential too when it was a copy of the bot token.
+
+    Setup uses the bot token for Slack history unless the person gives another
+    credential. A reinstall revokes the old bot token, so that copy must follow it.
+    """
+    changes = dict(credentials)
+    current = settings.read_config(config_path)
+    if current.get("MFS_SLACK_TOKEN") and current.get("MFS_SLACK_TOKEN") == current.get("SLACK_BOT_TOKEN"):
+        tag_credentials.write_slack_history(home, credentials["SLACK_BOT_TOKEN"])
+        changes["MFS_SLACK_TOKEN"] = credentials["SLACK_BOT_TOKEN"]
+    settings.update_config(config_path, changes)
+
+
+def repair_history_credential(home: Path, config_path: Path, values: dict[str, str]) -> bool:
+    """Replace a history credential left behind by an earlier reinstall.
+
+    Before the history credential followed bot token renewals, a reinstall left
+    it holding the revoked bot token. When it is a bot token Slack rejects and
+    the current bot token works, use the current one. Returns whether it changed.
+    """
+    history, bot = values.get("MFS_SLACK_TOKEN", ""), values.get("SLACK_BOT_TOKEN", "")
+    if not history.startswith("xoxb-") or not bot or history == bot:
+        return False
+    try:
+        granted_bot_scopes(history)
+        return False
+    except BotTokenRejected:
+        pass
+    except RuntimeError:
+        return False  # Slack couldn't say; leave the person's credential alone.
+    try:
+        granted_bot_scopes(bot)
+    except RuntimeError:
+        return False
+    tag_credentials.write_slack_history(home, bot)
+    settings.update_config(config_path, {"MFS_SLACK_TOKEN": bot})
     return True
 
 
