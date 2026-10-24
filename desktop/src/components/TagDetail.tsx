@@ -391,7 +391,7 @@ function RemoveTag({ tags, row, say }: { tags: Tags; row: TagRow; say: (text: st
   if (step === "idle") return <button className="link bad" onClick={() => setStep("choose")}>Remove this Tag…</button>;
   if (step === "choose") {
     return (
-      <div className="notice" style={{ marginTop: 8 }}>
+      <div key="choose" className="notice" style={{ marginTop: 8 }}>
         <div style={{ flex: 1 }}>
           <div className="t">Remove {name}?</div>
           <div className="d">It stops, and its files are set aside in a backup. Its Slack app stays in Slack.</div>
@@ -406,7 +406,7 @@ function RemoveTag({ tags, row, say }: { tags: Tags; row: TagRow; say: (text: st
     );
   }
   return (
-    <div className="notice" style={{ marginTop: 8 }}>
+    <div key="delete" className="notice bad" style={{ marginTop: 8 }}>
       <div style={{ flex: 1 }}>
         <div className="t">Permanently delete this Slack app?</div>
         <dl className="sl-kv">
@@ -420,7 +420,7 @@ function RemoveTag({ tags, row, say }: { tags: Tags; row: TagRow; say: (text: st
       </div>
       <div className="act">
         <button className="p-btn quiet sm" onClick={() => { setTyped(""); setStep("choose"); }}>Back</button>
-        <button className="p-btn soft sm" disabled={busy || typed !== appId}
+        <button className="p-btn danger sm" disabled={busy || typed !== appId}
           onClick={() => void tags.remove(row, appId).then((ok) => done(ok, `Deleted the Slack app and removed ${name}.`))}>Delete app and remove</button>
       </div>
     </div>

@@ -1236,3 +1236,18 @@ button.list-item:hover { background: var(--fill); }
 }
 :where(:root[data-theme="dark"]) .segc button[aria-selected="true"] { background: rgba(255, 255, 255, .14); }
 .tab-dot { display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: 50%; background: var(--link); vertical-align: middle; }
+
+/* Removing a Tag from the centered setup screen: the confirmation reads left-aligned at a comfortable width. */
+.sl-empty:has(> .notice) { max-width: min(460px, 100%); width: 100%; box-sizing: border-box; padding: 16px; }
+/* The removal panel is the task at hand: the setup screen steps aside so it stands alone and fits the pane. */
+.sl-empty:has(> .notice) > :not(.notice) { display: none; }
+.sl-empty > .notice { animation: rise2 .24s var(--ease); }
+.sl-empty > .notice .act { flex-wrap: wrap; justify-content: flex-end; }
+.sl-empty > .notice .act > .link { order: -1; flex-basis: 100%; text-align: left; white-space: nowrap; margin: 0 0 2px; padding-left: 0; padding-right: 0; }
+.sl-empty > .notice.bad .act { flex-direction: column-reverse; align-items: stretch; gap: 6px; }
+.sl-empty > .notice.bad .act > .p-btn { justify-content: center; }
+.p-btn.danger { background: var(--red); border: 1px solid color-mix(in srgb, var(--red) 80%, black); color: #fff; }
+.p-btn.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--red) 88%, black); }
+.sl-empty > .notice { align-self: stretch; box-sizing: border-box; min-width: 0; text-align: left; margin-bottom: 16px; }
+.notice .sl-kv { grid-template-columns: max-content minmax(0, 1fr); column-gap: 16px; row-gap: 6px; font-size: 13.5px; padding: 8px 0 6px; }
+.notice .sl-kv dd { column-gap: 6px; row-gap: 0; }
