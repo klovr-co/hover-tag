@@ -134,9 +134,11 @@ class OpenTagSetupTests(unittest.TestCase):
             for index, body in enumerate(opentag_setup.WATERDROP_BODIES)
         }
 
+        # Metal is a cool silver: nearly neutral, leaning blue rather than pink.
         for key in ("E", "P"):
             with self.subTest(element="metal", palette_key=key):
-                self.assertLessEqual(max(palettes["metal"][key]) - min(palettes["metal"][key]), 20)
+                self.assertLessEqual(max(palettes["metal"][key]) - min(palettes["metal"][key]), 24)
+                self.assertEqual(palettes["metal"][key][2], max(palettes["metal"][key]))
         for element, dominant_channel in (("wood", 1), ("water", 2), ("fire", 0)):
             for key in ("E", "P"):
                 with self.subTest(element=element, palette_key=key):

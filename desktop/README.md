@@ -46,11 +46,10 @@ icon formats with `uv run scripts/app-icons.py` (requires
 [uv](https://docs.astral.sh/uv/)). The script preserves the macOS tile padding
 and regenerates PNG, ICNS, and ICO assets from the shared branding artwork.
 The menu bar derives a monochrome avatar from the TUI's pixel map in
-`scripts/tag_mascot.py`, preserving its silhouette, narrow eyes, and tiny smile.
+`scripts/tag_mascot.json`, preserving its silhouette, narrow eyes, and tiny smile.
 An outline means no Tags are online; a filled silhouette means at least one is
 online. macOS template tinting adapts it to light, dark, and selected menu bars.
-Regenerate the four tray assets with `node scripts/tray-icons.mjs` (requires
-Python 3). They display at 18 points on macOS with 36px assets for Retina
+Regenerate the four tray assets with `node scripts/tray-icons.mjs`. They display at 18 points on macOS with 36px assets for Retina
 displays. The TUI retains its colored pixel map.
 These are bundled visual assets; the CLI and agent backends require no
 corresponding changes or migrations.

@@ -5394,12 +5394,15 @@ def main() -> None:
 
     allowed_user_ids = configured_slack_user_ids()
     session_journal = SlackSessionJournal(slack_session_journal_path())
+    activity_store = ActivityStore()
+    activity_store.publish_now()  # Nothing is running yet, whatever a previous bridge left.
     app = create_app(
         args.backend,
         args.timeout,
         allowed_user_ids,
         max_timeout=args.max_timeout,
         session_journal=session_journal,
+        activity_store=activity_store,
     )
     print_live_summary(args.backend, allowed_user_ids)
     app_token = require_env("SLACK_APP_TOKEN")
