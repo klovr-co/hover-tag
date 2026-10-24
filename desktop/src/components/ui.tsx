@@ -46,6 +46,7 @@ const PATHS: Record<string, ReactNode> = {
   share: <path d="M12 3v12M7 8l5-5 5 5M5 13v7h14v-7" />,
   chevdown: <path d="M6 9l6 6 6-6" />,
   close: <path d="M6 6l12 12M18 6 6 18" />,
+  more: <><circle cx="5" cy="12" r="1.7" fill="currentColor" stroke="none" /><circle cx="12" cy="12" r="1.7" fill="currentColor" stroke="none" /><circle cx="19" cy="12" r="1.7" fill="currentColor" stroke="none" /></>,
 };
 const FILLED = new Set(["play", "stop", "spark"]);
 const WEIGHT: Record<string, number> = { plus: 2.6, check: 3, bang: 3.4, up: 2.6, left: 2.6, right: 2.6, arrow: 2.4, updown: 2.4, chevdown: 3 };

@@ -478,6 +478,7 @@ flowchart LR
 | See choices | The Tag → **Details** → **Model** lists models from connected accounts, grouped by agent. Each account's list is saved, so it shows at once, and is updated in the background once a day. | `tag NAME settings ai models` (add `--refresh` to read the lists again) |
 | Choose a model | Pick one. The agent follows the model. | `tag NAME settings ai model claude:opus` |
 | Choose a thinking level | Pick one the model offers, or the model's default. | `tag NAME settings ai effort high` (or `default`) |
+| Choose permissions | **Permissions**: Codex's sandbox, approval policy and approvals reviewer, and Claude's mode, each set on its own. | `tag NAME settings ai permissions claude-mode=acceptEdits` |
 | Apply | The app restarts a running Tag. | Add `--restart`, or confirm when asked. |
 | Connect accounts | Settings → AI → **AI connections** | `tag settings ai sign-in codex\|claude` |
 
@@ -576,6 +577,9 @@ flowchart LR
 | Switch the search model later | Settings → AI → **Memory** → **Search model** | `tag memory embedding local\|custom`; `tag settings` → Workspace and memory |
 | Rename or describe | Details → **Rename** / description **Edit** | `tag NAME rename "Name"`, `tag NAME describe "…"` |
 | Change the model | Details → **Model** | `tag NAME settings ai model VALUE` |
+| Change what it may do without asking | Details → **Permissions** | `tag NAME settings ai permissions codex-sandbox=… claude-mode=…` |
+| Allow or block something for one Tag | Details → **Permissions** → **Rules** | `tag NAME settings ai permissions block codex 'git push'` |
+| Allow or block something for every Tag | Settings → AI connections → **Rules for all Tags** | `tag settings ai rules block codex 'git push'` |
 | Update | Settings → **Updates** → **Update Tag** updates the app and the runtime together; choose Stable, Beta, or Alpha | `tag upgrade`; `tag upgrade --channel beta` |
 | Remove a Tag | Details → **Remove this Tag…** (keeps the Slack app) | `tag NAME remove` |
 | Also delete the Slack app | **Also delete the Slack app…**, then type the App ID | `tag NAME remove --delete-app --confirm-app A…` |

@@ -5,7 +5,7 @@ import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState }
 import { bridge, type AppInfo, type Bridge } from "./lib/bridge";
 import { compatibility, isDraft, parseJSON, parseList, status, type Group, type VersionInfo } from "./lib/protocol";
 import { setEmbedding } from "./lib/memory";
-import { checkUpdate, initialUpdate, installUpdate, updateReducer } from "./lib/updates";
+import { checkUpdate, initialUpdate, installUpdate, updateReducer, useDeferral } from "./lib/updates";
 import { useTags } from "./lib/tags";
 import { TrackContext, useTelemetry, type AppEvents } from "./lib/telemetry";
 import { useWatch } from "./lib/watch";
@@ -16,7 +16,7 @@ import { Connect } from "./components/Connect";
 import { Home } from "./components/Home";
 import { QuickAdd } from "./components/QuickAdd";
 import { Installing, NO_CUSTOM, Starting, Welcome, type InstallChoice } from "./components/Install";
-import { AI_CAPABILITY, API_CAPABILITY, SAVED_MODELS_CAPABILITY, SHARED_AI_CAPABILITY } from "./lib/ai";
+import { AI_CAPABILITY, API_CAPABILITY, RULES_CAPABILITY, SAVED_MODELS_CAPABILITY, SHARED_AI_CAPABILITY } from "./lib/ai";
 import { AISettings } from "./components/AISettings";
 import { MemorySettings, Settings, type SettingsTab } from "./components/Settings";
 import { TagDetail, type Tab as TagTab } from "./components/TagDetail";
@@ -45,6 +45,8 @@ const SCREEN_EVENT: Partial<Record<Screen["name"], AppEvents["app_screen_viewed"
 const NEEDED = ["list", "setup-jsonl"];
 /** How often Tag checks for a complete product update. */
 const APP_UPDATE_HOURS = 6;
+/** While a release waits for its Tag.app builds, look again soon so the banner appears as soon as it can. */
+const PREPARING_RECHECK_MINUTES = 5;
 const DEVELOPMENT_UPDATES = "Updates are off in development builds. Use the installed Tag.app to update.";
 /** Window widths: everyday screens, and Tag detail's Slack layout. */
 export const WIDTH = 520;
@@ -79,6 +81,7 @@ export function App() {
   const [outdated, setOutdated] = useState(false);
   const [capabilities, setCapabilities] = useState<string[]>([]);
   const [update, dispatchUpdate] = useReducer(updateReducer, initialUpdate);
+  const deferral = useDeferral();
   const [toast, setToast] = useState<string | null>(null);
   const installed = !!info?.cli && !["loading", "welcome", "installing"].includes(screen.name);
   const tags = useTags(api, installed);
@@ -178,6 +181,15 @@ export function App() {
     const timer = setInterval(() => void check(), APP_UPDATE_HOURS * 3600 * 1000);
     return () => clearInterval(timer);
   }, [api, info?.cli, info?.development, screen.name, check]);
+
+  // Keep looking while the last good check found a release still being prepared, including during
+  // a recheck and after one fails; only a successful check without it (or an available update) stops this.
+  const preparing = ["current", "checking", "idle"].includes(update.status) && !!update.update?.preparing;
+  useEffect(() => {
+    if (!preparing || screen.name !== "home") return;
+    const timer = setInterval(() => void check(), PREPARING_RECHECK_MINUTES * 60 * 1000);
+    return () => clearInterval(timer);
+  }, [preparing, screen.name, check]);
 
   const runUpdate = useCallback(async () => {
     if (!api || !info || info.development) return;
@@ -299,7 +311,7 @@ export function App() {
           {screen.name === "home" && !tags.loaded && <Starting error={tags.error} retry={() => void tags.refresh()} />}
           {screen.name === "home" && tags.loaded && (
             <Home api={api} tags={tags} reports={watch.reports} problems={watch.problems} activity={watch.activity}
-              firstName={info.firstName ?? null} update={update} outdated={outdated} runUpdate={() => void runUpdate()}
+              firstName={info.firstName ?? null} update={update} outdated={outdated} runUpdate={() => void runUpdate()} defer={deferral}
               add={add} addTo={addTo} usageNote={telemetry.announced} seenUsageNote={sawOnHome}
               finishSetup={(row) => setScreen({ name: "connect", args: [row.id, "setup"] })}
               open={(row) => setScreen({ name: "tag", id: row.id })}
@@ -324,7 +336,7 @@ export function App() {
           )}
           {screen.name === "memory" && <MemorySettings api={api} close={() => setScreen({ name: "settings", tab: "ai" })} />}
           {screen.name === "ai" && (
-            <AISettings api={api} tags={tags} apiConnections={capabilities.includes(API_CAPABILITY)} close={() => { watch.recheck(); setScreen(screen.resume ? { name: "connect", args: screen.resume } : { name: "settings", tab: "ai" }); }} />
+            <AISettings api={api} tags={tags} apiConnections={capabilities.includes(API_CAPABILITY)} rules={capabilities.includes(RULES_CAPABILITY)} close={() => { watch.recheck(); setScreen(screen.resume ? { name: "connect", args: screen.resume } : { name: "settings", tab: "ai" }); }} />
           )}
           {screen.name === "tag" && (
             <TagDetail key={screen.opened ?? 0} api={api} tags={tags} initial={screen.id} initialTab={screen.tab} problems={watch.problems} back={home} add={add}

@@ -10,12 +10,13 @@ import { ActivityDetails, StepsToggle } from "./ActivityDetails";
 import { ActivityArtifacts } from "./ActivityArtifacts";
 import { ActivityTokens } from "./ActivityTokens";
 import { useModelChoice } from "../lib/model";
+import { usePermissions } from "../lib/permissions";
 import { collapseRepeats, groups, parseJSON, problemHelp, problemText, status, title, type Group, type TagRow } from "../lib/protocol";
 import type { Tags } from "../lib/tags";
 import teamArt from "../assets/art/tag-team.png";
 import keyArt from "../assets/art/tag-key.png";
 import { workingFolder } from "./Home";
-import { ModelMenu, ModelWarning, SaveBar, ThinkingRow } from "./AI";
+import { modelSaveText, ModelMenu, ModelWarning, PermissionsRow, SaveBar, ThinkingRow } from "./AI";
 import { Avatar, dragWindow, ErrorLine, fitText, Icon, Primary, Switch, useCopied, workspaceColor, WorkspaceMark, source, tagIcon } from "./ui";
 
 export type Selection = { kind: "tag"; id: string } | { kind: "channel"; id: string };
@@ -390,7 +391,7 @@ function RemoveTag({ tags, row, say }: { tags: Tags; row: TagRow; say: (text: st
   if (step === "idle") return <button className="link bad" onClick={() => setStep("choose")}>Remove this Tag…</button>;
   if (step === "choose") {
     return (
-      <div className="notice" style={{ marginTop: 8 }}>
+      <div key="choose" className="notice" style={{ marginTop: 8 }}>
         <div style={{ flex: 1 }}>
           <div className="t">Remove {name}?</div>
           <div className="d">It stops, and its files are set aside in a backup. Its Slack app stays in Slack.</div>
@@ -405,7 +406,7 @@ function RemoveTag({ tags, row, say }: { tags: Tags; row: TagRow; say: (text: st
     );
   }
   return (
-    <div className="notice" style={{ marginTop: 8 }}>
+    <div key="delete" className="notice bad" style={{ marginTop: 8 }}>
       <div style={{ flex: 1 }}>
         <div className="t">Permanently delete this Slack app?</div>
         <dl className="sl-kv">
@@ -419,7 +420,7 @@ function RemoveTag({ tags, row, say }: { tags: Tags; row: TagRow; say: (text: st
       </div>
       <div className="act">
         <button className="p-btn quiet sm" onClick={() => { setTyped(""); setStep("choose"); }}>Back</button>
-        <button className="p-btn soft sm" disabled={busy || typed !== appId}
+        <button className="p-btn danger sm" disabled={busy || typed !== appId}
           onClick={() => void tags.remove(row, appId).then((ok) => done(ok, `Deleted the Slack app and removed ${name}.`))}>Delete app and remove</button>
       </div>
     </div>
@@ -602,6 +603,10 @@ function Details({ api, tags, row, copyLog, openAI, say, canDescribe, canRefresh
   const choice = useModelChoice(api, row.id, {
     onSaved: (text) => { void tags.refresh(); if (text) say(`${name} ${text}`); },
   });
+  const permissions = usePermissions(api, row.id, choice.report?.permissions, {
+    onSaved: (text) => { if (text) say(`${name} ${text}`); },
+    onRuleChanged: (action, rule) => say(`${{ allow: "Allowed", block: "Blocked", remove: "Removed" }[action]} ${rule} for ${name}. It applies from the next request.`),
+  });
   const [renaming, setRenaming] = useState(false);
   const [newName, setNewName] = useState(row.slack_name ?? "");
   const copyMention = useCopied();
@@ -682,11 +687,19 @@ function Details({ api, tags, row, copyLog, openAI, say, canDescribe, canRefresh
               <ModelWarning models={choice.models} value={choice.value} label={saved?.label ?? ""} tail="Pick another so new tasks don't fail." />
               <ThinkingRow entry={choice.entry} value={choice.level} onChange={choice.pickEffort} disabled={choice.save === "saving" || choice.save === "restarting"} />
               <p className="mcap">Applies to all requests to this Tag.</p>
-              <SaveBar choice={choice} tagName={name} running={running} />
+              <SaveBar choice={choice} what={modelSaveText(choice)} tagName={name} running={running} />
             </>
           )}
           {choice.error && <ErrorLine>{choice.error}</ErrorLine>}
         </dd>
+        {permissions.report && <>
+          <dt>Permissions</dt>
+          <dd className="mdd pdd">
+            <PermissionsRow choice={permissions} using={saved?.backend} disabled={permissions.save === "saving" || permissions.save === "restarting"} openSettings={openAI} />
+            <SaveBar choice={permissions} what="the new permissions" tagName={name} running={running} held={permissions.ruleBusy !== null} />
+            {permissions.error && <ErrorLine>{permissions.error}</ErrorLine>}
+          </dd>
+        </>}
       </dl>
       <hr className="sl-sep" />
       <dl className="sl-kv">

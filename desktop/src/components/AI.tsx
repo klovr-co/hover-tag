@@ -5,12 +5,14 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ACTION_LABEL, CLAUDE_SHARED_NOTE, CODEX_METHODS, isUrgent, primaryAction, statusLine,
-  findModel, type AIModels, type AIStatus, type Connection, type ModelEntry, type ModelGroup, type SignInState,
+  findModel, type AIModels, type AIStatus, type Connection, type ModelEntry, type ModelGroup, type PermissionRule, type SignInState,
 } from "../lib/ai";
 import { useNight } from "../lib/appearance";
-import { reducedMotion, useListMotion, usePresence } from "../lib/motion";
+import { reducedMotion, useFresh, useListMotion, usePresence } from "../lib/motion";
 import { effortLabel } from "../lib/home";
-import { choiceText, type ModelChoice } from "../lib/model";
+import { choiceText, type ModelChoice, type SaveState } from "../lib/model";
+import { optionsFor, savedValue, type PermissionsChoice, type RuleBackend, type Setting } from "../lib/permissions";
+import { RulesEditor } from "./Rules";
 import claude from "../assets/agents/claude.png";
 import codexDark from "../assets/agents/codex-dark.png";
 import codexLight from "../assets/agents/codex.png";
@@ -50,6 +52,36 @@ interface RowProps {
   open: (url: string) => void;
 }
 
+/** A ⋯ button that opens a short list of less common actions. */
+function MoreMenu({ label, items, disabled }: { label: string; items: { title: string; onClick: () => void }[]; disabled?: boolean }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: Event) => {
+      if (e instanceof KeyboardEvent ? e.key === "Escape" : !ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    window.addEventListener("mousedown", close);
+    window.addEventListener("keydown", close);
+    return () => { window.removeEventListener("mousedown", close); window.removeEventListener("keydown", close); };
+  }, [open]);
+  return (
+    <div className="more-wrap" ref={ref}>
+      <button className="p-btn quiet sm more-btn" aria-haspopup="menu" aria-expanded={open} aria-label={label}
+        disabled={disabled} onClick={() => setOpen(!open)}>
+        <Icon name="more" size={18} />
+      </button>
+      {open && (
+        <div className="menu" role="menu" aria-label={label}>
+          {items.map((item) => (
+            <button key={item.title} role="menuitem" onClick={() => { setOpen(false); item.onClick(); }}>{item.title}</button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** One agent: its own app icon, one status line, and the one thing to do next. */
 export function ConnectionRow({ connection: c, signIn, opened, busy, quiet, act, cancel, check, open }: RowProps) {
   const running = signIn?.backend === c.backend && !!signIn.step;
@@ -66,6 +98,11 @@ export function ConnectionRow({ connection: c, signIn, opened, busy, quiet, act,
   let tone = "";
   let line: ReactNode;
   let acts: ReactNode = null;
+  // Reconnect and Resume renew the saved account; this is the way to a different one.
+  const another = c.actions.includes("change_account")
+    ? <MoreMenu label={`More options for ${c.name}`} disabled={busy && !running}
+        items={[{ title: "Change account", onClick: () => run("change_account") }]} />
+    : null;
   if (running) {
     tone = "busy";
     line = <><span className="spin" />{signIn.text || "Waiting for your browser…"}</>;
@@ -73,23 +110,23 @@ export function ConnectionRow({ connection: c, signIn, opened, busy, quiet, act,
   } else if (failed) {
     tone = "bad";
     line = <><Icon name="warn" /><span>Sign-in didn't finish. {result?.error ?? ""}</span></>;
-    acts = button("ink", "Try again", () => run(c.state === "expired" ? "reconnect" : "sign_in"));
+    acts = <>{button("ink", "Try again", () => run(c.state === "expired" ? "reconnect" : "sign_in"))}{another}</>;
   } else switch (c.state) {
     case "connected":
       tone = "ok";
       line = <><i className="dot" /><b>Connected</b>{c.account && <span className="acct">· {c.account}</span>}</>;
-      if (c.actions.includes("change_account")) acts = button("soft", "Change account", () => run("change_account"));
+      acts = another;
       break;
     case "expired":
       tone = "warn";
       line = <><Icon name="warn" />Sign-in expired</>;
-      acts = button("ink", "Reconnect", () => run("reconnect"));
+      acts = <>{button("ink", "Reconnect", () => run("reconnect"))}{another}</>;
       break;
     case "limited":
       tone = "warn";
       line = <><Icon name="warn" />Usage limit reached</>;
       acts = <><button className="link" onClick={() => open("https://chatgpt.com/settings/usage")}>Review usage</button>
-        {button("soft", "Resume", () => run("resume"))}</>;
+        {button("soft", "Resume", () => run("resume"))}{another}</>;
       break;
     case "not_installed":
       line = <><i className="dot" />Not installed</>;
@@ -124,7 +161,8 @@ export function ChangeAccount({ connection, running, choose, cancel }: {
   connection: Connection; running: boolean;
   choose: (method?: string) => void; cancel: () => void;
 }) {
-  const [method, setMethod] = useState<string>("chatgpt");
+  // Start on the account Codex uses now, so changing it doesn't begin on the other option.
+  const [method, setMethod] = useState<string>(connection.method === "codex" ? "codex" : "chatgpt");
   const codex = connection.backend === "codex";
   const stops = running;
   const back = codex && method === "codex" && connection.method === "chatgpt";
@@ -277,21 +315,152 @@ export function ThinkingRow({ entry, value, onChange, disabled }: {
   );
 }
 
-/** Changing a default asks before restarting a running Tag. */
-export function SaveBar({ choice, tagName, running }: { choice: ModelChoice; tagName: string; running: boolean }) {
+const WARN = new Set(["danger-full-access", "bypassPermissions"]);
+
+/** Tag's reason it won't run with the saved value, while that's still the one shown. */
+const reasonFor = (choice: PermissionsChoice, setting: Setting) =>
+  choice.value(setting) === savedValue(choice.report!, setting) ? choice.report!.errors?.[setting] : undefined;
+/** A value Tag won't run with: one it reports as wrong, or one that isn't among the choices. */
+const invalid = (choice: PermissionsChoice, setting: Setting) => !!reasonFor(choice, setting) ||
+  !optionsFor(choice.report!, setting).some((o) => o.value === choice.value(setting));
+
+/** One setting: its name, the agent's own choices, and what the picked one means. */
+function PermissionSetting({ choice, setting, title, disabled }: {
+  choice: PermissionsChoice; setting: Setting; title: string; disabled?: boolean;
+}) {
+  const value = choice.value(setting);
+  const fresh = useFresh(value, 300);
+  const options = optionsFor(choice.report!, setting);
+  const picked = options.find((o) => o.value === value);
+  const reason = reasonFor(choice, setting);
+  const warn = WARN.has(value);
+  return (
+    <div className="think pset">
+      <span className="tlab">{title}</span>
+      {options.length > 4 ? (
+        // Too many to fit on one line, like Claude's modes: a menu instead.
+        <select className="field psel" aria-label={title} value={value} disabled={disabled} onChange={(e) => choice.pick(setting, e.target.value)}>
+          {!picked && <option value={value} disabled>{value}</option>}
+          {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+      ) : (
+        <div className="segc" role="radiogroup" aria-label={title}>
+          {options.map((o) => (
+            <button key={o.value} role="radio" aria-checked={value === o.value} disabled={disabled} onClick={() => choice.pick(setting, o.value)}>
+              {o.label}
+            </button>
+          ))}
+        </div>
+      )}
+      {picked && !reason ? (
+        <p key={picked.value} className={`${warn ? "mwarn" : "mcap"} pdet${fresh ? " fresh" : ""}`}>
+          {warn && <Icon name="warn" />}<span>{picked.detail}</span>
+        </p>
+      ) : (
+        // A saved value Tag doesn't know: the Tag won't run until one above is picked.
+        <p className="mwarn"><Icon name="warn" /><span>“{value}” isn't a valid choice, so the Tag won't run. Pick one above.
+          {reason && <span className="pwhy">{reason}</span>}</span></p>
+      )}
+    </div>
+  );
+}
+
+/** Rules for this Tag, folded into one line until you open them. */
+function TagRules({ choice, backend, disabled, openSettings }: {
+  choice: PermissionsChoice; backend: RuleBackend; disabled?: boolean; openSettings?: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rules = choice.report![backend].rules;
+  if (!rules) return null;
+  const count = (list: PermissionRule[] | null | undefined, what: string) =>
+    list === null || list === undefined ? `unreadable ${what}` : list.length ? `${list.length} ${what}` : "";
+  const summary = [count(rules.tag, "for this Tag"), count(rules.folder, "in its folder"), count(rules.all_tags, "for all Tags")]
+    .filter(Boolean).join(" · ") || "None yet";
+  const busyRule = choice.ruleBusy?.startsWith(`${backend}:`) ? choice.ruleBusy.slice(backend.length + 1) : null;
+  // Tag keeps Codex rules only in a Tag's own folder; in a folder of yours they'd change your own Codex too.
+  const yours = backend === "codex" && choice.report!.own_folder === false;
+  const blocked = yours && !!rules.all_tags?.some((r) => r.decision !== "allow");
+  return (
+    <div className="think pset">
+      <button className="psum" type="button" aria-expanded={open} aria-label={`${backend === "codex" ? "Codex" : "Claude"} rules: ${summary}`}
+        onClick={() => setOpen((v) => !v)}>
+        <b>Rules</b><span className="m">{summary}</span><span className="link">{open ? "Done" : "Edit"}<Icon name="chevdown" size={12} /></span>
+      </button>
+      {open && (
+        <div className="pmore">
+          {yours ? (
+            <p className={blocked ? "mwarn" : "mcap"}>{blocked && <Icon name="warn" />}<span>
+              This Tag works in a folder of yours, so Tag keeps no Codex rules for it: they'd change your own Codex there too.
+              {blocked && " Codex rules for all Tags block things, so this Tag won't run Codex until it has its own folder."}
+            </span></p>
+          ) : (
+            <RulesEditor backend={backend} own={rules.tag ?? null} busy={!!disabled || choice.ruleBusy !== null} busyRule={busyRule}
+              change={(action, rule) => choice.changeRule(backend, action, rule)}
+              inherited={[
+                { label: "in its folder", where: backend === "codex" ? ".codex/rules" : ".claude/settings.json", rules: rules.folder ?? null },
+                { label: "for all Tags", rules: rules.all_tags, where: openSettings
+                  ? <button className="link" type="button" onClick={openSettings}>Change them in Settings → AI connections</button>
+                  : "change them in Settings → AI connections" },
+                { label: "of your own", where: backend === "codex" ? "~/.codex/rules" : "~/.claude/settings.json", rules: rules.personal }]} />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const AGENTS = { codex: "Codex", claude: "Claude" } as const;
+
+/** The permissions of the agent the Tag's model runs on (`using`); every Slack request uses that
+ *  model, so the other agent's settings wait until the Tag switches to one of its models.
+ *  Without a saved model both show. Each setting uses the agent's own name; rules open on a click. */
+export function PermissionsRow({ choice, using, disabled, openSettings }: {
+  choice: PermissionsChoice; using?: string; disabled?: boolean; openSettings?: () => void;
+}) {
+  if (!choice.report) return null;
+  const shown = (["codex", "claude"] as const).filter((backend) => !using || using === backend);
+  return <>{shown.map((backend) => (
+    <section key={backend} className="pagent" aria-label={`${AGENTS[backend]} permissions`}>
+      <div className="phead"><AgentMark backend={backend} size={20} /><b>{AGENTS[backend]}</b></div>
+      {backend === "codex" ? <>
+        <PermissionSetting choice={choice} setting="codex-sandbox" title="Sandbox" disabled={disabled} />
+        <PermissionSetting choice={choice} setting="codex-approvals" title="Approval policy" disabled={disabled} />
+        {/* Never asks, so there is nothing to review, but Codex still won't start with a reviewer it doesn't know. */}
+        {(choice.value("codex-approvals") !== "never" || invalid(choice, "codex-reviewer")) &&
+          <PermissionSetting choice={choice} setting="codex-reviewer" title="Approvals reviewer" disabled={disabled} />}
+        <TagRules choice={choice} backend="codex" disabled={disabled} openSettings={openSettings} />
+      </> : <>
+        <PermissionSetting choice={choice} setting="claude-mode" title="Mode" disabled={disabled} />
+        <TagRules choice={choice} backend="claude" disabled={disabled} openSettings={openSettings} />
+      </>}
+    </section>
+  ))}</>;
+}
+
+type Saving = { save: SaveState; dirty: boolean; discard: () => void; commit: (restart: boolean) => Promise<void> };
+
+/** Changing a default asks before restarting a running Tag; `what` names the new choice. */
+export function SaveBar({ choice, what, tagName, running, held }: {
+  choice: Saving; what: string | null; tagName: string; running: boolean;
+  /** Something else is saving, like a rule; Save waits for it. */
+  held?: boolean;
+}) {
   if (choice.save === "restarting") {
     return <div className="savebar busy" role="status"><span className="t"><span className="spin" />Restarting {tagName}…</span></div>;
   }
   if (choice.save === "saved") {
     return <div className="savebar ok" role="status"><span className="t"><Icon name="check" size={12} />Saved. {tagName} uses it next time it starts.</span></div>;
   }
-  if (!choice.dirty || !choice.entry) return null;
+  if (!choice.dirty || !what) return null;
   const busy = choice.save === "saving";
   return (
     <div className="savebar">
-      <span className="t">{running ? `Restart ${tagName} to use ${choiceText(choice.entry.label, choice.level)}.` : `${tagName} isn't running, so nothing restarts.`}</span>
+      <span className="t">{running ? `Restart ${tagName} to use ${what}.` : `${tagName} isn't running, so nothing restarts.`}</span>
       <button className="p-btn quiet sm" disabled={busy} onClick={choice.discard}>Cancel</button>
-      <button className="p-btn ink sm" disabled={busy} onClick={() => void choice.commit(running)}>{running ? "Save and restart" : "Save"}</button>
+      <button className="p-btn ink sm" disabled={busy || held} onClick={() => void choice.commit(running)}>{running ? "Save and restart" : "Save"}</button>
     </div>
   );
 }
+
+/** The model's save bar: "Restart Maya's Tag to use Opus 5.5 · High thinking." */
+export const modelSaveText = (choice: ModelChoice) => choice.entry ? choiceText(choice.entry.label, choice.level) : null;

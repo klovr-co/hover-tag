@@ -229,7 +229,7 @@ class ClearAndCheckTests(ApiFixture):
     def test_the_tags_connection_row_says_it_uses_the_api(self) -> None:
         values = {"OPENTAG_CODEX_AUTH": "api", "OPENTAG_CODEX_API_KEY": KEY, "OPENTAG_CODEX_MODELS": "m",
                   "OPENTAG_CODEX_BASE_URL": "https://gateway.example.com/v1"}
-        item = {"backend": "codex", "name": "Codex", "state": "connected", "installed": True, "account": "ChatGPT sign-in",
+        item = {"backend": "codex", "name": "Codex", "state": "connected", "installed": True, "account": "Codex sign-in on this Mac",
                 "actions": ["change_account"], "detail": "", "shared": True}
         row = tag_ai.api_connection(item, values)
         self.assertEqual((row["state"], row["method"], row["account"], row["shared"], row["actions"]),

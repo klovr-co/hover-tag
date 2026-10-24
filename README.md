@@ -8,7 +8,7 @@
 
 <h1 align="center">Tag</h1>
 <p align="center">by <a href="https://www.hover.team/">Hover</a></p>
-<p align="center"><strong>Multiplayer AI, right in Slack.</strong></p>
+<p align="center"><strong>An AI team member, right in Slack.</strong></p>
 <p align="center">
   Powered by your Codex or Claude Code setup · Runs on a computer you control
 </p>
