@@ -6,6 +6,7 @@ import re
 import tempfile
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from scripts import tag_activity
@@ -54,6 +55,19 @@ class ActivityStoreTests(unittest.TestCase):
             self.assertEqual((first, "completed"), (now()["last"]["run_id"], now()["last"]["outcome"]))
             # A new bridge never inherits a crashed bridge's runs.
             ActivityStore(store.root).publish_now()
+            self.assertEqual([], now()["running"])
+
+    def test_a_finished_run_leaves_activity_now_even_when_its_record_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            store = ActivityStore(Path(raw) / "activity")
+            now = lambda: json.loads(store.now_path.read_text(encoding="utf-8"))
+            unwritable = store.create(team="T1", channel="C1", thread_ts="1.0", request_ts="1.0", requester="U1")
+            missing = store.create(team="T1", channel="C1", thread_ts="1.0", request_ts="2.0", requester="U1")
+            with mock.patch.object(store, "_write", side_effect=OSError("disk full")), self.assertRaises(OSError):
+                store.finish(unwritable, "completed")
+            self.assertEqual([missing], [run["run_id"] for run in now()["running"]])
+            (store.root / f"{missing}.json").unlink()
+            store.finish(missing, "completed")
             self.assertEqual([], now()["running"])
 
     def test_model_metadata_survives_reopen_for_both_backends(self):

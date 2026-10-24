@@ -307,20 +307,25 @@ class ActivityStore:
 
     def finish(self, run_id: str, outcome: str) -> None:
         with self.lock:
-            record = self.get(run_id)
-            if record is None or record["outcome"] != "running":
-                return
-            record["outcome"] = outcome if outcome in OUTCOMES - {"running"} else "failed"
-            record["finished_at"] = _timestamp()
-            for event in record["events"]:
-                if event["status"] == "running":
-                    event["status"] = "interrupted" if outcome == "interrupted" else "unknown"
-                    event["finished_at"] = record["finished_at"]
-            self._write(record)
-            self.live.pop(run_id, None)
-            self.last = {"run_id": run_id, "thread": thread_id(record),
-                         "outcome": record["outcome"], "at": record["finished_at"]}
-            self.publish_now()
+            # The run leaves activity-now.json even when its record is missing or can't be
+            # written, so Tag.app never shows it working forever.
+            was_live = self.live.pop(run_id, None) is not None
+            try:
+                record = self.get(run_id)
+                if record is None or record["outcome"] != "running":
+                    return
+                record["outcome"] = outcome if outcome in OUTCOMES - {"running"} else "failed"
+                record["finished_at"] = _timestamp()
+                for event in record["events"]:
+                    if event["status"] == "running":
+                        event["status"] = "interrupted" if outcome == "interrupted" else "unknown"
+                        event["finished_at"] = record["finished_at"]
+                self.last = {"run_id": run_id, "thread": thread_id(record),
+                             "outcome": record["outcome"], "at": record["finished_at"]}
+                self._write(record)
+            finally:
+                if was_live or (self.last or {}).get("run_id") == run_id:
+                    self.publish_now()
 
     def attach_error(self, run_id: str, reference: str) -> None:
         """Keep the exact failure association, including when a Slack request is retried."""

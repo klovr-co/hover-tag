@@ -258,13 +258,15 @@ button.opt:hover:not(:disabled) { background: var(--fill); }
 /* Buttons: the hero form's button, exactly */
 .p-btn {
   height: 36px; padding: 0 15px; border-radius: 7px; font-size: 15px; font-weight: 500; display: inline-flex; align-items: center; gap: 6px;
-  white-space: nowrap; transition: background .16s, opacity .16s;
+  white-space: nowrap; transition: transform .16s var(--ease), background .16s, opacity .16s;
 }
+.p-btn:active:not(:disabled) { transform: scale(.985); }
 .p-btn.ink {
   background: var(--primary-bg); color: var(--primary-fg); border: 1px solid #15394f;
   box-shadow: 0 2px 0 rgba(255, 255, 255, .16) inset, 0 2px 5px rgba(8, 45, 69, .25);
-  transition: background .2s ease;
+  transition: background .2s ease, transform .2s var(--ease);
 }
+.p-btn.ink:active:not(:disabled) { transition-duration: .06s; }
 .p-btn.ink:hover:not(:disabled) { background: var(--primary-hover); }
 @media (prefers-color-scheme: dark) {
 :where(:root:not([data-theme="light"])) .p-btn.ink { border-color: rgba(255, 255, 255, .42); box-shadow: 0 1px 0 rgba(255, 255, 255, .8) inset, 0 4px 12px rgba(0, 0, 0, .35); }
@@ -1123,7 +1125,7 @@ button.list-item:hover { background: var(--fill); }
 
 @media (prefers-reduced-motion: reduce) {
   .radio-dot::after, .model-choices .opt, .opt[aria-checked="true"] .radio-dot::after { transition: none; }
-  .model-choices .opt:active:not(:disabled) { transform: none; }
+  .model-choices .opt:active:not(:disabled), .p-btn:active:not(:disabled) { transform: none; }
   .pick-fields, .api-row.entering, .api-row.entering > img, .api-leave, .api-check, .api-models, .api-saved, .api-azure, .api-hint, .api-chip, .model-edit,
   .api-progress span:last-child,
   .flow-panel > .body > *, .confetti, .notice.info .bar, .usage-note, .avw2.rolling .pic, .track .tnode img,
