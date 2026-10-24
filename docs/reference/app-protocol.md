@@ -47,7 +47,7 @@ it shows is listed in `capabilities`; otherwise it offers to upgrade Tag.
 
 `tag list --json` returns `tags`, one object per Tag with `id`, `valid`,
 `state`, `slack_workspace`, `workspace_name`, `workspace_icon`, `slack_name`,
-`slack_app_id`, `slack_enterprise` (the organization's ID for a workspace in an Enterprise Grid organization, else `null`), `has_app`, `nickname`, `avatar`, `keep_running`, `main`, `description`, `default_model`,
+`slack_app_id`, `slack_enterprise` (the organization's ID for a workspace in an Enterprise Grid organization, else `null`), `has_app`, `nickname`, `avatar`, `picture`, `activity_now`, `keep_running`, `main`, `description`, `default_model`,
 `default_model_label`, `default_model_name`, `default_effort`, and `channels`. `state` is
 `running`, `stopped`, `not_configured`, `setup_incomplete`, `needs_attention`,
 `invalid_configuration`, or `invalid_tag`; treat unknown states as needing
@@ -84,6 +84,26 @@ Claude. The last good picture stays available offline. Until the first successfu
 sync, `avatar` uses the setup picture, or `null` if none exists. A changed picture
 gets a new local filename so apps reload it. `tag list` only reads this cache;
 it does not make network requests. Syncing never changes the Slack app's picture.
+
+`picture` is the picture setup gave the Tag in Slack: `{"kind": "waterdrop",
+"index": 42, "sprite": {...}}` for one of Tag's 960 waterdrops, `{"kind":
+"custom"}` for a picture someone uploaded, or `null` when Tag did not choose
+it (an existing Slack app keeps its own). `sprite` lets an app draw and animate
+the same drop: `element`, `background`, `palette` (a colour for every letter of
+the 28 × 34 map in `scripts/tag_mascot.json`; letters `B`–`G` are background),
+and `marks`, the look's decoration as `[column, row, cells wide, cells high,
+colour]` in map cells, painted in order. Someone can still change the app's
+picture in Slack itself, which Tag can't see; `avatar` shows that picture.
+
+`activity_now` is the path to the Tag's `activity-now.json`, which the running
+bridge replaces whenever a Slack request starts or finishes:
+`{"schema_version": 1, "updated_at": …, "running": [{"run_id", "thread",
+"started_at"}], "last": {"run_id", "thread", "outcome", "at"} | null}`. `thread`
+is the same opaque key as in `activity`, so runs of several Tags in one Slack
+thread share it. `outcome` is `completed`, `failed`, or `interrupted`. The file
+lists only runs the current bridge started and is reset when it starts. It may
+not exist yet; read it only while `state` is `running`. Apps can read this small
+file often instead of running `tag NAME logs --json`.
 
 `tag NAME logs --json` returns `services`, each service's recent log lines,
 and `activity`: up to 50 of the Tag's recent Slack requests, newest first.

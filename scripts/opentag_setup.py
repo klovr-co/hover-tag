@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import colorsys
 import getpass
 import hashlib
 import json
@@ -17,8 +16,6 @@ import struct
 import subprocess
 import sys
 import webbrowser
-import zlib
-from dataclasses import dataclass
 from pathlib import Path
 
 try:
@@ -52,7 +49,12 @@ try:
     import tag_credentials
     import tag_telemetry
     import tag_cli as lifecycle
-    from tag_mascot import PALETTE as MASCOT_PALETTE, PIXELS as MASCOT_PIXELS
+    from tag_waterdrop import (
+        DEFAULT_WATERDROP_ELEMENT, WATERDROP_APPROVED_BACKGROUNDS, WATERDROP_BACKGROUNDS, WATERDROP_BASE_COUNT,
+        WATERDROP_BODIES, WATERDROP_ELEMENT_RECIPE_COUNT, WATERDROP_HIGHLIGHTS, WATERDROP_RECIPE_COUNT,
+        WATERDROP_SIGNATURE_COUNT, WATERDROP_SIGNATURES, WaterdropBackground, WaterdropBody,
+        _waterdrop_palette, render_png, waterdrop_recipe,
+    )
 except ImportError:
     from scripts.tag_paths import (
         instance_home,
@@ -75,7 +77,12 @@ except ImportError:
     from scripts import tag_credentials
     from scripts import tag_telemetry
     from scripts import tag_cli as lifecycle
-    from scripts.tag_mascot import PALETTE as MASCOT_PALETTE, PIXELS as MASCOT_PIXELS
+    from scripts.tag_waterdrop import (
+        DEFAULT_WATERDROP_ELEMENT, WATERDROP_APPROVED_BACKGROUNDS, WATERDROP_BACKGROUNDS, WATERDROP_BASE_COUNT,
+        WATERDROP_BODIES, WATERDROP_ELEMENT_RECIPE_COUNT, WATERDROP_HIGHLIGHTS, WATERDROP_RECIPE_COUNT,
+        WATERDROP_SIGNATURE_COUNT, WATERDROP_SIGNATURES, WaterdropBackground, WaterdropBody,
+        _waterdrop_palette, render_png, waterdrop_recipe,
+    )
 
 
 REQUIRED_APP_SETTINGS = {
@@ -683,74 +690,6 @@ def suggested_assistant_name() -> str:
     return suggestion if len(suggestion) <= 35 else settings.DEFAULTS["OPENTAG_BOT_NAME"]
 
 
-@dataclass(frozen=True)
-class WaterdropBody:
-    name: str
-    hue: float
-    saturation: float = 1.0
-
-
-@dataclass(frozen=True)
-class WaterdropBackground:
-    name: str
-    hue_offset: float
-    saturation: float
-    value: float
-
-
-WATERDROP_BODIES = (
-    WaterdropBody("metal", 0, .08),
-    WaterdropBody("wood", .36, .86),
-    WaterdropBody("water", .57),
-    WaterdropBody("fire", .01, .92),
-    WaterdropBody("soil", .13, .92),
-)
-DEFAULT_WATERDROP_ELEMENT = "water"
-WATERDROP_BACKGROUNDS = (
-    WaterdropBackground("mist", 0, .18, .96),
-    WaterdropBackground("haze", -.02, .12, .99),
-    WaterdropBackground("veil", .02, .08, 1.0),
-)
-WATERDROP_APPROVED_BACKGROUNDS = {
-    element: ("mist", "haze", "veil")
-    for element in ("metal", "wood", "water", "fire", "soil")
-}
-WATERDROP_HIGHLIGHTS = ("glass", "pearl", "glow", "frost")
-WATERDROP_SIGNATURES = (
-    "clean", "rose-cheeks", "peach-cheeks", "freckles",
-    "north-sparkle", "east-sparkle", "west-sparkle", "twin-sparkles",
-    "left-bubble", "right-bubbles", "twin-bubbles", "bubble-trail",
-    "gold-crown", "side-stripe", "twin-dots", "heart-mark",
-)
-WATERDROP_BASE_COUNT = len(WATERDROP_BODIES) * 3 * len(WATERDROP_HIGHLIGHTS)
-WATERDROP_SIGNATURE_COUNT = len(WATERDROP_SIGNATURES)
-WATERDROP_RECIPE_COUNT = WATERDROP_BASE_COUNT * WATERDROP_SIGNATURE_COUNT
-WATERDROP_ELEMENT_RECIPE_COUNT = WATERDROP_RECIPE_COUNT // len(WATERDROP_BODIES)
-
-
-def waterdrop_recipe(seed: str, recipe_index: int | None = None) -> dict[str, object]:
-    """Choose one five-element waterdrop with a subtle, deterministic signature."""
-    if recipe_index is None:
-        recipe_index = int.from_bytes(hashlib.sha256(seed.encode("utf-8")).digest()[:8], "big")
-    identity_index = recipe_index % WATERDROP_RECIPE_COUNT
-    base_index = identity_index % WATERDROP_BASE_COUNT
-    signature_index = identity_index // WATERDROP_BASE_COUNT
-    body = WATERDROP_BODIES[base_index % len(WATERDROP_BODIES)]
-    background_slot = (base_index // len(WATERDROP_BODIES)) % 3
-    background_name = WATERDROP_APPROVED_BACKGROUNDS[body.name][background_slot]
-    background = next(item for item in WATERDROP_BACKGROUNDS if item.name == background_name)
-    highlight = WATERDROP_HIGHLIGHTS[base_index // (len(WATERDROP_BODIES) * 3)]
-    return {
-        "index": identity_index,
-        "base_index": base_index,
-        "signature_index": signature_index,
-        "body": body,
-        "background": background,
-        "highlight": highlight,
-        "signature": WATERDROP_SIGNATURES[signature_index],
-    }
-
-
 def _waterdrop_assignments(project: Path) -> tuple[Path, dict[str, object]]:
     assets = project / "assets"
     assets.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -868,49 +807,6 @@ def shuffled_waterdrop_index(current: int | None, occupied: set[int]) -> int:
     return random.SystemRandom().choice(candidates)
 
 
-def _rgb_bytes(hue: float, saturation: float, value: float) -> bytes:
-    red, green, blue = colorsys.hsv_to_rgb(hue % 1, max(0, min(1, saturation)), max(0, min(1, value)))
-    return bytes(round(channel * 255) for channel in (red, green, blue))
-
-
-def _body_color(value: str, body: WaterdropBody) -> bytes:
-    red, green, blue = (int(value[index:index + 2], 16) / 255 for index in (1, 3, 5))
-    original_hue, saturation, brightness = colorsys.rgb_to_hsv(red, green, blue)
-    base_hue = colorsys.rgb_to_hsv(0x20 / 255, 0xCA / 255, 0xFE / 255)[0]
-    hue_delta = ((original_hue - base_hue + .5) % 1) - .5
-    return _rgb_bytes(body.hue + hue_delta * .24, saturation * body.saturation, brightness)
-
-
-def _waterdrop_palette(recipe: dict[str, object]) -> dict[str, bytes]:
-    body = recipe["body"]
-    background = recipe["background"]
-    assert isinstance(body, WaterdropBody) and isinstance(background, WaterdropBackground)
-    background_color = _rgb_bytes(
-        body.hue + background.hue_offset,
-        background.saturation * body.saturation,
-        background.value,
-    )
-    palette = {
-        key: background_color if key in "BCDEFG" else _body_color(value, body)
-        for key, value in MASCOT_PALETTE.items()
-    }
-    highlight = recipe["highlight"]
-    if highlight == "glass":
-        palette["A"] = bytes((250, 253, 253))
-    elif highlight == "pearl":
-        palette["A"] = bytes((255, 247, 219))
-    elif highlight == "glow":
-        palette["A"] = _rgb_bytes(body.hue + .08, .18, 1)
-    else:
-        palette["A"] = _rgb_bytes(body.hue + .50, .12, .98)
-    return palette
-
-
-def _png_chunk(kind: bytes, payload: bytes) -> bytes:
-    checksum = zlib.crc32(kind + payload) & 0xFFFFFFFF
-    return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", checksum)
-
-
 def branded_profile_icon(
     project: Path,
     seed: str,
@@ -919,110 +815,9 @@ def branded_profile_icon(
     element: str = DEFAULT_WATERDROP_ELEMENT,
 ) -> Path:
     """Render one curated, deterministic Tag waterdrop identity as a Slack icon."""
-    width = height = 512
-    scale = 12
-    sprite_width, sprite_height = len(MASCOT_PIXELS[0]), len(MASCOT_PIXELS)
-    left = (width - sprite_width * scale) // 2
-    top = (height - sprite_height * scale) // 2
     if recipe_index is None:
         recipe_index = _assigned_waterdrop_index(project, seed, element)
-    recipe = waterdrop_recipe(seed, recipe_index)
-    palette = _waterdrop_palette(recipe)
-    background = palette["E"]
-    rows = []
-    for y in range(height):
-        source_y = (y - top) // scale
-        row = bytearray(background * width)
-        if 0 <= source_y < sprite_height:
-            for source_x, key in enumerate(MASCOT_PIXELS[source_y]):
-                start = left + source_x * scale
-                row[start * 3:(start + scale) * 3] = palette[key] * scale
-        rows.append(row)
-
-    def paint_cell(column: int, row: int, color: bytes, *, cells_wide: int = 1, cells_high: int = 1) -> None:
-        x_start, y_start = left + column * scale, top + row * scale
-        for pixel_y in range(max(0, y_start), min(height, y_start + cells_high * scale)):
-            start = max(0, x_start) * 3
-            end = min(width, x_start + cells_wide * scale) * 3
-            rows[pixel_y][start:end] = color * ((end - start) // 3)
-
-    body = recipe["body"]
-    assert isinstance(body, WaterdropBody)
-    signature = recipe["signature"]
-
-    def sparkle(column: int, row: int, color: bytes) -> None:
-        """Paint a four-cell-wide mark that survives Slack-size downsampling."""
-        paint_cell(column, row - 1, color, cells_wide=2)
-        paint_cell(column - 1, row, color, cells_wide=4, cells_high=2)
-        paint_cell(column, row + 2, color, cells_wide=2)
-
-    def bubble_mark(column: int, row: int) -> None:
-        """Paint a small diamond bubble with a readable white glint."""
-        paint_cell(column + 1, row, bubble, cells_wide=2)
-        paint_cell(column, row + 1, bubble, cells_wide=4, cells_high=2)
-        paint_cell(column + 1, row + 3, bubble, cells_wide=2)
-        paint_cell(column + 1, row + 1, palette["A"])
-
-    cheek = _rgb_bytes(body.hue + .38, .48, 1)
-    peach = _rgb_bytes(.04, .38, 1)
-    bubble = _rgb_bytes(body.hue + .04, .72, .96)
-    accent = _rgb_bytes(body.hue + .38, .78, .94)
-    gold = _rgb_bytes(.13, .88, 1)
-    if signature == "rose-cheeks":
-        paint_cell(5, 21, cheek, cells_wide=3, cells_high=2)
-        paint_cell(20, 21, cheek, cells_wide=3, cells_high=2)
-    elif signature == "peach-cheeks":
-        paint_cell(5, 21, peach, cells_wide=3, cells_high=2)
-        paint_cell(20, 21, peach, cells_wide=3, cells_high=2)
-    elif signature == "freckles":
-        for column, row in ((6, 21), (9, 22), (17, 22), (20, 21)):
-            paint_cell(column, row, cheek, cells_wide=2)
-    elif signature == "north-sparkle":
-        sparkle(24, 9, palette["A"])
-    elif signature == "east-sparkle":
-        sparkle(24, 16, palette["A"])
-    elif signature == "west-sparkle":
-        sparkle(2, 14, palette["A"])
-    elif signature == "twin-sparkles":
-        sparkle(2, 14, palette["A"])
-        sparkle(24, 9, palette["A"])
-    elif signature == "left-bubble":
-        bubble_mark(1, 11)
-    elif signature == "right-bubbles":
-        bubble_mark(23, 13)
-    elif signature == "twin-bubbles":
-        bubble_mark(1, 12)
-        bubble_mark(23, 14)
-    elif signature == "bubble-trail":
-        bubble_mark(1, 16)
-        paint_cell(3, 13, bubble, cells_wide=2, cells_high=2)
-        paint_cell(5, 10, bubble, cells_wide=2, cells_high=2)
-    elif signature == "gold-crown":
-        paint_cell(11, 13, gold, cells_wide=2, cells_high=3)
-        paint_cell(14, 12, gold, cells_wide=2, cells_high=4)
-        paint_cell(17, 13, gold, cells_wide=2, cells_high=3)
-        paint_cell(11, 16, gold, cells_wide=8, cells_high=2)
-    elif signature == "side-stripe":
-        paint_cell(3, 16, accent, cells_wide=3, cells_high=2)
-        paint_cell(4, 18, accent, cells_wide=4, cells_high=2)
-        paint_cell(5, 20, accent, cells_wide=4, cells_high=2)
-    elif signature == "twin-dots":
-        paint_cell(7, 14, gold, cells_wide=3, cells_high=3)
-        paint_cell(19, 16, accent, cells_wide=3, cells_high=3)
-    elif signature == "heart-mark":
-        paint_cell(16, 23, accent, cells_wide=2, cells_high=2)
-        paint_cell(19, 23, accent, cells_wide=2, cells_high=2)
-        paint_cell(16, 25, accent, cells_wide=5, cells_high=2)
-        paint_cell(17, 27, accent, cells_wide=3)
-        paint_cell(18, 28, accent)
-
-    filtered_rows = [b"\x00" + bytes(row) for row in rows]
-    png = (
-        b"\x89PNG\r\n\x1a\n"
-        + _png_chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
-        + _png_chunk(b"IDAT", zlib.compress(b"".join(filtered_rows), level=9))
-        + _png_chunk(b"IEND", b"")
-    )
+    png = render_png(waterdrop_recipe(seed, recipe_index))
     assets = project / "assets"
     assets.mkdir(parents=True, exist_ok=True, mode=0o700)
     temporary = assets / ".tag-profile.png.tmp"

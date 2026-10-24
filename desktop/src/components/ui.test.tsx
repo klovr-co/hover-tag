@@ -1,11 +1,40 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Avatar, ErrorLine, Sky, tagIcon } from "./ui";
+import { MoodContext } from "../lib/mood";
+import list from "../../../protocol/examples/list.json";
+import type { TagRow } from "../lib/protocol";
 
 const startDragging = vi.fn(() => Promise.resolve());
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ startDragging }) }));
 vi.mock("@tauri-apps/api/core", () => ({ convertFileSrc: (path: string) => `asset://localhost${path}` }));
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+
+describe("animated waterdrop", () => {
+  const maya = list.tags[0] as TagRow;
+  const mood = (container: HTMLElement) => container.querySelector("canvas")?.dataset.mood;
+
+  it("draws the waterdrop Tag gave itself, playing what the Tag is doing", () => {
+    const { container, rerender } = render(<Avatar row={maya} />);
+    expect(container.querySelector("img")).toBeNull();
+    expect(mood(container)).toBe("idle");
+    rerender(<Avatar row={{ ...maya, state: "stopped" }} />);
+    expect(mood(container)).toBe("off");
+    rerender(<MoodContext.Provider value={() => "work"}><Avatar row={maya} /></MoodContext.Provider>);
+    expect(mood(container)).toBe("work");
+    rerender(<MoodContext.Provider value={() => "work"}><Avatar row={maya} mood="idle" /></MoodContext.Provider>);
+    expect(mood(container)).toBe("idle");
+  });
+
+  it("keeps the picture for one someone uploaded or an existing app's own", () => {
+    for (const picture of [{ kind: "custom" }, null]) {
+      const { container } = render(<Avatar row={{ ...maya, picture }} />);
+      expect(container.querySelector("canvas")).toBeNull();
+      expect(container.querySelector("img")).not.toBeNull();
+      cleanup();
+    }
+  });
+});
 
 describe("Slack avatar", () => {
   it("loads a newly synced picture after falling back from a failed image", () => {

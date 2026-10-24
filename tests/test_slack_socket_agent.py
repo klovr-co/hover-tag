@@ -19,6 +19,7 @@ except ModuleNotFoundError:
     raise unittest.SkipTest("slack_bolt is installed by the Slack bridge runtime")
 
 from scripts import agent_models, slack_socket_agent
+from scripts.agent_activity import THINKING_LABEL
 from scripts.tag_error_reporting import ErrorReportStore, ReportOrigin, make_error_report
 from scripts.tag_activity import ActivityStore
 
@@ -3818,7 +3819,9 @@ class SlackAnswerStreamTests(unittest.TestCase):
         stream = slack_socket_agent.SlackAnswerStream(
             client, "C123", "1.23", "U123", "T123", MagicMock()
         )
-        labels = list(slack_socket_agent.PUBLIC_LABELS)[:slack_socket_agent.MAX_STREAM_TASKS + 1]
+        # Thinking keeps its own rows, and PUBLIC_LABELS is an unordered set, so leave it out of the tool labels.
+        tool_labels = sorted(slack_socket_agent.PUBLIC_LABELS - {THINKING_LABEL})
+        labels = tool_labels[:slack_socket_agent.MAX_STREAM_TASKS + 1]
         for index, label in enumerate(labels):
             stream.activity({"type": "activity_start", "activity_id": f"item-{index}", "label": label})
 

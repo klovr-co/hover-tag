@@ -499,7 +499,8 @@ function ActivityFeed({ api, rows, entries, hideErrors, hasMore, loading, loadOl
     const key = activityKey({ tag, item });
     return (
       <div className={item.kind === "working" ? "sl-msg working" : "sl-msg"}>
-        <Avatar row={row} size={34} badge={false} className="" />
+        {/* Only the request still running moves; past messages keep a still picture. */}
+        <Avatar row={row} size={34} badge={false} className="" mood={item.kind === "working" ? "work" : "idle"} still={item.kind !== "working"} />
         <div>
           <div className="who">{title(row)}<span>{clock(at)}</span>{item.model && <span title={`${item.backend ?? "Agent"} · ${item.model}${item.reasoning_effort ? ` · ${effortLabel(item.reasoning_effort)} thinking` : ""}`}>· {item.model_name || item.model}{item.reasoning_effort && ` ${effortShort(item.reasoning_effort)}`}</span>}
             {item.duration_seconds != null && Number.isFinite(item.duration_seconds) && item.duration_seconds > 0 && <span title="Generation time, including tool work">· {generationTime(item.duration_seconds)}</span>}

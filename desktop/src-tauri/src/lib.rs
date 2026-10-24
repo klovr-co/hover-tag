@@ -381,6 +381,7 @@ mod tests {
         });
         assert!(allowed("$HOME/Tag/default/.tag/state/slack-avatar-abc.png"));
         assert!(allowed("$HOME/Tag/default/.tag/state/workspace-icon.png"));
+        assert!(allowed("$HOME/Tag/default/.tag/state/activity-now.json"));
         assert!(allowed("$HOME/Tag/default/.tag/integrations/slack-cli/assets/tag-profile.png"));
         assert!(!allowed("$HOME/Tag/default/.tag/config/settings.json"));
         assert!(!allowed("$HOME/Tag/default/.tag/state/slack-avatar.json"));

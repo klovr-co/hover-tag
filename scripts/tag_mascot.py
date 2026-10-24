@@ -1,43 +1,14 @@
 """Pixel-center samples from the user-supplied blue droplet reference.
 
-Reproduce with docs/testing/sample_mascot.py; no runtime image dependency.
+The sprite lives in tag_mascot.json so the terminal, the Slack picture, the
+menu bar icons and Tag.app all draw the same 28 × 34 map. Reproduce it with
+docs/testing/sample_mascot.py; no runtime image dependency.
 """
+import json
+from pathlib import Path
 
-PALETTE = {'A': '#fafdfd', 'B': '#c5e9fd', 'C': '#bfe7fe', 'D': '#bfe6fe', 'E': '#bfe6fd', 'F': '#bfe5fd', 'G': '#bee6fd', 'H': '#8fedfe', 'I': '#82ebfd', 'J': '#6be6fd', 'K': '#4adafd', 'L': '#42dafe', 'M': '#41dafe', 'N': '#40dafe', 'O': '#38d6fe', 'P': '#20cafe', 'Q': '#19c3fe', 'R': '#11b4fd', 'S': '#099bfd', 'T': '#0599fd', 'U': '#047df6', 'V': '#0267ea', 'W': '#035be2', 'X': '#053fa0'}
+_DATA = json.loads(Path(__file__).with_name("tag_mascot.json").read_text(encoding="utf-8"))
 
-PIXELS = (
-    'EEEEEFEEEEEEEEEECVVVVEEEEFEE',
-    'EEEFEEEEEEEEEEECUUHHUVEGGEFE',
-    'EEEEEEEEEDEECCUUKHHPQVEDQREF',
-    'EEEECEEEEEDDUUTHAIPQTWCQPQSE',
-    'EEEEEEEEEECUNIACJPQTWGGQAQSD',
-    'EEEEEEEEEGUIIAGIPPTVWGGRPQSG',
-    'EDEEEEEFGUIIAAIKPSTWGEGGSSGE',
-    'EEEEEEFEUKIAAIIPPSTWGFEDEEEG',
-    'EEEFEFGGUHHAAIIPPPRVGEEGFEEF',
-    'EEEEEEGUOIAAAIIPPPRTWFEEEGEE',
-    'EEEEGEGULHAAAIIKPPPSVEFGEEEE',
-    'EEEEGGUTLHAAAAIIKPPPSWEEEEEE',
-    'EEEEFVQQLHHAAAAIIOPPRUWGEEEE',
-    'EFGSSQOOLKHIHAAAAIJPQQTWUEEE',
-    'FGVSPKIILMMHIHHAAAAILQRTWEFF',
-    'GCVPKIAIINNNKHIIIIAAAKQSUWEE',
-    'GUROIAAILLMMNNNMNNLIAALTTWCE',
-    'GVOHBAILMMLMNNNNNNNNKAARSVXE',
-    'URLAIIMNMLLMNNNNNMNNNOAJSSXF',
-    'VNLIILNNXALMNNNNOXFMNNNIRSVE',
-    'VMLKKLMLXXMMMMMMNXXLNNNIRSVD',
-    'VLLLLLLLXXMNMMMMLXXNNNNJRSVG',
-    'VPLLMHKLXXLNXNXMNXONHIIIRSWG',
-    'VPPLMHLLMNMNXXOMNNNNHIIQSSWG',
-    'VSPLMLLLMMMMNNMNNNMNHIQQSUWD',
-    'CVPPLLLLLLNNNLMMLJIAANQSSWCE',
-    'DVSPPLLLMNNOOKJIAAAJQQQSUWEE',
-    'EGVSPPPLNPPPJJAAAAJQQQSSVCDE',
-    'EDVTSPPPPPMJJAAJQQQQQTSUWEEE',
-    'EEGVSSSPPPJIAAIOQQQQTTSWEGEE',
-    'EEDGVSSSPPJIIIIOQQQSTUWCEEEE',
-    'EEEDCVVSSPPKIIIILTTTVWCEEEDE',
-    'EEEEGCGVVTPPPPPPQTVWCCGEEEEE',
-    'EEEEEEDEGWWWWWWWWWDEEEEEEEEE',
-)
+PALETTE = dict(_DATA["palette"])
+
+PIXELS = tuple(_DATA["pixels"])
