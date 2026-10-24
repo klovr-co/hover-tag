@@ -1238,7 +1238,9 @@ button.list-item:hover { background: var(--fill); }
 .tab-dot { display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: 50%; background: var(--link); vertical-align: middle; }
 
 /* Removing a Tag from the centered setup screen: the confirmation reads left-aligned at a comfortable width. */
-.sl-empty:has(> .notice) { max-width: min(460px, 100%); width: 100%; }
+.sl-empty:has(> .notice) { max-width: min(460px, 100%); width: 100%; box-sizing: border-box; padding: 16px; }
+/* The removal panel is the task at hand, so the art and intro step aside and everything fits the pane. */
+.sl-empty:has(> .notice) > img, .sl-empty:has(> .notice) > .lead { display: none; }
 .sl-empty > .notice { align-self: stretch; box-sizing: border-box; min-width: 0; text-align: left; margin-bottom: 16px; }
 .notice .sl-kv { grid-template-columns: max-content minmax(0, 1fr); column-gap: 16px; row-gap: 6px; font-size: 13.5px; padding: 8px 0 6px; }
 .notice .sl-kv dd { column-gap: 6px; row-gap: 0; }
