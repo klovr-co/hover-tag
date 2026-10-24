@@ -318,6 +318,14 @@ button.opt:hover:not(:disabled) { background: var(--fill); }
 @keyframes spin { to { transform: rotate(360deg); } }
 .err-line { color: var(--red); display: flex; gap: 6px; align-items: flex-start; font-size: 13.5px; line-height: 1.4; }
 .err-line svg { flex: none; margin-top: 2px; }
+.err-line .err-text { flex: 1; }
+.err-x { flex: none; display: grid; place-items: center; width: 22px; height: 22px; margin: -2px -4px 0 0; padding: 0; border: 0; border-radius: 6px;
+  background: transparent; color: inherit; opacity: .6; cursor: pointer; transition: opacity .15s var(--ease), background-color .15s var(--ease), transform .15s var(--ease); }
+.err-x svg { margin: 0; }
+.err-x:hover, .err-x:focus-visible { opacity: 1; background: color-mix(in srgb, currentColor 12%, transparent); }
+.err-x:active { transform: scale(.96); }
+.err-line.leaving { pointer-events: none; animation: err-out .16s var(--ease) forwards; }
+@keyframes err-out { to { opacity: 0; transform: translateY(-3px); } }
 
 .empty { text-align: center; padding: 22px 24px 26px; display: flex; flex-direction: column; align-items: center; gap: 6px; }
 .empty img { width: 100%; max-width: 400px; image-rendering: pixelated; margin-bottom: 6px; }
@@ -1192,7 +1200,7 @@ button.list-item:hover { background: var(--fill); }
   .p-btn:active:not(:disabled), .sky-btn:active:not(:disabled), .add:active:not(:disabled), .link:active:not(:disabled), .back:active,
   .community button:active, .chan-chip button:active, .activity-toggle:active, .activity-thread:active, button.activity-artifact:active,
   .segc button:active:not(:disabled), .sl-ws:active, .ghost-add:active, .sl-item:active, .mpick:active:not(:disabled),
-  .mrefresh:active:not(:disabled), .opt:active .box, .opt:active .radio { transform: none !important; }
+  .mrefresh:active:not(:disabled), .opt:active .box, .opt:active .radio, .err-x:active { transform: none !important; }
   .sw:active:not(:disabled) > i { width: 18px !important; }
   .sw.on:active:not(:disabled) > i { transform: translateX(16px) !important; }
   *, *::before, *::after { animation-duration: 0s !important; transition-duration: 0s !important; }
