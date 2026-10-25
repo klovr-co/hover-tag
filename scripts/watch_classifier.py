@@ -4,8 +4,9 @@ Two providers ask the same question. TypeSafe Jev answers a ``noul`` question
 with true/false criteria about a structured ``state``. OpenAI Decisions answers a
 ``predicate`` question whose instructions carry the same criteria, about the
 same state serialized into ``input``. Each provider has its own key, model and
-threshold. Every failure, refusal or malformed answer raises, and callers stay
-silent.
+threshold. In chime-in channels a second question, whether the post invites
+colleagues' reactions, can go in the same call with its own threshold. Every
+failure, refusal or malformed answer raises, and callers stay silent.
 """
 from __future__ import annotations
 
@@ -14,7 +15,7 @@ import os
 import re
 import urllib.request
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 
@@ -22,6 +23,8 @@ DEFAULT_TIMEOUT_SECONDS = 5.0
 MAX_CONTEXT_MESSAGES = 10
 MAX_MESSAGE_CHARS = 2_000
 QUESTION_NAME = "tag_is_addressed"
+CHIME_QUESTION_NAME = "invites_reactions"
+DEFAULT_CHIME_THRESHOLD = 0.95
 SLACK_USER_MENTION_RE = re.compile(r"<@([A-Z0-9]+)(?:\|[^>]+)?>")
 
 INSTRUCTIONS = (
@@ -65,6 +68,40 @@ ASSISTANT_ROLE = (
 )
 
 
+CHIME_INSTRUCTIONS = (
+    "Considering `current_message`, `thread_history`, and `assistant`, does the requester's "
+    "current message invite colleagues' reactions, such that a short, warm comment from the "
+    "assistant as a coworker would be welcome now? Judge only the current message, using the "
+    "thread for context. Nobody has to address the assistant."
+)
+CHIME_TRUE_CRITERIA = (
+    "The message shares news the team would celebrate or comment on: a launch, release, demo, "
+    "milestone, finished piece of work, win, customer success, or similar good news, posted for "
+    "the channel to see. A link, image or video can be the news itself when the words present it "
+    "as something to look at."
+)
+CHIME_FALSE_CRITERIA = (
+    "The message is a request, a question to someone, a task assignment, an incident, outage or "
+    "problem report, routine status or logistics, a reminder, a meeting note, or an aside; it "
+    "shares sensitive personal news such as illness, loss, health, family or job changes; it is "
+    "part of a conversation between other people; or it is already addressed to the assistant. "
+    "When unsure, it is false: a missed comment costs little, an unwelcome one costs trust."
+)
+
+
+@dataclass(frozen=True)
+class Question:
+    name: str
+    instructions: str
+    true: str
+    false: str
+
+
+ADDRESSED = Question(QUESTION_NAME, INSTRUCTIONS, TRUE_CRITERIA, FALSE_CRITERIA)
+CHIME_IN = Question(CHIME_QUESTION_NAME, CHIME_INSTRUCTIONS, CHIME_TRUE_CRITERIA, CHIME_FALSE_CRITERIA)
+QUESTIONS = {question.name: question for question in (ADDRESSED, CHIME_IN)}
+
+
 class ClassifierError(RuntimeError):
     """The decision could not be obtained or validated; the caller stays silent."""
 
@@ -76,9 +113,12 @@ class ClassifierRefusal(ClassifierError):
 @dataclass(frozen=True)
 class ClassifierDecision:
     should_invoke: bool
-    tag_is_addressed: float
+    tag_is_addressed: float | None
     model: str
     provider: str
+    # Set only when the chime-in question was asked.
+    invites_reactions: float | None = None
+    should_chime: bool = False
 
 
 @dataclass(frozen=True)
@@ -88,6 +128,8 @@ class Score:
     model: str
     input_tokens: int | None = None
     cached_tokens: int | None = None
+    # Every asked question's probability; ``probability`` is the first question's.
+    probabilities: Mapping[str, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -98,13 +140,14 @@ class Provider:
     key_setting: str
     model_setting: str
     threshold_setting: str
+    chime_threshold_setting: str
     default_model: str
     default_threshold: float
     # Input price in USD per million tokens, used only for evaluation estimates.
     usd_per_million_input: float
     price_source: str
-    payload: Callable[[dict[str, Any], str], dict[str, Any]]
-    parse: Callable[[Any, str], Score]
+    payload: Callable[..., dict[str, Any]]
+    parse: Callable[..., Score]
 
 
 def minimize_text_identities(
@@ -222,34 +265,41 @@ def cached_tokens(result: Any) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
-def jev_payload(state: dict[str, Any], model: str) -> dict[str, Any]:
+def _score(probabilities: dict[str, float], model: str, result: dict[str, Any]) -> Score:
+    return Score(next(iter(probabilities.values())), model, _input_tokens(result), probabilities=probabilities)
+
+
+def jev_payload(state: dict[str, Any], model: str, questions: tuple[Question, ...] = (ADDRESSED,)) -> dict[str, Any]:
     return {
         "state": state,
         "model": model,
         "questions": {
-            QUESTION_NAME: {
+            question.name: {
                 "type": "noul",
-                "instructions": INSTRUCTIONS,
-                "criteria": {"true": TRUE_CRITERIA, "false": FALSE_CRITERIA},
-            },
+                "instructions": question.instructions,
+                "criteria": {"true": question.true, "false": question.false},
+            }
+            for question in questions
         },
     }
 
 
-def jev_parse(result: Any, _model: str) -> Score:
+def jev_parse(result: Any, _model: str, questions: tuple[Question, ...] = (ADDRESSED,)) -> Score:
     try:
-        probability = result["answers"][QUESTION_NAME]["noul"]
+        probabilities = {q.name: _probability(result["answers"][q.name]["noul"]) for q in questions}
         response_model = result["model"]
     except (KeyError, TypeError) as exc:
         raise ClassifierError("TypeSafe returned an incomplete decision") from exc
     if not isinstance(response_model, str) or not response_model:
         raise ClassifierError("TypeSafe returned an invalid decision")
-    return Score(_probability(probability), response_model, _input_tokens(result))
+    return _score(probabilities, response_model, result)
 
 
-DECISIONS_INSTRUCTIONS = (
-    f"{INSTRUCTIONS}\n\nAnswer true when: {TRUE_CRITERIA}\n\nAnswer false when: {FALSE_CRITERIA}"
-)
+def decisions_instructions(question: Question) -> str:
+    return f"{question.instructions}\n\nAnswer true when: {question.true}\n\nAnswer false when: {question.false}"
+
+
+DECISIONS_INSTRUCTIONS = decisions_instructions(ADDRESSED)
 DECISIONS_INPUT_PREFIX = (
     "Slack conversation state as JSON. `thread_history` is oldest first and excludes "
     "`current_message`, which is the message to judge.\n"
@@ -261,35 +311,36 @@ def decisions_input(state: dict[str, Any]) -> str:
     return DECISIONS_INPUT_PREFIX + json.dumps(state, ensure_ascii=False)
 
 
-def decisions_payload(state: dict[str, Any], model: str) -> dict[str, Any]:
+def decisions_payload(state: dict[str, Any], model: str, questions: tuple[Question, ...] = (ADDRESSED,)) -> dict[str, Any]:
     return {
         "model": model,
         "input": decisions_input(state),
         "questions": [
-            {"type": "predicate", "name": QUESTION_NAME, "instructions": DECISIONS_INSTRUCTIONS},
+            {"type": "predicate", "name": question.name, "instructions": decisions_instructions(question)}
+            for question in questions
         ],
     }
 
 
-def decisions_parse(result: Any, model: str) -> Score:
+def decisions_parse(result: Any, model: str, questions: tuple[Question, ...] = (ADDRESSED,)) -> Score:
     answers = result.get("answers") if isinstance(result, dict) else None
     if not isinstance(answers, list):
         raise ClassifierError("OpenAI returned an incomplete decision")
-    matches = [a for a in answers if isinstance(a, dict) and a.get("name") == QUESTION_NAME]
-    if len(matches) != 1:
-        raise ClassifierError("OpenAI returned an incomplete decision")
-    answer = matches[0]
-    if answer.get("type") == "refusal":
-        raise ClassifierRefusal("OpenAI refused to decide")
-    if answer.get("type") != "predicate":
-        raise ClassifierError("OpenAI returned an invalid decision")
+    probabilities = {}
+    for question in questions:
+        matches = [a for a in answers if isinstance(a, dict) and a.get("name") == question.name]
+        if len(matches) != 1:
+            raise ClassifierError("OpenAI returned an incomplete decision")
+        answer = matches[0]
+        if answer.get("type") == "refusal":
+            raise ClassifierRefusal("OpenAI refused to decide")
+        if answer.get("type") != "predicate":
+            raise ClassifierError("OpenAI returned an invalid decision")
+        probabilities[question.name] = _probability(answer.get("probability"))
     # The guide documents only `answers`; report the requested model when no other is given.
     response_model = result.get("model")
-    return Score(
-        _probability(answer.get("probability")),
-        response_model if isinstance(response_model, str) and response_model else model,
-        _input_tokens(result),
-    )
+    return _score(probabilities, response_model if isinstance(response_model, str) and response_model else model,
+                  result)
 
 
 PROVIDERS: dict[str, Provider] = {
@@ -300,6 +351,7 @@ PROVIDERS: dict[str, Provider] = {
         key_setting="OPENTAG_TYPESAFE_API_KEY",
         model_setting="OPENTAG_JEV_MODEL",
         threshold_setting="OPENTAG_JEV_THRESHOLD",
+        chime_threshold_setting="OPENTAG_JEV_CHIME_THRESHOLD",
         default_model="jev-latest",
         default_threshold=0.9,
         usd_per_million_input=0.042,
@@ -314,6 +366,7 @@ PROVIDERS: dict[str, Provider] = {
         key_setting="OPENTAG_OPENAI_DECISIONS_API_KEY",
         model_setting="OPENTAG_DECISIONS_MODEL",
         threshold_setting="OPENTAG_DECISIONS_THRESHOLD",
+        chime_threshold_setting="OPENTAG_DECISIONS_CHIME_THRESHOLD",
         default_model="gpt-6-luna",
         default_threshold=0.9,
         usd_per_million_input=0.10,
@@ -334,10 +387,12 @@ def score(
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     payload: Callable[[dict[str, Any], str], dict[str, Any]] | None = None,
     parse: Callable[[Any, str], Score] | None = None,
+    questions: tuple[Question, ...] = (ADDRESSED,),
 ) -> Score:
-    """Ask one provider for the probability that Tag is addressed and a reply is welcome.
+    """Ask one provider each question's probability in a single call.
 
-    ``payload`` and ``parse`` let offline evaluations try other prompts; production uses the defaults.
+    By default that is whether Tag is addressed and a reply is welcome. ``payload`` and ``parse`` let
+    offline evaluations try other prompts for that one question; production uses the defaults.
     """
     try:
         spec = PROVIDERS[provider]
@@ -348,7 +403,7 @@ def score(
     model = model or spec.default_model
     request = urllib.request.Request(
         spec.url,
-        data=json.dumps((payload or spec.payload)(state, model)).encode("utf-8"),
+        data=json.dumps(payload(state, model) if payload else spec.payload(state, model, questions)).encode("utf-8"),
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
@@ -360,9 +415,9 @@ def score(
             result = json.loads(response.read().decode("utf-8"))
     except Exception as exc:  # noqa: BLE001 - callers fail closed on any provider failure
         raise ClassifierError(f"{spec.label} request failed: {type(exc).__name__}") from exc
-    answer = (parse or spec.parse)(result, model)
+    answer = parse(result, model) if parse else spec.parse(result, model, questions)
     cached = cached_tokens(result)
-    return answer if cached is None else Score(answer.probability, answer.model, answer.input_tokens, cached)
+    return answer if cached is None else replace(answer, cached_tokens=cached)
 
 
 def evaluate(
@@ -373,14 +428,26 @@ def evaluate(
     threshold: float,
     model: str = "",
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    addressed: bool = True,
+    chime_in: bool = False,
+    chime_threshold: float = DEFAULT_CHIME_THRESHOLD,
 ) -> ClassifierDecision:
-    """Decide whether to invoke Tag; raises ClassifierError on any failure."""
-    answer = score(state, provider=provider, api_key=api_key, model=model, timeout=timeout)
+    """Decide whether to invoke Tag, and whether to chime in; raises ClassifierError on any failure.
+
+    The asked questions go in one call. A question that wasn't asked never passes."""
+    questions = tuple(q for q, asked in ((ADDRESSED, addressed), (CHIME_IN, chime_in)) if asked)
+    if not questions:
+        raise ClassifierError("No classifier question was asked")
+    answer = score(state, provider=provider, api_key=api_key, model=model, timeout=timeout, questions=questions)
+    addressed_p = answer.probabilities.get(QUESTION_NAME)
+    chime_p = answer.probabilities.get(CHIME_QUESTION_NAME)
     return ClassifierDecision(
-        should_invoke=answer.probability >= threshold,
-        tag_is_addressed=answer.probability,
+        should_invoke=addressed_p is not None and addressed_p >= threshold,
+        tag_is_addressed=addressed_p,
         model=answer.model,
         provider=provider,
+        invites_reactions=chime_p,
+        should_chime=chime_p is not None and chime_p >= chime_threshold,
     )
 
 
@@ -391,6 +458,7 @@ class Settings:
     model: str
     threshold: float
     timeout: float
+    chime_threshold: float = DEFAULT_CHIME_THRESHOLD
 
 
 def settings_from(environment: Mapping[str, str] = os.environ) -> Settings:
@@ -404,10 +472,11 @@ def settings_from(environment: Mapping[str, str] = os.environ) -> Settings:
         raise ClassifierError(f"{spec.key_setting} is not set")
     try:
         threshold = float(environment.get(spec.threshold_setting, "") or spec.default_threshold)
+        chime_threshold = float(environment.get(spec.chime_threshold_setting, "") or DEFAULT_CHIME_THRESHOLD)
         timeout = float(environment.get("OPENTAG_WATCH_CLASSIFIER_TIMEOUT_SECONDS", "") or DEFAULT_TIMEOUT_SECONDS)
     except ValueError:
         raise ClassifierError("Classifier threshold and timeout must be numbers") from None
-    if not 0.5 <= threshold <= 1 or not 0 < timeout <= 30:
+    if not 0.5 <= threshold <= 1 or not 0.5 <= chime_threshold <= 1 or not 0 < timeout <= 30:
         raise ClassifierError("Classifier threshold or timeout is out of range")
     return Settings(
         provider=provider,
@@ -415,4 +484,5 @@ def settings_from(environment: Mapping[str, str] = os.environ) -> Settings:
         model=environment.get(spec.model_setting, "") or spec.default_model,
         threshold=threshold,
         timeout=timeout,
+        chime_threshold=chime_threshold,
     )

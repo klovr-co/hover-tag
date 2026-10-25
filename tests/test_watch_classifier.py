@@ -279,6 +279,61 @@ class TypeSafeJevTests(unittest.TestCase):
                     watch_classifier.evaluate({}, provider="typesafe-jev", api_key="secret-key", threshold=0.5)
 
 
+class ChimeInQuestionTests(unittest.TestCase):
+    def test_both_questions_go_in_one_jev_call_with_their_own_thresholds(self) -> None:
+        response = {"model": "jev-1.13.0", "answers": {
+            "tag_is_addressed": {"type": "noul", "noul": 0.2}, "invites_reactions": {"type": "noul", "noul": 0.96}}}
+        with respond(response) as urlopen:
+            decision = watch_classifier.evaluate({}, provider="typesafe-jev", api_key="k", threshold=0.9,
+                                                 chime_in=True, chime_threshold=0.95)
+        self.assertEqual((False, 0.2, True, 0.96), (decision.should_invoke, decision.tag_is_addressed,
+                                                    decision.should_chime, decision.invites_reactions))
+        urlopen.assert_called_once()
+        questions = json.loads(urlopen.call_args.args[0].data)["questions"]
+        self.assertEqual({"tag_is_addressed", "invites_reactions"}, set(questions))
+        chime = questions["invites_reactions"]
+        self.assertIn("launch", chime["criteria"]["true"])
+        self.assertIn("sensitive personal news", chime["criteria"]["false"])
+        self.assertIn("When unsure, it is false", chime["criteria"]["false"])
+
+    def test_chime_in_alone_on_decisions_and_its_threshold_is_separate(self) -> None:
+        with respond(predicate(0.94, name="invites_reactions")) as urlopen:
+            decision = watch_classifier.evaluate({}, provider="openai-decisions", api_key="k", threshold=0.5,
+                                                 addressed=False, chime_in=True, chime_threshold=0.95)
+        self.assertEqual((False, None, False, 0.94), (decision.should_invoke, decision.tag_is_addressed,
+                                                      decision.should_chime, decision.invites_reactions))
+        [question] = json.loads(urlopen.call_args.args[0].data)["questions"]
+        self.assertEqual("invites_reactions", question["name"])
+        self.assertIn(watch_classifier.CHIME_TRUE_CRITERIA, question["instructions"])
+        with self.assertRaises(watch_classifier.ClassifierError):
+            watch_classifier.evaluate({}, provider="openai-decisions", api_key="k", threshold=0.5, addressed=False)
+
+    def test_a_missing_or_refused_answer_to_either_question_fails_closed(self) -> None:
+        for provider, response in (
+            ("typesafe-jev", {"model": "jev-1.13.0", "answers": {"tag_is_addressed": {"noul": 0.99}}}),
+            ("openai-decisions", predicate(0.99)),
+            ("openai-decisions", {"answers": [predicate(0.99)["answers"][0],
+                                              {"type": "refusal", "name": "invites_reactions"}]}),
+        ):
+            with self.subTest(provider=provider, response=response), respond(response):
+                with self.assertRaises(watch_classifier.ClassifierError):
+                    watch_classifier.evaluate({}, provider=provider, api_key="k", threshold=0.5, chime_in=True)
+
+    def test_chime_threshold_settings_default_to_095_per_provider(self) -> None:
+        base = {"OPENTAG_TYPESAFE_API_KEY": "k"}
+        self.assertEqual(0.95, watch_classifier.settings_from(base).chime_threshold)
+        self.assertEqual(0.97, watch_classifier.settings_from(base | {"OPENTAG_JEV_CHIME_THRESHOLD": "0.97"}).chime_threshold)
+        decisions = {"OPENTAG_WATCH_CLASSIFIER": "openai-decisions", "OPENTAG_OPENAI_DECISIONS_API_KEY": "k",
+                     "OPENTAG_JEV_CHIME_THRESHOLD": "0.6"}
+        self.assertEqual(0.95, watch_classifier.settings_from(decisions).chime_threshold)
+        with self.assertRaises(watch_classifier.ClassifierError):
+            watch_classifier.settings_from(base | {"OPENTAG_JEV_CHIME_THRESHOLD": "0.4"})
+        for key in ("OPENTAG_JEV_CHIME_THRESHOLD", "OPENTAG_DECISIONS_CHIME_THRESHOLD"):
+            self.assertEqual("0.95", tag_config.DEFAULTS[key])
+            self.assertIsNone(tag_config.validation_error(key, "0.99"))
+            self.assertIsNotNone(tag_config.validation_error(key, "1.5"))
+
+
 class OpenAIDecisionsTests(unittest.TestCase):
     def test_asks_one_predicate_with_the_same_criteria_and_serialized_state(self) -> None:
         state = watch_classifier.message_state(
@@ -323,7 +378,8 @@ class OpenAIDecisionsTests(unittest.TestCase):
         response = predicate(0.5) | {"model": "gpt-6-luna-2026-09-30", "usage": {"input_tokens": 640}}
         with respond(response):
             answer = watch_classifier.score({}, provider="openai-decisions", api_key="k")
-        self.assertEqual(watch_classifier.Score(0.5, "gpt-6-luna-2026-09-30", 640), answer)
+        self.assertEqual(watch_classifier.Score(0.5, "gpt-6-luna-2026-09-30", 640,
+                                                probabilities={"tag_is_addressed": 0.5}), answer)
 
     def test_refusal_fails_closed(self) -> None:
         with respond({"answers": [{"type": "refusal", "name": "tag_is_addressed"}]}):

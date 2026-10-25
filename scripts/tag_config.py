@@ -30,8 +30,9 @@ DEFAULTS = {
     "OPENTAG_WATCH_QUIET_HOURS": "19:00-08:00", "OPENTAG_WATCH_DAILY_LIMIT": "5",
     "OPENTAG_WATCH_COOLDOWN_HOURS": "24",
     "OPENTAG_WATCH_CLASSIFIER": "typesafe-jev", "OPENTAG_WATCH_CLASSIFIER_TIMEOUT_SECONDS": "5",
-    "OPENTAG_JEV_MODEL": "jev-latest", "OPENTAG_JEV_THRESHOLD": "0.9",
+    "OPENTAG_JEV_MODEL": "jev-latest", "OPENTAG_JEV_THRESHOLD": "0.9", "OPENTAG_JEV_CHIME_THRESHOLD": "0.95",
     "OPENTAG_DECISIONS_MODEL": "gpt-6-luna", "OPENTAG_DECISIONS_THRESHOLD": "0.9",
+    "OPENTAG_DECISIONS_CHIME_THRESHOLD": "0.95",
     "OPENTAG_FILE_DELIVERY": "local+slack",
     "OPENTAG_THREAD_MAX_CONTEXT_TOKENS": "150000", "OPENTAG_THREAD_IDLE_HOURS": "4",
     "MFS_URL": "http://127.0.0.1:13619", "MFS_SLACK_HISTORY_DAYS": "30",
@@ -96,9 +97,11 @@ LABELS = {
     "OPENTAG_WATCH_CLASSIFIER": "Watching classifier (typesafe-jev or openai-decisions)",
     "OPENTAG_WATCH_CLASSIFIER_TIMEOUT_SECONDS": "Classifier timeout (seconds)",
     "OPENTAG_JEV_MODEL": "Jev model", "OPENTAG_JEV_THRESHOLD": "Jev reply threshold (0.5 to 1)",
+    "OPENTAG_JEV_CHIME_THRESHOLD": "Jev chime-in threshold (0.5 to 1)",
     "OPENTAG_TYPESAFE_API_KEY": "TypeSafe API key",
     "OPENTAG_DECISIONS_MODEL": "OpenAI Decisions model",
     "OPENTAG_DECISIONS_THRESHOLD": "OpenAI Decisions reply threshold (0.5 to 1)",
+    "OPENTAG_DECISIONS_CHIME_THRESHOLD": "OpenAI Decisions chime-in threshold (0.5 to 1)",
     "OPENTAG_OPENAI_DECISIONS_API_KEY": "OpenAI Decisions API key",
     "OPENTAG_FILE_DELIVERY": "File delivery (local or local+slack)",
     "OPENTAG_TRANSPORT": "Chat service",
@@ -264,7 +267,8 @@ def validation_error(key: str, value: str) -> str | None:
         return "Use a Jev model name such as jev-latest"
     if key == "OPENTAG_DECISIONS_MODEL" and not re.fullmatch(r"gpt-[A-Za-z0-9.-]+", value):
         return "Use an OpenAI Decisions model name such as gpt-6-luna"
-    if key in {"OPENTAG_JEV_THRESHOLD", "OPENTAG_DECISIONS_THRESHOLD"}:
+    if key in {"OPENTAG_JEV_THRESHOLD", "OPENTAG_DECISIONS_THRESHOLD",
+               "OPENTAG_JEV_CHIME_THRESHOLD", "OPENTAG_DECISIONS_CHIME_THRESHOLD"}:
         try:
             valid = 0.5 <= float(value) <= 1
         except ValueError:
