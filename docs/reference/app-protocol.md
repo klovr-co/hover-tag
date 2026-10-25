@@ -23,7 +23,7 @@ it shows is listed in `capabilities`; otherwise it offers to upgrade Tag.
 | `setup-back` | `{"back": true}` during setup |
 | `rename` | `tag NAME rename "Name" --json` |
 | `describe` | `tag NAME describe "Description" --json`: changes the Slack app's one-line description and verifies Slack saved it; `""` clears it |
-| `routines` | `tag NAME routine list\|show\|add\|edit\|pause\|resume\|remove\|run-now --json`; see [Routines](#routines) |
+| `routines` | `tag NAME routine list\|show\|runs\|add\|edit\|pause\|resume\|remove\|run-now --json`; see [Routines](#routines) |
 | `abandon-setup` | `tag NAME abandon --json`: moves a Tag that never reached Slack to `abandoned/` under the installation root; refuses a Tag that has a Slack app, a bot token, or a running bridge |
 | `remove-tag` | `tag NAME remove --json [--delete-app --confirm-app APP_ID]`: stops the Tag and moves its files to `abandoned/`. The Slack app is kept unless `--delete-app` is given with its exact App ID in `--confirm-app` |
 | `workspace-lifecycle` | `tag start\|stop\|restart --workspace TEAM --json` |
@@ -606,6 +606,7 @@ Tag's channels. See [Routines](../concepts/routines.md).
 | --- | --- |
 | `tag NAME routine list --json` | `tag_running`, `routines`, `invalid` (entries that could not be read), and `limits` (`per_tag`, `per_channel`, `min_interval_seconds`); see `routine-list.json` |
 | `tag NAME routine show ROUTINE --json` | `routine`, the next five run times in `upcoming`, and `history`, newest first; see `routine-show.json` |
+| `tag NAME routine runs ROUTINE [--limit N] [--offset N] --json` | `routine` (`id`, `name`, `timezone`), `runs` (history entries, newest first, at most 100 a page; default 20), `total`, and `has_more`; see `routine-runs.json` |
 | `tag NAME routine add --name … --schedule … --timezone … --channel … --prompt … [--owner U…] [--catch-up latest\|skip] [--max-budget-usd N] [--max-turns N] [--timeout-minutes N] [--paused] --json` | `routine` |
 | `tag NAME routine add --from-json FILE\|- --json` | `routine`; the whole definition as one JSON object, for other components that create routines |
 | `tag NAME routine edit ROUTINE [options] --json` | `routine` |
@@ -624,8 +625,16 @@ history entry or null), `running`, `consecutive_failures`, `paused_reason`
 (set when Tag paused it after repeated failures), and `attention`. History
 `outcome` is one of `posted`, `no_reply`, `failed`, `budget_exceeded`,
 `timeout`, `skipped`, `missed`, `interrupted`, or `blocked`; treat unknown
-values as needing attention. `trigger` is `schedule`, `catch-up`, or
-`run-now`. Activity rows from `tag NAME logs --json` carry `trigger` with
+values as needing attention. `trigger` is `schedule`, `catch-up`, `run-now`, or
+`retry`.
+
+History entries in `show` and `runs` also say what each run did. `activity` is
+the run's Activity row (the same fields as `tag NAME logs --json`, including
+`reply_preview`, `artifacts`, `step_count`, `duration_seconds`, `usage` and
+the model) while Tag keeps it, which is for its latest 50 routine runs; load
+its steps with `tag NAME logs --activity RUN --json` using `activity.run_id`
+(also `activity_run_id`). `slack_url` opens the message the run posted, and
+`error_reference` names a failure's entry in the error report and the logs. Activity rows from `tag NAME logs --json` carry `trigger` with
 `type: "routine"`, `routine_id`, `name`, and `trigger` when a routine started
 the run.
 

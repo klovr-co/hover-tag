@@ -3,6 +3,7 @@
 // Routines: a saved prompt a Tag runs on a schedule and posts in one channel.
 // The app only reads and changes them through `tag NAME routine … --json`.
 import routineListExample from "../../../protocol/examples/routine-list.json";
+import type { ActivityItem } from "./home";
 import { parseJSON } from "./protocol";
 
 export type RunOutcome = "posted" | "no_reply" | "failed" | "budget_exceeded" | "timeout" | "skipped" | "missed" | "interrupted" | "blocked" | "cancelled";
@@ -19,6 +20,13 @@ export interface RoutineRun {
   cost_usd?: number;
   tokens?: number;
   tools_used?: string[];
+  /** The run's Activity row, while Tag keeps it (its latest 50 routine runs). */
+  activity?: ActivityItem;
+  activity_run_id?: string;
+  /** Opens the message the run posted. */
+  slack_url?: string;
+  /** A failure's entry in the error report and the logs. */
+  error_reference?: string;
 }
 
 export interface Routine {
@@ -48,6 +56,7 @@ export interface RoutineList {
   tag_running: boolean; scheduler?: SchedulerStatus; routines: Routine[]; limits: { per_tag: number; per_channel: number };
 }
 export interface RoutineDetail { routine: Routine; upcoming: string[]; history: RoutineRun[] }
+export interface RoutineRuns { routine: { id: string; name: string; timezone: string }; runs: RoutineRun[]; total: number; has_more: boolean }
 
 /** What someone fills in to add or change a routine. */
 export interface RoutineForm { name: string; schedule: string; timezone: string; channel: string; prompt: string; budget: string }
@@ -191,6 +200,43 @@ export function nextWeekly(weekday: number, hour: number, minute: number, zone: 
   return new Date(now.getTime() + 7 * 86_400_000);
 }
 
+/** The demo's failed routine run, so the Logs tab can show its line. */
+export const DEMO_ROUTINE_REFERENCE = "7C2E91AB";
+
+/** A posted run, a quiet NO_REPLY run and a failed one, with the Activity rows the bridge would keep. */
+function demoRuns(routine: Routine, posted: Date): { history: RoutineRun[]; activity: ActivityItem[] } {
+  // Each earlier run is the schedule's time a week before, worked out in its zone across clock changes.
+  const weekBefore = (date: Date) => nextWeekly(1, 9, 3, routine.timezone, new Date(date.getTime() - 8 * 86_400_000));
+  const at = (date: Date, seconds: number) => new Date(date.getTime() + seconds * 1000).toISOString();
+  const quiet = weekBefore(posted), failed = weekBefore(quiet);
+  const trigger = { type: "routine" as const, routine_id: routine.id, name: routine.name, trigger: "schedule" };
+  const place = { channel: routine.channel, channel_name: routine.channel_name, dm: false, trigger };
+  const activity: ActivityItem[] = [
+    { ...place, run_id: "d".repeat(32), at: at(posted, 97), kind: "replied", step_count: 6, duration_seconds: 97,
+      backend: "claude", model: "claude-opus-5-5", model_name: "Opus 5.5",
+      usage: { input_tokens: 42100, output_tokens: 1400, total_tokens: 43500, cache_read_input_tokens: 30000 },
+      reply_summary: "Four pull requests merged this week: routines, the timezone picker, demo dates and the CI cache.",
+      artifacts: [{ name: "pr-digest.md", kind: "file", delivery: "uploaded", url: "https://example.slack.com/files/F0DIGEST/pr-digest.md" }] },
+    { ...place, run_id: "e".repeat(32), at: at(quiet, 41), kind: "replied", step_count: 3, duration_seconds: 41,
+      backend: "claude", model: "claude-opus-5-5", model_name: "Opus 5.5",
+      usage: { input_tokens: 18000, output_tokens: 90, total_tokens: 18090 } },
+    { ...place, run_id: "f".repeat(32), at: at(failed, 38), kind: "failed", step_count: 2, duration_seconds: 38,
+      backend: "claude", model: "claude-opus-5-5", model_name: "Opus 5.5" },
+  ];
+  const base = { trigger: "schedule" };
+  const slack = (date: Date) => `slack://channel?team=T0KLOVR1&id=${routine.channel}&message=${Math.floor(date.getTime() / 1000)}.000100`;
+  const history: RoutineRun[] = [
+    { ...base, run_id: `${routine.id}:posted`, scheduled_for: posted.toISOString(), started: at(posted, 4), ended: at(posted, 97),
+      outcome: "posted", cost_usd: 0.18, tokens: 43500, activity_run_id: activity[0].run_id, activity: activity[0], slack_url: slack(posted) },
+    { ...base, run_id: `${routine.id}:quiet`, scheduled_for: quiet.toISOString(), started: at(quiet, 3), ended: at(quiet, 41),
+      outcome: "no_reply", cost_usd: 0.05, tokens: 18090, activity_run_id: activity[1].run_id, activity: activity[1] },
+    { ...base, run_id: `${routine.id}:failed`, scheduled_for: failed.toISOString(), started: at(failed, 2), ended: at(failed, 38),
+      outcome: "failed", diagnostic: `The AI provider's usage limit was reached. Reference ${DEMO_ROUTINE_REFERENCE}.`,
+      error_reference: DEMO_ROUTINE_REFERENCE, activity_run_id: activity[2].run_id, activity: activity[2], slack_url: slack(failed) },
+  ];
+  return { history, activity };
+}
+
 /** A tiny in-memory stand-in for `tag NAME routine`, for the demo app and tests. */
 export function demoRoutines() {
   const byTag = new Map<string, Routine[]>();
@@ -199,19 +245,18 @@ export function demoRoutines() {
   // The example's dates are fixed; the demo moves them around now, so "next" is never in the past.
   const day = 86_400_000;
   const next = nextWeekly(1, 9, 3, sample.timezone);
-  const last = new Date(next.getTime() - 7 * day);
+  const last = nextWeekly(1, 9, 3, sample.timezone, new Date(next.getTime() - 8 * day));
   sample.next_run = next.toISOString();
-  if (sample.last_run) {
-    sample.last_run = { ...sample.last_run, scheduled_for: last.toISOString(), started: new Date(last.getTime() + 4_000).toISOString(),
-      ended: new Date(last.getTime() + 97_000).toISOString() };
-  }
+  const runs = demoRuns(sample, last);
+  sample.last_run = runs.history[0];
+  history.set(sample.id, runs.history);
   const listFor = (tag: string, first: boolean) => {
     if (!byTag.has(tag)) byTag.set(tag, first ? [structuredClone(sample)] : []);
     return byTag.get(tag)!;
   };
   const option = (args: string[], name: string) => args.includes(name) ? args[args.indexOf(name) + 1] : undefined;
   const fail = (error: string) => ({ ok: false as const, error });
-  return (tag: string, first: boolean, running: boolean, args: string[]) => {
+  return Object.assign((tag: string, first: boolean, running: boolean, args: string[]) => {
     const routines = listFor(tag, first);
     const [action, reference] = args;
     const find = () => routines.find((r) => r.id === reference || r.name.toLowerCase() === (reference ?? "").toLowerCase());
@@ -232,9 +277,16 @@ export function demoRoutines() {
     }
     const routine = find();
     if (!routine) return fail(`No routine named '${reference}'.`);
+    const runsOf = () => history.get(routine.id) ?? (routine.last_run ? [routine.last_run] : []);
     if (action === "show") {
       const next = routine.next_run ? [routine.next_run] : [];
-      return { ok: true, tag_running: running, routine, upcoming: next, history: history.get(routine.id) ?? (routine.last_run ? [routine.last_run] : []) };
+      return { ok: true, tag_running: running, routine, upcoming: next, history: runsOf() };
+    }
+    if (action === "runs") {
+      const limit = Number(option(args, "--limit") ?? 20), offset = Number(option(args, "--offset") ?? 0);
+      const all = runsOf();
+      return { ok: true, routine: { id: routine.id, name: routine.name, timezone: routine.timezone },
+        runs: all.slice(offset, offset + limit), total: all.length, has_more: offset + limit < all.length };
     }
     if (action === "edit") {
       for (const [flag, key] of [["--name", "name"], ["--schedule", "schedule"], ["--timezone", "timezone"], ["--channel", "channel"], ["--prompt", "prompt"]] as const) {
@@ -265,5 +317,5 @@ export function demoRoutines() {
       return { ok: true, requested: routine.id };
     }
     return fail(`Unknown routine command ${action}`);
-  };
+  }, { activity: runs.activity });
 }

@@ -101,17 +101,26 @@ the latest one once if it was due in the last seven days. Use
 If a running Tag stops checking its routines, for example because
 `routines.json` can't be read, `tag NAME routine list` and Tag.app say so.
 
-`tag NAME routine show NAME` lists the next five run times and the history.
-Runs also appear in the Tag's Activity, marked with the routine's name; Tag
-keeps the latest 50 routine runs there so they never push out people's
-requests.
+`tag NAME routine show NAME` lists the next five run times and the latest
+runs, and `tag NAME routine runs NAME` pages through them all (`--limit`,
+`--offset`). For each run they show what it did: its reply, how many steps it
+took, how long, what it cost and which model ran it, the command that lists its
+steps, and, for a failure, the error reference. In Tag.app, open a routine and
+then a run to see the same, with its files, its steps, a link to the message
+it posted in Slack, and, for a failure, a link to its lines in the Logs tab.
+**Show all runs** goes past the latest five.
+
+Runs also appear in the Tag's Activity, labelled with the routine's name;
+click the label to open the routine. Tag keeps the latest 50 routine runs
+there so they never push out people's requests; older runs keep their outcome,
+reply link and cost, but not their steps.
 
 ## Manage routines
 
 | Task | Tag.app | Terminal |
 | --- | --- | --- |
 | List | Routines | `tag NAME routine list` |
-| Inspect | Open a routine | `tag NAME routine show ROUTINE` |
+| Inspect | Open a routine, then a run | `tag NAME routine show ROUTINE`, `tag NAME routine runs ROUTINE` |
 | Add | Add a routine | `tag NAME routine add …` |
 | Change | Edit | `tag NAME routine edit ROUTINE --schedule …` |
 | Pause or resume | The routine's switch | `tag NAME routine pause\|resume ROUTINE` |

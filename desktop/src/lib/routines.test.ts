@@ -11,8 +11,10 @@ describe("routine examples", () => {
   it("reads the list and show examples", () => {
     expect(list.routines.map((r) => r.name)).toEqual(["Weekly PR digest"]);
     const detail = routineShow as unknown as RoutineDetail;
-    expect(detail.history.map(outcomeText)).toEqual(["Missed"]);
-    expect(outcomeGood(detail.history[0])).toBe(false);
+    expect(detail.history.map(outcomeText)).toEqual(["Posted", "Missed", "Failed"]);
+    expect(detail.history.map(outcomeGood)).toEqual([true, false, false]);
+    expect(detail.history[0].activity?.trigger?.routine_id).toBe(detail.routine.id);
+    expect(detail.history[2].error_reference).toBe("7C2E91AB");
     expect(outcomeGood(routine.last_run!)).toBe(true);
   });
 });
@@ -98,6 +100,14 @@ describe("demo routines", () => {
     const local = new Intl.DateTimeFormat("en-GB", { timeZone: sample.timezone, weekday: "short", hour: "2-digit", minute: "2-digit" })
       .format(new Date(sample.next_run!));
     expect(local).toBe("Mon 09:03");
+    // A posted, a NO_REPLY and a failed run, each on the schedule, even across a clock change.
+    const shown = run("t1", true, true, ["show", sample.id]) as unknown as RoutineDetail;
+    expect(shown.history.map((entry) => entry.outcome)).toEqual(["posted", "no_reply", "failed"]);
+    const times = shown.history.map((entry) => new Intl.DateTimeFormat("en-GB", { timeZone: sample.timezone, weekday: "short", hour: "2-digit", minute: "2-digit" })
+      .format(new Date(entry.scheduled_for!)));
+    expect(times).toEqual(["Mon 09:03", "Mon 09:03", "Mon 09:03"]);
+    expect(shown.history[2].error_reference).toBe("7C2E91AB");
+    expect(run.activity.map((item) => item.trigger?.name)).toEqual(["Weekly PR digest", "Weekly PR digest", "Weekly PR digest"]);
   });
 
   it("works out the next weekly time across a clock change", () => {

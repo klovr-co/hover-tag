@@ -211,6 +211,65 @@ class RoutineCliTests(unittest.TestCase):
         _, listed = self.cli("list", "--json")
         self.assertTrue(listed["scheduler"]["ok"])
 
+    def seed_runs(self, routine_id, count=0):
+        """One posted run with its Activity record, one NO_REPLY, one failure, then `count` more."""
+        from scripts.tag_activity import ActivityStore
+        store = ActivityStore(self.home / "state/activity")
+        run = store.create(team="T0KLOVR", channel="C0123ABCDE", thread_ts="", request_ts="", requester="U0123ABC",
+                           trigger={"type": "routine", "routine_id": routine_id, "name": "PR digest", "trigger": "schedule"})
+        store.observe(run, {"type": "activity_start", "activity_id": "a1", "label": "Searching the web…"})
+        store.set_thread(run, "1791158400.000100")
+        store.finish(run, "completed")
+        store.save_reply(run, "Three PRs merged: routines, timezones and demo dates.")
+        states = routines.RoutineStateStore(self.home)
+        item = routines.RoutineStore(self.home).get(routine_id)
+        older = [routines.run_record(item, trigger="schedule", slot=None, outcome="no_reply") for _ in range(count)]
+        for record in older + [
+            routines.run_record(item, trigger="schedule", slot=None, outcome="failed",
+                                diagnostic="The coding agent reported an error. Reference ABCD1234."),
+            routines.run_record(item, trigger="run-now", slot=None, outcome="no_reply"),
+            routines.run_record(item, trigger="schedule", slot=None, outcome="posted", activity_run_id=run,
+                                slack_ts="1791158400.000100", slack_team="T0KLOVR", cost_usd=0.18,
+                                started=NOW, ended=NOW)]:
+            states.record(routine_id, record)
+        return run
+
+    def test_show_and_runs_say_what_each_run_did(self):
+        _, added = self.add()
+        routine_id = added["routine"]["id"]
+        activity_id = self.seed_runs(routine_id)
+        _, shown = self.cli("show", routine_id, "--json")
+        posted, quiet, failed = shown["history"]
+        self.assertEqual(posted["activity"]["run_id"], activity_id)
+        self.assertEqual(posted["activity"]["reply_preview"], "Three PRs merged: routines, timezones and demo dates.")
+        self.assertEqual(posted["activity"]["trigger"]["routine_id"], routine_id)
+        self.assertNotIn("team", posted["activity"])
+        self.assertEqual(posted["slack_url"], "slack://channel?team=T0KLOVR&id=C0123ABCDE&message=1791158400.000100")
+        self.assertNotIn("activity", quiet)
+        self.assertEqual(failed["error_reference"], "ABCD1234")
+        code, text = self.cli("show", routine_id)
+        self.assertIn("Three PRs merged", text)
+        self.assertIn(f"tag research logs --activity {activity_id}", text)
+        self.assertIn("Reference ABCD1234", text)
+
+    def test_runs_pages_through_the_whole_history(self):
+        _, added = self.add()
+        routine_id = added["routine"]["id"]
+        self.seed_runs(routine_id, count=12)
+        _, first = self.cli("runs", routine_id, "--limit", "5", "--json")
+        self.assertEqual((len(first["runs"]), first["total"], first["has_more"]), (5, 15, True))
+        self.assertEqual(first["runs"][0]["outcome"], "posted")
+        self.assertEqual(first["routine"]["name"], "PR digest")
+        _, last = self.cli("runs", routine_id, "--limit", "5", "--offset", "10", "--json")
+        self.assertEqual((len(last["runs"]), last["has_more"]), (5, False))
+        ids = {r["run_id"] for r in first["runs"]} | {r["run_id"] for r in last["runs"]}
+        self.assertEqual(len(ids), 10)
+        code, text = self.cli("runs", routine_id, "--limit", "5")
+        self.assertEqual(code, 0)
+        self.assertIn("--offset 5", text)
+        with self.assertRaisesRegex(routines.RoutineError, "--limit"):
+            self.cli("runs", routine_id, "--limit", "500")
+
     def test_adding_while_stopped_says_it_wont_run_yet(self):
         self.running = False
         code, text = self.cli("add", "--name", "PR digest", "--schedule", "weekdays 09:00", "--timezone",

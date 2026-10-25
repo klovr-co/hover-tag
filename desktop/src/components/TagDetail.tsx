@@ -275,6 +275,9 @@ function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, sa
   const [logText, setLogText] = useState("");
   const failure = usePresence(tags.error || null);
   const [logView, setLogView] = useState("");
+  // A routine opened from its label in Activity, and text to find in the Logs tab.
+  const [routineFocus, setRoutineFocus] = useState<string | null>(null);
+  const [logFind, setLogFind] = useState("");
   const request = useRef(0);
   const load = useCallback(async () => {
     const current = ++request.current;
@@ -354,7 +357,8 @@ function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, sa
       <div key={tab} className="sl-body" role="tabpanel">
         {/* Rename, description, remove and start/stop report failures here, not only on Home. */}
         {failure.shown && <ErrorLine leaving={failure.leaving} onDismiss={tags.dismissible ? () => tags.setError("") : undefined}>{failure.shown}</ErrorLine>}
-        {tab === "activity" && <Activity hasMore={hasMore} loading={loading} loadOlder={() => setLimit((value) => value + 50)} hideErrors={hideErrors} api={api} row={row} items={activity} copyLog={copyLog} showLogs={() => setTab("logs")} problem={problem} openAI={() => openAI(row.id)} />}
+        {tab === "activity" && <Activity hasMore={hasMore} loading={loading} loadOlder={() => setLimit((value) => value + 50)} hideErrors={hideErrors} api={api} row={row} items={activity} copyLog={copyLog} showLogs={() => { setLogFind(""); setTab("logs"); }} problem={problem} openAI={() => openAI(row.id)}
+          openRoutine={canRoutines ? (id) => { setRoutineFocus(id); setTab("routines"); } : undefined} />}
         {tab === "channels" && (
           <>
             <p className="lead" style={{ margin: "0 0 8px" }}>{title(row)} answers and remembers conversations in these channels.</p>
@@ -372,8 +376,9 @@ function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, sa
             )}
           </>
         )}
-        {tab === "routines" && canRoutines && <Routines api={api} row={row} say={say} />}
-        {tab === "logs" && <Logs text={logView} copyLog={copyLog} />}
+        {tab === "routines" && canRoutines && <Routines api={api} row={row} say={say} focus={routineFocus}
+          showLogs={(find) => { setLogFind(find); setTab("logs"); }} />}
+        {tab === "logs" && <Logs text={logView} copyLog={copyLog} find={logFind} clearFind={() => setLogFind("")} />}
         {tab === "details" && <Details api={api} tags={tags} row={row} copyLog={copyLog} openAI={() => openAI(row.id)} say={say} canDescribe={canDescribe} canRefreshModels={canRefreshModels} />}
       </div>
       {on && tab === "activity" && (
@@ -450,8 +455,10 @@ function ActivityFilter({ hideErrors, setHideErrors }: FilterProps) {
     onChange={(event) => setHideErrors(!event.target.checked)} />Show errors</label>;
 }
 
-function ActivityFeed({ api, rows, entries, hideErrors, hasMore, loading, loadOlder, showReplyPlace = true, empty = "No activity yet" }: Pick<FilterProps, "hideErrors"> & HistoryProps & {
+function ActivityFeed({ api, rows, entries, hideErrors, hasMore, loading, loadOlder, showReplyPlace = true, empty = "No activity yet", openRoutine }: Pick<FilterProps, "hideErrors"> & HistoryProps & {
   api: Bridge; rows: TagRow[]; entries: ActivityEntry[] | null; showReplyPlace?: boolean; empty?: string;
+  /** Opens a routine from the label on a run it started. */
+  openRoutine?: (id: string) => void;
 }) {
   const now = new Date();
   const sorted = [...(entries ?? [])].filter(({ item }) => !hideErrors || item.kind !== "failed")
@@ -510,6 +517,9 @@ function ActivityFeed({ api, rows, entries, hideErrors, hasMore, loading, loadOl
             {item.duration_seconds != null && Number.isFinite(item.duration_seconds) && item.duration_seconds > 0 && <span title="Generation time, including tool work">· {generationTime(item.duration_seconds)}</span>}
             {item.usage && <ActivityTokens usage={item.usage} />}
             <StepsToggle item={item} open={!!expanded[key]} controls={`${key}:work`} onToggle={() => setExpanded((all) => ({ ...all, [key]: !all[key] }))} />
+            {item.trigger && (openRoutine
+              ? <button className="activity-routine" title="Open this routine" onClick={() => openRoutine(item.trigger!.routine_id)}><Icon name="clock" size={11} />Routine: {item.trigger.name}</button>
+              : <span className="activity-routine"><Icon name="clock" size={11} />Routine: {item.trigger.name}</span>)}
           </div>
           {item.kind === "replied" ?
             preview && <p className="activity-reply-preview">{preview}</p>
@@ -564,24 +574,40 @@ function ActivityFeed({ api, rows, entries, hideErrors, hasMore, loading, loadOl
   </>;
 }
 
-function Logs({ text, copyLog }: { text: string; copyLog: () => Promise<boolean> }) {
+/** The Tag's recent log lines; `find` marks the lines that mention it, such as a run's error reference. */
+function Logs({ text, copyLog, find = "", clearFind }: { text: string; copyLog: () => Promise<boolean>; find?: string; clearFind?: () => void }) {
   const copy = useCopied();
+  const box = useRef<HTMLPreElement>(null);
+  const lines = text.trim() ? text.trim().split("\n") : [];
+  const hits = find ? lines.filter((line) => line.includes(find)).length : 0;
+  useEffect(() => {
+    if (find) box.current?.querySelector("mark")?.scrollIntoView?.({ block: "center" });
+  }, [find, text]);
   return <>
     <div className="row" style={{ marginBottom: 8 }}>
       <p className="lead" style={{ margin: 0, flex: 1 }}>Recent entries from this Tag's services, newest last.</p>
       <button className="p-btn soft sm" onClick={() => void copyLog().then((ok) => ok && copy.mark())}>{copy.label("Copy full log")}</button>
     </div>
-    <pre className="logbox selectable" aria-label="Tag log" style={{ maxHeight: "none" }}>{text.trim() || "No log entries yet."}</pre>
+    {find && <p className="meta log-find" role="status">
+      {hits ? `${hits} ${hits === 1 ? "line mentions" : "lines mention"} ${find}.` : `No recent line mentions ${find}; it may be older than these entries.`}
+      {clearFind && <> <button className="link" onClick={clearFind}>Show all</button></>}
+    </p>}
+    <pre ref={box} className="logbox selectable" aria-label="Tag log" style={{ maxHeight: "none" }}>
+      {!lines.length ? "No log entries yet." : find
+        ? lines.map((line, index) => <span key={index}>{line.includes(find) ? <mark>{line}</mark> : line}{"\n"}</span>)
+        : text.trim()}
+    </pre>
   </>;
 }
 
-function Activity({ api, row, items, showLogs, problem, openAI, hideErrors, hasMore, loading, loadOlder }: Pick<FilterProps, "hideErrors"> & HistoryProps & {
+function Activity({ api, row, items, showLogs, problem, openAI, hideErrors, hasMore, loading, loadOlder, openRoutine }: Pick<FilterProps, "hideErrors"> & HistoryProps & {
   api: Bridge; row: TagRow; items: ActivityItem[] | null; copyLog: () => Promise<boolean>; showLogs: () => void; problem: string | null; openAI: () => void;
+  openRoutine?: (id: string) => void;
 }) {
   const attention = status(row) === "attention";
   return <>
     <ActivityFeed api={api} rows={[row]} entries={items?.map((item) => ({ tag: row.id, item })) ?? null}
-      hasMore={hasMore} loading={loading} loadOlder={loadOlder} hideErrors={hideErrors} />
+      hasMore={hasMore} loading={loading} loadOlder={loadOlder} hideErrors={hideErrors} openRoutine={openRoutine} />
       {problem && (
         <div className="notice" style={{ marginTop: 8 }}>
           <span className="ic"><Icon name="warn" size={16} /></span>

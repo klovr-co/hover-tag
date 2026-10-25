@@ -1,5 +1,5 @@
 // Routines in Tag detail: the same commands as the CLI, with motion only for real changes.
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { demoBridge } from "../lib/bridge";
 import { parseList, type TagRow } from "../lib/protocol";
@@ -137,6 +137,66 @@ describe("Routines", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save and approve" }));
     await waitFor(() => expect(say).toHaveBeenCalledWith("Saved Weekly PR digest"));
     expect(calls).toContainEqual([row.id, "routine", "edit", expect.stringMatching(/^r-/), "--timezone", "America/New_York", "--via", "tag-app", "--json"]);
+  });
+
+  it("opens what each run did: reply, files, steps, cost, Slack link, and a failure's log lines", async () => {
+    const api = demoBridge();
+    const rows: TagRow[] = parseList((await api.tag(["list", "--json"])).stdout);
+    api.open = vi.fn();
+    const showLogs = vi.fn();
+    render(<Routines api={api} row={rows[0]} say={vi.fn()} showLogs={showLogs} />);
+    fireEvent.click(await screen.findByRole("button", { name: /Weekly PR digest/ }));
+    const history = await screen.findByRole("list", { name: "Weekly PR digest runs" });
+    const runs = within(history).getAllByRole("button", { expanded: false });
+    expect(runs.map((run) => run.textContent)).toEqual([expect.stringMatching(/Posted$/), expect.stringMatching(/Nothing new$/), expect.stringMatching(/Failed$/)]);
+    fireEvent.click(runs[0]);
+    expect(screen.getByText(/Four pull requests merged this week/)).toBeTruthy();
+    expect(screen.getByText("pr-digest.md")).toBeTruthy();
+    expect(screen.getByText(/Opus 5\.5 · 1m 37s · \$0\.18/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Open in Slack/ }));
+    expect(api.open).toHaveBeenCalledWith(expect.stringMatching(/^slack:\/\/channel\?team=T0KLOVR1&id=C0LAUNCH1&message=\d+\.000100$/));
+    fireEvent.click(screen.getByRole("button", { name: "Steps" }));
+    expect(await screen.findByText("cat launch-plan.md")).toBeTruthy();
+    fireEvent.click(within(history).getAllByRole("button", { expanded: false }).at(-1)!);
+    expect(screen.getAllByText(/usage limit was reached\. Reference 7C2E91AB/).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: "Find 7C2E91AB in logs" }));
+    expect(showLogs).toHaveBeenCalledWith("7C2E91AB");
+  });
+
+  it("shows all runs past the latest five, a page at a time", async () => {
+    const api = demoBridge();
+    const rows: TagRow[] = parseList((await api.tag(["list", "--json"])).stdout);
+    const many = Array.from({ length: 27 }, (_, index) => ({ run_id: `r-${index}`, trigger: "schedule", scheduled_for: null,
+      started: new Date(Date.now() - index * 3_600_000).toISOString(), ended: null, outcome: index % 2 ? "no_reply" : "posted" }));
+    const run = api.tag;
+    const calls: string[][] = [];
+    api.tag = async (args) => {
+      calls.push(args);
+      const result = await run(args);
+      if (args.includes("show")) return { ...result, stdout: JSON.stringify({ ...JSON.parse(result.stdout), history: many }) };
+      if (args.includes("runs")) {
+        const limit = Number(args[args.indexOf("--limit") + 1]), offset = Number(args[args.indexOf("--offset") + 1]);
+        return { ...result, stdout: JSON.stringify({ ok: true, routine: {}, runs: many.slice(offset, offset + limit), total: many.length, has_more: offset + limit < many.length }) };
+      }
+      return result;
+    };
+    render(<Routines api={api} row={rows[0]} say={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: /Weekly PR digest/ }));
+    const history = await screen.findByRole("list", { name: "Weekly PR digest runs" });
+    expect(within(history).getAllByRole("listitem")).toHaveLength(5);
+    fireEvent.click(screen.getByRole("button", { name: "Show all 27 runs" }));
+    await waitFor(() => expect(within(history).getAllByRole("listitem")).toHaveLength(20));
+    fireEvent.click(screen.getByRole("button", { name: "Load older runs" }));
+    await waitFor(() => expect(within(history).getAllByRole("listitem")).toHaveLength(27));
+    expect(screen.queryByRole("button", { name: "Load older runs" })).toBeNull();
+    expect(calls.filter((args) => args.includes("runs")).map((args) => args.slice(-3, -1))).toEqual([["--offset", "0"], ["--offset", "20"]]);
+  });
+
+  it("opens the routine it was asked to focus", async () => {
+    const api = demoBridge();
+    const rows: TagRow[] = parseList((await api.tag(["list", "--json"])).stdout);
+    render(<Routines api={api} row={rows[0]} say={vi.fn()} focus="r-3f9a1c2e7b" />);
+    expect(await screen.findByRole("list", { name: "Weekly PR digest runs" })).toBeTruthy();
   });
 
   it("asks before removing, and the row slides out", async () => {

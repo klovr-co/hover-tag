@@ -1,6 +1,6 @@
 # Copyright 2026 klovr.co
 # SPDX-License-Identifier: Apache-2.0
-"""``tag [TAG] routine list|show|add|edit|pause|resume|remove|run-now``.
+"""``tag [TAG] routine list|show|runs|add|edit|pause|resume|remove|run-now``.
 
 Tag.app runs the same commands with ``--json``. Creating or editing a routine
 here counts as the operator's approval of exactly what was saved; the running
@@ -17,22 +17,26 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
+import urllib.parse
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 try:
+    import tag_activity
     import tag_display as display
     import tag_routines as routines_lib
     from tag_routine_scheduler import schedule_key
 except ImportError:
+    from scripts import tag_activity
     from scripts import tag_display as display
     from scripts import tag_routines as routines_lib
     from scripts.tag_routine_scheduler import schedule_key
 
-ACTIONS = ("list", "show", "add", "edit", "pause", "resume", "remove", "run-now")
+ACTIONS = ("list", "show", "runs", "add", "edit", "pause", "resume", "remove", "run-now")
 CHANGES = frozenset({"add", "edit", "pause", "resume", "remove", "run-now"})
 ATTENTION = frozenset({"failed", "budget_exceeded", "timeout", "blocked", "missed", "interrupted"})
 OPERATOR = "local-operator"
@@ -55,6 +59,9 @@ def parser() -> argparse.ArgumentParser:
 
     command("list", "List this Tag's routines.", reference=False)
     command("show", "Show one routine, its next runs and its history.")
+    runs = command("runs", "List a routine's runs, newest first, with what each one did.")
+    runs.add_argument("--limit", type=int, default=20, help="how many runs (1–100, default 20)")
+    runs.add_argument("--offset", type=int, default=0, help="skip this many of the newest runs")
     for name, help_text in (("add", "Add a routine."), ("edit", "Change a routine.")):
         sub = command(name, help_text, reference=name == "edit")
         sub.add_argument("--name")
@@ -166,6 +173,66 @@ def _fields(args: argparse.Namespace, values: dict[str, str], channels: list[dic
         if getattr(args, "paused", False):
             fields["enabled"] = False
     return fields
+
+
+REFERENCE_RE = re.compile(r"Reference ([A-F0-9]{8})")
+
+
+def run_entries(home: Path, routine: dict[str, Any], history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """History entries with what each run did: its Activity row while Tag keeps it (the latest 50
+    routine runs), a link to the message it posted, and the error reference of a failure."""
+    found = tag_activity.activity_for_runs(home / "state/activity", [e.get("activity_run_id") for e in history])
+    entries = []
+    for entry in history:
+        row = dict(entry)
+        item = found.get(entry.get("activity_run_id"))
+        team = entry.get("slack_team")
+        if item is not None:
+            item = dict(item)
+            team = team or item.pop("team")
+            item.pop("team", None)
+            row["activity"] = item
+        channel = (item or {}).get("channel") or routine["channel"]
+        if (isinstance(entry.get("slack_ts"), str) and isinstance(team, str)
+                and re.fullmatch(r"T[A-Z0-9]+", team) and re.fullmatch(r"\d+\.\d+", entry["slack_ts"])):
+            row["slack_url"] = "slack://channel?" + urllib.parse.urlencode(
+                {"team": team, "id": channel, "message": entry["slack_ts"]})
+        if not row.get("error_reference") and (match := REFERENCE_RE.search(str(entry.get("diagnostic") or ""))):
+            row["error_reference"] = match.group(1)
+        entries.append(row)
+    return entries
+
+
+def _run_text(entry: dict[str, Any], zone: str, tag_id: str) -> tuple[str, str, list[str]]:
+    """One run for people: when, what happened, and detail lines."""
+    when = entry.get("started") or entry.get("scheduled_for") or ""
+    parts = [entry["outcome"].replace("_", " ")]
+    if entry.get("trigger") in {"run-now", "catch-up", "retry"}:
+        parts[0] += {"run-now": " (run by hand)", "catch-up": " (caught up)", "retry": " (tried again)"}[entry["trigger"]]
+    activity = entry.get("activity") or {}
+    if steps := activity.get("step_count"):
+        parts.append(f"{steps} step{'s' if steps != 1 else ''}")
+    if (seconds := activity.get("duration_seconds")) is not None:
+        parts.append(f"{int(seconds) // 60}m {int(seconds) % 60:02d}s" if seconds >= 60 else f"{int(seconds)}s")
+    if isinstance(entry.get("cost_usd"), (int, float)):
+        parts.append(f"${entry['cost_usd']:.2f}")
+    if model := activity.get("model_name") or activity.get("model"):
+        parts.append(model)
+    details = []
+    if summary := activity.get("reply_summary") or activity.get("reply_preview"):
+        details.append(summary)
+    if entry.get("diagnostic"):
+        details.append(entry["diagnostic"])
+    if entry.get("activity_run_id"):
+        details.append(f"Steps: tag {tag_id} logs --activity {entry['activity_run_id']}")
+    return (_local(when, zone) if when else "—"), " · ".join(parts), details
+
+
+def _show_run(entry: dict[str, Any], zone: str, tag_id: str) -> None:
+    when, text, details = _run_text(entry, zone, tag_id)
+    display.info_row(when, text, good=entry["outcome"] not in ATTENTION)
+    for line in details:
+        display.info_row("", line)
 
 
 def scheduler_status(home: Path, tag_id: str, running: bool, now: datetime) -> dict[str, Any]:
@@ -334,13 +401,31 @@ def run(home: Path, tag_id: str, argv: list[str], *, values: dict[str, str],
 
     routine = store.get(args.routine)
     _check_caller(args.action, routine)
+    if args.action == "runs":
+        if not 1 <= args.limit <= 100 or args.offset < 0:
+            raise routines_lib.RoutineError("Use --limit from 1 to 100 and an --offset of 0 or more")
+        history = list(reversed(states.peek(routine["id"]).get("history") or []))
+        page = run_entries(home, routine, history[args.offset:args.offset + args.limit])
+        if args.json_output:
+            output({"routine": {"id": routine["id"], "name": routine["name"], "timezone": routine["timezone"]},
+                    "runs": page, "total": len(history), "has_more": args.offset + len(page) < len(history)})
+            return 0
+        display.header("Runs", routine["name"])
+        if not page:
+            display.info_row("Runs", "None yet")
+        for entry in page:
+            _show_run(entry, routine["timezone"], tag_id)
+        if args.offset + len(page) < len(history):
+            display.next_action("See older runs", f"tag {tag_id} routine runs {routine['id']} --offset "
+                                                  f"{args.offset + len(page)}")
+        return 0
     if args.action == "show":
         row = describe(routine)
         state = states.peek(routine["id"])
         upcoming = ([t.isoformat() for t in routines_lib.upcoming(routine, moment)] if routine["enabled"] else [])
         if args.json_output:
             output({"tag_running": running, "routine": row, "upcoming": upcoming,
-                    "history": list(reversed(state.get("history") or []))})
+                    "history": run_entries(home, routine, list(reversed(state.get("history") or [])))})
             return 0
         display.header("Routine", row["name"])
         display.info_row("Schedule", f"{row['schedule']} ({row['timezone']})")
@@ -355,11 +440,11 @@ def run(home: Path, tag_id: str, argv: list[str], *, values: dict[str, str],
                                    f"{limits['timeout_seconds'] // 60} min per run")
         for moment_text in upcoming:
             display.info_row("Next", _local(moment_text, routine["timezone"]))
-        for entry in list(reversed(state.get("history") or []))[:10]:
-            when = entry.get("started") or entry.get("scheduled_for") or ""
-            detail = entry["outcome"].replace("_", " ") + (f": {entry['diagnostic']}" if entry.get("diagnostic") else "")
-            display.info_row(_local(when, routine["timezone"]) if when else "—", detail,
-                             good=entry["outcome"] not in ATTENTION)
+        history = list(reversed(state.get("history") or []))
+        for entry in run_entries(home, routine, history[:10]):
+            _show_run(entry, routine["timezone"], tag_id)
+        if len(history) > 10:
+            display.next_action("See all runs", f"tag {tag_id} routine runs {routine['id']}")
         display.paragraph("Prompt:\n" + routine["prompt"])
         return 0
     if args.action == "edit":

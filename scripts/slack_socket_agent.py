@@ -5342,8 +5342,10 @@ def create_app(
         header = f"⏰ *{slack_escape(name)}*"
 
         def record(outcome: str, diagnostic: str = "", **extra: Any) -> dict[str, Any]:
+            # The workspace lets the CLI and Tag.app link to the message the run posted.
             return tag_routines.run_record(routine, trigger=trigger, slot=slot, outcome=outcome, started=started,
-                                           ended=datetime.now(timezone.utc), diagnostic=diagnostic, **extra)
+                                           ended=datetime.now(timezone.utc), diagnostic=diagnostic,
+                                           slack_team=team or None, **extra)
 
         def refuse(diagnostic: str, *, notify: bool) -> dict[str, Any]:
             if notify:
@@ -5545,7 +5547,8 @@ def create_app(
                     client.chat_postMessage(channel=channel, thread_ts=root["ts"], text=text)
                 else:
                     ensure_root(text)
-                return record(outcome, f"{diagnostic} Reference {reference}.", slack_ts=root.get("ts"), **extra)
+                return record(outcome, f"{diagnostic} Reference {reference}.", slack_ts=root.get("ts"),
+                              error_reference=reference, **extra)
         finally:
             if not finished:
                 finish_activity("failed")

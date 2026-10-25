@@ -112,7 +112,7 @@ def routine_trigger(value: object) -> dict[str, str] | None:
         return None
     kind = value.get("trigger")
     return {"type": "routine", "routine_id": routine_id, "name": preview(name, limit=80),
-            "trigger": kind if kind in {"schedule", "catch-up", "run-now"} else "schedule"}
+            "trigger": kind if kind in {"schedule", "catch-up", "run-now", "retry"} else "schedule"}
 
 
 def _is_routine_record(path: Path) -> bool:
@@ -504,42 +504,63 @@ def recent_activity(root: Path, scopes: str = "", limit: int = MAX_RECENT, *,
             continue
         if hide_errors and record["outcome"] == "failed":
             continue
-        finished = record.get("finished_at")
-        raw = finished if record["outcome"] != "running" and isinstance(finished, str) else record["started_at"]
-        try:
-            at = datetime.fromisoformat(raw)
-        except ValueError:
-            continue
-        at = at.replace(tzinfo=timezone.utc) if at.tzinfo is None else at.astimezone(timezone.utc)
-        record_channel = record["channel"]
-        dm = record_channel.startswith("D")
-        items.append((at, {
-            "run_id": record["run_id"],
-            "thread": thread_id(record),
-            "at": at.isoformat(timespec="seconds"), "kind": RECENT_KINDS[record["outcome"]],
-            "channel": record_channel,
-            "channel_name": None if dm else (cached_names or {}).get(record["team"], {}).get(record_channel, names.get(record_channel)),
-            "dm": dm,
-            **({"step_count": steps} if (steps := len(record["events"]) + record["omitted"]) else {}),
-            **({"duration_seconds": duration} if (duration := generation_seconds(record)) is not None else {}),
-            **({"reasoning_effort": effort} if (effort := record.get("reasoning_effort")) in SUPPORTED_REASONING_EFFORTS else {}),
-            **({"trigger": trigger} if (trigger := routine_trigger(record.get("trigger"))) else {}),
-            **({"usage": usage} if (usage := token_usage(record.get("usage"))) is not None else {}),
-            **({"artifacts": artifacts} if (artifacts := artifact_records(record.get("artifacts"))) else {}),
-            **({"artifact_thread_url": url} if artifacts and (url := artifact_thread_url(record)) else {}),
-            **{key: record[key] for key in ("backend", "model", "model_name")
-               if isinstance(record.get(key), str)},
-            **({"reply_summary_status": (
-                "unavailable" if record.get("reply_summary_status") == "pending"
-                and _summary_expired(record) else record["reply_summary_status"])}
-               if record.get("reply_summary_status") in {"pending", "unavailable", "ready"} else {}),
-            **({"reply_preview": reply_preview(record["reply_preview"])}
-               if record["outcome"] == "completed" and record.get("reply_preview") else {}),
-            **({"reply_summary": reply_preview(record["reply_summary"])}
-               if record["outcome"] == "completed" and record.get("reply_summary") else {}),
-        }))
+        if (built := activity_item(record, names=names, cached_names=cached_names)) is not None:
+            items.append(built)
     items.sort(key=lambda item: item[0], reverse=True)
     return [item for _, item in items[:limit]]
+
+
+def activity_item(record: dict[str, Any], *, names: dict[str, str] | None = None,
+                  cached_names: dict[str, dict[str, str]] | None = None) -> tuple[datetime, dict[str, Any]] | None:
+    """One validated record as an Activity row, with the time it sorts by."""
+    finished = record.get("finished_at")
+    raw = finished if record["outcome"] != "running" and isinstance(finished, str) else record["started_at"]
+    try:
+        at = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    at = at.replace(tzinfo=timezone.utc) if at.tzinfo is None else at.astimezone(timezone.utc)
+    record_channel = record["channel"]
+    dm = record_channel.startswith("D")
+    return at, {
+        "run_id": record["run_id"],
+        "thread": thread_id(record),
+        "at": at.isoformat(timespec="seconds"), "kind": RECENT_KINDS[record["outcome"]],
+        "channel": record_channel,
+        "channel_name": None if dm else (cached_names or {}).get(record["team"], {}).get(
+            record_channel, (names or {}).get(record_channel)),
+        "dm": dm,
+        **({"step_count": steps} if (steps := len(record["events"]) + record["omitted"]) else {}),
+        **({"duration_seconds": duration} if (duration := generation_seconds(record)) is not None else {}),
+        **({"reasoning_effort": effort} if (effort := record.get("reasoning_effort")) in SUPPORTED_REASONING_EFFORTS else {}),
+        **({"trigger": trigger} if (trigger := routine_trigger(record.get("trigger"))) else {}),
+        **({"usage": usage} if (usage := token_usage(record.get("usage"))) is not None else {}),
+        **({"artifacts": artifacts} if (artifacts := artifact_records(record.get("artifacts"))) else {}),
+        **({"artifact_thread_url": url} if artifacts and (url := artifact_thread_url(record)) else {}),
+        **{key: record[key] for key in ("backend", "model", "model_name")
+           if isinstance(record.get(key), str)},
+        **({"reply_summary_status": (
+            "unavailable" if record.get("reply_summary_status") == "pending"
+            and _summary_expired(record) else record["reply_summary_status"])}
+           if record.get("reply_summary_status") in {"pending", "unavailable", "ready"} else {}),
+        **({"reply_preview": reply_preview(record["reply_preview"])}
+           if record["outcome"] == "completed" and record.get("reply_preview") else {}),
+        **({"reply_summary": reply_preview(record["reply_summary"])}
+           if record["outcome"] == "completed" and record.get("reply_summary") else {}),
+    }
+
+
+def activity_for_runs(root: Path, run_ids: list[str]) -> dict[str, dict[str, Any]]:
+    """Activity rows, with the Slack workspace, for the given runs that are still kept. Never writes."""
+    store = ActivityStore(root)
+    found: dict[str, dict[str, Any]] = {}
+    for run_id in run_ids:
+        if not isinstance(run_id, str) or not RUN_ID_RE.fullmatch(run_id):
+            continue
+        record = store.get(run_id)
+        if record is not None and (built := activity_item(record)) is not None:
+            found[run_id] = {**built[1], "team": record["team"]}
+    return found
 
 
 def activity_details(root: Path, run_id: str, *, report_directory: Path | None = None) -> dict[str, Any] | None:

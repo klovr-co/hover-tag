@@ -26,6 +26,8 @@ export interface ActivityItem {
   artifacts?: { name: string; kind: "file" | "image"; delivery: "uploaded" | "local" | "upload_failed";
     url?: string; local_path?: string }[];
   artifact_thread_url?: string;
+  /** Set when a routine started the run, rather than a person. */
+  trigger?: { type: "routine"; routine_id: string; name: string; trigger: string };
 
   at: string;
   kind: "replied" | "failed" | "stopped" | "working" | string;

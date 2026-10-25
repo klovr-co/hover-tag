@@ -177,6 +177,8 @@ class RoutineRunTests(unittest.TestCase):
         self.assertIn("didn't finish", text)
         self.assertNotIn("secret-token-123", text)
         self.assertRegex(record["diagnostic"], r"Reference [A-F0-9]{8}")
+        self.assertIn(f"Reference {record['error_reference']}.", record["diagnostic"])
+        self.assertEqual(record["slack_team"], "T1")
 
     def test_timeouts_are_reported_as_timeouts(self):
         def behaviour(kwargs):

@@ -17,7 +17,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts import agent_models, slack_channel_names, tag_activity, tag_autostart, tag_cli, tag_config, tag_install, tag_instances
+from scripts import agent_models, slack_channel_names, tag_activity, tag_routines, tag_autostart, tag_cli, tag_config, tag_install, tag_instances
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = ROOT / "protocol/examples"
@@ -70,6 +70,27 @@ class ProtocolTests(unittest.TestCase):
         self.assertProvides(listed["routines"][0]["approval"], promised_row["approval"], "routine approval")
         shown = self.cli("t1-a1", "routine", "show", "Weekly PR digest", "--json")
         self.assertProvides(shown, example("routine-show.json"), "tag routine show --json")
+        routine_id = added["routine"]["id"]
+        activity = tag_activity.ActivityStore(home / "state/activity")
+        run = activity.create(team="T0KLOVR1", channel="C0LAUNCH1", thread_ts="", request_ts="", requester="U0MAYA001",
+                              trigger={"type": "routine", "routine_id": routine_id, "name": "Weekly PR digest"})
+        activity.set_thread(run, "1760256281.000100")
+        activity.finish(run, "completed")
+        activity.save_reply(run, "Four pull requests merged.")
+        item = tag_routines.RoutineStore(home).get(routine_id)
+        tag_routines.RoutineStateStore(home).record(routine_id, tag_routines.run_record(
+            item, trigger="schedule", slot=None, outcome="posted", activity_run_id=run, slack_ts="1760256281.000100",
+            slack_team="T0KLOVR1", tools_used=["Searching Slack…"], cost_usd=0.18, tokens=43500))
+        listed_runs = self.cli("t1-a1", "routine", "runs", routine_id, "--json")
+        promised_runs = example("routine-runs.json")
+        self.assertProvides(listed_runs, promised_runs, "tag routine runs --json")
+        self.assertProvides(listed_runs["routine"], promised_runs["routine"], "tag routine runs --json routine")
+        posted = example("routine-show.json")["history"][0]
+        actual = self.cli("t1-a1", "routine", "show", routine_id, "--json")["history"][0]
+        self.assertProvides(actual, {k: v for k, v in posted.items() if k not in {"error_reference", "diagnostic"}},
+                            "tag routine show --json run")
+        self.assertProvides(actual["activity"], {k: v for k, v in posted["activity"].items() if k not in {
+            "step_count", "duration_seconds", "usage", "backend", "model", "model_name"}}, "routine run activity")
         paused = self.cli("t1-a1", "routine", "pause", added["routine"]["id"], "--json")
         self.assertIsNone(paused["routine"]["next_run"])
         removed = self.cli("t1-a1", "routine", "remove", added["routine"]["id"], "--json")

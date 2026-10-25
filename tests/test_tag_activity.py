@@ -307,5 +307,15 @@ class RecentActivityTests(unittest.TestCase):
         self.assertEqual(sorted((item["at"] for item in items), reverse=True), [item["at"] for item in items])
 
 
+    def test_rows_for_given_runs_match_the_feed_and_name_the_workspace(self) -> None:
+        kept = self.record("C0LAUNCH", "completed", "2026-01-01T10:00:00+00:00", "2026-01-01T10:01:00+00:00")
+        from scripts.tag_activity import activity_for_runs, recent_activity
+        found = activity_for_runs(self.root, [kept, "0" * 32, "../../etc/passwd", None])  # type: ignore[list-item]
+        self.assertEqual(list(found), [kept])
+        self.assertEqual(found[kept]["team"], "T1")
+        feed = {item["run_id"]: item for item in recent_activity(self.root)}
+        self.assertEqual({k: v for k, v in found[kept].items() if k != "team"}, feed[kept])
+
+
 if __name__ == "__main__":
     unittest.main()

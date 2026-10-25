@@ -10,13 +10,20 @@ import { useFresh, useListMotion } from "../lib/motion";
 import {
   cliError, emptyForm, formArgs, formOf, formProblem, outcomeGood, outcomeText, routineLine, SCHEDULE_EXAMPLES, triggerText,
   localZone, matchZones, timeZones, when,
-  type Routine, type RoutineDetail, type RoutineForm, type RoutineList,
+  type Routine, type RoutineDetail, type RoutineForm, type RoutineList, type RoutineRun, type RoutineRuns,
 } from "../lib/routines";
+import { generationTime } from "../lib/home";
+import { ActivityArtifacts } from "./ActivityArtifacts";
+import { ActivityDetails } from "./ActivityDetails";
+import { ActivityTokens } from "./ActivityTokens";
 import { ErrorLine, fitText, Icon, Switch } from "./ui";
 
 type Say = (text: string) => void;
 
-export function Routines({ api, row, say }: { api: Bridge; row: TagRow; say: Say }) {
+/** A Tag's routines. `focus` opens one (from its label in Activity); `showLogs` finds a failure in the Logs tab. */
+export function Routines({ api, row, say, focus, showLogs }: {
+  api: Bridge; row: TagRow; say: Say; focus?: string | null; showLogs?: (find: string) => void;
+}) {
   const [list, setList] = useState<RoutineList | null>(null);
   const [error, setError] = useState("");
   const [editing, setEditing] = useState<Routine | "new" | null>(null);
@@ -57,6 +64,13 @@ export function Routines({ api, row, say }: { api: Bridge; row: TagRow; say: Say
     }
   };
   const channels = row.channels ?? [];
+  const focused = useRef<string | null>(null);
+  useEffect(() => {
+    if (!focus || !list || focused.current === focus || !list.routines.some((r) => r.id === focus)) return;
+    focused.current = focus;
+    setOpen(focus);
+    requestAnimationFrame(() => document.querySelector(`[data-routine="${focus}"]`)?.scrollIntoView?.({ block: "nearest" }));
+  }, [focus, list]);
   if (!list) return <p className="meta" style={{ margin: 0 }}>Loading routines…</p>;
   const full = list.routines.filter((r) => r.enabled).length >= list.limits.per_tag;
   return (
@@ -74,7 +88,7 @@ export function Routines({ api, row, say }: { api: Bridge; row: TagRow; say: Say
       <RoutineRows routines={list.routines} render={(item, state) => (
         <RoutineRow key={item.id} api={api} tag={row.id} routine={item} state={state} tagRunning={list.tag_running}
           open={open === item.id} toggleOpen={() => setOpen(open === item.id ? null : item.id)}
-          busy={busy === item.id} saved={saved === item.id} act={act}
+          busy={busy === item.id} saved={saved === item.id} act={act} showLogs={showLogs}
           edit={() => { setEditing(item); setOpen(null); }} />
       )} />
       {editing ? (
@@ -113,8 +127,8 @@ function RoutineRows({ routines, render }: { routines: Routine[]; render: (item:
   return <div className="card rt-list">{rows.map(({ item, state }) => render(item, state))}</div>;
 }
 
-function RoutineRow({ api, tag, routine, state, tagRunning, open, toggleOpen, busy, saved, act, edit }: {
-  api: Bridge; tag: string; routine: Routine; state: "stay" | "enter" | "leave"; tagRunning: boolean;
+function RoutineRow({ api, tag, routine, state, tagRunning, open, toggleOpen, busy, saved, act, edit, showLogs }: {
+  api: Bridge; tag: string; routine: Routine; state: "stay" | "enter" | "leave"; tagRunning: boolean; showLogs?: (find: string) => void;
   open: boolean; toggleOpen: () => void; busy: boolean; saved: boolean;
   act: (id: string, args: string[], done: string) => Promise<boolean>; edit: () => void;
 }) {
@@ -125,7 +139,7 @@ function RoutineRow({ api, tag, routine, state, tagRunning, open, toggleOpen, bu
   const cls = ["rt-row", state === "enter" ? "entering" : "", state === "leave" ? "leaving" : "", flash ? "fresh" : "", open ? "open" : ""].filter(Boolean).join(" ");
   const dot = routine.attention ? "bad" : routine.running ? "live" : routine.enabled ? "on" : "off";
   return (
-    <div className={cls}>
+    <div className={cls} data-routine={routine.id}>
       <div className="rt-head">
         <button className="rt-main" aria-expanded={open} onClick={toggleOpen}>
           <span className={`rt-dot ${dot}${ran ? " ran" : ""}`} aria-hidden="true" />
@@ -141,7 +155,7 @@ function RoutineRow({ api, tag, routine, state, tagRunning, open, toggleOpen, bu
       </div>
       {open && (
         <div className="rt-more">
-          <RoutineHistory api={api} tag={tag} routine={routine} />
+          <RoutineHistory api={api} tag={tag} routine={routine} showLogs={showLogs} />
           <p className="rt-prompt selectable">{routine.prompt}</p>
           <p className="meta" style={{ margin: 0 }}>
             Up to ${routine.limits.max_budget_usd.toFixed(2)}, {routine.limits.max_turns} turns and {Math.round(routine.limits.timeout_seconds / 60)} minutes a run.
@@ -171,29 +185,86 @@ function RoutineRow({ api, tag, routine, state, tagRunning, open, toggleOpen, bu
   );
 }
 
-function RoutineHistory({ api, tag, routine }: { api: Bridge; tag: string; routine: Routine }) {
+const PAGE = 20;
+
+/** The latest five runs from `show`; "Show all runs" pages through `routine runs`. Each run opens what it did. */
+function RoutineHistory({ api, tag, routine, showLogs }: { api: Bridge; tag: string; routine: Routine; showLogs?: (find: string) => void }) {
   const [detail, setDetail] = useState<RoutineDetail | null>(null);
+  const [all, setAll] = useState<{ runs: RoutineRun[]; more: boolean } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [open, setOpen] = useState<string | null>(null);
   const lastRun = routine.last_run?.run_id;
   useEffect(() => {
     let live = true;
+    setAll(null);
     void api.tag([tag, "routine", "show", routine.id, "--json"]).then((result) => {
       if (live && result.code === 0) setDetail(parseJSON<RoutineDetail>(result.stdout));
     }, () => {});
     return () => { live = false; };
   }, [api, tag, routine.id, lastRun]);
+  const loadRuns = async (offset: number) => {
+    setLoading(true); setError("");
+    try {
+      const result = await api.tag([tag, "routine", "runs", routine.id, "--limit", String(PAGE), "--offset", String(offset), "--json"]).catch(() => null);
+      if (!result || result.code !== 0) { setError(result ? cliError(result.stdout, result.stderr) : "Couldn't reach Tag. Try again."); return; }
+      const page = parseJSON<RoutineRuns>(result.stdout);
+      setAll((previous) => ({ runs: [...(offset ? previous?.runs ?? [] : []), ...page.runs], more: page.has_more }));
+    } finally { setLoading(false); }
+  };
   if (!detail) return null;
-  const runs = detail.history.slice(0, 5);
+  const runs = all?.runs ?? detail.history.slice(0, 5);
+  const more = all ? all.more : detail.history.length > 5;
   if (!runs.length) return <p className="meta" style={{ margin: 0 }}>No runs yet.</p>;
   return (
-    <ul className="rt-history">
-      {runs.map((run) => (
-        <li key={run.run_id} className={outcomeGood(run) ? "good" : "bad"}>
-          <span className="rt-when">{when(run.started ?? run.scheduled_for, routine.timezone)}</span>
-          <span className="rt-outcome">{outcomeText(run)}{triggerText(run)}</span>
-          {run.diagnostic && <span className="rt-diag selectable">{run.diagnostic}</span>}
-        </li>
-      ))}
-    </ul>
+    <div className="rt-runs">
+      <ul className="rt-history" aria-label={`${routine.name} runs`}>
+        {runs.map((run) => {
+          const isOpen = open === run.run_id;
+          return (
+            <li key={run.run_id} className={`${outcomeGood(run) ? "good" : "bad"}${isOpen ? " open" : ""}`}>
+              <button className="rt-run-head" aria-expanded={isOpen} onClick={() => setOpen(isOpen ? null : run.run_id)}>
+                <span className="rt-when">{when(run.started ?? run.scheduled_for, routine.timezone)}</span>
+                <span className="rt-outcome">{outcomeText(run)}{triggerText(run)}</span>
+                <span className={isOpen ? "chev turn" : "chev"}><Icon name="right" size={11} /></span>
+              </button>
+              {!isOpen && run.diagnostic && <span className="rt-diag selectable">{run.diagnostic}</span>}
+              {isOpen && <RunDetail api={api} tag={tag} run={run} showLogs={showLogs} />}
+            </li>
+          );
+        })}
+      </ul>
+      {error && <ErrorLine>{error}</ErrorLine>}
+      {more && <button className="link rt-all" disabled={loading} onClick={() => void loadRuns(all ? all.runs.length : 0)}>
+        {loading ? "Loading runs…" : all ? "Load older runs" : `Show all ${detail.history.length} runs`}
+      </button>}
+    </div>
+  );
+}
+
+/** What one run did: the same reply, files, steps, tokens and timing as its entry in Activity. */
+function RunDetail({ api, tag, run, showLogs }: { api: Bridge; tag: string; run: RoutineRun; showLogs?: (find: string) => void }) {
+  const item = run.activity;
+  const summary = item?.reply_summary?.trim() || item?.reply_preview?.trim();
+  const facts = [
+    item?.model_name || item?.model,
+    item?.duration_seconds != null && item.duration_seconds > 0 ? generationTime(item.duration_seconds) : null,
+    typeof run.cost_usd === "number" ? `$${run.cost_usd.toFixed(2)}` : null,
+  ].filter(Boolean);
+  return (
+    <div className="rt-run">
+      {summary && <p className="activity-reply-preview">{summary}</p>}
+      {run.outcome === "no_reply" && <p className="meta">Nothing new to post, so it posted nothing.</p>}
+      {item && <ActivityArtifacts api={api} item={item} />}
+      {run.diagnostic && <p className="rt-diag selectable">{run.diagnostic}</p>}
+      {(facts.length > 0 || item?.usage) && <p className="meta rt-run-facts">{facts.join(" · ")}{item?.usage && <ActivityTokens usage={item.usage} />}</p>}
+      {(run.slack_url || (run.error_reference && showLogs)) && <div className="rt-run-acts">
+        {run.slack_url && <button className="link" onClick={() => void api.open(run.slack_url!)}>Open in Slack <Icon name="external" size={12} /></button>}
+        {run.error_reference && showLogs && <button className="link" onClick={() => showLogs(run.error_reference!)}>Find {run.error_reference} in logs</button>}
+      </div>}
+      {item ? <ActivityDetails api={api} tag={tag} item={item} label="Steps" />
+        : run.activity_run_id && <p className="meta">Tag keeps steps for its latest 50 routine runs; this one's are gone.</p>}
+    </div>
   );
 }
 
