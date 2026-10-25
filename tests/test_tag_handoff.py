@@ -597,11 +597,14 @@ class HandoffPromptAndSettingsTests(unittest.TestCase):
     def test_only_a_first_level_run_with_a_request_file_is_offered_the_helper(self) -> None:
         offered = self.prompt(OPENTAG_HANDOFF_REQUESTS="/tmp/r.jsonl", OPENTAG_HANDOFF_DEPTH="0")
         self.assertIn("Other Tags you may ask: Tag B, Tag C.", offered)
-        self.assertIn(str(Path("/tmp/open-tag/scripts/tag_handoff.py")), offered)
-        self.assertIn("cannot see this thread", offered)
-        self.assertNotIn("tag_handoff.py", self.prompt(OPENTAG_HANDOFF_REQUESTS="/tmp/r.jsonl",
-                                                       OPENTAG_HANDOFF_DEPTH="1"))
-        self.assertNotIn("tag_handoff.py", self.prompt(OPENTAG_HANDOFF_DEPTH="0"))
+        self.assertIn("(tag-handoff)", offered)
+        skill = (Path(__file__).resolve().parents[1] / "runtime-skills/skills/tag-handoff/SKILL.md").read_text(
+            encoding="utf-8")
+        self.assertIn("`tag_handoff.py` helper", skill)
+        self.assertIn("cannot see this thread", skill)
+        self.assertNotIn("tag-handoff", self.prompt(OPENTAG_HANDOFF_REQUESTS="/tmp/r.jsonl",
+                                                    OPENTAG_HANDOFF_DEPTH="1"))
+        self.assertNotIn("tag-handoff", self.prompt(OPENTAG_HANDOFF_DEPTH="0"))
 
     def test_peer_setting_is_validated_by_tag_config(self) -> None:
         from scripts import tag_config

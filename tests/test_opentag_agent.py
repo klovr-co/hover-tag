@@ -10,6 +10,14 @@ from unittest.mock import MagicMock, call, patch
 
 from scripts import opentag_agent
 
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def skill_text(name: str, *, raw: bool = False) -> str:
+    """A runtime skill's text, with line wrapping folded to single spaces unless ``raw``."""
+    text = (ROOT / "runtime-skills/skills" / name / "SKILL.md").read_text(encoding="utf-8")
+    return text if raw else " ".join(text.split())
+
 
 class OpenTagAgentPromptTests(unittest.TestCase):
     def test_standing_instructions_hold_nothing_that_changes_between_requests(self) -> None:
@@ -22,7 +30,8 @@ class OpenTagAgentPromptTests(unittest.TestCase):
             output_manifest=root / "inv-7/manifest.json")
         self.assertNotIn("inv-7", instructions)
         self.assertNotIn("Summarize the plan", instructions)
-        self.assertIn("record_output_artifact.py", instructions)
+        self.assertIn("File delivery default: `local+slack`", instructions)
+        self.assertIn(str(root / "workspace/artifacts/C123"), instructions)
         attachments = root / "inv-7/attachments"
         for value in (str(attachments), str(attachments / "results/images"),
                       str(attachments / "results/artifacts"), str(root / "inv-7/manifest.json"),
@@ -49,11 +58,14 @@ class OpenTagAgentPromptTests(unittest.TestCase):
             attachments_dir=None,
             allowed_scopes="slack://tag-t1/channels/general__C123",
         )
-        self.assertIn(str(Path("/tmp/open-tag/references/runtime-agent.md")), prompt)
-        self.assertNotIn("/tmp/open-tag/SKILL.md", prompt)
+        # Search scope is a procedure: the prompt routes unclear scope to the skill that settles it.
+        self.assertNotIn("runtime-agent.md", prompt)
         self.assertIn("search general workspace all", prompt)
-        self.assertIn("ask a short scope", prompt)
-        self.assertIn("do not call a search helper", prompt)
+        self.assertIn("unclear scope, or this channel's history, use\n  tag-slack-search", prompt)
+        search = skill_text("tag-slack-search")
+        self.assertIn("`search general workspace all` is ambiguous: ask a short scope question and do not call a search helper", search)
+        self.assertIn("Never silently fix a typo", search)
+        self.assertIn("`__<conversation id>`", search)
 
     def test_prompt_loads_channel_memory_and_explains_the_memory_helper(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -74,9 +86,12 @@ class OpenTagAgentPromptTests(unittest.TestCase):
                 )
         self.assertIn("- deadline: Reports are due Friday.", prompt)
         self.assertIn("- pricing: Launch pricing is 49 per seat. (this channel)", prompt)
-        self.assertIn(str(Path("/tmp/open-tag/scripts/tag_memory.py")), prompt)
-        self.assertIn("Do not save memory on your own initiative", prompt)
-        self.assertIn("only when the\n  user explicitly says it is for all channels", prompt)
+        self.assertIn(opentag_agent.helper_command(Path("/tmp/open-tag/scripts/NAME.py")), prompt)
+        self.assertIn("or forget memory (tag-memory) only when the user explicitly asks", prompt)
+        memory = skill_text("tag-memory")
+        self.assertIn("`tag_memory.py` helper", memory)
+        self.assertIn("Do not save memory on your own initiative", memory)
+        self.assertIn("only when the user explicitly says it is for all channels", memory)
         self.assertLess(prompt.index("<tag-memory"), prompt.index("User question:"))
 
     def test_native_memory_is_disabled_for_both_backends(self) -> None:
@@ -136,9 +151,9 @@ class OpenTagAgentPromptTests(unittest.TestCase):
             else:
                 os.environ["OPENTAG_TRANSPORT"] = previous_transport
 
-        self.assertIn("commands and skills installed in its environment", prompt)
-        self.assertIn("mfs_ls.py", prompt)
-        self.assertIn("not add per-tool feature flags or caller allowlists.", prompt)
+        self.assertIn("Installed commands and skills may be used under their own permissions", prompt)
+        self.assertIn("mfs_search.py", prompt)
+        self.assertIn("Never expose tokens or credentials", prompt)
         self.assertNotIn("gws", prompt.lower())
         self.assertNotIn("gmail", prompt.lower())
 
@@ -161,11 +176,14 @@ class OpenTagAgentPromptTests(unittest.TestCase):
             else:
                 os.environ["OPENTAG_TRANSPORT"] = previous_transport
 
-        self.assertIn("slack_post_message.py", prompt)
-        self.assertIn("new top-level channel message", prompt)
-        self.assertIn("only when the user", prompt)
-        self.assertIn("slack_thread_file.py", prompt)
+        self.assertIn("Post to the channel, create or change a Canvas (tag-slack-actions)", prompt)
+        self.assertIn("only when the user explicitly asks", prompt)
         self.assertIn("Never comment on a file you have not opened", prompt)
+        actions = skill_text("tag-slack-actions")
+        self.assertIn("`slack_post_message.py` helper", actions)
+        self.assertIn("new top-level channel message", actions)
+        self.assertIn("Do not post merely because you produced a summary", actions)
+        self.assertIn("`slack_thread_file.py`", skill_text("tag-attachments"))
 
     def test_slack_prompt_registers_only_explicitly_requested_output_files(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
@@ -181,16 +199,19 @@ class OpenTagAgentPromptTests(unittest.TestCase):
                 output_manifest=root / "workspace/.opentag-output.json",
             )
 
-        self.assertIn("record_output_artifact.py", prompt)
-        self.assertIn("file type is supported", prompt)
-        self.assertIn("supporting files", prompt)
-        self.assertIn("Individual Open file buttons appear only", prompt)
-        self.assertIn("Add `--attach` when", prompt)
-        self.assertIn("Add `--local-only`", prompt)
-        self.assertIn("every file in a multi-file request", prompt)
-        self.assertIn("Do not claim a file is attached", prompt)
-        self.assertIn("Do not mention the manifest helper", prompt)
-        self.assertIn("empty stdout/stderr details", prompt)
+        self.assertIn("Before saving any file for the user, use tag-files", prompt)
+        self.assertIn("Never claim that something was saved,\n  posted, remembered, attached, or downloadable", prompt)
+        self.assertIn("empty stdout/stderr", prompt)
+        files = skill_text("tag-files")
+        self.assertIn("`record_output_artifact.py` helper", files)
+        self.assertIn("file type is supported", files)
+        self.assertIn("supporting files", files)
+        self.assertIn("Individual Open file buttons appear only", files)
+        self.assertIn("Add `--attach` when", files)
+        self.assertIn("Add `--local-only`", files)
+        self.assertIn("every file in a multi-file request", files)
+        self.assertIn("Do not claim a file is attached", files)
+        self.assertIn("Do not mention the manifest helper", files)
 
     def test_slack_prompt_exposes_generated_image_result_directory(self) -> None:
         prompt = opentag_agent.build_prompt(
@@ -204,10 +225,59 @@ class OpenTagAgentPromptTests(unittest.TestCase):
         )
 
         self.assertIn(str(Path("/tmp/invocation/results/images")), prompt)
-        self.assertIn("Slack bridge uploads supported files", prompt)
-        self.assertIn("Do not call Slack's API to upload them", prompt)
         self.assertIn(str(Path("/tmp/invocation/results/artifacts")), prompt)
-        self.assertIn("including generated HTML", prompt)
+        self.assertIn("including\n  generated HTML, goes in the request's temporary artifacts directory", prompt)
+        files = skill_text("tag-files")
+        self.assertIn("Slack bridge uploads supported files", files)
+        self.assertIn("Do not call Slack's API to upload them", files)
+
+    def test_standing_instructions_stay_lean(self) -> None:
+        # Procedures belong in runtime skills; the base was ~10,000 characters before they moved.
+        with patch.dict(os.environ, {"OPENTAG_PEER_TAGS": "Writer Tag=U0123ABCD", "OPENTAG_HANDOFF_REQUESTS": "/r"}):
+            instructions = opentag_agent.build_instructions(
+                skill_dir=Path("/tag/release"), workdir=Path("/tag/workspace"), channel_id="C123", output_files=True)
+        self.assertLess(len(instructions), 3300)
+        self.assertIn("tag-handoff", instructions)
+
+    def test_runtime_skills_ship_and_name_real_helpers(self) -> None:
+        import json
+        import re
+
+        plugin = ROOT / "runtime-skills"
+        self.assertEqual("tag", json.loads((plugin / ".claude-plugin/plugin.json").read_text(encoding="utf-8"))["name"])
+        shipped = set(json.loads((ROOT / "scripts/runtime-files.json").read_text(encoding="utf-8"))["files"])
+        self.assertIn("runtime-skills/.claude-plugin/plugin.json", shipped)
+        self.assertEqual(set(opentag_agent.RUNTIME_SKILLS),
+                         {path.parent.name for path in (plugin / "skills").glob("*/SKILL.md")})
+        for name in opentag_agent.RUNTIME_SKILLS:
+            text = skill_text(name, raw=True)
+            self.assertIn(f"runtime-skills/skills/{name}/SKILL.md", shipped)
+            self.assertRegex(text, rf"\A---\nname: {name}\ndescription: Use .+\n---\n")
+            for helper in re.findall(r"`([a-z_]+\.py)`", text):
+                self.assertTrue((ROOT / "scripts" / helper).is_file(), helper)
+
+    def test_handoff_skill_states_the_real_default_deadline(self) -> None:
+        from scripts import tag_handoff
+
+        self.assertIn(f"(default {tag_handoff.DEFAULT_WAIT_MINUTES})", skill_text("tag-handoff"))
+
+    def test_both_backends_register_the_runtime_skills(self) -> None:
+        plugin = str(Path("/tag/release/runtime-skills"))
+        with patch.object(opentag_agent, "claude_rule_args", return_value=[]):
+            command = opentag_agent.claude_stream_command(
+                skill_dir=Path("/tag/release"), workdir=Path("/work"), attachments_dir=None)
+        self.assertEqual(plugin, command[command.index("--plugin-dir") + 1])
+        with patch.object(opentag_agent, "ClaudeAgentRun") as claude, \
+                patch.object(opentag_agent, "run_rich_events", side_effect=lambda start, **_: start(lambda _e: None)):
+            opentag_agent.run_claude_sdk_events("p", skill_dir=Path("/tag/release"), workdir=Path("/work"),
+                                                attachments_dir=None, timeout=5)
+        self.assertEqual([Path(plugin)], claude.call_args.kwargs["plugin_dirs"])
+        with patch.object(opentag_agent, "CodexAppServer") as codex, \
+                patch.object(opentag_agent, "codex_app_server_command", return_value=["codex"]), \
+                patch.object(opentag_agent, "run_rich_events", side_effect=lambda start, **_: start(lambda _e: None)):
+            opentag_agent.run_codex_app_server_events("p", workdir=Path("/work"), skill_dir=Path("/tag/release"),
+                                                      timeout=5)
+        self.assertEqual([Path(plugin) / "skills"], codex.call_args.kwargs["skill_roots"])
 
     @patch("scripts.opentag_agent.backend_command", return_value=["codex"])
     def test_codex_backend_uses_automatic_workspace_safety_review(self, _backend) -> None:
@@ -531,9 +601,12 @@ class ChannelArtifactRoutingTests(unittest.TestCase):
                 self.assertEqual(kwargs['workdir'], root)
                 self.assertTrue((root / 'artifacts/C123').is_dir())
                 self.assertIn(str(root / 'artifacts/C123'), prompt)
-                self.assertIn('--channel-id C123', prompt)
-                self.assertIn('edit existing', prompt)
-                self.assertIn('workspace root for older files', prompt)
+                self.assertIn('Conversation id: C123', prompt)
+                self.assertIn('Before saving any file for the user, use tag-files', prompt)
+                files = skill_text('tag-files')
+                self.assertIn('`--channel-id` set to the conversation id', files)
+                self.assertIn('edit existing', files)
+                self.assertIn('workspace root for older files', files)
                 self.assertEqual(legacy.read_text(encoding="utf-8"), 'existing')
                 return 0
             # Without --event-stream this is claude -p, which runs only as Bypass.
