@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "ok": true,
+  "imported": {
+    "tag": "mayas-tag",
+    "name": "Maya's Tag",
+    "contents": {
+      "memory": 2,
+      "history": 3,
+      "skills": 1,
+      "threads": 0,
+      "routines": 0
+    },
+    "redacted": [],
+    "slack": {
+      "team": "T0KLOVR1",
+      "app": "A0RESE02",
+      "workspace_name": "Klovr"
+    },
+    "history": true,
+    "next": "tag mayas-tag setup"
+  }
+}
