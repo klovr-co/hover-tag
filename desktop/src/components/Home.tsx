@@ -1,7 +1,7 @@
 // Copyright 2026 klovr.co
 // SPDX-License-Identifier: Apache-2.0
 // Every Tag on this computer, grouped by Slack workspace, under the sky.
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import type { AIStatus } from "../lib/ai";
 import type { Bridge } from "../lib/bridge";
 import {
@@ -52,6 +52,8 @@ interface Props {
   showSettings: (tab?: SettingsTab, privacy?: boolean) => void;
   /** Usage data was turned on at first run: say so once. */
   usageNote?: boolean;
+  /** Import a Tag from a file, shown beside Add Tag when the installed Tag can (`tag-export`). */
+  importTag?: ReactNode;
   seenUsageNote?: () => void;
   now?: Date;
 }
@@ -123,6 +125,7 @@ export function Home(props: Props) {
             <div className="sum"><span className={sum.on ? "sq" : "sq off"} />{sum.text}</div>
           </div>
           <button className="sky-btn" aria-label="Settings" title="Settings" onClick={() => showSettings()}><Icon name="gear" size={16} /></button>
+          {props.importTag}
           <button className={rows.length > 2 && !setup.length && !urgent ? "add solid" : "add"} onClick={add}>
             <Icon name="plus" />Add Tag
           </button>

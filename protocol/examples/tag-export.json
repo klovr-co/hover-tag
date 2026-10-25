@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "ok": true,
+  "tag": "t0klovr1-a0rese02",
+  "export": {
+    "path": "/Users/maya/Downloads/mayas-tag-2026-10-26.hovertag",
+    "bytes": 8312,
+    "format": "hover-tag-export",
+    "version": 1,
+    "exported_at": "2026-10-26T09:00:00Z",
+    "tag": {
+      "id": "t0klovr1-a0rese02",
+      "name": "Maya's Tag",
+      "description": null
+    },
+    "slack": {
+      "team": "T0KLOVR1",
+      "app": "A0RESE02",
+      "workspace_name": "Klovr"
+    },
+    "contents": {
+      "memory": 2,
+      "history": 3,
+      "skills": 1,
+      "threads": 0,
+      "routines": 0
+    },
+    "history": true,
+    "redacted": []
+  }
+}

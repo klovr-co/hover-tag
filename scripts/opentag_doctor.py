@@ -29,7 +29,7 @@ def recovery_hint(label: str) -> str:
     if label == "Tag runtime dependencies":
         return "Re-run the Tag installer; for a source checkout, run ./install.sh --dependencies-only"
     if label == "Tag memory":
-        return "Move the damaged file named in the detail out of Tag's state/memory folder; Tag recreates empty memory"
+        return "Fix or move the damaged file named in the detail in Tag's memory folder; tag knowledge history shows earlier versions"
     if label.startswith("MFS"):
         return "Check tag config show, start MFS, and index the configured sources before retrying"
     if label.startswith("Slack") or label.startswith("SLACK_"):
@@ -227,24 +227,24 @@ def check_slack(channel_id: str | None) -> bool:
 def check_memory() -> bool:
     """Report Tag memory health; provider-native memory is always disabled at launch."""
     try:
-        from tag_memory import GLOBAL, default_root, read_document, scope_path
+        import tag_knowledge as knowledge
+        from tag_memory import GLOBAL, default_root, prepare
     except ImportError:  # Imported as scripts.opentag_doctor by tests.
-        from scripts.tag_memory import GLOBAL, default_root, read_document, scope_path
-    root = default_root()
-    paths = [scope_path(root, GLOBAL), *sorted((root / "channels").glob("*.json"))]
+        from scripts import tag_knowledge as knowledge
+        from scripts.tag_memory import GLOBAL, default_root, prepare
+    places = knowledge.Places.from_env(default_root())
     counts = {"core": 0, "note": 0}
     scopes = 0
-    for path in paths:
-        if not path.exists():
-            continue
-        try:
-            entries = read_document(path)["entries"]
-        except Exception as exc:  # noqa: BLE001 - doctor reports, never raises
-            print_check(False, "Tag memory", f"cannot read {path}: {type(exc).__name__}")
-            return False
-        scopes += 1
-        for entry in entries.values():
-            counts[entry.get("kind", "core")] = counts.get(entry.get("kind", "core"), 0) + 1
+    try:
+        prepare(places)
+        for scope in [GLOBAL, *knowledge.channels(places)]:
+            entries = knowledge.load_scope(places, scope)["entries"]
+            scopes += bool(entries)
+            for entry in entries.values():
+                counts[entry["kind"]] += 1
+    except Exception as exc:  # noqa: BLE001 - doctor reports, never raises
+        print_check(False, "Tag memory", f"cannot read {places.memory}: {exc}")
+        return False
     print_check(
         True,
         "Tag memory",

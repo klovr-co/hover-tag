@@ -136,7 +136,7 @@ class OpenTagDoctorTests(unittest.TestCase):
             self.assertIn("1 always-loaded entries and 1 notes in 1 scope(s)", output.getvalue())
             self.assertIn("Codex memories are turned off", output.getvalue())
 
-            (root / "global.json").write_text("{broken", encoding="utf-8")
+            (root / "channels/C1/.entries.json").write_text("{broken", encoding="utf-8")
             output = io.StringIO()
             with patch.dict(os.environ, {"OPENTAG_MEMORY_ROOT": temp}), redirect_stdout(output):
                 self.assertFalse(opentag_doctor.check_memory())

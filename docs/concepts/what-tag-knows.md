@@ -83,9 +83,14 @@ You can also ask Tag:
 - "What do you remember?" to list what this channel can use.
 - "Change the deadline to Thursday." Tag keeps the old value in its history
   so the change can be undone. Say the old value was wrong or sensitive, and
-  Tag does not keep it.
-- "Forget the report deadline." Tag can no longer reach the entry, including
-  its history. The original Slack messages are not changed.
+  Tag removes it from its history too.
+- "Forget the report deadline." Tag can no longer reach the entry. Its private
+  history keeps it so the Tag's owner can restore it, unless you ask Tag to
+  forget it completely. The original Slack messages are not changed.
+
+Each Tag's memory is a set of plain markdown files that belong only to that
+Tag; Tags never share memory, even on one computer. Every change is kept in
+the Tag's private history, with who asked and the thread it came from.
 
 Anyone who can use Tag can save, change, or forget memory, and each reply says
 exactly what changed. Short facts are loaded with every request; longer

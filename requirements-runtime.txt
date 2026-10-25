@@ -9,3 +9,5 @@ tomli==2.2.1; python_version < "3.11"
 mfs-server[slack]==0.4.6
 PyJWT[crypto]==2.10.1
 claude-agent-sdk==0.2.163
+# Each Tag's knowledge history; used under Apache-2.0 (dual-licensed Apache-2.0 / GPL-2.0-or-later).
+dulwich==1.2.19

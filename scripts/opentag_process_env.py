@@ -54,8 +54,8 @@ def text_only_environment(source: Mapping[str, str]) -> dict[str, str]:
     """Preserve provider auth while blanking task/bridge data, also for SDK env merges."""
     clean = without_telemetry_environment(source)
     return {key: "" if key not in clean or key.startswith(("SLACK_", "MFS_"))
-            or key in {"OPENTAG_CALLER_ID", "OPENTAG_CURRENT_CHANNEL_ID", "OPENTAG_ROUTINE_ID",
-                       "OPENTAG_SLACK_SEARCH_GRANT", "OPENTAG_SLACK_CHANNEL_LABELS"}
+            or key in {"OPENTAG_CALLER_ID", "OPENTAG_CURRENT_CHANNEL_ID", "OPENTAG_CURRENT_THREAD_TS",
+                       "OPENTAG_ROUTINE_ID", "OPENTAG_SLACK_SEARCH_GRANT", "OPENTAG_SLACK_CHANNEL_LABELS"}
             else value for key, value in source.items()}
 
 
@@ -134,6 +134,7 @@ def backend_environment(
     handoff_depth: int = 0,
     run_limits: Mapping[str, float | int] | None = None,
     routine_id: str | None = None,
+    thread_ts: str | None = None,
 ) -> dict[str, str]:
     clean = without_telemetry_environment(
         isolated_environment(source, transport=transport)
@@ -144,6 +145,11 @@ def backend_environment(
         clean.pop(name, None)
     clean["OPENTAG_CURRENT_CHANNEL_ID"] = conversation_id
     clean["OPENTAG_CALLER_ID"] = caller_id
+    # The memory helper links what it saves to this Slack thread.
+    if thread_ts:
+        clean["OPENTAG_CURRENT_THREAD_TS"] = thread_ts
+    else:
+        clean.pop("OPENTAG_CURRENT_THREAD_TS", None)
     if authorized_scopes is not None:
         clean["MFS_ALLOWED_SCOPES"] = authorized_scopes
     elif clean.get("MFS_ALLOWED_SCOPES"):
