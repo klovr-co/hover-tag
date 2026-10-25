@@ -25,6 +25,7 @@ it shows is listed in `capabilities`; otherwise it offers to upgrade Tag.
 | `describe` | `tag NAME describe "Description" --json`: changes the Slack app's one-line description and verifies Slack saved it; `""` clears it |
 | `routines` | `tag NAME routine list\|show\|runs\|add\|edit\|pause\|resume\|remove\|run-now --json`; see [Routines](#routines) |
 | `knowledge` | `tag NAME knowledge list\|read\|edit\|forget\|history\|show\|undo --json`: the Tag's memory and skills, with history and undo; see [Knowledge](#knowledge) |
+| `tag-export` | `tag NAME export [--output FILE\|FOLDER] [--without-history] --json` and `tag import FILE --json`: move a Tag to another computer; see [Export and import](#export-and-import) |
 | `knowledge-add` | `tag NAME knowledge add --key … --text … --channel C…\|--all-channels --json`: give the Tag something to remember from the app |
 | `abandon-setup` | `tag NAME abandon --json`: moves a Tag that never reached Slack to `abandoned/` under the installation root; refuses a Tag that has a Slack app, a bot token, or a running bridge |
 | `remove-tag` | `tag NAME remove --json [--delete-app --confirm-app APP_ID]`: stops the Tag and moves its files to `abandoned/`. The Slack app is kept unless `--delete-app` is given with its exact App ID in `--confirm-app` |
@@ -695,3 +696,33 @@ Failures print `{"schema_version": 1, "ok": false, "error", "code"}` and exit
 `empty`, `busy` (try again), `not_undoable`, `history_unavailable`, and
 `use_helper` (a write from inside a Tag run, which must use the memory
 helper). Tag.app passes `--via tag-app` to writes.
+
+## Export and import
+
+`tag NAME export --json` saves one Tag to one `.hovertag` file: its memory and
+history, its skills (the whole folders under `.claude/skills` and
+`.agents/skills`), its threads, and its settings. Settings include routines
+and permission rules. Without `--output` the file goes in the current folder.
+The result is `export`, with `path`, `bytes`, `tag` (`id`, `name`,
+`description`), `slack` (`team`, `app`, `workspace_name`), `contents` (counts
+of `memory` files, `history` changes, `skills`, `threads`, `routines`),
+`history`, and `redacted`. See `tag-export.json`.
+
+The file never holds passwords or tokens. Credentials, Slack tokens, API keys,
+the Slack app link and paths on this computer are left out. Token-shaped text
+in memory, skills and threads is replaced with `[removed token]`; `redacted`
+lists those files. History can't be edited that way, so an export fails with
+`code: "history_has_token"` when history holds a token-shaped value. Remove it
+with `knowledge forget` or `edit` and `--drop-old`, or export with
+`--without-history`.
+
+`tag import FILE --json` adds a new Tag from that file and returns `imported`:
+the new `tag` ID, `name`, `contents`, `slack` (the app the Tag used), `history`,
+`redacted`, and `next`, the setup command that reconnects Slack. See
+`tag-import.json`. The new Tag has no Slack connection until setup finishes:
+apps show it under Finish setting up, and setup lets the person choose the same
+Slack app. Stop the Tag on the old computer first, because one Slack app
+serves one running Tag. Routines arrive paused. Import fails with
+`code: "already_here"` when a Tag on this computer already uses that Slack app,
+`not_an_export`, `newer_export`, `unsafe_export` (a path that leaves the Tag's
+folders) or `too_large`.
