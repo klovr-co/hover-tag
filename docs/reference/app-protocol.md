@@ -24,6 +24,8 @@ it shows is listed in `capabilities`; otherwise it offers to upgrade Tag.
 | `rename` | `tag NAME rename "Name" --json` |
 | `describe` | `tag NAME describe "Description" --json`: changes the Slack app's one-line description and verifies Slack saved it; `""` clears it |
 | `routines` | `tag NAME routine list\|show\|runs\|add\|edit\|pause\|resume\|remove\|run-now --json`; see [Routines](#routines) |
+| `knowledge` | `tag NAME knowledge list\|read\|edit\|forget\|history\|show\|undo --json`: the Tag's memory and skills, with history and undo; see [Knowledge](#knowledge) |
+| `knowledge-add` | `tag NAME knowledge add --key … --text … --channel C…\|--all-channels --json`: give the Tag something to remember from the app |
 | `abandon-setup` | `tag NAME abandon --json`: moves a Tag that never reached Slack to `abandoned/` under the installation root; refuses a Tag that has a Slack app, a bot token, or a running bridge |
 | `remove-tag` | `tag NAME remove --json [--delete-app --confirm-app APP_ID]`: stops the Tag and moves its files to `abandoned/`. The Slack app is kept unless `--delete-app` is given with its exact App ID in `--confirm-app` |
 | `workspace-lifecycle` | `tag start\|stop\|restart --workspace TEAM --json` |
@@ -639,3 +641,57 @@ its steps with `tag NAME logs --activity RUN --json` using `activity.run_id`
 `type: "routine"`, `routine_id`, `name`, and `trigger` when a routine started
 the run.
 
+## Knowledge
+
+What one Tag knows: its memory and its skills. Each Tag has only its own;
+Tags never share knowledge. The Tag remembers only what someone asked it to,
+in Slack or with `knowledge add`. Every change goes into the Tag's private
+history, and undo is itself a recorded change. See [Memory](../../references/memory.md).
+
+Paths are relative to the Tag's knowledge:
+
+- `memory/core.md` is always loaded in every channel.
+- `memory/notes/KEY.md` is a note for all channels.
+- `memory/channels/C…/core.md` and `memory/channels/C…/notes/KEY.md` are one channel's memory.
+- `skills/claude|codex/NAME/SKILL.md` is a skill the backend reads from
+  `.claude/skills` or `.agents/skills`.
+
+| Command | Output |
+| --- | --- |
+| `tag NAME knowledge list --json` | `memory` (`core`, the all-channels `core.md` or `null`, and `notes`), `channels` (each with `id`, `name`, `core` and `notes`; the Tag's channels with no memory yet come last), `skills`, `limits` (`core`, `note`, `notes`) and `history.available`; see `knowledge-list.json` |
+| `tag NAME knowledge read PATH --json` | `file`: `path`, `kind` (`core`, `note`, `skill`), `version`, `body` (the markdown without its front matter), `size`, `limit`, and `written_by`, `from_thread`, `updated`. Memory files add `scope` (`all` or `channel`), `channel` and `channel_name`; `core` adds `entries`; notes add `key` and `links`; skills add `name`, `backend` and `summary`. See `knowledge-read.json` |
+| `tag NAME knowledge edit PATH --body-file FILE\|- --base VERSION --json` | `change` and the saved `file`; see `knowledge-change.json` |
+| `tag NAME knowledge add --key KEY --text TEXT\|--text-file FILE [--kind core\|note] --channel C…\|--all-channels --json` | `change` and the `file` the entry went into |
+| `tag NAME knowledge forget PATH [--key KEY] --json` | `change`; `--key` names the entry in a `core.md` |
+| `tag NAME knowledge history [PATH] [--limit N] [--before CHANGE] --json` | `changes`, newest first (at most 200 a page; default 30), and `has_more`; see `knowledge-history.json` |
+| `tag NAME knowledge show CHANGE --json` | `change` and `files`, each with `path`, `status` (`added`, `changed`, `removed`), `before`, `after` and `diff` (lines with `op` ` `, `+`, `-`, or `…` between hunks); see `knowledge-show.json` |
+| `tag NAME knowledge undo CHANGE --json` | `change`, the new change that undid it |
+
+A core entry in `entries` has `key`, `text`, `version`, `links` (the `[[key]]`
+links in its text), `written_by`, `from_thread` and `updated`. `written_by` is
+a Slack member ID, or `local-operator` for a change made in Tag.app or the
+CLI. `from_thread` is a `hover-tag://tag/TAG/thread/CHANNEL/TS` link to the
+Slack thread where someone asked, or `null`. Apps open it in the Threads
+screen and show it on hover.
+
+To edit, send the whole new `body` with the `version` you read. A `core.md`
+body is one `## key` section per entry; removing a section forgets that entry.
+Edits keep the memory limits (6,000 always-loaded characters per scope, 4,000
+per note, 200 notes per scope) and refuse text that looks like an instruction
+to override the Tag's rules. A stale `--base` fails with `code: "conflict"`.
+
+A change row has `id`, `at`, `action` (`saved`, `changed`, `forgot`,
+`edited`, `undid`, `outside` for an edit made to the files by hand,
+`started`, or `migrated`; treat unknown values as `changed`), `summary`,
+`written_by`, `via` (`slack`, `tag-app`, `cli`, `files`, `migration`),
+`from_thread`, `entries`, `undo_of`, `undoable` and `undone_by`. Undo puts back
+what that change replaced, entry by entry. It fails with `code: "conflict"` when
+one of those entries changed again since; undo the later change first. A
+forgotten entry can be restored by undoing its `forgot` change.
+
+Failures print `{"schema_version": 1, "ok": false, "error", "code"}` and exit
+1. Codes include `not_found`, `bad_path`, `conflict`, `core_full`,
+`notes_full`, `too_long`, `unsafe`, `bad_key`, `bad_format`, `exists`,
+`empty`, `busy` (try again), `not_undoable`, `history_unavailable`, and
+`use_helper` (a write from inside a Tag run, which must use the memory
+helper). Tag.app passes `--via tag-app` to writes.
