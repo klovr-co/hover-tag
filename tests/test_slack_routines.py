@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import threading
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -49,6 +50,8 @@ class RoutineRunTests(unittest.TestCase):
             patch.dict(os.environ, env, clear=True),
             patch.object(agent_models, "discover_codex_models", return_value=[]),
             patch.object(slack_socket_agent, "collect_health_checks", return_value=[]),
+            # A failure would otherwise wait to see whether Tag is stopping.
+            patch.object(slack_socket_agent, "ROUTINE_SHUTDOWN_GRACE_SECONDS", 0),
         ]
         for item in self.patches:
             item.start()
@@ -286,6 +289,51 @@ class RoutineRunTests(unittest.TestCase):
                 else:
                     self.assertEqual(record["outcome"], "cancelled")
                     self.client.chat_postMessage.assert_not_called()
+
+    def test_pausing_or_removing_a_running_routine_stops_its_backend(self):
+        # Waiting for the run to end kept it spending; the pause now stops it as a stop in Slack would.
+        for change in ("pause", "remove", "edit"):
+            with self.subTest(change=change):
+                self.definitions.save([self.routine])
+                self.client.chat_postMessage.reset_mock()
+                stopped = threading.Event()
+                run = MagicMock()
+                run.cancel.side_effect = stopped.set
+
+                def behaviour(kwargs):
+                    if change == "pause":
+                        self.definitions.set_enabled(self.routine["id"], False)
+                    elif change == "remove":
+                        self.definitions.remove(self.routine["id"])
+                    else:
+                        self.definitions.update(self.routine["id"], {"name": "Renamed"}, by="local-operator",
+                                                via="cli")
+                    if stopped.wait(1 if change != "edit" else 0.2):
+                        kwargs["on_cancelled"]()
+                        return "Stopped.", False
+                    return "Three PRs merged.", True
+
+                with patch.object(slack_socket_agent, "ROUTINE_WITHDRAW_CHECK_SECONDS", 0.01), \
+                        patch.object(slack_socket_agent, "active_run", return_value=run):
+                    record = self.run_routine(behaviour)
+                if change == "edit":
+                    self.assertFalse(stopped.is_set())
+                    self.assertEqual(record["outcome"], "posted")
+                else:
+                    self.assertTrue(stopped.is_set())
+                    self.assertEqual(record["outcome"], "cancelled")
+                    self.client.chat_postMessage.assert_not_called()
+
+    def test_a_run_cut_short_by_tag_stopping_is_interrupted_and_posts_nothing(self):
+        # Stopping Tag ends the coding agent first; that isn't the routine failing.
+        def behaviour(kwargs):
+            self.fake_app.tag_shutdown_requested.set()
+            return "Open Tag backend failed with exit code -15.", False
+
+        record = self.run_routine(behaviour)
+        self.assertEqual(record["outcome"], "interrupted")
+        self.assertIn("nothing was posted", record["diagnostic"])
+        self.client.chat_postMessage.assert_not_called()
 
     def test_a_run_stopped_by_a_person_is_cancelled_not_failed(self):
         # nanobot: test_run_history_records_job_cancellation.
