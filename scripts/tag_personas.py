@@ -268,6 +268,68 @@ def parse_call(text: str, personas: list[Persona]) -> Call | None:
     return None
 
 
+# One run's personas -------------------------------------------------------------------
+# The bridge writes this file for a run; the agent's helper records a handover in it.
+
+
+HANDOVER_TEXT = "That's {name}'s area, handing you over."
+
+
+def brief(persona: Persona) -> dict[str, Any]:
+    """What a run needs to answer as a persona; memory scopes and channels stay with the bridge."""
+    return {"name": persona.name, "description": persona.description, "voice": persona.voice,
+            "skills": list(persona.skills)}
+
+
+def write_run_file(destination: Path, *, active: Persona | None, personas: list[Persona]) -> None:
+    write_document(destination, {"schema_version": SCHEMA_VERSION,
+                                 "active": brief(active) if active else None,
+                                 "personas": [] if active else [brief(item) for item in personas],
+                                 "handover": None})
+
+
+def read_run_file(source: Path) -> dict[str, Any]:
+    try:
+        document = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return document if isinstance(document, dict) else {}
+
+
+def record_handover(source: Path, name: str) -> dict[str, Any]:
+    """The agent's handover, once per run, to a persona the bridge listed for this run."""
+    document = read_run_file(source)
+    if not document:
+        raise PersonaError("Handing over is unavailable in this conversation.")
+    if document.get("active"):
+        raise PersonaError(f"You are already answering as {document['active'].get('name')}; answer here yourself.")
+    if document.get("handover"):
+        raise PersonaError(f"This reply already hands over to {document['handover']}; answer as that persona.")
+    wanted = _one_line(name).removeprefix("@").casefold()
+    target = next((item for item in document.get("personas") or []
+                   if isinstance(item, dict) and str(item.get("name", "")).casefold() == wanted), None)
+    if target is None:
+        names = ", ".join(str(item.get("name")) for item in document.get("personas") or [] if isinstance(item, dict))
+        raise PersonaError(f"There is no persona named {name}. The personas are: {names or 'none'}.")
+    document["handover"] = target["name"]
+    write_document(source, document)
+    return target
+
+
+def read_handover(source: Path) -> str | None:
+    value = read_run_file(source).get("handover")
+    return value if isinstance(value, str) and value else None
+
+
+def brief_text(item: dict[str, Any]) -> str:
+    parts = [f"{item.get('name')}: {item.get('description')}"]
+    if item.get("voice"):
+        parts.append(f"Voice: {item['voice']}.")
+    if item.get("skills"):
+        parts.append("Reach for these skills first: " + ", ".join(item["skills"]) + ".")
+    return " ".join(parts)
+
+
 # Thread personas and who posted what ------------------------------------------------
 
 

@@ -59,8 +59,12 @@ All notable changes to Tag are documented here.
 - Personas: give one Tag named faces such as Finance or Designer, each with
   a picture, description, the skills it reaches for first, a short voice and
   how often it speaks up, with `tag NAME persona add|list|show|set|remove`.
-  They share the Tag's permissions and Slack app. Calling them in Slack comes
-  next.
+  They share the Tag's permissions and Slack app. In Slack, `@Tag Finance: …`
+  calls one, and the thread stays with it. When a request is clearly a
+  persona's area, the Tag posts one handover line and the persona answers
+  straight after. Replies show the persona's name and picture once the app has
+  the `chat:write.customize` scope; until then they start with its name.
+  Persona replies are posted whole rather than streamed for now.
 - No Tag creates new Tags for now. Lead says which existing Tag can help, or
   answers itself ([ADR 0012](docs/adr/0012-tags-as-personas.md)).
 - `tag add --json` accepts `--preset FILE` and first reports the new Tag's ID.

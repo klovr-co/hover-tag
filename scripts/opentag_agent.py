@@ -26,6 +26,7 @@ try:
     from record_output_artifact import channel_artifact_directory
     import tag_memory
     import tag_handoff
+    import tag_personas
 except ImportError:
     from scripts.agent_activity import token_usage
     from scripts import agent_connection, agent_permissions, agent_usage
@@ -33,7 +34,7 @@ except ImportError:
     from scripts.codex_agent_backend import CodexAppServer, CodexAppServerError
     from scripts.claude_agent_backend import ClaudeAgentError, ClaudeAgentRun
     from scripts.record_output_artifact import channel_artifact_directory
-    from scripts import tag_memory, tag_handoff
+    from scripts import tag_memory, tag_handoff, tag_personas
 
 
 def default_skill_dir() -> Path:
@@ -99,7 +100,7 @@ def build_prompt(
     instructions = build_instructions(skill_dir=skill_dir, workdir=workdir, channel_id=channel_id,
                                       output_files=output_manifest is not None)
     request = build_request(channel_id=channel_id, question=question, thread_text=thread_text,
-                            attachments_dir=attachments_dir,
+                            attachments_dir=attachments_dir, skill_dir=skill_dir,
                             allowed_scopes=allowed_scopes, output_manifest=output_manifest)
     return f"{instructions}\n\n{request}"
 
@@ -113,6 +114,7 @@ def build_request(
     allowed_scopes: str,
     output_manifest: Path | None = None,
     continued: bool = False,
+    skill_dir: Path | None = None,
 ) -> str:
     """What changes with every Slack request: its paths, grant, question, and thread context.
 
@@ -143,12 +145,35 @@ Request context (these paths and grants apply to this request only):
 
 User question:
 {question}
-
+{persona_context(skill_dir)}
 {context}
 {thread_text or "(none)"}
 
 Return only the final chat-ready answer.
 """.strip()
+
+
+def persona_context(skill_dir: Path | None) -> str:
+    """Who this reply speaks as, from the bridge's run file (ADR 0012); empty without personas."""
+    path = os.getenv("OPENTAG_PERSONA_FILE", "")
+    document = tag_personas.read_run_file(Path(path)) if path else {}
+    if active := document.get("active"):
+        return f"""
+Persona: answer as {tag_personas.brief_text(active)}
+It is this Tag under another name; your rules and permissions are unchanged.
+"""
+    personas = [item for item in document.get("personas") or [] if isinstance(item, dict)]
+    if not personas or skill_dir is None:
+        return ""
+    lines = "\n".join(f"- {tag_personas.brief_text(item)}" for item in personas)
+    helper = helper_command(skill_dir / "scripts" / "tag_persona.py")
+    return f"""
+Personas: you answer under your own name. This Tag also has these personas:
+{lines}
+Only when the request is clearly one persona's area, run
+`{helper} handover --to "NAME"` once before answering, then answer as that
+persona. Tag posts a one-line handover first. Otherwise answer yourself.
+"""
 
 
 def lead_instructions(skill_dir: Path, channel_id: str) -> str:
@@ -1121,6 +1146,7 @@ def main() -> int:
         output_files=args.output_manifest is not None,
     )
     request_options = dict(
+        skill_dir=args.skill_dir.resolve(),
         channel_id=args.channel_id,
         question=args.question,
         attachments_dir=args.attachments_dir.resolve() if args.attachments_dir else None,

@@ -76,6 +76,7 @@ try:
     from . import tag_memory
     from . import tag_handoff
     from . import tag_lead
+    from . import tag_personas
     from . import tag_routines
     from .tag_routine_scheduler import RoutineScheduler
 except ImportError:  # Direct script execution does not create a package context.
@@ -122,6 +123,7 @@ except ImportError:  # Direct script execution does not create a package context
     import tag_memory
     import tag_handoff
     import tag_lead
+    import tag_personas
     import tag_routines
     from tag_routine_scheduler import RoutineScheduler
 
@@ -927,14 +929,16 @@ def skip_oversized_earlier_files(
 
 def build_thread_text(
     client: Any, channel: str, thread_ts: str, attachment_dir: Path,
-    *, request: dict[str, Any] | None = None,
+    *, request: dict[str, Any] | None = None, persona_of: Callable[[str], str | None] | None = None,
 ) -> str:
-    return build_thread_texts(client, channel, thread_ts, attachment_dir, request=request)[0]
+    return build_thread_texts(client, channel, thread_ts, attachment_dir, request=request,
+                              persona_of=persona_of)[0]
 
 
 def build_thread_texts(
     client: Any, channel: str, thread_ts: str, attachment_dir: Path,
     *, request: dict[str, Any] | None = None, since_ts: str | None = None, own_user: str | None = None,
+    persona_of: Callable[[str], str | None] | None = None,
 ) -> tuple[str, str]:
     """The thread excerpt, and only what was posted after ``since_ts`` by others.
 
@@ -984,6 +988,9 @@ def build_thread_texts(
     since = float(since_ts) if since_ts else None
     for message in messages[-30:]:
         user = message.get("user") or message.get("bot_id") or "unknown"
+        # Every persona shares one bot user, so name the persona that posted (ADR 0012).
+        if persona_of is not None and message.get("bot_id") and (persona := persona_of(str(message.get("ts", "")))):
+            user = f"{user} as {persona}"
         text = message.get("text", "")
         message_lines = [f"{user}: {text}", *format_message_attachments(message)]
         for file in message_files(message):
@@ -2512,6 +2519,8 @@ def run_backend(
     memory_receipts: Path | None = None,
     handoff_requests: Path | None = None,
     handoff_depth: int = 0,
+    persona_file: Path | None = None,
+    persona_scopes: str | None = None,
 ) -> tuple[str, bool]:
     if max_timeout is None:
         max_timeout = int(os.getenv("OPENTAG_MAX_TIMEOUT_SECONDS", "3600"))
@@ -2570,6 +2579,8 @@ def run_backend(
             memory_receipts=str(memory_receipts) if memory_receipts else None,
             handoff_requests=str(handoff_requests) if handoff_requests else None,
             handoff_depth=handoff_depth,
+            persona_file=str(persona_file) if persona_file else None,
+            persona_scopes=persona_scopes,
         )
         result = subprocess.run(
             cmd,
@@ -2627,6 +2638,8 @@ def run_backend_events(
     memory_receipts: Path | None = None,
     handoff_requests: Path | None = None,
     handoff_depth: int = 0,
+    persona_file: Path | None = None,
+    persona_scopes: str | None = None,
     resume_session: str | None = None,
     on_session: Callable[[str], None] | None = None,
     thread_new_text: str | None = None,
@@ -2718,6 +2731,8 @@ def run_backend_events(
         memory_receipts=str(memory_receipts) if memory_receipts else None,
         handoff_requests=str(handoff_requests) if handoff_requests else None,
         handoff_depth=handoff_depth,
+        persona_file=str(persona_file) if persona_file else None,
+        persona_scopes=persona_scopes,
         run_limits=run_limits,
         routine_id=routine_id,
     )
@@ -2905,7 +2920,14 @@ def post_final_reply(
     answer: str,
     placeholder_ts: str | None = None,
     footer_blocks: list[dict[str, Any]] | None = None,
-) -> None:
+    identity: dict[str, str] | None = None,
+) -> str | None:
+    """Post the reply and return its first message's ``ts``.
+
+    ``identity`` (``username`` and ``icon_url``) posts as a persona. ``chat.update``
+    can't change who a message is from, so a persona's reply replaces the
+    placeholder with a new message instead of editing it.
+    """
     chunks = split_reply(to_mrkdwn(answer), max_chars=2_900 if footer_blocks else MAX_REPLY_CHARS)
 
     def blocks_with_accessory(text: str) -> list[dict[str, Any]]:
@@ -2922,10 +2944,16 @@ def post_final_reply(
             return [section]
         return [section, *(footer_blocks or [])]
 
+    if placeholder_ts is not None and identity:
+        try:
+            client.chat_delete(channel=channel, ts=placeholder_ts)
+        except Exception:  # noqa: BLE001 - the reply still posts; the placeholder stays
+            pass
+        placeholder_ts = None
+    first_blocks = None
+    if footer_blocks and len(chunks) == 1:
+        first_blocks = blocks_with_accessory(chunks[0])
     if placeholder_ts is not None:
-        first_blocks = None
-        if footer_blocks and len(chunks) == 1:
-            first_blocks = blocks_with_accessory(chunks[0])
         client.chat_update(
             channel=channel,
             ts=placeholder_ts,
@@ -2933,17 +2961,17 @@ def post_final_reply(
             mrkdwn=True,
             blocks=first_blocks,
         )
+        first_ts: str | None = placeholder_ts
     else:
-        first_blocks = None
-        if footer_blocks and len(chunks) == 1:
-            first_blocks = blocks_with_accessory(chunks[0])
-        client.chat_postMessage(
+        posted = client.chat_postMessage(
             channel=channel,
             thread_ts=thread_ts,
             text=chunks[0],
             mrkdwn=True,
             blocks=first_blocks,
+            **(identity or {}),
         )
+        first_ts = posted.get("ts") if hasattr(posted, "get") else None
     for index, chunk in enumerate(chunks[1:], start=1):
         blocks = None
         if footer_blocks and index == len(chunks) - 1:
@@ -2954,7 +2982,27 @@ def post_final_reply(
             text=chunk,
             mrkdwn=True,
             blocks=blocks,
+            **(identity or {}),
         )
+    return first_ts
+
+
+def slack_customize_granted(client: Any) -> bool:
+    """Whether this app may post under a persona's name and picture (``chat:write.customize``)."""
+    try:
+        response = client.auth_test()
+    except Exception:  # noqa: BLE001 - without an answer, post as the app
+        return False
+    headers = getattr(response, "headers", None) or {}
+    scopes = next((value for key, value in headers.items() if str(key).lower() == "x-oauth-scopes"), "")
+    return "chat:write.customize" in {item.strip() for item in str(scopes).split(",")}
+
+
+def persona_reply(client: Any, persona: tag_personas.Persona, answer: str) -> tuple[str, dict[str, str] | None]:
+    """The reply text and identity for a persona; without the scope, the app posts with the name first."""
+    if slack_customize_granted(client):
+        return answer, persona.message_fields()
+    return f"*{persona.name}:* {answer}", None
 
 
 def post_private_failure(
@@ -3491,9 +3539,14 @@ def post_backend_approval(
     user_id: str,
     approval: dict[str, Any],
     backend: str = "codex",
+    identity: dict[str, str] | None = None,
 ) -> Any:
-    """Show an approval only to its requester, except in an already-private DM."""
+    """Show an approval only to its requester, except in an already-private DM.
+
+    ``identity`` shows the persona that asks (ADR 0012); the requester check is unchanged.
+    """
     message = {
+        **(identity or {}),
         "channel": channel,
         "thread_ts": thread_ts,
         "text": f"{backend_display_name(backend)} needs your approval to continue.",
@@ -4974,6 +5027,28 @@ def create_app(
             return
         team = body.get("team_id") or event.get("team") or ""
         question = strip_mention(event.get("text", ""))
+        # Personas (ADR 0012): a name first calls one; otherwise the thread keeps the one it is with.
+        personas: list[tag_personas.Persona] = []
+        active_persona: tag_personas.Persona | None = None
+        if handoff_depth == 0 and not bot_request:
+            try:
+                personas = tag_personas.load(instance_home())
+            except tag_personas.PersonaError as exc:
+                logger.warning("Ignoring this Tag's personas: %s", exc)
+        if personas:
+            own_names = [name for name in (os.getenv("OPENTAG_BOT_NAME", "").strip(),
+                                           tag_lead.ROLE_NAME if lead is not None and lead.is_lead() else "") if name]
+            # The Tag's own name, or Lead's, takes a thread back from a persona.
+            own = [tag_personas.Persona(name, "") for name in own_names]
+            if call := tag_personas.parse_call(question, personas + own):
+                question = call.text
+                active_persona = call.persona if call.persona.description else None
+                tag_personas.set_thread_persona(instance_home(), channel, thread_ts,
+                                                active_persona.name if active_persona else None, by="named")
+            else:
+                active_persona = tag_personas.find(
+                    personas, tag_personas.thread_persona(instance_home(), channel, thread_ts) or "")
+        persona_scopes = ",".join(active_persona.memory_scopes) if active_persona else ""
         if lead is not None and handoff_depth == 0 and not direct_message and lead.is_lead():
             if routed := lead.route_for_thread(channel, thread_ts):
                 question = f"{tag_handoff.routed_note(routed['owner_name'])}\n\n{question}"
@@ -5158,8 +5233,20 @@ def create_app(
             and handoff_depth == 0 and not direct_message
             else None
         )
+        persona_file = tag_temp_dir() / f"persona-{uuid.uuid4().hex}.json" if personas else None
+        approval_identity = (active_persona.message_fields()
+                             if active_persona is not None and slack_customize_granted(client) else None)
+        persona_home = instance_home()
+
+        def persona_of(ts: str) -> str | None:
+            try:
+                return tag_personas.message_persona(persona_home, channel, ts)
+            except ValueError:
+                return None
 
         try:
+            if persona_file is not None:
+                tag_personas.write_run_file(persona_file, active=active_persona, personas=personas)
             with tempfile.TemporaryDirectory(
                 prefix="slack-invocation-",
                 dir=tag_temp_dir(),
@@ -5173,11 +5260,12 @@ def create_app(
                 if continued:
                     thread_text, thread_new_text = build_thread_texts(
                         client, channel, thread_ts, attachment_dir, request=None if combine else event,
-                        since_ts=continued[1], own_user=own_user,
+                        since_ts=continued[1], own_user=own_user, persona_of=persona_of if personas else None,
                     )
                 else:
                     thread_text = build_thread_text(
                         client, channel, thread_ts, attachment_dir, request=None if combine else event,
+                        persona_of=persona_of if personas else None,
                     )
                     thread_new_text = None
                 if combine:
@@ -5193,6 +5281,9 @@ def create_app(
                     and indicator.message_ts is None
                     # A reply to another Tag must be one new message that mentions it.
                     and peer_request is None
+                    # A persona's reply is posted whole under its name until streaming with a
+                    # custom name is checked live; the handover is known only once the run ends.
+                    and not personas
                 )
                 app_server_selected = rich_events_selected(request_backend)
                 if app_server_selected:
@@ -5241,6 +5332,7 @@ def create_app(
                             user_id=user_id,
                             approval=approval,
                             backend=request_backend,
+                            identity=approval_identity,
                         ),
                         fast_mode=agent_settings.fast_mode,
                         output_manifest=output_manifest,
@@ -5253,6 +5345,8 @@ def create_app(
                         memory_receipts=memory_receipts,
                         handoff_requests=handoff_requests,
                         handoff_depth=handoff_depth,
+                        persona_file=persona_file,
+                        persona_scopes=persona_scopes or None,
                         resume_session=continued[0] if continued and app_server_selected else None,
                         thread_new_text=thread_new_text,
                         on_session=capture_session if app_server_selected else None,
@@ -5278,6 +5372,8 @@ def create_app(
                         memory_receipts=memory_receipts,
                         handoff_requests=handoff_requests,
                         handoff_depth=handoff_depth,
+                        persona_file=persona_file,
+                        persona_scopes=persona_scopes or None,
                     )
                 finish_activity(
                     "completed" if succeeded else
@@ -5402,7 +5498,27 @@ def create_app(
                             except Exception as exc:  # noqa: BLE001 - the reply is already posted
                                 logger.warning("Could not delete Tag progress placeholder: %s", exc)
                     elif succeeded or stopped:
-                        post_final_reply(client, channel, thread_ts, answer, indicator.message_ts, footer_blocks)
+                        placeholder_ts = indicator.message_ts
+                        handover = (tag_personas.find(personas, tag_personas.read_handover(persona_file) or "")
+                                    if persona_file is not None and active_persona is None and succeeded else None)
+                        if handover is not None:
+                            # One line under the Tag's own name, then the reply as the persona (ADR 0012).
+                            line = tag_personas.HANDOVER_TEXT.format(name=handover.name)
+                            post_final_reply(client, channel, thread_ts, line, placeholder_ts)
+                            placeholder_ts = None
+                            tag_personas.set_thread_persona(persona_home, channel, thread_ts, handover.name,
+                                                            by="handover")
+                        speaker = handover or active_persona
+                        identity = None
+                        if speaker is not None:
+                            answer, identity = persona_reply(client, speaker, answer)
+                        posted_ts = post_final_reply(client, channel, thread_ts, answer, placeholder_ts,
+                                                     footer_blocks, identity=identity)
+                        if speaker is not None and posted_ts:
+                            try:
+                                tag_personas.record_message(persona_home, channel, posted_ts, speaker.name)
+                            except (OSError, ValueError) as exc:
+                                logger.warning("Could not record which persona replied: %s", exc)
                     else:
                         post_private_failure(
                             client, channel, thread_ts, user_id, answer, indicator.message_ts, footer_blocks,
@@ -5549,6 +5665,8 @@ def create_app(
             memory_receipts.unlink(missing_ok=True)
             if handoff_requests is not None:
                 handoff_requests.unlink(missing_ok=True)
+            if persona_file is not None:
+                persona_file.unlink(missing_ok=True)
             next_request = release_thread(thread_key)
             if next_request is not None:
                 start_waiting_request(next_request)

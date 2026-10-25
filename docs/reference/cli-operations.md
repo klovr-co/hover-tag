@@ -248,8 +248,21 @@ A persona is a named face over one Tag: a name, picture, description, the
 skills it reaches for first, an optional memory scope, a short voice, and how
 often it speaks up ([ADR 0012](../adr/0012-tags-as-personas.md)). Every
 persona is the same Tag, with the same permissions, memory access and Slack
-app. People call one with `@Tag Finance: …`; otherwise the Tag answers under
-its own name.
+app.
+
+In Slack, `@Tag Finance: …`, `@Tag Finance, …` or `@Tag ask Finance to …`
+calls a persona, and later mentions in that thread stay with it. Naming
+another persona, or the Tag's own name, moves the thread. With no name, the
+Tag answers itself unless the request is clearly one persona's area: then it
+posts one line ("That's Finance's area, handing you over.") and the persona's
+answer follows straight after, from the same run. A persona's memory scope
+narrows the sources that run may search.
+
+Replies show the persona's name and picture when the Slack app has the
+`chat:write.customize` scope. Tag doesn't add it for you: add it to the app's
+manifest and reinstall the app. Without it, replies start with the persona's
+name. Persona replies are posted whole, not streamed, until streaming under
+another name has been checked in Slack.
 
 ```sh
 tag maya persona add Finance --description "Month-end close and invoices" \

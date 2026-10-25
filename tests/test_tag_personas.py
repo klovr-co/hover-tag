@@ -215,3 +215,206 @@ class PersonaCliTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HelperAndPromptTests(unittest.TestCase):
+    """The agent's handover helper and what a run is told about personas."""
+
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.file = Path(temporary.name) / "persona.json"
+        self.personas = [persona("Finance", voice="brisk", skills=["month-end-close"]), persona("Ops")]
+
+    def helper(self, *arguments: str) -> tuple[int, str, str]:
+        from scripts import tag_persona
+        out, err = io.StringIO(), io.StringIO()
+        with patch.dict(os.environ, {"OPENTAG_PERSONA_FILE": str(self.file)}), redirect_stdout(out), redirect_stderr(err):
+            code = tag_persona.main(list(arguments))
+        return code, out.getvalue(), err.getvalue()
+
+    def test_the_default_persona_hands_over_once_to_a_listed_persona(self) -> None:
+        tag_personas.write_run_file(self.file, active=None, personas=self.personas)
+        code, _, err = self.helper("handover", "--to", "Legal")
+        self.assertEqual(1, code)
+        self.assertIn("The personas are: Finance, Ops", err)
+        code, out, _ = self.helper("handover", "--to", "finance")
+        self.assertEqual(0, code)
+        self.assertIn("Answer as Finance: Finance's work. Voice: brisk.", out)
+        self.assertIn("month-end-close", out)
+        self.assertEqual("Finance", tag_personas.read_handover(self.file))
+        code, _, err = self.helper("handover", "--to", "Ops")
+        self.assertEqual(1, code)
+        self.assertIn("already hands over to Finance", err)
+
+    def test_a_persona_already_answering_cannot_hand_over(self) -> None:
+        tag_personas.write_run_file(self.file, active=self.personas[0], personas=self.personas)
+        code, _, err = self.helper("handover", "--to", "Ops")
+        self.assertEqual(1, code)
+        self.assertIn("already answering as Finance", err)
+        self.file.unlink()
+        self.assertEqual(1, self.helper("handover", "--to", "Ops")[0])
+
+    def test_the_request_names_the_persona_or_lists_who_to_hand_over_to(self) -> None:
+        from scripts import opentag_agent
+
+        def request() -> str:
+            with patch.dict(os.environ, {"OPENTAG_PERSONA_FILE": str(self.file)}):
+                return opentag_agent.build_request(channel_id="C123", question="Close the month",
+                                                   thread_text="", attachments_dir=None, allowed_scopes="",
+                                                   skill_dir=Path("/skill"))
+        tag_personas.write_run_file(self.file, active=None, personas=self.personas)
+        text = request()
+        self.assertIn("you answer under your own name", text)
+        self.assertIn("- Ops: Ops's work.", text)
+        self.assertIn('tag_persona.py handover --to "NAME"', text)
+        tag_personas.write_run_file(self.file, active=self.personas[0], personas=self.personas)
+        text = request()
+        self.assertIn("Persona: answer as Finance: Finance's work. Voice: brisk.", text)
+        self.assertNotIn("handover --to", text)
+        with patch.dict(os.environ, {"OPENTAG_PERSONA_FILE": ""}):
+            self.assertNotIn("Persona", opentag_agent.build_request(
+                channel_id="C123", question="Hi", thread_text="", attachments_dir=None, allowed_scopes="",
+                skill_dir=Path("/skill")))
+
+
+class PersonaBridgeTests(unittest.TestCase):
+    """One Tag, Maya, with a Finance persona, on a fake Slack."""
+
+    def setUp(self) -> None:
+        from scripts import slack_socket_agent
+        from scripts.tag_handoff import HandoffStore
+        from test_tag_handoff import MAYA, TAG_A, FakeApp, SlackBus
+        self.sa, self.tag, self.maya = slack_socket_agent, TAG_A, MAYA
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        self.home = root / "maya"
+        env = patch.dict(os.environ, {
+            "TAG_HOME": str(root), "TAG_INSTANCE_HOME": str(self.home), "SLACK_BOT_TOKEN": "xoxb-test",
+            "SLACK_CHANNEL_IDS": "C123", "OPENTAG_BOT_NAME": "Maya", "OPENTAG_SLACK_STREAMING": "0",
+            "OPENTAG_CLAUDE_TRANSPORT": "print", "OPENTAG_MEMORY_ROOT": str(root / "memory"),
+            "MFS_ALLOWED_SCOPES": "slack://T123/general__C123,file:///finance,file:///ops",
+            "MFS_CHANNEL_SCOPES": '{"C123": ["file:///finance", "file:///ops"]}',
+        }, clear=True)
+        env.start()
+        self.addCleanup(env.stop)
+        tag_personas.save(self.home, [
+            tag_personas.validate({**FINANCE, "picture": "iris", "memory_scopes": ["file:///finance"]}),
+            persona("Ops")])
+        self.runs: list[dict[str, Any]] = []
+        self.handover_to: str | None = None
+        backend = patch.object(slack_socket_agent, "run_backend", side_effect=self.fake_backend)
+        backend.start()
+        self.addCleanup(backend.stop)
+        busy = patch.object(slack_socket_agent, "reserve_thread", return_value=True)
+        busy.start()
+        self.addCleanup(busy.stop)
+        self.customize = patch.object(slack_socket_agent, "slack_customize_granted", return_value=True)
+        self.customize.start()
+        self.addCleanup(self.customize.stop)
+        self.bus = SlackBus()
+        app = FakeApp()
+        self.bus.apps[TAG_A] = app
+        self.client = self.bus.client(TAG_A)
+        with patch.object(slack_socket_agent, "App", return_value=app):
+            slack_socket_agent.create_app("claude", 30, frozenset({MAYA}), peers=[],
+                                          handoff_store=HandoffStore(root / "handoffs"))
+
+    def fake_backend(self, _backend: str, channel: str, caller: str, question: str, thread_text: str,
+                     *_args: Any, **kwargs: Any) -> tuple[str, bool]:
+        run_file = kwargs.get("persona_file")
+        document = tag_personas.read_run_file(run_file) if run_file else {}
+        self.runs.append({"question": question, "thread": thread_text, "active": (document.get("active") or {}).get("name"),
+                          "listed": [item["name"] for item in document.get("personas") or []],
+                          "scopes": kwargs.get("persona_scopes")})
+        if self.handover_to and run_file:
+            tag_personas.record_handover(run_file, self.handover_to)
+        return "Three items left.", True
+
+    def ask(self, text: str, thread_ts: str | None = None) -> dict[str, Any]:
+        with self.bus.lock:
+            message = {"channel": "C123", "ts": self.bus.next_ts(), "user": self.maya, "text": text}
+            if thread_ts:
+                message["thread_ts"] = thread_ts
+            self.bus.messages.append(message)
+        self.bus.deliver(self.tag, {"type": "app_mention", **message})
+        self.bus.settle()
+        return message
+
+    def replies(self, thread_ts: str) -> list[tuple[str, str | None]]:
+        """(text, username) for each final reply the Tag posted, in order."""
+        found = []
+        for call in self.client.chat_postMessage.call_args_list:
+            kwargs = call.kwargs
+            if kwargs.get("thread_ts") == thread_ts and kwargs.get("text") not in (None, "") \
+                    and not str(kwargs.get("text")).startswith("_"):
+                found.append((kwargs["text"], kwargs.get("username")))
+        return found
+
+    def test_a_named_persona_answers_under_its_name_and_keeps_the_thread(self) -> None:
+        origin = self.ask(f"<@{self.tag}> Finance: what's left for month-end?")
+        self.assertEqual("what's left for month-end?", self.runs[-1]["question"])
+        self.assertEqual("Finance", self.runs[-1]["active"])
+        self.assertEqual("file:///finance", self.runs[-1]["scopes"])  # The persona's memory scope.
+        self.assertIn(("Three items left.", "Finance"), self.replies(origin["ts"]))
+        call = next(c for c in self.client.chat_postMessage.call_args_list if c.kwargs.get("username") == "Finance")
+        self.assertTrue(call.kwargs["icon_url"].endswith("tag-iris-pixel.png"))
+        self.assertEqual("Finance", tag_personas.thread_persona(self.home, "C123", origin["ts"]))
+
+        self.ask(f"<@{self.tag}> and the invoices?", thread_ts=origin["ts"])
+        self.assertEqual("Finance", self.runs[-1]["active"])
+        self.assertIn("as Finance", self.runs[-1]["thread"])  # Earlier replies are labelled by persona.
+
+        self.ask(f"<@{self.tag}> Maya: thanks, what's on today?", thread_ts=origin["ts"])
+        self.assertIsNone(self.runs[-1]["active"])
+        self.assertEqual(["Finance", "Ops"], self.runs[-1]["listed"])
+        self.assertIsNone(tag_personas.thread_persona(self.home, "C123", origin["ts"]))
+
+    def test_the_default_persona_hands_over_with_one_line_then_the_persona_answers(self) -> None:
+        self.handover_to = "Finance"
+        origin = self.ask(f"<@{self.tag}> what's left for month-end?")
+        self.assertIsNone(self.runs[-1]["active"])
+        thread = [m for m in self.bus.thread(origin["ts"]) if not m["text"].startswith("_")]
+        texts = [m["text"] for m in thread]
+        handover = tag_personas.HANDOVER_TEXT.format(name="Finance")
+        self.assertIn(handover, texts)
+        self.assertEqual("Three items left.", texts[-1])
+        self.assertLess(texts.index(handover), len(texts) - 1)
+        self.assertIn(("Three items left.", "Finance"), self.replies(origin["ts"]))
+        self.assertNotIn((handover, "Finance"), self.replies(origin["ts"]))
+        self.assertEqual("Finance", tag_personas.thread_persona(self.home, "C123", origin["ts"]))
+        self.assertEqual("Finance", tag_personas.message_persona(self.home, "C123", thread[-1]["ts"]))
+
+        # The thread stays with Finance, and Ops can take it by name.
+        self.handover_to = None
+        self.ask(f"<@{self.tag}> and the invoices?", thread_ts=origin["ts"])
+        self.assertEqual("Finance", self.runs[-1]["active"])
+        self.ask(f"<@{self.tag}> Ops: who's on shift?", thread_ts=origin["ts"])
+        self.assertEqual("Ops", self.runs[-1]["active"])
+
+    def test_without_the_customize_scope_the_app_posts_with_the_persona_name_first(self) -> None:
+        self.customize.stop()
+        with patch.object(self.sa, "slack_customize_granted", return_value=False):
+            origin = self.ask(f"<@{self.tag}> Finance: what's left?")
+        self.assertIn("*Finance:* Three items left.", [m["text"] for m in self.bus.thread(origin["ts"])])
+        self.assertTrue(all(call.kwargs.get("username") is None for call in self.client.chat_postMessage.call_args_list))
+        self.customize.start()
+
+    def test_a_persona_scope_narrows_the_runs_memory_sources(self) -> None:
+        from scripts.opentag_process_env import backend_environment
+        source = dict(os.environ)
+        whole = backend_environment(source, transport="slack", conversation_id="C123", caller_id=self.maya,
+                                    authorized_scopes="slack://T123/general__C123,file:///finance,file:///ops")
+        self.assertEqual("slack://T123/general__C123,file:///finance,file:///ops", whole["MFS_ALLOWED_SCOPES"])
+        narrowed = backend_environment(source, transport="slack", conversation_id="C123", caller_id=self.maya,
+                                       authorized_scopes="slack://T123/general__C123,file:///finance,file:///ops",
+                                       persona_scopes="file:///finance,file:///elsewhere")
+        self.assertEqual("file:///finance", narrowed["MFS_ALLOWED_SCOPES"])
+
+    def test_without_personas_nothing_changes(self) -> None:
+        tag_personas.save(self.home, [])
+        origin = self.ask(f"<@{self.tag}> Finance: what's left?")
+        self.assertEqual("Finance: what's left?", self.runs[-1]["question"])
+        self.assertIsNone(self.runs[-1]["active"])
+        self.assertTrue(all(username is None for _text, username in self.replies(origin["ts"])))
