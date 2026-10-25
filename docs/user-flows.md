@@ -200,8 +200,9 @@ Try this:
 6. To refine it, mention the Tag again in the same thread. The agent continues
    the same conversation.
 
-The operator can see every request in the Tag app: open the Tag, then **Activity**, or with
-`tag NAME logs --json` and `tag NAME logs --activity RUN_ID`.
+The operator can see every thread in the Tag app: open the Tag, then **Threads**, or with
+`tag NAME threads --json` and `tag NAME thread CHANNEL THREAD_TS --json`. Each run's steps
+are in `tag NAME logs --activity RUN_ID`.
 
 ### Level 3 · Service blueprint
 
@@ -658,7 +659,8 @@ not set up.
 | Memory search | Implemented | Allowed scopes only; each reply gets its own channel's history. |
 | Model and thinking level | Per Tag | The app's Details tab or `tag settings ai`. No per-user overrides. |
 | Failure reports | Implemented | Private to the requester; sharing is manual. |
-| Activity history | Implemented | The app's Activity tab or `tag NAME logs --json`; kept 30 days. |
+| Activity history | Implemented | A thread's steps in the app's Threads tab, or `tag NAME logs --json`; kept 30 days. |
+| Thread history | Implemented | The app's Threads tab or `tag NAME threads --json`; each thread is kept 90 days after its last message. |
 | Work in the Tag's folder | Through the agent | Your account's permissions; not a hardened sandbox. |
 | Duplicate-event protection | Partial | One request per thread at a time. |
 | Organization governance and audit | Not provided | Add external sandboxing and policy for production use. |

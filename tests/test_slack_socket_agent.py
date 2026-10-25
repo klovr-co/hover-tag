@@ -18,7 +18,7 @@ try:
 except ModuleNotFoundError:
     raise unittest.SkipTest("slack_bolt is installed by the Slack bridge runtime")
 
-from scripts import agent_models, slack_socket_agent
+from scripts import agent_models, slack_socket_agent, tag_activity, tag_threads
 from scripts.agent_activity import THINKING_LABEL
 from scripts.tag_error_reporting import ErrorReportStore, ReportOrigin, make_error_report
 from scripts.tag_activity import ActivityStore
@@ -28,6 +28,14 @@ def setUpModule() -> None:
     summary = patch.object(slack_socket_agent, "queue_reply_summary")
     summary.start()
     unittest.addModuleCleanup(summary.stop)
+    # Activity and thread transcripts default to the Tag home: keep them out of the real one,
+    # also in tests that clear the environment.
+    home = tempfile.TemporaryDirectory()
+    unittest.addModuleCleanup(home.cleanup)
+    for module in (slack_socket_agent, tag_activity, tag_threads):
+        redirect = patch.object(module, "instance_home", lambda: Path(home.name))
+        redirect.start()
+        unittest.addModuleCleanup(redirect.stop)
 
 
 class FakeApp:

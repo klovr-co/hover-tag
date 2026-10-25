@@ -22,7 +22,7 @@ import urllib.request
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -66,6 +66,7 @@ try:
     from .agent_sessions import ThreadSessions
     from .tag_activity import ACTIVITY_DETAIL_ACTION_ID, PUBLIC_LABELS, ActivityStore, activity_detail_modal, activity_modal
     from .agent_summary import queue_reply_summary
+    from . import tag_threads
     from .tag_activity_details import sanitize_activity_details
     from .tag_approval_choices import sanitize_review_details
     from .tag_activity_labels import activity_title_for_status, readable_activity_title
@@ -111,6 +112,7 @@ except ImportError:  # Direct script execution does not create a package context
     from agent_sessions import ThreadSessions
     from tag_activity import ACTIVITY_DETAIL_ACTION_ID, PUBLIC_LABELS, ActivityStore, activity_detail_modal, activity_modal
     from agent_summary import queue_reply_summary
+    import tag_threads
     from tag_activity_details import sanitize_activity_details
     from tag_approval_choices import sanitize_review_details
     from tag_activity_labels import activity_title_for_status, readable_activity_title
@@ -923,18 +925,22 @@ def skip_oversized_earlier_files(
 def build_thread_text(
     client: Any, channel: str, thread_ts: str, attachment_dir: Path,
     *, request: dict[str, Any] | None = None,
+    on_messages: Callable[[list[dict[str, Any]]], None] | None = None,
 ) -> str:
-    return build_thread_texts(client, channel, thread_ts, attachment_dir, request=request)[0]
+    return build_thread_texts(client, channel, thread_ts, attachment_dir, request=request,
+                              on_messages=on_messages)[0]
 
 
 def build_thread_texts(
     client: Any, channel: str, thread_ts: str, attachment_dir: Path,
     *, request: dict[str, Any] | None = None, since_ts: str | None = None, own_user: str | None = None,
+    on_messages: Callable[[list[dict[str, Any]]], None] | None = None,
 ) -> tuple[str, str]:
     """The thread excerpt, and only what was posted after ``since_ts`` by others.
 
     A continued conversation already holds earlier messages and Tag's own
     replies, so it receives the second text. Selected files appear in both.
+    ``on_messages`` sees the thread's messages, for its transcript.
     """
     messages: list[dict[str, Any]] = []
     cursor = ""
@@ -966,6 +972,8 @@ def build_thread_texts(
         messages = [message for message in messages if message.get("ts") != request["ts"]]
         messages.append(request)
     messages.sort(key=lambda message: float(message.get("ts", "0")))
+    if on_messages is not None:
+        on_messages(messages)
     request = request or (messages[-1] if messages else {})
     files = select_request_files(messages, request)
     # An oversized file from an earlier message must not block every later
@@ -2397,6 +2405,77 @@ def waiting_request_blocks(offer_id: str, team: str, channel: str, thread_ts: st
     ]
 
 
+# How each kind of waiting question is answered from Tag.app: (prompt, choice, by) -> a short result.
+# The bridge registers approvals and Queue/Steer; other components register their own kinds.
+PROMPT_HANDLERS: dict[str, Callable[[dict[str, Any], str, dict[str, Any]], str]] = {}
+
+
+def approval_prompt_id(approval_id: str) -> str:
+    """A stable prompt ID for a backend approval, without exposing the backend's own ID."""
+    return "approval-" + hashlib.sha256(approval_id.encode("utf-8")).hexdigest()[:24]
+
+
+def waiting_prompt_id(offer_id: str) -> str:
+    return "queue-" + hashlib.sha256(offer_id.encode("utf-8")).hexdigest()[:24]
+
+
+def register_prompt_handler(kind: str, handler: Callable[[dict[str, Any], str, dict[str, Any]], str]) -> None:
+    """Let Tag.app answer prompts of ``kind``. The handler raises ``tag_threads.PromptExpired`` when too late."""
+    PROMPT_HANDLERS[kind] = handler
+
+
+def asks_approval(blocks: Any) -> bool:
+    """Whether a message carries approval buttons, which must reach the person even for app-only replies."""
+    for block in blocks or []:
+        if not isinstance(block, dict):
+            continue
+        for element in [*(block.get("elements") or []), block.get("accessory") or {}]:
+            if isinstance(element, dict) and str(element.get("action_id", "")).startswith("opentag_approval"):
+                return True
+    return False
+
+
+def kept_in_app(client: Any, artifacts: list[dict[str, str]]) -> None:
+    """An app-only reply's files stay on this computer instead of going to Slack."""
+    if isinstance(client, AppOnlyClient):
+        for artifact in artifacts:
+            if artifact.get("delivery") == "uploaded":
+                artifact["delivery"] = "local"
+
+
+class AppOnlyClient:
+    """A Slack client for a reply that stays in Tag.app.
+
+    It reads from Slack as usual but posts nothing in the reply's channel: no
+    working status, streamed answer, final message or upload. Private prompts
+    still reach Slack: ephemeral messages, and an approval posted in a DM.
+    Other channels are untouched.
+    """
+
+    QUIET = frozenset({
+        "chat_postMessage", "chat_update", "chat_delete", "chat_startStream", "chat_appendStream",
+        "chat_stopStream", "assistant_threads_setStatus", "assistant_threads_setTitle",
+        "assistant_threads_setSuggestedPrompts", "reactions_add", "reactions_remove", "files_upload_v2",
+        "api_call",
+    })
+
+    def __init__(self, client: Any, channel: str) -> None:
+        self.client = client
+        self.channel = channel
+
+    def __getattr__(self, name: str) -> Any:
+        method = getattr(self.client, name)
+        if name not in self.QUIET:
+            return method
+
+        def call(*args: Any, **kwargs: Any) -> Any:
+            target = kwargs.get("channel") or (kwargs.get("json") or {}).get("channel_id")
+            if target != self.channel or (name == "chat_postMessage" and asks_approval(kwargs.get("blocks"))):
+                return method(*args, **kwargs)
+            return {"ok": True, "ts": f"{time.time():.6f}", "channel": self.channel, "files": [], "message": {}}
+        return call
+
+
 def register_active_run(key: RunKey, run: ActiveBackendRun) -> None:
     with ACTIVE_RUNS_LOCK:
         ACTIVE_RUNS[key] = run
@@ -3700,6 +3779,7 @@ def create_app(
     peers: list[tag_handoff.Peer] | None = None,
     handoff_store: tag_handoff.HandoffStore | None = None,
     allowed_bot_ids: frozenset[str] | None = None,
+    thread_store: tag_threads.ThreadStore | None = None,
 ) -> App:
     retire_slack_settings()
     if allowed_bot_ids is None:
@@ -3739,6 +3819,93 @@ def create_app(
         app = App(token=token, before_authorize=workspace_boundary)
     report_store = report_store or default_report_store()
     activity_store = activity_store or ActivityStore()
+    # Transcripts live beside Activity, in the Tag's own state folder.
+    thread_store = thread_store or tag_threads.ThreadStore(activity_store.root.parent.parent)
+    person_names: dict[str, str | None] = {}
+    person_names_lock = threading.Lock()
+    # Questions this bridge asked that Tag.app may answer, by prompt ID: what answering needs.
+    app_prompts: dict[str, dict[str, Any]] = {}
+    app_prompts_lock = threading.Lock()
+
+    def person_name(client: Any, user_id: str | None) -> str | None:
+        """A person's Slack display name for transcripts, looked up once per bridge."""
+        if not isinstance(user_id, str) or not re.fullmatch(r"[UW][A-Z0-9]{2,30}", user_id):
+            return None
+        with person_names_lock:
+            if user_id in person_names:
+                return person_names[user_id]
+        name = None
+        try:
+            user = client.users_info(user=user_id).get("user") or {}
+            profile = user.get("profile") or {}
+            found = (profile.get("display_name") or profile.get("real_name")
+                     or user.get("real_name") or user.get("name"))
+            name = found if isinstance(found, str) and found else None
+        except Exception:  # noqa: BLE001 - a name is cosmetic
+            pass
+        with person_names_lock:
+            person_names[user_id] = name
+        return name
+
+    def remember_prompt(prompt_id: str, target: dict[str, Any]) -> None:
+        with app_prompts_lock:
+            app_prompts[prompt_id] = target
+
+    def prompt_target(prompt_id: str) -> dict[str, Any]:
+        with app_prompts_lock:
+            target = app_prompts.get(prompt_id)
+        if target is None:
+            raise tag_threads.PromptExpired(prompt_id)
+        return target
+
+    def show_approval(client: Any, *, team: str, channel: str, thread_ts: str, user_id: str,
+                      approval: dict[str, Any], backend: str, transcript: tag_threads.RunTranscript) -> Any:
+        """Post an approval privately in Slack, and show it in Tag.app as a question for the owner."""
+        posted = post_backend_approval(client, team=team, channel=channel, thread_ts=thread_ts,
+                                       user_id=user_id, approval=approval, backend=backend)
+        try:
+            blocks = approval_button_blocks(team=team, channel=channel, thread_ts=thread_ts, user_id=user_id,
+                                            approval_id=approval["approval_id"], label=approval["label"],
+                                            backend=backend, choices=approval.get("choices"))
+            text = re.sub(r"[*_]", "", next((b["text"]["text"] for b in blocks if b.get("type") == "section"),
+                                            f"{backend_display_name(backend)} needs your approval to continue."))
+            choices = ([{"id": c["id"], "label": c["label"], "primary": bool(c.get("primary"))}
+                        for c in approval["choices"]] if approval.get("choices")
+                       else [{"id": "approve", "label": "Approve once", "style": "primary"},
+                             {"id": "deny", "label": "Deny", "style": "danger"}])
+            prompt_id = approval_prompt_id(approval["approval_id"])
+            ts = posted.get("ts") if hasattr(posted, "get") and is_direct_message_channel(channel) else None
+            thread_store.open_prompt(
+                team=team, channel=channel, thread_ts=thread_ts, kind="approval", text=text, choices=choices,
+                requester={"id": user_id, "name": person_name(client, user_id)}, prompt_id=prompt_id,
+                run_id=transcript.run_id,
+                slack_message={"channel": channel, "ts": ts} if isinstance(ts, str) else None)
+            remember_prompt(prompt_id, {"kind": "approval", "approval_id": approval["approval_id"], "team": team,
+                                        "channel": channel, "thread_ts": thread_ts, "user": user_id,
+                                        "message_ts": ts})
+        except (OSError, ValueError, KeyError, TypeError, tag_threads.ThreadError) as exc:
+            app.logger.warning("Could not show the approval in Tag.app: %s", exc)
+        return posted
+
+    def show_waiting_choice(client: Any, offer_id: str, *, team: str, channel: str, thread_ts: str,
+                            user_id: str, question: str) -> None:
+        """Offer Queue or Steer in Tag.app too, for as long as Slack offers it."""
+        prompt_id = waiting_prompt_id(offer_id)
+        try:
+            thread_store.open_prompt(
+                team=team, channel=channel, thread_ts=thread_ts, kind="queue_steer",
+                text=f"{WAITING_REQUEST_MESSAGE} What should I do with the new message: “{question[:300]}”?",
+                choices=[{"id": "queue", "label": "Queue", "primary": True}, {"id": "steer", "label": "Steer"}],
+                requester={"id": user_id, "name": person_name(client, user_id)}, prompt_id=prompt_id,
+                expires_at=datetime.now(timezone.utc) + timedelta(seconds=WAITING_OFFER_SECONDS))
+            remember_prompt(prompt_id, {"kind": "queue_steer", "offer_id": offer_id, "team": team,
+                                        "channel": channel, "thread_ts": thread_ts, "user": user_id})
+        except (OSError, ValueError, tag_threads.ThreadError) as exc:
+            app.logger.warning("Could not show Queue or Steer in Tag.app: %s", exc)
+
+    def slack_to_transcript(client: Any, text: str) -> str:
+        """An answer's Slack mentions and links as Markdown, for Tag.app."""
+        return tag_threads.slack_to_markdown(text, lambda member: person_name(client, member))
     if peers is None:
         try:
             peers = tag_handoff.parse_peers(os.getenv("OPENTAG_PEER_TAGS", ""))
@@ -4112,6 +4279,12 @@ def create_app(
                     replace_original=True,
                 )
                 return
+            try:
+                thread_store.close_prompt(channel, thread_ts, approval_prompt_id(approval_id),
+                                          choice=choice or ("approve" if approved else "deny"),
+                                          by={"id": user_id, "name": person_name(client, user_id)}, via="slack")
+            except (OSError, ValueError, tag_threads.ThreadError) as exc:
+                logger.warning("Could not close the approval in Tag.app: %s", exc)
             result = "Approved once" if approved else "Denied"
             text = ("Your choice was sent to Tag." if choice is not None
                     else f"{result}. Tag is continuing.")
@@ -4686,6 +4859,7 @@ def create_app(
         combine: dict[str, Any] | None = None,
         bot_request: bool = False,
         queued: WaitingRequest | None = None,
+        via: str = "slack",
     ) -> None:
         channel = event["channel"]
         thread_ts = event.get("thread_ts") or event["ts"]
@@ -4773,15 +4947,16 @@ def create_app(
                     text=STOPPING_REQUEST_MESSAGE,
                 )
                 return
+            offer_id = offer_waiting_request(thread_key, waiting)
             client.chat_postEphemeral(
                 channel=channel,
                 user=user_id,
                 thread_ts=thread_ts,
                 text=WAITING_REQUEST_MESSAGE,
-                blocks=waiting_request_blocks(
-                    offer_waiting_request(thread_key, waiting), team, channel, thread_ts, user_id,
-                ),
+                blocks=waiting_request_blocks(offer_id, team, channel, thread_ts, user_id),
             )
+            show_waiting_choice(client, offer_id, team=team, channel=channel, thread_ts=thread_ts,
+                                user_id=user_id, question=question)
             return
 
         indicator = WorkingIndicator(
@@ -4814,9 +4989,13 @@ def create_app(
         backend_error_events: list[str] = []
         failure_stage = "request preparation"
         activity_run_id: str | None = None
+        transcript = tag_threads.RunTranscript(
+            thread_store, team=team, channel=channel, thread_ts=thread_ts, run_id=None,
+            requester={"id": user_id}, via=via, logger=logger)
 
         def trace_activity(trace_event: dict[str, Any]) -> None:
             nonlocal activity_run_id
+            transcript.step(trace_event)
             if activity_run_id is not None:
                 try:
                     activity_store.observe(activity_run_id, trace_event)
@@ -4865,6 +5044,7 @@ def create_app(
 
         def finish_activity(outcome: str) -> None:
             nonlocal activity_run_id
+            transcript.finish(outcome)
             if activity_run_id is None:
                 return
             try:
@@ -4912,14 +5092,20 @@ def create_app(
                 (attachment_dir / "results" / "artifacts").mkdir()
                 own_user = next((item.get("user_id") for item in body.get("authorizations") or []
                                  if isinstance(item, dict) and item.get("is_bot")), None)
+
+                def record_messages(messages: list[dict[str, Any]]) -> None:
+                    transcript.slack_messages(messages, own_user=own_user,
+                                              name_of=lambda member: person_name(client, member))
+
                 if continued:
                     thread_text, thread_new_text = build_thread_texts(
                         client, channel, thread_ts, attachment_dir, request=None if combine else event,
-                        since_ts=continued[1], own_user=own_user,
+                        since_ts=continued[1], own_user=own_user, on_messages=record_messages,
                     )
                 else:
                     thread_text = build_thread_text(
                         client, channel, thread_ts, attachment_dir, request=None if combine else event,
+                        on_messages=record_messages,
                     )
                     thread_new_text = None
                 if combine:
@@ -4946,6 +5132,9 @@ def create_app(
                         )
                     except OSError as exc:
                         logger.warning("Could not start Tag activity record: %s", exc)
+                if activity_run_id is not None:
+                    transcript.run_id = activity_run_id
+                transcript.start()
                 if stream_available:
                     answer_stream = SlackAnswerStream(
                         client,
@@ -4975,7 +5164,7 @@ def create_app(
                         on_status=indicator.status,
                         on_stop_requested=indicator.stop_requested,
                         # No one can answer an approval for a bot, so a bot's request declines them.
-                        on_approval=None if bot_request else lambda approval: post_backend_approval(
+                        on_approval=None if bot_request else lambda approval: show_approval(
                             client,
                             team=team,
                             channel=channel,
@@ -4983,6 +5172,7 @@ def create_app(
                             user_id=user_id,
                             approval=approval,
                             backend=request_backend,
+                            transcript=transcript,
                         ),
                         fast_mode=agent_settings.fast_mode,
                         output_manifest=output_manifest,
@@ -5048,6 +5238,7 @@ def create_app(
                     )
                     if delivery_messages:
                         answer = f"{answer.rstrip()}\n\n" + "\n".join(delivery_messages)
+                    kept_in_app(client, delivered_artifacts)
                     if activity_run_id is not None and delivered_artifacts:
                         try:
                             activity_store.save_artifacts(activity_run_id, delivered_artifacts)
@@ -5158,6 +5349,10 @@ def create_app(
                                 text=f"{tag_handoff.result_prefix(handoff_id, sender, 'failed')} "
                                 "Tag couldn't complete this request.",
                             )
+                transcript.answer(slack_to_transcript(client, answer),
+                                  outcome="completed" if succeeded else "stopped" if stopped else "failed",
+                                  posted_to="app" if isinstance(client, AppOnlyClient) else "slack")
+                transcript.memory(tag_memory.read_receipts(memory_receipts))
                 if succeeded and handoff_requests is not None:
                     request = tag_handoff.read_request(handoff_requests)
                     if request is not None:
@@ -5186,6 +5381,7 @@ def create_app(
                         artifacts=delivered_artifacts,
                         keep_dir=kept_images_directory(channel),
                     )
+                    kept_in_app(client, delivered_artifacts)
                     if activity_run_id is not None:
                         try:
                             activity_store.save_artifacts(activity_run_id, delivered_artifacts)
@@ -5211,8 +5407,11 @@ def create_app(
                                 + "; ".join(upload_errors)
                             ),
                         )
+                transcript.files(delivered_artifacts)
         except AttachmentLimitError as exc:
             finish_activity("failed")
+            transcript.answer(slack_to_transcript(client, str(exc)), outcome="failed",
+                              posted_to="app" if isinstance(client, AppOnlyClient) else "slack")
             indicator.clear()
             if answer_stream is not None:
                 answer_stream.abort("failed")
@@ -5283,6 +5482,8 @@ def create_app(
                 footer_blocks,
                 bot_request=bot_request,
             )
+            transcript.answer(slack_to_transcript(client, answer), outcome="failed",
+                              posted_to="app" if isinstance(client, AppOnlyClient) else "slack")
         finally:
             output_manifest.unlink(missing_ok=True)
             memory_receipts.unlink(missing_ok=True)
@@ -5310,6 +5511,176 @@ def create_app(
     def start_waiting_request(request: WaitingRequest) -> None:
         threading.Thread(target=run_queued_request, args=(request,),
                          name="slack-queued-request", daemon=True).start()
+
+    def apply_waiting_choice(offer_id: str, key: RunKey, *, steer: bool) -> str | None:
+        """Queue or steer a waiting request; None when the offer has expired."""
+        offer = take_waiting_request(offer_id)
+        if offer is None or offer[0] != key:
+            return None
+        key, request = offer
+        if not queue_waiting_request(key, request, first=steer):
+            start_waiting_request(request)
+            return "The earlier request has finished. Starting yours now."
+        if steer:
+            # The steering message's time keeps this from stopping a run that began after it.
+            stopped = cancel_active_run(key, request.event.get("ts"))
+            return ("Stopping the current request. I'll answer yours next."
+                    if stopped else "I'll answer yours as soon as the current request ends.")
+        return "Queued. I'll answer it after the current request."
+
+    def answer_waiting_from_app(prompt: dict[str, Any], choice: str, by: dict[str, Any]) -> str:
+        target = prompt_target(prompt["prompt_id"])
+        text = apply_waiting_choice(target["offer_id"], RunKey(target["team"], target["channel"], target["thread_ts"]),
+                                    steer=choice == "steer")
+        if text is None:
+            raise tag_threads.PromptExpired(prompt["prompt_id"])
+        try:
+            app.client.chat_postEphemeral(channel=target["channel"], user=target["user"],
+                                          thread_ts=target["thread_ts"],
+                                          text=f"Answered in Tag.app: {choice.capitalize()}. {text}")
+        except Exception as exc:  # noqa: BLE001 - the choice is already applied
+            app.logger.warning("Could not tell Slack about the Tag.app answer: %s", exc)
+        return text
+
+    def answer_approval_from_app(prompt: dict[str, Any], choice: str, by: dict[str, Any]) -> str:
+        target = prompt_target(prompt["prompt_id"])
+        numbered = choice if re.fullmatch(r"[0-9]{1,2}", choice) else None
+        if not resolve_active_approval(RunKey(target["team"], target["channel"], target["thread_ts"]),
+                                       target["approval_id"], approved=choice == "approve", choice=numbered):
+            raise tag_threads.PromptExpired(prompt["prompt_id"])
+        label = next((c["label"] for c in prompt["choices"] if c["id"] == choice), choice)
+        text = f"Answered in Tag.app: {label}. Tag is continuing."
+        try:
+            if target.get("message_ts"):
+                app.client.chat_update(channel=target["channel"], ts=target["message_ts"], text=text,
+                                       blocks=[{"type": "section", "text": {"type": "plain_text", "text": text}}])
+            else:
+                app.client.chat_postEphemeral(channel=target["channel"], user=target["user"],
+                                              thread_ts=target["thread_ts"], text=text)
+        except Exception as exc:  # noqa: BLE001 - the approval is already decided
+            app.logger.warning("Could not tell Slack about the Tag.app answer: %s", exc)
+        return text
+
+    register_prompt_handler("queue_steer", answer_waiting_from_app)
+    register_prompt_handler("approval", answer_approval_from_app)
+
+    bot_identity: dict[str, str] = {}
+
+    def own_identity() -> dict[str, str]:
+        """This Tag's bot member and workspace, asked once."""
+        if not bot_identity:
+            try:
+                result = app.client.auth_test()
+                bot_identity.update(user_id=str(result.get("user_id") or ""), team_id=str(result.get("team_id") or ""))
+            except Exception as exc:  # noqa: BLE001 - asked again next time
+                app.logger.warning("Could not read this Tag's Slack identity: %s", exc)
+        return bot_identity
+
+    def app_owner(request: dict[str, Any]) -> str | None:
+        """The person at this computer: the request's owner when still allowed, else the first allowed one."""
+        if isinstance(request.get("by"), str) and slack_user_allowed(request["by"], allowed_user_ids):
+            return request["by"]
+        configured = [part.strip() for part in os.getenv("SLACK_ALLOWED_USER_IDS", "").split(",") if part.strip()]
+        return next((member for member in configured if member in allowed_user_ids), None)
+
+    def answer_from_app(request: dict[str, Any]) -> None:
+        channel, thread_ts, prompt_id, choice = (request["channel"], request["thread_ts"],
+                                                 request.get("prompt_id"), request.get("choice"))
+        if not isinstance(prompt_id, str) or not isinstance(choice, str):
+            return
+        prompt = thread_store.pending_prompt(channel, thread_ts, prompt_id)
+        if prompt is None:
+            return  # Answered in Slack meanwhile: nothing to do.
+        if choice not in {c["id"] for c in prompt["choices"]}:
+            return
+        owner = app_owner(request)
+        by = {"id": owner, "name": person_name(app.client, owner)}
+        handler = PROMPT_HANDLERS.get(prompt["kind"])
+        if handler is None:
+            thread_store.notice(channel, thread_ts, "Answer this one in Slack.", prompt_id=prompt_id)
+            return
+        try:
+            handler(prompt, choice, {**by, "via": "app"})
+        except tag_threads.PromptExpired:
+            thread_store.close_prompt(channel, thread_ts, prompt_id, choice=None, via="expired")
+            thread_store.notice(channel, thread_ts, "This question had already stopped waiting.", prompt_id=prompt_id)
+            return
+        thread_store.close_prompt(channel, thread_ts, prompt_id, choice=choice, by=by, via="app")
+
+    def reply_from_app(request: dict[str, Any]) -> None:
+        """Send the owner's reply from Tag.app to the Tag, posting it in Slack only when asked."""
+        channel, thread_ts, text = request["channel"], request["thread_ts"], request.get("text")
+        owner = app_owner(request)
+        if not isinstance(text, str) or not text.strip() or owner is None:
+            return
+        direct_message = is_direct_message_channel(channel)
+        if not slack_conversation_allowed(channel, direct_message=direct_message):
+            thread_store.notice(channel, thread_ts, "The Tag doesn't answer in this channel any more.")
+            return
+        identity = own_identity()
+        team = os.getenv("SLACK_TEAM_ID", "").strip() or identity.get("team_id", "")
+        name = person_name(app.client, owner)
+        post = request.get("post_to_slack") is True
+        ts = f"{time.time():.6f}"
+        if post:
+            posted = app.client.chat_postMessage(
+                channel=channel, thread_ts=thread_ts, unfurl_links=False, unfurl_media=False,
+                text=f"{text}\n\n_— {slack_escape(name or 'The owner')}, from Tag.app_")
+            ts = posted.get("ts") or ts
+        thread_store.message(channel, thread_ts, ts=ts if post else None, author={"id": owner, "name": name},
+                             text=text, via="app", team=team, posted_to_slack=post)
+        event = {"type": "app_mention", "channel": channel, "thread_ts": thread_ts, "ts": ts, "user": owner,
+                 "text": text, "tag_app": True}
+        body = {"team_id": team, "authorizations": [{"user_id": identity.get("user_id"), "is_bot": True}]}
+        client = app.client if post else AppOnlyClient(app.client, channel)
+
+        def run() -> None:
+            try:
+                handle_invocation(event, body, client, app.logger, direct_message=direct_message, via="app")
+            except Exception:  # noqa: BLE001 - the transcript shows what happened
+                app.logger.exception("Could not answer the reply from Tag.app")
+            if not post:
+                update_slack_card(team, channel, thread_ts)
+
+        threading.Thread(target=run, name="tag-app-reply", daemon=True).start()
+
+    def update_slack_card(team: str, channel: str, thread_ts: str) -> None:
+        """After an app-only reply, the thread's Slack card shows the new result."""
+        try:
+            try:
+                from .slack_rounds import update_card
+            except ImportError:
+                from slack_rounds import update_card  # type: ignore[no-redef]
+        except ImportError:
+            return  # Without live cards, the new answer stays in Tag.app.
+        thread = thread_store.read(channel, thread_ts)
+        last = next((item for item in reversed(thread["items"]) if item["type"] == "answer"), None)
+        if last is None or last.get("posted_to") != "app" or last.get("outcome") != "completed":
+            return
+        try:
+            update_card(app.client, team, channel, thread_ts, headline=tag_threads.reply_preview(last["text"])[:150],
+                        results=None)
+        except Exception as exc:  # noqa: BLE001 - the answer is saved in Tag.app either way
+            app.logger.warning("Could not update the Slack card: %s", exc)
+
+    def process_thread_requests() -> None:
+        """Replies and answers Tag.app asked for since the last check."""
+        for request in tag_threads.take_requests(thread_store.home):
+            try:
+                if request["stale"]:
+                    thread_store.notice(request["channel"], request["thread_ts"],
+                                        "A reply from Tag.app arrived while the Tag was stopped, so it wasn't sent."
+                                        if request["kind"] == "reply" else
+                                        "An answer from Tag.app arrived while the Tag was stopped, so it wasn't used.")
+                elif request["kind"] == "answer":
+                    answer_from_app(request)
+                else:
+                    reply_from_app(request)
+            except Exception as exc:  # noqa: BLE001 - one request must not stop the others
+                app.logger.warning("Could not handle a Tag.app request: %s", exc)
+
+    app.tag_thread_requests = process_thread_requests
+    app.tag_prune_threads = thread_store.prune
 
     @app.action(WAITING_QUEUE_ACTION_ID)
     @app.action(WAITING_STEER_ACTION_ID)
@@ -5340,22 +5711,20 @@ def create_app(
                 )
             ):
                 return
-            offer = take_waiting_request(offer_id)
-            if offer is None or offer[0] != RunKey(team, channel, thread_ts):
+            text = apply_waiting_choice(offer_id, RunKey(team, channel, thread_ts), steer=steer)
+            prompt_id = waiting_prompt_id(offer_id)
+            try:
+                if text is None:
+                    thread_store.close_prompt(channel, thread_ts, prompt_id, choice=None, via="expired")
+                else:
+                    thread_store.close_prompt(channel, thread_ts, prompt_id, choice="steer" if steer else "queue",
+                                              by={"id": user_id, "name": person_name(client, user_id)}, via="slack")
+            except (OSError, ValueError, tag_threads.ThreadError) as exc:
+                logger.warning("Could not close Queue or Steer in Tag.app: %s", exc)
+            if text is None:
                 respond(text="This choice has expired. Mention me again to send your message.",
                         response_type="ephemeral", replace_original=True)
                 return
-            key, request = offer
-            if not queue_waiting_request(key, request, first=steer):
-                text = "The earlier request has finished. Starting yours now."
-                start_waiting_request(request)
-            elif steer:
-                # The steering message's time keeps this from stopping a run that began after it.
-                stopped = cancel_active_run(key, request.event.get("ts"))
-                text = ("Stopping the current request. I'll answer yours next."
-                        if stopped else "I'll answer yours as soon as the current request ends.")
-            else:
-                text = "Queued. I'll answer it after the current request."
             respond(text=text, blocks=[{"type": "section", "text": {"type": "plain_text", "text": text}}],
                     response_type="ephemeral", replace_original=True)
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
@@ -5900,6 +6269,7 @@ def main() -> None:
         app.tag_refresh_invitations = invitation_memory.refresh
     next_handoff_check = 0.0
     next_routine_check = 0.0
+    next_thread_prune = 0.0
     try:
         connection.connect()
         try:
@@ -5913,6 +6283,16 @@ def main() -> None:
                     app.tag_routine_scheduler.tick()
                 except Exception as exc:  # noqa: BLE001 - keep the bridge running
                     app.logger.warning("Could not check routines: %s", exc)
+            try:
+                app.tag_thread_requests()
+            except Exception as exc:  # noqa: BLE001 - keep the bridge running
+                app.logger.warning("Could not check Tag.app requests: %s", exc)
+            if time.monotonic() >= next_thread_prune:
+                next_thread_prune = time.monotonic() + 3600
+                try:
+                    app.tag_prune_threads()
+                except Exception as exc:  # noqa: BLE001 - keep the bridge running
+                    app.logger.warning("Could not delete expired threads: %s", exc)
             if time.monotonic() >= next_handoff_check:
                 next_handoff_check = time.monotonic() + 30
                 try:

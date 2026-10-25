@@ -1,0 +1,54 @@
+{
+ "schema_version": 1,
+ "ok": true,
+ "tag": "t0klovr1-a0maya01",
+ "retention_days": 90,
+ "has_more": false,
+ "threads": [
+  {
+   "channel": "D0MAYA001",
+   "thread_ts": "1792401200.000100",
+   "team": "T0KLOVR1",
+   "source": "slack",
+   "title": "What did we decide about the beta invite list?",
+   "status": "done",
+   "preview_only": false,
+   "started_at": "2026-10-20T09:15:12+00:00",
+   "updated_at": "2026-10-20T09:15:42+00:00",
+   "people": [
+    "Maya"
+   ],
+   "message_count": 2,
+   "file_count": 0,
+   "memory_count": 0,
+   "pending_prompts": 0,
+   "last_answer_preview": "You decided to invite the first 200 people on the waitlist, starting Monday.",
+   "channel_name": null,
+   "dm": true,
+   "link": "hover-tag://tag/t0klovr1-a0maya01/thread/D0MAYA001/1792401200.000100"
+  },
+  {
+   "channel": "C0LAUNCH1",
+   "thread_ts": "1792487642.000100",
+   "team": "T0KLOVR1",
+   "source": "slack",
+   "title": "Turn the launch notes into a checklist with owners",
+   "status": "needs_you",
+   "preview_only": false,
+   "started_at": "2026-10-20T09:14:07+00:00",
+   "updated_at": "2026-10-20T09:15:07+00:00",
+   "people": [
+    "Maya",
+    "Sam"
+   ],
+   "message_count": 3,
+   "file_count": 1,
+   "memory_count": 1,
+   "pending_prompts": 1,
+   "last_answer_preview": "The launch checklist is ready. I also saved who owns launch comms.",
+   "channel_name": "launch",
+   "dm": false,
+   "link": "hover-tag://tag/t0klovr1-a0maya01/thread/C0LAUNCH1/1792487642.000100"
+  }
+ ]
+}

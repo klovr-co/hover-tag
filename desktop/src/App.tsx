@@ -11,6 +11,7 @@ import { TrackContext, useTelemetry, type AppEvents } from "./lib/telemetry";
 import { useWatch } from "./lib/watch";
 import { MoodContext, useMoods } from "./lib/mood";
 import { deepLinkTarget } from "./lib/deeplink";
+import { BACKGROUND_SECONDS, LIST_SECONDS, needsYouNotice, NOT_HERE, PROMPTS_CAPABILITY, REPLY_CAPABILITY, THREADS_CAPABILITY, useThreads } from "./lib/threads";
 import { glide } from "./lib/motion";
 import { Connect } from "./components/Connect";
 import { Home } from "./components/Home";
@@ -31,8 +32,8 @@ type Screen =
   | { name: "settings"; tab?: SettingsTab; privacy?: boolean }
   | { name: "ai"; resume?: string[] }
   | { name: "memory" }
-  /** `opened` counts Slack links, so a second link resets an open Tag screen. */
-  | { name: "tag"; id: string; tab?: TagTab; opened?: number }
+  /** `opened` counts Slack links, so a second link resets an open Tag screen. `thread` opens one conversation. */
+  | { name: "tag"; id: string; tab?: TagTab; thread?: { channel: string; thread: string }; opened?: number }
   /** Settings > Replay onboarding: the first-run screens again, changing nothing. */
   | { name: "replay" };
 
@@ -48,9 +49,9 @@ const APP_UPDATE_HOURS = 6;
 /** While a release waits for its Tag.app builds, look again soon so the banner appears as soon as it can. */
 const PREPARING_RECHECK_MINUTES = 5;
 const DEVELOPMENT_UPDATES = "Updates are off in development builds. Use the installed Tag.app to update.";
-/** Window widths: everyday screens, and Tag detail's Slack layout. */
+/** Window widths: everyday screens, and Tag detail's threads beside their conversation. */
 export const WIDTH = 520;
-export const WIDE = 800;
+export const WIDE = 1040;
 
 /** Keep the Tags the Swift app restored at login, then let the login service do it. */
 export async function migrateFromSwiftApp(api: Bridge, legacy: string[], existing: string[]) {
@@ -88,6 +89,13 @@ export function App() {
   const watch = useWatch(api, tags.rows, {
     ai: installed && capabilities.includes(AI_CAPABILITY),
     activity: installed && capabilities.includes("logs-activity"),
+  });
+  // Every Tag's threads: read often while they show, and in the background so a thread that
+  // starts waiting on its owner shows a notification wherever the app is.
+  const threads = useThreads(api, tags.rows, {
+    enabled: installed && capabilities.includes(THREADS_CAPABILITY),
+    seconds: screen.name === "tag" ? LIST_SECONDS : BACKGROUND_SECONDS,
+    notify: (row, tag) => { const notice = needsYouNotice(row, tag); void api?.notify(notice.title, notice.body); },
   });
   // Every Tag's waterdrop plays what that Tag is doing, on every screen.
   const moods = useMoods(tags.rows, { busy: tags.busy, problems: watch.problems, activity: watch.activity, url: source });
@@ -236,7 +244,7 @@ export function App() {
     });
   }, [api, tags]);
 
-  // Links from Slack, such as "Choose another model in the Tag app", open that Tag's Details.
+  // Links from Slack open a thread, or, such as "Choose another model in the Tag app", that Tag's Details.
   const ready = installed && tags.loaded;
   const [link, setLink] = useState<string | null>(null);
   const links = useRef(0);
@@ -244,9 +252,13 @@ export function App() {
   useEffect(() => {
     if (!api || !link || !ready) return;
     setLink(null);
-    const id = deepLinkTarget(link);
-    if (id && tags.rows.some((r) => r.id === id)) setScreen({ name: "tag", id, tab: "details", opened: ++links.current });
-    else if (id) say("That Tag isn't on this computer.");
+    const target = deepLinkTarget(link);
+    const here = !!target && tags.rows.some((r) => r.id === target.tag);
+    if (target && here && target.channel && target.thread) {
+      setScreen({ name: "tag", id: target.tag, thread: { channel: target.channel, thread: target.thread }, opened: ++links.current });
+    } else if (target && here) setScreen({ name: "tag", id: target.tag, tab: "details", opened: ++links.current });
+    else if (target?.thread) say(NOT_HERE);
+    else if (target) say("That Tag isn't on this computer. Open the link on the computer that runs the Tag.");
     void api.showWindow();
   }, [api, link, ready, tags.rows, say]);
 
@@ -339,7 +351,9 @@ export function App() {
             <AISettings api={api} tags={tags} apiConnections={capabilities.includes(API_CAPABILITY)} rules={capabilities.includes(RULES_CAPABILITY)} close={() => { watch.recheck(); setScreen(screen.resume ? { name: "connect", args: screen.resume } : { name: "settings", tab: "ai" }); }} />
           )}
           {screen.name === "tag" && (
-            <TagDetail key={screen.opened ?? 0} api={api} tags={tags} initial={screen.id} initialTab={screen.tab} problems={watch.problems} back={home} add={add}
+            <TagDetail key={screen.opened ?? 0} api={api} tags={tags} initial={screen.id} initialTab={screen.tab} initialThread={screen.thread} problems={watch.problems} back={home} add={add}
+              threads={capabilities.includes(THREADS_CAPABILITY) ? threads : undefined}
+              canReply={capabilities.includes(REPLY_CAPABILITY)} canAnswer={capabilities.includes(PROMPTS_CAPABILITY)}
               canDescribe={capabilities.includes("describe")} canRefreshModels={capabilities.includes(SAVED_MODELS_CAPABILITY)}
               canRoutines={capabilities.includes("routines")}
               showSettings={() => setScreen({ name: "settings" })}

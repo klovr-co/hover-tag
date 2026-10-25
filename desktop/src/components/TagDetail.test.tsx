@@ -1,4 +1,4 @@
-// Tag detail: the feed shows only Tag's own records, and model changes wait for a click.
+// Tag detail: a Tag too old to report threads shows its own records, and model changes wait for a click.
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AIModels, Permissions } from "../lib/ai";
@@ -44,11 +44,16 @@ describe("Tag detail", () => {
     expect(activityText({ at: "", kind: "failed", channel: "D1", channel_name: null, dm: true })).toBe("Couldn't finish a request in a direct message");
   });
 
-  it("lists the workspace's Tags and channels, and a channel shows its Tags", async () => {
+  it("picks a Tag from the top bar, across workspaces, instead of an icon rail", async () => {
     await open();
-    expect(screen.getByRole("button", { name: /Research Tag/ })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: /^#\s*general$/ }));
-    expect(screen.getByText("1 Tag answers here")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Tag: Maya's Tag" }));
+    const menu = screen.getByRole("menu", { name: "Tags" });
+    expect(within(menu).getByText("Acme Inc")).toBeTruthy();
+    fireEvent.click(within(menu).getByRole("menuitemradio", { name: /Research Tag/ }));
+    expect(screen.getByRole("button", { name: "Tag: Research Tag" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Research Tag settings" }));
+    expect(screen.getByRole("tab", { name: "Details" })).toBeTruthy();
+    expect(screen.queryByRole("tab", { name: "Activity" })).toBeNull();
   });
 
   it("asks before restarting a running Tag to use a new thinking level", async () => {
@@ -481,47 +486,6 @@ it("shows chronological history, hides failures by default, and remembers Show e
   expect(messages()).toHaveLength(3);
 });
 
-it("merges channel activity across workspace Tags, scopes requests, and opens the correct Tag's details", async () => {
-  let secondTag = "";
-  const { calls, rows } = await open(undefined, false, (api, rows) => {
-    secondTag = rows[1].id;
-    const run = api.tag;
-    api.tag = async (args) => {
-      if (args[1] !== "logs" || args.includes("--activity")) return run(args);
-      return { code: 0, stderr: "", stdout: JSON.stringify({ services: {}, activity: args[0] === rows[0].id ? [
-        entry("First Tag reply", "2026-10-05T01:00:00Z"),
-        entry("Wrong channel", "2026-10-05T03:00:00Z", "replied", "C0GENERAL"),
-      ] : [entry("Second Tag reply", "2026-10-05T02:00:00Z")] }) };
-    };
-  });
-  fireEvent.click(screen.getByRole("button", { name: /^#\s*launch$/ }));
-  await screen.findByText("Second Tag reply");
-  expect(screen.getByRole("tab", { name: "Activity" }).getAttribute("aria-selected")).toBe("true");
-  expect([...document.querySelectorAll(".activity-reply-preview")].map((el) => el.textContent)).toEqual(["First Tag reply", "Second Tag reply"]);
-  expect(screen.queryByText("Wrong channel")).toBeNull();
-  expect(document.querySelector(".activity-reply-place")).toBeNull();
-  expect(screen.queryByText(/Replied in/)).toBeNull();
-  expect(calls.filter((args) => args.includes("--activity-channel")).map((args) => args[0])).toEqual([rows[0].id, secondTag]);
-  fireEvent.click(screen.getAllByRole("button", { name: /^2 steps/ })[1]);
-  await vi.waitFor(() => expect(calls).toContainEqual([secondTag, "logs", "--activity", "Second Tag reply", "--json"]));
-  fireEvent.click(screen.getByRole("tab", { name: "Tags in this channel" }));
-  expect(screen.getAllByRole("button", { name: "View" })).toHaveLength(1);
-  fireEvent.click(screen.getByRole("button", { name: /^#\s*general$/ }));
-  expect(screen.getByRole("tab", { name: "Activity" }).getAttribute("aria-selected")).toBe("true");
-  expect(screen.queryByText("Second Tag reply")).toBeNull();
-});
-
-it("keeps available channel activity and reports a failed Tag read", async () => {
-  await open(undefined, false, (api, rows) => {
-    const run = api.tag;
-    api.tag = async (args) => args[1] === "logs" && args[0] === rows[1].id
-      ? { code: 1, stdout: "", stderr: "Unavailable" } : run(args);
-  });
-  fireEvent.click(screen.getByRole("button", { name: /^#\s*launch$/ }));
-  expect(await screen.findByText(/Couldn't load activity for Research Tag/)).toBeTruthy();
-  expect(screen.getByText("Created a launch checklist with owners and next steps.")).toBeTruthy();
-});
-
 it("opens at the latest request, loads older records on upward scroll, and preserves the reading position", async () => {
   const height = vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) {
     return this.classList.contains("sl-body") ? this.querySelectorAll(".sl-msg").length * 20 : 0;
@@ -558,34 +522,7 @@ it("opens at the latest request, loads older records on upward scroll, and prese
   } finally { height.mockRestore(); clientHeight.mockRestore(); }
 }, 20_000);
 
-it("loads channel history as a continuous chronological window across Tags", async () => {
-  await open(undefined, false, (api, rows) => {
-    const run = api.tag;
-    api.tag = async (args) => {
-      if (args[1] !== "logs") return run(args);
-      const limit = Number(args[args.indexOf("--activity-limit") + 1]);
-      const all = Array.from({ length: 60 }, (_, index) => {
-        const minute = index * 2 + (args[0] === rows[0].id ? 0 : 1);
-        return entry(`Channel reply ${minute}`, new Date(Date.UTC(2026, 9, 5, 0, minute)).toISOString());
-      }).reverse();
-      return { code: 0, stderr: "", stdout: JSON.stringify({ services: {}, activity: all.slice(0, limit), activity_has_more: limit < all.length }) };
-    };
-  });
-  fireEvent.click(screen.getByRole("button", { name: /^#\s*launch$/ }));
-  await screen.findByText("Channel reply 119");
-  const summaries = () => [...document.querySelectorAll(".activity-reply-preview")].map((el) => el.textContent);
-  expect(summaries()).toEqual(Array.from({ length: 50 }, (_, index) => `Channel reply ${index + 70}`));
-  fireEvent.click(screen.getByRole("button", { name: "Load older activity" }));
-  await screen.findByText("Channel reply 20");
-  expect(summaries()).toEqual(Array.from({ length: 100 }, (_, index) => `Channel reply ${index + 20}`));
-  fireEvent.click(screen.getByRole("button", { name: "Load older activity" }));
-  await screen.findByText("Channel reply 0");
-  expect(summaries()).toHaveLength(120);
-  expect(screen.queryByRole("button", { name: "Load older activity" })).toBeNull();
-}, 20_000);
-
-
-it("hides empty reply rows and uses a plain empty state in Tag and channel activity", async () => {
+it("hides empty reply rows and uses a plain empty state in Tag activity", async () => {
   await open(undefined, false, (api) => {
     const run = api.tag;
     api.tag = async (args) => args.includes("logs") ? { code: 0, stderr: "", stdout: JSON.stringify({
@@ -603,9 +540,6 @@ it("hides empty reply rows and uses a plain empty state in Tag and channel activ
   expect(filter.closest('[role="tabpanel"]')).toBeNull();
   fireEvent.click(filter);
   await screen.findByText("No activity yet");
-  fireEvent.click(screen.getByRole("button", { name: /^#\s*launch$/ }));
-  await screen.findByText("No activity in #launch yet");
-  expect(document.querySelector(".sl-msg")).toBeNull();
   expect(screen.queryByText(/errors hidden|errors shown/)).toBeNull();
 });
 

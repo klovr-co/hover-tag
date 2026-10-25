@@ -263,9 +263,32 @@ it("opens a linked Tag's Details from Slack and ignores Tags that aren't here", 
   render(<App />);
   expect((await screen.findByRole("tab", { name: "Details" })).getAttribute("aria-selected")).toBe("true");
   expect(api.showWindow).toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("tab", { name: "Activity" }));
+  fireEvent.click(screen.getByRole("tab", { name: "Threads" }));
   act(() => open("hover-tag://tag/t0klovr1-a0rese02"));
   await vi.waitFor(() => expect(screen.getByRole("tab", { name: "Details" }).getAttribute("aria-selected")).toBe("true"));
   act(() => open("hover-tag://tag/missing"));
-  expect(await screen.findByText("That Tag isn't on this computer.")).toBeTruthy();
+  expect(await screen.findByText("That Tag isn't on this computer. Open the link on the computer that runs the Tag.")).toBeTruthy();
 });
+
+it("opens a linked thread from Slack, and says when it isn't on this computer", async () => {
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  const api = demoBridge();
+  const demo = api.tag;
+  api.tag = vi.fn(async (args: string[]) => args[0] === "telemetry" && args[1] !== "record"
+    ? { code: 0, stderr: "", stdout: JSON.stringify({ schema_version: 1, enabled: false, available: true,
+      saved_preference: "off", process_override: null, privacy_notice: "" }) }
+    : demo(args));
+  let open: (url: string) => void = () => {};
+  api.onDeepLink = (handler) => { open = handler; return () => {}; };
+  api.showWindow = vi.fn(async () => {});
+  vi.mocked(bridge).mockResolvedValue(api);
+  render(<App />);
+  await screen.findByRole("heading", { name: "Your Tags" }, { timeout: 5000 });
+  // Home has read the installed Tag's capabilities before a link arrives.
+  await vi.waitFor(() => expect(vi.mocked(api.tag).mock.calls.some(([args]) => args[0] === "version")).toBe(true));
+  act(() => open("hover-tag://tag/t0klovr1-a0maya01/thread/D0MAYA001/1792401200.000100"));
+  expect(await screen.findByText("first 200 people", { exact: false }, { timeout: 5000 })).toBeTruthy();
+  expect(vi.mocked(api.tag).mock.calls).toContainEqual([["t0klovr1-a0maya01", "thread", "D0MAYA001", "1792401200.000100", "--json"]]);
+  act(() => open("hover-tag://tag/missing/thread/C0LAUNCH1/1792487642.000100"));
+  expect(await screen.findByText("This thread isn't on this computer. Open the link on the computer that runs the Tag.")).toBeTruthy();
+}, 20_000);
