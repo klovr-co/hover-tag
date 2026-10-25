@@ -26,6 +26,8 @@ export function Routines({ api, row, say, focus, showLogs }: {
 }) {
   const [list, setList] = useState<RoutineList | null>(null);
   const [error, setError] = useState("");
+  // A failed refresh has its own message, so the next good refresh clears it without touching an editor error.
+  const [loadError, setLoadError] = useState("");
   const [editing, setEditing] = useState<Routine | "new" | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -36,10 +38,11 @@ export function Routines({ api, row, say, focus, showLogs }: {
     const result = await api.tag([row.id, "routine", "list", "--json"]).catch(() => null);
     if (current !== request.current) return;
     if (!result || result.code !== 0) {
-      setError(result ? cliError(result.stdout, result.stderr) : "Couldn't reach Tag to read its routines. Trying again every 30 seconds.");
+      setLoadError(result ? cliError(result.stdout, result.stderr) : "Couldn't reach Tag to read its routines. Trying again every 30 seconds.");
       setList((l) => l ?? { tag_running: false, routines: [], limits: { per_tag: 10, per_channel: 3 } });
       return;
     }
+    setLoadError("");
     setList(parseJSON<RoutineList>(result.stdout));
   }, [api, row.id]);
   useEffect(() => {
@@ -84,7 +87,7 @@ export function Routines({ api, row, say, focus, showLogs }: {
       {list.tag_running && list.routines.length > 0 && list.scheduler?.problem && (
         <p className="meta rt-note"><Icon name="warn" />{list.scheduler.problem}</p>
       )}
-      {error && <ErrorLine>{error}</ErrorLine>}
+      {(error || loadError) && <ErrorLine>{error || loadError}</ErrorLine>}
       <RoutineRows routines={list.routines} render={(item, state) => (
         <RoutineRow key={item.id} api={api} tag={row.id} routine={item} state={state} tagRunning={list.tag_running}
           open={open === item.id} toggleOpen={() => setOpen(open === item.id ? null : item.id)}
@@ -377,9 +380,12 @@ function TimezonePicker({ value, onChange }: { value: string; onChange: (value: 
           if (e.key === "ArrowDown" || e.key === "ArrowUp") {
             e.preventDefault();
             setActive((i) => Math.max(0, Math.min(shown.length - 1, i + (e.key === "ArrowDown" ? 1 : -1))));
-          } else if (e.key === "Enter" && shown[active]) {
+          } else if (e.key === "Enter" && shown[active] && (query || active > 0)) {
+            // Only once something was typed or chosen; otherwise Enter keeps the zone and reaches the form.
             e.preventDefault();
             pick(shown[active]);
+          } else if (e.key === "Enter") {
+            setQuery(null);
           } else if (e.key === "Escape") {
             e.preventDefault();
             e.stopPropagation();  // Close the list, not the editor.

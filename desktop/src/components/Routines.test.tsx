@@ -1,5 +1,5 @@
 // Routines in Tag detail: the same commands as the CLI, with motion only for real changes.
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { demoBridge } from "../lib/bridge";
 import { parseList, type TagRow } from "../lib/protocol";
@@ -48,9 +48,21 @@ describe("Routines", () => {
   it("says when it can't reach Tag at all", async () => {
     const api = demoBridge();
     const rows: TagRow[] = parseList((await api.tag(["list", "--json"])).stdout);
-    api.tag = () => Promise.reject(new Error("bridge gone"));
-    render(<Routines api={api} row={rows[0]} say={vi.fn()} />);
-    expect(await screen.findByText(/Couldn't reach Tag to read its routines/)).toBeTruthy();
+    const run = api.tag;
+    let reachable = false;
+    api.tag = (args) => reachable ? run(args) : Promise.reject(new Error("bridge gone"));
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      render(<Routines api={api} row={rows[0]} say={vi.fn()} />);
+      expect(await screen.findByText(/Couldn't reach Tag to read its routines/)).toBeTruthy();
+      // The next refresh works, so the message goes.
+      reachable = true;
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+      expect(await screen.findByText("Weekly PR digest")).toBeTruthy();
+      expect(screen.queryByText(/Couldn't reach Tag/)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("pauses with the switch and says so", async () => {
@@ -134,6 +146,11 @@ describe("Routines", () => {
     fireEvent.change(zone, { target: { value: "new york" } });
     fireEvent.keyDown(zone, { key: "Enter" });
     expect((zone as HTMLInputElement).value).toBe("America/New_York");
+    // Enter without typing or choosing keeps the zone.
+    fireEvent.focus(zone);
+    fireEvent.keyDown(zone, { key: "Enter" });
+    expect((zone as HTMLInputElement).value).toBe("America/New_York");
+    expect(screen.queryByRole("listbox", { name: "Timezones" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Save and approve" }));
     await waitFor(() => expect(say).toHaveBeenCalledWith("Saved Weekly PR digest"));
     expect(calls).toContainEqual([row.id, "routine", "edit", expect.stringMatching(/^r-/), "--timezone", "America/New_York", "--via", "tag-app", "--json"]);

@@ -624,7 +624,8 @@ Each routine row has `next_run` (null while paused), `last_run` (the newest
 history entry or null), `running`, `consecutive_failures`, `paused_reason`
 (set when Tag paused it after repeated failures), and `attention`. History
 `outcome` is one of `posted`, `no_reply`, `failed`, `budget_exceeded`,
-`timeout`, `skipped`, `missed`, `interrupted`, or `blocked`; treat unknown
+`timeout`, `skipped`, `missed`, `interrupted`, `blocked`, or `cancelled`
+(someone stopped the run, or paused or removed the routine during it); treat unknown
 values as needing attention. `trigger` is `schedule`, `catch-up`, `run-now`, or
 `retry`.
 
