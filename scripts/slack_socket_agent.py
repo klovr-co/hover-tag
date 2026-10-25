@@ -5525,10 +5525,10 @@ def create_app(
 
         def stop_if_withdrawn(done: threading.Event) -> None:
             # Pausing or removing the routine stops the run, as a stop in Slack would, so it spends no more.
+            # Once withdrawn, keep waiting for a run that is still starting, so it can't slip through.
             while not done.wait(ROUTINE_WITHDRAW_CHECK_SECONDS):
-                if withdrawn() is not None:
-                    if (run := active_run(run_key)) is not None:
-                        run.cancel()
+                if withdrawn() is not None and (run := active_run(run_key)) is not None:
+                    run.cancel()
                     return
 
         output_manifest = default_workdir() / f"{OUTPUT_ARTIFACT_MANIFEST_PREFIX}{uuid.uuid4().hex}.json"
@@ -5553,13 +5553,17 @@ def create_app(
                 )
                 run_done.set()
                 finished = True
-                finish_activity("completed" if succeeded else "failed")
                 extra = {"tools_used": tools_used or None, "cost_usd": usage.get("cost_usd"),
                          "tokens": usage.get("tokens"), "activity_run_id": activity_run_id}
                 if (reason := withdrawn()) is not None:
+                    finish_activity("completed" if succeeded else "failed")
                     return record("cancelled", reason, **extra)
-                if not succeeded and not cancelled and shutdown_requested.wait(ROUTINE_SHUTDOWN_GRACE_SECONDS):
-                    # Tag is stopping and took the coding agent with it: that isn't the routine's failure.
+                # Tag is stopping and took the coding agent with it: that isn't the routine's failure.
+                # A reply that did finish still posts.
+                interrupted = (not succeeded and not cancelled
+                               and shutdown_requested.wait(ROUTINE_SHUTDOWN_GRACE_SECONDS))
+                finish_activity("interrupted" if interrupted else "completed" if succeeded else "failed")
+                if interrupted:
                     return record("interrupted", "Tag stopped during this run, so nothing was posted. "
                                                  "It wasn't run again, so nothing posts twice.", **extra)
                 if cancelled and not limit_hit:

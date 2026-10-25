@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import tempfile
 import threading
+import time
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -333,6 +334,32 @@ class RoutineRunTests(unittest.TestCase):
         record = self.run_routine(behaviour)
         self.assertEqual(record["outcome"], "interrupted")
         self.assertIn("nothing was posted", record["diagnostic"])
+        self.client.chat_postMessage.assert_not_called()
+        self.assertEqual(self.store.get(record["activity_run_id"])["outcome"], "interrupted")
+
+    def test_a_pause_while_the_backend_is_still_starting_stops_it_once_it_starts(self):
+        run = MagicMock()
+        stopped = threading.Event()
+        run.cancel.side_effect = stopped.set
+        registered: list = []
+
+        def behaviour(kwargs):
+            self.definitions.set_enabled(self.routine["id"], False)
+            time.sleep(0.1)  # Paused before the backend run is registered.
+            registered.append(run)
+            if stopped.wait(1):
+                kwargs["on_cancelled"]()
+                return "Stopped.", False
+            return "Three PRs merged.", True
+
+        def started(_key):
+            return registered[0] if registered else None
+
+        with patch.object(slack_socket_agent, "ROUTINE_WITHDRAW_CHECK_SECONDS", 0.01), \
+                patch.object(slack_socket_agent, "active_run", side_effect=started):
+            record = self.run_routine(behaviour)
+        self.assertTrue(stopped.is_set())
+        self.assertEqual(record["outcome"], "cancelled")
         self.client.chat_postMessage.assert_not_called()
 
     def test_a_run_stopped_by_a_person_is_cancelled_not_failed(self):
