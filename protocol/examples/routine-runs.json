@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "ok": true,
+  "tag": "t0klovr1-a0rese02",
+  "routine": {
+    "id": "r-3f9a1c2e7b",
+    "name": "Weekly PR digest",
+    "timezone": "Europe/London"
+  },
+  "runs": [
+    {
+      "run_id": "r-3f9a1c2e7b:20261012T080300Z",
+      "trigger": "schedule",
+      "scheduled_for": "2026-10-12T08:03:00+00:00",
+      "started": "2026-10-12T08:03:04+00:00",
+      "ended": "2026-10-12T08:04:41+00:00",
+      "outcome": "posted",
+      "prompt_sha256": "1f0e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+      "approval_hash": "9b0c6d0f2f3c4e7a8f1d2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f70",
+      "slack_team": "T0KLOVR1",
+      "tools_used": [
+        "Searching Slack…"
+      ],
+      "cost_usd": 0.18,
+      "tokens": 43500,
+      "activity_run_id": "5d1c0e8b2a7f4e3c9b6a1d0f8e7c6b5a",
+      "slack_ts": "1760256281.000100",
+      "slack_url": "slack://channel?team=T0KLOVR1&id=C0LAUNCH1&message=1760256281.000100",
+      "activity": {
+        "run_id": "5d1c0e8b2a7f4e3c9b6a1d0f8e7c6b5a",
+        "thread": "4be1f0c2d9a87e65",
+        "at": "2026-10-12T08:04:41+00:00",
+        "kind": "replied",
+        "channel": "C0LAUNCH1",
+        "channel_name": null,
+        "dm": false,
+        "step_count": 6,
+        "duration_seconds": 97.0,
+        "trigger": {
+          "type": "routine",
+          "routine_id": "r-3f9a1c2e7b",
+          "name": "Weekly PR digest",
+          "trigger": "schedule"
+        },
+        "usage": {
+          "input_tokens": 42100,
+          "output_tokens": 1400,
+          "total_tokens": 43500,
+          "cache_read_input_tokens": 30000
+        },
+        "backend": "claude",
+        "model": "claude-opus-5-5",
+        "model_name": "Opus 5.5",
+        "reply_preview": "Four pull requests merged this week: routines, timezone picker, demo dates and the CI cache."
+      }
+    },
+    {
+      "run_id": "r-3f9a1c2e7b:20261005T080300Z",
+      "trigger": "schedule",
+      "scheduled_for": "2026-10-05T08:03:00+00:00",
+      "started": null,
+      "ended": null,
+      "outcome": "missed",
+      "prompt_sha256": "1f0e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+      "approval_hash": "9b0c6d0f2f3c4e7a8f1d2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f70",
+      "count": 1,
+      "diagnostic": "Missed 1 run while Tag was stopped or this computer was asleep."
+    },
+    {
+      "run_id": "r-3f9a1c2e7b:20260928T080300Z",
+      "trigger": "schedule",
+      "scheduled_for": "2026-09-28T08:03:00+00:00",
+      "started": "2026-09-28T08:03:02+00:00",
+      "ended": "2026-09-28T08:03:40+00:00",
+      "outcome": "failed",
+      "prompt_sha256": "1f0e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+      "approval_hash": "9b0c6d0f2f3c4e7a8f1d2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f70",
+      "slack_team": "T0KLOVR1",
+      "diagnostic": "The AI provider's usage limit was reached. Reference 7C2E91AB.",
+      "error_reference": "7C2E91AB",
+      "slack_ts": "1759046582.000200",
+      "slack_url": "slack://channel?team=T0KLOVR1&id=C0LAUNCH1&message=1759046582.000200"
+    }
+  ],
+  "total": 40,
+  "has_more": true
+}

@@ -287,6 +287,16 @@ class ClaudeEventMapperTests(unittest.TestCase):
         self.assertEqual({"type": "turn_complete", "status": "failed",
                           "text": "API Error: 429 rate limit", "code": "http_429"}, events[-1])
 
+    def test_spend_and_turn_limits_keep_their_subtype_as_the_code(self) -> None:
+        for subtype in ("error_max_budget_usd", "error_max_turns"):
+            with self.subTest(subtype=subtype):
+                events = mapped([ResultMessage(subtype=subtype, is_error=True, num_turns=3,
+                                               errors=["Reached the limit"])])
+                self.assertEqual({"type": "turn_complete", "status": "failed", "text": "Reached the limit",
+                                  "code": subtype}, events[-1])
+        events = mapped([ResultMessage(subtype="error_during_execution", is_error=True, num_turns=3, errors=["boom"])])
+        self.assertNotIn("code", events[-1])
+
 
 def replace_parent(event: StreamEvent) -> StreamEvent:
     event.parent_tool_use_id = "task"

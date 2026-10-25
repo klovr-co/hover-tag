@@ -659,9 +659,11 @@ def run_rich_events(
     """Run one request-scoped turn per attempt and emit the richer event contract."""
     attempts = max(1, int(os.getenv("OPENTAG_BACKEND_ATTEMPTS", "3")))
     previous_usage: dict[str, int] = {}
+    previous_cost = 0.0
     for attempt in range(1, attempts + 1):
         made_progress = False
         attempt_usage: dict[str, int] = {}
+        attempt_cost: float | None = None
         recorder = None
         try:
             recorder = agent_usage.Recorder(backend_name.lower())
@@ -669,8 +671,11 @@ def run_rich_events(
             emit_event("status", "Usage recording unavailable; task will continue.")
 
         def forward_event(event: dict[str, Any]) -> None:
-            nonlocal made_progress, attempt_usage, recorder
+            nonlocal made_progress, attempt_usage, attempt_cost, recorder
+            cost: float | None = None
             if event.get("type") == "usage":
+                # The same estimate as usage records; None when the price is unknown.
+                cost = agent_usage.estimated_cost(backend_name.lower(), event)
                 if recorder is not None:
                     try:
                         recorder.observe(event)
@@ -693,6 +698,9 @@ def run_rich_events(
                 attempt_usage = usage
                 payload["usage"] = {key: previous_usage.get(key, 0) + usage.get(key, 0)
                                     for key in previous_usage.keys() | usage.keys()}
+                if cost is not None:
+                    attempt_cost = cost
+                    payload["cost_usd"] = round(previous_cost + cost, 6)
             if event_type in {
                 "approval_request",
                 "activity_start",
@@ -726,6 +734,7 @@ def run_rich_events(
         ):
             previous_usage = {key: previous_usage.get(key, 0) + attempt_usage.get(key, 0)
                               for key in previous_usage.keys() | attempt_usage.keys()}
+            previous_cost += attempt_cost or 0.0
             emit_event("status", retry_status(attempt + 1, attempts))
             time.sleep(min(2 * attempt, 8))
             continue

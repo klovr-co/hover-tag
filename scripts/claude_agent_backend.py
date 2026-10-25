@@ -415,8 +415,12 @@ class ClaudeEventMapper:
             terminal: dict[str, Any] = {"type": "turn_complete", "status": "failed",
                                         "text": detail or str(payload.get("subtype") or "Claude turn failed")}
             status_code = payload.get("api_error_status")
+            subtype = payload.get("subtype")
             if isinstance(status_code, int):
                 terminal["code"] = f"http_{status_code}"
+            elif subtype in LIMIT_SUBTYPES:
+                # Routine runs tell spend and turn limits apart from other failures.
+                terminal["code"] = subtype
             events.append(terminal)
             return events
         if not interrupted:
@@ -581,6 +585,31 @@ def normalize_catalog(models: Any) -> list[dict[str, Any]]:
     return catalog
 
 
+LIMIT_SUBTYPES = frozenset({"error_max_budget_usd", "error_max_turns"})
+
+
+def run_limits(environ: Any) -> dict[str, Any]:
+    """Routine runs' turn and spend limits, which the SDK enforces natively.
+
+    The SDK checks the budget after each response, so a run can pass it by one
+    response; the bridge also stops runs that go over from their usage events.
+    """
+    limits: dict[str, Any] = {}
+    try:
+        turns = int(environ.get("OPENTAG_RUN_MAX_TURNS", ""))
+        if turns > 0:
+            limits["max_turns"] = turns
+    except ValueError:
+        pass
+    try:
+        budget = float(environ.get("OPENTAG_RUN_MAX_BUDGET_USD", ""))
+        if budget > 0:
+            limits["max_budget_usd"] = budget
+    except ValueError:
+        pass
+    return limits
+
+
 def plugin_skills(plugin_dir: Path) -> list[str]:
     """``plugin:skill`` names of a local plugin's skills, as Claude's Skill tool calls them."""
     try:
@@ -737,6 +766,7 @@ class ClaudeAgentRun:
             kwargs["extra_args"] = {"thinking-display": "summarized"}
         if self.resume_session_id:
             kwargs["resume"] = self.resume_session_id
+        kwargs.update(run_limits(os.environ))
         if self.instructions:
             # Sent as the system prompt each run, so it never accumulates in the session.
             kwargs["system_prompt"] = self.instructions

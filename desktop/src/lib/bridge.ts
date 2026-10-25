@@ -16,6 +16,7 @@ import type { AIStatus, ApiConnection, Connection, PermissionRule } from "./ai";
 import type { RuleBackend } from "./permissions";
 import type { ActivityItem } from "./home";
 import { windowFitter } from "./fit";
+import { DEMO_ROUTINE_REFERENCE, demoRoutines } from "./routines";
 
 export interface AppInfo {
   platform: "macos" | "windows" | "linux" | string;
@@ -245,6 +246,9 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
   // ?telemetry=ask shows the first-run usage data notice.
   let telemetry = new URLSearchParams(location.search).get("telemetry") === "ask" ? "not_set" : "on";
   const json = (value: unknown): RunResult => ({ code: 0, stdout: JSON.stringify(value), stderr: "" });
+  const routines = demoRoutines();
+  // The sample routine's runs appear in its Tag's Activity, labelled with the routine.
+  activity[rows[0].id].push(...routines.activity);
   return {
     info: async () => ({
       platform: "macos", demo: true, cli: installed ? "~/.local/bin/tag" : null,
@@ -282,7 +286,7 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
       }
       if (first === "version") {
         return json({ ...versionExample, version: runtimeVersion,
-          capabilities: [...new Set([...versionExample.capabilities, "ai-connections", "shared-ai-connections", "logs-activity", "thinking-level", "describe", "telemetry-events", "api-connections", "saved-models", "permission-rules"])] });
+          capabilities: [...new Set([...versionExample.capabilities, "ai-connections", "shared-ai-connections", "logs-activity", "thinking-level", "describe", "telemetry-events", "api-connections", "saved-models", "permission-rules", "routines"])] });
       }
       if (second === "settings" && args[2] === "ai" && args[3] === "api" && args[4] === "check") {
         await sleep(500);
@@ -397,8 +401,10 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
         if (args.includes("--activity")) {
           const item = activity[row.id]?.find((item) => item.run_id === args[args.indexOf("--activity") + 1]);
           return json({ schema_version: 1, ok: !!item, activity: item ? {
-            run_id: item.run_id, outcome: "completed", started_at: item.at, finished_at: item.at,
-            team: row.slack_workspace, channel: item.channel, thread_ts: "1791158400.000001", omitted: 0, error: null,
+            run_id: item.run_id, outcome: item.kind === "failed" ? "failed" : "completed", started_at: item.at, finished_at: item.at,
+            team: row.slack_workspace, channel: item.channel, thread_ts: "1791158400.000001", omitted: 0,
+            error: item.kind === "failed" ? { reference: DEMO_ROUTINE_REFERENCE,
+              text: "Reference: " + DEMO_ROUTINE_REFERENCE + "\nCause: The AI provider's usage limit was reached." } : null,
             events: [{ label: "Reading a file…", status: "completed", started_at: item.at, finished_at: item.at,
               details: { tool: "cat launch-plan.md", input: "Read launch-plan.md", output: "Launch checklist reviewed." } }],
           } : null });
@@ -409,8 +415,13 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
           .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
         const limit = args.includes("--activity-limit") ? Number(args[args.indexOf("--activity-limit") + 1]) : 50;
         return json({ schema_version: 1, tag: row.id, services: {
-          slack: ["Open Tag is live as @" + (row.slack_name ?? "Tag")],
+          slack: ["Open Tag is live as @" + (row.slack_name ?? "Tag"),
+            ...(row === rows[0] ? [`ERROR Routine r-3f9a1c2e7b failed [${DEMO_ROUTINE_REFERENCE}]: rate_limit: usage limit reached`] : [])],
           mfs: ["Memory server ready"] }, activity: matches.slice(0, limit), activity_has_more: matches.length > limit });
+      }
+      if (row && second === "routine") {
+        const result = routines(row.id, row === rows[0], row.state === "running", args.slice(2));
+        return { code: result.ok ? 0 : 1, stdout: JSON.stringify({ schema_version: 1, tag: row.id, ...result }), stderr: "" };
       }
       if (row && (second === "start" || second === "stop")) {
         row.state = second === "start" ? "running" : "stopped";

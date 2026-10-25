@@ -30,7 +30,7 @@ async function open(tab?: string, canDescribe = false, configure?: (api: Bridge,
 describe("Tag detail", () => {
   it("shows the Tag's recorded replies, and nothing it didn't do", async () => {
     await open();
-    expect(await screen.findByText("#launch")).toBeTruthy();
+    expect((await screen.findAllByText("#launch")).length).toBeGreaterThan(0);
     expect(screen.getByText("Created a launch checklist with owners and next steps.")).toBeTruthy();
     expect(screen.queryByText("I reviewed the launch notes and prepared the following checklist.")).toBeNull();
     expect(screen.getByText("Today")).toBeTruthy();
@@ -120,6 +120,32 @@ describe("Tag detail", () => {
     const { rows } = await open("Details");
     expect(screen.getByText(rows[0].description!)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+  });
+
+  it("labels runs a routine started, and the label opens the routine; a failure's reference finds its log lines", async () => {
+    const api = demoBridge();
+    const rows: TagRow[] = parseList((await api.tag(["list", "--json"])).stdout);
+    const tags = { rows, busy: new Set<string>(), toggle: vi.fn(), workspace: vi.fn(), rename: vi.fn(async () => ""), describe: vi.fn(), refresh: vi.fn(), remove: vi.fn() } as unknown as Tags;
+    render(<TagDetail api={api} tags={tags} initial={rows[0].id} problems={{}} back={vi.fn()} add={vi.fn()} showSettings={vi.fn()}
+      finishSetup={vi.fn()} openAI={vi.fn()} say={vi.fn()} canRoutines />);
+    // A NO_REPLY run posts nothing, so like any reply without text it isn't in the feed.
+    const labels = await screen.findAllByRole("button", { name: /Routine: Weekly PR digest/ });
+    expect(labels.length).toBeGreaterThan(0);
+    fireEvent.click(labels[0]);
+    expect(screen.getByRole("tab", { name: "Routines" }).getAttribute("aria-selected")).toBe("true");
+    const history = await screen.findByRole("list", { name: "Weekly PR digest runs" });
+    fireEvent.click(within(history).getAllByRole("button", { expanded: false }).at(-1)!);
+    fireEvent.click(screen.getByRole("button", { name: "Find 7C2E91AB in logs" }));
+    expect(screen.getByRole("tab", { name: "Logs" }).getAttribute("aria-selected")).toBe("true");
+    expect(await screen.findByText(/1 line mentions 7C2E91AB/)).toBeTruthy();
+    expect(document.querySelector(".logbox mark")?.textContent).toContain("Routine r-3f9a1c2e7b failed [7C2E91AB]");
+    fireEvent.click(screen.getByRole("button", { name: "Show all" }));
+    expect(document.querySelector(".logbox mark")).toBeNull();
+  });
+
+  it("shows routine labels as plain text where routines can't be opened", async () => {
+    await open();
+    expect((await screen.findAllByText(/Routine: Weekly PR digest/))[0].closest("button")).toBeNull();
   });
 
   it("shows the Tag's service log in a Logs tab", async () => {

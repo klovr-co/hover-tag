@@ -18,10 +18,11 @@ import teamArt from "../assets/art/tag-team.png";
 import keyArt from "../assets/art/tag-key.png";
 import { workingFolder } from "./Home";
 import { modelSaveText, ModelMenu, ModelWarning, PermissionsRow, SaveBar, ThinkingRow } from "./AI";
+import { Routines } from "./Routines";
 import { Avatar, dragWindow, ErrorLine, fitText, Icon, Primary, Switch, useCopied, workspaceColor, WorkspaceMark, source, tagIcon } from "./ui";
 
 export type Selection = { kind: "tag"; id: string } | { kind: "channel"; id: string };
-export type Tab = "activity" | "channels" | "logs" | "details";
+export type Tab = "activity" | "channels" | "routines" | "logs" | "details";
 
 interface Props {
   api: Bridge;
@@ -39,6 +40,8 @@ interface Props {
   say: (text: string) => void;
   /** The installed Tag can change descriptions (`describe` capability). */
   canDescribe?: boolean;
+  /** The installed Tag has routines (`routines` capability). */
+  canRoutines?: boolean;
   /** The installed Tag can read model lists again (`saved-models` capability). */
   canRefreshModels?: boolean;
 }
@@ -52,7 +55,7 @@ export const shortPath = (path: string) => path.replace(/^(\/Users\/[^/]+|\/home
 /** A channel's name for people, or its ID while Tag hasn't recorded one. */
 const channelName = (channel: { id: string; name: string | null }) => channel.name ?? channel.id;
 
-export function TagDetail({ api, tags, initial, initialTab = "activity", problems, back, add, showSettings, finishSetup, openAI, say, canDescribe = false, canRefreshModels = false }: Props) {
+export function TagDetail({ api, tags, initial, initialTab = "activity", problems, back, add, showSettings, finishSetup, openAI, say, canDescribe = false, canRefreshModels = false, canRoutines = false }: Props) {
   const rows = tags.rows;
   const start = rows.find((row) => row.id === initial);
   const [workspace, setWorkspace] = useState(start?.slack_workspace ?? "");
@@ -142,7 +145,7 @@ export function TagDetail({ api, tags, initial, initialTab = "activity", problem
           {sel.kind === "channel"
             ? <ChannelPane key={`${group.key}:${sel.id}:${hideErrors}`} hideErrors={hideErrors} setHideErrors={setHideErrors} api={api} channel={channels.find((c) => c.id === sel.id)!} rows={live} team={group.key} open={(id) => choose({ kind: "tag", id })} />
             : <TagPane key={`${sel.id}:${hideErrors}`} hideErrors={hideErrors} setHideErrors={setHideErrors} api={api} tags={tags} row={group.rows.find((r) => r.id === sel.id)!} tab={tab} setTab={setTab}
-              problem={problems[sel.id] ?? null} finishSetup={finishSetup} openAI={openAI} say={say} canDescribe={canDescribe} canRefreshModels={canRefreshModels} />}
+              problem={problems[sel.id] ?? null} finishSetup={finishSetup} openAI={openAI} say={say} canDescribe={canDescribe} canRefreshModels={canRefreshModels} canRoutines={canRoutines} />}
         </div>
       </div>
     </>
@@ -260,9 +263,9 @@ function dayLabel(at: Date, now: Date) {
   return diff === 0 ? "Today" : diff === 1 ? "Yesterday" : at.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
 }
 
-function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, say, canDescribe, canRefreshModels, hideErrors, setHideErrors }: FilterProps & {
+function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, say, canDescribe, canRefreshModels, canRoutines, hideErrors, setHideErrors }: FilterProps & {
   api: Bridge; tags: Tags; row: TagRow; tab: Tab; setTab: (tab: Tab) => void; problem: string | null;
-  finishSetup: (row: TagRow) => void; openAI: (tag: string) => void; say: (text: string) => void; canDescribe: boolean; canRefreshModels: boolean;
+  finishSetup: (row: TagRow) => void; openAI: (tag: string) => void; say: (text: string) => void; canDescribe: boolean; canRefreshModels: boolean; canRoutines: boolean;
 }) {
   const state = status(row);
   const [activity, setActivity] = useState<ActivityItem[] | null>(null);
@@ -272,6 +275,9 @@ function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, sa
   const [logText, setLogText] = useState("");
   const failure = usePresence(tags.error || null);
   const [logView, setLogView] = useState("");
+  // A routine opened from its label in Activity, and text to find in the Logs tab.
+  const [routineFocus, setRoutineFocus] = useState<string | null>(null);
+  const [logFind, setLogFind] = useState("");
   const request = useRef(0);
   const load = useCallback(async () => {
     const current = ++request.current;
@@ -340,7 +346,7 @@ function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, sa
       </div>
       <div className="sl-tabbar">
       <div className="sl-tabs" role="tablist">
-        {([["activity", "Activity", null], ["channels", "Channels", channels.length], ["logs", "Logs", null], ["details", "Details", null]] as const).map(([key, label, count]) => (
+        {([["activity", "Activity", null], ["channels", "Channels", channels.length], ...(canRoutines ? [["routines", "Routines", null] as const] : []), ["logs", "Logs", null], ["details", "Details", null]] as const).map(([key, label, count]) => (
           <button key={key} role="tab" aria-selected={tab === key} onClick={() => setTab(key)}>
             {label}{count !== null && <> <span className="tcount">{count}</span></>}
           </button>
@@ -351,7 +357,8 @@ function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, sa
       <div key={tab} className="sl-body" role="tabpanel">
         {/* Rename, description, remove and start/stop report failures here, not only on Home. */}
         {failure.shown && <ErrorLine leaving={failure.leaving} onDismiss={tags.dismissible ? () => tags.setError("") : undefined}>{failure.shown}</ErrorLine>}
-        {tab === "activity" && <Activity hasMore={hasMore} loading={loading} loadOlder={() => setLimit((value) => value + 50)} hideErrors={hideErrors} api={api} row={row} items={activity} copyLog={copyLog} showLogs={() => setTab("logs")} problem={problem} openAI={() => openAI(row.id)} />}
+        {tab === "activity" && <Activity hasMore={hasMore} loading={loading} loadOlder={() => setLimit((value) => value + 50)} hideErrors={hideErrors} api={api} row={row} items={activity} copyLog={copyLog} showLogs={() => { setLogFind(""); setTab("logs"); }} problem={problem} openAI={() => openAI(row.id)}
+          openRoutine={canRoutines ? (id) => { setRoutineFocus(id); setTab("routines"); } : undefined} />}
         {tab === "channels" && (
           <>
             <p className="lead" style={{ margin: "0 0 8px" }}>{title(row)} answers and remembers conversations in these channels.</p>
@@ -369,7 +376,9 @@ function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, sa
             )}
           </>
         )}
-        {tab === "logs" && <Logs text={logView} copyLog={copyLog} />}
+        {tab === "routines" && canRoutines && <Routines api={api} row={row} say={say} focus={routineFocus}
+          showLogs={(find) => { setLogFind(find); setTab("logs"); }} />}
+        {tab === "logs" && <Logs text={logView} copyLog={copyLog} find={logFind} clearFind={() => setLogFind("")} />}
         {tab === "details" && <Details api={api} tags={tags} row={row} copyLog={copyLog} openAI={() => openAI(row.id)} say={say} canDescribe={canDescribe} canRefreshModels={canRefreshModels} />}
       </div>
       {on && tab === "activity" && (
@@ -446,8 +455,10 @@ function ActivityFilter({ hideErrors, setHideErrors }: FilterProps) {
     onChange={(event) => setHideErrors(!event.target.checked)} />Show errors</label>;
 }
 
-function ActivityFeed({ api, rows, entries, hideErrors, hasMore, loading, loadOlder, showReplyPlace = true, empty = "No activity yet" }: Pick<FilterProps, "hideErrors"> & HistoryProps & {
+function ActivityFeed({ api, rows, entries, hideErrors, hasMore, loading, loadOlder, showReplyPlace = true, empty = "No activity yet", openRoutine }: Pick<FilterProps, "hideErrors"> & HistoryProps & {
   api: Bridge; rows: TagRow[]; entries: ActivityEntry[] | null; showReplyPlace?: boolean; empty?: string;
+  /** Opens a routine from the label on a run it started. */
+  openRoutine?: (id: string) => void;
 }) {
   const now = new Date();
   const sorted = [...(entries ?? [])].filter(({ item }) => !hideErrors || item.kind !== "failed")
@@ -506,6 +517,9 @@ function ActivityFeed({ api, rows, entries, hideErrors, hasMore, loading, loadOl
             {item.duration_seconds != null && Number.isFinite(item.duration_seconds) && item.duration_seconds > 0 && <span title="Generation time, including tool work">· {generationTime(item.duration_seconds)}</span>}
             {item.usage && <ActivityTokens usage={item.usage} />}
             <StepsToggle item={item} open={!!expanded[key]} controls={`${key}:work`} onToggle={() => setExpanded((all) => ({ ...all, [key]: !all[key] }))} />
+            {item.trigger && (openRoutine
+              ? <button className="activity-routine" title="Open this routine" onClick={() => openRoutine(item.trigger!.routine_id)}><Icon name="clock" size={11} />Routine: {item.trigger.name}</button>
+              : <span className="activity-routine"><Icon name="clock" size={11} />Routine: {item.trigger.name}</span>)}
           </div>
           {item.kind === "replied" ?
             preview && <p className="activity-reply-preview">{preview}</p>
@@ -560,24 +574,40 @@ function ActivityFeed({ api, rows, entries, hideErrors, hasMore, loading, loadOl
   </>;
 }
 
-function Logs({ text, copyLog }: { text: string; copyLog: () => Promise<boolean> }) {
+/** The Tag's recent log lines; `find` marks the lines that mention it, such as a run's error reference. */
+function Logs({ text, copyLog, find = "", clearFind }: { text: string; copyLog: () => Promise<boolean>; find?: string; clearFind?: () => void }) {
   const copy = useCopied();
+  const box = useRef<HTMLPreElement>(null);
+  const lines = text.trim() ? text.trim().split("\n") : [];
+  const hits = find ? lines.filter((line) => line.includes(find)).length : 0;
+  useEffect(() => {
+    if (find) box.current?.querySelector("mark")?.scrollIntoView?.({ block: "center" });
+  }, [find, text]);
   return <>
     <div className="row" style={{ marginBottom: 8 }}>
       <p className="lead" style={{ margin: 0, flex: 1 }}>Recent entries from this Tag's services, newest last.</p>
       <button className="p-btn soft sm" onClick={() => void copyLog().then((ok) => ok && copy.mark())}>{copy.label("Copy full log")}</button>
     </div>
-    <pre className="logbox selectable" aria-label="Tag log" style={{ maxHeight: "none" }}>{text.trim() || "No log entries yet."}</pre>
+    {find && <p className="meta log-find" role="status">
+      {hits ? `${hits} ${hits === 1 ? "line mentions" : "lines mention"} ${find}.` : `No recent line mentions ${find}; it may be older than these entries.`}
+      {clearFind && <> <button className="link" onClick={clearFind}>Show all</button></>}
+    </p>}
+    <pre ref={box} className="logbox selectable" aria-label="Tag log" style={{ maxHeight: "none" }}>
+      {!lines.length ? "No log entries yet." : find
+        ? lines.map((line, index) => <span key={index}>{line.includes(find) ? <mark>{line}</mark> : line}{"\n"}</span>)
+        : text.trim()}
+    </pre>
   </>;
 }
 
-function Activity({ api, row, items, showLogs, problem, openAI, hideErrors, hasMore, loading, loadOlder }: Pick<FilterProps, "hideErrors"> & HistoryProps & {
+function Activity({ api, row, items, showLogs, problem, openAI, hideErrors, hasMore, loading, loadOlder, openRoutine }: Pick<FilterProps, "hideErrors"> & HistoryProps & {
   api: Bridge; row: TagRow; items: ActivityItem[] | null; copyLog: () => Promise<boolean>; showLogs: () => void; problem: string | null; openAI: () => void;
+  openRoutine?: (id: string) => void;
 }) {
   const attention = status(row) === "attention";
   return <>
     <ActivityFeed api={api} rows={[row]} entries={items?.map((item) => ({ tag: row.id, item })) ?? null}
-      hasMore={hasMore} loading={loading} loadOlder={loadOlder} hideErrors={hideErrors} />
+      hasMore={hasMore} loading={loading} loadOlder={loadOlder} hideErrors={hideErrors} openRoutine={openRoutine} />
       {problem && (
         <div className="notice" style={{ marginTop: 8 }}>
           <span className="ic"><Icon name="warn" size={16} /></span>
