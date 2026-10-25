@@ -54,10 +54,13 @@ identity fields, so edits rely on Slack keeping the original ones. This has
 not been checked live. Reactions and the assistant "is thinking" status show
 the app, not the profile.
 
-- `icon_url` must be a public HTTPS URL. Built-in characters use pinned
-  `raw.githubusercontent.com` URLs from this public repository. A custom
-  picture needs a public URL set with `tag NAME profile icon-url URL`.
-  Without one, the profile posts with the app's icon and its own name.
+- `icon_url` must be a public HTTPS URL. A profile's picture is one of the
+  built-in characters, linked by a `raw.githubusercontent.com` URL pinned to
+  a commit of this public repository. A person may instead set any public
+  HTTPS URL with `tag NAME profile icon-url URL`. Tag doesn't host uploaded
+  pictures in #238; that is a follow-up under
+  [#206](https://github.com/klovr-co/hover-tag/issues/206). Without a valid
+  URL, the profile posts with the app's icon and its own name.
 
 **Threads stay with their owner profile.**
 
@@ -111,8 +114,12 @@ the app, not the profile.
   saves starting routines. No admin approval, service account or app
   configuration token is involved, and profiles don't count against the
   app cap. `OPENTAG_CHIEF_MAX_TAGS` stays the safety cap (default 10).
-- Only a person creates a Tag with its own Slack app, in Tag.app or with
-  `tag add`, when it needs a separate Slack identity or Slack permissions.
+- **Creating app Tags is on hold.** Installations run one Slack app, so
+  Chief-of-Tag never creates a Tag with its own Slack app, and nobody needs
+  the service account while there is one app. ADR 0011's service-account,
+  Slack CLI and `apps.manifest.create` code stays in the branch unchanged,
+  but nothing calls it from Chief-of-Tag's flow and it isn't extended.
+  Resuming it needs a new decision.
 
 **Mixed mode, no automatic migration.**
 
@@ -168,10 +175,9 @@ the app, not the profile.
 4. **In-process routing and handoffs.** Teach `route` and `ask` between
    profiles to start runs directly. Add profile IDs to the records and
    attribute status, activity and approvals.
-5. **Creation.** Point Chief-of-Tag's proposal flow at `tag add --profile`. Take the
-   service-account, Slack CLI and `apps.manifest.create` paths out of the
-   approval flow. Either drop that code from #238 or keep it behind
-   `tag add` for app Tags (open question below).
+5. **Creation.** Point Chief-of-Tag's proposal flow at `tag add --profile`.
+   Unwire the service-account, Slack CLI and `apps.manifest.create` paths
+   from the approval flow, leaving their code in place (on hold, above).
 6. **Enable and convert.** `tag chief-of-tag profiles enable` (manifest scope plus
    reinstall step for a person) and `tag NAME profile convert`.
 7. **Docs and Tag.app.** Update ADR 0011's status, the handoffs reference,
@@ -183,9 +189,9 @@ No step creates, reinstalls or deletes a Slack app in tests. Live checks
 (edit keeps the name, streaming with a custom name, ephemeral with a custom
 name) wait for an explicit go-ahead.
 
-## Open questions
+## Follow-ups
 
-- Should #238 delete the service-account and `apps.manifest.create` code, or
-  keep it for creating app Tags from Tag.app?
-- Should a custom picture upload go to a Tag-hosted public URL, or stay
-  URL-only?
+- Hosting uploaded profile pictures at a public URL
+  ([#206](https://github.com/klovr-co/hover-tag/issues/206)).
+- Resuming app-Tag creation by Chief-of-Tag, if an installation ever needs a
+  second Slack app.
