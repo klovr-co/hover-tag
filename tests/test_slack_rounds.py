@@ -380,7 +380,7 @@ class SlackRoundsBridgeTests(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         home = Path(self.directory.name)
         (home / "config").mkdir()
-        (home / "config/settings.json").write_text(json.dumps({"SLACK_ALLOWED_USER_IDS": "UOWNER"}))
+        (home / "config/settings.json").write_text(json.dumps({"SLACK_ALLOWED_USER_IDS": "UOWNER"}), encoding="utf-8")
         self.app = FakeApp()
         self.client = MagicMock()
         posted = iter(f"9.{index:02d}" for index in range(1, 100))
@@ -517,7 +517,7 @@ class SlackRoundsBridgeTests(unittest.TestCase):
     def test_people_the_owner_did_not_allow_cannot_answer(self) -> None:
         home = Path(os.environ["TAG_INSTANCE_HOME"])
         (home / "config/settings.json").write_text(json.dumps({"SLACK_ALLOWED_USER_IDS": "UOWNER",
-                                                               "OPENTAG_WHO_CAN_INFORM": "owner"}))
+                                                               "OPENTAG_WHO_CAN_INFORM": "owner"}), encoding="utf-8")
         self.mention()
         with patch.object(slack_socket_agent, "sort_reply") as sort:
             self.reply("2 Queen", "UTEAM")

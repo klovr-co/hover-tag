@@ -10,6 +10,12 @@ from scripts.tag_activity import ActivityStore, artifact_records, recent_activit
 from tests.test_slack_socket_agent import FakeApp
 
 
+def setUpModule() -> None:
+    # These tests cover the classic reply flow; tests/test_slack_rounds.py covers rounds.
+    classic = patch.object(bridge, "ROUNDS_DEFAULT", False)
+    classic.start()
+    unittest.addModuleCleanup(classic.stop)
+
 class ArtifactTests(unittest.TestCase):
     def test_metadata_bounds_and_links_and_old_records(self):
         with tempfile.TemporaryDirectory() as raw:
