@@ -183,14 +183,13 @@ skill into their workspace.
 One Tag per installation is Lead
 ([ADR 0011](../adr/0011-lead-tag.md)). Mention it with new, unclear or
 cross-lane work. It routes each request to one owner Tag, which answers in the
-same thread itself. It is the only Tag that creates Tags, and a person
-approves each one in Slack. Upgrading gives the role to the main Tag; it never
-renames a Slack app.
+same thread itself. Creating new Tags is on hold
+([ADR 0012](../adr/0012-tags-as-personas.md)), so Lead never proposes one.
+Upgrading gives the role to the main Tag; it never renames a Slack app.
 
 ```sh
 tag lead                    # Who holds the role, and the service account
 tag research lead set       # Move the role to another Tag
-tag lead sign-in            # Once: sign the service account in to Slack
 ```
 
 `tag list` marks the Tag with ★ Lead, and Tag.app's Details shows

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Lead: the one Tag that routes work and creates new Tags.
+"""Lead: the one Tag that routes work and, when allowed, creates new Tags.
 
 Lead is a dispatcher, not an orchestrator. Each request has exactly
 one owner Tag, which handles it end to end and replies in the thread itself.
@@ -19,6 +19,10 @@ Installation state, in ``<TAG_HOME>/state``:
 The agent records what it wants in the run's request file (see
 ``tag_handoff``). The bridge checks the role again before it acts, so an agent
 that writes to the file by itself can never create a Tag.
+
+Creating Tags is on hold (ADR 0012): new kinds of work become personas and
+skills, not Tags. The proposal and creation code stays, refused at the helper,
+the bridge check and the create step until a new decision resumes it.
 """
 from __future__ import annotations
 
@@ -58,6 +62,10 @@ BOUNDARIES = {
     "identity": "a distinct Slack identity people should @mention directly",
     "owner": "a different owner, audience or runtime",
 }
+# ADR 0012: no Tag creates a Slack app until a new decision resumes it.
+CREATION_ON_HOLD = True
+ON_HOLD_TEXT = ("Creating new Tags is on hold. Answer with this Tag's skills, "
+                "or say which existing Tag can help.")
 # States in which a proposal still holds the single creation slot.
 OPEN_STATES = frozenset({"pending", "approved", "creating", "waiting_on_slack"})
 FINAL_STATES = frozenset({"rejected", "expired", "created", "failed", "refused"})
@@ -320,6 +328,8 @@ def record_proposal(proposal: dict[str, Any]) -> str:
         raise LeadRefused(f"Only {ROLE_NAME} can create Tags. Ask {ROLE_NAME} for a new Tag instead.")
     if int(os.getenv("OPENTAG_HANDOFF_DEPTH", "0") or 0) >= 1:
         raise LeadRefused("This run is answering another Tag, so it cannot create Tags.")
+    if CREATION_ON_HOLD:
+        raise LeadRefused(ON_HOLD_TEXT)
     clean = validate_proposal(proposal)
     append_request({"kind": "propose", **clean})
     return (f"After this reply, Tag will post the proposal for {clean['name']} in this thread. "
@@ -556,6 +566,8 @@ class LeadBridge:
 
     def check(self, proposal: dict[str, Any], channel: str) -> dict[str, Any]:
         """Validate a proposal against the shape rules and this installation's limits."""
+        if CREATION_ON_HOLD:
+            raise LeadRefused(ON_HOLD_TEXT)
         clean = validate_proposal(proposal)
         values = self.settings()
         allowed = {item.strip() for item in values.get("SLACK_CHANNEL_IDS", "").split(",") if item.strip()}
@@ -566,6 +578,8 @@ class LeadBridge:
         return clean
 
     def create(self, record: dict[str, Any], *, on_tag: Callable[[str], None]) -> Any:
+        if CREATION_ON_HOLD:
+            raise LeadRefused(ON_HOLD_TEXT)
         if self._create is not None:
             return self._create(record, on_tag=on_tag)
         try:

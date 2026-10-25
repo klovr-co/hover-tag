@@ -631,17 +631,21 @@ const DESCRIPTION_LIMIT = 140;
 
 /** Whether Lead's service account can create Tags, from `tag lead --json`. */
 function ServiceAccount({ api }: { api: Bridge }) {
-  const [account, setAccount] = useState<{ ready: boolean; sign_in: string | null } | null>(null);
+  const [account, setAccount] = useState<{ ready: boolean; sign_in: string | null; onHold: boolean } | null>(null);
   useEffect(() => {
     let live = true;
     void api.tag(["lead", "--json"]).then((result) => {
       if (!live || result.code !== 0) return;
-      try { setAccount(parseJSON<{ service_account: { ready: boolean; sign_in: string | null } }>(result.stdout).service_account); }
+      try {
+        const report = parseJSON<{ service_account: { ready: boolean; sign_in: string | null }; creating_tags?: string }>(result.stdout);
+        setAccount({ ...report.service_account, onHold: report.creating_tags === "on_hold" });
+      }
       catch { /* An older Tag without the report: show nothing. */ }
     }, () => {});
     return () => { live = false; };
   }, [api]);
   if (!account) return null;
+  if (account.onHold) return <span className="meta role-acct">Creating new Tags is on hold.</span>;
   return account.ready
     ? <span className="meta role-acct">Creates Tags as the service account ({account.sign_in}).</span>
     : <span className="meta role-acct">To let it create Tags, sign in the service account once: in a terminal, run <span className="mono">tag lead sign-in</span>.</span>;
@@ -661,7 +665,7 @@ function RoleRow({ api, tags, row, say }: { api: Bridge; tags: Tags; row: TagRow
       <dd className="role-dd">
         {row.lead ? (
           <>
-            <span className="meta">{LEAD}. Routes new or unclear requests to one owner Tag, and is the only Tag that creates Tags.</span>
+            <span className="meta">{LEAD}. Routes new or unclear requests to one owner Tag.</span>
             <ServiceAccount api={api} />
           </>
         ) : (

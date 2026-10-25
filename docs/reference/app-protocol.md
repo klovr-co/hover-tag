@@ -244,6 +244,7 @@ records that it should stay off (see [Keeping Tags running](cli-operations.md#ke
 
 `tag lead --json` returns `lead` (a Tag ID or `null`),
 `role`, `tags` (`id`, `slack_name`, `lead`, `created_by_lead`),
+`creating_tags` (`on_hold` while no Tag may create Tags, else `on`),
 `max_tags`, and `service_account` (`sign_in`, `config_dir`, `ready`).
 `tag NAME lead set --json` moves the role and returns the same
 report. Exactly one Tag holds it. Running Tags pick up the change without a

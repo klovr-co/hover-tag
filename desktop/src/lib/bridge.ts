@@ -281,7 +281,7 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
       if (first === "lead") {
         return json({ schema_version: 1, lead: rows.find((r) => r.lead)?.id ?? null, role: "Lead",
           tags: rows.map((r) => ({ id: r.id, slack_name: r.slack_name ?? null, lead: Boolean(r.lead), created_by_lead: Boolean(r.created_by_lead) })),
-          max_tags: 10, service_account: { sign_in: null, config_dir: "~/Library/Application Support/Tag/shared/slack/service-account", ready: false } });
+          creating_tags: "on_hold", max_tags: 10, service_account: { sign_in: null, config_dir: "~/Library/Application Support/Tag/shared/slack/service-account", ready: false } });
       }
       if (first === "telemetry") {
         if (second === "record") return json({ schema_version: 1, ok: true });

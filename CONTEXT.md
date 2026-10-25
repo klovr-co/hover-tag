@@ -28,7 +28,7 @@ a local coding-agent backend with optional MFS retrieval.
   implementation code calls this an instance.
 
 - **Lead** — the one Tag per installation that routes new or unclear
-  requests to one owner Tag, and the only Tag that creates Tags. It is a
+  requests to one owner Tag. It is a
   dispatcher, not an orchestrator: the owner answers in the thread itself.
 - **Specialist** — any other Tag; it owns its lane end to end.
 - **Routine** — a saved prompt one Tag runs on a schedule and posts in one of

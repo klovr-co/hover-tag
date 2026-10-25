@@ -152,7 +152,7 @@ Return only the final chat-ready answer.
 
 
 def lead_instructions(skill_dir: Path, channel_id: str) -> str:
-    """Lead's standing instructions: route to one owner, and create Tags only as a last resort."""
+    """Lead's standing instructions: route to one owner; while creation is on hold, never propose a Tag."""
     try:
         import tag_lead
     except ImportError:
@@ -162,6 +162,23 @@ def lead_instructions(skill_dir: Path, channel_id: str) -> str:
     handoff_helper = helper_command(skill_dir / "scripts" / "tag_handoff.py")
     lead_helper = helper_command(skill_dir / "scripts" / "tag_lead.py")
     channels = ", ".join(item.strip() for item in os.getenv("SLACK_CHANNEL_IDS", "").split(",") if item.strip())
+    if tag_lead.CREATION_ON_HOLD:
+        creation = """- Creating new Tags is on hold. If no Tag fits, answer with your own
+  skills, and say which existing Tag can help if one can.
+"""
+    else:
+        creation = f"""- A new Tag is the last resort. First consider a skill, then an in-process
+  subagent. Propose a Tag only for a real boundary: different credentials,
+  its own memory and routines, long-running parallel work, a distinct
+  @mention identity, or a different owner or runtime. Then run
+  `{lead_helper} propose --name "NAME" --description "LANE" --boundary KIND
+  --why-not-skill "WHY" [--channel CHANNEL_ID] [--model MODEL]
+  [--routine "SCHEDULE::WHAT TO DO"]`. KIND is one of
+  {", ".join(sorted(tag_lead.BOUNDARIES))}. Channels must be ones you are in:
+  {channels or "this channel"}. Leave out --model to use your own.
+- Tag posts the proposal in this thread after your reply, and nothing is
+  created until the person who asked approves it. Say that in your reply.
+"""
     return f"""
 Lead:
 - You are this installation's Lead, a dispatcher. Each request has
@@ -177,19 +194,10 @@ Lead:
 - Pick one owner. Never split a request across several Tags or ask them to
   work on it together. Route only to a Tag that is in this channel; otherwise
   say which Tag owns it and ask the person to invite it with /invite.
-- A new Tag is the last resort. First consider a skill, then an in-process
-  subagent. Propose a Tag only for a real boundary: different credentials,
-  its own memory and routines, long-running parallel work, a distinct
-  @mention identity, or a different owner or runtime. Then run
-  `{lead_helper} propose --name "NAME" --description "LANE" --boundary KIND
-  --why-not-skill "WHY" [--channel CHANNEL_ID] [--model MODEL]
-  [--routine "SCHEDULE::WHAT TO DO"]`. KIND is one of
-  {", ".join(sorted(tag_lead.BOUNDARIES))}. Channels must be ones you are in:
-  {channels or "this channel"}. Leave out --model to use your own.
-- Tag posts the proposal in this thread after your reply, and nothing is
-  created until the person who asked approves it. Say that in your reply.
-- If a helper refuses, explain why and answer as well as you can.
+{creation}- If a helper refuses, explain why and answer as well as you can.
 """
+
+
 RUNTIME_SKILLS = ("tag-files", "tag-attachments", "tag-memory", "tag-slack-search", "tag-slack-actions",
                   "tag-handoff")
 

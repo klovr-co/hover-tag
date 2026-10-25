@@ -137,16 +137,24 @@ describe("Tag detail", () => {
     expect(makeLead).toHaveBeenCalledWith(rows[0]);
   });
 
-  it("tells Lead how to let it create Tags when the service account isn't signed in", async () => {
+  it.each([
+    ["on_hold", "Creating new Tags is on hold."],
+    ["on", "tag lead sign-in"],
+  ])("shows Lead's Tag creation state (%s)", async (creating, shown) => {
     const api = demoBridge();
     const rows: TagRow[] = parseList((await api.tag(["list", "--json"])).stdout);
+    const demoTag = api.tag.bind(api);
+    api.tag = async (args) => {
+      const result = await demoTag(args);
+      return args[0] === "lead" ? { ...result, stdout: JSON.stringify({ ...JSON.parse(result.stdout), creating_tags: creating }) } : result;
+    };
     const tags = { rows, busy: new Set<string>(), toggle: vi.fn(), workspace: vi.fn(), rename: vi.fn(), describe: vi.fn(),
       makeLead: vi.fn(), refresh: vi.fn(), remove: vi.fn() } as unknown as Tags;
     render(<TagDetail api={api} tags={tags} initial={rows[0].id} problems={{}} back={vi.fn()} add={vi.fn()}
       showSettings={vi.fn()} finishSetup={vi.fn()} openAI={vi.fn()} say={vi.fn()} canLead />);
     fireEvent.click(screen.getByRole("tab", { name: "Details" }));
     expect(screen.queryByRole("button", { name: "Make Lead" })).toBeNull();
-    expect((await screen.findByText("tag lead sign-in")).closest(".role-acct")).toBeTruthy();
+    expect((await screen.findByText(shown)).closest(".role-acct")).toBeTruthy();
   });
 
   it("the demo bridge moves Lead to exactly one Tag", async () => {

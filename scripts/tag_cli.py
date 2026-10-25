@@ -2329,6 +2329,7 @@ def _lead_report(installation_root: Path) -> dict:
     folder = slack_cli_config.service_account_dir(installation_root, values)
     max_tags = values.get("OPENTAG_LEAD_MAX_TAGS") or str(tag_lead.DEFAULT_MAX_TAGS)
     return {"schema_version": 1, "lead": lead, "role": tag_lead.ROLE_NAME, "tags": tags,
+            "creating_tags": "on_hold" if tag_lead.CREATION_ON_HOLD else "on",
             "max_tags": int(max_tags) if max_tags.isdigit() else tag_lead.DEFAULT_MAX_TAGS,
             "service_account": {"sign_in": values.get("OPENTAG_LEAD_SLACK_SIGN_IN") or None,
                                 "config_dir": str(folder), "ready": bool(values.get("OPENTAG_LEAD_SLACK_SIGN_IN"))}}
@@ -2356,7 +2357,9 @@ def _lead_command(installation_root: Path, tag_reference: str | None, args) -> i
     if args.json_output:
         print(json.dumps(report, indent=2))
         return 0
-    display.header(tag_lead.ROLE_NAME, "Routes requests to one owner Tag, and is the only Tag that creates Tags.")
+    on_hold = report["creating_tags"] == "on_hold"
+    display.header(tag_lead.ROLE_NAME, "Routes requests to one owner Tag. Creating new Tags is on hold." if on_hold
+                   else "Routes requests to one owner Tag, and is the only Tag that creates Tags.")
     lead = report["lead"]
     for tag in report["tags"]:
         role = f"★ {tag_lead.ROLE_NAME}" if tag["lead"] else "specialist"
@@ -2366,7 +2369,7 @@ def _lead_command(installation_root: Path, tag_reference: str | None, args) -> i
     account = report["service_account"]
     display.info_row("Service account", account["sign_in"] or "not signed in", good=account["ready"])
     display.info_row("Most Tags", str(report["max_tags"]), good=True)
-    if lead and not account["ready"]:
+    if lead and not account["ready"] and not on_hold:
         display.next_action("Let Lead create Tags", "tag lead sign-in")
     return 0
 

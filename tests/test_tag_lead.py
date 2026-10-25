@@ -28,6 +28,22 @@ PROPOSAL = {"name": "Finance Tag", "description": "Answers finance questions and
             "boundary": "credentials", "why_not_skill": "It needs the finance system's own credentials.",
             "channels": ["C123"], "model": "", "routines": [], "reason": ""}
 
+# Creating Tags is on hold (ADR 0012). The dormant creation code keeps its tests, so they run with the hold
+# lifted; HoldTests and the tests named "on hold" check the hold itself.
+_lift_hold = patch.object(tag_lead, "CREATION_ON_HOLD", False)
+
+
+def setUpModule() -> None:
+    _lift_hold.start()
+
+
+def tearDownModule() -> None:
+    _lift_hold.stop()
+
+
+def on_hold():
+    return patch.object(tag_lead, "CREATION_ON_HOLD", True)
+
 
 def make_tags(root: Path, *ids: str, app: set[str] = frozenset()) -> None:
     for tag_id in ids:
@@ -100,6 +116,12 @@ class DesignationTests(unittest.TestCase):
         self.assertEqual({"research": False, "writer": True},
                          {tag["id"]: tag["lead"] for tag in report["tags"]})
         self.assertFalse(report["service_account"]["ready"])
+        self.assertEqual("on", report["creating_tags"])
+        out = io.StringIO()
+        with on_hold(), patch.dict(os.environ, {"TAG_HOME": str(self.root)}), redirect_stdout(out), \
+                patch.object(sys, "argv", ["tag", "lead", "--json"]):
+            self.assertEqual(0, tag_cli.main())
+        self.assertEqual("on_hold", json.loads(out.getvalue())["creating_tags"])
         out = io.StringIO()
         with patch.dict(os.environ, {"TAG_HOME": str(self.root)}), redirect_stdout(out), \
                 patch.object(sys, "argv", ["tag", "list", "--json"]):
@@ -274,6 +296,17 @@ class AgentHelperTests(unittest.TestCase):
             text = opentag_agent.build_instructions(skill_dir=Path("/skill"), workdir=self.root, channel_id="C123")
         self.assertIn("Lead is this installation's Lead", text)
         self.assertIn("You cannot create Tags", text)
+        self.assertNotIn("propose --name", text)
+
+    def test_on_hold_the_helper_refuses_and_lead_is_told_not_to_propose(self) -> None:
+        from scripts import opentag_agent
+        with on_hold(), self.env("tag-a"):
+            with self.assertRaisesRegex(LeadRefused, "Creating new Tags is on hold"):
+                tag_lead.record_proposal(PROPOSAL)
+            text = opentag_agent.build_instructions(skill_dir=Path("/skill"), workdir=self.root, channel_id="C123")
+        self.assertFalse(self.requests.exists())
+        self.assertIn("Creating new Tags is on hold", text)
+        self.assertIn("route --to", text)
         self.assertNotIn("propose --name", text)
 
 
@@ -460,6 +493,22 @@ class LeadBridgeTests(unittest.TestCase):
         with self.assertRaisesRegex(LeadRefused, "Only Lead can create Tags"):
             tag_creator.create(self.root, record, lead_values={}, on_tag=lambda _tag: None,
                                run=lambda *args, **kwargs: self.fail("setup must not run"))
+
+    def test_on_hold_a_proposal_written_past_the_helper_is_refused_and_nothing_is_created(self) -> None:
+        def bypass(kwargs: dict[str, Any]) -> tuple[str, bool]:
+            Path(kwargs["handoff_requests"]).write_text(json.dumps({"kind": "propose", **PROPOSAL}) + "\n", encoding="utf-8")
+            return "Proposing a finance Tag.", True
+        self.script[TAG_A] = bypass
+        with on_hold():
+            origin = self.bus.human_mention(TAG_A, f"<@{TAG_A}> make a finance Tag")
+            self.settle()
+            self.assertEqual([], self.bridges[TAG_A].proposals.all())
+            # An approved proposal saved before the hold creates nothing either.
+            with self.assertRaisesRegex(LeadRefused, "on hold"):
+                self.bridges[TAG_A].create({"lead": "tag-a", "proposal": PROPOSAL, "tag": None}, on_tag=lambda _tag: None)
+        self.assertEqual([], self.created)
+        texts = [m["text"] for m in self.bus.thread(origin["ts"])]
+        self.assertIn(f"I can't propose that Tag: {tag_lead.ON_HOLD_TEXT}", texts)
 
     def test_a_proposal_from_a_former_lead_creates_nothing(self) -> None:
         record = self.propose()

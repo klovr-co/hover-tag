@@ -56,12 +56,8 @@ All notable changes to Tag are documented here.
   skips it. On upgrade, your main Tag gets the role; move it with
   `tag NAME lead set` or in Tag.app's Details. With a Lead,
   a Tag can ask only Lead for help, for a judgment call.
-- Lead is the only Tag that can create Tags. It proposes a new Tag
-  in your thread, and nothing happens in Slack until you approve. The new Tag
-  is then created with its own Slack app, name and picture, and starts. If
-  Slack needs an admin to approve the install, Lead posts that one
-  step. Run `tag lead sign-in` once to sign a service account in to
-  its own Slack CLI folder, kept apart from yours.
+- No Tag creates new Tags for now. Lead says which existing Tag can help, or
+  answers itself ([ADR 0012](docs/adr/0012-tags-as-personas.md)).
 - `tag add --json` accepts `--preset FILE` and first reports the new Tag's ID.
 
 - Let one Tag ask other Tags for help and combine their answers. Tag posts one

@@ -308,7 +308,7 @@ export function LeadBadge({ row }: { row: TagRow }) {
   const lead = Boolean(row.lead);
   const fresh = useFresh(lead) && lead;
   if (!lead) return null;
-  return <span className={`main-badge lead-badge${fresh ? " fresh" : ""}`} title="Routes requests to one owner Tag, and is the only Tag that creates Tags">★ {LEAD}</span>;
+  return <span className={`main-badge lead-badge${fresh ? " fresh" : ""}`} title="Routes new or unclear requests to one owner Tag">★ {LEAD}</span>;
 }
 
 export function TagRowView({ row, tags, report, problem, open, drag, entering }: {

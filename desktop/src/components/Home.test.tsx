@@ -104,7 +104,7 @@ function row(tag: TagRow, problem: string | null = null) {
 describe("Tag rows", () => {
   it("mark only Lead", () => {
     row(maya);
-    expect(screen.getByTitle("Routes requests to one owner Tag, and is the only Tag that creates Tags").textContent).toBe("★ Lead");
+    expect(screen.getByTitle("Routes new or unclear requests to one owner Tag").textContent).toBe("★ Lead");
     cleanup();
     row({ ...maya, lead: false });
     expect(screen.queryByText("★ Lead")).toBeNull();
