@@ -41,6 +41,8 @@
     "scripts/agent_usage.py",
     "scripts/claude_agent_backend.py",
     "scripts/codex_agent_backend.py",
+    "scripts/connectors/package-lock.json",
+    "scripts/connectors/package.json",
     "scripts/install_dependencies.sh",
     "scripts/mfs_cat.py",
     "scripts/mfs_ls.py",
