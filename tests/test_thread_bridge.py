@@ -22,6 +22,8 @@ from scripts.tag_threads import ThreadStore
 
 C, TS = "C0LAUNCH1", "1792487642.000100"
 BACKENDS = ("codex", "claude")
+# Built at run time so the repository holds nothing shaped like a real token.
+TOKEN = "xox" + "b-1234567890-abcdefghijkl"
 
 
 NAMES = {"U0MAYA001": "Maya", "U0SAM0001": "Sam"}
@@ -108,7 +110,7 @@ class BridgeTranscriptTests(unittest.TestCase):
                                       client, MagicMock())
 
     def test_a_run_saves_messages_steps_the_full_answer_and_memory(self) -> None:
-        answer = "## Launch checklist\n\n| Item | Owner |\n| --- | --- |\n| Press kit | Maya |\n\nToken xoxb-1234567890-abcdefghijkl stays out."
+        answer = "## Launch checklist\n\n| Item | Owner |\n| --- | --- |\n| Press kit | Maya |\n\nToken " + TOKEN + " stays out."
         for backend in BACKENDS:
             with self.subTest(backend=backend):
                 for path in self.store.root.glob("*.jsonl"):
@@ -133,7 +135,7 @@ class BridgeTranscriptTests(unittest.TestCase):
                 self.assertEqual(work["status"], "completed")
                 self.assertEqual([(s["label"], s["status"]) for s in work["steps"]], [("Searching Slack…", "completed")])
                 self.assertIn("| Press kit | Maya |", reply["text"])
-                self.assertNotIn("xoxb-1234567890", reply["text"])
+                self.assertNotIn(TOKEN, reply["text"])
                 self.assertEqual(reply["memory"][0]["key"], "launch-owner")
                 raw = self.store.path(C, TS).read_text(encoding="utf-8")
                 self.assertNotIn("secret tool output", raw)

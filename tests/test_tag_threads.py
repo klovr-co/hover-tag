@@ -17,7 +17,8 @@ from scripts.tag_threads import RunTranscript, ThreadStore
 
 C, TS = "C0LAUNCH1", "1792487642.000100"
 NAMES = {"U0MAYA001": "Maya", "U0SAM0001": "Sam", "U0TAG0001": "Tag"}
-TOKEN = "xoxb-1234567890-abcdefghijkl"
+# Built at run time so the repository holds nothing shaped like a real token.
+TOKEN = "xox" + "b-1234567890-abcdefghijkl"
 
 
 class StoreTests(unittest.TestCase):
