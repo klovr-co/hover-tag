@@ -2054,6 +2054,12 @@ def _remove_command(context: tag_instances.InstanceContext, args) -> int:
             raise ValueError("Slack CLI is unavailable. Nothing was removed or deleted. Remove without deleting the app, or install Slack CLI.")
     config_path = home / "config/settings.json"
     values = read_config(config_path) if config_path.is_file() else {}
+    # First, so a later Tag with this name doesn't inherit its connectors.
+    try:
+        from . import tag_connectors
+    except ImportError:
+        import tag_connectors
+    tag_connectors.Store(context.installation_root).forget_tag(context.tag_id)
     stop_process(home, "slack")
     memory = tag_reset.unregister_connector(home, values)
     backup = context.installation_root / "abandoned" / f"{context.tag_id}-{datetime.now():%Y%m%d-%H%M%S}"

@@ -5,6 +5,8 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -109,6 +111,135 @@ class ConnectorStoreTests(unittest.TestCase):
                 patch("sys.stderr", io.StringIO()), self.assertRaises(SystemExit):
             tag_cli._run_cli()
 
+
+
+# Found before any test narrows PATH; only ever run with a temp CODEX_HOME.
+CODEX = shutil.which("codex")
+REAL_PATH = os.environ.get("PATH", "")
+
+
+class ConnectorRunTests(unittest.TestCase):
+    """Each run is given only the connectors its Tag may use (ADR 0014)."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        base = Path(self.temp.name)
+        self.root, self.codex_home, self.workdir = base / "tag", base / "codex", base / "workspace"
+        for path in (self.root, self.codex_home, self.workdir, base / "claude", base / "bin"):
+            path.mkdir()
+        # No backend CLIs on PATH and temp configs: these tests must never reach the user's own.
+        env = patch.dict(os.environ, {"TAG_HOME": str(self.root), "TAG_ID": "sales", "HOME": str(base),
+                                      "CODEX_HOME": str(self.codex_home), "CLAUDE_CONFIG_DIR": str(base / "claude"),
+                                      "PATH": str(base / "bin")})
+        env.start()
+        self.addCleanup(env.stop)
+        self.node = base / "bin/node"
+        self.node.write_text("#!/bin/sh\n")
+        self.node.chmod(0o755)
+        self.bridge = connectors.bridge_script(self.root)
+        self.bridge.parent.mkdir(parents=True)
+        self.bridge.write_text("")
+        self.auth = str(connectors.auth_dir(self.root, "linear"))
+        tag_instances.create(self.root, "sales")
+        self.store = connectors.Store(self.root)
+        self.store.add("linear", url="https://mcp.linear.app/mcp")
+        self.store.add("gmail", url="https://gmail.example/mcp")
+        self.store.add("notes", command=["notes-mcp", "--read-only"], env=["NOTES_KEY"])
+        self.store.set_allowed("linear", ["sales"], True)
+        self.store.set_allowed("notes", ["sales"], True)
+        self.sign_in("linear", "https://mcp.linear.app/mcp")
+
+    def sign_in(self, name, url):
+        path = connectors.sign_in_file(self.root, name, url)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}")
+
+    def bridge_args(self, url):
+        return [str(self.bridge), url, "--auth-timeout", "10"]
+
+    def test_sign_in_file_matches_mcp_remote_layout(self):
+        # mcp-remote 0.15.2: <dir>/mcp-remote-v1/<md5 of the URL>_tokens.json
+        self.assertEqual(connectors.sign_in_file(self.root, "linear", "https://mcp.linear.app/mcp"),
+                         self.root / "state/connector-auth/linear/mcp-remote-v1/"
+                                     "fcc436b0d1e0a1ed9a2b15bbd638eb13_tokens.json")
+        # Two accounts on one service sign in separately.
+        self.assertNotEqual(connectors.sign_in_file(self.root, "notion-acme", "https://mcp.notion.com/mcp"),
+                            connectors.sign_in_file(self.root, "notion-client", "https://mcp.notion.com/mcp"))
+
+    def test_codex_gets_only_allowed_connectors_through_the_bridge(self):
+        self.assertEqual(connectors.codex_run_args(self.workdir), [
+            "-c", 'mcp_servers.linear={"command" = ' + json.dumps(str(self.node)) + ', "args" = ['
+                  + ", ".join(json.dumps(arg) for arg in self.bridge_args("https://mcp.linear.app/mcp"))
+                  + '], "env" = {"MCP_REMOTE_CONFIG_DIR" = ' + json.dumps(self.auth) + '}}',
+            "-c", 'mcp_servers.notes={"command" = "notes-mcp", "args" = ["--read-only"], '
+                  '"env_vars" = ["NOTES_KEY"]}'])
+
+    def test_claude_gets_allowed_connectors_and_the_workspace_wins(self):
+        self.assertEqual(connectors.claude_mcp_servers(self.workdir), {
+            "linear": {"type": "stdio", "command": str(self.node),
+                       "args": self.bridge_args("https://mcp.linear.app/mcp"),
+                       "env": {"MCP_REMOTE_CONFIG_DIR": self.auth}},
+            "notes": {"type": "stdio", "command": "notes-mcp", "args": ["--read-only"],
+                      "env": {"NOTES_KEY": "${NOTES_KEY}"}}})
+        mine = {"command": "my-linear"}
+        (self.workdir / ".mcp.json").write_text(json.dumps({"mcpServers": {"linear": mine}}))
+        self.assertEqual(connectors.claude_mcp_servers(self.workdir)["linear"], mine)
+        (self.workdir / ".codex").mkdir()
+        (self.workdir / ".codex/config.toml").write_text('[mcp_servers.linear]\ncommand = "my-linear"\n')
+        self.assertEqual([argument.split("=")[0] for argument in connectors.codex_run_args(self.workdir)],
+                         ["-c", "mcp_servers.notes"])
+
+    def test_remote_connectors_wait_for_sign_in_and_the_bridge(self):
+        self.store.set_allowed("gmail", ["sales"], True)
+        definitions, skipped = connectors.run_plan()
+        self.assertEqual(set(definitions), {"linear", "notes"})
+        self.assertEqual(skipped, {"gmail": "Not signed in; run tag connector sign-in gmail."})
+        self.bridge.unlink()
+        definitions, skipped = connectors.run_plan()
+        self.assertEqual(set(definitions), {"notes"})
+        self.assertEqual(set(skipped), {"linear", "gmail"})
+        self.assertIn("tag doctor", skipped["linear"])
+
+    def test_without_connectors_the_workspace_config_passes_as_before(self):
+        self.store.forget_tag("sales")
+        self.assertIsNone(connectors.claude_mcp_servers(self.workdir))
+        (self.workdir / ".mcp.json").write_text('{"mcpServers": {}}')
+        self.assertEqual(connectors.claude_mcp_servers(self.workdir), self.workdir / ".mcp.json")
+        self.assertEqual(connectors.codex_run_args(self.workdir), [])
+
+    def test_nothing_outside_a_tag_run_and_bad_files_fail(self):
+        with patch.dict(os.environ, {"TAG_ID": ""}):
+            self.assertEqual(connectors.codex_run_args(self.workdir), [])
+            self.assertIsNone(connectors.claude_mcp_servers(self.workdir))
+        (self.workdir / ".mcp.json").write_text("{")
+        with self.assertRaisesRegex(connectors.ConnectorError, "Couldn't read"):
+            connectors.claude_mcp_servers(self.workdir)
+        connectors.store_path(self.root).write_text("{")
+        with self.assertRaisesRegex(connectors.ConnectorError, "Cannot read the connector list"):
+            connectors.codex_run_args(self.workdir)
+
+    def test_codex_workspace_args_add_connectors_in_any_folder(self):
+        from scripts import tag_paths
+        self.assertEqual(tag_paths.codex_workspace_args(self.workdir), connectors.codex_run_args(self.workdir))
+
+    def test_rename_moves_access_and_remove_forgets_it(self):
+        self.store.rename_tag("sales", "acme-sales")
+        self.assertEqual(self.store.allowed_for("acme-sales"), {"linear", "notes"})
+        self.assertEqual(self.store.allowed_for("sales"), set())
+        self.store.forget_tag("acme-sales")
+        self.assertEqual(self.store.allowed_for("acme-sales"), set())
+
+    @unittest.skipUnless(CODEX, "codex CLI not installed")
+    def test_real_codex_accepts_the_definitions(self):
+        listed = subprocess.run([CODEX, "mcp", "list", "--json", *connectors.codex_run_args(self.workdir)],
+                                capture_output=True, text=True, timeout=60, check=True,
+                                env={**os.environ, "PATH": REAL_PATH})
+        rows = {row["name"]: row for row in json.loads(listed.stdout)}
+        self.assertEqual(set(rows), {"linear", "notes"})
+        self.assertEqual(rows["linear"]["transport"]["args"], self.bridge_args("https://mcp.linear.app/mcp"))
+        self.assertEqual(rows["linear"]["transport"]["env"], {"MCP_REMOTE_CONFIG_DIR": self.auth})
+        self.assertEqual(rows["notes"]["transport"]["env_vars"], ["NOTES_KEY"])
 
 if __name__ == "__main__":
     unittest.main()

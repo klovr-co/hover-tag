@@ -3,16 +3,21 @@
 The list lives in ``state/connectors.json`` under the installation root and is
 shared by every Tag, like ChatGPT accounts. It holds connector definitions and
 which Tags may use each one. It never holds tokens or secret values: sign-ins
-stay in each backend's own store, and stdio servers get environment variable
-*names* that the backend reads from Tag's environment.
+stay in mcp-remote's files, and stdio servers get environment variable
+*names* that the backend reads from Tag's environment. Nothing is written into
+the backends' own config: each run is given the connectors its Tag may use, and
+remote ones start through a pinned mcp-remote that keeps one sign-in for both
+backends in Tag's folder.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
 import shlex
+import shutil
 import sys
 import tempfile
 import time
@@ -35,11 +40,17 @@ SCHEMA_VERSION = 1
 NAME_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9-]|_(?!_)){0,47}")
 ENV_NAME_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}")
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
+# Remote connectors run through this exact mcp-remote, installed in Tag's folder (ADR 0014).
+MCP_REMOTE_VERSION = "0.15.2"
+# mcp-remote keeps sign-ins in <MCP_REMOTE_CONFIG_DIR>/mcp-remote-v1/<md5(url)>_tokens.json.
+MCP_REMOTE_STORE = "mcp-remote-v1"
+# A sign-in that stops working fails the connector quickly instead of holding up the run.
+RUN_AUTH_TIMEOUT_SECONDS = 10
 USAGE = ("tag connector list | show NAME | add NAME (--url URL | --command \"CMD ARGS\") [--env NAME ...] | "
          "remove NAME | allow NAME TAG... | deny NAME TAG...")
 
 
-class ConnectorError(RuntimeError):
+class ConnectorError(ValueError):
     """A connector request that can't be done; the message says what to do instead."""
 
 
@@ -186,6 +197,130 @@ class Store:
         """Names of the connectors this Tag may use."""
         return {name for name, entry in self.read()["connectors"].items()
                 if any(row.get("tag") == tag_id for row in entry.get("allowed", []))}
+
+
+    def rename_tag(self, old: str, new: str) -> None:
+        """Carry a renamed Tag's access over to its new name."""
+        if not self.path.exists():
+            return
+        with self.change() as data:
+            for entry in data["connectors"].values():
+                for row in entry.get("allowed", []):
+                    if row.get("tag") == old:
+                        row["tag"] = new
+
+    def forget_tag(self, tag_id: str) -> None:
+        """Drop a removed Tag from every allow list, so a later Tag of that name starts with none."""
+        if not self.path.exists():
+            return
+        with self.change() as data:
+            for entry in data["connectors"].values():
+                entry["allowed"] = [row for row in entry.get("allowed", []) if row.get("tag") != tag_id]
+
+
+def bridge_script(root: Path) -> Path:
+    return root / "tools/mcp-remote/node_modules/mcp-remote/dist/proxy.js"
+
+
+def auth_dir(root: Path, name: str) -> Path:
+    """mcp-remote's folder for one connector. mcp-remote keys sign-ins by URL only,
+    so a folder per connector keeps two accounts on one service apart."""
+    return root / "state/connector-auth" / validate_name(name)
+
+
+def sign_in_file(root: Path, name: str, url: str) -> Path:
+    """Where mcp-remote keeps this connector's sign-in. Tag only checks it exists."""
+    return auth_dir(root, name) / MCP_REMOTE_STORE / f"{hashlib.md5(url.encode()).hexdigest()}_tokens.json"
+
+
+def run_plan() -> tuple[dict[str, dict], dict[str, str]]:
+    """The server definitions for this Tag's run, and the allowed connectors left
+    out with the reason. Nothing outside a Tag run."""
+    tag_id = os.getenv("TAG_ID")
+    if not tag_id or not os.getenv("TAG_HOME"):
+        return {}, {}
+    store = Store()
+    definitions, skipped = {}, {}
+    node = None
+    for name, entry in sorted(store.read()["connectors"].items()):
+        if not any(row.get("tag") == tag_id for row in entry.get("allowed", [])):
+            continue
+        if entry.get("transport") != "http":
+            definitions[name] = {"command": entry["command"], "args": entry.get("args", []),
+                                 "env_names": entry.get("env", [])}
+            continue
+        # Both backends start the same bridge, so they share its one sign-in.
+        node = node or shutil.which("node")
+        if node is None or not bridge_script(store.root).is_file():
+            skipped[name] = "Node or mcp-remote isn't installed; see tag doctor."
+        elif not sign_in_file(store.root, name, entry["url"]).is_file():
+            skipped[name] = f"Not signed in; run tag connector sign-in {name}."
+        else:
+            definitions[name] = {
+                "command": node,
+                "args": [str(bridge_script(store.root)), entry["url"],
+                         "--auth-timeout", str(RUN_AUTH_TIMEOUT_SECONDS)],
+                "env": {"MCP_REMOTE_CONFIG_DIR": str(auth_dir(store.root, name))}, "env_names": []}
+    return definitions, skipped
+
+
+def codex_run_args(workdir: Path) -> list[str]:
+    """Codex -c definitions for the connectors this Tag may use. A server the
+    Tag's own workspace defines is the Tag's choice and wins."""
+    definitions, _skipped = run_plan()
+    if not definitions:
+        return []
+    try:
+        import tomllib
+    except ImportError:
+        import tomli as tomllib
+    try:
+        from .tag_paths import toml_value
+    except ImportError:
+        from tag_paths import toml_value
+    config = workdir / ".codex/config.toml"
+    try:
+        with config.open("rb") as handle:
+            workspace = tomllib.load(handle).get("mcp_servers", {})
+    except FileNotFoundError:
+        workspace = {}
+    except (OSError, ValueError):
+        raise ConnectorError(f"Couldn't read {config} to add this Tag's connectors.") from None
+    arguments = []
+    for name, found in definitions.items():
+        if name in workspace:
+            continue
+        definition = {"command": found["command"], "args": found["args"]}
+        if found.get("env"):
+            definition["env"] = found["env"]
+        if found["env_names"]:
+            # Names only: Codex reads the values from Tag's environment.
+            definition["env_vars"] = found["env_names"]
+        arguments += ["-c", f"mcp_servers.{name}={toml_value(definition)}"]
+    return arguments
+
+
+def claude_mcp_servers(workdir: Path) -> Path | dict | None:
+    """The MCP servers for a Claude run: the workspace's .mcp.json plus the
+    connectors this Tag may use. The workspace's own servers win on a name clash."""
+    config = workdir / ".mcp.json"
+    definitions, _skipped = run_plan()
+    if not definitions:
+        return config if config.is_file() else None
+    try:
+        workspace = json.loads(config.read_text(encoding="utf-8")).get("mcpServers", {})
+        if not isinstance(workspace, dict):
+            raise ValueError()
+    except FileNotFoundError:
+        workspace = {}
+    except (OSError, ValueError, AttributeError):
+        raise ConnectorError(f"Couldn't read {config} to add this Tag's connectors.") from None
+    servers = {}
+    for name, found in definitions.items():
+        # Claude expands ${NAME} from Tag's environment when it starts the server.
+        env = {**found.get("env", {}), **{env: "${" + env + "}" for env in found["env_names"]}}
+        servers[name] = {"type": "stdio", "command": found["command"], "args": found["args"], "env": env}
+    return {**servers, **workspace}
 
 
 def view(name: str, entry: dict) -> dict:
