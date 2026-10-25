@@ -17,9 +17,12 @@ import json
 import os
 import re
 import shlex
+import queue
 import shutil
+import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.parse
 from contextlib import contextmanager
@@ -46,8 +49,14 @@ MCP_REMOTE_VERSION = "0.15.2"
 MCP_REMOTE_STORE = "mcp-remote-v1"
 # A sign-in that stops working fails the connector quickly instead of holding up the run.
 RUN_AUTH_TIMEOUT_SECONDS = 10
+SIGN_IN_TIMEOUT_SECONDS = 900
+BRIDGE_STARTUP_SECONDS = 60
+# mcp-remote discovers sign-in settings before connecting; slow servers take most of a minute.
+CHECK_TIMEOUT_SECONDS = 90
+NODE_MISSING = ("Remote connectors need Node.js with npm. Install it from https://nodejs.org "
+                "(or with your package manager), then retry.")
 USAGE = ("tag connector list | show NAME | add NAME (--url URL | --command \"CMD ARGS\") [--env NAME ...] | "
-         "remove NAME | allow NAME TAG... | deny NAME TAG...")
+         "remove NAME | allow NAME TAG... | deny NAME TAG... | sign-in NAME [--device-code] | check NAME")
 
 
 class ConnectorError(ValueError):
@@ -147,13 +156,18 @@ class Store:
             lock.release()
 
     def list(self) -> list[dict]:
-        return [view(name, entry) for name, entry in sorted(self.read()["connectors"].items())]
+        return [view(name, entry, sign_in_state(self.root, name, entry))
+                for name, entry in sorted(self.read()["connectors"].items())]
 
-    def get(self, name: str) -> dict:
+    def entry(self, name: str) -> dict:
         entry = self.read()["connectors"].get(name)
         if entry is None:
             raise ConnectorError(f"No connector named '{name}'. See tag connector list.")
-        return view(name, entry)
+        return entry
+
+    def get(self, name: str) -> dict:
+        entry = self.entry(name)
+        return view(name, entry, sign_in_state(self.root, name, entry))
 
     def add(self, name: str, *, url: str | None = None, command: list[str] | None = None,
             env: list[str] | None = None) -> dict:
@@ -176,10 +190,12 @@ class Store:
         return view(name, entry)
 
     def remove(self, name: str) -> dict:
+        """Remove the connector and its sign-in on this computer."""
         with self.change() as data:
             entry = data["connectors"].pop(name, None)
             if entry is None:
                 raise ConnectorError(f"No connector named '{name}'. See tag connector list.")
+            shutil.rmtree(auth_dir(self.root, name), ignore_errors=True)
         return view(name, entry)
 
     def set_allowed(self, name: str, tags: list[str], allowed: bool) -> dict:
@@ -253,7 +269,7 @@ def run_plan() -> tuple[dict[str, dict], dict[str, str]]:
         node = node or shutil.which("node")
         if node is None or not bridge_script(store.root).is_file():
             skipped[name] = "Node or mcp-remote isn't installed; see tag doctor."
-        elif not sign_in_file(store.root, name, entry["url"]).is_file():
+        elif sign_in_state(store.root, name, entry) in {"not_signed_in", "expired"}:
             skipped[name] = f"Not signed in; run tag connector sign-in {name}."
         else:
             definitions[name] = {
@@ -293,6 +309,8 @@ def codex_run_args(workdir: Path) -> list[str]:
         definition = {"command": found["command"], "args": found["args"]}
         if found.get("env"):
             definition["env"] = found["env"]
+            # mcp-remote connects before it answers; give slow servers time to start.
+            definition["startup_timeout_sec"] = BRIDGE_STARTUP_SECONDS
         if found["env_names"]:
             # Names only: Codex reads the values from Tag's environment.
             definition["env_vars"] = found["env_names"]
@@ -323,7 +341,172 @@ def claude_mcp_servers(workdir: Path) -> Path | dict | None:
     return {**servers, **workspace}
 
 
-def view(name: str, entry: dict) -> dict:
+def bridge_dir(root: Path) -> Path:
+    return root / "tools/mcp-remote"
+
+
+def installed_bridge_version(root: Path) -> str | None:
+    try:
+        return json.loads((bridge_dir(root) / "node_modules/mcp-remote/package.json")
+                          .read_text(encoding="utf-8"))["version"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def install_bridge(root: Path) -> None:
+    """Install the pinned mcp-remote into Tag's folder from the shipped lockfile.
+    npm ci checks every package against the lockfile's checksums, and no install
+    scripts run."""
+    npm = shutil.which("npm")
+    if npm is None or shutil.which("node") is None:
+        raise ConnectorError(NODE_MISSING)
+    print(f"Installing mcp-remote {MCP_REMOTE_VERSION} for remote connectors...", file=sys.stderr)
+    target = bridge_dir(root)
+    target.mkdir(parents=True, exist_ok=True)
+    for name in ("package.json", "package-lock.json"):
+        shutil.copyfile(Path(__file__).resolve().parent / "connectors" / name, target / name)
+    try:
+        done = subprocess.run([npm, "ci", "--ignore-scripts", "--no-audit", "--no-fund", "--omit=dev"],
+                              cwd=target, capture_output=True, text=True, timeout=900, check=False)
+    except subprocess.TimeoutExpired:
+        raise ConnectorError("Installing mcp-remote took more than 15 minutes; check the network and retry.") from None
+    if done.returncode or installed_bridge_version(root) != MCP_REMOTE_VERSION:
+        detail = (done.stderr.strip().splitlines() or [""])[-1][:200]
+        raise ConnectorError(f"Couldn't install mcp-remote {MCP_REMOTE_VERSION} with npm. {detail}".strip())
+
+
+def ensure_bridge(root: Path) -> None:
+    if installed_bridge_version(root) != MCP_REMOTE_VERSION:
+        install_bridge(root)
+
+
+def _bridge_env(root: Path, name: str) -> dict[str, str]:
+    directory = auth_dir(root, name)
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    restrict_windows_acl(directory)
+    return {**os.environ, "MCP_REMOTE_CONFIG_DIR": str(directory)}
+
+
+def sign_in_state(root: Path, name: str, entry: dict) -> str:
+    """not_needed, not_signed_in, expired, signed_in or unknown, from mcp-remote's
+    sign-in file alone. A sign-in revoked at the provider still reads signed_in;
+    tag connector check finds those."""
+    if entry.get("transport") != "http" or entry.get("sign_in") == "none":
+        return "not_needed"
+    try:
+        tokens = json.loads(sign_in_file(root, name, entry["url"]).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return "not_signed_in"
+    except (OSError, ValueError, UnicodeError, KeyError):
+        return "unknown"
+    if not isinstance(tokens, dict) or not tokens.get("access_token"):
+        return "unknown"
+    expires_at = tokens.get("expires_at")  # milliseconds
+    if isinstance(expires_at, (int, float)) and expires_at <= time.time() * 1000 and not tokens.get("refresh_token"):
+        return "expired"
+    return "signed_in"
+
+
+def sign_in(root: Path, name: str, *, device_code: bool = False) -> str:
+    """Run mcp-remote's sign-in once; both backends and every allowed Tag then use it."""
+    entry = Store(root).entry(name)
+    if entry.get("transport") != "http":
+        raise ConnectorError(f"{name} runs on this computer and doesn't sign in.")
+    ensure_bridge(root)
+    command = [shutil.which("node") or "node", str(bridge_dir(root) / "node_modules/mcp-remote/dist/client.js"),
+               entry["url"]]
+    if device_code:
+        command.append("--device-code")
+    print(f"Signing in to {name}. Finish in the browser; if none opens, open the address shown below.",
+          file=sys.stderr)
+    try:
+        # The sign-in's own output goes to stderr, so --json output stays clean.
+        connected = subprocess.run(command, env=_bridge_env(root, name), stdin=subprocess.DEVNULL, stdout=2,
+                                   timeout=SIGN_IN_TIMEOUT_SECONDS, check=False).returncode == 0
+    except subprocess.TimeoutExpired:
+        connected = False
+    state = sign_in_state(root, name, entry)
+    if connected and state == "not_signed_in":
+        # It connected without asking anyone to sign in, so it needs none.
+        with Store(root).change() as data:
+            data["connectors"][name]["sign_in"] = "none"
+        return "not_needed"
+    if state != "signed_in":
+        hint = "" if device_code else (" On a computer without a browser, try --device-code, or forward the "
+                                       "sign-in port shown above over SSH.")
+        raise ConnectorError(f"Signing in to {name} didn't finish.{hint}")
+    return state
+
+
+def check(root: Path, name: str) -> dict:
+    """Connect for real and count the server's tools. Finds sign-ins the provider
+    revoked, which the sign-in file can't show."""
+    entry = Store(root).entry(name)
+    state = sign_in_state(root, name, entry)
+    if entry.get("transport") != "http" or state in {"not_signed_in", "expired"}:
+        return {"state": state}
+    node = shutil.which("node")
+    if node is None or installed_bridge_version(root) != MCP_REMOTE_VERSION:
+        return {"state": "bridge_missing"}
+    command = [node, str(bridge_script(root)), entry["url"], "--auth-timeout", str(RUN_AUTH_TIMEOUT_SECONDS)]
+    try:
+        return {"state": "connected", "tools": _count_tools(command, _bridge_env(root, name))}
+    except (OSError, ConnectionError, TimeoutError) as exc:
+        return {"state": "failed", "detail": str(exc)[:200] or type(exc).__name__}
+
+
+def _count_tools(command: list[str], env: dict[str, str]) -> int:
+    """Speak just enough MCP over stdio to list the server's tools."""
+    process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                               env=env, text=True, start_new_session=True)
+    lines: queue.Queue = queue.Queue()
+
+    def read() -> None:
+        for line in process.stdout:
+            lines.put(line)
+        lines.put(None)
+
+    threading.Thread(target=read, daemon=True).start()
+    deadline = time.monotonic() + CHECK_TIMEOUT_SECONDS
+
+    def send(message: dict) -> None:
+        process.stdin.write(json.dumps({"jsonrpc": "2.0", **message}) + "\n")
+        process.stdin.flush()
+
+    def reply(request_id: int) -> dict:
+        while True:
+            try:
+                line = lines.get(timeout=max(0.0, deadline - time.monotonic()))
+            except queue.Empty:
+                raise TimeoutError(f"No answer within {CHECK_TIMEOUT_SECONDS} seconds.") from None
+            if line is None:
+                raise ConnectionError("The connector closed before answering.")
+            try:
+                message = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(message, dict) and message.get("id") == request_id:
+                if "error" in message:
+                    raise ConnectionError(str((message["error"] or {}).get("message", "")))
+                return message.get("result") or {}
+
+    try:
+        send({"id": 1, "method": "initialize", "params": {
+            "protocolVersion": "2025-06-18", "capabilities": {},
+            "clientInfo": {"name": "tag-connector-check", "version": "1"}}})
+        reply(1)
+        send({"method": "notifications/initialized"})
+        send({"id": 2, "method": "tools/list", "params": {}})
+        return len(reply(2).get("tools") or [])
+    finally:
+        try:
+            os.killpg(process.pid, 15)
+        except (OSError, AttributeError):
+            process.kill()
+        process.wait(timeout=10)
+
+
+def view(name: str, entry: dict, sign_in: str | None = None) -> dict:
     """The public shape of one connector, for --json and Tag.app."""
     row = {"name": name, "transport": entry.get("transport"),
            "allowed_tags": [row["tag"] for row in entry.get("allowed", []) if isinstance(row.get("tag"), str)],
@@ -332,6 +515,8 @@ def view(name: str, entry: dict) -> dict:
         row["url"] = entry.get("url")
     else:
         row.update(command=entry.get("command"), args=entry.get("args", []), env=entry.get("env", []))
+    if sign_in is not None:
+        row["sign_in"] = sign_in
     return row
 
 
@@ -357,22 +542,29 @@ class _Parser(argparse.ArgumentParser):
 def _parser() -> argparse.ArgumentParser:
     parser = _Parser(prog="tag connector", description="Manage the MCP connectors Tags may use.",
                                      usage=USAGE)
-    parser.add_argument("action", choices=("list", "show", "add", "remove", "allow", "deny"), nargs="?",
-                        default="list")
+    parser.add_argument("action", choices=("list", "show", "add", "remove", "allow", "deny", "sign-in", "check"),
+                        nargs="?", default="list")
     parser.add_argument("name", nargs="?")
     parser.add_argument("tags", nargs="*", help="allow, deny: Tag names or nicknames")
     parser.add_argument("--url", help="add: the remote connector's address")
     parser.add_argument("--command", help="add: the program that runs a local connector, with its arguments")
     parser.add_argument("--env", action="append", default=[], metavar="NAME",
                         help="add --command: an environment variable the connector reads (name only; repeatable)")
+    parser.add_argument("--device-code", action="store_true",
+                        help="sign-in: show a code to enter on another device, for computers without a browser")
     parser.add_argument("--json", action="store_true", dest="json_output", help="structured output")
     return parser
+
+
+SIGN_IN_TEXT = {"not_needed": "no sign-in needed", "not_signed_in": "not signed in",
+                "expired": "sign-in expired", "signed_in": "signed in", "unknown": "sign-in unknown"}
 
 
 def _print_row(row: dict) -> None:
     target = row.get("url") or shlex.join([row.get("command") or "", *row.get("args", [])])
     tags = ", ".join(row["allowed_tags"]) or "no Tags yet"
-    print(f"{row['name']}  {target}  · allowed for {tags}")
+    state = SIGN_IN_TEXT.get(row.get("sign_in", ""), "")
+    print(f"{row['name']}  {target}  · allowed for {tags}" + (f"  · {state}" if state else ""))
 
 
 def cli(arguments: list[str], *, root: Path | None = None) -> int:
@@ -400,9 +592,26 @@ def cli(arguments: list[str], *, root: Path | None = None) -> int:
         raise ConnectorError(f"Unexpected arguments: {' '.join(args.tags)}")
     if (args.url or args.command or args.env) and args.action != "add":
         raise ConnectorError("--url, --command and --env are only for tag connector add.")
+    if args.device_code and args.action != "sign-in":
+        raise ConnectorError("--device-code is only for tag connector sign-in.")
     message = ""
     if args.action == "show":
         row = store.get(args.name)
+    elif args.action == "sign-in":
+        sign_in(root, args.name, device_code=args.device_code)
+        row = store.get(args.name)
+        message = (f"Signed in to {args.name}. Claude and Codex runs of every allowed Tag use this sign-in."
+                   if row["sign_in"] == "signed_in" else f"{args.name} connected without a sign-in; none is needed.")
+    elif args.action == "check":
+        found = check(root, args.name)
+        row = {**store.get(args.name), "check": found}
+        message = {"connected": f"{args.name} is connected ({found.get('tools')} tools).",
+                   "failed": f"{args.name} didn't connect: {str(found.get('detail')).rstrip('.')}. "
+                             f"If it keeps failing, sign in again: tag connector sign-in {args.name}.",
+                   "bridge_missing": "Node or mcp-remote isn't installed; see tag doctor.",
+                   "not_needed": f"{args.name} runs on this computer; it's started with each run.",
+                   }.get(found["state"], f"{args.name}: {SIGN_IN_TEXT.get(found['state'], found['state'])}. "
+                                         f"Sign in with tag connector sign-in {args.name}.")
     elif args.action == "add":
         command = shlex.split(args.command) if args.command else None
         if args.command is not None and not command:
@@ -410,16 +619,19 @@ def cli(arguments: list[str], *, root: Path | None = None) -> int:
         row = store.add(args.name, url=args.url, command=command, env=args.env)
         message = (f"Added {args.name}. No Tag can use it yet; "
                    f"allow one with tag connector allow {args.name} TAG.")
+        if args.url:
+            message += f" Then sign in once: tag connector sign-in {args.name}."
     elif args.action == "remove":
         row = store.remove(args.name)
-        message = f"Removed {args.name}."
+        message = f"Removed {args.name} and its sign-in on this computer."
     else:
         tags = resolve_tags(root, args.tags)
         row = store.set_allowed(args.name, tags, args.action == "allow")
         verb = "can now" if args.action == "allow" else "can no longer"
         message = f"{', '.join(tags)} {verb} use {args.name} in new requests."
+    ok = args.action != "check" or row["check"]["state"] in {"connected", "not_needed"}
     if args.json_output:
-        result = {"schema_version": SCHEMA_VERSION, "ok": True, "connector": row}
+        result = {"schema_version": SCHEMA_VERSION, "ok": ok, "connector": row}
         if message:
             result["message"] = message
         print(json.dumps(result, indent=2))
@@ -428,7 +640,31 @@ def cli(arguments: list[str], *, root: Path | None = None) -> int:
             print(message)
         if args.action != "remove":
             _print_row(row)
-    return 0
+    return 0 if ok else 1
+
+
+def doctor_checks(root: Path | None = None) -> list[tuple[bool, str, str, str | None]]:
+    """(ok, label, detail, next action) for tag doctor: Node and the pinned
+    mcp-remote when a remote connector is in use, and each in-use connector's
+    sign-in. Connectors no Tag may use aren't checked."""
+    store = Store(root)
+    entries = {name: entry for name, entry in store.read()["connectors"].items() if entry.get("allowed")}
+    remote = {name: entry for name, entry in entries.items() if entry.get("transport") == "http"}
+    if not remote:
+        return []
+    results = []
+    node = shutil.which("node") is not None
+    results.append((node, "Node.js for remote connectors", "found" if node else "missing",
+                    None if node else NODE_MISSING))
+    version = installed_bridge_version(store.root)
+    results.append((version == MCP_REMOTE_VERSION, "mcp-remote",
+                    f"{version or 'not installed'} (Tag uses {MCP_REMOTE_VERSION})",
+                    f"Run tag connector sign-in {next(iter(sorted(remote)))} to install it."))
+    for name, entry in sorted(remote.items()):
+        state = sign_in_state(store.root, name, entry)
+        results.append((state in {"signed_in", "not_needed"}, f"connector {name}", SIGN_IN_TEXT[state],
+                        f"Run tag connector sign-in {name}."))
+    return results
 
 
 if __name__ == "__main__":

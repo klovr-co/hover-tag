@@ -1,0 +1,8 @@
+{
+  "name": "tag-connector-bridge",
+  "private": true,
+  "description": "The mcp-remote version Tag starts for remote connectors (ADR 0014). Installed with npm ci --ignore-scripts.",
+  "dependencies": {
+    "mcp-remote": "0.15.2"
+  }
+}
