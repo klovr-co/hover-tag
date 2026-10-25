@@ -1178,7 +1178,10 @@ button.list-item:hover { background: var(--fill); }
 .rt-run .rt-diag { padding-left: 0; }
 .rt-run-facts { display: flex; flex-wrap: wrap; align-items: center; gap: 0 4px; }
 .rt-run-acts { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; }
-.rt-all { align-self: flex-start; margin-top: 6px; font-size: 13px; }
+.rt-all { font-size: 13px; }
+.rt-runs-foot { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin-top: 6px; font-size: 13px; }
+.rt-runs-foot:empty { display: none; }
+.rt-runs.all .rt-history { max-height: 320px; overflow-y: auto; overscroll-behavior: contain; padding: 2px 6px 2px 2px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .rt-runs { display: flex; flex-direction: column; }
 .activity-routine { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; padding: 1px 6px; border-radius: 9px; font: inherit; font-size: 12px; font-weight: 500; color: var(--blue); background: rgba(31, 126, 222, .08); white-space: nowrap; }
 button.activity-routine:hover { background: rgba(31, 126, 222, .16); }

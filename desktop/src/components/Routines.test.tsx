@@ -186,10 +186,39 @@ describe("Routines", () => {
     expect(within(history).getAllByRole("listitem")).toHaveLength(5);
     fireEvent.click(screen.getByRole("button", { name: "Show all 27 runs" }));
     await waitFor(() => expect(within(history).getAllByRole("listitem")).toHaveLength(20));
-    fireEvent.click(screen.getByRole("button", { name: "Load older runs" }));
+    // All runs scroll inside the routine; reaching the end loads older ones.
+    expect(history.closest(".rt-runs")?.classList.contains("all")).toBe(true);
+    expect(screen.getByText("20 of 27 runs")).toBeTruthy();
+    fireEvent.scroll(history);
     await waitFor(() => expect(within(history).getAllByRole("listitem")).toHaveLength(27));
     expect(screen.queryByRole("button", { name: "Load older runs" })).toBeNull();
     expect(calls.filter((args) => args.includes("runs")).map((args) => args.slice(-3, -1))).toEqual([["--offset", "0"], ["--offset", "20"]]);
+    fireEvent.click(screen.getByRole("button", { name: "Show fewer" }));
+    expect(within(history).getAllByRole("listitem")).toHaveLength(5);
+    expect(screen.getByRole("button", { name: "Show all 27 runs" })).toBeTruthy();
+  });
+
+  it("keeps the timezone list inside the window, opening upwards when there's no room below", async () => {
+    const box = (top: number) => ({ top, bottom: top + 34, left: 0, right: 220, width: 220, height: 34, x: 0, y: top, toJSON: () => ({}) });
+    const place = async (top: number, height: number) => {
+      vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(box(top) as DOMRect);
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: height });
+      const zone = screen.getByRole("combobox", { name: "Timezone" });
+      fireEvent.focus(zone);
+      const list = await screen.findByRole("listbox", { name: "Timezones" });
+      const shown = { below: list.classList.contains("below"), max: list.style.maxHeight };
+      fireEvent.blur(zone);
+      vi.restoreAllMocks();
+      return shown;
+    };
+    await open();
+    fireEvent.click(await screen.findByRole("button", { name: /Weekly PR digest/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    const tall = window.innerHeight;
+    expect(await place(100, 900)).toEqual({ below: true, max: "340px" });
+    expect(await place(700, 768)).toEqual({ below: false, max: "340px" });
+    expect(await place(100, 300)).toEqual({ below: true, max: "154px" });
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: tall });
   });
 
   it("opens the routine it was asked to focus", async () => {

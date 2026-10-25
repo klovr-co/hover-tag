@@ -216,9 +216,12 @@ function RoutineHistory({ api, tag, routine, showLogs }: { api: Bridge; tag: str
   const runs = all?.runs ?? detail.history.slice(0, 5);
   const more = all ? all.more : detail.history.length > 5;
   if (!runs.length) return <p className="meta" style={{ margin: 0 }}>No runs yet.</p>;
+  // All runs scroll inside the routine, so a long history never pushes the rest of the tab away.
+  const nearEnd = (list: HTMLElement) => list.scrollHeight - list.scrollTop - list.clientHeight < 60;
   return (
-    <div className="rt-runs">
-      <ul className="rt-history" aria-label={`${routine.name} runs`}>
+    <div className={all ? "rt-runs all" : "rt-runs"}>
+      <ul className="rt-history" aria-label={`${routine.name} runs`}
+        onScroll={all ? (e) => { if (all.more && !loading && nearEnd(e.currentTarget)) void loadRuns(all.runs.length); } : undefined}>
         {runs.map((run) => {
           const isOpen = open === run.run_id;
           return (
@@ -235,9 +238,13 @@ function RoutineHistory({ api, tag, routine, showLogs }: { api: Bridge; tag: str
         })}
       </ul>
       {error && <ErrorLine>{error}</ErrorLine>}
-      {more && <button className="link rt-all" disabled={loading} onClick={() => void loadRuns(all ? all.runs.length : 0)}>
-        {loading ? "Loading runs…" : all ? "Load older runs" : `Show all ${detail.history.length} runs`}
-      </button>}
+      <div className="rt-runs-foot">
+        {more && <button className="link rt-all" disabled={loading} onClick={() => void loadRuns(all ? all.runs.length : 0)}>
+          {loading ? "Loading runs…" : all ? "Load older runs" : `Show all ${detail.history.length} runs`}
+        </button>}
+        {all && <><span className="meta">{all.runs.length} of {detail.history.length} runs</span>
+          <button className="link rt-all" onClick={() => { setAll(null); setOpen(null); }}>Show fewer</button></>}
+      </div>
     </div>
   );
 }
@@ -322,14 +329,35 @@ function RoutineEditor({ tag, channels, routine, busy, cancel, save }: {
   );
 }
 
+const MENU_HEIGHT = 340, MENU_MIN = 200, MENU_MIN_HEIGHT = 120, MENU_GAP = 12;
+
 /** A timezone field you type into: it lists matching IANA zones and saves only one of them.
  *  A saved zone that this computer doesn't list is kept; the CLI checks every name anyway. */
 function TimezonePicker({ value, onChange }: { value: string; onChange: (value: string) => void }) {
   const zones = useMemo(() => timeZones([value, localZone()]), [value]);
   const [query, setQuery] = useState<string | null>(null);
   const [active, setActive] = useState(0);
+  const [fit, setFit] = useState({ above: false, height: MENU_HEIGHT });
+  const wrap = useRef<HTMLDivElement>(null);
   const open = query !== null;
   const shown = open ? matchZones(zones, query) : [];
+  // The list never leaves the visible part of the panel (or window): it opens below the field, or
+  // above it when there's more room there, and is never taller than that room.
+  const measure = useCallback(() => {
+    const field = wrap.current?.getBoundingClientRect();
+    if (!field) return;
+    const view = wrap.current?.closest(".sl-body")?.getBoundingClientRect() ?? { top: 0, bottom: window.innerHeight };
+    const below = Math.min(view.bottom, window.innerHeight) - field.bottom - MENU_GAP;
+    const above = field.top - Math.max(view.top, 0) - MENU_GAP;
+    const up = below < MENU_MIN && above > below;
+    setFit({ above: up, height: Math.max(MENU_MIN_HEIGHT, Math.min(MENU_HEIGHT, up ? above : below)) });
+  }, []);
+  useEffect(() => {
+    if (!open) return;
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [open, measure]);
   const pick = (zone: string) => { onChange(zone); setQuery(null); };
   const close = () => {
     const exact = query && zones.find((zone) => zone.toLowerCase() === query.trim().toLowerCase());
@@ -337,7 +365,7 @@ function TimezonePicker({ value, onChange }: { value: string; onChange: (value: 
     setQuery(null);
   };
   return (
-    <div className="mpick-wrap">
+    <div className="mpick-wrap" ref={wrap}>
       <input className="field" role="combobox" aria-expanded={open} aria-controls="rt-zones" aria-autocomplete="list"
         aria-activedescendant={open && shown[active] ? `rt-zone-${active}` : undefined} spellCheck={false}
         value={open ? query : value} placeholder={localZone()}
@@ -359,7 +387,7 @@ function TimezonePicker({ value, onChange }: { value: string; onChange: (value: 
           }
         }} />
       {open && (
-        <div className="mmenu below" role="listbox" id="rt-zones" aria-label="Timezones">
+        <div className={fit.above ? "mmenu" : "mmenu below"} style={{ maxHeight: fit.height }} role="listbox" id="rt-zones" aria-label="Timezones">
           {shown.length ? shown.map((zone, index) => (
             <button key={zone} id={`rt-zone-${index}`} type="button" role="option" aria-selected={zone === value}
               className={index === active ? "mopt active" : "mopt"} onMouseDown={(e) => e.preventDefault()} onClick={() => pick(zone)}>
