@@ -20,6 +20,7 @@ import { AI_CAPABILITY, API_CAPABILITY, RULES_CAPABILITY, SAVED_MODELS_CAPABILIT
 import { AISettings } from "./components/AISettings";
 import { MemorySettings, Settings, type SettingsTab } from "./components/Settings";
 import { TagDetail, type Tab as TagTab } from "./components/TagDetail";
+import { ImportTag } from "./components/TagTransfer";
 import { source, Toast } from "./components/ui";
 
 type Screen =
@@ -316,7 +317,11 @@ export function App() {
               finishSetup={(row) => setScreen({ name: "connect", args: [row.id, "setup"] })}
               open={(row) => setScreen({ name: "tag", id: row.id })}
               fixAI={() => capabilities.includes(SHARED_AI_CAPABILITY) ? setScreen({ name: "ai" }) : say("Update Tag to manage shared AI accounts in Settings.")}
-              showSettings={(tab, privacy) => setScreen({ name: "settings", tab, privacy })} />
+              showSettings={(tab, privacy) => setScreen({ name: "settings", tab, privacy })}
+              importTag={capabilities.includes("tag-export") ? <ImportTag api={api} say={say} onImported={(imported) => {
+                void tags.refresh();
+                setScreen({ name: "connect", args: [imported.tag, "setup"] });
+              }} /> : undefined} />
           )}
           {screen.name === "home" && quick && (
             <QuickAdd api={api} {...quick} start={(id) => tags.start(id)}
@@ -342,6 +347,7 @@ export function App() {
             <TagDetail key={screen.opened ?? 0} api={api} tags={tags} initial={screen.id} initialTab={screen.tab} problems={watch.problems} back={home} add={add}
               canDescribe={capabilities.includes("describe")} canRefreshModels={capabilities.includes(SAVED_MODELS_CAPABILITY)}
               canRoutines={capabilities.includes("routines")} canKnowledge={capabilities.includes("knowledge")}
+              canExport={capabilities.includes("tag-export")}
               showSettings={() => setScreen({ name: "settings" })}
               finishSetup={(row) => setScreen({ name: "connect", args: [row.id, "setup"] })}
               openAI={() => capabilities.includes(SHARED_AI_CAPABILITY) ? setScreen({ name: "ai" }) : say("Update Tag to manage shared AI accounts in Settings.")} say={say} />
