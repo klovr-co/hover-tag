@@ -2542,6 +2542,15 @@ def _run_cli() -> int:
         ))
     )
     tag_id = raw_arguments.pop(0) if explicit_tag else "default"
+    if raw_arguments[:1] == ["connector"]:
+        # Connectors are shared by every Tag; the module parses its own options.
+        if explicit_tag:
+            parser.error("Connectors are shared by all Tags. Use tag connector without a Tag name.")
+        try:
+            from . import tag_connectors
+        except ImportError:
+            import tag_connectors
+        return tag_connectors.cli(raw_arguments[1:], root=tag_home())
     args = parser.parse_args(raw_arguments)
     if args.activity and (args.command != "logs" or args.follow):
         parser.error("--activity requires logs and cannot be combined with --follow")
@@ -3561,7 +3570,7 @@ def _command_group(command: str) -> str:
         return "lifecycle"
     if command in {"setup", "add", "reset", "settings"}:
         return "setup"
-    if command in {"config", "paths"}:
+    if command in {"config", "paths", "connector"}:
         return "configuration"
     if command in {"inspect", "status", "doctor", "version"}:
         return "diagnostics"
