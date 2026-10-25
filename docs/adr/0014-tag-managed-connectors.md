@@ -52,7 +52,9 @@ across teams.
 - **One sign-in per connector, kept in Tag's folder by mcp-remote.** Tag
   installs one pinned mcp-remote version into its installation folder (a
   lockfile with checksums, installed with `npm ci --ignore-scripts`; never
-  `npx` at run time) and points it at `<installation root>/state/connector-auth`.
+  `npx` at run time) and gives each connector its own folder under
+  `<installation root>/state/connector-auth/<name>`. mcp-remote keys sign-ins
+  by URL alone, so the folder keeps two accounts on one service apart.
   Tag's own code doesn't read or write tokens; it reads only whether a sign-in
   file exists and when it expires. ADR 0001's trusted-sandbox model covers
   these files like any other credential the backend can reach.
@@ -83,7 +85,9 @@ across teams.
   signed in); a live connection that lists the server's tools (on request, in
   Tag.app and in `tag doctor`); and, during runs, the backends' report of
   connectors that failed to start, which Tag turns into a note in the Slack
-  thread and Tag.app. Anything unrecognised is `unknown`, never connected.
+  thread and Tag.app. Anything unrecognised is `unknown`, never connected. A
+  server that connects without asking anyone to sign in is recorded as needing
+  none. Removing a connector deletes its sign-in folder.
   `tag doctor` checks Node and the pinned mcp-remote version.
 - **Surfaces.** `tag connector add|list|show|remove|allow|deny|import|sign-in|search`
   with `--json`; connector checks in `tag doctor`; a Connectors section in
