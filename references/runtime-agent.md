@@ -2,8 +2,23 @@
 
 # Runtime Agent Contract
 
-This file is loaded by `scripts/opentag_agent.py` for every Slack invocation. It is
-the behavior contract for the fresh CLI agent launched by the bridge.
+This file describes the behavior contract for the CLI agent launched by the
+bridge. The agent does not read it. It receives a lean set of standing
+instructions from `build_instructions` in `scripts/opentag_agent.py`, and loads
+procedures needed only by some requests from the runtime skills in
+`runtime-skills/skills/` (a Claude plugin and a Codex skill root):
+
+| Skill | Use |
+| --- | --- |
+| `tag-files` | Images, disposable artifacts, lasting files and their Slack delivery |
+| `tag-attachments` | Earlier thread files, earlier returned images, archives |
+| `tag-memory` | Remember, change, forget, or list saved memory |
+| `tag-slack-search` | Named-channel and all-Slack search scope; channel summaries |
+| `tag-slack-actions` | Posting a channel message; creating a Canvas |
+| `tag-handoff` | Asking other Tags, when the Tag may |
+
+Keep always-on rules (safety, answer format, never claiming unconfirmed
+success) in the standing instructions, and procedures in skills.
 
 ## Mental Model
 

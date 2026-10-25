@@ -65,6 +65,8 @@ export function useTags(api: Bridge | null, enabled: boolean) {
   const previous = useRef<TagRow[]>([]);
   const stopping = useRef(new Set<string>());
   const drafts = useRef<string[]>([]);
+  // The Tag whose start failure is showing; it clears once that Tag runs, however it started.
+  const failedStart = useRef("");
 
   const mark = (key: string, on: boolean) =>
     setBusy((current) => {
@@ -87,6 +89,10 @@ export function useTags(api: Bridge | null, enabled: boolean) {
       }
       stopping.current.clear();
       previous.current = next;
+      if (failedStart.current && next.some((row) => row.id === failedStart.current && row.state === "running")) {
+        failedStart.current = "";
+        setError("");
+      }
       setRows(next);
       setLoaded(true);
       setRefreshError("");
@@ -125,26 +131,32 @@ export function useTags(api: Bridge | null, enabled: boolean) {
   }, [api, rows, loaded, keepRunning]);
 
   /** Run a Tag command, keeping `key` busy meanwhile. Returns what went wrong, or "". */
-  const attempt = useCallback(async (key: string, args: string[], fallback: string) => {
+  const attempt = useCallback(async (key: string, args: string[], fallback: string, publish?: (failure: string) => void) => {
     if (!api) return fallback;
     mark(key, true);
+    let failure = "";
     try {
       const result = await api.tag(args);
-      return result.code === 0 ? "" : failureLine(result, fallback);
+      failure = result.code === 0 ? "" : failureLine(result, fallback);
     } catch (error) {
       // Tag couldn't be run at all, for example after it was uninstalled.
-      return `${fallback} ${String(error)}`;
+      failure = `${fallback} ${String(error)}`;
     } finally {
+      // Publish before refreshing, so the refresh can already clear a start failure.
+      publish?.(failure);
       mark(key, false);
       await refresh();
     }
+    return failure;
   }, [api, refresh]);
 
   /** Run a command whose failure Home shows. */
-  const run = useCallback(async (key: string, args: string[], fallback: string) => {
+  const run = useCallback(async (key: string, args: string[], fallback: string, starting = "") => {
     if (!api) return false;
-    const failure = await attempt(key, args, fallback);
-    setError(failure);
+    const failure = await attempt(key, args, fallback, (failure) => {
+      failedStart.current = failure ? starting : "";
+      setError(failure);
+    });
     return !failure;
   }, [api, attempt]);
 
@@ -157,6 +169,7 @@ export function useTags(api: Bridge | null, enabled: boolean) {
     mark(id, true);
     try {
       const failure = await startTag(api, id, onLine);
+      failedStart.current = failure ? id : "";
       setError(failure);
       return failure;
     } finally {
@@ -168,7 +181,7 @@ export function useTags(api: Bridge | null, enabled: boolean) {
   const toggle = useCallback((row: TagRow) => {
     const action = row.state === "running" ? "stop" : "start";
     if (action === "stop") stopping.current.add(row.id);
-    return run(row.id, [row.id, action], `Couldn't ${action} ${title(row)}.`);
+    return run(row.id, [row.id, action], `Couldn't ${action} ${title(row)}.`, action === "start" ? row.id : "");
   }, [run]);
 
   const workspace = useCallback((team: string, action: "start" | "stop") => {
@@ -215,7 +228,8 @@ export function useTags(api: Bridge | null, enabled: boolean) {
   }, [run]);
 
   return {
-    rows, loaded, busy, error: error || refreshError, setError, keepRunning,
+    // Only an action's failure can be dismissed; a list failure stays until the list loads.
+    rows, loaded, busy, error: error || refreshError, dismissible: !!error, setError, keepRunning,
     refresh, refreshAutostart, start, toggle, workspace, all, rename, describe, makeLead, discardDrafts, remove, setAutostart,
   };
 }

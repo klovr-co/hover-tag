@@ -30,8 +30,25 @@ interrupts the session, and the Tag's model, thinking, and Fast Mode defaults
 come from the signed-in account's model catalog. See
 [ADR 0008](../docs/adr/0008-claude-agent-sdk.md).
 
-`OPENTAG_CLAUDE_PERMISSION_MODE` selects `auto` (default), `acceptEdits`,
-`default`, `dontAsk`, or `bypassPermissions`. Anything Claude would ask about is
+Each Tag sets Claude's permission mode with `OPENTAG_CLAUDE_PERMISSION_MODE`
+(Tag.app's Details → **Permissions** → Claude, or `tag NAME settings ai
+permissions claude-mode=MODE`): `auto` (default), `acceptEdits`, `default`,
+`dontAsk`, or `bypassPermissions`. Codex has its own settings, passed to App
+Server `thread/start` and `thread/resume`: `OPENTAG_CODEX_SANDBOX` (`sandbox`,
+default `workspace-write`), `OPENTAG_CODEX_APPROVALS` (`approvalPolicy`; empty
+or unset sends nothing, so Codex follows the operator's own configuration), and
+`OPENTAG_CODEX_REVIEWER` (`approvalsReviewer`, default `auto_review`; forced to
+`user` when the approval policy is `never`, since nothing is asked). Unknown
+values stop the request instead of loosening access; the status report shows
+them with the reason instead of failing. The rollback transports
+(`OPENTAG_CODEX_TRANSPORT=exec`, `OPENTAG_CLAUDE_TRANSPORT=print`) have fixed
+flags, so they refuse any Codex setting, and `claude -p` runs only when the
+Claude mode is `bypassPermissions`, since it always skips permission checks.
+The SDK loads the `user`, `project`, and `local` setting sources, so the
+operator's `~/.claude/settings.json` and the Tag workspace's
+`.claude/settings.json` and `.claude/settings.local.json` apply. Claude checks
+hooks, then deny rules, ask rules, the mode, and allow rules, and only then asks
+in Slack; deny and ask rules hold even in `bypassPermissions`. Anything Claude would ask about is
 sent privately to the requester. Every request offers Allow once, Deny, and
 Deny and stop. When the CLI suggests allow rules or directories, Tag also
 offers Allow for this task (`session` destination) and Always allow
@@ -39,6 +56,43 @@ offers Allow for this task (`session` destination) and Always allow
 shell commands also offer Always allow this prefix, a `Bash(<program> <first
 argument>:*)` rule like Codex's prefix amendments. The bridge confirms saved
 rules before applying them.
+
+Each Tag follows four sets of rules for both agents: its own (Tag.app's
+**Rules** and `tag NAME settings ai permissions allow|block|remove`), other
+rule files in its folder, the installation's rules for all Tags (`tag settings
+ai rules …`, kept in `shared/permissions/`), and the operator's own. Tag only
+reads the folder's other files and the operator's own rules. Claude's
+own Tag rules are the workspace's `.claude/settings.local.json`; the all-Tags
+ones reach the SDK as `settings` (and `claude -p` as `--settings`), which add
+to the user, project, and local sources, together with deny rules
+`Edit(./.claude/settings.local.json)` and `Edit(./.claude/settings.json)` so
+Claude's file tools can't change its own rules (a shell command still could). Tag refuses to start Claude when that file,
+the Tag's own, the folder's `.claude/settings.json`, or the operator's
+`~/.claude/settings.json` can't be read, since Claude would skip it. Codex's own Tag rules are the workspace's
+`.codex/rules/tag.rules`, and before each run Tag copies the all-Tags rules to
+`.codex/rules/all-tags.rules` beside them. Tag starts Codex with
+`-c projects={"<workspace>"={trust_level="trusted"}}`, which makes Codex 0.162
+and later add that folder's `.codex/rules` to `$CODEX_HOME/rules` (Codex's own
+sandbox keeps `.codex` read-only). Codex's Always allow and host decisions
+would write to `$CODEX_HOME/rules/default.rules`, so Tag answers Codex with a
+plain approval or denial and writes the rule to the Tag's file itself. Codex
+reads that file when a thread starts, so until then Tag answers plain commands
+that match a prefix saved in the same run, and network requests for a host saved
+in the same run, unless a rule Codex reads asks about or blocks them, or one
+Tag can't parse. If those Codex rules block or
+ask, Tag checks `config/read` before each thread and stops when Codex reports
+the Tag's layer disabled, as older versions do. The `exec` rollback refuses
+such rules. Rules Tag can't parse count as asking, so they trigger that check
+too. Tag edits only lines that hold just the rule being changed, and saves
+under a system file lock, freed if Tag stops, with a uniquely named temporary
+file.
+
+Tag keeps Codex rules and trust only in a Tag's own default folder. A Tag whose
+`OPENTAG_WORKDIR` points at a folder of the operator's gets neither, since they
+would also change the operator's own Codex sessions there: Always allow offers
+no saved Codex rule, `permissions allow|block|remove codex` is refused, and a
+run is refused while the all-Tags Codex rules block or ask, or can't be read, or
+while that folder's own Codex rules block or ask and Codex hasn't been told to trust the folder.
 
 Set `OPENTAG_CLAUDE_TRANSPORT=print` to roll back to the previous print mode:
 
@@ -103,6 +157,12 @@ complete response without a fake typewriter animation.
   `final`, `error`, plus the richer `message_*`, `activity_*`,
   `approval_request`, `run_info`, `usage`, `session`, `context`, and `turn_complete` events); chat transports
   must never parse backend-native event payloads.
+- Report thinking as activity: an `activity_start`/`activity_complete` pair
+  labelled `THINKING_LABEL` (`scripts/agent_activity.py`) whose completed
+  `details.output` is the provider's thinking summary, never raw reasoning.
+  Claude asks the CLI for `--thinking-display summarized` and maps thinking
+  content blocks; Codex sends turn `summary: "auto"` (`"none"` when disabled, so a resumed thread stops too) and maps `reasoning`
+  items' `summary`. Both stop when `OPENTAG_SHOW_THINKING=0`.
 - Receive the thinking level as the backend-neutral `reasoning_effort`. The
   Tag's default level (`OPENTAG_DEFAULT_EFFORT`) is applied once, in
   `agent_models.discover_tag_models`, to the default model's default level, so
@@ -117,6 +177,13 @@ complete response without a fake typewriter animation.
   `thread/tokenUsage/updated.tokenUsage.total`; Claude maps the SDK result's
   `usage`. The runner accumulates reported usage across retry attempts; duplicate
   snapshots replace earlier snapshots within an attempt. Missing usage is unknown.
+  When the cost can be estimated (Claude's reported cost, or Codex token prices
+  from API connections), the runner adds a cumulative `cost_usd`; the bridge uses
+  it only to stop routine runs at their spend limit, and Activity keeps tokens only.
+- Routine runs pass `OPENTAG_RUN_MAX_TURNS` and `OPENTAG_RUN_MAX_BUDGET_USD` to the
+  backend process. Claude applies them as the SDK's `max_turns` and
+  `max_budget_usd`; Codex has no equivalent, so the bridge enforces spend from
+  `usage` events and time with the run's maximum runtime.
 - Finish a request only when the agent's background sub-agents have finished.
   A turn that ends with sub-agents still running is not the answer: its text is
   commentary, the session stays open within the request's maximum runtime, and
@@ -136,6 +203,12 @@ complete response without a fake typewriter animation.
   conversation (Codex `developerInstructions`, Claude system prompt) and send a
   continued conversation only the thread's new messages. See
   [ADR 0009](../docs/adr/0009-thread-scoped-agent-conversations.md).
+- Keep standing instructions lean and register Tag's runtime skills
+  (`runtime-skills/`) so procedures load only when a request needs them: Claude
+  loads the folder as a local plugin (`--plugin-dir`, or the SDK `plugins`
+  option, with its `Skill(tag:…)` calls allowed), and the Codex App Server adds
+  `runtime-skills/skills` with `skills/extraRoots/set`. The instructions also
+  name each skill's file, for transports that cannot register them.
 
 Generated images use a file handoff rather than a new stream event. For each
 Slack invocation, the prompt names a temporary `results/images` directory. A

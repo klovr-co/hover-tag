@@ -3,6 +3,8 @@
 - Status: Accepted
 - Date: 2026-09-20
 - Amended: 2026-10-07 — task threads are saved and continued per Slack thread; see [ADR 0009](0009-thread-scoped-agent-conversations.md).
+- Amended: 2026-10-13 — Thinking steps show provider thinking summaries in Agent activity; see [ADR 0010](0010-thinking-summaries-in-agent-activity.md).
+- Amended: 2026-10-16 — each Tag chooses Codex's sandbox, approval policy, and approvals reviewer; workspace-write with automatic review stays the default, and an unset approval policy follows the operator's own Codex config. Approval requests offer Allow once, Allow for this task, Deny, and Deny and stop, and saved rules go to the Tag's own `.codex/rules/tag.rules`; see [Control your Tag](../concepts/control-your-tag.md#choose-what-a-tag-may-do-without-asking).
 - Tracking: [Response streaming #24](https://github.com/klovr-co/hover-tag/issues/24),
   [Task cancellation #29](https://github.com/klovr-co/hover-tag/issues/29)
 

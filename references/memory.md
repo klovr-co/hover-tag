@@ -34,7 +34,7 @@ Both backends use `scripts/tag_memory.py` (`list`, `get`, `history`, `search`,
 `save`, `change`, `forget`). The runtime supplies the requester
 (`OPENTAG_CALLER_ID`) and channel (`OPENTAG_CURRENT_CHANNEL_ID`); the agent
 chooses only the operation. Writes go to the current channel unless the agent
-passes `--all-channels`, which the runtime instructions allow only when the
+passes `--all-channels`, which the `tag-memory` runtime skill allows only when the
 user explicitly asks for all channels. Changes must name the version they
 replace; a stale version is refused. A change keeps the previous value in
 history unless `--drop-old` is passed. `forget` removes the entry and its

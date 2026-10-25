@@ -16,3 +16,8 @@ The Codex App Server transport builds on safeguards from OpenTag
 (https://github.com/first-tree-ai/opentag), available under the Apache License,
 Version 2.0. Tag's request lifecycle and Slack event mapping are original to
 this project.
+
+Routine scheduling takes its rules and test scenarios from Hermes Agent
+(https://github.com/NousResearch/hermes-agent) and OpenClaw
+(https://github.com/openclaw/openclaw), both available under the MIT License,
+and from Temporal and Kubernetes. The code is original to this project.

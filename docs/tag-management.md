@@ -56,15 +56,17 @@ Tag's Details in the app.
 
 ### Settings
 
-Click the gear to open **Settings**. It has three tabs:
+Click the gear to open **Settings**. It has four tabs:
 
 - **General**: **Open Tag at login**, **Appearance**, **Keep Tags running**,
-  **AI connections**, and **Share usage data**.
+  and **Share usage data**.
+- **AI**: **AI connections** (your Codex and Claude accounts) and **Memory**
+  (start or stop it, and choose its search model).
 - **Updates**: **Update Tag** and the **Release channel** (Stable, Beta, or
   Alpha).
 - **About**: documentation and **Replay onboarding**.
 
-![Settings, General tab: Open Tag at login, Appearance, Keep Tags running, AI connections, and usage data](assets/screenshots/settings.png)
+![Settings, General tab: Open Tag at login, Appearance, Keep Tags running, and usage data](assets/screenshots/settings.png)
 
 ![Settings, Updates tab: Update Tag and the release channel (Stable, Beta, or Alpha)](assets/screenshots/settings-updates.png)
 
@@ -114,6 +116,14 @@ naming. The steps become **AI**, **Workspace**, **Your app**, and
    click **I'll do it myself** to see the steps in Slack.
 4. Click **Connect**, then choose channels.
 
+To add another Tag to a workspace you already use, click **Add Tag** on that
+workspace's card on **Home**. Give it a name, a one-line description and a
+picture, then click **Create in Slack**. Tag uses your default model; click
+**Change** beside it to pick another model and its thinking level, or change them later in the Tag's
+**Details**. Tag starts it when it's ready. Invite it to a
+channel with `/invite`. For every setup choice, use **Add Tag** at the top of
+**Home** instead.
+
 In the terminal: `tag setup` for your first Tag, `tag add` for another. Then
 run the `tag NAME start` command it prints. Choose **Use an existing app** on
 the first question to link an app you already have.
@@ -156,6 +166,29 @@ start after you sign in to your computer and restart if they stop. Turn on
 **Open Tag at login** to open the app too.
 
 In the terminal: `tag autostart on`.
+
+Keep Tags running also restarts memory (MFS) if it stops. **Settings** → **AI** →
+**Memory** shows whether memory is running, whether it restarts itself, and
+which search model it uses. Turn it off to stop memory (stop your Tags first);
+in the terminal, `tag memory status`, `start`, and `stop`.
+
+After a first install the built-in search model downloads in the background (about
+560 MB). Home shows the model, how far it is, and that memory search isn't available
+until it finishes; Settings → AI shows the same. If it stops, choose **Try again** on
+Home, or run `tag memory download`. `tag memory start` waits for a running download
+instead of giving up.
+
+**Search model** (in **Settings** → **AI**, under Memory) chooses how memory
+turns text into searchable vectors. **Default** is built in: it runs on this
+computer, is private, works offline, and is about 560 MB. **Custom** points memory
+at any OpenAI-compatible endpoint: OpenAI itself (`https://api.openai.com/v1`
+with a key), Ollama (`http://localhost:11434/v1`, no key), LM Studio, vLLM, or
+your own gateway. Give its address and the model's name; the key is optional.
+Choose **Switch**. Tag tries the endpoint first, so a wrong address, model or
+key changes nothing, and then memory indexes your Slack channels again, so
+search is partial until it finishes. A remote endpoint receives the text of
+indexed messages. In the terminal: `tag memory embedding local` or `custom`, or
+**Workspace and memory** in `tag settings`.
 
 Tags started this way find `claude` and `codex` in the usual install folders
 (`~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`). They also look in the
@@ -201,8 +234,12 @@ doesn't have this. Remove the Tag and add a new one instead.
 | Rename | Details → **Rename** | `tag NAME rename "Name"` |
 | Describe | Details → **Edit** | `tag NAME describe "…"` |
 | Model | Details → **Model** | `tag NAME settings ai model VALUE` |
-| AI accounts | Settings → General → **AI connections** | `tag settings ai` |
+| Permissions | Details → **Permissions** | `tag NAME settings ai permissions codex-sandbox=… claude-mode=…` |
+| Rules for one Tag | Details → **Permissions** → **Rules** | `tag NAME settings ai permissions block codex 'git push'` (or `allow`, `remove`) |
+| Rules for all Tags | Settings → AI → **AI connections** → **Rules for all Tags** | `tag settings ai rules block codex 'git push'` (or `allow`, `remove`) |
+| AI accounts | Settings → AI → **AI connections** | `tag settings ai` |
 | Keep Tags running | Settings → General → **Keep Tags running** | `tag autostart on` |
+| Start or stop memory | Settings → AI → **Memory** | `tag memory start` / `stop` / `status` |
 | Update | Settings → Updates → **Update Tag** | `tag upgrade` |
 | Release channel | Settings → Updates → **Release channel** | `tag upgrade --channel beta` |
 | Usage data | Settings → General → **Share usage data** | `tag telemetry on\|off` |

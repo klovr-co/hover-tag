@@ -23,6 +23,7 @@ it shows is listed in `capabilities`; otherwise it offers to upgrade Tag.
 | `setup-back` | `{"back": true}` during setup |
 | `rename` | `tag NAME rename "Name" --json` |
 | `describe` | `tag NAME describe "Description" --json`: changes the Slack app's one-line description and verifies Slack saved it; `""` clears it |
+| `routines` | `tag NAME routine list\|show\|runs\|add\|edit\|pause\|resume\|remove\|run-now --json`; see [Routines](#routines) |
 | `abandon-setup` | `tag NAME abandon --json`: moves a Tag that never reached Slack to `abandoned/` under the installation root; refuses a Tag that has a Slack app, a bot token, or a running bridge |
 | `remove-tag` | `tag NAME remove --json [--delete-app --confirm-app APP_ID]`: stops the Tag and moves its files to `abandoned/`. The Slack app is kept unless `--delete-app` is given with its exact App ID in `--confirm-app` |
 | `workspace-lifecycle` | `tag start\|stop\|restart --workspace TEAM --json` |
@@ -36,6 +37,8 @@ it shows is listed in `capabilities`; otherwise it offers to upgrade Tag.
 | `shared-ai-connections` | Global `tag settings ai connections\|sign-in\|resume --json`; shared accounts, model-only setup |
 | `api-connections` | `tag NAME settings ai api [set\|clear\|check] --json`: a Tag's own API connection; `api_connections` in `tag settings ai connections --json`; see [API connections](#api-connections) |
 | `thinking-level` | `tag NAME settings ai effort LEVEL --json`, `model VALUE --effort LEVEL`; thinking-level fields in `settings ai`, `models`, and `tag list` |
+| `permission-rules` | `tag NAME settings ai permissions …` and `tag settings ai rules …`: each agent's permission settings and rules for a Tag and for all Tags; see `permissions` below |
+| `saved-models` | `tag NAME settings ai models --refresh --json`; `cached`, `cached_at`, `refresh_failed`, and each group's `cached` and `fetched_at` in `models`; `cached_at` in setup's `default_model` |
 | `logs-activity` | `activity` in `tag NAME logs --json` |
 | `activity-details` | `tag NAME logs --activity RUN_ID --json` |
 | `telemetry-events` | `tag telemetry record EVENT FIELD=VALUE...`, `available` in `tag telemetry status\|on\|off --json`; see [Usage data](#usage-data) |
@@ -48,7 +51,7 @@ it shows is listed in `capabilities`; otherwise it offers to upgrade Tag.
 
 `tag list --json` returns `tags`, one object per Tag with `id`, `valid`,
 `state`, `slack_workspace`, `workspace_name`, `workspace_icon`, `slack_name`,
-`slack_app_id`, `has_app`, `nickname`, `avatar`, `keep_running`, `main`, `description`, `default_model`,
+`slack_app_id`, `slack_enterprise` (the organization's ID for a workspace in an Enterprise Grid organization, else `null`), `has_app`, `nickname`, `avatar`, `picture`, `activity_now`, `keep_running`, `main`, `description`, `default_model`,
 `default_model_label`, `default_model_name`, `default_effort`, `channels`,
 `lead`, and `created_by_lead`. `state` is
 `running`, `stopped`, `not_configured`, `setup_incomplete`, `needs_attention`,
@@ -86,6 +89,26 @@ Claude. The last good picture stays available offline. Until the first successfu
 sync, `avatar` uses the setup picture, or `null` if none exists. A changed picture
 gets a new local filename so apps reload it. `tag list` only reads this cache;
 it does not make network requests. Syncing never changes the Slack app's picture.
+
+`picture` is the picture setup gave the Tag in Slack: `{"kind": "waterdrop",
+"index": 42, "sprite": {...}}` for one of Tag's 960 waterdrops, `{"kind":
+"custom"}` for a picture someone uploaded, or `null` when Tag did not choose
+it (an existing Slack app keeps its own). `sprite` lets an app draw and animate
+the same drop: `element`, `background`, `palette` (a colour for every letter of
+the 28 × 34 map in `scripts/tag_mascot.json`; letters `B`–`G` are background),
+and `marks`, the look's decoration as `[column, row, cells wide, cells high,
+colour]` in map cells, painted in order. Someone can still change the app's
+picture in Slack itself, which Tag can't see; `avatar` shows that picture.
+
+`activity_now` is the path to the Tag's `activity-now.json`, which the running
+bridge replaces whenever a Slack request starts or finishes:
+`{"schema_version": 1, "updated_at": …, "running": [{"run_id", "thread",
+"started_at"}], "last": {"run_id", "thread", "outcome", "at"} | null}`. `thread`
+is the same opaque key as in `activity`, so runs of several Tags in one Slack
+thread share it. `outcome` is `completed`, `failed`, or `interrupted`. The file
+lists only runs the current bridge started and is reset when it starts. It may
+not exist yet; read it only while `state` is `running`. Apps can read this small
+file often instead of running `tag NAME logs --json`.
 
 `tag NAME logs --json` returns `services`, each service's recent log lines,
 and `activity`: up to 50 of the Tag's recent Slack requests, newest first.
@@ -201,7 +224,8 @@ The app loads these details on demand and reuses finished results while the feed
 is open. Both Codex App Server and Claude Agent SDK use the same stored event
 contract. Older records work without a rewrite; missing input and result previews are omitted. Error reports match the exact saved reference and request routing;
 older runs without a reference show a report only when routing and the run's time
-window give one unambiguous match. Prompts and private reasoning are not added.
+window give one unambiguous match. Prompts and raw reasoning are not added; a
+Thinking step's result is the model's thinking summary unless `OPENTAG_SHOW_THINKING=0`.
 
 ### Starting a Tag
 
@@ -402,7 +426,19 @@ levels it offers (`[]` for a model without any), and `default_effort`, the
 level it uses unless the Tag picks one, or `null`; the account default shows
 its default model's levels. `default.available` is false when the
 saved default is no longer offered; `suggested` is the model to preselect.
-Loading models can take several seconds.
+
+Each account's model list is saved once for all Tags, so later calls answer
+at once. A group read from the saved list has `cached: true`; `fetched_at` is
+when its list was read (`null` for a Tag's own API, which lists its models from
+settings). The top-level `cached` says whether any group came from a saved list,
+and `cached_at` is the oldest such `fetched_at`, or `null`. Only an account
+without a saved list is read now, which can take several seconds. A saved list
+older than a day is still returned at once and read again in the background, so
+the next call has the new list. A saved list is dropped when its account
+changes, and is read again when it lacks the Tag's chosen model rather than
+reporting that model unavailable. Add `--refresh` to read every account's list
+now and save it. When a live read fails, the account's saved list is kept and
+its backend is listed in `refresh_failed` (otherwise `[]`).
 
 `tag NAME settings ai model VALUE --json` saves the default model; the backend
 follows the model. All Slack requests use the Tag's settings; per-user model,
@@ -420,6 +456,50 @@ applies. It returns `ok`, `default_effort`, `restart_required`, and
 `restarted`, and accepts `--restart` like `model`. A level the model doesn't
 offer is refused. Every request uses the Tag's level.
 See `protocol/examples/ai-effort.json`.
+
+`tag NAME settings ai permissions SETTING=VALUE … --json` saves the Tag's
+permissions. Codex and Claude keep their own settings: `codex-sandbox`
+(`read-only`, `workspace-write`, `danger-full-access`), `codex-approvals`
+(`untrusted`, `on-request`, `never`), `codex-reviewer` (`auto_review`,
+`user`), and `claude-mode` (`default`, `acceptEdits`, `auto`, `dontAsk`,
+`bypassPermissions`). Only the settings named change. It returns `ok`,
+`permissions`, `restart_required`, and `restarted`, and accepts `--restart`
+like `model`. Without settings, `tag NAME settings ai permissions --json`
+returns the permissions themselves at the top level: `schema_version`,
+`own_folder`, `codex`, `claude`, `options`, and `errors` when there are any.
+The status report carries the same object as `permissions`, and saving returns
+it as `permissions`: `codex` and `claude` hold the
+values in effect, and `options` lists each setting's choices with the `label`
+and `detail` Tag.app shows. `codex.rules` and `claude.rules` hold four lists:
+`tag`, the Tag's own rules (its folder's `.claude/settings.local.json` and
+`.codex/rules/tag.rules`); `folder`, other rule files in the Tag's folder (its
+`.claude/settings.json`, other `.codex/rules/*.rules`), which the agent reads
+too; `all_tags`, the rules every Tag follows (the installation's
+`shared/permissions/claude.json` and `codex.rules`); and `personal`, the
+operator's own (`~/.claude/settings.json` or `$CLAUDE_CONFIG_DIR`, and
+`$CODEX_HOME/rules/*.rules`), which Tag only reads. Each rule has `kind`
+(`rule` or `folder` for Claude, `command` or `host` for Codex), `value`, and
+`decision` (`allow`, `ask`, or `block`). A list is `null` when its file can't
+be read. `own_folder` is `false` when the Tag works in a folder of the
+operator's, where Tag keeps no Codex rules: `permissions allow|block|remove
+codex` fails there. A saved value Tag won't run with is reported as it is, with the reason in
+`errors` by setting name. An empty `codex.approvals` means Codex's own
+configuration; `codex-approvals=` returns to it. See
+`protocol/examples/ai-permissions.json`.
+
+`tag NAME settings ai permissions allow|block|remove codex|claude RULE --json`
+changes one of the Tag's own rules and returns `ok` and `permissions`. For Codex,
+`RULE` is the start of a command, such as `git push`; for Claude it is a
+permission rule, such as `Bash(git push:*)`. Adding a rule that exists changes
+its decision; `remove` matches exactly. Other settings in the files stay as they
+were, and only the Tag's own rules change. The Tag's next request uses the
+change, with no restart.
+
+`tag settings ai rules --json`, without a Tag name, returns `ok`, `scope`
+(`installation`), and `rules`: `all_tags` and `personal` for `codex` and
+`claude`. `tag settings ai rules allow|block|remove codex|claude RULE --json`
+changes one rule for all Tags the same way and returns the same shape. See
+`protocol/examples/ai-rules.json`.
 
 `tag settings ai sign-in BACKEND --json` runs the backend's browser
 sign-in and writes JSON lines: `progress` events with `step` (`stopping`,
@@ -470,7 +550,8 @@ saved key. `check --backend B --json` returns `ok` and `checks` (`name`, `ok`,
 
 During `tag setup --json`, the AI step uses `choose` questions. When an agent is
 connected, `default_model` has model-only `option_ids`, `groups`, `connections`,
-and `tag_name`. Runtimes advertising `supports_effort: true` also accept
+and `tag_name`, plus `cached_at` as in `settings ai models` (`null` when every
+list was read now). Runtimes advertising `supports_effort: true` also accept
 `{"answer":{"value":"codex:gpt-5.5","effort":"high"}}` to save model and thinking
 together. `default_effort` carries the saved level; each model's `efforts` and
 `default_effort` describe its supported levels and default. `effort: "default"`
@@ -531,3 +612,46 @@ switch the release channel; `current.channel` and `target.channel` report the
 saved and requested channels. Switching to a channel whose newest release is
 older than the installed one saves the channel and keeps the installed
 release (`status` `channel-updated`) until that channel catches up.
+
+## Routines
+
+A routine runs a saved prompt on a schedule and posts the result in one of the
+Tag's channels. See [Routines](../concepts/routines.md).
+
+| Command | Output |
+| --- | --- |
+| `tag NAME routine list --json` | `tag_running`, `scheduler` (`ok`, `problem`: why a running Tag isn't checking its routines, or `null`, `last_check`, and `last_clock_jump`), `routines`, `invalid` (entries that could not be read), and `limits` (`per_tag`, `per_channel`, `min_interval_seconds`); see `routine-list.json` |
+| `tag NAME routine show ROUTINE --json` | `routine`, the next five run times in `upcoming`, and `history`, newest first; see `routine-show.json` |
+| `tag NAME routine runs ROUTINE [--limit N] [--offset N] --json` | `routine` (`id`, `name`, `timezone`), `runs` (history entries, newest first, at most 100 a page; default 20), `total`, and `has_more`; see `routine-runs.json` |
+| `tag NAME routine add --name … --schedule … --timezone … --channel … --prompt … [--owner U…] [--catch-up latest\|skip] [--max-budget-usd N] [--max-turns N] [--timeout-minutes N] [--paused] --json` | `routine` |
+| `tag NAME routine add --from-json FILE\|- --json` | `routine`; the whole definition as one JSON object, for other components that create routines |
+| `tag NAME routine edit ROUTINE [options] --json` | `routine` |
+| `tag NAME routine pause\|resume ROUTINE --json` | `routine` |
+| `tag NAME routine remove ROUTINE --json` | `removed`, the routine's ID |
+| `tag NAME routine run-now ROUTINE --json` | `requested`; fails when the Tag isn't running or the routine needs approval |
+
+`ROUTINE` is an ID or a unique name. Tag.app passes `--via tag-app` to `add`
+and `edit`, so the approval records where it was made. Saving through the CLI
+or Tag.app approves exactly what was saved (`approval.by` is `local-operator`).
+A routine whose `approved` is false changed after approval and does not run
+until it is saved again.
+
+Each routine row has `next_run` (null while paused), `last_run` (the newest
+history entry or null), `running`, `consecutive_failures`, `paused_reason`
+(set when Tag paused it after repeated failures), and `attention`. History
+`outcome` is one of `posted`, `no_reply`, `failed`, `budget_exceeded`,
+`timeout`, `skipped`, `missed`, `interrupted`, `blocked`, or `cancelled`
+(someone stopped the run, or paused or removed the routine during it); treat unknown
+values as needing attention. `trigger` is `schedule`, `catch-up`, `run-now`, or
+`retry`.
+
+History entries in `show` and `runs` also say what each run did. `activity` is
+the run's Activity row (the same fields as `tag NAME logs --json`, including
+`reply_preview`, `artifacts`, `step_count`, `duration_seconds`, `usage` and
+the model) while Tag keeps it, which is for its latest 50 routine runs; load
+its steps with `tag NAME logs --activity RUN --json` using `activity.run_id`
+(also `activity_run_id`). `slack_url` opens the message the run posted, and
+`error_reference` names a failure's entry in the error report and the logs. Activity rows from `tag NAME logs --json` carry `trigger` with
+`type: "routine"`, `routine_id`, `name`, and `trigger` when a routine started
+the run.
+

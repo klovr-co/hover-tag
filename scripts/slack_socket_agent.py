@@ -22,6 +22,7 @@ import urllib.request
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -68,12 +69,15 @@ try:
     from .tag_activity_details import sanitize_activity_details
     from .tag_approval_choices import sanitize_review_details
     from .tag_activity_labels import activity_title_for_status, readable_activity_title
+    from .agent_activity import THINKING_LABEL, show_thinking
     from .tag_paths import instance_home, tag_temp_dir
     from .record_output_artifact import channel_artifact_directory
     from . import slack_channels
     from . import tag_memory
     from . import tag_handoff
     from . import tag_lead
+    from . import tag_routines
+    from .tag_routine_scheduler import RoutineScheduler
 except ImportError:  # Direct script execution does not create a package context.
     import slack_identity
     from agent_models import (
@@ -111,12 +115,15 @@ except ImportError:  # Direct script execution does not create a package context
     from tag_activity_details import sanitize_activity_details
     from tag_approval_choices import sanitize_review_details
     from tag_activity_labels import activity_title_for_status, readable_activity_title
+    from agent_activity import THINKING_LABEL, show_thinking
     from record_output_artifact import channel_artifact_directory
     from tag_paths import instance_home, tag_temp_dir
     import slack_channels
     import tag_memory
     import tag_handoff
     import tag_lead
+    import tag_routines
+    from tag_routine_scheduler import RoutineScheduler
 
 
 MENTION_RE = re.compile(r"<@[^>]+>")
@@ -127,6 +134,18 @@ MAX_ATTACHMENT_TEXT_CHARS = 12_000
 MAX_OUTPUT_FILE_BYTES = 15 * 1024 * 1024
 MAX_OUTPUT_ARTIFACTS = 10
 OUTPUT_ARTIFACT_MANIFEST_PREFIX = ".opentag-output-artifacts-"
+# Routines are checked against the wall clock this often, so sleep and restarts don't matter.
+ROUTINE_CHECK_SECONDS = 20
+ROUTINE_FAILURE_TEXT = {
+    "authentication_failure": "The coding agent isn't signed in.",
+    "missing_executable": "The coding agent isn't installed on this computer.",
+    "rate_limit": "The AI provider's usage limit was reached.",
+    "idle_timeout": "The coding agent stopped responding.",
+    "maximum_runtime": "The run reached its time limit.",
+    "unexpected_backend_exit": "The coding agent stopped unexpectedly.",
+    "model_unavailable": "The Tag's model isn't available.",
+    "unsupported_tool": "The coding agent tried a tool Tag doesn't support.",
+}
 MAX_GENERATED_IMAGES = 10
 MAX_REPLY_CHARS = 3_800
 STREAM_START_CHARS = 40
@@ -134,6 +153,9 @@ STREAM_APPEND_CHARS = 200
 STREAM_FLUSH_SECONDS = 0.35
 MAX_STREAM_TASKS = 12
 MAX_STREAM_ACTIVITY_EVENTS = 60
+# Thinking rows in Agent activity; later thinking joins the last row so tools keep their rows.
+MAX_STREAM_THINKING_TASKS = 4
+MAX_STREAM_THINKING_CHARS = 500
 ACTIVITY_DEBOUNCE_SECONDS = 0.25
 ACTIVITY_HOLD_SECONDS = 1.5
 ACTIVITY_WAIT_SECONDS = 12.0
@@ -157,6 +179,8 @@ APPROVAL_MORE_ACTION_ID = "opentag_approval_more"
 TAG_CREATE_APPROVE_ACTION_ID = "opentag_tag_create_approve"
 TAG_CREATE_REJECT_ACTION_ID = "opentag_tag_create_reject"
 TAG_CREATE_CHECK_ACTION_ID = "opentag_tag_create_check"
+WAITING_QUEUE_ACTION_ID = "opentag_waiting_queue"
+WAITING_STEER_ACTION_ID = "opentag_waiting_steer"
 REPORT_ISSUE_ACTION_ID = "opentag_report_issue"
 FIX_WITH_AGENT_ACTION_ID = "opentag_fix_with_coding_agent"
 JOIN_COMMUNITY_ACTION_ID = "opentag_join_hover_community"
@@ -1458,6 +1482,8 @@ class WorkingIndicator:
         self.wait_labels: dict[str, str] = {}
         self.preparing_answer = False
         self.public_status: str | None = None
+        self.stopping = False
+        self.done = False
         self.last_status: str | None = None
         self.last_status_at = float("-inf")
         self.lock = threading.RLock()
@@ -1506,6 +1532,8 @@ class WorkingIndicator:
 
     def current_status(self) -> str:
         """Return the most useful truthful progress copy for the current work."""
+        if self.stopping:
+            return STOPPING_STATUS
         if self.public_status:
             return self.public_status
         if self.activities:
@@ -1624,6 +1652,18 @@ class WorkingIndicator:
                     self.set_display_status(force=True)
                 except Exception as exc:  # noqa: BLE001 - processing remains active
                     self.logger.warning("Could not update Slack progress: %s", exc)
+
+    def stop_requested(self) -> None:
+        """Show at once that a stop is in progress until the backend exits."""
+        with self.lock:
+            if self.done:
+                return  # The request ended; a late stop must not replace the final reply.
+            self.stopping = True
+            if self.legacy_status or self.message_ts is not None:
+                try:
+                    self.set_display_status(force=True)
+                except Exception as exc:  # noqa: BLE001 - the stop itself continues
+                    self.logger.warning("Could not show the Slack stopping status: %s", exc)
 
     def schedule_activity(self) -> None:
         """Coalesce events and hold the displayed copy briefly; caller holds lock."""
@@ -1747,6 +1787,8 @@ class WorkingIndicator:
 
     def clear(self, *, complete_session: bool = True) -> None:
         with self.lock:
+            if complete_session:
+                self.done = True
             if self.activity_timer is not None:
                 self.activity_timer.cancel()
                 self.activity_timer = None
@@ -1822,6 +1864,7 @@ class SlackAnswerStream:
         self.seen_tasks: set[str] = set()
         self.task_groups: dict[str, dict[str, Any]] = {}
         self.dirty_task_groups: set[str] = set()
+        self.thinking_rows = 0
         self.flush_timer: threading.Timer | None = None
         self.lock = threading.RLock()
 
@@ -1834,8 +1877,10 @@ class SlackAnswerStream:
             return
         if not isinstance(label, str) or label not in PUBLIC_LABELS:
             label = "Using a connected tool…"
-        tool = sanitize_activity_details(event.get("details")).get("tool", "")
-        title = readable_activity_title(tool, label)
+        details = sanitize_activity_details(event.get("details"))
+        thinking = label == THINKING_LABEL
+        tool = "" if thinking else details.get("tool", "")
+        title = "Thinking" if thinking else readable_activity_title(tool, label)
         compound = bool(re.search(r" (?:&&|\|\||\|) ", tool))
         item_id = hashlib.sha256(activity_id.encode("utf-8")).hexdigest()
         starting = event["type"] == "activity_start"
@@ -1850,8 +1895,17 @@ class SlackAnswerStream:
                     return
                 self.seen_tasks.add(item_id)
                 key = f"tool:{label}:{tool or title}"
-                if key not in self.task_groups and len(self.task_groups) >= MAX_STREAM_TASKS - 1:
-                    key = "overflow"
+                if thinking:
+                    key = f"thinking:{min(self.thinking_rows, MAX_STREAM_THINKING_TASKS - 1)}"
+                    self.thinking_rows += 1
+                    if key not in self.task_groups and len(self.task_groups) >= MAX_STREAM_TASKS:
+                        # Thinking never joins the mixed overflow row, where its summary would sit under a tool title.
+                        key = next((k for k in reversed(self.task_groups) if k.startswith("thinking:")), key)
+                elif key not in self.task_groups:
+                    # Until a Thinking row exists, keep a slot free for it so the rows stay within the limit.
+                    reserved = 1 if show_thinking() and not any(k.startswith("thinking:") for k in self.task_groups) else 0
+                    if len(self.task_groups) >= MAX_STREAM_TASKS - 1 - reserved:
+                        key = "overflow"
                 self.tasks[item_id] = key
                 group = self.task_groups.get(key)
                 if group is not None:
@@ -1882,6 +1936,9 @@ class SlackAnswerStream:
                 if tool and tool != "Command" and key != "overflow":
                     group["title"] = title
                     group["compound"] = compound
+                if thinking and details.get("output"):
+                    # Slack appends a task's details on every update, so send each summary once.
+                    group.setdefault("details", []).append(details["output"])
                 # Batch completions with the next start or final answer.
                 self.dirty_task_groups.add(key)
                 return
@@ -1903,6 +1960,9 @@ class SlackAnswerStream:
                         self.on_start()
                 else:
                     self.client.chat_appendStream(channel=self.channel, ts=self.ts, chunks=chunks)
+                for key in self.dirty_task_groups:
+                    if self.task_groups[key].pop("details", None):
+                        self.task_groups[key]["summarized"] = True
                 self.dirty_task_groups.clear()
             except Exception as exc:  # noqa: BLE001 - task UI is optional; answer delivery remains primary
                 self.task_updates_available = False
@@ -1929,7 +1989,20 @@ class SlackAnswerStream:
             status = "error" if final else "in_progress"
         if request_completed:
             status = "complete"
-        return {"type": "task_update", "id": group["id"], "title": title, "status": status}
+        chunk = {"type": "task_update", "id": group["id"], "title": title, "status": status}
+        if group.get("details"):
+            # Keep the newest summaries that fit; an oversized one is cut from its end.
+            kept: list[str] = []
+            for summary in reversed(group["details"]):
+                if len(summary) > MAX_STREAM_THINKING_CHARS:
+                    summary = summary[:MAX_STREAM_THINKING_CHARS - 1].rstrip() + "…"
+                if kept and sum(map(len, kept)) + 2 * len(kept) + len(summary) > MAX_STREAM_THINKING_CHARS:
+                    break
+                kept.insert(0, summary)
+            # Slack joins a task's details with nothing between, so later summaries start a new paragraph.
+            text = ("\n\n" if group.get("summarized") else "") + "\n\n".join(kept)
+            chunk["details"] = html.escape(text, quote=False)
+        return chunk
 
     def append(self, text: str) -> None:
         if not text:
@@ -2098,6 +2171,8 @@ class ActiveBackendRun:
     # The posted prompt, so "More options" can redraw it without trusting Slack.
     pending_approval_prompts: dict[str, dict[str, Any]] = field(default_factory=dict)
     kill_timer: threading.Timer | None = None
+    # Called once when a stop is requested, so Slack can show it before the backend exits.
+    on_stop_requested: Callable[[], None] | None = None
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def cancel(self) -> None:
@@ -2115,7 +2190,12 @@ class ActiveBackendRun:
                 self.kill_timer.daemon = True
                 self.kill_timer.start()
         if should_force_stop:
-            self.force_stop()
+            self.force_stop()  # Kill first; the Slack call below can be slow.
+        if self.on_stop_requested is not None:
+            try:
+                self.on_stop_requested()
+            except Exception:  # noqa: BLE001 - showing the stop must not block it
+                pass
 
     def force_stop(self) -> None:
         if self.process.poll() is not None:
@@ -2206,21 +2286,120 @@ ACTIVE_RUNS_LOCK = threading.Lock()
 
 
 THREAD_BUSY_MESSAGE = "I'm still working on an earlier request in this thread. Mention me again when I finish."
+WAITING_REQUEST_MESSAGE = "I'm still working on an earlier request in this thread."
+STOPPING_REQUEST_MESSAGE = "I'm stopping an earlier request in this thread. I'll answer this right after."
+STOPPING_STATUS = "Stopping…"
+# Seconds a Queue or Steer choice stays available before the request must be sent again.
+WAITING_OFFER_SECONDS = 3600.0
 BUSY_THREADS: set[RunKey] = set()
 
 
-def reserve_thread(key: RunKey) -> bool:
-    """Claim a Slack thread for one request; False while an earlier request still runs."""
+@dataclass
+class WaitingRequest:
+    """A Slack request that arrived while its thread was busy."""
+
+    event: dict[str, Any]
+    body: dict[str, Any]
+    direct_message: bool
+    client: Any
+    logger: Any
+    offered_at: float = field(default_factory=time.monotonic)
+    # Set once the request has reached the thread reservation, which then owns passing the queue on.
+    settled: bool = False
+
+
+# Requests offered Queue or Steer, by offer ID, until the requester chooses.
+WAITING_OFFERS: dict[str, tuple[RunKey, WaitingRequest]] = {}
+# Requests that run, in order, after the thread's current request ends.
+QUEUED_REQUESTS: dict[RunKey, list[WaitingRequest]] = {}
+
+
+def reserve_thread(key: RunKey, queued: WaitingRequest | None = None) -> bool:
+    """Claim a Slack thread for one request; False while an earlier request still runs.
+
+    A queued request that loses the thread to a newer one goes back to the front
+    of the queue, so the request that holds the thread starts it next.
+    """
     with ACTIVE_RUNS_LOCK:
         if key in BUSY_THREADS:
+            if queued is not None:
+                QUEUED_REQUESTS.setdefault(key, []).insert(0, queued)
             return False
         BUSY_THREADS.add(key)
         return True
 
 
-def release_thread(key: RunKey) -> None:
+def _pop_queued_request(key: RunKey) -> WaitingRequest | None:
+    """Remove the next queued request; the caller holds ACTIVE_RUNS_LOCK."""
+    queue = QUEUED_REQUESTS.get(key)
+    if not queue:
+        return None
+    request = queue.pop(0)
+    if not queue:
+        QUEUED_REQUESTS.pop(key, None)
+    return request
+
+
+def release_thread(key: RunKey) -> WaitingRequest | None:
+    """Free a Slack thread and return the queued request that should run next."""
     with ACTIVE_RUNS_LOCK:
         BUSY_THREADS.discard(key)
+        return _pop_queued_request(key)
+
+
+def take_next_if_idle(key: RunKey) -> WaitingRequest | None:
+    """The next queued request, unless a request holds the thread and will start it itself."""
+    with ACTIVE_RUNS_LOCK:
+        return None if key in BUSY_THREADS else _pop_queued_request(key)
+
+
+def offer_waiting_request(key: RunKey, request: WaitingRequest) -> str:
+    offer_id = uuid.uuid4().hex
+    with ACTIVE_RUNS_LOCK:
+        for stale in [i for i, (_, r) in WAITING_OFFERS.items()
+                      if request.offered_at - r.offered_at > WAITING_OFFER_SECONDS]:
+            WAITING_OFFERS.pop(stale, None)
+        WAITING_OFFERS[offer_id] = (key, request)
+    return offer_id
+
+
+def take_waiting_request(offer_id: str) -> tuple[RunKey, WaitingRequest] | None:
+    with ACTIVE_RUNS_LOCK:
+        offer = WAITING_OFFERS.pop(offer_id, None)
+    if offer is None or time.monotonic() - offer[1].offered_at > WAITING_OFFER_SECONDS:
+        return None
+    return offer
+
+
+def queue_waiting_request(key: RunKey, request: WaitingRequest, *, first: bool = False) -> bool:
+    """Queue a request behind the thread's current one; False when the thread is already free."""
+    with ACTIVE_RUNS_LOCK:
+        if key not in BUSY_THREADS:
+            return False
+        queue = QUEUED_REQUESTS.setdefault(key, [])
+        if first:
+            queue.insert(0, request)
+        else:
+            queue.append(request)
+        return True
+
+
+def waiting_request_blocks(offer_id: str, team: str, channel: str, thread_ts: str,
+                           user_id: str) -> list[dict[str, Any]]:
+    value = json.dumps({"offer_id": offer_id, "team": team, "channel": channel,
+                        "thread_ts": thread_ts, "user": user_id}, separators=(",", ":"))
+    return [
+        {"type": "section", "text": {"type": "plain_text", "text":
+            f"{WAITING_REQUEST_MESSAGE}\nWhat should I do with your new message?"}},
+        {"type": "actions", "elements": [
+            {"type": "button", "action_id": WAITING_QUEUE_ACTION_ID, "style": "primary",
+             "text": {"type": "plain_text", "text": "Queue"}, "value": value},
+            {"type": "button", "action_id": WAITING_STEER_ACTION_ID,
+             "text": {"type": "plain_text", "text": "Steer"}, "value": value},
+        ]},
+        {"type": "context", "elements": [{"type": "mrkdwn", "text":
+            "*Queue:* answer after. *Steer:* stop and answer this now."}]},
+    ]
 
 
 def register_active_run(key: RunKey, run: ActiveBackendRun) -> None:
@@ -2230,8 +2409,24 @@ def register_active_run(key: RunKey, run: ActiveBackendRun) -> None:
 
 def unregister_active_run(key: RunKey, run: ActiveBackendRun) -> None:
     with ACTIVE_RUNS_LOCK:
-        if ACTIVE_RUNS.get(key) is run:
-            ACTIVE_RUNS.pop(key, None)
+        # Also drop aliases, such as a routine thread created after the run started.
+        for candidate in [k for k, value in ACTIVE_RUNS.items() if value is run]:
+            ACTIVE_RUNS.pop(candidate, None)
+
+
+def alias_active_run(existing: RunKey, alias: RunKey) -> bool:
+    """Let approvals in a thread posted mid-run reach a run registered under another key."""
+    with ACTIVE_RUNS_LOCK:
+        run = ACTIVE_RUNS.get(existing)
+        if run is None:
+            return False
+        ACTIVE_RUNS[alias] = run
+        return True
+
+
+def active_run(key: RunKey) -> ActiveBackendRun | None:
+    with ACTIVE_RUNS_LOCK:
+        return ACTIVE_RUNS.get(key)
 
 
 def cancel_active_run(key: RunKey, event_ts: str | None = None) -> bool:
@@ -2247,6 +2442,30 @@ def cancel_active_run(key: RunKey, event_ts: str | None = None) -> bool:
         return False
     run.cancel()
     return True
+
+
+# Seconds between sending a Slack message and Tag receiving it before the delay is logged.
+SLACK_DELIVERY_LAG_SECONDS = 5.0
+
+
+def log_slack_delivery_lag(event: dict[str, Any], kind: str, now: float | None = None) -> float | None:
+    """Log when Slack delivers a message late, so slow replies can be traced to delivery."""
+    try:
+        lag = (time.time() if now is None else now) - float(event.get("ts") or "")
+    except ValueError:
+        return None
+    if lag >= SLACK_DELIVERY_LAG_SECONDS:
+        print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} Slack delivered a {kind} {lag:.0f}s after it was sent "
+              f"(channel {event.get('channel', '?')}, thread {event.get('thread_ts') or event.get('ts')})",
+              flush=True)
+    return lag
+
+
+def thread_stopping(key: RunKey) -> bool:
+    """Return whether the thread's current run was asked to stop and has not exited yet."""
+    with ACTIVE_RUNS_LOCK:
+        run = ACTIVE_RUNS.get(key)
+    return run is not None and run.cancel_requested
 
 
 def pending_approval_prompt(key: RunKey, approval_id: str) -> dict[str, Any] | None:
@@ -2412,6 +2631,10 @@ def run_backend_events(
     on_session: Callable[[str], None] | None = None,
     thread_new_text: str | None = None,
     on_context: Callable[[int], None] | None = None,
+    run_limits: dict[str, float | int] | None = None,
+    routine_id: str | None = None,
+    on_cancelled: Callable[[], None] | None = None,
+    on_stop_requested: Callable[[], None] | None = None,
 ) -> tuple[str, bool]:
     """Consume normalized lifecycle events and forward only final-answer text."""
     if max_timeout is None:
@@ -2495,6 +2718,8 @@ def run_backend_events(
         memory_receipts=str(memory_receipts) if memory_receipts else None,
         handoff_requests=str(handoff_requests) if handoff_requests else None,
         handoff_depth=handoff_depth,
+        run_limits=run_limits,
+        routine_id=routine_id,
     )
     try:
         process = subprocess.Popen(
@@ -2514,7 +2739,8 @@ def run_backend_events(
         approval_dir_context.cleanup()
         raise
     run_key = RunKey(team, channel, thread_ts)
-    active_run = ActiveBackendRun(process, control_file, run_id, approval_dir)
+    active_run = ActiveBackendRun(process, control_file, run_id, approval_dir,
+                                  on_stop_requested=on_stop_requested)
     register_active_run(run_key, active_run)
     timed_out = threading.Event()
 
@@ -2646,6 +2872,8 @@ def run_backend_events(
         control_file.unlink(missing_ok=True)
         approval_dir_context.cleanup()
 
+    if active_run.cancel_requested and on_cancelled is not None:
+        on_cancelled()
     if active_run.cancel_requested and terminal_status == "interrupted":
         return "Stopped. Actions completed before the stop were not rolled back.", False
     if active_run.cancel_requested:
@@ -2663,6 +2891,11 @@ def run_backend_events(
         return detail, False
     answer = "".join(final_messages) or "".join(delta_text)
     return (answer or "Open Tag finished without output."), True
+
+
+def slack_escape(text: str) -> str:
+    """Show text literally in Slack mrkdwn: no mentions, links or broadcasts."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def post_final_reply(
@@ -2732,8 +2965,14 @@ def post_private_failure(
     answer: str,
     placeholder_ts: str | None = None,
     footer_blocks: list[dict[str, Any]] | None = None,
+    bot_request: bool = False,
 ) -> None:
     """Show a failed request only to its requester in a shared channel."""
+    if bot_request:
+        # An ephemeral reply to a bot is never seen: give the asking app a fixed,
+        # detail-free signal in the thread instead.
+        post_final_reply(client, channel, thread_ts, "Tag couldn't complete this request.", placeholder_ts)
+        return
     if is_direct_message_channel(channel):
         post_final_reply(client, channel, thread_ts, answer, placeholder_ts, footer_blocks)
         return
@@ -3295,6 +3534,41 @@ def slack_user_allowed(user_id: str, allowed_user_ids: frozenset[str]) -> bool:
     return bool(user_id) and user_id in allowed_user_ids
 
 
+def configured_slack_bot_ids() -> frozenset[str]:
+    """Load the optional bot allowlist: bot IDs (B...) or bot member IDs (U... or W...)."""
+    return parse_slack_user_ids(os.getenv("SLACK_ALLOWED_BOT_IDS", ""))
+
+
+def slack_bot_allowed(event: dict[str, Any], allowed_bot_ids: frozenset[str], own_user_id: str | None) -> bool:
+    """A mention from another app's bot that the Tag owner approved; never this Tag itself."""
+    bot_id, user_id = event.get("bot_id") or "", event.get("user") or ""
+    if not bot_id or not allowed_bot_ids or (own_user_id and user_id == own_user_id):
+        return False
+    return bot_id in allowed_bot_ids or (bool(user_id) and user_id in allowed_bot_ids)
+
+
+# What an approved bot's request looks like: the mention and a command first, then a code block
+# that carries a Hover request ID. Other messages from the same bot (a mirror of WhatsApp text,
+# a log) never start a run, even if they happen to mention this Tag. Slack turns the line breaks
+# of a post's text into spaces when the post also has blocks, so any whitespace may precede the block.
+_BOT_REQUEST = re.compile(r"\A\s*<@[UW][A-Z0-9]+>\s+/[a-z0-9][a-z0-9-]*\s+```[\s\S]*?\"request_id\"\s*:\s*\"hv-[0-9a-f]{16}\"")
+_NOT_A_REQUEST_EVENT_TYPES = frozenset({"hover_whatsapp_mirror"})
+
+
+def bot_request_valid(event: dict[str, Any]) -> bool:
+    """True when an approved bot's mention is a Hover request, not other text that mentions Tag."""
+    metadata = event.get("metadata")
+    if isinstance(metadata, dict) and metadata.get("event_type") in _NOT_A_REQUEST_EVENT_TYPES:
+        return False
+    return bool(_BOT_REQUEST.match(event.get("text") or ""))
+
+
+def own_bot_user_id(body: dict[str, Any]) -> str | None:
+    """This Tag's bot member ID, from the event's authorizations."""
+    return next((item.get("user_id") for item in body.get("authorizations") or []
+                 if isinstance(item, dict) and item.get("is_bot")), None)
+
+
 def app_home_view(
     channel_ids: str = "",
     *,
@@ -3483,8 +3757,11 @@ def create_app(
     peers: list[tag_handoff.Peer] | None = None,
     handoff_store: tag_handoff.HandoffStore | None = None,
     lead: tag_lead.LeadBridge | None = None,
+    allowed_bot_ids: frozenset[str] | None = None,
 ) -> App:
     retire_slack_settings()
+    if allowed_bot_ids is None:
+        allowed_bot_ids = configured_slack_bot_ids()
     if max_timeout is None:
         max_timeout = int(os.getenv("OPENTAG_MAX_TIMEOUT_SECONDS", "3600"))
     selected_team = os.getenv("SLACK_TEAM_ID", "").strip()
@@ -3539,6 +3816,9 @@ def create_app(
     def current_peer_ids() -> frozenset[str]:
         # Other Tags whose bot messages this Tag accepts; everything else from bots is ignored.
         return frozenset(peer.user_id for peer in current_peers())
+    # Live-test automation only: Slack apps whose posts carry their user's identity. Empty by default.
+    test_app_ids = frozenset(app_id.strip() for app_id in os.getenv("OPENTAG_TEST_APP_IDS", "").split(",")
+                             if app_id.strip())
     handoff_store = handoff_store or tag_handoff.HandoffStore(instance_home() / "state" / "handoffs")
     # A restart can end a combine run before it finishes; the next deadline scan picks it up again.
     handoff_store.requeue_combining()
@@ -3748,6 +4028,8 @@ def create_app(
         channel = event.get("channel", "")
         thread_ts = event.get("thread_ts", "")
         user_id = event.get("user", "")
+        if isinstance(event.get("event_ts"), str):
+            log_slack_delivery_lag({**event, "ts": event["event_ts"]}, "stop request")
         team = body.get("team_id") or event.get("team_id") or ""
         if not (
             isinstance(channel, str)
@@ -4571,6 +4853,12 @@ def create_app(
         threading.Thread(target=run_creation, args=(proposal_id, client, logger),
                          name=f"tag-create-{proposal_id}", daemon=True).start()
 
+    def posted_by_test_app(event: dict[str, Any]) -> bool:
+        """Whether a listed test app posted this as a person, which Slack marks with a bot id."""
+        app_id = event.get("app_id") or (event.get("bot_profile") or {}).get("app_id")
+        user = event.get("user")
+        return bool(event.get("bot_id") and app_id in test_app_ids and user and user not in current_peer_ids())
+
     def handle_peer_message(event: dict[str, Any], body: dict[str, Any], client: Any, logger: Any) -> None:
         sender = event.get("user", "")
         if sender not in current_peer_ids():
@@ -4650,13 +4938,18 @@ def create_app(
         prior_error_reference: str | None = None,
         peer_request: tuple[str, str] | None = None,
         combine: dict[str, Any] | None = None,
+        bot_request: bool = False,
+        queued: WaitingRequest | None = None,
     ) -> None:
         channel = event["channel"]
         thread_ts = event.get("thread_ts") or event["ts"]
-        # Answering another Tag or combining replies never starts another handoff.
-        handoff_depth = 1 if peer_request or combine else 0
+        if queued is None:
+            log_slack_delivery_lag(event, "message")
+        # Answering another Tag, combining replies or answering an approved bot never starts another handoff.
+        handoff_depth = 1 if peer_request or combine or bot_request else 0
         user_id = event.get("user", "")
-        if not slack_user_allowed(user_id, allowed_user_ids):
+        # An approved bot is authorized by SLACK_ALLOWED_BOT_IDS, checked before this call.
+        if not bot_request and not slack_user_allowed(user_id, allowed_user_ids):
             logger.warning(
                 "Rejecting Open Tag invocation from unauthorized Slack user %s in channel %s",
                 user_id or "(missing)",
@@ -4704,6 +4997,50 @@ def create_app(
         request_backend = agent_settings.backend or backend
         request_started = time.monotonic()
         reported_runs: list[dict[str, str]] = []
+        # Hold the thread until this request ends so two mentions cannot resume one conversation.
+        thread_key = RunKey(team, channel, thread_ts)
+        waiting = queued or (
+            WaitingRequest(event, body, direct_message, client, logger)
+            # A bot cannot choose Queue or Steer, so a busy thread tells it so in the thread.
+            if peer_request is None and combine is None and not bot_request
+            else None
+        )
+        if queued is not None:
+            queued.settled = True
+        if not reserve_thread(thread_key, queued):
+            # The status belongs to the run holding the thread, so leave it alone here.
+            if queued is not None:
+                return  # Back at the front of the queue; the current request starts it next.
+            if waiting is None:
+                client.chat_postMessage(
+                    channel=channel,
+                    thread_ts=thread_ts,
+                    text=THREAD_BUSY_MESSAGE,
+                )
+                return
+            if thread_stopping(thread_key):
+                # Queue or Steer means nothing once a stop is underway; answer right after it.
+                if not queue_waiting_request(thread_key, waiting, first=True):
+                    start_waiting_request(waiting)
+                    return
+                client.chat_postEphemeral(
+                    channel=channel,
+                    user=user_id,
+                    thread_ts=thread_ts,
+                    text=STOPPING_REQUEST_MESSAGE,
+                )
+                return
+            client.chat_postEphemeral(
+                channel=channel,
+                user=user_id,
+                thread_ts=thread_ts,
+                text=WAITING_REQUEST_MESSAGE,
+                blocks=waiting_request_blocks(
+                    offer_waiting_request(thread_key, waiting), team, channel, thread_ts, user_id,
+                ),
+            )
+            return
+
         indicator = WorkingIndicator(
             client,
             channel,
@@ -4713,16 +5050,22 @@ def create_app(
             team=team,
         )
         indicator.start()
-        slack_search_grant = plan_search_scopes(
-            request_text=question,
-            current_channel_id=channel,
-            caller_id=user_id,
-            team_id=policy_team,
-            configured_channels=configured_channels,
-            allowed_scopes=os.getenv("MFS_ALLOWED_SCOPES", ""),
-            client=client,
-            intent=SearchIntent("all"),
-        )
+        try:
+            slack_search_grant = plan_search_scopes(
+                request_text=question,
+                current_channel_id=channel,
+                caller_id=user_id,
+                team_id=policy_team,
+                configured_channels=configured_channels,
+                allowed_scopes=os.getenv("MFS_ALLOWED_SCOPES", ""),
+                client=client,
+                intent=SearchIntent("all"),
+            )
+        except BaseException:
+            indicator.clear()
+            if (next_request := release_thread(thread_key)) is not None:
+                start_waiting_request(next_request)
+            raise
         answer_stream: SlackAnswerStream | None = None
         backend_error_code: str | None = None
         backend_error_events: list[str] = []
@@ -4752,17 +5095,6 @@ def create_app(
                     logger.warning("Could not save the activity model")
 
         session_workdir = str(default_workdir())
-
-        # Hold the thread until this request ends so two mentions cannot resume one conversation.
-        thread_key = RunKey(team, channel, thread_ts)
-        if not reserve_thread(thread_key):
-            indicator.clear()
-            client.chat_postMessage(
-                channel=channel,
-                thread_ts=thread_ts,
-                text=THREAD_BUSY_MESSAGE,
-            )
-            return
 
         continued = thread_sessions.get(team, channel, thread_ts, request_backend,
                                         workdir=session_workdir, requester=user_id)
@@ -4899,7 +5231,9 @@ def create_app(
                         reasoning_effort=agent_settings.reasoning_effort,
                         on_answer_start=indicator.answer_started,
                         on_status=indicator.status,
-                        on_approval=lambda approval: post_backend_approval(
+                        on_stop_requested=indicator.stop_requested,
+                        # No one can answer an approval for a bot, so a bot's request declines them.
+                        on_approval=None if bot_request else lambda approval: post_backend_approval(
                             client,
                             team=team,
                             channel=channel,
@@ -5071,7 +5405,8 @@ def create_app(
                         post_final_reply(client, channel, thread_ts, answer, indicator.message_ts, footer_blocks)
                     else:
                         post_private_failure(
-                            client, channel, thread_ts, user_id, answer, indicator.message_ts, footer_blocks
+                            client, channel, thread_ts, user_id, answer, indicator.message_ts, footer_blocks,
+                            bot_request=bot_request,
                         )
                         if peer_request is not None:
                             handoff_id, sender = peer_request
@@ -5150,6 +5485,7 @@ def create_app(
                 str(exc),
                 indicator.message_ts,
                 None,
+                bot_request=bot_request,
             )
         except Exception as exc:
             finish_activity("failed")
@@ -5206,13 +5542,352 @@ def create_app(
                 answer,
                 indicator.message_ts,
                 footer_blocks,
+                bot_request=bot_request,
             )
         finally:
-            release_thread(thread_key)
             output_manifest.unlink(missing_ok=True)
             memory_receipts.unlink(missing_ok=True)
             if handoff_requests is not None:
                 handoff_requests.unlink(missing_ok=True)
+            next_request = release_thread(thread_key)
+            if next_request is not None:
+                start_waiting_request(next_request)
+
+    def run_queued_request(request: WaitingRequest) -> None:
+        """Run a queued request; if it ends before taking the thread, keep the queue moving."""
+        key = RunKey(request.body.get("team_id") or request.event.get("team") or "",
+                     request.event["channel"], request.event.get("thread_ts") or request.event["ts"])
+        try:
+            handle_invocation(request.event, request.body, request.client, request.logger,
+                              direct_message=request.direct_message, queued=request)
+        except Exception:  # noqa: BLE001 - one failed request must not strand those queued behind it
+            request.logger.exception("Could not run the queued Slack request")
+        finally:
+            if not request.settled:
+                following = take_next_if_idle(key)
+                if following is not None:
+                    start_waiting_request(following)
+
+    def start_waiting_request(request: WaitingRequest) -> None:
+        threading.Thread(target=run_queued_request, args=(request,),
+                         name="slack-queued-request", daemon=True).start()
+
+    @app.action(WAITING_QUEUE_ACTION_ID)
+    @app.action(WAITING_STEER_ACTION_ID)
+    def choose_waiting_request(ack: Any, body: dict[str, Any], client: Any, logger: Any,
+                               respond: Any) -> None:
+        ack()
+        user_id = body.get("user", {}).get("id", "")
+        channel = body.get("channel", {}).get("id", "")
+        body_team = body.get("team", {}).get("id", "") or body.get("team_id", "")
+        try:
+            action = body["actions"][0]
+            steer = action.get("action_id") == WAITING_STEER_ACTION_ID
+            metadata = json.loads(action["value"])
+            offer_id = metadata["offer_id"]
+            team = metadata["team"]
+            thread_ts = metadata["thread_ts"]
+            if not all(isinstance(value, str) and value for value in (
+                    offer_id, team, metadata["channel"], thread_ts, metadata["user"])):
+                raise ValueError("invalid waiting request metadata")
+            if (
+                body_team != team
+                or channel != metadata["channel"]
+                or user_id != metadata["user"]
+                or not slack_user_allowed(user_id, allowed_user_ids)
+                or not slack_conversation_allowed(
+                    channel,
+                    direct_message=is_direct_message_channel(channel),
+                )
+            ):
+                return
+            offer = take_waiting_request(offer_id)
+            if offer is None or offer[0] != RunKey(team, channel, thread_ts):
+                respond(text="This choice has expired. Mention me again to send your message.",
+                        response_type="ephemeral", replace_original=True)
+                return
+            key, request = offer
+            if not queue_waiting_request(key, request, first=steer):
+                text = "The earlier request has finished. Starting yours now."
+                start_waiting_request(request)
+            elif steer:
+                # The steering message's time keeps this from stopping a run that began after it.
+                stopped = cancel_active_run(key, request.event.get("ts"))
+                text = ("Stopping the current request. I'll answer yours next."
+                        if stopped else "I'll answer yours as soon as the current request ends.")
+            else:
+                text = "Queued. I'll answer it after the current request."
+            respond(text=text, blocks=[{"type": "section", "text": {"type": "plain_text", "text": text}}],
+                    response_type="ephemeral", replace_original=True)
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            logger.warning("Could not queue or steer the Slack request: %s", exc)
+
+    workspace_ids: list[str] = []
+
+    def workspace_id(client: Any) -> str:
+        if not workspace_ids:
+            workspace_ids.append(str(client.auth_test().get("team_id") or ""))
+        return workspace_ids[0]
+
+    def post_routine_root(client: Any, routine: dict[str, Any], text: str,
+                          blocks: list[dict[str, Any]] | None = None) -> str:
+        posted = client.chat_postMessage(channel=routine["channel"], text=text, mrkdwn=True, blocks=blocks,
+                                         unfurl_links=False, unfurl_media=False)
+        return posted["ts"]
+
+    def run_routine(routine: dict[str, Any], trigger: str, slot: datetime | None,
+                    last_success: str | None) -> dict[str, Any]:
+        """Run one routine through the normal request path and return its run record.
+
+        The routine's channel is the only place it posts. Nothing is posted until
+        there is something to say: a reply, an approval request, or a failure.
+        A reply of NO_REPLY posts nothing and is kept only in run history.
+        """
+        client = app.client
+        logger = app.logger
+        channel, owner = routine["channel"], routine["owner"]
+        limits = routine["limits"]
+        team = selected_team or workspace_id(client)
+        started = datetime.now(timezone.utc)
+        name = routine["name"]
+        # The name is the operator's text; escape it so it can't mention @channel or link.
+        header = f"⏰ *{slack_escape(name)}*"
+
+        def record(outcome: str, diagnostic: str = "", **extra: Any) -> dict[str, Any]:
+            # The workspace lets the CLI and Tag.app link to the message the run posted.
+            return tag_routines.run_record(routine, trigger=trigger, slot=slot, outcome=outcome, started=started,
+                                           ended=datetime.now(timezone.utc), diagnostic=diagnostic,
+                                           slack_team=team or None, **extra)
+
+        def refuse(diagnostic: str, *, notify: bool) -> dict[str, Any]:
+            if notify:
+                try:
+                    post_routine_root(client, routine, f"{header} didn't run: {diagnostic}")
+                except Exception as exc:  # noqa: BLE001 - the run history still records it
+                    logger.warning("Could not post routine notice: %s", exc)
+            # Running again won't help, so the scheduler pauses it now (as Agno disables such schedules).
+            return record("failed", diagnostic, pause_reason=f"Paused because {diagnostic}")
+
+        def withdrawn() -> str | None:
+            """Why the reply shouldn't post: the routine was paused or removed while it ran."""
+            try:
+                current = {item["id"]: item for item in tag_routines.RoutineStore(instance_home()).load()}
+            except (tag_routines.RoutineError, tag_routines.RoutineSchemaError):
+                return None
+            if routine["id"] not in current:
+                return "Removed while it ran, so nothing was posted."
+            if not current[routine["id"]]["enabled"]:
+                return "Paused while it ran, so nothing was posted."
+            return None
+
+        # A channel the Tag no longer uses gets nothing, not even this notice.
+        if not slack_channel_allowed(channel):
+            return refuse("its channel isn't one of the Tag's channels any more.", notify=False)
+        if not slack_user_allowed(owner, allowed_user_ids):
+            return refuse("its owner isn't allowed to use this Tag any more.", notify=True)
+        question = tag_routines.run_prompt(routine, trigger=trigger, slot=slot, last_success=last_success)
+        configured_team = os.getenv("SLACK_TEAM_ID", "").strip()
+        # As for a mention: the run's workspace when none is configured, and never a different one.
+        policy_team = team if not configured_team or configured_team == team else ""
+        configured_channels = (os.getenv("SLACK_CHANNEL_IDS", "").strip()
+                               or os.getenv("SLACK_CHANNEL_ID", "").strip())
+        scope_plan = plan_search_scopes(
+            request_text=question, current_channel_id=channel, caller_id=owner, team_id=policy_team,
+            configured_channels=configured_channels, allowed_scopes=os.getenv("MFS_ALLOWED_SCOPES", ""),
+            client=client, intent=SearchIntent("current"))
+        search_grant = plan_search_scopes(
+            request_text=question, current_channel_id=channel, caller_id=owner, team_id=policy_team,
+            configured_channels=configured_channels, allowed_scopes=os.getenv("MFS_ALLOWED_SCOPES", ""),
+            client=client, intent=SearchIntent("all"))
+        agent_settings = default_settings
+        request_backend = agent_settings.backend or backend
+        run_key = RunKey(team, channel, f"routine-{uuid.uuid4().hex}")
+        root: dict[str, str] = {}
+        tools_used: list[str] = []
+        usage: dict[str, Any] = {}
+        limit_hit: list[str] = []
+        error_codes: list[str] = []
+        cancelled: list[bool] = []
+        activity_run_id: str | None = None
+        if rich_events_selected(request_backend):
+            try:
+                activity_run_id = activity_store.create(
+                    team=team, channel=channel, thread_ts="", request_ts="", requester=owner,
+                    reasoning_effort=agent_settings.reasoning_effort,
+                    trigger={"type": "routine", "routine_id": routine["id"], "name": name, "trigger": trigger})
+            except OSError as exc:
+                logger.warning("Could not start Tag activity record: %s", exc)
+
+        def ensure_root(text: str) -> str:
+            if "ts" not in root:
+                root["ts"] = post_routine_root(client, routine, text)
+                alias_active_run(run_key, RunKey(team, channel, root["ts"]))
+                if activity_run_id is not None:
+                    try:
+                        activity_store.set_thread(activity_run_id, root["ts"])
+                    except OSError:
+                        logger.warning("Could not link routine activity to its thread")
+            return root["ts"]
+
+        def on_approval(approval: dict[str, Any]) -> None:
+            thread = ensure_root(f"{header} needs <@{owner}>'s approval to continue.")
+            post_backend_approval(client, team=team, channel=channel, thread_ts=thread, user_id=owner,
+                                  approval=approval, backend=request_backend)
+
+        def trace(event: dict[str, Any]) -> None:
+            if activity_run_id is not None:
+                try:
+                    activity_store.observe(activity_run_id, event)
+                except OSError:
+                    pass
+            if event.get("type") == "activity_start":
+                label = event.get("label")
+                if isinstance(label, str) and label in PUBLIC_LABELS and label not in tools_used:
+                    tools_used.append(label)
+                return
+            if event.get("type") != "usage":
+                return
+            counts = event.get("usage") if isinstance(event.get("usage"), dict) else {}
+            tokens = sum(value for key in ("input_tokens", "output_tokens")
+                         if isinstance(value := counts.get(key), int))
+            usage["tokens"] = tokens
+            # Cached context is re-read every turn and costs little; the token limit counts new tokens.
+            cached = counts.get("cache_read_input_tokens")
+            fresh = tokens - (cached if isinstance(cached, int) and 0 <= cached <= tokens else 0)
+            cost = event.get("cost_usd")
+            if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+                usage["cost_usd"] = round(float(cost), 4)
+            over = (usage.get("cost_usd", 0) > limits["max_budget_usd"] if "cost_usd" in usage
+                    else fresh > limits["max_tokens"])
+            if over and not limit_hit:
+                limit_hit.append("cost" if "cost_usd" in usage else "tokens")
+                if (run := active_run(run_key)) is not None:
+                    run.cancel()
+
+        def capture_error(code: str | None, _detail: str) -> None:
+            if code:
+                error_codes.append(code)
+
+        def finish_activity(outcome: str) -> None:
+            nonlocal activity_run_id
+            if activity_run_id is not None:
+                try:
+                    activity_store.finish(activity_run_id, outcome)
+                except OSError:
+                    pass
+
+        output_manifest = default_workdir() / f"{OUTPUT_ARTIFACT_MANIFEST_PREFIX}{uuid.uuid4().hex}.json"
+        answer, succeeded, finished = "", False, False
+        try:
+            with tempfile.TemporaryDirectory(prefix="slack-routine-", dir=tag_temp_dir()) as raw_dir:
+                attachment_dir = Path(raw_dir)
+                generated_images_dir(attachment_dir).mkdir(parents=True)
+                (attachment_dir / "results" / "artifacts").mkdir()
+                answer, succeeded = run_backend_events(
+                    request_backend, team, channel, run_key.thread_ts, owner, question, "", attachment_dir,
+                    min(timeout, limits["timeout_seconds"]), lambda _text: None,
+                    model=agent_settings.model, reasoning_effort=agent_settings.reasoning_effort,
+                    on_approval=on_approval, fast_mode=agent_settings.fast_mode,
+                    output_manifest=output_manifest, max_timeout=limits["timeout_seconds"],
+                    scope_plan=scope_plan, slack_search_grant=search_grant, on_trace_event=trace,
+                    run_limits={"max_turns": limits["max_turns"], "max_budget_usd": limits["max_budget_usd"]},
+                    on_error=capture_error, routine_id=routine["id"], on_cancelled=lambda: cancelled.append(True),
+                )
+                finished = True
+                finish_activity("completed" if succeeded else "failed")
+                extra = {"tools_used": tools_used or None, "cost_usd": usage.get("cost_usd"),
+                         "tokens": usage.get("tokens"), "activity_run_id": activity_run_id}
+                if (reason := withdrawn()) is not None:
+                    return record("cancelled", reason, **extra)
+                if cancelled and not limit_hit:
+                    # Someone stopped it in Slack: not a failure, and nothing more to say.
+                    return record("cancelled", "Stopped by someone in Slack.", **extra)
+                category = classify_failure(answer, error_codes[-1] if error_codes else None).category
+                # Limits come from error codes and only for runs that failed: a reply that
+                # merely talks about turns or budgets is still a reply.
+                if not succeeded and (limit_hit or "error_max_budget_usd" in error_codes):
+                    outcome = "budget_exceeded"
+                    diagnostic = (f"Stopped at the per-run limit of {limits['max_tokens']:,} new tokens."
+                                  if limit_hit == ["tokens"] else
+                                  f"Stopped at the per-run spend limit of ${limits['max_budget_usd']:.2f}.")
+                elif not succeeded and "maximum_runtime" in error_codes:
+                    outcome, diagnostic = "timeout", f"Stopped at the {limits['timeout_seconds'] // 60}-minute limit."
+                elif not succeeded and "error_max_turns" in error_codes:
+                    outcome, diagnostic = "failed", f"Stopped at the limit of {limits['max_turns']} turns."
+                elif not succeeded and category == "rate_limit" and trigger != "retry":
+                    # Tried again in a minute; the channel hears about it only if that fails too.
+                    return record("failed", ROUTINE_FAILURE_TEXT["rate_limit"], rate_limited=True, **extra)
+                elif succeeded and not answer.strip():
+                    outcome, diagnostic = "failed", "The coding agent finished with an empty answer."
+                elif succeeded and tag_routines.is_no_reply(answer):
+                    if "ts" in root:
+                        client.chat_postMessage(channel=channel, thread_ts=root["ts"], text="Nothing new to report.")
+                    return record("no_reply", **extra)
+                elif succeeded:
+                    answer = without_bot_mentions(client, logger, answer)
+                    chunks = split_reply(to_mrkdwn(f"{header}\n\n{answer}"), max_chars=MAX_REPLY_CHARS)
+                    posted, problem = False, ""
+                    try:
+                        if "ts" in root:
+                            post_final_reply(client, channel, root["ts"], answer)
+                            posted = True
+                        else:
+                            ensure_root(chunks[0])
+                            posted = True
+                            for chunk in chunks[1:]:
+                                client.chat_postMessage(channel=channel, thread_ts=root["ts"], text=chunk,
+                                                        mrkdwn=True)
+                        deliver_output_artifacts(client, channel, root["ts"], output_manifest, default_workdir(),
+                                                 logger)
+                    except Exception as exc:  # noqa: BLE001 - once the reply is out, it counts as posted
+                        if not posted:
+                            raise
+                        logger.warning("Routine %s posted, then failed to finish: %s", routine["id"], exc)
+                        problem = "Posted, but the rest of the reply or its files couldn't be sent."
+                    if activity_run_id is not None:
+                        try:
+                            activity_store.save_reply(activity_run_id, answer)
+                        except OSError:
+                            pass
+                    return record("posted", problem, slack_ts=root["ts"], **extra)
+                else:
+                    outcome = "failed"
+                    # The channel sees only a fixed phrase; details stay in the error report.
+                    diagnostic = ROUTINE_FAILURE_TEXT.get(category, "The coding agent reported an error.")
+                reference = new_error_reference()
+                logger.error("Routine %s failed [%s]: %s", routine["id"], reference, answer)
+                text = f"{header} didn't finish. {diagnostic} Reference `{reference}`."
+                if "ts" in root:
+                    client.chat_postMessage(channel=channel, thread_ts=root["ts"], text=text)
+                else:
+                    ensure_root(text)
+                return record(outcome, f"{diagnostic} Reference {reference}.", slack_ts=root.get("ts"),
+                              error_reference=reference, **extra)
+        finally:
+            if not finished:
+                finish_activity("failed")
+            output_manifest.unlink(missing_ok=True)
+
+    def announce_auto_pause(routine: dict[str, Any]) -> None:
+        if not slack_channel_allowed(routine["channel"]):
+            return  # The Tag left that channel: it hears nothing more from this routine.
+        reason = routine.get("paused_reason") or "It was paused."
+        post_routine_root(app.client, routine,
+                          f"⏰ *{slack_escape(routine['name'])}* is paused. {slack_escape(reason)} "
+                          f"<@{routine['owner']}> can check it with `tag routine show` and resume it "
+                          "with `tag routine resume`, or in Tag.app.")
+
+    def announce_crash(routine: dict[str, Any], record: dict[str, Any]) -> None:
+        if not slack_channel_allowed(routine["channel"]):
+            return
+        reference = new_error_reference()
+        app.logger.error("Routine %s crashed [%s]: %s", routine["id"], reference, record.get("diagnostic"))
+        post_routine_root(app.client, routine, f"⏰ *{slack_escape(routine['name'])}* didn't finish. "
+                                               f"Tag hit an internal error. Reference `{reference}`.")
+
+    app.tag_routine_scheduler = RoutineScheduler(
+        instance_home(), run_routine, on_auto_pause=announce_auto_pause, on_crash=announce_crash,
+        logger=getattr(app, "logger", None))
 
     @app.action(RETRY_ACTION_ID)
     def retry_request(ack: Any, body: dict[str, Any], client: Any, logger: Any) -> None:
@@ -5294,10 +5969,39 @@ def create_app(
         ):
             logger.warning("Ignoring Open Tag mention from unapproved Slack channel %s", channel)
             return
-        if event.get("bot_id") or event.get("user") in current_peer_ids():
+        if posted_by_test_app(event):
+            # handle_invocation still requires the poster to be an authorized user.
+            event = {key: value for key, value in event.items() if key not in {"bot_id", "bot_profile", "app_id"}}
+        elif event.get("user") not in current_peer_ids() and slack_bot_allowed(event, allowed_bot_ids, own_bot_user_id(body)):
+            if not bot_request_valid(event):
+                logger.info("Ignoring a mention from approved bot %s that is not a Hover request",
+                            event.get("bot_id") or event.get("user"))
+                return
+            logger.info("Accepting a mention from approved bot %s", event.get("bot_id") or event.get("user"))
+            handle_invocation(event, body, client, logger, direct_message=False, bot_request=True)
+            return
+        elif event.get("bot_id") or event.get("user") in current_peer_ids():
             handle_peer_message(event, body, client, logger)
             return
         handle_invocation(event, body, client, logger, direct_message=False)
+
+    @app.event("member_joined_channel")
+    def handle_member_joined_channel(event: dict[str, Any], body: dict[str, Any], client: Any) -> None:
+        """Pick up a new invitation now rather than at the next membership poll."""
+        refresh = getattr(app, "tag_refresh_invitations", None)
+        if refresh is None:
+            return
+        # Slack sends this for anyone joining a channel Tag is in; only Tag's own
+        # invitation changes what Tag may serve.
+        bot_ids = {a.get("user_id") for a in body.get("authorizations") or [] if isinstance(a, dict)}
+        if not bot_ids:
+            try:
+                bot_ids = {client.auth_test().get("user_id")}
+            except Exception:  # noqa: BLE001 - unknown identity: leave it to the next poll
+                return
+        if event.get("user") not in bot_ids:
+            return
+        refresh()
 
     @app.event("message")
     def handle_direct_message(
@@ -5416,12 +6120,15 @@ def main() -> None:
 
     allowed_user_ids = configured_slack_user_ids()
     session_journal = SlackSessionJournal(slack_session_journal_path())
+    activity_store = ActivityStore()
+    activity_store.publish_now()  # Nothing is running yet, whatever a previous bridge left.
     app = create_app(
         args.backend,
         args.timeout,
         allowed_user_ids,
         max_timeout=args.max_timeout,
         session_journal=session_journal,
+        activity_store=activity_store,
     )
     print_live_summary(args.backend, allowed_user_ids)
     app_token = require_env("SLACK_APP_TOKEN")
@@ -5451,10 +6158,16 @@ def main() -> None:
             from tag_paths import instance_home
         invitation_memory = InvitationMemory(instance_home())
         invitation_memory.start()
+        app.tag_refresh_invitations = invitation_memory.refresh
     next_handoff_check = 0.0
     next_card = 0.0
+    next_routine_check = 0.0
     try:
         connection.connect()
+        try:
+            app.tag_routine_scheduler.recover()
+        except Exception as exc:  # noqa: BLE001 - routines must never stop the bridge
+            app.logger.warning("Could not recover routine runs: %s", exc)
         while not shutdown_requested.is_set():
             if time.monotonic() >= next_card:
                 # Channels and names change while running; republish now and then.
@@ -5463,6 +6176,12 @@ def main() -> None:
                     publish_roster_card(app.client)
                 except Exception as exc:  # noqa: BLE001 - routing waits for the next try
                     app.logger.warning("Could not publish this Tag's card for Lead: %s", exc)
+            if time.monotonic() >= next_routine_check:
+                next_routine_check = time.monotonic() + ROUTINE_CHECK_SECONDS
+                try:
+                    app.tag_routine_scheduler.tick()
+                except Exception as exc:  # noqa: BLE001 - keep the bridge running
+                    app.logger.warning("Could not check routines: %s", exc)
             if time.monotonic() >= next_handoff_check:
                 next_handoff_check = time.monotonic() + 30
                 try:

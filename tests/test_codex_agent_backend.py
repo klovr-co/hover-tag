@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import time
@@ -8,7 +9,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from scripts import agent_permissions
 from scripts.agent_activity import APPROVAL_TIMEOUT_SECONDS, activity_label
+from scripts.tag_approval_choices import approval_choices
 from scripts.codex_agent_backend import (
     CodexAppServer,
     CodexAppServerError,
@@ -103,6 +106,30 @@ class CodexEventMapperTests(unittest.TestCase):
         })
         self.assertEqual("message_complete", completed[0]["type"])
         self.assertEqual("Hello!", completed[0]["text"])
+
+    def test_reasoning_summary_becomes_thinking_activity_without_raw_content(self) -> None:
+        mapper = CodexEventMapper(thinking=True)
+        started = mapper.map({"method": "item/started",
+                              "params": {"item": {"id": "r1", "type": "reasoning", "summary": [], "content": []}}})
+        completed = mapper.map({"method": "item/completed", "params": {"item": {
+            "id": "r1", "type": "reasoning", "summary": ["**Plan** read the roles", " then write "],
+            "content": ["raw chain of thought"]}}})
+        self.assertEqual([{"type": "activity_start", "activity_id": "r1", "label": "Thinking…",
+                           "wait_label": "Still thinking…", "details": {"tool": "Thinking"}}], started)
+        self.assertEqual([{"type": "activity_complete", "activity_id": "r1", "label": "Thinking…",
+                           "status": "completed",
+                           "details": {"output": "**Plan** read the roles\n\nthen write"}}], completed)
+
+    def test_reasoning_stays_private_when_the_tag_does_not_share_it(self) -> None:
+        mapper = CodexEventMapper(thinking=False)
+        for method in ("item/started", "item/completed"):
+            self.assertEqual([], mapper.map({"method": method, "params": {"item": {
+                "id": "r1", "type": "reasoning", "summary": ["secret"]}}}))
+
+    def test_reasoning_without_summary_completes_without_details(self) -> None:
+        mapper = CodexEventMapper(thinking=True)
+        events = mapper.map({"method": "item/completed", "params": {"item": {"id": "r1", "type": "reasoning"}}})
+        self.assertEqual({}, events[0]["details"])
 
     def test_unknown_phase_is_buffered_until_terminal_fallback(self) -> None:
         mapper = CodexEventMapper()
@@ -220,10 +247,12 @@ class CodexEventMapperTests(unittest.TestCase):
         self.assertIn("sent-123", complete["details"]["output"])
         self.assertNotIn("hidden-password", str(start))
         self.assertNotIn("hidden-token", str(complete))
-        self.assertEqual([], mapper.map({"method": "item/completed", "params": {"item": {
-            "id": "reason-1", "type": "reasoning", "content": "private reasoning",
+        # Raw reasoning content never leaves, and only a list-shaped summary is shared.
+        reasoning = mapper.map({"method": "item/completed", "params": {"item": {
+            "id": "reason-1", "type": "reasoning", "content": ["private reasoning"],
             "summary": "private summary",
-        }}}))
+        }}})
+        self.assertNotIn("private", str(reasoning))
 
     def test_helper_mentions_do_not_claim_execution(self) -> None:
         for command in [
@@ -313,6 +342,45 @@ class ServerRequestTests(unittest.TestCase):
         self.assertEqual("approval_expired", emitted[-1]["type"])
         self.assertNotIn("private command", json.dumps(emitted))
         server._send.assert_called_once_with({"id": 8, "result": {"decision": "accept"}})
+
+    def test_rules_saved_this_run_answer_only_what_they_decide(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir, patch.dict(os.environ, {"CODEX_HOME": str(Path(raw_dir) / "codex")}):
+            root = Path(raw_dir) / "tag"
+            server = CodexAppServer(["codex"], cwd=root, timeout=1)
+            server.saved_prefixes.append(["git"])
+            server.saved_hosts[("api.example.com", "https")] = "allow"
+            server.saved_hosts[("ads.example.com", "https")] = "block"
+            method = "item/commandExecution/requestApproval"
+
+            def answer(params: dict[str, object]) -> object:
+                return server._saved_answer(approval_choices(method, params), params)
+
+            self.assertEqual({"decision": "accept"}, answer({"command": "git status"}))
+            # A network request is decided by its host only, never by the command that made it.
+            self.assertIsNone(answer({"command": "git fetch", "networkApprovalContext": {"host": "evil.example", "protocol": "https"}}))
+            self.assertIsNone(answer({"command": "git fetch", "networkApprovalContext": {"host": ["api.example.com"]}}))
+            self.assertEqual({"decision": "decline"}, answer({"networkApprovalContext": {"host": "ads.example.com", "protocol": "https"}}))
+            for unsafe in ("git status\rrm -rf ~", "git status\trm", "git status && rm -rf ~", "git $(rm)"):
+                self.assertIsNone(answer({"command": unsafe}))
+            # A rule that asks, anywhere Codex reads one, still gets its question.
+            rules = Path(raw_dir) / "codex" / "rules" / "team.rules"
+            rules.parent.mkdir(parents=True)
+            rules.write_text('prefix_rule(pattern=["git", ["push", "reset"]], decision="prompt")\n'
+                             'network_rule(host="*.example.com", protocol="https", decision="prompt")\n', encoding="utf-8")
+            self.assertIsNone(answer({"command": "git push origin"}))
+            self.assertEqual({"decision": "accept"}, answer({"command": "git status"}))
+            self.assertIsNone(answer({"networkApprovalContext": {"host": "api.example.com", "protocol": "https"}}))
+            self.assertEqual({"decision": "decline"}, answer({"networkApprovalContext": {"host": "ads.example.com", "protocol": "https"}}))
+            rules.write_text("ask = prefix_rule\nask(pattern=[\"rm\"])\n", encoding="utf-8")
+            self.assertIsNone(answer({"command": "git status"}))  # Tag can't read that rule, so it may ask.
+
+    def test_a_saved_block_never_answers_as_an_allow(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir, patch.dict(os.environ, {"CODEX_HOME": str(Path(raw_dir) / "codex")}):
+            server = CodexAppServer(["codex"], cwd=Path(raw_dir) / "tag", timeout=1)
+            self.assertTrue(server._save_rule({"kind": "command", "words": ["rm"], "decision": "block"}))
+            self.assertTrue(server._save_rule({"kind": "command", "words": ["git"], "decision": "allow"}))
+            self.assertEqual([["git"]], server.saved_prefixes)
+            self.assertIn('decision="forbidden"', agent_permissions.codex_tag_file(server.cwd).read_text(encoding="utf-8"))
 
     def test_permission_approval_grants_only_requested_permissions_for_turn(self) -> None:
         requested = {"network": {"enabled": True}}
@@ -556,8 +624,15 @@ for line in sys.stdin:
         send({"id": m["id"], "result": {"thread": {"id": "fresh"}}})
     elif method == "thread/name/set":
         send({"id": m["id"], "result": {}})
+    elif method == "skills/extraRoots/set":
+        if mode == "old-codex":
+            send({"id": m["id"], "error": {"code": -32601, "message": "method not found"}})
+        else:
+            send({"id": m["id"], "result": {}})
     elif method == "config/read":
-        send({"id": m["id"], "result": {"config": {}}})
+        layers = [{"name": {"type": "project", "dotCodexFolder": m["params"].get("cwd", "") + "/.codex"},
+                   "disabledReason": None if mode == "trusted" else "add it as a trusted project"}]
+        send({"id": m["id"], "result": {"config": {}, "layers": layers}})
     elif method == "turn/start":
         tid = m["params"]["threadId"]
         send({"id": m["id"], "result": {"turn": {"id": "turn-1"}}})
@@ -594,6 +669,19 @@ for line in sys.stdin:
         self.assertEqual("Standing rules", resume["params"]["developerInstructions"])
         self.assertEqual("Only new messages", turn["params"]["input"][0]["text"])
 
+    def test_runtime_skill_roots_are_registered_before_the_thread_starts(self) -> None:
+        roots = [Path("/tag/release/runtime-skills/skills")]
+        _result, _events, requests = self.run_server("ok", skill_roots=roots)
+        methods = [request["method"] for request in requests]
+        extra = next(request for request in requests if request["method"] == "skills/extraRoots/set")
+        self.assertEqual({"extraRoots": [str(roots[0])]}, extra["params"])
+        self.assertLess(methods.index("skills/extraRoots/set"), methods.index("thread/start"))
+        # An older Codex without the method still answers; the instructions name each skill's file.
+        result, _events, _requests = self.run_server("old-codex", skill_roots=roots)
+        self.assertEqual(("completed", ""), result)
+        _result, _events, requests = self.run_server("ok")
+        self.assertNotIn("skills/extraRoots/set", [request["method"] for request in requests])
+
     def test_fresh_thread_gets_the_full_prompt_after_a_failed_resume(self) -> None:
         _result, _events, requests = self.run_server_with("missing", resume_thread_id="gone")
         start = next(request for request in requests if request["method"] == "thread/start")
@@ -613,6 +701,75 @@ for line in sys.stdin:
                                 instructions="Standing rules", continued_prompt="Only new messages")
             requests = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
         return result, events, requests
+
+    def test_threads_follow_the_tags_codex_permissions(self) -> None:
+        _result, _events, requests = self.run_server("ok")
+        start = next(request for request in requests if request["method"] == "thread/start")
+        self.assertEqual(("workspace-write", "auto_review"), (start["params"]["sandbox"], start["params"]["approvalsReviewer"]))
+        # Unset, Codex's own approval policy applies, as before.
+        self.assertNotIn("approvalPolicy", start["params"])
+        with patch.dict(os.environ, {"OPENTAG_CODEX_SANDBOX": "danger-full-access", "OPENTAG_CODEX_APPROVALS": "never"}):
+            _result, _events, requests = self.run_server("ok", resume_thread_id="saved")
+        resume = next(request for request in requests if request["method"] == "thread/resume")
+        self.assertEqual(("danger-full-access", "never", "user"),
+                         (resume["params"]["sandbox"], resume["params"]["approvalPolicy"], resume["params"]["approvalsReviewer"]))
+        with patch.dict(os.environ, {"OPENTAG_CODEX_SANDBOX": "read-only", "OPENTAG_CODEX_APPROVALS": "untrusted",
+                                     "OPENTAG_CODEX_REVIEWER": "user"}):
+            _result, _events, requests = self.run_server("ok")
+        start = next(request for request in requests if request["method"] == "thread/start")
+        self.assertEqual(("read-only", "user", "untrusted"),
+                         (start["params"]["sandbox"], start["params"]["approvalsReviewer"], start["params"]["approvalPolicy"]))
+        # Reply summaries stay read-only whatever the Tag may do.
+        with patch.dict(os.environ, {"OPENTAG_CODEX_SANDBOX": "danger-full-access"}):
+            _result, _events, requests = self.run_server("ok", text_only_instructions="Summarize.")
+        start = next(request for request in requests if request["method"] == "thread/start")
+        self.assertEqual(("read-only", "never"), (start["params"]["sandbox"], start["params"]["approvalPolicy"]))
+
+    def test_a_codex_that_skips_the_tags_block_rules_does_not_run(self) -> None:
+        def run(mode: str, rule: str) -> tuple[object, list[dict]]:
+            with tempfile.TemporaryDirectory() as raw:
+                root = Path(raw)
+                script, log = root / "server.py", root / "requests.jsonl"
+                script.write_text(self.FAKE, encoding="utf-8")
+                if rule:
+                    agent_permissions.add_rule("codex", root, rule, "git push")
+                server = CodexAppServer([sys.executable, "-u", str(script), mode, str(log)], cwd=root,
+                                        timeout=5, max_timeout=10)
+                try:
+                    outcome: object = server.run("Next question", model=None, reasoning_effort=None, emit=lambda e: None)
+                except CodexAppServerError as error:
+                    outcome = str(error)
+                return outcome, [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+
+        with patch("scripts.codex_agent_backend.owns_workspace", return_value=True):
+            outcome, requests = run("old", "block")
+        self.assertIn("doesn't read a Tag's own rules", str(outcome))
+        self.assertNotIn("thread/start", [r["method"] for r in requests])
+        # In a folder of the operator's, updating Codex or using Tag.app can't help, so the message says what can.
+        with patch("scripts.codex_agent_backend.owns_workspace", return_value=False):
+            outcome, requests = run("old", "block")
+        self.assertIn("Trust that folder in your own Codex config", str(outcome))
+        self.assertNotIn("Tag.app", str(outcome))
+        self.assertNotIn("thread/start", [r["method"] for r in requests])
+        outcome, requests = run("trusted", "block")
+        self.assertEqual(("completed", ""), outcome)
+        # Allow rules that aren't read only mean more questions, so they need no check.
+        outcome, requests = run("old", "allow")
+        self.assertEqual(("completed", ""), outcome)
+        self.assertNotIn("config/read", [r["method"] for r in requests])
+
+    def test_asks_for_reasoning_summaries_unless_the_tag_keeps_them_private(self) -> None:
+        _result, _events, requests = self.run_server("ok")
+        turn = next(request for request in requests if request["method"] == "turn/start")
+        self.assertEqual("auto", turn["params"]["summary"])
+        with patch.dict(os.environ, {"OPENTAG_SHOW_THINKING": "0"}):
+            _result, _events, requests = self.run_server("ok")
+        turn = next(request for request in requests if request["method"] == "turn/start")
+        # An explicit override, since an earlier "auto" stays on a resumed thread.
+        self.assertEqual("none", turn["params"]["summary"])
+        _result, _events, requests = self.run_server("ok", text_only_instructions="Summarize.")
+        turn = next(request for request in requests if request["method"] == "turn/start")
+        self.assertEqual("none", turn["params"]["summary"])
 
     def test_missing_conversation_is_replaced_by_a_saved_fresh_one(self) -> None:
         result, events, requests = self.run_server("missing", resume_thread_id="gone")

@@ -144,6 +144,59 @@ class TagControlTests(unittest.TestCase):
         self.assertIn("Settings closed", output.getvalue())
         self.assertEqual(self.path.read_bytes(), original)
 
+    def run_search_model_menu(self, picks, key="sk-test-synthetic"):
+        runs = []
+
+        def fake_run(command, **kwargs):
+            runs.append((command, kwargs))
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+        with patch.object(tag_control.ui, "keyboard_available", return_value=True), patch.object(
+            tag_control.ui, "choose", side_effect=picks
+        ), patch.object(tag_control.getpass, "getpass", return_value=key), patch.object(
+            tag_control.subprocess, "run", side_effect=fake_run
+        ), redirect_stdout(StringIO()) as output:
+            tag_control.settings_menu(self.home)
+        return runs, output.getvalue()
+
+    def test_settings_can_point_memory_at_a_custom_endpoint_without_putting_the_key_in_the_command(self):
+        self.complete()
+        # Workspace and memory → Search model → Custom → confirm → Back
+        with patch("builtins.input", side_effect=["https://api.example.invalid/v1", "embed-x"]):
+            runs, output = self.run_search_model_menu([1, 4, 1, 0, 6])
+        self.assertEqual(len(runs), 1)
+        command, kwargs = runs[0]
+        self.assertEqual(command[command.index("embedding"):],
+                         ["embedding", "custom", "--base-url", "https://api.example.invalid/v1",
+                          "--embedding-model", "embed-x", "--stdin", "--json"])
+        self.assertNotIn("sk-test-synthetic", " ".join(command))
+        self.assertEqual(kwargs["input"], "sk-test-synthetic\n")
+        self.assertNotIn("sk-test-synthetic", output)
+
+    def test_settings_can_switch_memory_back_to_the_default(self):
+        self.complete()
+        runs, _ = self.run_search_model_menu([1, 4, 0, 0, 6])
+        command, kwargs = runs[0]
+        self.assertEqual(command[command.index("embedding"):], ["embedding", "local", "--json"])
+        self.assertIsNone(kwargs["input"])
+
+    def test_settings_label_shows_a_running_model_download(self):
+        shared = self.home / "shared/mfs"
+        with patch.dict(os.environ, {"TAG_HOME": str(self.home)}):
+            self.assertEqual(tag_control._search_model_label(), "Default")
+            tag_control.tag_model_download.write(shared, "downloading", model="bge-m3", done=1, total=4, pid=os.getpid())
+            self.assertEqual(tag_control._search_model_label(), "Default (downloading 25%, search off)")
+            tag_control.tag_model_download.write(shared, "ready", model="bge-m3", done=4, total=4)
+            self.assertEqual(tag_control._search_model_label(), "Default")
+
+    def test_settings_search_model_cancel_changes_nothing(self):
+        self.complete()
+        runs, _ = self.run_search_model_menu([1, 4, 2, 6])
+        self.assertEqual(runs, [])
+        with patch("builtins.input", side_effect=["https://api.example.invalid/v1", "embed-x"]):
+            runs, _ = self.run_search_model_menu([1, 4, 1, 1, 6])
+        self.assertEqual(runs, [])
+
     def test_settings_plain_number_navigation_still_works(self):
         self.complete()
         with patch.object(tag_control.ui, "keyboard_available", return_value=False), patch(

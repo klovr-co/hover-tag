@@ -6,6 +6,7 @@ import re
 import tempfile
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from scripts import tag_activity
@@ -36,6 +37,38 @@ class ActivityStoreTests(unittest.TestCase):
             store.save_reply(run, "Created the launch checklist.")
             self.assertEqual("Created the launch checklist.", tag_activity.recent_activity(store.root)[0]["reply_preview"])
             self.assertEqual("Created the launch checklist.", ActivityStore(store.root).get(run)["reply_preview"])
+
+    def test_activity_now_lists_this_bridges_running_runs_and_the_last_outcome(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            store = ActivityStore(Path(raw) / "activity")
+            now = lambda: json.loads(store.now_path.read_text(encoding="utf-8"))
+            store.publish_now()
+            self.assertEqual(([], None), (now()["running"], now()["last"]))
+            first = store.create(team="T1", channel="C1", thread_ts="1.0", request_ts="1.0", requester="U1")
+            second = store.create(team="T1", channel="C1", thread_ts="1.0", request_ts="2.0", requester="U1")
+            self.assertEqual(Path(raw) / "activity-now.json", store.now_path)
+            self.assertEqual([first, second], [run["run_id"] for run in now()["running"]])
+            # Runs in one Slack thread share the key apps use to show Tags working together.
+            self.assertEqual(tag_activity.recent_activity(store.root)[0]["thread"], now()["running"][0]["thread"])
+            store.finish(first, "completed")
+            self.assertEqual([second], [run["run_id"] for run in now()["running"]])
+            self.assertEqual((first, "completed"), (now()["last"]["run_id"], now()["last"]["outcome"]))
+            # A new bridge never inherits a crashed bridge's runs.
+            ActivityStore(store.root).publish_now()
+            self.assertEqual([], now()["running"])
+
+    def test_a_finished_run_leaves_activity_now_even_when_its_record_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            store = ActivityStore(Path(raw) / "activity")
+            now = lambda: json.loads(store.now_path.read_text(encoding="utf-8"))
+            unwritable = store.create(team="T1", channel="C1", thread_ts="1.0", request_ts="1.0", requester="U1")
+            missing = store.create(team="T1", channel="C1", thread_ts="1.0", request_ts="2.0", requester="U1")
+            with mock.patch.object(store, "_write", side_effect=OSError("disk full")), self.assertRaises(OSError):
+                store.finish(unwritable, "completed")
+            self.assertEqual([missing], [run["run_id"] for run in now()["running"]])
+            (store.root / f"{missing}.json").unlink()
+            store.finish(missing, "completed")
+            self.assertEqual([], now()["running"])
 
     def test_model_metadata_survives_reopen_for_both_backends(self):
         for backend, model in (("codex", "gpt-test"), ("claude", "claude-test")):
@@ -272,6 +305,16 @@ class RecentActivityTests(unittest.TestCase):
         self.assertEqual(50, len(items))
         self.assertEqual("2026-09-30T02:30:00+00:00", items[0]["at"])
         self.assertEqual(sorted((item["at"] for item in items), reverse=True), [item["at"] for item in items])
+
+
+    def test_rows_for_given_runs_match_the_feed_and_name_the_workspace(self) -> None:
+        kept = self.record("C0LAUNCH", "completed", "2026-01-01T10:00:00+00:00", "2026-01-01T10:01:00+00:00")
+        from scripts.tag_activity import activity_for_runs, recent_activity
+        found = activity_for_runs(self.root, [kept, "0" * 32, "../../etc/passwd", None])  # type: ignore[list-item]
+        self.assertEqual(list(found), [kept])
+        self.assertEqual(found[kept]["team"], "T1")
+        feed = {item["run_id"]: item for item in recent_activity(self.root)}
+        self.assertEqual({k: v for k, v in found[kept].items() if k != "team"}, feed[kept])
 
 
 if __name__ == "__main__":

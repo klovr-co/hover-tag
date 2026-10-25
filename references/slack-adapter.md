@@ -108,6 +108,7 @@ Profile-picture selection and upload require Slack CLI 4.7 or newer.
    - `users:read` — verify app identity and caller visibility for cross-channel search.
 5. Open **Event Subscriptions** and subscribe to Bot Events:
    - `app_mention`
+   - `member_joined_channel` — notice an invitation at once instead of at the next one-minute membership check. Tag still checks every minute, so an app without it works, just slower.
    - `message.im`
    - `app_home_opened`
    - `agent_session_stopped`
@@ -168,6 +169,17 @@ mfs add postgres://prod             --config ./pg.toml        # rows as objects
 export MFS_ALLOWED_SCOPES="slack://team-memory,github://your-org/your-repo,linear://your-workspace,file://local/path/to/workspace"
 ```
 
+A Slack request reaches only its own channel's Slack history. Other sources in
+`MFS_ALLOWED_SCOPES` reach it only through `MFS_CHANNEL_SCOPES`, a JSON object
+from channel ID to the extra scopes that channel may search. Tag keeps only the
+scopes that fall inside `MFS_ALLOWED_SCOPES`, and ignores the whole map if it is
+not valid (bad JSON, a key that is not a channel ID, or a URI with a comma):
+
+```bash
+tag config set MFS_CHANNEL_SCOPES '{"C0123ABCD": ["file://local/path/to/workspace"]}'
+tag restart
+```
+
 Do not hand-write Tag's primary Slack connector TOML; setup creates it with
 `channel_ids` and a bounded history window. For other connector types, use the
 **mfs-ingest** skill and `docs/connectors/`.
@@ -203,7 +215,9 @@ setting before restarting Tag.
 Direct-message invocation is enabled by default for the same authorized users,
 who can invoke Tag without an `@mention` from Tag's Messages tab. The channel
 allowlist does not apply to DMs, but `SLACK_ALLOWED_USER_IDS` still does. Set
-`OPENTAG_SLACK_DM_ENABLED=0` to disable DM invocation. Each top-level DM starts a
+`OPENTAG_SLACK_DM_ENABLED=0` to disable DM invocation. Set
+`OPENTAG_SHOW_THINKING=0` to keep thinking summaries out of Agent
+activity and the Activity record. Each top-level DM starts a
 fresh backend task, while replies reuse only that DM thread's bounded context
 (up to 30 messages).
 
@@ -211,7 +225,20 @@ fresh backend task, while replies reuse only that DM thread's bounded context
 requests from, as comma-separated `Name=MEMBERID` pairs that use each Tag's bot
 member ID, for example `Research Tag=U0123ABCD,Writer Tag=U0456EFGH`. It is
 empty by default, which turns handoffs off. Mentions from bots that are not
-listed are ignored. See `references/handoffs.md`.
+listed here or in `SLACK_ALLOWED_BOT_IDS` are ignored. See `references/handoffs.md`.
+
+`SLACK_ALLOWED_BOT_IDS` lists other apps' bots that may invoke Tag by mention,
+as comma-separated bot IDs (`B…`) or bot member IDs (`U…`/`W…`). It is empty by
+default. A listed bot is authorized without being in `SLACK_ALLOWED_USER_IDS`.
+Its requests decline every backend approval prompt and never start a handoff. A failed
+bot request gets a fixed, detail-free reply in the thread, not a private notice.
+Tag's own bot is never accepted, even when listed.
+
+`OPENTAG_TEST_APP_IDS` is for automated live tests of Tag itself, not for
+normal use. It lists Slack app IDs whose user-token posts Tag answers as the
+person who posted them (Slack marks those posts with the app's bot id). The
+person must still be in `SLACK_ALLOWED_USER_IDS`. It is empty by default and
+`tag config` does not show it; set it by editing the Tag's `settings.json`.
 
 The bridge does not need a model API key. The selected CLI backend handles model
 auth and tool execution.
@@ -318,7 +345,8 @@ again before storage. It stores this bounded record under
 the instance's private `state/activity/` directory. Records are available for
 30 days; later requests prune expired records and keep at most 200 runs, with
 up to 60 events per run. It does not store or display raw App Server items,
-prompts, or private reasoning. An item marked complete
+prompts, or raw reasoning. Thinking steps store the model's bounded thinking
+summary as their result unless `OPENTAG_SHOW_THINKING=0`. An item marked complete
 means the tool call ended; it does not verify that an external action succeeded.
 App Server can report an outer agent-tool step without exposing connector calls
 made inside that step, so this view is an activity summary rather than a

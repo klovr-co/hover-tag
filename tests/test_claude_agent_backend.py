@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-from scripts import claude_agent_backend
+from scripts import agent_permissions, claude_agent_backend
 from scripts.claude_agent_backend import (
     APPROVAL_LABEL_COMMAND,
     APPROVAL_LABEL_TOOL,
@@ -125,6 +125,53 @@ class ClaudeEventMapperTests(unittest.TestCase):
             events[-2],
         )
         self.assertEqual({"type": "turn_complete", "status": "completed"}, events[-1])
+
+    def thinking_stream(self, message_id: str, *chunks: str, stop: bool = True) -> list[StreamEvent]:
+        events = [StreamEvent({"type": "message_start", "message": {"id": message_id}}),
+                  StreamEvent({"type": "content_block_start", "index": 0,
+                               "content_block": {"type": "thinking", "thinking": ""}})]
+        events.extend(StreamEvent({"type": "content_block_delta", "index": 0,
+                                   "delta": {"type": "thinking_delta", "thinking": chunk}}) for chunk in chunks)
+        if stop:
+            events.append(StreamEvent({"type": "content_block_stop", "index": 0}))
+        return events
+
+    def test_thinking_summary_becomes_a_completed_activity(self) -> None:
+        mapper = ClaudeEventMapper(thinking=True)
+        events = [event for message in [
+            *self.thinking_stream("m1", "Owners are under Roles; ", "read that first."),
+            *stream("m1", "Done.", stop_reason="end_turn"),
+            ResultMessage(result="Done."),
+        ] for event in mapper.map(claude_agent_backend.message_payload(message))]
+
+        activity = [event for event in events if event["type"].startswith("activity_")]
+        self.assertEqual([
+            {"type": "activity_start", "activity_id": "m1:thinking:0", "label": "Thinking…",
+             "wait_label": "Still thinking…", "details": {"tool": "Thinking"}},
+            {"type": "activity_complete", "activity_id": "m1:thinking:0", "label": "Thinking…",
+             "status": "completed", "details": {"output": "Owners are under Roles; read that first."}},
+        ], activity)
+        self.assertNotIn("Owners", json.dumps([e for e in events if e["type"].startswith("message_")]))
+
+    def test_thinking_stays_private_when_the_tag_does_not_share_it(self) -> None:
+        events = mapped([*self.thinking_stream("m1", "private plan"), ResultMessage(result="ok")])
+        self.assertNotIn("private plan", json.dumps(events))
+        self.assertFalse([event for event in events if event["type"].startswith("activity_")])
+
+    def test_empty_thinking_completes_without_details(self) -> None:
+        mapper = ClaudeEventMapper(thinking=True)
+        events = [event for message in self.thinking_stream("m1")
+                  for event in mapper.map(claude_agent_backend.message_payload(message))]
+        self.assertEqual({}, events[-1]["details"])
+
+    def test_interrupted_thinking_is_closed(self) -> None:
+        mapper = ClaudeEventMapper(thinking=True)
+        for message in self.thinking_stream("m1", "half a thought", stop=False):
+            mapper.map(claude_agent_backend.message_payload(message))
+        events = mapper.interrupted()
+        self.assertEqual("interrupted", events[0]["status"])
+        self.assertEqual({"output": "half a thought"}, events[0]["details"])
+        self.assertEqual({"type": "turn_complete", "status": "interrupted"}, events[-1])
 
     def test_waits_for_background_agents_before_completing(self) -> None:
         events = mapped([
@@ -240,6 +287,16 @@ class ClaudeEventMapperTests(unittest.TestCase):
         self.assertEqual({"type": "turn_complete", "status": "failed",
                           "text": "API Error: 429 rate limit", "code": "http_429"}, events[-1])
 
+    def test_spend_and_turn_limits_keep_their_subtype_as_the_code(self) -> None:
+        for subtype in ("error_max_budget_usd", "error_max_turns"):
+            with self.subTest(subtype=subtype):
+                events = mapped([ResultMessage(subtype=subtype, is_error=True, num_turns=3,
+                                               errors=["Reached the limit"])])
+                self.assertEqual({"type": "turn_complete", "status": "failed", "text": "Reached the limit",
+                                  "code": subtype}, events[-1])
+        events = mapped([ResultMessage(subtype="error_during_execution", is_error=True, num_turns=3, errors=["boom"])])
+        self.assertNotIn("code", events[-1])
+
 
 def replace_parent(event: StreamEvent) -> StreamEvent:
     event.parent_tool_use_id = "task"
@@ -339,7 +396,7 @@ class ClaudeAgentRunTests(unittest.TestCase):
                                                 "claude_agent_sdk.types": FAKE_SDK_TYPES})
         patcher.start()
         self.addCleanup(patcher.stop)
-        env = patch.dict(os.environ, {"OPENTAG_CLAUDE_CLI": "/bin/claude"}, clear=False)
+        env = patch.dict(os.environ, {"OPENTAG_CLAUDE_CLI": "/bin/claude", "TAG_HOME": str(self.root / "install")}, clear=False)
         env.start()
         self.addCleanup(env.stop)
         self.addCleanup(self.directory.cleanup)
@@ -364,7 +421,9 @@ class ClaudeAgentRunTests(unittest.TestCase):
         options = FakeClient.instances[0].options
         self.assertEqual("completed", status)
         self.assertEqual(("opus", "xhigh", "auto"), (options.model, options.effort, options.permission_mode))
-        self.assertEqual({"fastMode": True}, json.loads(options.settings))
+        # Claude never edits the Tag's own rules; you change them in Slack or Tag.app.
+        self.assertEqual({"permissions": {"deny": list(agent_permissions.CLAUDE_KEEPS_OUT)}, "fastMode": True},
+                         json.loads(options.settings))
         self.assertEqual([str(self.root / "skill")], options.add_dirs)
         self.assertEqual("/bin/claude", options.cli_path)
         self.assertTrue(options.include_partial_messages)
@@ -385,6 +444,16 @@ class ClaudeAgentRunTests(unittest.TestCase):
         self.run_agent(script, model=settings.model, reasoning_effort=settings.reasoning_effort)
         self.assertEqual(("opus", "max"), (FakeClient.instances[0].options.model, FakeClient.instances[0].options.effort))
 
+    def test_requests_thinking_summaries_unless_the_tag_keeps_them_private(self) -> None:
+        async def script(_client):
+            yield ResultMessage(result="ok")
+
+        self.run_agent(script)
+        self.assertEqual({"thinking-display": "summarized"}, FakeClient.instances[0].options.extra_args)
+        with patch.dict(os.environ, {"OPENTAG_SHOW_THINKING": "0"}):
+            self.run_agent(script)
+        self.assertFalse(hasattr(FakeClient.instances[1].options, "extra_args"))
+
     def test_claude_auto_memory_is_disabled_for_tag_runs(self) -> None:
         async def script(_client):
             yield ResultMessage(result="ok")
@@ -398,7 +467,7 @@ class ClaudeAgentRunTests(unittest.TestCase):
 
         self.run_agent(script, model="default")
         self.assertFalse(hasattr(FakeClient.instances[0].options, "model"))
-        self.assertFalse(hasattr(FakeClient.instances[0].options, "settings"))
+        self.assertNotIn("fastMode", json.loads(FakeClient.instances[0].options.settings))
 
     def test_workspace_mcp_config_is_layered(self) -> None:
         (self.root / ".mcp.json").write_text('{"mcpServers": {}}', encoding="utf-8")
@@ -654,6 +723,27 @@ class ClaudeAgentRunTests(unittest.TestCase):
         self.assertEqual(["All done."], answers)
         self.assertTrue(FakeClient.instances[0].disconnected)
 
+    def test_resume_after_a_stop_skips_the_stopped_tasks_empty_turn(self) -> None:
+        # The order Claude Code sends when a stopped background command's
+        # notification is still queued in the resumed conversation.
+        async def script(_client):
+            yield TaskNotificationMessage("shell", status="stopped")
+            yield SystemMessage("init", {"session_id": "s-1"})
+            yield ResultMessage(result="", num_turns=0, session_id="s-1")
+            yield SystemMessage("init", {"session_id": "s-1"})
+            for event in stream("m1", "4", stop_reason="end_turn"):
+                yield event
+            yield ResultMessage(result="4", session_id="s-1")
+
+        FakeClient.script = script
+        events: list[dict[str, Any]] = []
+        agent = ClaudeAgentRun(cwd=self.root, timeout=30, resume_session_id="s-1")
+        result = agent.run("prompt", model=None, reasoning_effort=None, emit=events.append)
+
+        self.assertEqual(("completed", ""), result)
+        self.assertEqual(["4"], [event["text"] for event in events if event["type"] == "message_complete"])
+        self.assertEqual(1, sum(event["type"] == "turn_complete" for event in events))
+
     def test_resumes_the_slack_threads_session_and_reports_it(self) -> None:
         async def script(_client):
             yield SystemMessage("init", {"session_id": "s-1"})
@@ -687,6 +777,24 @@ class ClaudeAgentRunTests(unittest.TestCase):
 
         self.assertEqual([{"type": "session", "session_id": "new"}],
                          [event for event in events if event["type"] == "session"])
+
+    def test_runtime_skills_load_as_a_plugin_whose_skills_need_no_approval(self) -> None:
+        plugin = self.root / "runtime-skills"
+        for name in ("tag-files", "tag-memory"):
+            (plugin / "skills" / name).mkdir(parents=True)
+            (plugin / "skills" / name / "SKILL.md").write_text("---\nname: x\n---\n", encoding="utf-8")
+        (plugin / ".claude-plugin").mkdir()
+        (plugin / ".claude-plugin/plugin.json").write_text('{"name": "tag"}', encoding="utf-8")
+
+        async def script(_client):
+            yield ResultMessage(result="ok")
+
+        FakeClient.script = script
+        ClaudeAgentRun(cwd=self.root, timeout=30, plugin_dirs=[plugin]).run(
+            "prompt", model=None, reasoning_effort=None, emit=lambda _event: None)
+        options = FakeClient.instances[0].options
+        self.assertEqual([{"type": "local", "path": str(plugin)}], options.plugins)
+        self.assertEqual(["Skill(tag:tag-files)", "Skill(tag:tag-memory)"], options.allowed_tools)
 
     def test_standing_instructions_are_the_system_prompt_and_resumes_get_new_messages(self) -> None:
         async def script(client):
@@ -821,6 +929,39 @@ class ClaudeAgentRunTests(unittest.TestCase):
         with patch.dict(os.environ, {"OPENTAG_CLAUDE_PERMISSION_MODE": "plan"}):
             with self.assertRaisesRegex(ValueError, "OPENTAG_CLAUDE_PERMISSION_MODE"):
                 claude_agent_backend.claude_permission_mode()
+        for mode in ("default", "acceptEdits", "dontAsk", "bypassPermissions"):
+            with patch.dict(os.environ, {"OPENTAG_CLAUDE_PERMISSION_MODE": mode}):
+                self.assertEqual(mode, claude_agent_backend.claude_permission_mode())
+
+    def test_rules_for_all_tags_reach_the_sdk_as_extra_settings(self) -> None:
+        async def script(_client):
+            yield ResultMessage(result="ok")
+
+        agent_permissions.add_rule("claude", None, "block", "Bash(git push:*)")
+        self.run_agent(script, fast_mode=True)
+        self.assertEqual({"permissions": {"deny": ["Bash(git push:*)", *agent_permissions.CLAUDE_KEEPS_OUT]}, "fastMode": True},
+                         json.loads(FakeClient.instances[-1].options.settings))
+        agent_permissions.claude_all_tags_file().write_text("{broken", encoding="utf-8")
+        with self.assertRaisesRegex(claude_agent_backend.ClaudeAgentError, "Couldn't read"):
+            self.run_agent(script)  # Not without the blocks every Tag must follow.
+
+    def test_a_tags_claude_rules_it_cant_read_stop_the_run(self) -> None:
+        async def script(_client):
+            yield ResultMessage(result="ok")
+
+        path = agent_permissions.claude_tag_file(self.root)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{"permissions": {"deny": ["Bash(git push:*)"]', encoding="utf-8")
+        with self.assertRaisesRegex(claude_agent_backend.ClaudeAgentError, "Couldn't read"):
+            self.run_agent(script)  # Claude would skip that file, and its blocks.
+
+    def test_the_tags_claude_mode_reaches_the_sdk(self) -> None:
+        async def script(_client):
+            yield ResultMessage(result="ok")
+
+        with patch.dict(os.environ, {"OPENTAG_CLAUDE_PERMISSION_MODE": "acceptEdits"}):
+            self.run_agent(script)
+        self.assertEqual("acceptEdits", FakeClient.instances[-1].options.permission_mode)
 
 
 class CatalogTests(unittest.TestCase):

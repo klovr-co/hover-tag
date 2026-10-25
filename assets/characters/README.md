@@ -55,9 +55,8 @@ Precise, quietly confident, with a little dry wit.
 - Future variations: evaluating a brief, pointing out a missing detail, a subtle nod.
 - Keep: white/silver hair, ivory silhouette, and natural warm skin tones.
 - Pair with: **Iris's Tag**, always Metal white/silver.
-- Asset caveat: the current Metal Tag bitmap reads grey. White/silver is the
-  intended palette; this reference records the current asset, not approval of
-  its brightness. Any recolor should be reviewed before replacing it.
+- Metal Tag palette: cool silver with stronger shine, recoloured from the
+  earlier flat grey so it no longer reads as an offline or disabled state.
 
 ## Rowan · 木 / Wood
 

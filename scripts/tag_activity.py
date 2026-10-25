@@ -1,7 +1,8 @@
 """Bounded, private records of Slack request activity.
 
 Tag stores public activity labels, bounded reply excerpts, and redacted tool-item previews.
-Raw App Server items, prompts, and reasoning never enter this store.
+Raw App Server items, prompts, and raw reasoning never enter this store; bounded thinking
+summaries do when the Tag shares them (OPENTAG_SHOW_THINKING).
 """
 from __future__ import annotations
 
@@ -20,12 +21,14 @@ from typing import Any
 
 try:
     from .agent_models import SUPPORTED_REASONING_EFFORTS
-    from .agent_activity import MCP_SERVICE_NAMES, MCP_TOOL_NAMES, activity_label, mcp_activity_label, token_usage
+    from .agent_activity import (MCP_SERVICE_NAMES, MCP_TOOL_NAMES, THINKING_LABEL, activity_label,
+                                 mcp_activity_label, token_usage)
     from .tag_activity_details import MAX_DETAIL_CHARS, MAX_TOOL_CHARS, sanitize_activity_details, preview
     from .tag_paths import instance_home, restrict_windows_acl
 except ImportError:  # Direct script execution does not create a package context.
     from agent_models import SUPPORTED_REASONING_EFFORTS
-    from agent_activity import MCP_SERVICE_NAMES, MCP_TOOL_NAMES, activity_label, mcp_activity_label, token_usage
+    from agent_activity import (MCP_SERVICE_NAMES, MCP_TOOL_NAMES, THINKING_LABEL, activity_label,
+                                mcp_activity_label, token_usage)
     from tag_activity_details import MAX_DETAIL_CHARS, MAX_TOOL_CHARS, sanitize_activity_details, preview
     from tag_paths import instance_home, restrict_windows_acl
 
@@ -33,6 +36,8 @@ except ImportError:  # Direct script execution does not create a package context
 SCHEMA_VERSION = 1
 RETENTION_SECONDS = 30 * 24 * 60 * 60
 MAX_RECORDS = 200
+# Routine runs keep their own, smaller budget so they never push out people's requests.
+MAX_ROUTINE_RECORDS = 50
 MAX_EVENTS = 60
 MAX_REPLY_PREVIEW = 220
 ACTIVITY_DETAIL_ACTION_ID = "opentag_activity_detail"
@@ -86,6 +91,7 @@ def _public_labels() -> frozenset[str]:
         "python slack_post_message.py", "create-document.py", "unknown-command",
     ))
     labels = {label for item in examples if (label := activity_label(item))}
+    labels.add(THINKING_LABEL)
     for server in (*MCP_SERVICE_NAMES, "unrecognized"):
         for tool in (*MCP_TOOL_NAMES, "unrecognized"):
             labels.add(mcp_activity_label({"server": server, "tool": tool}))
@@ -93,6 +99,27 @@ def _public_labels() -> frozenset[str]:
 
 
 PUBLIC_LABELS = _public_labels()
+
+
+def routine_trigger(value: object) -> dict[str, str] | None:
+    """The routine that started a run, or None for a person's request."""
+    if not isinstance(value, dict) or value.get("type") != "routine":
+        return None
+    routine_id, name = value.get("routine_id"), value.get("name")
+    if not isinstance(routine_id, str) or not re.fullmatch(r"r-[0-9a-f]{10}", routine_id):
+        return None
+    if not isinstance(name, str) or not name.strip():
+        return None
+    kind = value.get("trigger")
+    return {"type": "routine", "routine_id": routine_id, "name": preview(name, limit=80),
+            "trigger": kind if kind in {"schedule", "catch-up", "run-now", "retry"} else "schedule"}
+
+
+def _is_routine_record(path: Path) -> bool:
+    try:
+        return routine_trigger(json.loads(path.read_text(encoding="utf-8")).get("trigger")) is not None
+    except (OSError, ValueError, AttributeError):
+        return False
 
 
 def _timestamp() -> str:
@@ -119,12 +146,39 @@ def reply_preview(answer: object) -> str:
     return clipped.rstrip() + "…"
 
 
+NOW_FILE = "activity-now.json"
+
+
 class ActivityStore:
-    """One JSON file per run, with atomic updates and bounded retention."""
+    """One JSON file per run, with atomic updates and bounded retention.
+
+    Beside the runs, ``activity-now.json`` says what this bridge is doing right
+    now, so Tag.app can animate a Tag while it works without running a command.
+    It lists only runs this process started, so a crashed bridge leaves none behind.
+    """
 
     def __init__(self, root: Path | None = None) -> None:
         self.root = root or instance_home() / "state/activity"
         self.lock = threading.RLock()
+        self.live: dict[str, dict[str, str]] = {}
+        self.last: dict[str, str] | None = None
+
+    @property
+    def now_path(self) -> Path:
+        return self.root.parent / NOW_FILE
+
+    def publish_now(self) -> None:
+        """Replace activity-now.json; a failure never affects the run itself."""
+        with self.lock:
+            state = {"schema_version": SCHEMA_VERSION, "updated_at": _timestamp(),
+                     "running": sorted(self.live.values(), key=lambda run: run["started_at"]), "last": self.last}
+            try:
+                self.root.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                temporary = self.root.parent / f".{NOW_FILE}.{uuid.uuid4().hex}.tmp"
+                temporary.write_text(json.dumps(state, separators=(",", ":")), encoding="utf-8")
+                os.replace(temporary, self.now_path)
+            except OSError:
+                pass
 
     def _path(self, run_id: str) -> Path | None:
         return self.root / f"{run_id}.json" if RUN_ID_RE.fullmatch(run_id) else None
@@ -147,12 +201,18 @@ class ActivityStore:
     def _prune(self) -> None:
         cutoff = time.time() - RETENTION_SECONDS
         files = sorted(self.root.glob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
-        for index, path in enumerate(files):
-            if index >= MAX_RECORDS or path.stat().st_mtime < cutoff:
+        kept = {False: 0, True: 0}
+        for path in files:
+            routine = _is_routine_record(path)
+            limit = MAX_ROUTINE_RECORDS if routine else MAX_RECORDS
+            if kept[routine] >= limit or path.stat().st_mtime < cutoff:
                 path.unlink(missing_ok=True)
+            else:
+                kept[routine] += 1
 
     def create(self, *, team: str, channel: str, thread_ts: str,
-               request_ts: str, requester: str, reasoning_effort: str | None = None) -> str:
+               request_ts: str, requester: str, reasoning_effort: str | None = None,
+               trigger: dict[str, str] | None = None) -> str:
         run_id = uuid.uuid4().hex
         record = {
             "schema_version": SCHEMA_VERSION,
@@ -170,10 +230,24 @@ class ActivityStore:
         }
         if reasoning_effort in SUPPORTED_REASONING_EFFORTS:
             record["reasoning_effort"] = reasoning_effort
+        if (clean := routine_trigger(trigger)) is not None:
+            record["trigger"] = clean
         with self.lock:
             self._write(record)
             self._prune()
+            self.live[run_id] = {"run_id": run_id, "thread": thread_id(record), "started_at": record["started_at"]}
+            self.publish_now()
         return run_id
+
+    def set_thread(self, run_id: str, thread_ts: str) -> None:
+        """A routine run gets its Slack thread only once it has something to post."""
+        with self.lock:
+            record = self.get(run_id)
+            if record is not None:
+                record["thread_ts"] = thread_ts
+                if not record["request_ts"]:
+                    record["request_ts"] = thread_ts
+                self._write(record)
 
     def get(self, run_id: str) -> dict[str, Any] | None:
         path = self._path(run_id)
@@ -274,16 +348,25 @@ class ActivityStore:
 
     def finish(self, run_id: str, outcome: str) -> None:
         with self.lock:
-            record = self.get(run_id)
-            if record is None or record["outcome"] != "running":
-                return
-            record["outcome"] = outcome if outcome in OUTCOMES - {"running"} else "failed"
-            record["finished_at"] = _timestamp()
-            for event in record["events"]:
-                if event["status"] == "running":
-                    event["status"] = "interrupted" if outcome == "interrupted" else "unknown"
-                    event["finished_at"] = record["finished_at"]
-            self._write(record)
+            # The run leaves activity-now.json even when its record is missing or can't be
+            # written, so Tag.app never shows it working forever.
+            was_live = self.live.pop(run_id, None) is not None
+            try:
+                record = self.get(run_id)
+                if record is None or record["outcome"] != "running":
+                    return
+                record["outcome"] = outcome if outcome in OUTCOMES - {"running"} else "failed"
+                record["finished_at"] = _timestamp()
+                for event in record["events"]:
+                    if event["status"] == "running":
+                        event["status"] = "interrupted" if outcome == "interrupted" else "unknown"
+                        event["finished_at"] = record["finished_at"]
+                self.last = {"run_id": run_id, "thread": thread_id(record),
+                             "outcome": record["outcome"], "at": record["finished_at"]}
+                self._write(record)
+            finally:
+                if was_live or (self.last or {}).get("run_id") == run_id:
+                    self.publish_now()
 
     def attach_error(self, run_id: str, reference: str) -> None:
         """Keep the exact failure association, including when a Slack request is retried."""
@@ -421,41 +504,63 @@ def recent_activity(root: Path, scopes: str = "", limit: int = MAX_RECENT, *,
             continue
         if hide_errors and record["outcome"] == "failed":
             continue
-        finished = record.get("finished_at")
-        raw = finished if record["outcome"] != "running" and isinstance(finished, str) else record["started_at"]
-        try:
-            at = datetime.fromisoformat(raw)
-        except ValueError:
-            continue
-        at = at.replace(tzinfo=timezone.utc) if at.tzinfo is None else at.astimezone(timezone.utc)
-        record_channel = record["channel"]
-        dm = record_channel.startswith("D")
-        items.append((at, {
-            "run_id": record["run_id"],
-            "thread": thread_id(record),
-            "at": at.isoformat(timespec="seconds"), "kind": RECENT_KINDS[record["outcome"]],
-            "channel": record_channel,
-            "channel_name": None if dm else (cached_names or {}).get(record["team"], {}).get(record_channel, names.get(record_channel)),
-            "dm": dm,
-            **({"step_count": steps} if (steps := len(record["events"]) + record["omitted"]) else {}),
-            **({"duration_seconds": duration} if (duration := generation_seconds(record)) is not None else {}),
-            **({"reasoning_effort": effort} if (effort := record.get("reasoning_effort")) in SUPPORTED_REASONING_EFFORTS else {}),
-            **({"usage": usage} if (usage := token_usage(record.get("usage"))) is not None else {}),
-            **({"artifacts": artifacts} if (artifacts := artifact_records(record.get("artifacts"))) else {}),
-            **({"artifact_thread_url": url} if artifacts and (url := artifact_thread_url(record)) else {}),
-            **{key: record[key] for key in ("backend", "model", "model_name")
-               if isinstance(record.get(key), str)},
-            **({"reply_summary_status": (
-                "unavailable" if record.get("reply_summary_status") == "pending"
-                and _summary_expired(record) else record["reply_summary_status"])}
-               if record.get("reply_summary_status") in {"pending", "unavailable", "ready"} else {}),
-            **({"reply_preview": reply_preview(record["reply_preview"])}
-               if record["outcome"] == "completed" and record.get("reply_preview") else {}),
-            **({"reply_summary": reply_preview(record["reply_summary"])}
-               if record["outcome"] == "completed" and record.get("reply_summary") else {}),
-        }))
+        if (built := activity_item(record, names=names, cached_names=cached_names)) is not None:
+            items.append(built)
     items.sort(key=lambda item: item[0], reverse=True)
     return [item for _, item in items[:limit]]
+
+
+def activity_item(record: dict[str, Any], *, names: dict[str, str] | None = None,
+                  cached_names: dict[str, dict[str, str]] | None = None) -> tuple[datetime, dict[str, Any]] | None:
+    """One validated record as an Activity row, with the time it sorts by."""
+    finished = record.get("finished_at")
+    raw = finished if record["outcome"] != "running" and isinstance(finished, str) else record["started_at"]
+    try:
+        at = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    at = at.replace(tzinfo=timezone.utc) if at.tzinfo is None else at.astimezone(timezone.utc)
+    record_channel = record["channel"]
+    dm = record_channel.startswith("D")
+    return at, {
+        "run_id": record["run_id"],
+        "thread": thread_id(record),
+        "at": at.isoformat(timespec="seconds"), "kind": RECENT_KINDS[record["outcome"]],
+        "channel": record_channel,
+        "channel_name": None if dm else (cached_names or {}).get(record["team"], {}).get(
+            record_channel, (names or {}).get(record_channel)),
+        "dm": dm,
+        **({"step_count": steps} if (steps := len(record["events"]) + record["omitted"]) else {}),
+        **({"duration_seconds": duration} if (duration := generation_seconds(record)) is not None else {}),
+        **({"reasoning_effort": effort} if (effort := record.get("reasoning_effort")) in SUPPORTED_REASONING_EFFORTS else {}),
+        **({"trigger": trigger} if (trigger := routine_trigger(record.get("trigger"))) else {}),
+        **({"usage": usage} if (usage := token_usage(record.get("usage"))) is not None else {}),
+        **({"artifacts": artifacts} if (artifacts := artifact_records(record.get("artifacts"))) else {}),
+        **({"artifact_thread_url": url} if artifacts and (url := artifact_thread_url(record)) else {}),
+        **{key: record[key] for key in ("backend", "model", "model_name")
+           if isinstance(record.get(key), str)},
+        **({"reply_summary_status": (
+            "unavailable" if record.get("reply_summary_status") == "pending"
+            and _summary_expired(record) else record["reply_summary_status"])}
+           if record.get("reply_summary_status") in {"pending", "unavailable", "ready"} else {}),
+        **({"reply_preview": reply_preview(record["reply_preview"])}
+           if record["outcome"] == "completed" and record.get("reply_preview") else {}),
+        **({"reply_summary": reply_preview(record["reply_summary"])}
+           if record["outcome"] == "completed" and record.get("reply_summary") else {}),
+    }
+
+
+def activity_for_runs(root: Path, run_ids: list[str]) -> dict[str, dict[str, Any]]:
+    """Activity rows, with the Slack workspace, for the given runs that are still kept. Never writes."""
+    store = ActivityStore(root)
+    found: dict[str, dict[str, Any]] = {}
+    for run_id in run_ids:
+        if not isinstance(run_id, str) or not RUN_ID_RE.fullmatch(run_id):
+            continue
+        record = store.get(run_id)
+        if record is not None and (built := activity_item(record)) is not None:
+            found[run_id] = {**built[1], "team": record["team"]}
+    return found
 
 
 def activity_details(root: Path, run_id: str, *, report_directory: Path | None = None) -> dict[str, Any] | None:
@@ -596,7 +701,7 @@ def activity_detail_modal(record: dict[str, Any], index: int) -> dict[str, Any]:
         )}})
     blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": (
         "Common credentials are redacted and previews are shortened. "
-        "Private reasoning and prompts are not shown."
+        "Prompts are not shown."
     )}]})
     return {
         "type": "modal",

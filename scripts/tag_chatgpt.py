@@ -345,6 +345,11 @@ class Store:
                 yield
         except RuntimeError as exc:
             raise ChatGPTError(str(exc)) from None
+        try:
+            from . import model_catalog
+        except ImportError:
+            import model_catalog
+        model_catalog.forget("codex")  # The saved models may belong to the previous account.
 
     def assert_stopped(self):
         try:

@@ -1,0 +1,119 @@
+// Routines: the app reads the shared examples and sends the CLI only what changed.
+import { afterEach, describe, expect, it, vi } from "vitest";
+import routineList from "../../../protocol/examples/routine-list.json";
+import routineShow from "../../../protocol/examples/routine-show.json";
+import { cliError, demoRoutines, emptyForm, formArgs, formOf, formProblem, localZone, matchZones, nextWeekly, outcomeGood, outcomeText, routineLine, timeZones, triggerText, type Routine, type RoutineDetail, type RoutineList } from "./routines";
+
+const list = routineList as unknown as RoutineList;
+const routine = list.routines[0] as Routine;
+
+describe("routine examples", () => {
+  it("reads the list and show examples", () => {
+    expect(list.routines.map((r) => r.name)).toEqual(["Weekly PR digest"]);
+    const detail = routineShow as unknown as RoutineDetail;
+    expect(detail.history.map(outcomeText)).toEqual(["Posted", "Missed", "Failed"]);
+    expect(detail.history.map(outcomeGood)).toEqual([true, false, false]);
+    expect(detail.history[0].activity?.trigger?.routine_id).toBe(detail.routine.id);
+    expect(detail.history[2].error_reference).toBe("7C2E91AB");
+    expect(outcomeGood(routine.last_run!)).toBe(true);
+  });
+});
+
+describe("routine line", () => {
+  it("says when it runs next, or why it won't", () => {
+    expect(routineLine(routine, true)).toMatch(/^mon 09:00 · #launch · next /);
+    expect(routineLine(routine, false)).toBe("mon 09:00 · #launch · waits for the Tag to start");
+    expect(routineLine({ ...routine, enabled: false }, true)).toBe("mon 09:00 · #launch · paused");
+    expect(routineLine({ ...routine, enabled: false, paused_reason: "Paused after 5 failed runs in a row." }, true))
+      .toBe("mon 09:00 · #launch · Paused after 5 failed runs in a row.");
+    expect(routineLine({ ...routine, approved: false }, true)).toBe("mon 09:00 · #launch · changed since it was approved");
+    expect(routineLine({ ...routine, running: true }, true)).toBe("mon 09:00 · #launch · running now");
+    expect(outcomeText({ ...routine.last_run!, outcome: "missed", count: 3 })).toBe("Missed 3 runs");
+    expect(outcomeText({ ...routine.last_run!, outcome: "something-new" })).toBe("Needs attention");
+    const stopped = { ...routine.last_run!, outcome: "cancelled", trigger: "retry" };
+    expect([outcomeText(stopped), triggerText(stopped), outcomeGood(stopped)]).toEqual(["Stopped", " · tried again", true]);
+  });
+});
+
+describe("routine form", () => {
+  it("adds with every field and edits only what changed", () => {
+    const form = { ...emptyForm("C0LAUNCH1"), name: " Digest ", prompt: "Summarise.", timezone: "Europe/London" };
+    expect(formArgs("t1", form)).toEqual(["t1", "routine", "add", "--name", "Digest", "--schedule", "weekdays 09:00",
+      "--timezone", "Europe/London", "--channel", "C0LAUNCH1", "--prompt", "Summarise.", "--max-budget-usd", "0.50", "--via", "tag-app", "--json"]);
+    const edited = { ...formOf(routine), schedule: "fri 17:30" };
+    expect(formArgs("t1", edited, routine)).toEqual(["t1", "routine", "edit", routine.id, "--schedule", "fri 17:30", "--via", "tag-app", "--json"]);
+    // Reviewing an unapproved routine and saving it unchanged approves it, so every field is sent.
+    const unapproved = { ...routine, approved: false };
+    expect(formArgs("t1", formOf(unapproved), unapproved)).toEqual(expect.arrayContaining(["--name", routine.name, "--prompt", routine.prompt]));
+  });
+
+  it("asks for what's missing before calling the CLI", () => {
+    expect(formProblem(emptyForm("C1"))).toBe("Give the routine a name.");
+    expect(formProblem({ ...emptyForm(""), name: "x", prompt: "p" })).toBe("Choose a channel.");
+    expect(formProblem({ ...emptyForm("C1"), name: "x" })).toBe("Say what the Tag should do each time.");
+    expect(formProblem({ ...emptyForm("C1"), name: "x", prompt: "p", budget: "50" })).toMatch(/spend limit/);
+    expect(formProblem({ ...emptyForm("C1"), name: "x", prompt: "p" })).toBe("");
+  });
+
+  it("shows the CLI's own error", () => {
+    expect(cliError(JSON.stringify({ schema_version: 1, ok: false, error: "Routines run at most once an hour" }), "")).toBe("Routines run at most once an hour");
+    expect(cliError("", "Traceback\nError: Start the Tag first")).toBe("Start the Tag first");
+  });
+});
+
+describe("timezones", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("lists every zone the computer knows, keeping a saved one it doesn't", () => {
+    const zones = timeZones(["Mars/Olympus_Mons", localZone()]);
+    expect(zones).toEqual(expect.arrayContaining(["UTC", "Europe/London", "America/New_York", localZone(), "Mars/Olympus_Mons"]));
+    expect(zones).toEqual([...zones].sort());
+  });
+
+  it("falls back to common zones when the webview can't list them", () => {
+    vi.spyOn(Intl as unknown as { supportedValuesOf: (key: string) => string[] }, "supportedValuesOf").mockImplementation(() => {
+      throw new RangeError("unsupported");
+    });
+    const zones = timeZones(["Asia/Kathmandu"]);
+    expect(zones).toEqual(expect.arrayContaining(["UTC", "Europe/London", "Asia/Tokyo", "Asia/Kathmandu"]));
+    expect(zones.length).toBeLessThan(40);
+  });
+
+  it("finds zones by city however they're typed", () => {
+    const zones = timeZones();
+    expect(matchZones(zones, "new york")[0]).toBe("America/New_York");
+    expect(matchZones(zones, "America/New_Y")).toEqual(["America/New_York"]);
+    expect(matchZones(zones, "lon")[0]).toBe("Europe/London");
+    expect(matchZones(zones, "Europe/Londn")).toEqual([]);
+    expect(matchZones(zones, "").length).toBeGreaterThan(0);
+  });
+});
+
+describe("demo routines", () => {
+  it("never show a next run in the past", () => {
+    const run = demoRoutines();
+    const listed = run("t1", true, true, ["list"]) as unknown as RoutineList;
+    const sample = listed.routines[0];
+    expect(new Date(sample.next_run!).getTime()).toBeGreaterThan(Date.now());
+    expect(new Date(sample.last_run!.started!).getTime()).toBeLessThan(Date.now());
+    // "mon 09:00" with its few-minutes stagger, in the routine's own zone.
+    const local = new Intl.DateTimeFormat("en-GB", { timeZone: sample.timezone, weekday: "short", hour: "2-digit", minute: "2-digit" })
+      .format(new Date(sample.next_run!));
+    expect(local).toBe("Mon 09:03");
+    // A posted, a NO_REPLY and a failed run, each on the schedule, even across a clock change.
+    const shown = run("t1", true, true, ["show", sample.id]) as unknown as RoutineDetail;
+    expect(shown.history.map((entry) => entry.outcome)).toEqual(["posted", "no_reply", "failed"]);
+    const times = shown.history.map((entry) => new Intl.DateTimeFormat("en-GB", { timeZone: sample.timezone, weekday: "short", hour: "2-digit", minute: "2-digit" })
+      .format(new Date(entry.scheduled_for!)));
+    expect(times).toEqual(["Mon 09:03", "Mon 09:03", "Mon 09:03"]);
+    expect(shown.history[2].error_reference).toBe("7C2E91AB");
+    expect(run.activity.map((item) => item.trigger?.name)).toEqual(["Weekly PR digest", "Weekly PR digest", "Weekly PR digest"]);
+  });
+
+  it("works out the next weekly time across a clock change", () => {
+    // Saturday 24 Oct 2026, the day before London leaves summer time.
+    const at = nextWeekly(1, 9, 3, "Europe/London", new Date("2026-10-24T12:00:00Z"));
+    expect(at.toISOString()).toBe("2026-10-26T09:03:00.000Z");
+    expect(nextWeekly(1, 9, 3, "Europe/London", new Date("2026-10-19T08:00:00Z")).toISOString()).toBe("2026-10-19T08:03:00.000Z");
+  });
+});

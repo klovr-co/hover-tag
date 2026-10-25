@@ -17,7 +17,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts import agent_models, slack_channel_names, tag_activity, tag_autostart, tag_cli, tag_config, tag_install, tag_instances
+from scripts import agent_models, slack_channel_names, tag_activity, tag_routines, tag_autostart, tag_cli, tag_config, tag_install, tag_instances
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = ROOT / "protocol/examples"
@@ -53,6 +53,61 @@ class ProtocolTests(unittest.TestCase):
         documented = set(re.findall(r"^\| `([a-z0-9-]+)` \|", DOC.read_text(encoding="utf-8"), re.M))
         self.assertEqual(documented, set(tag_cli.CAPABILITIES))
 
+    def test_routine_commands_provide_what_apps_read(self) -> None:
+        home = tag_instances.create(self.root, "t1-a1").home
+        tag_config.save_config(home / "config/settings.json", {
+            "SLACK_TEAM_ID": "T1", "SLACK_APP_ID": "A1", "SLACK_CHANNEL_IDS": "C0LAUNCH1",
+            "SLACK_ALLOWED_USER_IDS": "U0MAYA001"})
+        added = self.cli("t1-a1", "routine", "add", "--name", "Weekly PR digest", "--schedule", "mon 09:00",
+                         "--timezone", "Europe/London", "--channel", "C0LAUNCH1", "--prompt", "Summarise PRs.",
+                         "--via", "tag-app", "--json")
+        promised_row = example("routine-list.json")["routines"][0]
+        self.assertProvides(added["routine"], promised_row, "tag routine add --json")
+        listed = self.cli("t1-a1", "routine", "list", "--json")
+        self.assertProvides(listed, example("routine-list.json"), "tag routine list --json")
+        self.assertProvides(listed["routines"][0], promised_row, "tag routine list --json rows")
+        self.assertProvides(listed["routines"][0]["limits"], promised_row["limits"], "routine limits")
+        self.assertProvides(listed["routines"][0]["approval"], promised_row["approval"], "routine approval")
+        shown = self.cli("t1-a1", "routine", "show", "Weekly PR digest", "--json")
+        self.assertProvides(shown, example("routine-show.json"), "tag routine show --json")
+        routine_id = added["routine"]["id"]
+        activity = tag_activity.ActivityStore(home / "state/activity")
+        run = activity.create(team="T0KLOVR1", channel="C0LAUNCH1", thread_ts="", request_ts="", requester="U0MAYA001",
+                              trigger={"type": "routine", "routine_id": routine_id, "name": "Weekly PR digest"})
+        activity.set_thread(run, "1760256281.000100")
+        activity.finish(run, "completed")
+        activity.save_reply(run, "Four pull requests merged.")
+        item = tag_routines.RoutineStore(home).get(routine_id)
+        tag_routines.RoutineStateStore(home).record(routine_id, tag_routines.run_record(
+            item, trigger="schedule", slot=None, outcome="posted", activity_run_id=run, slack_ts="1760256281.000100",
+            slack_team="T0KLOVR1", tools_used=["Searching Slack…"], cost_usd=0.18, tokens=43500))
+        listed_runs = self.cli("t1-a1", "routine", "runs", routine_id, "--json")
+        promised_runs = example("routine-runs.json")
+        self.assertProvides(listed_runs, promised_runs, "tag routine runs --json")
+        self.assertProvides(listed_runs["routine"], promised_runs["routine"], "tag routine runs --json routine")
+        posted = example("routine-show.json")["history"][0]
+        actual = self.cli("t1-a1", "routine", "show", routine_id, "--json")["history"][0]
+        self.assertProvides(actual, {k: v for k, v in posted.items() if k not in {"error_reference", "diagnostic"}},
+                            "tag routine show --json run")
+        self.assertProvides(actual["activity"], {k: v for k, v in posted["activity"].items() if k not in {
+            "step_count", "duration_seconds", "usage", "backend", "model", "model_name"}}, "routine run activity")
+        paused = self.cli("t1-a1", "routine", "pause", added["routine"]["id"], "--json")
+        self.assertIsNone(paused["routine"]["next_run"])
+        removed = self.cli("t1-a1", "routine", "remove", added["routine"]["id"], "--json")
+        self.assertEqual(removed["removed"], added["routine"]["id"])
+
+    def test_routine_commands_find_a_tag_by_nickname_or_as_the_main_tag(self) -> None:
+        home = tag_instances.create(self.root, "t1-a1").home
+        tag_config.save_config(home / "config/settings.json", {
+            "SLACK_TEAM_ID": "T1", "SLACK_APP_ID": "A1", "SLACK_CHANNEL_IDS": "C0LAUNCH1",
+            "SLACK_ALLOWED_USER_IDS": "U0MAYA001"})
+        tag_instances.set_nickname(self.root, "t1-a1", "research")
+        self.cli("research", "routine", "add", "--name", "Digest", "--schedule", "mon 09:00", "--timezone", "UTC",
+                 "--channel", "C0LAUNCH1", "--prompt", "p", "--json")
+        self.assertEqual(self.cli("research", "routine", "list", "--json")["tag"], "t1-a1")
+        listed = self.cli("routine", "list", "--json")
+        self.assertEqual((listed["tag"], [r["name"] for r in listed["routines"]]), ("t1-a1", ["Digest"]))
+
     def test_list_rows_provide_what_apps_read(self) -> None:
         home = tag_instances.create(self.root, "t1-a1").home
         tag_config.save_config(home / "config/settings.json", {"SLACK_TEAM_ID": "T1", "SLACK_APP_ID": "A1"})
@@ -84,6 +139,23 @@ class ProtocolTests(unittest.TestCase):
                                                          "default_model_name", "default_effort")},
                          {key: row[key] for key in ("description", "default_model", "default_model_label",
                                                     "default_model_name", "default_effort")})
+
+    def test_list_rows_describe_the_picture_tag_gave_the_tag(self) -> None:
+        home = tag_instances.create(self.root, "t1-a1").home
+        assets = home / "integrations/slack-cli/assets"
+        assets.mkdir(parents=True)
+        row = lambda: self.cli("list", "--json")["tags"][0]
+        self.assertIsNone(row()["picture"])
+        self.assertEqual(str(home / "state/activity-now.json"), row()["activity_now"])
+        (assets / "tag-picture.json").write_text(json.dumps({"picture": "waterdrop", "index": 962}), encoding="utf-8")
+        picture = row()["picture"]
+        self.assertEqual(("waterdrop", 2, "water"), (picture["kind"], picture["index"], picture["sprite"]["element"]))
+        self.assertEqual(example("list.json")["tags"][0]["picture"], picture)
+        (assets / "tag-picture.json").write_text(json.dumps({"picture": "custom"}), encoding="utf-8")
+        self.assertEqual({"kind": "custom"}, row()["picture"])
+        # An existing Slack app keeps its own picture, whatever setup previewed.
+        (home / "config/setup-progress.json").write_text(json.dumps({"app_path": "existing"}), encoding="utf-8")
+        self.assertIsNone(row()["picture"])
 
     def test_autostart_and_logs_provide_what_apps_read(self) -> None:
         home = tag_instances.create(self.root, "t1-a1").home

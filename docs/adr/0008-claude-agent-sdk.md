@@ -35,7 +35,9 @@ parse backend-native payloads:
   `can_use_tool` sends an `approval_request` event and waits for the same
   file-based decision used by Codex; denial, timeout, Stop, or a missing
   approval channel fail closed. Interactive questions are declined.
-  `OPENTAG_CLAUDE_PERMISSION_MODE` can select another non-planning mode.
+  `OPENTAG_CLAUDE_PERMISSION_MODE`, set per Tag in Tag.app or with
+  `tag NAME settings ai permissions claude-mode=MODE`, selects another
+  non-planning mode. Codex keeps its own sandbox and approval settings.
 - **Lifecycle.** The control file triggers `interrupt()` and waits for the
   interrupted result; the bridge's existing force-stop remains the fallback.
   SDK messages refresh the idle deadline; pending approvals and running tools

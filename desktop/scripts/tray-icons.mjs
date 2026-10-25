@@ -1,15 +1,13 @@
 // Monochrome tray masks from the TUI's pixel map: outline offline, filled online.
 // Keep the original narrow eyes and small smile; macOS recolors the alpha mask.
 import { execFileSync } from "node:child_process";
-import { copyFile, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const desktop = fileURLToPath(new URL("../", import.meta.url));
-const pixels = JSON.parse(execFileSync("python3", ["-c",
-  "import json, runpy, sys; print(json.dumps(runpy.run_path(sys.argv[1])['PIXELS']))",
-  join(desktop, "../scripts/tag_mascot.py")], { encoding: "utf8" }));
+const { pixels } = JSON.parse(await readFile(join(desktop, "../scripts/tag_mascot.json"), "utf8"));
 const width = 28, height = 34;
 if (pixels.length !== height || pixels.some(row => row.length !== width)) {
   throw new Error("Review the tray layout when the TUI sprite dimensions change");

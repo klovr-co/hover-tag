@@ -16,10 +16,11 @@ try:
     import slack_channels
     import setup_ui as ui
     import tag_slack_backoff
+    import tag_model_download
     from tag_paths import default_workspace, tag_home
 except ImportError:
     from scripts import agent_models, slack_channels, tag_config as settings, setup_ui as ui
-    from scripts import tag_slack_backoff
+    from scripts import tag_slack_backoff, tag_model_download
     from scripts.tag_paths import default_workspace, tag_home
 
 
@@ -325,13 +326,67 @@ def choose_default_model(home: Path, values: dict[str, str]) -> str | None:
     return values_only[choice] if choice < len(choices) else None
 
 
+def _embedding_choices():
+    try:
+        import tag_embedding
+        from tag_paths import tag_home
+    except ImportError:
+        from scripts import tag_embedding
+        from scripts.tag_paths import tag_home
+    shared = tag_home() / "shared/mfs"
+    return tag_embedding, shared
+
+
+def _search_model_label() -> str:
+    tag_embedding, shared = _embedding_choices()
+    current = tag_embedding.current_provider(shared)
+    label = next((str(c["label"]) for c in tag_embedding.choices(shared) if c["id"] == current), current)
+    download = tag_model_download.report(shared) if current == tag_embedding.LOCAL else None
+    if download and download["state"] == "downloading":
+        return f"{label} (downloading {download['percent']}%, search off)"
+    return label
+
+
+def _choose_search_model() -> None:
+    """Pick how memory computes search embeddings; `tag memory embedding` does the work."""
+    tag_embedding, shared = _embedding_choices()
+    options = tag_embedding.choices(shared)
+    ui.message("Switching builds a new index: memory indexes your Slack channels again with the new model.")
+    chosen = ui.choose("Search model", [f"{c['label']} · {c['detail']}" for c in options] + ["Cancel"])
+    if chosen >= len(options):
+        return
+    picked = options[chosen]
+    arguments, key = [], ""
+    if picked["custom"]:
+        example = "https://api.openai.com/v1 or http://localhost:11434/v1"
+        url = input(f"Endpoint address ({example}) [{picked['base_url']}]: ").strip() or str(picked["base_url"])
+        model = input(f"Embedding model name [{picked['model']}]: ").strip() or str(picked["model"])
+        key = getpass.getpass("API key (optional; Enter to keep a saved key or use none): ").strip()
+        arguments = ["--base-url", url, "--embedding-model", model]
+    if ui.choose("Switch the search model?", ["Switch and re-index", "Cancel"]) != 0:
+        return
+    command = [sys.executable, str(Path(__file__).with_name("tag_cli.py")), "memory", "embedding",
+               "custom" if picked["custom"] else "local", *arguments, *(["--stdin"] if picked["custom"] else []), "--json"]
+    # The key goes over stdin only, never into the command line.
+    completed = subprocess.run(command, input=key + "\n" if picked["custom"] else None, text=True, capture_output=True, check=False)
+    try:
+        report = json.loads(completed.stdout.strip().splitlines()[-1]) if completed.stdout.strip() else {}
+    except ValueError:
+        report = {}
+    if completed.returncode or report.get("ok") is False:
+        lines = completed.stderr.strip().splitlines()
+        ui.message(report.get("error") or (lines[-1] if lines else "Couldn't change the search model."))
+        return
+    ui.message(report.get("note") or ("Memory restarted and is indexing your Slack channels again." if report.get("reindexing") else "Saved."))
+
+
 def _settings_menu(home: Path, ai=None) -> None:
     groups = (
-        ("Slack connection and access", ("SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_ALLOWED_USER_IDS", "SLACK_CHANNEL_IDS", "OPENTAG_BOT_NAME", "OPENTAG_BOT_DESCRIPTION", "SLACK_CHANNEL_POLICY", "change_app", "reconnect")),
-        ("Workspace and memory", ("MFS_SLACK_HISTORY_DAYS", "MFS_ALLOWED_SCOPES", "MFS_URL", "MFS_TOKEN")),
+        ("Slack connection and access", ("SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_ALLOWED_USER_IDS", "SLACK_CHANNEL_IDS", "OPENTAG_BOT_NAME", "OPENTAG_BOT_DESCRIPTION", "SLACK_CHANNEL_POLICY", "SLACK_ALLOWED_BOT_IDS", "change_app", "reconnect")),
+        ("Workspace and memory", ("MFS_SLACK_HISTORY_DAYS", "MFS_ALLOWED_SCOPES", "MFS_URL", "MFS_TOKEN", "memory_model", "MFS_CHANNEL_SCOPES")),
         ("AI & models", ("OPENTAG_DEFAULT_MODEL",)),
         ("Advanced", ("OPENTAG_TIMEOUT_SECONDS", "OPENTAG_MAX_TIMEOUT_SECONDS", "OPENTAG_BACKEND_ATTEMPTS", "OPENTAG_SLACK_STREAMING",
-                      "OPENTAG_SLACK_DM_ENABLED",
+                      "OPENTAG_SLACK_DM_ENABLED", "OPENTAG_SHOW_THINKING",
                       "OPENTAG_CODEX_TRANSPORT", "OPENTAG_CLAUDE_TRANSPORT", "OPENTAG_CLAUDE_PERMISSION_MODE")),
         ("API connections", ("OPENTAG_CODEX_API_KEY", "OPENTAG_CODEX_BASE_URL", "OPENTAG_CODEX_API_VERSION",
                              "OPENTAG_CODEX_GATEWAY_FORMAT", "OPENTAG_CODEX_GATEWAY_PROVIDER",
@@ -389,7 +444,8 @@ def _settings_menu(home: Path, ai=None) -> None:
                 settings.update_config(settings.config_path(home), {"OPENTAG_DEFAULT_MODEL": value})
                 ui.message("Saved. Restart Tag to apply the default model.")
             continue
-        actions = {"change_app": "Change Slack app or workspace", "reconnect": "Reconnect credentials with Slack CLI"}
+        actions = {"change_app": "Change Slack app or workspace", "reconnect": "Reconnect credentials with Slack CLI",
+                   "memory_model": "Search model: " + _search_model_label()}
         labels = [actions.get(key, f"{settings.LABELS.get(key, key)}: {values.get(key, 'not set')}") for key in keys]
         if ui.keyboard_available():
             choice = ui.choose("Choose a setting", labels + ["Back"])
@@ -402,6 +458,9 @@ def _settings_menu(home: Path, ai=None) -> None:
             continue
         key = keys[int(selection) - 1]
         try:
+            if key == "memory_model":
+                _choose_search_model()
+                continue
             if key in {"change_app", "reconnect", "SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_CHANNEL_IDS", "MFS_SLACK_HISTORY_DAYS", "SLACK_CHANNEL_POLICY"}:
                 try:
                     from . import tag_reconfigure

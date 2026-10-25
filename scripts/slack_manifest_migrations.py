@@ -27,13 +27,16 @@ try:
     import slack_channels
     import slack_credentials
     import tag_config as settings
+    import tag_credentials
 except ImportError:
     from scripts import slack_identity, slack_channels, slack_app_create, slack_credentials, tag_config as settings
+    from scripts import tag_credentials
 
 
 ROOT = Path(__file__).resolve().parents[1]
 # 4: team:read, so Tag.app can show the Slack workspace icon.
-MIGRATION_VERSION = 4
+# 5: member_joined_channel, so Tag notices an invitation at once.
+MIGRATION_VERSION = 5
 DM_SCOPE = "im:history"
 REQUIRED_MANIFEST = yaml.safe_load((ROOT / "slack-app-manifest.yaml").read_text(encoding="utf-8"))
 REQUIRED_BOT_SCOPES = tuple(REQUIRED_MANIFEST["oauth_config"]["scopes"]["bot"])
@@ -151,6 +154,10 @@ _SECRET = re.compile(r"\b(?:xox[a-z]-|xapp-)[A-Za-z0-9-]+")
 _SIGN_IN = re.compile(r"login|log in|sign in|not_authed|invalid_auth|token_(?:expired|revoked)|unauthori[sz]ed|auth", re.I)
 
 
+# What Slack CLI reports when the app has no installation in the workspace.
+_NOT_INSTALLED = "installation_required"
+
+
 def _cli_failure(result: subprocess.CompletedProcess, what: str, retry: str) -> RuntimeError:
     """Say what Slack CLI reported; suggest `slack login` only when that's the problem."""
     output = re.sub(r"\x1b\[[0-9;]*m", "", f"{result.stdout or ''}\n{result.stderr or ''}")
@@ -170,6 +177,14 @@ def remote_manifest(slack: str, project: Path, app_id: str) -> dict:
     return _json_output(result.stdout)
 
 
+class BotTokenRejected(RuntimeError):
+    """Slack says the saved bot token is dead: revoked, rotated, or from a removed install."""
+
+
+# What auth.test answers for a token that will never work again, as opposed to a passing Slack error.
+_DEAD_TOKEN_ERRORS = frozenset({"invalid_auth", "token_revoked", "token_expired", "account_inactive", "not_authed"})
+
+
 def granted_bot_scopes(token: str) -> set[str]:
     request = urllib.request.Request(
         "https://slack.com/api/auth.test",
@@ -182,7 +197,10 @@ def granted_bot_scopes(token: str) -> set[str]:
     except (OSError, UnicodeError, json.JSONDecodeError, urllib.error.URLError) as exc:
         raise RuntimeError("Slack permissions could not be verified; check the connection and retry") from exc
     if not isinstance(payload, dict) or not payload.get("ok"):
-        raise RuntimeError("Slack rejected the bot token; reconnect it with `tag setup`")
+        message = "Slack rejected the bot token; reconnect it with `tag setup`"
+        if isinstance(payload, dict) and payload.get("error") in _DEAD_TOKEN_ERRORS:
+            raise BotTokenRejected(message)
+        raise RuntimeError(message)
     return {item.strip() for item in header.split(",") if item.strip()}
 
 
@@ -436,8 +454,15 @@ def _reconcile(home: Path, config_path: Path, values: dict[str, str], receipt: d
     project = home / "integrations/slack-cli"
     remote = remote_manifest(slack, project, app_id)
     migrated, changed = migrate_manifest(remote, enterprise=bool(enterprise_id))
-    scopes = granted_bot_scopes(values["SLACK_BOT_TOKEN"])
-    if enterprise_id:
+    rejected = False
+    try:
+        scopes = granted_bot_scopes(values["SLACK_BOT_TOKEN"])
+    except BotTokenRejected:
+        rejected = True
+        # Nothing to ask the person: the credential handoff below issues a fresh token
+        # through Slack CLI, as it does after any app update.
+        scopes = set()
+    if enterprise_id and not rejected:
         slack_identity.validate(values["SLACK_BOT_TOKEN"], team_id=team_id, app_id=app_id,
                                 enterprise_id=enterprise_id, label="Bot token", api=slack_channels.slack_api)
     if not changed and set(REQUIRED_BOT_SCOPES).issubset(scopes):
@@ -450,7 +475,14 @@ def _reconcile(home: Path, config_path: Path, values: dict[str, str], receipt: d
     with tempfile.TemporaryDirectory(prefix="tag-slack-migration-") as directory:
         migration_project = _migration_project(project, migrated, authorization_id, app_id, Path(directory))
         if changed:
-            result = _run(_sync_command(slack, migration_project, app_id, authorization_id), cwd=migration_project)
+            sync = _sync_command(slack, migration_project, app_id, authorization_id)
+            result = _run(sync, cwd=migration_project)
+            if result.returncode and _NOT_INSTALLED in f"{result.stdout}{result.stderr}":
+                # Slack only syncs settings for an installed app. Reinstall it with its
+                # current settings through the credential handoff, then sync again.
+                _save_credentials(home, config_path, _receive(project, team_id, app_id, enterprise_id))
+                progress["refreshed"] = True
+                result = _run(sync, cwd=migration_project)
             if result.returncode:
                 raise _cli_failure(result, "Slack app settings migration failed", "tag start")
     verified = remote_manifest(slack, project, app_id)
@@ -458,12 +490,8 @@ def _reconcile(home: Path, config_path: Path, values: dict[str, str], receipt: d
         raise RuntimeError("Slack did not save the required app settings; retry `tag start`")
     # The credential handoff refreshes the installation itself. It captures
     # output and closes stdin, so background upgrades never wait for input.
-    credentials = slack_credentials.receive(project, team_id, app_id,
-        **({"enterprise_id": enterprise_id} if enterprise_id else {}))
-    if enterprise_id:
-        slack_identity.validate(credentials["SLACK_BOT_TOKEN"], team_id=team_id, app_id=app_id,
-                                enterprise_id=enterprise_id, label="Bot token", api=slack_channels.slack_api)
-    settings.update_config(config_path, credentials)
+    credentials = _receive(project, team_id, app_id, enterprise_id)
+    _save_credentials(home, config_path, credentials)
     progress["refreshed"] = True
     granted = granted_bot_scopes(credentials["SLACK_BOT_TOKEN"])
     progress["granted"] = granted
@@ -477,6 +505,56 @@ def _reconcile(home: Path, config_path: Path, values: dict[str, str], receipt: d
     _save_receipt(marker, receipt, pending,
                   ("Slack reinstalled the app without " + ", ".join(sorted(pending))) if pending else "")
     return True
+
+
+def _save_credentials(home: Path, config_path: Path, credentials: dict[str, str]) -> None:
+    """Save fresh tokens, and the history credential too when it was a copy of the bot token.
+
+    Setup uses the bot token for Slack history unless the person gives another
+    credential. A reinstall revokes the old bot token, so that copy must follow it.
+    """
+    changes = dict(credentials)
+    current = settings.read_config(config_path)
+    if current.get("MFS_SLACK_TOKEN") and current.get("MFS_SLACK_TOKEN") == current.get("SLACK_BOT_TOKEN"):
+        tag_credentials.write_slack_history(home, credentials["SLACK_BOT_TOKEN"])
+        changes["MFS_SLACK_TOKEN"] = credentials["SLACK_BOT_TOKEN"]
+    settings.update_config(config_path, changes)
+
+
+def repair_history_credential(home: Path, config_path: Path, values: dict[str, str]) -> bool:
+    """Replace a history credential left behind by an earlier reinstall.
+
+    Before the history credential followed bot token renewals, a reinstall left
+    it holding the revoked bot token. When it is a bot token Slack rejects and
+    the current bot token works, use the current one. Returns whether it changed.
+    """
+    history, bot = values.get("MFS_SLACK_TOKEN", ""), values.get("SLACK_BOT_TOKEN", "")
+    if not history.startswith("xoxb-") or not bot or history == bot:
+        return False
+    try:
+        granted_bot_scopes(history)
+        return False
+    except BotTokenRejected:
+        pass
+    except RuntimeError:
+        return False  # Slack couldn't say; leave the person's credential alone.
+    try:
+        granted_bot_scopes(bot)
+    except RuntimeError:
+        return False
+    tag_credentials.write_slack_history(home, bot)
+    settings.update_config(config_path, {"MFS_SLACK_TOKEN": bot})
+    return True
+
+
+def _receive(project: Path, team_id: str, app_id: str, enterprise_id: str) -> dict[str, str]:
+    """Fresh credentials from the handoff, checked before anything saves them."""
+    credentials = slack_credentials.receive(project, team_id, app_id,
+        **({"enterprise_id": enterprise_id} if enterprise_id else {}))
+    if enterprise_id:
+        slack_identity.validate(credentials["SLACK_BOT_TOKEN"], team_id=team_id, app_id=app_id,
+                                enterprise_id=enterprise_id, label="Bot token", api=slack_channels.slack_api)
+    return credentials
 
 
 def enable_org_deployment(project: Path, app_id: str, enterprise_id: str) -> None:

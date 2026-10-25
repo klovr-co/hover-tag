@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-VERSION = 2
+VERSION = 3
 
 
 def active(shared: Path, process) -> bool:

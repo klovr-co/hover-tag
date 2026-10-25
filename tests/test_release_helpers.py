@@ -52,6 +52,10 @@ class ReleaseHelperTests(unittest.TestCase):
         self.assertIn("Invoke-Native { & $uv venv --python $python $venv }", script)
         self.assertIn("Invoke-Native { & $uv pip install --python $runtimePython -r", script)
         self.assertIn("requirements-runtime.txt", script)
+        # -SkipMemoryModel must not leak TAG_SKIP_MFS_MODEL into the caller's session.
+        self.assertIn("$previousSkip = $env:TAG_SKIP_MFS_MODEL", script)
+        self.assertIn("$env:TAG_SKIP_MFS_MODEL = $previousSkip", script)
+        self.assertIn("} finally {\n        $env:TAG_SKIP_MFS_MODEL = $previousSkip", script)
 
     def test_windows_bootstrap_needs_no_system_python(self) -> None:
         root = Path(__file__).resolve().parents[1]
@@ -128,6 +132,7 @@ class ReleaseHelperTests(unittest.TestCase):
         self.assertTrue(any("missing bot scopes" in error for error in errors))
         self.assertIn("Socket Mode must be enabled", errors)
         self.assertIn("app_mention must be subscribed", errors)
+        self.assertIn("member_joined_channel must be subscribed", errors)
         self.assertIn("message.im must be subscribed", errors)
         self.assertIn("app_home_opened must be subscribed", errors)
         self.assertIn("agent_session_stopped must be subscribed", errors)

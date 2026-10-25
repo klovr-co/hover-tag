@@ -162,12 +162,23 @@ describe("Tag rows", () => {
     const finish = vi.fn();
     render(<Home api={demoBridge()} tags={tags} reports={{}} problems={{}} activity={{}} firstName="Maya"
       update={{ status: "current", update: null, phase: null, error: "" }} outdated={false} runUpdate={vi.fn()}
-      add={vi.fn()} finishSetup={finish} open={vi.fn()} fixAI={vi.fn()} showSettings={vi.fn()} now={noon} />);
+      add={vi.fn()} addTo={vi.fn()} finishSetup={finish} open={vi.fn()} fixAI={vi.fn()} showSettings={vi.fn()} now={noon} />);
     expect(screen.getByText("Finish setting up")).toBeTruthy();
     expect(screen.getByText("Not in Slack yet")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /Continue/ }));
     expect(finish).toHaveBeenCalledWith(setup);
     expect(screen.getByText("2 of 3 online · 1 to finish")).toBeTruthy();
+  });
+
+  it("open quick add for a workspace from its card", async () => {
+    const { Home } = await import("./Home");
+    const tags = { rows: [maya], loaded: true, busy: new Set<string>(), error: "" } as unknown as Tags;
+    const addTo = vi.fn();
+    render(<Home api={demoBridge()} tags={tags} reports={{}} problems={{}} activity={{}} firstName="Maya"
+      update={{ status: "current", update: null, phase: null, error: "" }} outdated={false} runUpdate={vi.fn()}
+      add={vi.fn()} addTo={addTo} finishSetup={vi.fn()} open={vi.fn()} fixAI={vi.fn()} showSettings={vi.fn()} now={noon} />);
+    fireEvent.click(screen.getByRole("button", { name: /^Add a Tag to / }));
+    expect(addTo).toHaveBeenCalledWith(expect.objectContaining({ key: maya.slack_workspace }));
   });
 
   it("say once that usage data is on, with Learn more opening Settings", async () => {
@@ -176,7 +187,7 @@ describe("Tag rows", () => {
     const showSettings = vi.fn();
     const props = { api: demoBridge(), tags, reports: {}, problems: {}, activity: {}, firstName: "Maya",
       update: { status: "current", update: null, phase: null, error: "" } as const, outdated: false, runUpdate: vi.fn(),
-      add: vi.fn(), finishSetup: vi.fn(), open: vi.fn(), fixAI: vi.fn(), showSettings, now: noon };
+      add: vi.fn(), addTo: vi.fn(), finishSetup: vi.fn(), open: vi.fn(), fixAI: vi.fn(), showSettings, now: noon };
     const { rerender } = render(<Home {...props} usageNote />);
     expect(screen.getByText(/anonymous usage data/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: /Turn off/ })).toBeNull();
