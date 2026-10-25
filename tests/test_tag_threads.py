@@ -127,7 +127,7 @@ class PromptTests(unittest.TestCase):
         self.home = Path(temporary.name)
         self.store = ThreadStore(self.home)
 
-    def open(self, **kwargs) -> str:
+    def ask(self, **kwargs) -> str:
         options = {"kind": "run_request", "text": "Sam asked your Tag to run: add the FAQ",
                    "choices": [{"id": "run_once", "label": "Run this once", "primary": True},
                                {"id": "allow_thread", "label": "Let Sam run tasks in this thread"},
@@ -136,7 +136,7 @@ class PromptTests(unittest.TestCase):
         return self.store.open_prompt(team="T0KLOVR1", channel=C, thread_ts=TS, **options)
 
     def test_a_waiting_question_marks_the_thread_needs_you_until_answered_once(self) -> None:
-        prompt_id = self.open(flagged=True, reason="instruction", nested={"dropped": True})
+        prompt_id = self.ask(flagged=True, reason="instruction", nested={"dropped": True})
         thread = self.store.read(C, TS)
         self.assertEqual((thread["status"], thread["pending_prompts"]), ("needs_you", 1))
         prompt = thread["prompts"][0]
@@ -153,12 +153,12 @@ class PromptTests(unittest.TestCase):
 
     def test_prompts_expire_by_time_and_with_their_run(self) -> None:
         past = datetime.now(timezone.utc) - timedelta(seconds=1)
-        self.open(prompt_id="old", expires_at=past)
+        self.ask(prompt_id="old", expires_at=past)
         self.assertEqual(self.store.read(C, TS)["status"], "done")
         self.assertIsNone(self.store.pending_prompt(C, TS, "old"))
         run = RunTranscript(self.store, team="T0KLOVR1", channel=C, thread_ts=TS, run_id="e" * 32, requester=None)
         run.start()
-        self.open(prompt_id="approval-1", kind="approval", run_id=run.run_id)
+        self.ask(prompt_id="approval-1", kind="approval", run_id=run.run_id)
         self.assertEqual(self.store.read(C, TS)["status"], "needs_you")
         run.finish("completed")
         self.assertEqual(self.store.read(C, TS)["prompts"][-1]["status"], "expired")
@@ -166,10 +166,10 @@ class PromptTests(unittest.TestCase):
 
     def test_a_prompt_needs_a_valid_choice(self) -> None:
         with self.assertRaises(ValueError):
-            self.open(choices=[{"id": "no spaces allowed", "label": "x"}])
+            self.ask(choices=[{"id": "no spaces allowed", "label": "x"}])
 
     def test_answers_from_the_app_go_through_a_request_the_bridge_takes(self) -> None:
-        prompt_id = self.open()
+        prompt_id = self.ask()
         with self.assertRaises(tag_threads.ThreadError):
             tag_threads.request_answer(self.home, C, TS, prompt_id, "maybe", by="U0MAYA001")
         tag_threads.request_answer(self.home, C, TS, prompt_id, "run_once", by="U0MAYA001")
