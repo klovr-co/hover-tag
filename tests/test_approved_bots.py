@@ -18,6 +18,10 @@ def setUpModule() -> None:
     summary = patch.object(slack_socket_agent, "queue_reply_summary")
     summary.start()
     unittest.addModuleCleanup(summary.stop)
+    # These tests cover the classic reply flow; tests/test_slack_rounds.py covers rounds.
+    classic = patch.object(slack_socket_agent, "ROUNDS_DEFAULT", False)
+    classic.start()
+    unittest.addModuleCleanup(classic.stop)
 
 
 class ApprovedBotMentionTests(unittest.TestCase):

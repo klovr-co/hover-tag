@@ -245,6 +245,7 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
   let loginItem = false;
   // ?telemetry=ask shows the first-run usage data notice.
   let telemetry = new URLSearchParams(location.search).get("telemetry") === "ask" ? "not_set" : "on";
+  const accessByTag: Record<string, { inform: string; run: string; channels: Record<string, { inform?: string; run?: string }> }> = {};
   const json = (value: unknown): RunResult => ({ code: 0, stdout: JSON.stringify(value), stderr: "" });
   const routines = demoRoutines();
   // The sample routine's runs appear in its Tag's Activity, labelled with the routine.
@@ -286,7 +287,19 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
       }
       if (first === "version") {
         return json({ ...versionExample, version: runtimeVersion,
-          capabilities: [...new Set([...versionExample.capabilities, "ai-connections", "shared-ai-connections", "logs-activity", "thinking-level", "describe", "telemetry-events", "api-connections", "saved-models", "permission-rules", "routines"])] });
+          capabilities: [...new Set([...versionExample.capabilities, "ai-connections", "shared-ai-connections", "logs-activity", "thinking-level", "describe", "telemetry-events", "api-connections", "saved-models", "permission-rules", "routines", "access-settings"])] });
+      }
+      if (second === "settings" && args[2] === "access") {
+        const access = (accessByTag[first] ??= { inform: "anyone", run: "owner", channels: {} });
+        const [which, level, channel] = args.slice(3).filter((a) => !a.startsWith("--"));
+        if (which === "inform" || which === "run") {
+          if (!channel) access[which] = level;
+          else if (level === "default") delete (access.channels[channel] ??= {})[which];
+          else (access.channels[channel] ??= {})[which] = level;
+        }
+        return json({ schema_version: 1, tag: first, ...access, owner: "U012OWNER", authorized: [],
+          inform_options: [{ id: "anyone", label: "Anyone in the thread" }, { id: "authorized", label: "People I've authorised" }, { id: "owner", label: "Only me" }],
+          run_options: [{ id: "authorized", label: "People I've authorised" }, { id: "owner", label: "Only me" }] });
       }
       if (second === "settings" && args[2] === "ai" && args[3] === "api" && args[4] === "check") {
         await sleep(500);

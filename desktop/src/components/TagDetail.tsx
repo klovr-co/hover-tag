@@ -19,6 +19,7 @@ import keyArt from "../assets/art/tag-key.png";
 import { workingFolder } from "./Home";
 import { modelSaveText, ModelMenu, ModelWarning, PermissionsRow, SaveBar, ThinkingRow } from "./AI";
 import { Routines } from "./Routines";
+import { AccessRows } from "./Access";
 import { Avatar, dragWindow, ErrorLine, fitText, Icon, Primary, Switch, useCopied, workspaceColor, WorkspaceMark, source, tagIcon } from "./ui";
 
 export type Selection = { kind: "tag"; id: string } | { kind: "channel"; id: string };
@@ -44,6 +45,8 @@ interface Props {
   canRoutines?: boolean;
   /** The installed Tag can read model lists again (`saved-models` capability). */
   canRefreshModels?: boolean;
+  /** The installed Tag has separate information and run-work permissions (`access-settings` capability). */
+  canAccess?: boolean;
 }
 
 const PRESENCE = { online: "var(--green)", offline: "transparent", setup: "var(--amber)", attention: "var(--red)" };
@@ -55,7 +58,7 @@ export const shortPath = (path: string) => path.replace(/^(\/Users\/[^/]+|\/home
 /** A channel's name for people, or its ID while Tag hasn't recorded one. */
 const channelName = (channel: { id: string; name: string | null }) => channel.name ?? channel.id;
 
-export function TagDetail({ api, tags, initial, initialTab = "activity", problems, back, add, showSettings, finishSetup, openAI, say, canDescribe = false, canRefreshModels = false, canRoutines = false }: Props) {
+export function TagDetail({ api, tags, initial, initialTab = "activity", problems, back, add, showSettings, finishSetup, openAI, say, canDescribe = false, canRefreshModels = false, canRoutines = false, canAccess = false }: Props) {
   const rows = tags.rows;
   const start = rows.find((row) => row.id === initial);
   const [workspace, setWorkspace] = useState(start?.slack_workspace ?? "");
@@ -145,7 +148,7 @@ export function TagDetail({ api, tags, initial, initialTab = "activity", problem
           {sel.kind === "channel"
             ? <ChannelPane key={`${group.key}:${sel.id}:${hideErrors}`} hideErrors={hideErrors} setHideErrors={setHideErrors} api={api} channel={channels.find((c) => c.id === sel.id)!} rows={live} team={group.key} open={(id) => choose({ kind: "tag", id })} />
             : <TagPane key={`${sel.id}:${hideErrors}`} hideErrors={hideErrors} setHideErrors={setHideErrors} api={api} tags={tags} row={group.rows.find((r) => r.id === sel.id)!} tab={tab} setTab={setTab}
-              problem={problems[sel.id] ?? null} finishSetup={finishSetup} openAI={openAI} say={say} canDescribe={canDescribe} canRefreshModels={canRefreshModels} canRoutines={canRoutines} />}
+              problem={problems[sel.id] ?? null} finishSetup={finishSetup} openAI={openAI} say={say} canDescribe={canDescribe} canRefreshModels={canRefreshModels} canRoutines={canRoutines} canAccess={canAccess} />}
         </div>
       </div>
     </>
@@ -263,9 +266,9 @@ function dayLabel(at: Date, now: Date) {
   return diff === 0 ? "Today" : diff === 1 ? "Yesterday" : at.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
 }
 
-function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, say, canDescribe, canRefreshModels, canRoutines, hideErrors, setHideErrors }: FilterProps & {
+function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, say, canDescribe, canRefreshModels, canRoutines, canAccess, hideErrors, setHideErrors }: FilterProps & {
   api: Bridge; tags: Tags; row: TagRow; tab: Tab; setTab: (tab: Tab) => void; problem: string | null;
-  finishSetup: (row: TagRow) => void; openAI: (tag: string) => void; say: (text: string) => void; canDescribe: boolean; canRefreshModels: boolean; canRoutines: boolean;
+  finishSetup: (row: TagRow) => void; openAI: (tag: string) => void; say: (text: string) => void; canDescribe: boolean; canRefreshModels: boolean; canRoutines: boolean; canAccess: boolean;
 }) {
   const state = status(row);
   const [activity, setActivity] = useState<ActivityItem[] | null>(null);
@@ -379,7 +382,7 @@ function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, sa
         {tab === "routines" && canRoutines && <Routines api={api} row={row} say={say} focus={routineFocus}
           showLogs={(find) => { setLogFind(find); setTab("logs"); }} />}
         {tab === "logs" && <Logs text={logView} copyLog={copyLog} find={logFind} clearFind={() => setLogFind("")} />}
-        {tab === "details" && <Details api={api} tags={tags} row={row} copyLog={copyLog} openAI={() => openAI(row.id)} say={say} canDescribe={canDescribe} canRefreshModels={canRefreshModels} />}
+        {tab === "details" && <Details api={api} tags={tags} row={row} copyLog={copyLog} openAI={() => openAI(row.id)} say={say} canDescribe={canDescribe} canRefreshModels={canRefreshModels} canAccess={canAccess} />}
       </div>
       {on && tab === "activity" && (
         <div className="sl-compose">
@@ -627,9 +630,9 @@ function Activity({ api, row, items, showLogs, problem, openAI, hideErrors, hasM
 
 const DESCRIPTION_LIMIT = 140;
 
-function Details({ api, tags, row, copyLog, openAI, say, canDescribe, canRefreshModels }: {
+function Details({ api, tags, row, copyLog, openAI, say, canDescribe, canRefreshModels, canAccess }: {
   api: Bridge; tags: Tags; row: TagRow; copyLog: () => Promise<boolean>; openAI: () => void; say: (text: string) => void; canDescribe: boolean;
-  canRefreshModels: boolean;
+  canRefreshModels: boolean; canAccess: boolean;
 }) {
   const name = title(row);
   const choice = useModelChoice(api, row.id, {
@@ -733,6 +736,12 @@ function Details({ api, tags, row, copyLog, openAI, say, canDescribe, canRefresh
           </dd>
         </>}
       </dl>
+      {canAccess && <>
+        <hr className="sl-sep" />
+        <dl className="sl-kv">
+          <AccessRows api={api} tag={row.id} channels={row.channels ?? []} say={say} />
+        </dl>
+      </>}
       <hr className="sl-sep" />
       <dl className="sl-kv">
         <dt>Working folder</dt>

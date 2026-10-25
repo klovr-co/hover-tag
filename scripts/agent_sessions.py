@@ -80,8 +80,12 @@ class ThreadSessions:
             temporary.unlink(missing_ok=True)
 
     def get(self, team: str, channel: str, thread_ts: str, backend: str, *,
-            workdir: str, requester: str) -> tuple[str, str] | None:
-        """Return the conversation to continue and the last request it answered, if any."""
+            workdir: str, requester: str, keep_idle: bool = False) -> tuple[str, str] | None:
+        """Return the conversation to continue and the last request it answered, if any.
+
+        ``keep_idle`` continues past the idle limit: an answer to the Tag's own
+        question resumes the work it paused, however long it waited.
+        """
         with self.lock:
             record = self._read().get(thread_key(team, channel, thread_ts, backend))
         if (not isinstance(record, dict) or record.get("workdir") != workdir
@@ -91,6 +95,8 @@ class ThreadSessions:
         updated, context = record.get("updated_at"), record.get("context_tokens", 0)
         max_context = setting("OPENTAG_THREAD_MAX_CONTEXT_TOKENS", DEFAULT_MAX_CONTEXT_TOKENS)
         idle_seconds = setting("OPENTAG_THREAD_IDLE_HOURS", DEFAULT_IDLE_HOURS) * 3600
+        if keep_idle and idle_seconds:
+            idle_seconds = RETENTION_SECONDS
         if (not isinstance(session_id, str) or not SESSION_ID_RE.fullmatch(session_id)
                 or not isinstance(request_ts, str) or not SLACK_TS_RE.fullmatch(request_ts)
                 or not isinstance(updated, (int, float)) or not isinstance(context, int)

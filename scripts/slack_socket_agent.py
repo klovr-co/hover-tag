@@ -64,7 +64,8 @@ try:
     from .slack_mrkdwn import to_mrkdwn
     from .slack_search_scope import ScopePlan, SearchIntent, plan_search_scopes
     from .agent_sessions import ThreadSessions
-    from .tag_activity import ACTIVITY_DETAIL_ACTION_ID, PUBLIC_LABELS, ActivityStore, activity_detail_modal, activity_modal
+    from .tag_activity import (ACTIVITY_DETAIL_ACTION_ID, PUBLIC_LABELS, ActivityStore, activity_detail_modal,
+                               activity_modal, recent_activity)
     from .agent_summary import queue_reply_summary
     from .tag_activity_details import sanitize_activity_details
     from .tag_approval_choices import sanitize_review_details
@@ -77,6 +78,9 @@ try:
     from . import tag_handoff
     from . import tag_routines
     from .tag_routine_scheduler import RoutineScheduler
+    from . import slack_rounds
+    from . import tag_access
+    from .reply_sorting import sort_reply
 except ImportError:  # Direct script execution does not create a package context.
     import slack_identity
     from agent_models import (
@@ -109,7 +113,8 @@ except ImportError:  # Direct script execution does not create a package context
     from slack_mrkdwn import to_mrkdwn
     from slack_search_scope import ScopePlan, SearchIntent, plan_search_scopes
     from agent_sessions import ThreadSessions
-    from tag_activity import ACTIVITY_DETAIL_ACTION_ID, PUBLIC_LABELS, ActivityStore, activity_detail_modal, activity_modal
+    from tag_activity import (ACTIVITY_DETAIL_ACTION_ID, PUBLIC_LABELS, ActivityStore, activity_detail_modal,
+                              activity_modal, recent_activity)
     from agent_summary import queue_reply_summary
     from tag_activity_details import sanitize_activity_details
     from tag_approval_choices import sanitize_review_details
@@ -122,7 +127,17 @@ except ImportError:  # Direct script execution does not create a package context
     import tag_handoff
     import tag_routines
     from tag_routine_scheduler import RoutineScheduler
+    import slack_rounds
+    import tag_access
+    from reply_sorting import sort_reply
 
+try:  # Tag.app's thread store and Needs-you prompts; optional until it ships beside this bridge.
+    from . import tag_threads
+except ImportError:
+    try:
+        import tag_threads  # type: ignore[no-redef]
+    except ImportError:
+        tag_threads = None  # type: ignore[assignment]
 
 MENTION_RE = re.compile(r"<@[^>]+>")
 MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024
@@ -1454,6 +1469,7 @@ class WorkingIndicator:
         *,
         journal: SlackSessionJournal | None = None,
         team: str = "",
+        fallback_message: bool = True,
     ) -> None:
         self.client = client
         self.channel = channel
@@ -1461,6 +1477,8 @@ class WorkingIndicator:
         self.logger = logger
         self.journal = journal
         self.team = team
+        # Off when the round's live message already shows progress.
+        self.fallback_message = fallback_message
         self.native = False
         self.session_api = False
         self.legacy_status = False
@@ -1718,7 +1736,7 @@ class WorkingIndicator:
                     pending_legacy_status=self.cleanup_legacy_status,
                 )
                 self.schedule_refresh()
-            if not self.legacy_status:
+            if not self.legacy_status and self.fallback_message:
                 try:
                     response = self.client.chat_postMessage(
                         channel=self.channel,
@@ -2507,6 +2525,7 @@ def run_backend(
     memory_receipts: Path | None = None,
     handoff_requests: Path | None = None,
     handoff_depth: int = 0,
+    rounds: bool = False,
 ) -> tuple[str, bool]:
     if max_timeout is None:
         max_timeout = int(os.getenv("OPENTAG_MAX_TIMEOUT_SECONDS", "3600"))
@@ -2538,6 +2557,8 @@ def run_backend(
         "--max-timeout",
         str(max_timeout),
     ]
+    if rounds:
+        cmd.append("--rounds")
     if output_manifest is not None:
         cmd.extend(["--output-manifest", str(output_manifest)])
     if model:
@@ -2630,6 +2651,7 @@ def run_backend_events(
     routine_id: str | None = None,
     on_cancelled: Callable[[], None] | None = None,
     on_stop_requested: Callable[[], None] | None = None,
+    rounds: bool = False,
 ) -> tuple[str, bool]:
     """Consume normalized lifecycle events and forward only final-answer text."""
     if max_timeout is None:
@@ -2663,6 +2685,8 @@ def run_backend_events(
         str(max_timeout),
         "--event-stream",
     ]
+    if rounds:
+        cmd.append("--rounds")
     if output_manifest is not None:
         cmd.extend(["--output-manifest", str(output_manifest)])
     if model:
@@ -3688,6 +3712,88 @@ def print_live_summary(backend: str, allowed_user_ids: frozenset[str]) -> None:
     print("=" * 64)
 
 
+# Several rounds, one live message -------------------------------------------
+
+# OPENTAG_SLACK_ROUNDS=0 brings back streamed task cards and a separate reply.
+ROUNDS_DEFAULT = True
+OWNER_RUN_ONCE_ACTION_ID = "opentag_owner_run_once"
+OWNER_ALLOW_THREAD_ACTION_ID = "opentag_owner_allow_thread"
+OWNER_IGNORE_ACTION_ID = "opentag_owner_ignore"
+OWNER_CHOICES = {OWNER_RUN_ONCE_ACTION_ID: "run_once", OWNER_ALLOW_THREAD_ACTION_ID: "allow_thread",
+                 OWNER_IGNORE_ACTION_ID: "ignore"}
+ACCESS_KEYS = ("SLACK_ALLOWED_USER_IDS", tag_access.INFORM_KEY, tag_access.RUN_KEY, tag_access.CHANNELS_KEY)
+STEP_ESTIMATE_SECONDS = 600
+ROUNDS_CHECK_SECONDS = 60
+
+
+def rounds_enabled() -> bool:
+    return env_enabled("OPENTAG_SLACK_ROUNDS", default=ROUNDS_DEFAULT)
+
+
+def access_values() -> dict[str, str]:
+    """The access settings now: saved settings win, so a change applies without a restart.
+
+    Only a bridge the CLI started (with ``TAG_INSTANCE_HOME``) reads the file.
+    """
+    values = {key: os.getenv(key, "") for key in ACCESS_KEYS}
+    if not os.getenv("TAG_INSTANCE_HOME"):
+        return values
+    try:
+        saved = json.loads((instance_home() / "config/settings.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError, RuntimeError):
+        return values
+    if isinstance(saved, dict):
+        values.update({key: saved[key] for key in ACCESS_KEYS if isinstance(saved.get(key), str)})
+    return values
+
+
+def remembered_items(receipts: Path) -> list[str]:
+    """Short "what was remembered" phrases for the outcome card's small line."""
+    items = []
+    for item in tag_memory.read_receipts(receipts):
+        text = slack_rounds._clip(str(item.get("text", "")), 60)
+        if item.get("action") in {"saved", "changed"} and text:
+            items.append(text)
+        elif item.get("action") == "forgotten":
+            items.append(f"forgot {item.get('key', '?')}")
+    return items
+
+
+def owner_prompt_blocks(prompt: dict[str, Any], *, team: str, channel: str, thread_ts: str,
+                        permalink: str | None) -> list[dict[str, Any]]:
+    """What the owner sees privately when a teammate asks the Tag to run work."""
+    name = slack_rounds.slack_escape(prompt.get("from_name") or "A teammate")
+    words = slack_rounds.slack_escape(slack_rounds._clip(prompt.get("text", ""), 600))
+    if prompt.get("flagged"):
+        intro = f"⚠️ *{name} tried to instruct your Tag* (not run): “{words}”"
+    else:
+        intro = f"▶ *{name} asked your Tag to run:* “{words}”"
+    where = f"In <{permalink}|this thread>" if permalink else "In a thread"
+    value = json.dumps({"team": team, "channel": channel, "thread_ts": thread_ts, "p": prompt["id"]},
+                       separators=(",", ":"))
+    let = f"Let {slack_rounds._clip(prompt.get('from_name') or 'them', 30)} run tasks in this thread"
+    return [
+        {"type": "section", "text": {"type": "mrkdwn", "text": intro}},
+        {"type": "actions", "elements": [
+            {"type": "button", "action_id": OWNER_RUN_ONCE_ACTION_ID, "style": "primary",
+             "text": {"type": "plain_text", "text": "Run this once"}, "value": value},
+            {"type": "button", "action_id": OWNER_ALLOW_THREAD_ACTION_ID,
+             "text": {"type": "plain_text", "text": let}, "value": value},
+            {"type": "button", "action_id": OWNER_IGNORE_ACTION_ID,
+             "text": {"type": "plain_text", "text": "Ignore"}, "value": value},
+        ]},
+        {"type": "context", "elements": [{"type": "mrkdwn", "text":
+            f"{where} · Only you can make it run work · Letting them run tasks covers this thread only"}]},
+    ]
+
+
+def owner_prompt_result(prompt: dict[str, Any], choice: str, *, via_app: bool = False) -> str:
+    name = prompt.get("from_name") or "them"
+    done = {"run_once": "Running it once", "allow_thread": f"{name} can run tasks in this thread",
+            "ignore": "Ignored"}[choice]
+    return f"{done}{' · answered in Tag.app' if via_app else ''}"
+
+
 def create_app(
     backend: str,
     timeout: int,
@@ -4674,6 +4780,533 @@ def create_app(
             own_name, sender_name, others, tag_handoff.task_from_request(text)))
         handle_invocation(peer_event, body, client, logger, direct_message=False, peer_request=(handoff_id, sender))
 
+    # Several rounds, one live message ---------------------------------------
+
+    round_store = slack_rounds.RoundStore(activity_store.root.parent / "slack-rounds.json")
+    round_lock = threading.RLock()
+    step_estimate_cache: dict[str, Any] = {"at": float("-inf"), "value": None}
+    user_names: dict[str, str] = {}
+    thread_prompts = tag_threads.ThreadStore() if tag_threads is not None else None
+
+    def access_settings() -> dict[str, str]:
+        values = access_values()
+        if not values.get("SLACK_ALLOWED_USER_IDS"):
+            values["SLACK_ALLOWED_USER_IDS"] = ",".join(sorted(allowed_user_ids))
+        return values
+
+    def may_run(user: str, team: str, channel: str, thread_ts: str) -> bool:
+        """Who can make it run work, plus anyone the owner let run tasks in this thread."""
+        if not user:
+            return False
+        state = round_store.get(team, channel, thread_ts)
+        return tag_access.can_run(access_settings(), user, channel,
+                                  thread_runners=state.runners if state else ())
+
+    def may_inform(user: str, state: slack_rounds.RoundState) -> bool:
+        values = access_settings()
+        return (tag_access.can_inform(values, user, state.channel, requester=state.requester,
+                                      thread_runners=state.runners)
+                or tag_access.can_run(values, user, state.channel, thread_runners=state.runners))
+
+    def user_name(client: Any, user_id: str) -> str:
+        if user_id in user_names:
+            return user_names[user_id]
+        try:
+            user = client.users_info(user=user_id).get("user") or {}
+            profile = user.get("profile") or {}
+            name = profile.get("display_name") or profile.get("real_name") or user.get("real_name") or user.get("name")
+        except Exception:  # noqa: BLE001 - a name is cosmetic
+            name = None
+        if isinstance(name, str) and name.strip():
+            user_names[user_id] = name.strip()[:80]
+            return user_names[user_id]
+        return "Someone"
+
+    def recent_step_estimate() -> int | None:
+        if time.monotonic() - step_estimate_cache["at"] < STEP_ESTIMATE_SECONDS:
+            return step_estimate_cache["value"]
+        try:
+            counts = [item.get("step_count") for item in recent_activity(activity_store.root, limit=30)
+                      if item.get("kind") == "replied" and not item.get("trigger")]
+            value = slack_rounds.step_estimate(counts)
+        except Exception:  # noqa: BLE001 - the estimate is optional
+            value = None
+        step_estimate_cache.update(at=time.monotonic(), value=value)
+        return value
+
+    def save_round(state: slack_rounds.RoundState) -> None:
+        try:
+            round_store.save(state)
+        except OSError as exc:
+            app.logger.warning("Could not save the Slack thread's round: %s", exc)
+
+    def start_round_message(client: Any, logger: Any, team: str, channel: str, thread_ts: str,
+                            user_id: str, question: str, *, continuing: bool
+                            ) -> tuple[slack_rounds.LiveMessage, slack_rounds.RoundState]:
+        """Post the round's live message first, so the thread shows the Tag at work within a second."""
+        with round_lock:
+            previous = round_store.get(team, channel, thread_ts)
+            if continuing and previous is not None:
+                state = previous
+            else:
+                state = slack_rounds.RoundState(team=team, channel=channel, thread_ts=thread_ts,
+                                                requester=user_id, headline=slack_rounds.request_headline(question))
+                if previous is not None:
+                    # Who may run tasks here, and the owner's open decisions, belong to the thread.
+                    state.runners, state.prompts, state.deferred = previous.runners, previous.prompts, previous.deferred
+            state.status = "working"
+        live = slack_rounds.LiveMessage(client, channel, thread_ts, logger, headline=state.headline,
+                                        link=slack_rounds.link_for(channel, thread_ts), steps=state.steps,
+                                        estimate=state.estimate)
+        live.post()
+        with round_lock:
+            state.live_ts = live.ts
+            save_round(state)
+        if state.estimate is None:
+            live.estimate = state.estimate = recent_step_estimate()
+        return live, state
+
+    def end_round(state: slack_rounds.RoundState, live: slack_rounds.LiveMessage) -> None:
+        live.close()
+        with round_lock:
+            state.steps = live.steps
+            state.status, state.question, state.confirm = "done", None, None
+            save_round(state)
+
+    def show_or_post(client: Any, live: slack_rounds.LiveMessage, state: slack_rounds.RoundState,
+                     text: str, blocks: list[dict[str, Any]]) -> None:
+        if not live.show(text, blocks):
+            response = client.chat_postMessage(channel=state.channel, thread_ts=state.thread_ts, text=text,
+                                               blocks=blocks, unfurl_links=False)
+            state.live_ts = response["ts"]
+
+    def question_message(state: slack_rounds.RoundState, *, still_waiting: bool = False
+                         ) -> tuple[str, list[dict[str, Any]]]:
+        question = slack_rounds.Question.from_dict(state.question)
+        assert question is not None and state.question_id
+        return question.text, slack_rounds.question_blocks(
+            question, progress=slack_rounds.progress_text(state.steps, state.estimate, paused=True),
+            team=state.team, channel=state.channel, thread_ts=state.thread_ts, question_id=state.question_id,
+            link=slack_rounds.link_for(state.channel, state.thread_ts), still_waiting=still_waiting)
+
+    def finish_round(client: Any, logger: Any, live: slack_rounds.LiveMessage, state: slack_rounds.RoundState,
+                     parsed: slack_rounds.ParsedAnswer, *, delivery_notes: list[str],
+                     artifacts: list[dict[str, str]], remembered: list[str]) -> dict[str, Any] | None:
+        """Turn the live message into the question, or into the outcome card."""
+        with round_lock:
+            state.steps = live.steps
+            state.files.extend(name for item in artifacts if (name := item.get("name")) and name not in state.files)
+            state.remembered.extend(item for item in remembered if item not in state.remembered)
+        if parsed.question is not None:
+            question = parsed.question
+            if context := slack_rounds.question_context(parsed.body, question.text):
+                # What the Tag found so far stays above its question.
+                question = slack_rounds.Question(f"{context}\n\n*{question.text}*", question.choices,
+                                                 question.risky)
+            with round_lock:
+                state.status, state.confirm, state.nudged = "waiting", None, False
+                state.question, state.question_id = question.as_dict(), uuid.uuid4().hex[:16]
+                state.asked_at = time.time()
+                text, blocks = question_message(state)
+                show_or_post(client, live, state, text, blocks)
+                save_round(state)
+            return None
+        outcome = parsed.outcome
+        results = list(outcome.results) if outcome else []
+        headline, shown_body = slack_rounds.card_headline(parsed)
+        body = parsed.body if outcome is None else ""
+        if delivery_notes:
+            notes = "\n".join(delivery_notes)
+            if outcome is None:
+                body, shown_body = f"{body}\n\n{notes}".strip(), f"{shown_body}\n\n{notes}".strip()
+            else:
+                results += [slack_rounds.Result("warn", slack_rounds._clip(note, slack_rounds.MAX_RESULT_CHARS))
+                            for note in delivery_notes]
+        small = slack_rounds.context_line(files=state.files, remembered=state.remembered, steps=state.steps,
+                                          seconds=time.time() - state.started_at)
+        link = slack_rounds.link_for(state.channel, state.thread_ts)
+
+        def card(headline: str, body: str) -> list[dict[str, Any]]:
+            return slack_rounds.outcome_blocks(headline=headline, results=results, actions=outcome.actions if outcome else (),
+                                               body=body, link=link, small=small)
+
+        text = headline or slack_rounds._clip(slack_rounds.reply_preview(parsed.body) or "Done", slack_rounds.MAX_HEADLINE_CHARS)
+        with round_lock:
+            show_or_post(client, live, state, text, card(headline, shown_body))
+            state.status, state.question, state.confirm = "done", None, None
+            save_round(state)
+        card_ts = state.live_ts
+
+        def on_summary(summary: str) -> None:
+            """Edit the card once more when the TL;DR is ready, unless newer work replaced it."""
+            current = round_store.get(state.team, state.channel, state.thread_ts)
+            if current is None or current.live_ts != card_ts or current.status != "done":
+                return
+            client.chat_update(channel=state.channel, ts=card_ts, text=summary, blocks=card(summary, body))
+
+        source = "\n".join([parsed.body, *(f"{item.status}: {item.text}" for item in results)]).strip()
+        return {"on_summary": on_summary, "summary_source": source or text}
+
+    def queue_deferred_tasks(state: slack_rounds.RoundState, key: RunKey, body: dict[str, Any],
+                             direct_message: bool, client: Any, logger: Any) -> None:
+        with round_lock:
+            current = round_store.get(state.team, state.channel, state.thread_ts)
+            if current is None or current.status != "done" or not current.deferred:
+                return
+            tasks, current.deferred = current.deferred, []
+            save_round(current)
+        for task in tasks:
+            request = WaitingRequest(owner_task_event(current, task), {"team_id": current.team}, direct_message,
+                                     client, logger)
+            if not queue_waiting_request(key, request):
+                start_waiting_request(request)
+
+    def owner_task_event(state: slack_rounds.RoundState, task: dict[str, Any]) -> dict[str, Any]:
+        return {"channel": state.channel, "thread_ts": state.thread_ts, "ts": task["ts"], "user": task["user"],
+                "text": task["text"], "team": state.team, "tag_owner_approved": True}
+
+    def start_answer_round(client: Any, logger: Any, state: slack_rounds.RoundState, *, answer: str, by: str,
+                           by_name: str, as_info: bool, answer_ts: str, confirmed_by: str | None = None) -> bool:
+        """Shrink the question to one answered line, then run the next round below it."""
+        with round_lock:
+            current = round_store.get(state.team, state.channel, state.thread_ts)
+            if current is None or current.status not in {"waiting", "confirming"}:
+                return False
+            asked = slack_rounds.Question.from_dict(current.question)
+            question_ts = current.live_ts
+            current.status, current.question, current.confirm, current.nudged = "working", None, None, False
+            current.rounds += 1
+            save_round(current)
+        shown_by = by_name if not confirmed_by else f"{by_name}, confirmed by {user_name(client, confirmed_by)}"
+        if question_ts:
+            try:
+                question_text = asked.text.rsplit("\n\n", 1)[-1].strip("*") if asked else ""
+                client.chat_update(channel=current.channel, ts=question_ts,
+                                   text=f"✓ {answer}, from {shown_by}",
+                                   blocks=slack_rounds.answered_blocks(question_text, answer, shown_by))
+            except Exception as exc:  # noqa: BLE001 - the work continues; the old question stays visible
+                logger.warning("Could not shrink the answered question: %s", exc)
+        # Teammates' words are information, never instructions.
+        words = f"{by_name} said: {answer}" if as_info else answer
+        if confirmed_by:
+            words += f"\n({user_name(client, confirmed_by)} confirmed this answer.)"
+        handle_invocation(
+            {"channel": current.channel, "thread_ts": current.thread_ts, "ts": answer_ts,
+             "user": current.requester, "text": words, "team": current.team, "tag_owner_approved": True},
+            {"team_id": current.team}, client, logger,
+            direct_message=is_direct_message_channel(current.channel), round_answer={"by": by})
+        return True
+
+    def accept_answer(client: Any, logger: Any, state: slack_rounds.RoundState, answer: str, by: str,
+                      by_name: str, *, as_info: bool, answer_ts: str,
+                      choice: slack_rounds.Choice | None = None) -> None:
+        question = slack_rounds.Question.from_dict(state.question)
+        if choice is None and question is not None:
+            choice = next((item for item in question.choices
+                           if item.label.casefold() == answer.strip().casefold()), None)
+        risky = bool(question and question.risky) or bool(choice and choice.risky)
+        if not risky or by == state.requester:
+            start_answer_round(client, logger, state, answer=answer, by=by, by_name=by_name, as_info=as_info,
+                               answer_ts=answer_ts)
+            return
+        # A teammate approved something risky: the requester decides, by name.
+        with round_lock:
+            current = round_store.get(state.team, state.channel, state.thread_ts)
+            if current is None or current.status != "waiting" or current.question_id != state.question_id:
+                return
+            current.status = "confirming"
+            current.confirm = {"answer": answer, "by": by, "by_name": by_name, "as_info": as_info, "ts": answer_ts}
+            save_round(current)
+        blocks = slack_rounds.confirm_blocks(requester=current.requester, answer=answer, by_name=by_name,
+                                             team=current.team, channel=current.channel,
+                                             thread_ts=current.thread_ts, question_id=current.question_id or "")
+        try:
+            client.chat_update(channel=current.channel, ts=current.live_ts,
+                               text=f"{by_name} answered {answer}; waiting for the requester to confirm",
+                               blocks=blocks)
+        except Exception as exc:  # noqa: BLE001 - post it anew so the requester still sees it
+            logger.warning("Could not edit the question into a confirmation: %s", exc)
+            client.chat_postMessage(channel=current.channel, thread_ts=current.thread_ts,
+                                    text=f"{by_name} answered {answer}", blocks=blocks)
+        # Tag.app answers as the owner, so it can confirm only the owner's own requests.
+        if thread_prompts is not None and current.requester == tag_access.owner_id(access_settings()):
+            try:
+                app_id = thread_prompts.open_prompt(
+                    team=current.team, channel=current.channel, thread_ts=current.thread_ts,
+                    kind="confirm_answer", text=f"{by_name} answered “{answer}”, which approves something risky.",
+                    choices=[{"id": "confirm", "label": "Go ahead", "primary": True},
+                             {"id": "decline", "label": "Don't"}],
+                    requester={"id": current.requester, "name": None}, slack_message=None,
+                    **round_address(current))
+                round_store.update(current.team, current.channel, current.thread_ts,
+                                   confirm={**current.confirm, "app_id": app_id})
+            except Exception as exc:  # noqa: BLE001 - Slack still holds the confirmation
+                logger.warning("Could not show the confirmation in Tag.app: %s", exc)
+
+    def decide_confirmation(client: Any, logger: Any, team: str, channel: str, thread_ts: str, choice: str,
+                            by: str, *, via_app: bool = False) -> str:
+        state = round_store.get(team, channel, thread_ts)
+        if state is None or state.status != "confirming" or not state.confirm:
+            raise LookupError("This answer was already decided.")
+        if by != state.requester:
+            raise PermissionError(f"Only <@{state.requester}> can confirm this.")
+        pending = dict(state.confirm)
+        if thread_prompts is not None and pending.get("app_id") and not via_app:
+            try:
+                thread_prompts.close_prompt(channel, thread_ts, pending["app_id"], choice=choice,
+                                            by={"id": by, "name": None}, via="slack")
+            except Exception as exc:  # noqa: BLE001 - Slack already shows the decision
+                logger.warning("Could not close the confirmation in Tag.app: %s", exc)
+        if choice == "confirm":
+            threading.Thread(target=start_answer_round, args=(client, logger, state), kwargs=dict(
+                answer=pending["answer"], by=pending["by"], by_name=pending["by_name"],
+                as_info=pending.get("as_info", True), answer_ts=pending.get("ts") or state.live_ts or thread_ts,
+                confirmed_by=by), name="slack-round-answer", daemon=True).start()
+            return "Going ahead"
+        with round_lock:
+            state.status, state.confirm = "waiting", None
+            text, blocks = question_message(state)
+            save_round(state)
+        client.chat_update(channel=channel, ts=state.live_ts, text=text, blocks=blocks)
+        return "Not that answer; the question is open again"
+
+    def open_owner_prompt(client: Any, logger: Any, state: slack_rounds.RoundState, *, from_user: str,
+                          from_name: str, text: str, ts: str, flagged: bool) -> None:
+        """A teammate's task or instruction goes to the owner privately, never straight to the agent."""
+        owner = tag_access.owner_id(access_settings())
+        prompt: dict[str, Any] = {"id": uuid.uuid4().hex[:16], "kind": "run_request", "from": from_user,
+                                  "from_name": from_name, "text": text[:2_000], "ts": ts, "flagged": flagged,
+                                  "status": "open", "created_at": time.time()}
+        if owner:
+            try:
+                response = client.chat_postMessage(
+                    channel=owner, unfurl_links=False,
+                    text=(f"{from_name} tried to instruct your Tag" if flagged else f"{from_name} asked your Tag to run work"),
+                    blocks=owner_prompt_blocks(prompt, team=state.team, channel=state.channel, thread_ts=state.thread_ts,
+                                               permalink=message_link(client, logger, state.channel, ts)))
+                prompt["dm"] = {"channel": response["channel"], "ts": response["ts"]}
+            except Exception as exc:  # noqa: BLE001 - Tag.app can still show it
+                logger.warning("Could not send the owner the teammate's request: %s", exc)
+        if thread_prompts is not None:
+            try:
+                prompt["app_id"] = thread_prompts.open_prompt(
+                    team=state.team, channel=state.channel, thread_ts=state.thread_ts, kind="run_request",
+                    text=text[:2_000],
+                    choices=[{"id": "run_once", "label": "Run this once", "primary": True},
+                             {"id": "allow_thread", "label": f"Let {from_name} run tasks in this thread"},
+                             {"id": "ignore", "label": "Ignore"}],
+                    requester={"id": owner, "name": None}, slack_message=prompt.get("dm"),
+                    flagged=flagged, reason="instruction" if flagged else "task",
+                    from_id=from_user, from_name=from_name, round_prompt=prompt["id"], **round_address(state))
+            except Exception as exc:  # noqa: BLE001 - Slack still holds the prompt
+                logger.warning("Could not show the teammate's request in Tag.app: %s", exc)
+        with round_lock:
+            current = round_store.get(state.team, state.channel, state.thread_ts) or state
+            current.prompts[prompt["id"]] = prompt
+            save_round(current)
+
+    def apply_owner_choice(client: Any, logger: Any, team: str, channel: str, thread_ts: str, prompt_id: str,
+                           choice: str, *, via_app: bool = False) -> str:
+        owner = tag_access.owner_id(access_settings())
+        run_now: dict[str, Any] | None = None
+        with round_lock:
+            state = round_store.get(team, channel, thread_ts)
+            prompt = state.prompts.get(prompt_id) if state is not None else None
+            if state is None or prompt is None or prompt.get("status") != "open":
+                raise LookupError("This was already decided.")
+            prompt["status"], prompt["decided_at"] = choice, time.time()
+            later = False
+            if choice in {"run_once", "allow_thread"}:
+                if choice == "allow_thread" and prompt["from"] not in state.runners:
+                    state.runners.append(prompt["from"])
+                # The owner approved it, so the words now count as a task.
+                task = ({"user": owner, "text": f"{prompt['from_name']} asked, and the owner approved: {prompt['text']}",
+                         "ts": prompt["ts"]} if choice == "run_once" else
+                        {"user": prompt["from"], "text": prompt["text"], "ts": prompt["ts"]})
+                with ACTIVE_RUNS_LOCK:
+                    busy = RunKey(team, channel, thread_ts) in BUSY_THREADS
+                if state.status == "done" and not busy:
+                    run_now = task
+                else:
+                    state.deferred.append(task)
+                    later = True
+            save_round(state)
+        result = owner_prompt_result(prompt, choice, via_app=via_app)
+        if later:
+            result += " after the current work"
+        if prompt.get("dm"):
+            try:
+                client.chat_update(channel=prompt["dm"]["channel"], ts=prompt["dm"]["ts"], text=result, blocks=[
+                    owner_prompt_blocks(prompt, team=team, channel=channel, thread_ts=thread_ts, permalink=None)[0],
+                    {"type": "context", "elements": [{"type": "mrkdwn", "text": f"✓ {slack_rounds.slack_escape(result)}"}]}])
+            except Exception as exc:  # noqa: BLE001 - the decision already applies
+                logger.warning("Could not update the owner's prompt: %s", exc)
+        if thread_prompts is not None and prompt.get("app_id") and not via_app:
+            try:
+                thread_prompts.close_prompt(channel, thread_ts, prompt["app_id"], choice=choice,
+                                            by={"id": owner, "name": None}, via="slack")
+            except Exception as exc:  # noqa: BLE001 - Slack already shows the decision
+                logger.warning("Could not close the prompt in Tag.app: %s", exc)
+        if run_now is not None:
+            start_waiting_request(WaitingRequest(owner_task_event(state, run_now), {"team_id": team},
+                                                 is_direct_message_channel(channel), client, logger))
+        return result
+
+    def handle_round_reply(event: dict[str, Any], body: dict[str, Any], client: Any, logger: Any) -> bool:
+        """Send a reply in a thread where the Tag waits back into the paused work.
+
+        Returns True when the reply belonged to the Tag's question (even if it was
+        ignored as chatter), False when the usual rules for the message apply.
+        """
+        if event.get("tag_owner_approved") or not rounds_enabled():
+            return False
+        channel, thread_ts, user = event.get("channel", ""), event.get("thread_ts"), event.get("user", "")
+        if not thread_ts or thread_ts == event.get("ts") or not user or event.get("bot_id"):
+            return False
+        team = body.get("team_id") or event.get("team") or ""
+        state = round_store.get(team, channel, thread_ts)
+        if state is None or state.status not in {"waiting", "confirming"}:
+            return False
+        if not may_inform(user, state):
+            return False
+        text = strip_mention(event.get("text", "")).strip()
+        if not text:
+            return True
+        name = user_name(client, user)
+        values = access_settings()
+        runner = tag_access.can_run(values, user, channel, thread_runners=state.runners)
+        if state.status == "confirming":
+            if user == state.requester:
+                start_answer_round(client, logger, state, answer=text, by=user, by_name=name, as_info=False,
+                                   answer_ts=event["ts"])
+            return True
+        if runner:
+            accept_answer(client, logger, state, text, user, name, as_info=False, answer_ts=event["ts"])
+            return True
+        question = slack_rounds.Question.from_dict(state.question)
+        sorted_reply = sort_reply(text, question=question.text if question else "",
+                                  choices=[item.label for item in question.choices] if question else [],
+                                  speaker=name, backend=default_settings.backend or backend,
+                                  model=default_settings.model)
+        if sorted_reply.kind in {"answer_and_task", "instruction"}:
+            open_owner_prompt(client, logger, state, from_user=user, from_name=name, text=sorted_reply.task,
+                              ts=event["ts"], flagged=sorted_reply.kind == "instruction")
+        if sorted_reply.is_answer:
+            accept_answer(client, logger, state, sorted_reply.answer, user, name, as_info=True, answer_ts=event["ts"])
+        return True
+
+    @app.action(re.compile(r"^" + slack_rounds.CHOICE_ACTION_PREFIX + r"[0-9]$"))
+    def answer_round_choice(ack: Any, body: dict[str, Any], client: Any, logger: Any) -> None:
+        ack()
+        user = body.get("user", {}).get("id", "")
+        try:
+            value = json.loads(body["actions"][0]["value"])
+            team, channel, thread_ts = value["team"], value["channel"], value["thread_ts"]
+            state = round_store.get(team, channel, thread_ts)
+            if state is None or state.status != "waiting" or state.question_id != value["q"]:
+                client.chat_postEphemeral(channel=channel, user=user, thread_ts=thread_ts,
+                                          text="This question was already answered.")
+                return
+            if not may_inform(user, state):
+                client.chat_postEphemeral(channel=channel, user=user, thread_ts=thread_ts,
+                                          text="Only people the Tag's owner allows can answer this question.")
+                return
+            question = slack_rounds.Question.from_dict(state.question)
+            choice = question.choices[int(value["i"])] if question else None
+            if choice is None:
+                return
+            runner = tag_access.can_run(access_settings(), user, channel, thread_runners=state.runners)
+            # A button click is used as it is.
+            accept_answer(client, logger, state, choice.label, user, user_name(client, user), as_info=not runner,
+                          answer_ts=state.live_ts or thread_ts, choice=choice)
+        except Exception as exc:  # noqa: BLE001 - keep the Slack action listener alive
+            logger.warning("Could not use the answer: %s", exc)
+
+    @app.action(slack_rounds.CONFIRM_ACTION_ID)
+    @app.action(slack_rounds.DECLINE_ACTION_ID)
+    def confirm_round_answer(ack: Any, body: dict[str, Any], client: Any, logger: Any) -> None:
+        ack()
+        user = body.get("user", {}).get("id", "")
+        action = body["actions"][0]
+        value: dict[str, Any] = {}
+        try:
+            value = json.loads(action["value"])
+            decide_confirmation(client, logger, value["team"], value["channel"], value["thread_ts"],
+                                "confirm" if action["action_id"] == slack_rounds.CONFIRM_ACTION_ID else "decline", user)
+        except (LookupError, PermissionError) as exc:
+            client.chat_postEphemeral(channel=value["channel"], user=user, thread_ts=value["thread_ts"], text=str(exc))
+        except Exception as exc:  # noqa: BLE001 - keep the Slack action listener alive
+            logger.warning("Could not confirm the answer: %s", exc)
+
+    @app.action(OWNER_RUN_ONCE_ACTION_ID)
+    @app.action(OWNER_ALLOW_THREAD_ACTION_ID)
+    @app.action(OWNER_IGNORE_ACTION_ID)
+    def decide_owner_prompt(ack: Any, body: dict[str, Any], client: Any, logger: Any, respond: Any) -> None:
+        ack()
+        user = body.get("user", {}).get("id", "")
+        action = body["actions"][0]
+        if user != tag_access.owner_id(access_settings()):
+            respond(replace_original=False, response_type="ephemeral", text="Only the Tag's owner can decide this.")
+            return
+        try:
+            value = json.loads(action["value"])
+            apply_owner_choice(client, logger, value["team"], value["channel"], value["thread_ts"], value["p"],
+                               OWNER_CHOICES[action["action_id"]])
+        except LookupError as exc:
+            respond(replace_original=False, response_type="ephemeral", text=str(exc))
+        except Exception as exc:  # noqa: BLE001 - keep the Slack action listener alive
+            logger.warning("Could not apply the owner's decision: %s", exc)
+
+    def check_rounds(client: Any, logger: Any) -> None:
+        """Mark a question nobody answered "Still waiting", once, with no further pings."""
+        for state in round_store.all():
+            if not slack_rounds.due_for_nudge(state) or not state.live_ts:
+                continue
+            try:
+                text, blocks = question_message(state, still_waiting=True)
+                client.chat_update(channel=state.channel, ts=state.live_ts, text=text, blocks=blocks)
+            except Exception as exc:  # noqa: BLE001 - try again at the next check
+                logger.warning("Could not mark a question as still waiting: %s", exc)
+                continue
+            round_store.update(state.team, state.channel, state.thread_ts, nudged=True)
+
+    def reconcile_rounds(client: Any, logger: Any) -> None:
+        """A restart ends unfinished work; its live message must not say "Working" forever."""
+        for state in round_store.all():
+            if state.status != "working":
+                continue
+            if state.live_ts:
+                try:
+                    client.chat_update(channel=state.channel, ts=state.live_ts,
+                                       text="Tag restarted before this finished.", blocks=[
+                                           {"type": "section", "text": {"type": "mrkdwn", "text":
+                                               "⏹ Tag restarted before this finished. Mention me to try again."}}])
+                except Exception as exc:  # noqa: BLE001 - nothing else depends on it
+                    logger.warning("Could not close an interrupted live message: %s", exc)
+            round_store.update(state.team, state.channel, state.thread_ts, status="done")
+
+    def round_address(state: slack_rounds.RoundState) -> dict[str, str]:
+        """Where a Tag.app prompt's answer goes; Tag.app hands the prompt back as it was opened."""
+        return {"round_team": state.team, "round_channel": state.channel, "round_thread": state.thread_ts}
+
+    def app_prompt_handler(kind: str) -> Callable[[dict[str, Any], str, dict[str, Any]], str]:
+        """Apply an owner's answer that came from Tag.app."""
+        def handle(prompt: dict[str, Any], choice: str, by: dict[str, Any]) -> str:
+            try:
+                where = (prompt["round_team"], prompt["round_channel"], prompt["round_thread"])
+                if kind == "run_request":
+                    return apply_owner_choice(app.client, app.logger, *where, prompt["round_prompt"], choice,
+                                              via_app=True)
+                return decide_confirmation(app.client, app.logger, *where, choice, by.get("id", ""), via_app=True)
+            except (LookupError, KeyError, PermissionError) as exc:
+                raise tag_threads.PromptExpired(str(exc)) from exc
+        return handle
+
+    register_prompt = globals().get("register_prompt_handler")  # Tag.app prompts, once they ship.
+    if callable(register_prompt) and tag_threads is not None:
+        register_prompt("run_request", app_prompt_handler("run_request"))
+        register_prompt("confirm_answer", app_prompt_handler("confirm_answer"))
+
     def handle_invocation(
         event: dict[str, Any],
         body: dict[str, Any],
@@ -4686,16 +5319,20 @@ def create_app(
         combine: dict[str, Any] | None = None,
         bot_request: bool = False,
         queued: WaitingRequest | None = None,
+        round_answer: dict[str, Any] | None = None,
     ) -> None:
         channel = event["channel"]
         thread_ts = event.get("thread_ts") or event["ts"]
-        if queued is None:
+        if queued is None and round_answer is None:
             log_slack_delivery_lag(event, "message")
         # Answering another Tag, combining replies or answering an approved bot never starts another handoff.
         handoff_depth = 1 if peer_request or combine or bot_request else 0
         user_id = event.get("user", "")
+        team = body.get("team_id") or event.get("team") or ""
+        # Another Tag, a combine, or a bot needs one new reply message, so they keep the earlier flow.
+        use_rounds = rounds_enabled() and peer_request is None and combine is None and not bot_request
         # An approved bot is authorized by SLACK_ALLOWED_BOT_IDS, checked before this call.
-        if not bot_request and not slack_user_allowed(user_id, allowed_user_ids):
+        if not bot_request and not may_run(user_id, team, channel, thread_ts):
             logger.warning(
                 "Rejecting Open Tag invocation from unauthorized Slack user %s in channel %s",
                 user_id or "(missing)",
@@ -4718,7 +5355,6 @@ def create_app(
                 text=str(exc),
             )
             return
-        team = body.get("team_id") or event.get("team") or ""
         question = strip_mention(event.get("text", ""))
         configured_team = os.getenv("SLACK_TEAM_ID", "").strip()
         policy_team = team if not configured_team or configured_team == team else ""
@@ -4784,6 +5420,16 @@ def create_app(
             )
             return
 
+        live: slack_rounds.LiveMessage | None = None
+        round_state: slack_rounds.RoundState | None = None
+        if use_rounds:
+            try:
+                live, round_state = start_round_message(client, logger, team, channel, thread_ts, user_id,
+                                                        question, continuing=round_answer is not None)
+            except BaseException:
+                if (next_request := release_thread(thread_key)) is not None:
+                    start_waiting_request(next_request)
+                raise
         indicator = WorkingIndicator(
             client,
             channel,
@@ -4791,6 +5437,7 @@ def create_app(
             logger,
             journal=session_journal,
             team=team,
+            fallback_message=live is None or live.ts is None,
         )
         indicator.start()
         try:
@@ -4806,10 +5453,22 @@ def create_app(
             )
         except BaseException:
             indicator.clear()
+            if live is not None:
+                live.close()
             if (next_request := release_thread(thread_key)) is not None:
                 start_waiting_request(next_request)
             raise
         answer_stream: SlackAnswerStream | None = None
+
+        def show_activity(event_type: str, activity_id: str, label: str, wait_label: str) -> None:
+            indicator.activity(event_type, activity_id, label, wait_label)
+            if live is not None:
+                live.activity(event_type, activity_id, label, wait_label)
+
+        def show_status(text: str) -> None:
+            indicator.status(text)
+            if live is not None:
+                live.status(text)
         backend_error_code: str | None = None
         backend_error_events: list[str] = []
         failure_stage = "request preparation"
@@ -4839,8 +5498,10 @@ def create_app(
 
         session_workdir = str(default_workdir())
 
+        # An answer to the Tag's own question resumes the paused work, however long it waited.
         continued = thread_sessions.get(team, channel, thread_ts, request_backend,
-                                        workdir=session_workdir, requester=user_id)
+                                        workdir=session_workdir, requester=user_id,
+                                        keep_idle=round_answer is not None)
         current_session: str | None = None
 
         def save_session(context_tokens: int | None = None) -> None:
@@ -4912,14 +5573,16 @@ def create_app(
                 (attachment_dir / "results" / "artifacts").mkdir()
                 own_user = next((item.get("user_id") for item in body.get("authorizations") or []
                                  if isinstance(item, dict) and item.get("is_bot")), None)
+                # An answer's words come in the question itself, so the whole thread is context.
+                thread_request = None if combine or round_answer else event
                 if continued:
                     thread_text, thread_new_text = build_thread_texts(
-                        client, channel, thread_ts, attachment_dir, request=None if combine else event,
+                        client, channel, thread_ts, attachment_dir, request=thread_request,
                         since_ts=continued[1], own_user=own_user,
                     )
                 else:
                     thread_text = build_thread_text(
-                        client, channel, thread_ts, attachment_dir, request=None if combine else event,
+                        client, channel, thread_ts, attachment_dir, request=thread_request,
                     )
                     thread_new_text = None
                 if combine:
@@ -4935,6 +5598,8 @@ def create_app(
                     and indicator.message_ts is None
                     # A reply to another Tag must be one new message that mentions it.
                     and peer_request is None
+                    # Rounds show progress in the live message instead of streamed task cards.
+                    and not use_rounds
                 )
                 app_server_selected = rich_events_selected(request_backend)
                 if app_server_selected:
@@ -4968,11 +5633,11 @@ def create_app(
                         attachment_dir,
                         timeout,
                         answer_stream.append if answer_stream is not None else lambda _text: None,
-                        indicator.activity,
+                        show_activity,
                         model=agent_settings.model,
                         reasoning_effort=agent_settings.reasoning_effort,
                         on_answer_start=indicator.answer_started,
-                        on_status=indicator.status,
+                        on_status=show_status,
                         on_stop_requested=indicator.stop_requested,
                         # No one can answer an approval for a bot, so a bot's request declines them.
                         on_approval=None if bot_request else lambda approval: post_backend_approval(
@@ -4999,6 +5664,7 @@ def create_app(
                         thread_new_text=thread_new_text,
                         on_session=capture_session if app_server_selected else None,
                         on_context=save_session if app_server_selected else None,
+                        rounds=use_rounds,
                     )
                 else:
                     answer, succeeded = run_backend(
@@ -5020,11 +5686,15 @@ def create_app(
                         memory_receipts=memory_receipts,
                         handoff_requests=handoff_requests,
                         handoff_depth=handoff_depth,
+                        rounds=use_rounds,
                     )
                 finish_activity(
                     "completed" if succeeded else
                     "interrupted" if answer.startswith(("Stopped.", "Stop requested")) else "failed"
                 )
+                # The backend's own words, before Tag adds delivery and memory notes.
+                round_source = answer
+                delivery_messages: list[str] = []
                 artifact_button_blocks: list[dict[str, Any]] = []
                 delivered_artifacts: list[dict[str, str]] = []
                 if succeeded:
@@ -5042,7 +5712,7 @@ def create_app(
                         logger,
                         uploaded_paths=uploaded_paths,
                         artifacts=delivered_artifacts,
-                        on_upload_start=lambda: indicator.status(
+                        on_upload_start=lambda: show_status(
                             "Uploading the result…"
                         ),
                     )
@@ -5126,7 +5796,41 @@ def create_app(
                         error_reference=error_reference,
                         direct_message=direct_message,
                     )
-                streamed = (
+                round_card: dict[str, Any] | None = None
+                upload_errors: list[str] = []
+                images_uploaded = False
+                if use_rounds and live is not None and round_state is not None:
+                    if succeeded:
+                        # Images go up before the card, so the outcome stays the Tag's last message.
+                        upload_errors = upload_generated_images(
+                            client, channel, thread_ts, image_results_dir,
+                            artifacts=delivered_artifacts, keep_dir=kept_images_directory(channel),
+                        )
+                        images_uploaded = True
+                        notes = list(delivery_messages)
+                        if upload_errors:
+                            notes.append("I couldn't attach every generated image.")
+                        round_card = finish_round(
+                            client, logger, live, round_state,
+                            slack_rounds.parse_answer(without_bot_mentions(client, logger, round_source)),
+                            delivery_notes=notes, artifacts=delivered_artifacts,
+                            remembered=remembered_items(memory_receipts))
+                    else:
+                        end_round(round_state, live)
+                        if stopped:
+                            stopped_text = to_mrkdwn(answer)
+                            if not live.show(answer, [
+                                    {"type": "section", "text": {"type": "mrkdwn", "text": f"⏹ {stopped_text}"}},
+                                    *summary_blocks]):
+                                post_final_reply(client, channel, thread_ts, answer, None, footer_blocks)
+                        else:
+                            live.close()
+                            # Errors stay private, with Retry, Fix and Report, as before rounds.
+                            post_private_failure(
+                                client, channel, thread_ts, user_id, answer, live.ts, footer_blocks,
+                                bot_request=bot_request,
+                            )
+                streamed = use_rounds or (
                     answer_stream is not None
                     and succeeded
                     and answer_stream.finish(answer, footer_blocks)
@@ -5178,14 +5882,15 @@ def create_app(
                         channel=channel, thread_ts=thread_ts, text="\n".join(memory_changes)
                     )
                 if succeeded:
-                    upload_errors = upload_generated_images(
-                        client,
-                        channel,
-                        thread_ts,
-                        image_results_dir,
-                        artifacts=delivered_artifacts,
-                        keep_dir=kept_images_directory(channel),
-                    )
+                    if not images_uploaded:
+                        upload_errors = upload_generated_images(
+                            client,
+                            channel,
+                            thread_ts,
+                            image_results_dir,
+                            artifacts=delivered_artifacts,
+                            keep_dir=kept_images_directory(channel),
+                        )
                     if activity_run_id is not None:
                         try:
                             activity_store.save_artifacts(activity_run_id, delivered_artifacts)
@@ -5193,9 +5898,14 @@ def create_app(
                             summary_answer = answer
                             if upload_errors:
                                 summary_answer += "\n\nSome generated images could not be attached to Slack."
+                            on_summary = None
+                            if round_card is not None:
+                                summary_answer = round_card["summary_source"]
+                                on_summary = round_card["on_summary"]
                             queue_reply_summary(activity_store, activity_run_id, summary_answer,
                                                 request_backend,
-                                                reported_runs[-1]["model"] if reported_runs else agent_settings.model)
+                                                reported_runs[-1]["model"] if reported_runs else agent_settings.model,
+                                                on_ready=on_summary)
                         except OSError:
                             logger.warning("Could not save the reply preview to Tag activity")
                     if upload_errors:
@@ -5203,6 +5913,7 @@ def create_app(
                             "Generated-image upload failed: %s",
                             "; ".join(upload_errors),
                         )
+                    if upload_errors and not images_uploaded:
                         client.chat_postMessage(
                             channel=channel,
                             thread_ts=thread_ts,
@@ -5216,13 +5927,15 @@ def create_app(
             indicator.clear()
             if answer_stream is not None:
                 answer_stream.abort("failed")
+            if live is not None and round_state is not None:
+                end_round(round_state, live)
             post_private_failure(
                 client,
                 channel,
                 thread_ts,
                 user_id,
                 str(exc),
-                indicator.message_ts,
+                live.ts if live is not None else indicator.message_ts,
                 None,
                 bot_request=bot_request,
             )
@@ -5234,6 +5947,8 @@ def create_app(
             indicator.clear()
             if answer_stream is not None:
                 answer_stream.abort("failed")
+            if live is not None and round_state is not None:
+                end_round(round_state, live)
             failure_at = utc_timestamp()
             report = make_error_report(
                 error_reference,
@@ -5279,7 +5994,7 @@ def create_app(
                 thread_ts,
                 user_id,
                 answer,
-                indicator.message_ts,
+                live.ts if live is not None else indicator.message_ts,
                 footer_blocks,
                 bot_request=bot_request,
             )
@@ -5288,6 +6003,11 @@ def create_app(
             memory_receipts.unlink(missing_ok=True)
             if handoff_requests is not None:
                 handoff_requests.unlink(missing_ok=True)
+            if live is not None:
+                live.close()
+            if round_state is not None:
+                # Tasks the owner approved while this work was open run once it is done.
+                queue_deferred_tasks(round_state, thread_key, body, direct_message, client, logger)
             next_request = release_thread(thread_key)
             if next_request is not None:
                 start_waiting_request(next_request)
@@ -5297,6 +6017,9 @@ def create_app(
         key = RunKey(request.body.get("team_id") or request.event.get("team") or "",
                      request.event["channel"], request.event.get("thread_ts") or request.event["ts"])
         try:
+            # The work they queued behind may have stopped at a question; then this answers it.
+            if handle_round_reply(request.event, request.body, request.client, request.logger):
+                return
             handle_invocation(request.event, request.body, request.client, request.logger,
                               direct_message=request.direct_message, queued=request)
         except Exception:  # noqa: BLE001 - one failed request must not strand those queued behind it
@@ -5722,6 +6445,8 @@ def create_app(
         elif event.get("bot_id") or event.get("user") in peer_ids:
             handle_peer_message(event, body, client, logger)
             return
+        if handle_round_reply(event, body, client, logger):
+            return  # An answer to the Tag's question, with or without the @mention.
         handle_invocation(event, body, client, logger, direct_message=False)
 
     @app.event("member_joined_channel")
@@ -5749,14 +6474,37 @@ def create_app(
         client: Any,
         logger: Any,
     ) -> None:
+        if event.get("channel_type") in {"channel", "group"}:
+            handle_channel_reply(event, body, client, logger)
+            return
         if event.get("channel_type") != "im" or not direct_messages_enabled():
             return
         # Ignore bot output and Slack's message lifecycle events to prevent reply loops.
         if event.get("bot_id") or event.get("subtype") not in {None, "file_share"}:
             return
+        if handle_round_reply(event, body, client, logger):
+            return
         handle_invocation(event, body, client, logger, direct_message=True)
 
+    def handle_channel_reply(event: dict[str, Any], body: dict[str, Any], client: Any, logger: Any) -> None:
+        """A thread reply without an @mention reaches the Tag only while it waits for an answer there.
+
+        Mentions arrive as app_mention events and are handled there.
+        """
+        if event.get("subtype") not in {None, "file_share"} or not event.get("thread_ts"):
+            return
+        if posted_by_test_app(event):
+            event = {key: value for key, value in event.items() if key not in {"bot_id", "bot_profile", "app_id"}}
+        if event.get("bot_id") or not slack_conversation_allowed(event.get("channel", "")):
+            return
+        own_user = own_bot_user_id(body)
+        if own_user and f"<@{own_user}>" in event.get("text", ""):
+            return
+        handle_round_reply(event, body, client, logger)
+
     app.tag_expire_handoffs = expire_handoffs
+    app.tag_check_rounds = check_rounds
+    app.tag_reconcile_rounds = reconcile_rounds
     app.tag_update_handoff_status = update_handoff_status
     return app
 
@@ -5900,12 +6648,17 @@ def main() -> None:
         app.tag_refresh_invitations = invitation_memory.refresh
     next_handoff_check = 0.0
     next_routine_check = 0.0
+    next_rounds_check = 0.0
     try:
         connection.connect()
         try:
             app.tag_routine_scheduler.recover()
         except Exception as exc:  # noqa: BLE001 - routines must never stop the bridge
             app.logger.warning("Could not recover routine runs: %s", exc)
+        try:
+            app.tag_reconcile_rounds(app.client, app.logger)
+        except Exception as exc:  # noqa: BLE001 - keep the bridge running
+            app.logger.warning("Could not close interrupted Slack rounds: %s", exc)
         while not shutdown_requested.is_set():
             if time.monotonic() >= next_routine_check:
                 next_routine_check = time.monotonic() + ROUTINE_CHECK_SECONDS
@@ -5919,6 +6672,12 @@ def main() -> None:
                     app.tag_expire_handoffs(app.client, app.logger)
                 except Exception as exc:  # noqa: BLE001 - keep the bridge running
                     app.logger.warning("Could not check Tag handoff deadlines: %s", exc)
+            if time.monotonic() >= next_rounds_check:
+                next_rounds_check = time.monotonic() + ROUNDS_CHECK_SECONDS
+                try:
+                    app.tag_check_rounds(app.client, app.logger)
+                except Exception as exc:  # noqa: BLE001 - keep the bridge running
+                    app.logger.warning("Could not check unanswered Slack questions: %s", exc)
             connected = connection.is_connected()
             if args.ready_file:
                 invitation_ready = (

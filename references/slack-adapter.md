@@ -5,7 +5,9 @@
 Use this reference when setting up the Slack-facing side of Tag from
 scratch. The bridge is intentionally thin. It only:
 
-1. Receives `app_mention` and `message.im` events through Socket Mode.
+1. Receives `app_mention` and `message.im` events through Socket Mode, and
+   thread replies (`message.channels`, `message.groups`) only while the Tag
+   waits for an answer in that thread.
 2. Reads the current thread through Slack Web API.
 3. Starts Slack's native working indicator, falling back to a temporary reply
    when that API is unavailable.
@@ -40,6 +42,8 @@ Relevant Slack docs:
 
 - Socket Mode: <https://docs.slack.dev/apis/events-api/using-socket-mode/>
 - App mentions: <https://docs.slack.dev/reference/events/app_mention/>
+- Public channel messages: <https://docs.slack.dev/reference/events/message.channels/>
+- Private channel messages: <https://docs.slack.dev/reference/events/message.groups/>
 - Direct messages: <https://docs.slack.dev/reference/events/message.im/>
 - OAuth scopes: <https://docs.slack.dev/reference/scopes/>
 
@@ -109,6 +113,7 @@ Profile-picture selection and upload require Slack CLI 4.7 or newer.
 5. Open **Event Subscriptions** and subscribe to Bot Events:
    - `app_mention`
    - `member_joined_channel` — notice an invitation at once instead of at the next one-minute membership check. Tag still checks every minute, so an app without it works, just slower.
+   - `message.channels` and `message.groups` — an answer to the Tag's question in a thread needs no @mention. Other messages are ignored.
    - `message.im`
    - `app_home_opened`
    - `agent_session_stopped`
