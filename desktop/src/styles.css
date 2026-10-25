@@ -829,6 +829,9 @@ button.activity-artifact:hover { border-color: var(--link); color: var(--link); 
 .phead { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--ink); }
 .pset .tlab { font-size: 13px; font-weight: 600; color: var(--muted); }
 .psel { height: 36px; font-size: 13.5px; font-weight: 600; padding: 0 8px; }
+.access-tbl { border-collapse: collapse; font-size: 13.5px; }
+.access-tbl th { text-align: left; font-weight: 600; color: var(--muted); padding: 0 12px 6px 0; }
+.access-tbl td { padding: 3px 12px 3px 0; }
 .sl-kv dd.pdd .mcap, .sl-kv dd.pdd .mwarn { margin: 0; font-size: 13px; }
 .pdet.fresh { animation: rise2 .22s var(--ease); }
 .psaved { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 8px; }

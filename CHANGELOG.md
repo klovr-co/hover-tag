@@ -6,6 +6,25 @@ All notable changes to Tag are documented here.
 
 ### Added
 
+- Several rounds of work in one Slack thread, with one live message. The Tag
+  posts within about a second, shows "Step N of ~M" and what it's doing, and
+  turns the message into its question when it needs an answer. Once someone
+  answers, the question shrinks to one line naming who answered, and the work
+  carries on below it. The last message becomes the outcome card: the TL;DR,
+  up to five results marked ✅, ⚠️ or ❌, buttons only for what a person must
+  do, **Open in Tag.app**, and one line with the files, what was remembered,
+  the steps and the time. A question nobody answers is marked "Still waiting
+  for an answer" once, after `OPENTAG_THREAD_IDLE_HOURS`; a later answer still
+  resumes the work. Errors stay private, as before. `OPENTAG_SLACK_ROUNDS=0`
+  brings back streamed replies. Existing Slack apps get the `message.channels`
+  and `message.groups` events on the next start, so an answer needs no
+  @mention.
+- Two separate permissions in the Tag's **Details**: **Who can give it
+  information** (Anyone in the thread, People I've authorised, Only me) and
+  **Who can make it run work** (People I've authorised, Only me), each with
+  per-channel overrides. A teammate's new task reaches the owner privately with
+  **Run this once**, **Let NAME run tasks in this thread**, and **Ignore**. In
+  the terminal: `tag NAME settings access`.
 - Choose what each Tag may do without asking, with each agent's own
   settings. In the Tag's **Details**, **Permissions** shows Codex's sandbox
   (Read only, Workspace write, Full access), approval policy (Default,

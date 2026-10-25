@@ -33,7 +33,7 @@ them back from a separate AI chat.
 
 ## Only you can give your Tag instructions
 
-By default, only the owner can ask their Tag to do work. The owner is the
+By default, only the owner can make their Tag run work. The owner is the
 Slack account you sign in with during setup; the setup recap shows
 **Who can ask it: Only you**. Jules can reply to Maya in the thread, but he
 can't give Maya's Tag a task.
@@ -44,6 +44,32 @@ If you need to let someone else make requests, see
 This matters because your Tag may use your files and connected accounts.
 For example, if it uses your Gmail connection, it accesses the mail that
 connection allows.
+
+## Anyone in the thread can answer its questions
+
+When Maya's Tag needs an answer to finish, it asks in the thread, with buttons
+when the choices are known. Anyone in the thread can answer, with or without
+an @mention. The question then shrinks to one line naming who answered, such as
+"✓ 2 queen + 1 single, from Jules", and the work carries on below it.
+
+Jules's words reach the agent as "Jules said: …": information, never
+instructions. If his reply also asks for new work, the answer is used and the
+task goes to Maya privately, with **Run this once**, **Let Jules run tasks in
+this thread** (until the thread ends, nowhere else), and **Ignore**. A reply
+that only tells the Tag what to do isn't run; Maya sees it, flagged. If an
+answer approves something risky, such as spending money, deleting something,
+or giving admin access, the Tag asks Maya by name and waits.
+
+These are two separate settings in the Tag's **Details**, and each can be
+changed for one channel:
+
+- **Who can give it information**: Anyone in the thread (the default),
+  People I've authorised, or Only me.
+- **Who can make it run work**: People I've authorised, or Only me (the
+  default).
+
+In the terminal, `tag NAME settings access inform owner C0123ABCD` and
+`tag NAME settings access run authorized` do the same.
 
 ## People in the channel can see the work
 

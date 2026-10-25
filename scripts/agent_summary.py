@@ -11,6 +11,7 @@ import logging
 import queue
 import tempfile
 import threading
+from collections.abc import Callable
 from pathlib import Path
 
 try:
@@ -56,17 +57,12 @@ def summary_source(answer: str) -> str:
     return redact_sensitive_text(html.unescape(answer), limit=MAX_SOURCE_CHARS, preserve_whitespace=True)
 
 
-def summarize_reply(answer: str, backend: str, model: str | None, *, artifacts: list[dict] | None = None) -> str:
-    """Use the request's connected account/model in a separate, restricted run."""
-    source = summary_source(answer)
-    if not source:
-        return ""
-    payload = {"reply": source}
-    if artifacts:
-        payload["artifacts"] = [{"name": summary_source(item["name"]), "kind": item["kind"],
-                                 "delivery": item["delivery"], "available_locally": bool(item.get("local_path"))}
-                                for item in artifact_records(artifacts)]
-    prompt = json.dumps(payload, ensure_ascii=False)
+def text_only_reply(prompt: str, backend: str, model: str | None, *, instructions: str,
+                    timeout: int = SUMMARY_TIMEOUT) -> tuple[str, str]:
+    """One restricted run: no Tag workspace, tools, project instructions, or caller context.
+
+    Returns the backend's terminal status and its final answer text.
+    """
     final = ""
 
     def collect(event: dict) -> None:
@@ -74,10 +70,9 @@ def summarize_reply(answer: str, backend: str, model: str | None, *, artifacts: 
         if event.get("type") == "message_complete" and event.get("phase") == "final_answer":
             final = event.get("text", "")
 
-    # No Tag workspace, project instructions, or caller-specific tool context.
     with tempfile.TemporaryDirectory(prefix="tag-summary-") as directory:
-        options = dict(cwd=Path(directory), timeout=SUMMARY_TIMEOUT,
-                       max_timeout=SUMMARY_TIMEOUT, text_only_instructions=INSTRUCTIONS)
+        options = dict(cwd=Path(directory), timeout=timeout,
+                       max_timeout=timeout, text_only_instructions=instructions)
         if backend == "codex":
             try:
                 from .opentag_agent import executable_command
@@ -88,8 +83,23 @@ def summarize_reply(answer: str, backend: str, model: str | None, *, artifacts: 
         elif backend == "claude":
             runner = ClaudeAgentRun(**options)
         else:
-            return ""
+            return "unsupported", ""
         status, _detail = runner.run(prompt, model=model, reasoning_effort=None, emit=collect)
+    return status, final if isinstance(final, str) else ""
+
+
+def summarize_reply(answer: str, backend: str, model: str | None, *, artifacts: list[dict] | None = None) -> str:
+    """Use the request's connected account/model in a separate, restricted run."""
+    source = summary_source(answer)
+    if not source:
+        return ""
+    payload = {"reply": source}
+    if artifacts:
+        payload["artifacts"] = [{"name": summary_source(item["name"]), "kind": item["kind"],
+                                 "delivery": item["delivery"], "available_locally": bool(item.get("local_path"))}
+                                for item in artifact_records(artifacts)]
+    status, final = text_only_reply(json.dumps(payload, ensure_ascii=False), backend, model,
+                                    instructions=INSTRUCTIONS)
     # Don't save partial output, model errors, or a truncated paragraph as a TL;DR.
     if status != "completed" or not isinstance(final, str):
         return ""
@@ -123,7 +133,7 @@ class ReplySummaryWorker:
         self.thread: threading.Thread | None = None
 
     def submit(self, store: ActivityStore, run_id: str, answer: str,
-               backend: str, model: str | None) -> bool:
+               backend: str, model: str | None, on_ready: Callable[[str], None] | None = None) -> bool:
         record = store.get(run_id)
         if not record or record["outcome"] != "completed" or record.get("reply_summary"):
             return False
@@ -133,7 +143,7 @@ class ReplySummaryWorker:
                 return False
             store.summary_status(run_id, "pending")
             try:
-                self.jobs.put_nowait((key, store, run_id, summary_source(answer), backend, model))
+                self.jobs.put_nowait((key, store, run_id, summary_source(answer), backend, model, on_ready))
             except queue.Full:
                 store.summary_status(run_id, "unavailable")
                 return False
@@ -145,7 +155,7 @@ class ReplySummaryWorker:
 
     def _work(self) -> None:
         while True:
-            key, store, run_id, answer, backend, model = self.jobs.get()
+            key, store, run_id, answer, backend, model, on_ready = self.jobs.get()
             try:
                 record = store.get(run_id)
                 if record and record["outcome"] == "completed" and not record.get("reply_summary"):
@@ -153,6 +163,12 @@ class ReplySummaryWorker:
                     summary = summarize_reply(answer, backend, model, **metadata)
                     if summary:
                         store.save_reply_summary(run_id, summary)
+                        if on_ready is not None:
+                            try:
+                                on_ready(summary)
+                            except Exception as exc:  # noqa: BLE001 - the card keeps its first headline
+                                logging.getLogger(__name__).warning(
+                                    "Could not show the TL;DR in Slack (%s)", type(exc).__name__)
                         if isinstance(record.get("session_id"), str):
                             try:
                                 name_session(backend, record["session_id"], summary)
@@ -180,9 +196,11 @@ _worker = ReplySummaryWorker()
 
 
 def queue_reply_summary(store: ActivityStore, run_id: str, answer: str,
-                        backend: str, model: str | None = None) -> bool:
+                        backend: str, model: str | None = None,
+                        on_ready: Callable[[str], None] | None = None) -> bool:
+    """Queue the TL;DR; ``on_ready`` gets it once saved, for example to edit the outcome card."""
     try:
-        return _worker.submit(store, run_id, answer, backend, model)
+        return _worker.submit(store, run_id, answer, backend, model, on_ready)
     except Exception:
         logging.getLogger(__name__).warning("Could not queue an activity reply summary")
         return False

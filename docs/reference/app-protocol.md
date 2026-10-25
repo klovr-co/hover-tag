@@ -38,6 +38,7 @@ it shows is listed in `capabilities`; otherwise it offers to upgrade Tag.
 | `api-connections` | `tag NAME settings ai api [set\|clear\|check] --json`: a Tag's own API connection; `api_connections` in `tag settings ai connections --json`; see [API connections](#api-connections) |
 | `thinking-level` | `tag NAME settings ai effort LEVEL --json`, `model VALUE --effort LEVEL`; thinking-level fields in `settings ai`, `models`, and `tag list` |
 | `permission-rules` | `tag NAME settings ai permissions …` and `tag settings ai rules …`: each agent's permission settings and rules for a Tag and for all Tags; see `permissions` below |
+| `access-settings` | `tag NAME settings access [inform\|run LEVEL [CHANNEL]] --json`: who can give the Tag information and who can make it run work; see [Who can work with a Tag](#who-can-work-with-a-tag) |
 | `saved-models` | `tag NAME settings ai models --refresh --json`; `cached`, `cached_at`, `refresh_failed`, and each group's `cached` and `fetched_at` in `models`; `cached_at` in setup's `default_model` |
 | `logs-activity` | `activity` in `tag NAME logs --json` |
 | `activity-details` | `tag NAME logs --activity RUN_ID --json` |
@@ -546,6 +547,52 @@ just the model, keeping a compatible saved level. When nothing usable is connect
 terminal. The app pauses setup, opens Settings, and resumes setup when you return.
 Setup questions cannot sign in or change accounts. Answer with an option ID,
 index, or label.
+
+## Who can work with a Tag
+
+Two separate permissions, always named in full. Never show one "allow" for both.
+
+| Setting | Levels | Default |
+| --- | --- | --- |
+| Who can give it information: answer its questions and add context in a thread where it waits | `anyone` (Anyone in the thread), `authorized` (People I've authorised), `owner` (Only me) | `anyone` |
+| Who can make it run work: start or add tasks | `authorized`, `owner` | `owner`; a Tag saved with several people in `SLACK_ALLOWED_USER_IDS` and no `OPENTAG_WHO_CAN_RUN` keeps `authorized` |
+
+`tag NAME settings access --json` reports `inform`, `run`, `inform_options` and
+`run_options` (`id`, `label`), `channels` (per-channel overrides, channel ID to
+`inform` and/or `run`), `owner` (the first ID in `SLACK_ALLOWED_USER_IDS`), and
+`authorized` (the other IDs). `tag NAME settings access inform LEVEL [CHANNEL]`
+and `run LEVEL [CHANNEL]` change one setting and print the same report; with a
+`CHANNEL`, `default` clears that channel's override. Changes apply to the next
+Slack message without a restart.
+
+The requester and the owner can always answer the Tag's question. Teammates'
+words reach the agent as "NAME said: …", never as instructions. A teammate's
+new task or an instruction to the Tag goes to the owner instead, as a prompt.
+
+### Opening a thread from Slack
+
+The outcome card's **Open in Tag.app** opens
+`hover-tag://tag/TAG_ID/thread/CHANNEL_ID/THREAD_TS`: the Slack thread, not a
+backend conversation. `parseDeepLink` in `desktop/src/lib/deeplink.ts` returns
+`{tag, channel, thread}`; `hover-tag://tag/TAG_ID` still opens the Tag.
+
+### Prompts from Slack rounds
+
+The bridge opens two kinds of thread prompt (see `prompts` under Threads) and
+handles Tag.app's answer to both:
+
+- `run_request`: a teammate asked the Tag to run work, or told it to do
+  something (`flagged` true, `reason` `instruction`). Choices `run_once`,
+  `allow_thread` (that person may run tasks in this thread until it ends, and
+  nowhere else), and `ignore`. Extra fields: `from_id`, `from_name`, `reason`
+  (`task` or `instruction`), `flagged`.
+- `confirm_answer`: a teammate's answer approves something risky (spending
+  money, deleting, giving admin access), and the owner asked for the work.
+  Choices `confirm` and `decline`. When someone else asked, only they can
+  confirm, in Slack.
+
+Both carry `round_team`, `round_channel`, `round_thread` and, for
+`run_request`, `round_prompt`, which the bridge uses to apply the answer.
 
 ## Usage data
 

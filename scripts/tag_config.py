@@ -11,12 +11,13 @@ from urllib.parse import urlsplit
 
 try:
     import agent_permissions
+    import tag_access
     from agent_models import SUPPORTED_REASONING_EFFORTS
     from mfs_scope_policy import canonical_uri, parse_scopes
     from tag_handoff import parse_peers
     from opentag_process_env import parse_channel_scopes
 except ImportError:
-    from scripts import agent_permissions
+    from scripts import agent_permissions, tag_access
     from scripts.agent_models import SUPPORTED_REASONING_EFFORTS
     from scripts.mfs_scope_policy import canonical_uri, parse_scopes
     from scripts.tag_handoff import parse_peers
@@ -50,7 +51,8 @@ PUBLIC = frozenset((*DEFAULTS, "MFS_ALLOWED_SCOPES", "OPENTAG_WORKDIR",
                     "OPENTAG_CLAUDE_MODELS", "OPENTAG_DEFAULT_MODEL", "OPENTAG_BACKENDS",
                     "OPENTAG_DEFAULT_EFFORT", "OPENTAG_BOT_DESCRIPTION",
                     "OPENTAG_CODEX_SANDBOX", "OPENTAG_CODEX_APPROVALS", "OPENTAG_CODEX_REVIEWER",
-                    "OPENTAG_PEER_TAGS", "SLACK_ALLOWED_BOT_IDS", "MFS_CHANNEL_SCOPES"))
+                    "OPENTAG_PEER_TAGS", "SLACK_ALLOWED_BOT_IDS", "MFS_CHANNEL_SCOPES",
+                    "OPENTAG_WHO_CAN_INFORM", "OPENTAG_WHO_CAN_RUN", "OPENTAG_CHANNEL_ACCESS"))
 EDITABLE = PUBLIC - {"OPENTAG_WORKDIR"} | {
     "SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "MFS_TOKEN", "MFS_SLACK_TOKEN", "MFS_HOME"
 }
@@ -88,6 +90,9 @@ LABELS = {
     "SLACK_ALLOWED_BOT_IDS": "Other apps' bots that may ask this Tag (bot or member IDs, comma-separated)",
     "OPENTAG_THREAD_MAX_CONTEXT_TOKENS": "Continue a Slack thread's conversation up to this many tokens (0 never continues)",
     "OPENTAG_THREAD_IDLE_HOURS": "Continue a Slack thread's conversation within this many idle hours (0 never continues)",
+    "OPENTAG_WHO_CAN_INFORM": "Who can give it information (anyone, authorized, or owner)",
+    "OPENTAG_WHO_CAN_RUN": "Who can make it run work (authorized or owner)",
+    "OPENTAG_CHANNEL_ACCESS": "Per-channel overrides of who can give it information and run work (JSON)",
 }
 
 
@@ -229,6 +234,9 @@ def validation_error(key: str, value: str) -> str | None:
         prefix = "xapp-" if key == "SLACK_APP_TOKEN" else "xox"
         if not value.startswith(prefix) or len(value) <= len(prefix) or any(c.isspace() for c in value):
             return f"Enter a valid {prefix}- token issued by Slack"
+    if key in {"OPENTAG_WHO_CAN_INFORM", "OPENTAG_WHO_CAN_RUN", "OPENTAG_CHANNEL_ACCESS"}:
+        if error := tag_access.validation_error(key, value):
+            return error
     if key == "SLACK_ALLOWED_USER_IDS" and not all(re.fullmatch(r"[UW][A-Z0-9]+", item.strip()) for item in value.split(",")):
         return "Use comma-separated Slack member IDs"
     if key == "SLACK_ALLOWED_BOT_IDS" and value.strip() and not all(

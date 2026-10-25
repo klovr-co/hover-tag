@@ -10,7 +10,7 @@ import { useTags } from "./lib/tags";
 import { TrackContext, useTelemetry, type AppEvents } from "./lib/telemetry";
 import { useWatch } from "./lib/watch";
 import { MoodContext, useMoods } from "./lib/mood";
-import { deepLinkTarget } from "./lib/deeplink";
+import { parseDeepLink } from "./lib/deeplink";
 import { glide } from "./lib/motion";
 import { Connect } from "./components/Connect";
 import { Home } from "./components/Home";
@@ -31,8 +31,9 @@ type Screen =
   | { name: "settings"; tab?: SettingsTab; privacy?: boolean }
   | { name: "ai"; resume?: string[] }
   | { name: "memory" }
-  /** `opened` counts Slack links, so a second link resets an open Tag screen. */
-  | { name: "tag"; id: string; tab?: TagTab; opened?: number }
+  /** `opened` counts Slack links, so a second link resets an open Tag screen.
+   * `thread` is the Slack thread a link from Slack named, for the Threads screen. */
+  | { name: "tag"; id: string; tab?: TagTab; opened?: number; thread?: { channel: string; thread: string } }
   /** Settings > Replay onboarding: the first-run screens again, changing nothing. */
   | { name: "replay" };
 
@@ -236,7 +237,8 @@ export function App() {
     });
   }, [api, tags]);
 
-  // Links from Slack, such as "Choose another model in the Tag app", open that Tag's Details.
+  // Links from Slack, such as "Choose another model in the Tag app", open that Tag's Details;
+  // "Open in Tag.app" on a thread's outcome card names the thread too.
   const ready = installed && tags.loaded;
   const [link, setLink] = useState<string | null>(null);
   const links = useRef(0);
@@ -244,8 +246,12 @@ export function App() {
   useEffect(() => {
     if (!api || !link || !ready) return;
     setLink(null);
-    const id = deepLinkTarget(link);
-    if (id && tags.rows.some((r) => r.id === id)) setScreen({ name: "tag", id, tab: "details", opened: ++links.current });
+    const target = parseDeepLink(link);
+    const id = target?.tag;
+    if (id && tags.rows.some((r) => r.id === id)) {
+      const thread = target.channel && target.thread ? { channel: target.channel, thread: target.thread } : undefined;
+      setScreen({ name: "tag", id, tab: thread ? "activity" : "details", opened: ++links.current, thread });
+    }
     else if (id) say("That Tag isn't on this computer.");
     void api.showWindow();
   }, [api, link, ready, tags.rows, say]);
@@ -341,7 +347,7 @@ export function App() {
           {screen.name === "tag" && (
             <TagDetail key={screen.opened ?? 0} api={api} tags={tags} initial={screen.id} initialTab={screen.tab} problems={watch.problems} back={home} add={add}
               canDescribe={capabilities.includes("describe")} canRefreshModels={capabilities.includes(SAVED_MODELS_CAPABILITY)}
-              canRoutines={capabilities.includes("routines")}
+              canRoutines={capabilities.includes("routines")} canAccess={capabilities.includes("access-settings")}
               showSettings={() => setScreen({ name: "settings" })}
               finishSetup={(row) => setScreen({ name: "connect", args: [row.id, "setup"] })}
               openAI={() => capabilities.includes(SHARED_AI_CAPABILITY) ? setScreen({ name: "ai" }) : say("Update Tag to manage shared AI accounts in Settings.")} say={say} />

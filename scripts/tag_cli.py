@@ -71,6 +71,7 @@ CAPABILITIES = (
     "autostart", "autostart-keep", "logs-json", "upgrade-json", "install-progress",
     "ai-connections", "shared-ai-connections", "thinking-level", "logs-activity", "activity-details", "setup-v2", "abandon-setup", "remove-tag",
     "describe", "telemetry-events", "start-progress", "api-connections", "saved-models", "permission-rules", "routines",
+    "access-settings",
 )
 UPDATE_CHECK_INTERVAL_SECONDS = 24 * 60 * 60
 COMMANDS = tuple(sorted(tag_instances.RESERVED_NAMES))
@@ -2490,6 +2491,36 @@ def _settings_ai(context, args) -> int:
                       refresh=args.refresh)
 
 
+def _settings_access(context: tag_instances.InstanceContext, args) -> int:
+    """Show or change who can give the Tag information and who can make it run work."""
+    try:
+        import tag_access
+        import tag_config as settings
+    except ImportError:
+        from scripts import tag_access, tag_config as settings
+    words = args.arguments[1:]
+    path = settings.config_path(context.home)
+    values = settings.load_config(path)
+    if words:
+        if len(words) not in {2, 3} or words[0] not in {"inform", "run"}:
+            raise ValueError("Use tag settings access [inform anyone|authorized|owner [CHANNEL]] "
+                             "or [run authorized|owner [CHANNEL]]; with a CHANNEL, 'default' clears its override")
+        changes = tag_access.changes(values, **{words[0]: words[1]}, channel=words[2] if len(words) == 3 else None)
+        values = settings.update_config(path, changes)
+    report = {"schema_version": 1, "tag": context.tag_id, **tag_access.describe(values)}
+    if args.json_output:
+        print(json.dumps(report, indent=2))
+        return 0
+    display.header("Access", f"Tag '{context.tag_id}'")
+    display.paragraph(f"Who can give it information: {tag_access.INFORM_LABELS[report['inform']]}", indent="    ")
+    display.paragraph(f"Who can make it run work: {tag_access.RUN_LABELS[report['run']]}", indent="    ")
+    for channel, entry in sorted(report["channels"].items()):
+        parts = [f"who can give it information: {tag_access.INFORM_LABELS[entry['inform']]}" if "inform" in entry else "",
+                 f"who can make it run work: {tag_access.RUN_LABELS[entry['run']]}" if "run" in entry else ""]
+        display.paragraph(f"In {channel}, " + "; ".join(part for part in parts if part), indent="    ")
+    return 0
+
+
 def _run_cli() -> int:
     parser = argparse.ArgumentParser(description="Tag: set up, inspect, and manage your Slack teammate.",
                                      usage="tag [TAG] [COMMAND] [OPTIONS]",
@@ -2504,7 +2535,7 @@ def _run_cli() -> int:
                                      ),
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("command", nargs="?", choices=COMMANDS)
-    parser.add_argument("arguments", nargs="*", help="memory: start | status | stop; config: init | show | keys | set KEY VALUE; chatgpt: status | login [ACCOUNT] | use ACCOUNT | logout [ACCOUNT] | use-codex; settings: ai [status | models [--refresh] | sign-in codex|claude | resume | model VALUE | effort LEVEL|default | permissions [codex-sandbox=V ...] | permissions allow|block|remove codex|claude RULE | rules [allow|block|remove codex|claude RULE] | api [status | set | clear | check]]")
+    parser.add_argument("arguments", nargs="*", help="memory: start | status | stop; config: init | show | keys | set KEY VALUE; chatgpt: status | login [ACCOUNT] | use ACCOUNT | logout [ACCOUNT] | use-codex; settings: access [inform|run LEVEL [CHANNEL]] | ai [status | models [--refresh] | sign-in codex|claude | resume | model VALUE | effort LEVEL|default | permissions [codex-sandbox=V ...] | permissions allow|block|remove codex|claude RULE | rules [allow|block|remove codex|claude RULE] | api [status | set | clear | check]]")
     parser.add_argument("--offline", action="store_true")
     parser.add_argument("--json", action="store_true", dest="json_output", help="structured output for inspect, status, doctor, config, paths, upgrade, usage, and chatgpt")
     parser.add_argument("--consent", action="store_true", help="chatgpt login: request plan permission again")
@@ -2575,8 +2606,9 @@ def _run_cli() -> int:
     if args.arguments and args.command not in {"add", "memory", "config", "telemetry", "rename", "describe", "autostart", "chatgpt", "settings"}:
         parser.error("Only add, memory, config, telemetry, rename, describe, autostart, chatgpt, and settings accept additional positional arguments")
     settings_ai = args.command == "settings" and args.arguments[:1] == ["ai"]
-    if args.command == "settings" and args.arguments and not settings_ai:
-        parser.error("settings accepts only ai, for example tag settings ai --json")
+    settings_access = args.command == "settings" and args.arguments[:1] == ["access"]
+    if args.command == "settings" and args.arguments and not (settings_ai or settings_access):
+        parser.error("settings accepts only ai or access, for example tag settings ai --json")
     if (args.method or args.account or args.restart or args.effort is not None) and not settings_ai:
         parser.error("--method, --account, --effort and --restart are only for tag settings ai")
     if args.refresh and not (settings_ai and args.arguments[1:] == ["models"]):
@@ -2590,7 +2622,7 @@ def _run_cli() -> int:
                 option is not None for option in (args.api_backend, args.api_kind, args.api_models, args.api_version))):
         parser.error("--backend, --kind, --base-url, --models and --api-version are only for tag settings ai api "
                      "(--base-url also works with tag memory embedding custom)")
-    if args.json_output and args.command not in {"list", "memory", "inspect", "status", "doctor", "config", "paths", "upgrade", "telemetry", "setup", "add", "rename", "describe", "abandon", "remove", "start", "stop", "restart", "autostart", "version", "logs", "chatgpt", "usage"} and not settings_ai:
+    if args.json_output and args.command not in {"list", "memory", "inspect", "status", "doctor", "config", "paths", "upgrade", "telemetry", "setup", "add", "rename", "describe", "abandon", "remove", "start", "stop", "restart", "autostart", "version", "logs", "chatgpt", "usage"} and not (settings_ai or settings_access):
         parser.error("--json supports list, memory, inspect, status, doctor, config, paths, upgrade, telemetry, usage, chatgpt, settings ai, autostart, version, logs, setup, add, rename, describe, start, and stop/restart with --workspace")
     if args.json_output and args.follow:
         parser.error("--json cannot be combined with --follow")
@@ -2981,7 +3013,7 @@ def _run_cli() -> int:
         return int(args.command == "status" and report["state"] != "running")
     if args.command in {"setup", "settings", "reset"} and not display.stdin_is_terminal() and not (
         args.command == "setup" and os.getenv(SETUP_PROTOCOL_ENV) == "jsonl"
-    ) and not (settings_ai and (args.json_output or len(args.arguments) > 1)):
+    ) and not ((settings_ai or settings_access) and (args.json_output or len(args.arguments) > 1)):
         print("Interactive setup requires a terminal. Use tag inspect --json and tag config set for automation.", file=sys.stderr)
         return 2
     if args.command == "reset":
@@ -2994,6 +3026,10 @@ def _run_cli() -> int:
         if args.arguments[1:2] not in ([], ["status"], ["models"]) and args.arguments[1:3] not in (["api"], ["api", "status"], ["api", "check"]):
             initialize_instance(home)  # Only changes need the private home; checks don't create one.
         return _settings_ai(context, args)
+    if settings_access:
+        if len(args.arguments) > 1:
+            initialize_instance(home)
+        return _settings_access(context, args)
     if args.command == "settings":
         initialize_instance(home)
         control.settings_menu(home, ai=_ai_target(context))
