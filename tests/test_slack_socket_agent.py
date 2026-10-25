@@ -3020,7 +3020,7 @@ class SlackChannelWatchTests(unittest.TestCase):
         stack.enter_context(patch.object(slack_socket_agent, "build_thread_text", return_value="thread context"))
         stack.enter_context(patch.object(slack_socket_agent, "WorkingIndicator",
                                          return_value=MagicMock(native=False, message_ts=None)))
-        self.save_watch = stack.enter_context(patch.object(slack_socket_agent, "save_watch_channels"))
+        self.save_watch = stack.enter_context(patch.object(slack_socket_agent, "save_watch_modes"))
         slack_socket_agent.create_app(
             "claude", 30, frozenset({"UOWNER"}),
             activity_store=ActivityStore(self.home / "state/activity"),
@@ -3245,7 +3245,7 @@ class SlackChannelWatchTests(unittest.TestCase):
             self.app(stack).actions[slack_socket_agent.WATCH_OFF_ACTION_ID](
                 ack=MagicMock(), client=self.client, logger=MagicMock(),
                 body={"user": {"id": "USAM"}, "actions": [{"value": json.dumps({"channel": "C123", "score_id": "abc"})}]})
-            self.save_watch.assert_called_once_with([])
+            self.save_watch.assert_called_once_with({})
         self.assertFalse(self.state.noticed("C123"))
         self.assertIn("stopped watching", self.client.chat_postEphemeral.call_args.kwargs["text"])
         self.assertEqual(("abc", False), (self.log()[-1]["id"], self.log()[-1]["expected"]))
@@ -3287,11 +3287,35 @@ class SlackChannelWatchTests(unittest.TestCase):
         with ExitStack() as stack:
             self.app(stack).actions[slack_socket_agent.HOME_WATCH_ACTION_ID](
                 ack=MagicMock(), body=body, client=self.client, logger=MagicMock())
-            self.save_watch.assert_called_once_with(["C123", "C456"])
+            self.save_watch.assert_called_once_with({"C123": "when-addressed", "C456": "when-addressed"})
         with ExitStack() as stack:
             self.app(stack).actions[slack_socket_agent.HOME_WATCH_ACTION_ID](
                 ack=MagicMock(), body=body | {"user": {"id": "USAM"}}, client=self.client, logger=MagicMock())
             self.save_watch.assert_not_called()
+
+    def test_home_tab_sets_a_mode_per_channel(self) -> None:
+        from contextlib import ExitStack
+        self.environment = self.ENVIRONMENT | {"OPENTAG_WATCH_CHANNEL_IDS": "",
+                                               "OPENTAG_WATCH_CHANNEL_MODES": "C123=when-addressed,C456=chimes-in"}
+        with patch.dict(os.environ, self.environment, clear=True):
+            view = slack_socket_agent.app_home_view("C123,C456")
+        selectors = {b.get("accessory", {}).get("action_id"): b.get("accessory", {}) for b in view["blocks"]}
+        self.assertEqual(["C123"], selectors[slack_socket_agent.HOME_WATCH_ACTION_ID]["initial_conversations"])
+        self.assertEqual(["C456"], selectors[slack_socket_agent.HOME_CHIME_ACTION_ID]["initial_conversations"])
+        # Moving C123 into the chime-in list takes it out of the when-addressed list; C456 stays.
+        body = {"user": {"id": "UOWNER"}, "actions": [{"action_id": slack_socket_agent.HOME_CHIME_ACTION_ID,
+                                                       "selected_conversations": ["C123", "C456"]}]}
+        with ExitStack() as stack:
+            self.app(stack).actions[slack_socket_agent.HOME_CHIME_ACTION_ID](
+                ack=MagicMock(), body=body, client=self.client, logger=MagicMock())
+            self.save_watch.assert_called_once_with({"C123": "chimes-in", "C456": "chimes-in"})
+        # Clearing the chime-in list turns those channels off; the when-addressed list is untouched.
+        self.environment |= {"OPENTAG_WATCH_CHANNEL_MODES": "C123=when-addressed,C456=chimes-in"}
+        body["actions"][0]["selected_conversations"] = []
+        with ExitStack() as stack:
+            self.app(stack).actions[slack_socket_agent.HOME_CHIME_ACTION_ID](
+                ack=MagicMock(), body=body, client=self.client, logger=MagicMock())
+            self.save_watch.assert_called_once_with({"C123": "when-addressed"})
 
     def test_direct_messages_keep_their_own_path(self) -> None:
         self.environment = self.ENVIRONMENT | {"OPENTAG_SLACK_DM_ENABLED": "1"}

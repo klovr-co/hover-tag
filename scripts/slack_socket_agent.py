@@ -174,6 +174,7 @@ OPEN_LOCAL_ARTIFACT_DIRECTORY_ACTION_ID = "opentag_open_local_artifact_directory
 SETTINGS_VIEW_ID = "opentag_agent_settings"
 HOME_CHANNEL_ACTION_ID = "opentag_home_channel"
 HOME_WATCH_ACTION_ID = "opentag_home_watch_channels"
+HOME_CHIME_ACTION_ID = "opentag_home_chime_channels"
 WATCH_TAKE_ACTION_ID = "opentag_watch_take"
 WATCH_OFF_ACTION_ID = "opentag_watch_off"
 UNAUTHORIZED_USER_MESSAGE = "Sorry, only users authorized by the Tag owner can use this bot."
@@ -3432,22 +3433,33 @@ def slack_user_allowed(user_id: str, allowed_user_ids: frozenset[str]) -> bool:
 
 
 def watch_home_blocks() -> list[dict[str, Any]]:
-    """Owner control for watching: per channel, off by default, labelled experimental."""
-    selector: dict[str, Any] = {
-        "type": "multi_conversations_select",
-        "action_id": HOME_WATCH_ACTION_ID,
-        "placeholder": {"type": "plain_text", "text": "Watch no channels"},
-        "filter": {"include": ["public", "private"], "exclude_bot_users": True,
-                   "exclude_external_shared_channels": True},
-    }
-    watched = sorted(channel_watch.watched_channel_ids())
-    if watched:
-        selector["initial_conversations"] = watched
+    """Owner control for watching: a mode per channel, off by default, labelled experimental.
+
+    A channel in neither list is off; one in the chime-in list also answers when addressed."""
+    modes = channel_watch.channel_modes()
+
+    def selector(action_id: str, placeholder: str, mode: str) -> dict[str, Any]:
+        element: dict[str, Any] = {
+            "type": "multi_conversations_select", "action_id": action_id,
+            "placeholder": {"type": "plain_text", "text": placeholder},
+            "filter": {"include": ["public", "private"], "exclude_bot_users": True,
+                       "exclude_external_shared_channels": True},
+        }
+        if chosen := sorted(c for c, m in modes.items() if m == mode):
+            element["initial_conversations"] = chosen
+        return element
+
     return [
-        {"type": "section", "accessory": selector, "text": {"type": "mrkdwn", "text":
+        {"type": "section", "accessory": selector(HOME_WATCH_ACTION_ID, "No channels", "when-addressed"),
+         "text": {"type": "mrkdwn", "text":
             "*Answer without an @mention (experimental)*\n"
             "In these channels, Tag answers briefly in threads it's already in and to messages that "
             "name it. It can't take actions until someone confirms, and it posts a notice first."}},
+        {"type": "section", "accessory": selector(HOME_CHIME_ACTION_ID, "No channels", "chimes-in"),
+         "text": {"type": "mrkdwn", "text":
+            "*Also chime in (experimental)*\n"
+            "Tag does the above, and may also react to posts that invite colleagues' reactions, such "
+            "as a launch or a win. Every message here is checked by the classifier."}},
         {"type": "context", "elements": [{"type": "mrkdwn", "text":
             "Needs a classifier key: see `tag config keys`. Quiet hours, a daily limit and a "
             "cooldown after 👎 apply. Anyone can turn it off with “Don't do this here”."}]},
@@ -3537,17 +3549,19 @@ def save_home_channels(channel_ids: list[str]) -> None:
     os.environ["SLACK_CHANNEL_IDS"] = value
 
 
-def save_watch_channels(channel_ids: list[str]) -> None:
-    """Persist the watched channels and apply them to this live bridge."""
+def save_watch_modes(modes: dict[str, str]) -> None:
+    """Persist each watched channel's mode and apply them to this live bridge."""
     try:
         import tag_config as settings
         from tag_paths import instance_home
     except ImportError:
         from scripts import tag_config as settings
         from scripts.tag_paths import instance_home
-    value = ",".join(channel_ids)
-    settings.update_config(settings.config_path(instance_home()), {"OPENTAG_WATCH_CHANNEL_IDS": value})
-    os.environ["OPENTAG_WATCH_CHANNEL_IDS"] = value
+    value = channel_watch.format_channel_modes(modes)
+    settings.update_config(settings.config_path(instance_home()),
+                           {"OPENTAG_WATCH_CHANNEL_MODES": value, "OPENTAG_WATCH_CHANNEL_IDS": ""})
+    os.environ["OPENTAG_WATCH_CHANNEL_MODES"] = value
+    os.environ["OPENTAG_WATCH_CHANNEL_IDS"] = ""
 
 
 def print_live_summary(backend: str, allowed_user_ids: frozenset[str]) -> None:
@@ -4080,6 +4094,7 @@ def create_app(
             )
 
     @app.action(HOME_WATCH_ACTION_ID)
+    @app.action(HOME_CHIME_ACTION_ID)
     def select_watch_channels(ack: Any, body: dict[str, Any], client: Any, logger: Any) -> None:
         ack()
         user_id = body.get("user", {}).get("id", "")
@@ -4087,9 +4102,14 @@ def create_app(
             return
         current = os.getenv("SLACK_CHANNEL_IDS", "").strip() or os.getenv("SLACK_CHANNEL_ID", "").strip()
         try:
-            chosen = body["actions"][0].get("selected_conversations") or []
+            action = body["actions"][0]
+            mode = "chimes-in" if action.get("action_id") == HOME_CHIME_ACTION_ID else "when-addressed"
+            chosen = action.get("selected_conversations") or []
             if not isinstance(chosen, list):
                 raise ValueError("invalid channel selection")
+            before = channel_watch.channel_modes()
+            # This list now holds exactly the chosen channels in this mode; the other list keeps the rest.
+            modes = {c: m for c, m in before.items() if m != mode and c not in chosen} | {c: mode for c in chosen}
             outside = [c for c in chosen if not (slack_channel_allowed(c) or newly_invited_channel_allowed(c, client))]
             if outside:
                 notice = ":warning: Tag can only watch channels where it already responds."
@@ -4098,17 +4118,17 @@ def create_app(
                     watch_classifier.settings_from(os.environ)
                     ready = True
                 except watch_classifier.ClassifierError:
-                    ready = not chosen
+                    ready = not modes
                 if not ready:
                     notice = (":warning: Set the watching classifier's key first, for example "
                               "`printf '%s' \"$KEY\" | tag config set OPENTAG_TYPESAFE_API_KEY --stdin`.")
                 else:
-                    for channel in channel_watch.watched_channel_ids() - set(chosen):
+                    for channel in set(before) - set(modes):
                         watching().set_noticed(channel, False)
-                    save_watch_channels(sorted(chosen))
+                    save_watch_modes(modes)
                     post_watch_notices(client, logger)
                     notice = (":white_check_mark: Tag posted a notice and now watches the selected channels."
-                              if chosen else ":white_check_mark: Tag watches no channels.")
+                              if modes else ":white_check_mark: Tag watches no channels.")
         except (KeyError, IndexError, OSError, TypeError, ValueError, RuntimeError) as exc:
             logger.warning("Could not save watched channels: %s", exc)
             notice = ":warning: Tag could not save watched channels. Check the local Tag logs."
@@ -5602,8 +5622,8 @@ def create_app(
             channel = metadata["channel"]
             if not isinstance(channel, str) or not channel:
                 raise ValueError("invalid channel")
-            remaining = [c for c in sorted(channel_watch.watched_channel_ids()) if c != channel]
-            save_watch_channels(remaining)
+            remaining = {c: m for c, m in channel_watch.channel_modes().items() if c != channel}
+            save_watch_modes(remaining)
             watching().set_noticed(channel, False)
             watch_scores().label(str(metadata.get("score_id", "")), False, "dont-do-this-here")
             client.chat_postEphemeral(

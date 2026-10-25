@@ -52,6 +52,47 @@ class ConfigurationTests(unittest.TestCase):
         values["OPENTAG_OPENAI_DECISIONS_API_KEY"] = "sk-decisions"
         self.assertNotIn("OPENTAG_OPENAI_DECISIONS_API_KEY", tag_config.config_errors(values))
 
+    def test_any_watching_mode_requires_the_key_but_off_does_not(self) -> None:
+        values = dict(tag_config.DEFAULTS, OPENTAG_WATCH_CHANNEL_MODES="C123=chimes-in")
+        self.assertIn("OPENTAG_TYPESAFE_API_KEY", tag_config.config_errors(values))
+        values["OPENTAG_WATCH_CHANNEL_MODES"] = "C123=off"
+        self.assertNotIn("OPENTAG_TYPESAFE_API_KEY", tag_config.config_errors(values))
+
+    def test_modes_replace_the_older_list_which_still_counts_until_migrated(self) -> None:
+        from scripts import channel_watch
+        legacy = {"OPENTAG_WATCH_CHANNEL_IDS": "C1, C2"}
+        self.assertEqual({"C1": "when-addressed", "C2": "when-addressed"}, channel_watch.channel_modes(legacy))
+        both = legacy | {"OPENTAG_WATCH_CHANNEL_MODES": "C3=chimes-in,C4=off"}
+        self.assertEqual({"C3": "chimes-in"}, channel_watch.channel_modes(both))
+        self.assertEqual(frozenset({"C3"}), channel_watch.watched_channel_ids(both))
+        self.assertEqual(frozenset({"C3"}), channel_watch.chime_in_channel_ids(both))
+        self.assertEqual(frozenset(), channel_watch.chime_in_channel_ids(legacy))
+        self.assertEqual("C1=when-addressed,C3=chimes-in",
+                         channel_watch.format_channel_modes({"C3": "chimes-in", "C2": "off", "C1": "when-addressed"}))
+
+    def test_migration_moves_watched_channels_to_when_addressed_once(self) -> None:
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            path = tag_config.config_path(home)
+            tag_config.save_config(path, {"OPENTAG_WATCH_CHANNEL_IDS": "C2,C1"})
+            self.assertTrue(tag_config.migrate_watch_modes(home, path))
+            saved = tag_config.read_config(path)
+            self.assertEqual(("", "C1=when-addressed,C2=when-addressed"),
+                             (saved["OPENTAG_WATCH_CHANNEL_IDS"], saved["OPENTAG_WATCH_CHANNEL_MODES"]))
+            tag_config.update_config(path, {"OPENTAG_WATCH_CHANNEL_MODES": "C1=chimes-in"})
+            self.assertFalse(tag_config.migrate_watch_modes(home, path))  # Never runs twice.
+            self.assertEqual("C1=chimes-in", tag_config.read_config(path)["OPENTAG_WATCH_CHANNEL_MODES"])
+            # A config that already has modes keeps them; only the older list is cleared.
+            other = Path(directory) / "other"
+            other_path = tag_config.config_path(other)
+            tag_config.save_config(other_path, {"OPENTAG_WATCH_CHANNEL_IDS": "C1",
+                                                "OPENTAG_WATCH_CHANNEL_MODES": "C9=chimes-in"})
+            tag_config.migrate_watch_modes(other, other_path)
+            self.assertEqual(("", "C9=chimes-in"), tuple(tag_config.read_config(other_path)[k] for k in (
+                "OPENTAG_WATCH_CHANNEL_IDS", "OPENTAG_WATCH_CHANNEL_MODES")))
+
     def test_keys_are_editable_but_never_shown(self) -> None:
         for key in ("OPENTAG_TYPESAFE_API_KEY", "OPENTAG_OPENAI_DECISIONS_API_KEY"):
             self.assertIn(key, tag_config.EDITABLE)
@@ -63,6 +104,8 @@ class ConfigurationTests(unittest.TestCase):
         error = tag_config.validation_error
         for key, good, bad in (
             ("OPENTAG_WATCH_CHANNEL_IDS", ("", "C123,G456"), ("D123", "C1, nope")),
+            ("OPENTAG_WATCH_CHANNEL_MODES", ("", "C1=when-addressed,G2=chimes-in", "C3=off"),
+             ("C1", "C1=chime", "D1=chimes-in", "C1=chimes-in,")),
             ("OPENTAG_WATCH_NAMES", ("", "Iris's Tag, Tagbot"), ("Tag,,Bot", "x" * 36)),
             ("OPENTAG_WATCH_QUIET_HOURS", ("", "19:00-08:00", "09:30-17:45"), ("7pm-8am", "24:00-08:00")),
             ("OPENTAG_WATCH_DAILY_LIMIT", ("1", "50"), ("0", "51", "five")),

@@ -6,7 +6,9 @@ These notes go with the experimental channel-watching change, which supersedes #
 
 ## What changed
 
-- **Opt-in per channel, off by default.** Set from the Home tab or `OPENTAG_WATCH_CHANNEL_IDS`. Tag posts a
+- **Opt-in per channel, off by default.** Each channel is `off`, `when-addressed` or
+  `chimes-in`, set from the Home tab or `OPENTAG_WATCH_CHANNEL_MODES`. `tag start` moves channels from the older
+  `OPENTAG_WATCH_CHANNEL_IDS` list to `when-addressed`, once. Tag posts a
   visible notice before it starts watching a channel.
 - **Narrow scope.** Tag watches only messages that name it, and threads where it was @mentioned or engaged.
 - **Reduced capability.** A watched reply is a text-only backend run with no tools, files, memory, credentials or

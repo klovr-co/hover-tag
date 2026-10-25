@@ -26,7 +26,7 @@ DEFAULTS = {
     "OPENTAG_MAX_TIMEOUT_SECONDS": "3600",
     "OPENTAG_BACKEND_ATTEMPTS": "3", "OPENTAG_SLACK_STREAMING": "1",
     "OPENTAG_SLACK_DM_ENABLED": "1", "OPENTAG_SHOW_THINKING": "1",
-    "OPENTAG_WATCH_CHANNEL_IDS": "", "OPENTAG_WATCH_NAMES": "",
+    "OPENTAG_WATCH_CHANNEL_IDS": "", "OPENTAG_WATCH_CHANNEL_MODES": "", "OPENTAG_WATCH_NAMES": "",
     "OPENTAG_WATCH_QUIET_HOURS": "19:00-08:00", "OPENTAG_WATCH_DAILY_LIMIT": "5",
     "OPENTAG_WATCH_COOLDOWN_HOURS": "24",
     "OPENTAG_WATCH_CLASSIFIER": "typesafe-jev", "OPENTAG_WATCH_CLASSIFIER_TIMEOUT_SECONDS": "5",
@@ -86,7 +86,9 @@ LABELS = {
     "OPENTAG_BACKEND_ATTEMPTS": "Retry attempts", "OPENTAG_SLACK_STREAMING": "Stream replies (1 on, 0 off)",
     "OPENTAG_SLACK_DM_ENABLED": "Direct messages (1 on, 0 off)",
     "OPENTAG_SHOW_THINKING": "Show thinking summaries in Agent activity (1 on, 0 off)",
-    "OPENTAG_WATCH_CHANNEL_IDS": "Watched channels: answer without an @mention (experimental; comma-separated IDs)",
+    "OPENTAG_WATCH_CHANNEL_IDS": "Watched channels, older setting (moved to OPENTAG_WATCH_CHANNEL_MODES)",
+    "OPENTAG_WATCH_CHANNEL_MODES": ("Watched channels and their mode, experimental "
+                                    "(CHANNEL=when-addressed or CHANNEL=chimes-in, comma-separated)"),
     "OPENTAG_WATCH_NAMES": "Other names people call this Tag (comma-separated)",
     "OPENTAG_WATCH_QUIET_HOURS": "Watching quiet hours, this computer's time (HH:MM-HH:MM, empty for none)",
     "OPENTAG_WATCH_DAILY_LIMIT": "Unprompted replies per watched channel per day",
@@ -241,6 +243,10 @@ def validation_error(key: str, value: str) -> str | None:
     if key == "OPENTAG_WATCH_CHANNEL_IDS" and value.strip() and not all(
             re.fullmatch(r"[CG][A-Z0-9]+", item.strip()) for item in value.split(",")):
         return "Use comma-separated Slack channel IDs, or leave empty to watch no channels"
+    if key == "OPENTAG_WATCH_CHANNEL_MODES" and value.strip() and not all(
+            re.fullmatch(r"[CG][A-Z0-9]+=(?:off|when-addressed|chimes-in)", item.strip()) for item in value.split(",")):
+        return ("Use comma-separated CHANNEL=MODE pairs, where MODE is off, when-addressed or chimes-in; "
+                "leave empty to watch no channels")
     if key == "OPENTAG_WATCH_NAMES" and any(
             not item.strip() or len(item.strip()) > 35
             or any(unicodedata.category(character) in {"Cc", "Zl", "Zp"} for character in item)
@@ -327,7 +333,9 @@ def config_errors(values: dict[str, str]) -> dict[str, str]:
             continue
         if key in EDITABLE and (error := validation_error(key, value)):
             errors[key] = error
-    if values.get("OPENTAG_WATCH_CHANNEL_IDS", "").strip():
+    if values.get("OPENTAG_WATCH_CHANNEL_IDS", "").strip() or any(
+            not item.strip().endswith("=off") for item in values.get("OPENTAG_WATCH_CHANNEL_MODES", "").split(",")
+            if item.strip()):
         provider = values.get("OPENTAG_WATCH_CLASSIFIER") or DEFAULTS["OPENTAG_WATCH_CLASSIFIER"]
         key, label = CLASSIFIER_PROVIDERS.get(provider, ("", ""))
         if key and not values.get(key, "").strip():
@@ -411,6 +419,29 @@ def align_default_backend(values: dict[str, str], changes: dict[str, str]) -> No
         values["OPENTAG_BACKEND"] = model_backend
     elif "OPENTAG_BACKEND" in changes and model_backend and model_backend != values.get("OPENTAG_BACKEND"):
         values["OPENTAG_DEFAULT_MODEL"] = ""
+
+
+def migrate_watch_modes(home: Path, path: Path) -> bool:
+    """Version 1: each channel in OPENTAG_WATCH_CHANNEL_IDS becomes when-addressed, which is what it did."""
+    marker = home / "state/migrations/watch-modes-v1.json"
+    try:
+        checkpoint = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        checkpoint = {}
+    if isinstance(checkpoint, dict) and checkpoint.get("version") == "1":
+        return False
+    saved = read_config(path)
+    legacy = [item.strip() for item in saved.get("OPENTAG_WATCH_CHANNEL_IDS", "").split(",") if item.strip()]
+    if legacy:
+        modes = {} if saved.get("OPENTAG_WATCH_CHANNEL_MODES", "").strip() else {
+            channel: "when-addressed" for channel in legacy}
+        changes = {"OPENTAG_WATCH_CHANNEL_IDS": ""}
+        if modes:
+            changes["OPENTAG_WATCH_CHANNEL_MODES"] = ",".join(f"{c}={m}" for c, m in sorted(modes.items()))
+        update_config(path, changes)
+    # Atomic checkpoint comes last. Interrupted writes can be retried safely.
+    save_config(marker, {"version": "1"})
+    return True
 
 
 def migrate_file_delivery(home: Path, path: Path) -> bool:

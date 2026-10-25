@@ -189,8 +189,11 @@ Any action, change, file or search needs that confirmation, or an @mention.
   empty for none).
 - Tag also pauses watching when Slack answers 429.
 
-**Turning it on.** An authorized person chooses watched channels on Tag's Home
-tab, or sets them with `OPENTAG_WATCH_CHANNEL_IDS`. Tag first posts a notice in
+**Turning it on.** Each channel has a mode: `off` (the default),
+`when-addressed` or `chimes-in`. An authorized person picks the channels for
+each mode on Tag's Home tab, or sets them with `OPENTAG_WATCH_CHANNEL_MODES`.
+`tag start` moves channels from the older `OPENTAG_WATCH_CHANNEL_IDS` list to
+`when-addressed`, once. Tag first posts a notice in
 each channel explaining what it watches and how to turn it off, and watches only
 after that notice is posted. Watching also needs the optional `reactions:read`
 and `reactions:write` permissions, which `tag start` requests; until Slack
@@ -207,7 +210,7 @@ model and threshold:
 
 ```sh
 printf '%s' "$TYPESAFE_API_KEY" | tag config set OPENTAG_TYPESAFE_API_KEY --stdin --json
-tag config set OPENTAG_WATCH_CHANNEL_IDS C0123456789 --json
+tag config set OPENTAG_WATCH_CHANNEL_MODES C0123456789=when-addressed --json
 tag restart
 ```
 
