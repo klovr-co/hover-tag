@@ -72,7 +72,7 @@ try:
     from .agent_activity import THINKING_LABEL, show_thinking
     from .tag_paths import instance_home, tag_temp_dir
     from .record_output_artifact import channel_artifact_directory
-    from . import channel_watch, watch_attachments, watch_classifier, slack_channels
+    from . import channel_digest, channel_watch, watch_attachments, watch_classifier, slack_channels
     from . import tag_memory
     from . import tag_handoff
 except ImportError:  # Direct script execution does not create a package context.
@@ -115,6 +115,7 @@ except ImportError:  # Direct script execution does not create a package context
     from agent_activity import THINKING_LABEL, show_thinking
     from record_output_artifact import channel_artifact_directory
     from tag_paths import instance_home, tag_temp_dir
+    import channel_digest
     import channel_watch
     import watch_attachments
     import watch_classifier
@@ -5476,9 +5477,62 @@ def create_app(
                 handle_invocation(event, body, client, logger, direct_message=True)
             return
         channel = event.get("channel", "")
-        if channel_type not in {"channel", "group"} or channel not in channel_watch.watched_channel_ids():
+        if channel_type not in {"channel", "group"}:
             return
-        handle_watched_message(event, body, client, logger)
+        if channel in channel_digest.digest_channel_ids():
+            try:
+                handle_digest(event, client, logger)
+            except Exception as exc:  # noqa: BLE001 - a failed digest never blocks watching
+                logger.warning("Digest failed: %s", type(exc).__name__)
+        if channel in channel_watch.watched_channel_ids():
+            handle_watched_message(event, body, client, logger)
+
+    def digests() -> channel_digest.DigestStore:
+        if "digests" not in watch_stores:
+            watch_stores["digests"] = channel_digest.DigestStore(activity_store.root.parent / "digests.jsonl")
+        return watch_stores["digests"]
+
+    def handle_digest(event: dict[str, Any], client: Any, logger: Any) -> None:
+        """Change 7: read a shared link or file cheaply when it's posted, and keep a private digest."""
+        channel, user_id = event["channel"], event.get("user", "")
+        if not isinstance(user_id, str) or not slack_user_allowed(user_id, allowed_user_ids):
+            return  # Only authorized people's posts become the Tag's knowledge.
+        if event.get("thread_ts") and event.get("thread_ts") != event.get("ts"):
+            return
+        if not (slack_conversation_allowed(channel) or newly_invited_channel_allowed(channel, client)):
+            return
+        files = [f for f in event.get("files") or [] if isinstance(f, dict)]
+        verdict = channel_digest.should_digest(
+            str(event.get("text") or ""), files, names=channel_watch.watch_names(),
+            tag_user_id=current_assistant_user_id(client), own_hosts=channel_digest.own_hosts())
+        if verdict is None or digests().has(channel, event["ts"]):
+            return
+        today = date.today().isoformat()
+        limit = int(os.getenv("OPENTAG_DIGEST_DAILY_LIMIT", "") or 20)
+        if watching().digests_today(channel, today) >= limit:
+            logger.info("Digest skipped in %s: daily limit", channel)
+            return
+        name = suggested_bot_name(backend)
+        with tempfile.TemporaryDirectory(prefix="digest-", dir=tag_temp_dir()) as directory:
+            described, images = (watch_attachments.prepare(
+                event, Path(directory), os.getenv("SLACK_BOT_TOKEN", ""), watch_attachments.slack_download)
+                if files else ([], ()))
+            entry = channel_digest.digest(
+                event, verdict, files=lambda _event: described, reader=channel_digest.read_link,
+                summarize=channel_digest.summarize_with(default_settings.backend or backend,
+                                                         default_settings.model, name=name, images=images))
+        watching().record_digest(channel, today=today)
+        digests().add(entry)
+        logger.info("Digested a share in %s (%s)", channel, ", ".join(entry["types"]) or "files")
+        if channel_watch.reactions_granted(watch_home()):
+            # A lock when nothing could be read (every link blocked, no files), so the poster knows.
+            unreadable = bool(entry["blocked"]) and set(entry["blocked"]) >= set(entry["hosts"]) and not described
+            reaction = channel_digest.UNAVAILABLE_REACTION if unreadable else channel_digest.DIGESTED_REACTION
+            try:
+                client.reactions_add(channel=channel, timestamp=event["ts"], name=reaction)
+            except Exception as exc:  # noqa: BLE001 - the digest is kept even if the reaction fails
+                if not slack_backoff(exc):
+                    logger.warning("Could not react to a digested post: %s", type(exc).__name__)
 
     def handle_watched_message(
         event: dict[str, Any],

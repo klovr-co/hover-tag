@@ -121,6 +121,7 @@ def read_usage(path: Path, *, today: str) -> dict[str, dict[str, Any]]:
             "today_calls": int(item.get("day_calls", 0)) if fresh else 0,
             "today_usd": float(item.get("day_usd", 0.0)) if fresh else 0.0,
             "estimated_calls": int(item.get("estimated_calls", 0)),
+            "digests": int(item.get("digests", 0)),
         }
     return result
 

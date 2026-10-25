@@ -41,6 +41,8 @@
     "scripts/channel_watch.py",
     "scripts/watch_classifier.py",
     "scripts/watch_attachments.py",
+    "scripts/watch_digest.py",
+    "scripts/channel_digest.py",
     "scripts/claude_agent_backend.py",
     "scripts/codex_agent_backend.py",
     "scripts/install_dependencies.sh",

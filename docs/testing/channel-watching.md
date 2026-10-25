@@ -46,6 +46,12 @@ These notes go with the experimental channel-watching change, which supersedes #
 - **Cost per channel.** Classifier calls, input tokens and estimated spend per channel, in total and today, are
   kept in the watch state. `tag config watching [--json]` and the Home tab show them. Tag.app shows them in a
   follow-up.
+- **Digests (change 7).** Off by default, per channel (`OPENTAG_DIGEST_CHANNEL_IDS`). `scripts/channel_digest.py`:
+  the free trigger (`watch_digest.classify` plus question, Tag-request and own-host filters), bridge-side readers
+  (plain GET and X oEmbed; private addresses, other schemes and ports, credentials and login walls refused; each
+  redirect re-checked; bodies capped), one text-only summary run, and a private 90-day store. Access codes are
+  scrubbed before the summary. Known limit: the address check resolves the host before the request, so DNS
+  rebinding between the check and the connection isn't prevented.
 - **Eval runs.** `watch_eval.py plan|score --question tag_is_addressed|invites_reactions` scores either question.
   Paid runs make at most 4 calls at once (`--workers`). Before each call they reserve its cost, the larger of its
   estimate and the largest call so far, and stop dispatching when spent plus reserved would pass `--max-usd`.

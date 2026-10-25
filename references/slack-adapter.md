@@ -241,6 +241,21 @@ bridge downloads them with the bot token, only from Slack's file hosts, into a
 private temporary folder that is deleted after the run. There is no `ffmpeg`
 step and no transcription service.
 
+**Digests of shared links and files (experimental).** In channels listed in
+`OPENTAG_DIGEST_CHANNEL_IDS`, off by default, Tag digests posts from authorized
+people that are mostly a link or files: an X post, a web page, a Slack upload.
+A free rule decides; questions, requests to a Tag and links to your own sites
+(`OPENTAG_DIGEST_OWN_HOSTS`) are skipped. The bridge reads public pages with a
+plain request and X posts through X's free oEmbed endpoint, without cookies or
+logins, within size caps, and never from private network addresses. Drive and
+Baidu links are noted but not read yet, and access codes are never kept. One
+text-only run on the Tag's own backend writes the summary, which goes in a
+private store (`state/digests.jsonl`, kept 90 days) marked as an unverified
+digest. Tag reacts 📑 when it digests a post and 🔒 when it couldn't read
+anything; it doesn't reply. Search the store with `tag config digests [QUERY]
+--json`. At most `OPENTAG_DIGEST_DAILY_LIMIT` (default `20`) digests per channel
+a day.
+
 **Cost per channel.** Tag counts every classifier call per channel, with its
 input tokens and a spend estimate at the provider's list price. A failed call
 counts at its estimated size. See them with `tag config watching` (add `--json`

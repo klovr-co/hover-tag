@@ -95,3 +95,10 @@ its own instructions, offers no actions, and is dropped if unsafe. The daily
 cap, quiet hours and cooldown are backstops, not the decision. The cost is one
 classifier call per post, so per-channel call and spend counts are shown to
 the owner.
+
+A second amendment, the same day: in channels that opt in to digests, the
+bridge itself fetches public links that authorized people share, within size
+caps, without cookies or logins and never from private addresses, and a
+text-only run summarises the result as untrusted text into a private store.
+Fetched content can't make the Tag act: it has no tools in that run, and the
+summary is only ever read back as unverified notes.

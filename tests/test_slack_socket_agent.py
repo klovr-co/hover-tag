@@ -3427,6 +3427,31 @@ class SlackChannelWatchTests(unittest.TestCase):
         self.evaluate.assert_not_called()
         self.assertEqual([], self.log())
 
+    def test_digest_channels_keep_a_private_digest_of_authorized_shares(self) -> None:
+        from contextlib import ExitStack
+        self.environment |= {"OPENTAG_DIGEST_CHANNEL_IDS": "C456"}
+        share = self.event(channel="C456", ts="7.000", text="<https://x.com/ann/status/1>")
+        with ExitStack() as stack:
+            fake_app = self.app(stack)
+            stack.enter_context(patch.object(slack_socket_agent, "tag_temp_dir", return_value=self.home))
+            reader = stack.enter_context(patch.object(slack_socket_agent.channel_digest, "read_link",
+                                                      return_value={"kind": "x_post", "text": "We launched v2"}))
+            stack.enter_context(patch.object(slack_socket_agent.channel_digest, "summarize_with",
+                                             return_value=lambda content: "Ann launched v2\n- details"))
+            for event in (share, share, self.event(channel="C456", ts="8.000", user="USAM",
+                                                   text="<https://x.com/sam/status/2>"),
+                          self.event(channel="C456", ts="9.000", text="should we buy this? <https://shop.test/x>")):
+                fake_app.events["message"](event, {"team_id": "T123"}, self.client, MagicMock())
+        reader.assert_called_once()  # Once per post; others' posts and questions aren't digested.
+        store = slack_socket_agent.channel_digest.DigestStore(self.home / "state/digests.jsonl")
+        [entry] = store.search()
+        self.assertEqual(("C456", "7.000", "Ann launched v2", True),
+                         (entry["channel"], entry["ts"], entry["title"], entry["unverified"]))
+        self.client.reactions_add.assert_called_once_with(channel="C456", timestamp="7.000", name="bookmark_tabs")
+        self.client.chat_postMessage.assert_not_called()  # Silent apart from the reaction.
+        self.assertEqual(1, self.state.data["usage"]["C456"]["digests"])
+        self.evaluate.assert_not_called()  # C456 isn't watched, so no classifier call.
+
     def test_home_tab_sets_a_mode_per_channel(self) -> None:
         from contextlib import ExitStack
         self.environment = self.ENVIRONMENT | {"OPENTAG_WATCH_CHANNEL_IDS": "",

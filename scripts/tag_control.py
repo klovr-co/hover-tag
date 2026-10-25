@@ -243,6 +243,16 @@ def config_command(home: Path, words: list[str], *, json_output: bool, stdin: bo
                       "estimated_calls": 0})} for channel in sorted(set(modes) | set(usage))],
                   "off_reason": settings.watching_off_reason(values),
                   "note": "Spend is estimated from list prices; the provider's dashboard has the billed amount."}
+    elif action == "digests" and len(words) <= 2:
+        try:
+            import channel_digest
+        except ImportError:
+            from scripts import channel_digest
+        query = words[1] if len(words) == 2 else ""
+        found = channel_digest.DigestStore(home / "state/digests.jsonl").search(query, limit=50)
+        result = {"schema_version": 1, "tag": tag_id, "query": query,
+                  "digests": [{k: e.get(k) for k in ("channel", "ts", "at", "title", "summary", "hosts", "types",
+                                                    "blocked", "note")} for e in found]}
     elif action == "show" and len(words) <= 1:
         values = settings.load_config(path)
         result = {"schema_version": 1, "tag": tag_id, "path": str(path), "settings": settings.public_config(values),
@@ -261,7 +271,7 @@ def config_command(home: Path, words: list[str], *, json_output: bool, stdin: bo
                           f"{tag_command(tag_id, 'stop')} then {tag_command(tag_id, 'start')}."}
     else:
         raise ValueError("Use tag config init, tag config show, tag config keys, tag config watching, "
-                         "or tag config set KEY VALUE (secrets: --stdin)")
+                         "tag config digests [QUERY], or tag config set KEY VALUE (secrets: --stdin)")
     if not json_output:
         try:
             identity = settings.load_config(path)
@@ -285,6 +295,12 @@ def config_command(home: Path, words: list[str], *, json_output: bool, stdin: bo
     elif action == "init":
         ui.display.header("Config", target_detail(identity, tag_id, suffix="Existing values are preserved"))
         ui.display.completion("Defaults saved", result["note"], next_label="Inspect configuration", next_command=result["next_command"])
+    elif action == "digests":
+        ui.display.header("Digests", target_detail(identity, tag_id, suffix="Unverified: written from shared links"))
+        if not result["digests"]:
+            ui.message("No digests yet." if not result["query"] else "No digests match.")
+        for item in result["digests"]:
+            ui.display.info_row(item["channel"] or "", f"{item['title']} ({', '.join(item['hosts'] or [])})")
     elif action == "watching":
         ui.display.header("Watching", target_detail(identity, tag_id, suffix=f"Classifier: {result['classifier']}"))
         if not result["channels"]:

@@ -72,6 +72,18 @@ class TagControlTests(unittest.TestCase):
             tag_control.config_command(self.home, ["watching"], json_output=False, stdin=False)
         self.assertIn("2 classifier calls, ~$0.000150", output.getvalue())
 
+    def test_config_digests_searches_the_private_store(self):
+        import json
+        from scripts import channel_digest
+        self.complete()
+        store = channel_digest.DigestStore(self.home / "state/digests.jsonl")
+        store.add({"channel": "C1", "ts": "1.0", "title": "Launch notes", "summary": "v2 shipped", "hosts": ["x.com"]})
+        store.add({"channel": "C1", "ts": "2.0", "title": "Pricing", "summary": "tiers", "hosts": ["a.test"]})
+        with redirect_stdout(StringIO()) as output:
+            tag_control.config_command(self.home, ["digests", "v2"], json_output=True, stdin=False)
+        result = json.loads(output.getvalue())
+        self.assertEqual(["Launch notes"], [d["title"] for d in result["digests"]])
+
     def test_settings_model_cancel_preserves_configuration(self):
         self.complete()
         before = tag_config.read_config(self.path)
