@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "ok": true,
+  "tag": "t0klovr1-a0rese02",
+  "file": {
+    "path": "memory/channels/C0OPS0001/core.md",
+    "kind": "core",
+    "version": "a300fbf68abf",
+    "scope": "channel",
+    "channel": "C0OPS0001",
+    "channel_name": "ops",
+    "body": "## access-approval\nOnly Maya, and Dana while Maya is away, approve new SaaS seats. Ask in the thread before inviting anyone outside the company.\n\n## digest-format\nMonday digest: at most 5 bullets, link each item, no emoji. See [[digest-sources]].\n",
+    "entries": [
+      {
+        "key": "access-approval",
+        "text": "Only Maya, and Dana while Maya is away, approve new SaaS seats. Ask in the thread before inviting anyone outside the company.",
+        "version": "2b09853e81c6",
+        "links": [],
+        "written_by": "U0MAYA001",
+        "from_thread": "hover-tag://tag/t0klovr1-a0rese02/thread/C0OPS0001/1761400000.000500",
+        "updated": "2026-10-22T09:01:00Z"
+      },
+      {
+        "key": "digest-format",
+        "text": "Monday digest: at most 5 bullets, link each item, no emoji. See [[digest-sources]].",
+        "version": "b8a124036e7f",
+        "links": [
+          "digest-sources"
+        ],
+        "written_by": "U0MAYA001",
+        "from_thread": "hover-tag://tag/t0klovr1-a0rese02/thread/C0OPS0001/1760600000.000200",
+        "updated": "2026-10-16T16:40:00Z"
+      }
+    ],
+    "size": 208,
+    "limit": 6000,
+    "written_by": "U0MAYA001",
+    "from_thread": "hover-tag://tag/t0klovr1-a0rese02/thread/C0OPS0001/1761400000.000500",
+    "updated": "2026-10-22T09:02:00Z"
+  }
+}

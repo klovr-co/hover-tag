@@ -17,6 +17,7 @@ import type { RuleBackend } from "./permissions";
 import type { ActivityItem } from "./home";
 import { windowFitter } from "./fit";
 import { DEMO_ROUTINE_REFERENCE, demoRoutines } from "./routines";
+import { demoKnowledge } from "./knowledge";
 
 export interface AppInfo {
   platform: "macos" | "windows" | "linux" | string;
@@ -247,6 +248,7 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
   let telemetry = new URLSearchParams(location.search).get("telemetry") === "ask" ? "not_set" : "on";
   const json = (value: unknown): RunResult => ({ code: 0, stdout: JSON.stringify(value), stderr: "" });
   const routines = demoRoutines();
+  const knowledge = demoKnowledge();
   // The sample routine's runs appear in its Tag's Activity, labelled with the routine.
   activity[rows[0].id].push(...routines.activity);
   return {
@@ -286,7 +288,7 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
       }
       if (first === "version") {
         return json({ ...versionExample, version: runtimeVersion,
-          capabilities: [...new Set([...versionExample.capabilities, "ai-connections", "shared-ai-connections", "logs-activity", "thinking-level", "describe", "telemetry-events", "api-connections", "saved-models", "permission-rules", "routines"])] });
+          capabilities: [...new Set([...versionExample.capabilities, "ai-connections", "shared-ai-connections", "logs-activity", "thinking-level", "describe", "telemetry-events", "api-connections", "saved-models", "permission-rules", "routines", "knowledge", "knowledge-add"])] });
       }
       if (second === "settings" && args[2] === "ai" && args[3] === "api" && args[4] === "check") {
         await sleep(500);
@@ -418,6 +420,10 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
           slack: ["Open Tag is live as @" + (row.slack_name ?? "Tag"),
             ...(row === rows[0] ? [`ERROR Routine r-3f9a1c2e7b failed [${DEMO_ROUTINE_REFERENCE}]: rate_limit: usage limit reached`] : [])],
           mfs: ["Memory server ready"] }, activity: matches.slice(0, limit), activity_has_more: matches.length > limit });
+      }
+      if (row && second === "knowledge") {
+        const result = knowledge(args.slice(2));
+        return { code: result.ok ? 0 : 1, stdout: JSON.stringify({ schema_version: 1, tag: row.id, ...result }), stderr: "" };
       }
       if (row && second === "routine") {
         const result = routines(row.id, row === rows[0], row.state === "running", args.slice(2));

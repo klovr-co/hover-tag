@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "ok": true,
+  "tag": "t0klovr1-a0rese02",
+  "memory": {
+    "core": {
+      "path": "memory/core.md",
+      "kind": "core",
+      "entries": 1,
+      "size": 43,
+      "limit": 6000,
+      "written_by": "U0MAYA001",
+      "from_thread": "hover-tag://tag/t0klovr1-a0rese02/thread/C0LAUNCH1/1760800000.000400",
+      "updated": "2026-10-22T09:00:00Z"
+    },
+    "notes": []
+  },
+  "channels": [
+    {
+      "id": "C0OPS0001",
+      "name": "ops",
+      "core": {
+        "path": "memory/channels/C0OPS0001/core.md",
+        "kind": "core",
+        "entries": 2,
+        "size": 208,
+        "limit": 6000,
+        "written_by": "U0MAYA001",
+        "from_thread": "hover-tag://tag/t0klovr1-a0rese02/thread/C0OPS0001/1761400000.000500",
+        "updated": "2026-10-22T09:02:00Z"
+      },
+      "notes": [
+        {
+          "path": "memory/channels/C0OPS0001/notes/digest-sources.md",
+          "kind": "note",
+          "key": "digest-sources",
+          "summary": "Merged pull requests in hover-tag, closed issues, and the #launch decisions thr…",
+          "size": 83,
+          "limit": 4000,
+          "written_by": "U0JULES01",
+          "from_thread": "hover-tag://tag/t0klovr1-a0rese02/thread/C0OPS0001/1760700000.000300",
+          "updated": "2026-10-20T08:00:00Z"
+        }
+      ]
+    },
+    {
+      "id": "C0LAUNCH1",
+      "name": "launch",
+      "core": null,
+      "notes": []
+    }
+  ],
+  "skills": [
+    {
+      "path": "skills/claude/weekly-digest/SKILL.md",
+      "kind": "skill",
+      "name": "weekly-digest",
+      "backend": "claude",
+      "summary": "Post the Monday ops digest in five linked bullets.",
+      "size": 195
+    }
+  ],
+  "limits": {
+    "core": 6000,
+    "note": 4000,
+    "notes": 200
+  },
+  "history": {
+    "available": true
+  }
+}

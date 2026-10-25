@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "ok": true,
+  "tag": "t0klovr1-a0rese02",
+  "change": {
+    "id": "2fedd37662e1983d56dd9d9e5f64d53c4b8e024d",
+    "at": "2026-10-22T09:03:00Z",
+    "action": "edited",
+    "summary": "Edited channel C0OPS0001 memory: changed digest-format",
+    "written_by": "local-operator",
+    "via": "tag-app",
+    "from_thread": null,
+    "entries": [
+      "memory/channels/C0OPS0001/core.md#digest-format"
+    ],
+    "undo_of": null,
+    "undoable": true,
+    "undone_by": null
+  },
+  "files": [
+    {
+      "path": "memory/channels/C0OPS0001/core.md",
+      "status": "changed",
+      "before": "## access-approval\nOnly Maya, and Dana while Maya is away, approve new SaaS seats. Ask in the thread before inviting anyone outside the company.\n\n## digest-format\nMonday digest: at most 5 bullets, link each item, no emoji. See [[digest-sources]].\n",
+      "after": "## access-approval\nOnly Maya, and Dana while Maya is away, approve new SaaS seats. Ask in the thread before inviting anyone outside the company.\n\n## digest-format\nMonday digest: at most 5 bullets, link each item, no emoji, and post by 10:00. See [[digest-sources]].\n",
+      "diff": [
+        {
+          "op": " ",
+          "text": "Only Maya, and Dana while Maya is away, approve new SaaS seats. Ask in the thread before inviting anyone outside the company."
+        },
+        {
+          "op": " ",
+          "text": ""
+        },
+        {
+          "op": " ",
+          "text": "## digest-format"
+        },
+        {
+          "op": "-",
+          "text": "Monday digest: at most 5 bullets, link each item, no emoji. See [[digest-sources]]."
+        },
+        {
+          "op": "+",
+          "text": "Monday digest: at most 5 bullets, link each item, no emoji, and post by 10:00. See [[digest-sources]]."
+        },
+        {
+          "op": " ",
+          "text": ""
+        }
+      ]
+    }
+  ]
+}
