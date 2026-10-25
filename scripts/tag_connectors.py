@@ -239,19 +239,20 @@ def _run_store() -> tuple[Store, str] | None:
     return Store(), tag_id
 
 
-def codex_disable_args(workdir: Path) -> list[str]:
-    """Codex -c overrides that switch off the connectors this Tag may not use.
+def codex_run_args(workdir: Path) -> list[str]:
+    """Codex -c overrides for this Tag's run: switch off the connectors it may not
+    use, and pass the environment variable names its allowed local connectors read.
 
     Only servers present in the user's Codex config are named: Codex rejects an
     override for a server it has no transport for. A server the Tag's own
-    workspace defines is the Tag's choice and stays on.
+    workspace defines is the Tag's choice and is left as it is.
     """
     run = _run_store()
     if run is None:
         return []
     store, tag_id = run
-    blocked = store.blocked_for(tag_id)
-    if not blocked:
+    entries = store.read()["connectors"]
+    if not entries:
         return []
     try:
         import tomllib
@@ -269,8 +270,14 @@ def codex_disable_args(workdir: Path) -> list[str]:
             raise ConnectorError(f"Couldn't read {path} to switch off connectors this Tag may not use.") from None
         names = set(servers) if isinstance(servers, dict) else set()
         configured = configured | names if required else configured - names
-    return [argument for name in sorted(blocked & configured)
-            for argument in ("-c", f"mcp_servers.{name}.enabled=false")]
+    allowed = store.allowed_for(tag_id)
+    arguments = []
+    for name in sorted(set(entries) & configured):
+        if name not in allowed:
+            arguments += ["-c", f"mcp_servers.{name}.enabled=false"]
+        elif entries[name].get("env"):
+            arguments += ["-c", f"mcp_servers.{name}.env_vars={json.dumps(entries[name]['env'])}"]
+    return arguments
 
 
 def claude_deny_rules(workdir: Path) -> list[str]:

@@ -155,9 +155,8 @@ class Codex:
         return shutil.which("codex")
 
     def supports(self, entry: dict) -> str | None:
-        if entry["transport"] == "stdio" and entry.get("env"):
-            # Codex passes names through with env_vars, but `codex mcp add` can only set values.
-            return "The codex CLI can't pass environment variable names to a local connector yet."
+        # `codex mcp add` can only set env values, so a local connector's env names
+        # reach Codex per run as env_vars (tag_connectors.codex_run_args).
         return None
 
     def read_all(self) -> dict | None:

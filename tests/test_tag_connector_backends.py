@@ -228,9 +228,9 @@ class ConnectorBackendTests(FakeBackendsCase):
         self.assertEqual(self.claude_servers()["notes"], {"type": "stdio", "command": "npx",
                                                           "args": ["-y", "notes-mcp"],
                                                           "env": {"NOTES_KEY": "${NOTES_KEY}"}})
-        # Codex's CLI can only set values, so Tag doesn't write this one there.
-        self.assertEqual(row["backends"]["codex"]["state"], "unsupported")
-        self.assertNotIn("notes", self.codex_servers())
+        # Codex's CLI can only set values, so the names reach Codex per run as env_vars.
+        self.assertEqual(row["backends"]["codex"]["state"], "written")
+        self.assertIn(["codex", "mcp", "add", "notes", "--", "npx", "-y", "notes-mcp"], self.writes())
         files = [self.log, self.claude_dir / ".claude.json", connectors.store_path(self.root)]
         for path in files:
             self.assertNotIn(secret, path.read_text())

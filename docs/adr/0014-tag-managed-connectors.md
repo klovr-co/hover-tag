@@ -63,6 +63,11 @@ across teams.
     which removes the server's tools from the run.
   Servers Tag doesn't manage, and the workspace's own `.mcp.json` /
   `.codex/config.toml` servers, behave as before.
+- **Environment variable names, never values.** Claude gets them as
+  `env: {"NAME": "${NAME}"}`, which Claude expands when it starts the server.
+  `codex mcp add` can only set values, so Tag writes the Codex server without
+  them and each run passes `mcp_servers.<name>.env_vars = ["NAME"]` for the
+  connectors the Tag may use. The operator's own Codex sessions don't get them.
 - **Sign-in.** `tag connector sign-in NAME --backend claude|codex` runs
   `claude mcp login NAME` or `codex mcp login NAME` and relays the
   authorization URL, as `tag settings ai sign-in` does for the backends

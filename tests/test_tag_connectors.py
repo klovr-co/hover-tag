@@ -120,6 +120,11 @@ class ConnectorStoreTests(unittest.TestCase):
             tag_cli._run_cli()
 
 
+# Found before any test narrows PATH; only ever run with a temp CODEX_HOME.
+CODEX = shutil.which("codex")
+REAL_PATH = os.environ.get("PATH", "")
+
+
 class ConnectorFilterTests(unittest.TestCase):
     """Each run switches off the shared connectors its Tag may not use (ADR 0014)."""
 
@@ -128,10 +133,12 @@ class ConnectorFilterTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         base = Path(self.temp.name)
         self.root, self.codex_home, self.workdir = base / "tag", base / "codex", base / "workspace"
-        for path in (self.root, self.codex_home, self.workdir):
+        for path in (self.root, self.codex_home, self.workdir, base / "claude", base / "bin"):
             path.mkdir()
+        # No backend CLIs on PATH and temp configs: these tests must never reach the user's own.
         env = patch.dict(os.environ, {"TAG_HOME": str(self.root), "TAG_ID": "sales", "HOME": str(base),
-                                      "CODEX_HOME": str(self.codex_home)})
+                                      "CODEX_HOME": str(self.codex_home), "CLAUDE_CONFIG_DIR": str(base / "claude"),
+                                      "PATH": str(base / "bin")})
         env.start()
         self.addCleanup(env.stop)
         tag_instances.create(self.root, "sales")
@@ -145,10 +152,18 @@ class ConnectorFilterTests(unittest.TestCase):
 
     def test_codex_switches_off_only_blocked_servers_it_has(self):
         # gmail isn't in Codex's config: overriding it alone would fail Codex's start.
-        self.assertEqual(connectors.codex_disable_args(self.workdir), ["-c", "mcp_servers.notion.enabled=false"])
+        self.assertEqual(connectors.codex_run_args(self.workdir), ["-c", "mcp_servers.notion.enabled=false"])
         (self.workdir / ".codex").mkdir()
         (self.workdir / ".codex/config.toml").write_text('[mcp_servers.notion]\nurl = "https://n.example"\n')
-        self.assertEqual(connectors.codex_disable_args(self.workdir), [])
+        self.assertEqual(connectors.codex_run_args(self.workdir), [])
+
+    def test_codex_gets_env_names_for_allowed_local_connectors(self):
+        self.store.add("notes", command=["notes-mcp"], env=["NOTES_KEY"])
+        self.store.set_allowed("notes", ["sales"], True)
+        with (self.codex_home / "config.toml").open("a") as handle:
+            handle.write('[mcp_servers.notes]\ncommand = "notes-mcp"\n')
+        self.assertEqual(connectors.codex_run_args(self.workdir),
+                         ["-c", "mcp_servers.notes.env_vars=[\"NOTES_KEY\"]", "-c", "mcp_servers.notion.enabled=false"])
 
     def test_claude_denies_blocked_servers_except_the_workspace_own(self):
         self.assertEqual(connectors.claude_deny_rules(self.workdir), ["mcp__gmail", "mcp__notion"])
@@ -157,11 +172,11 @@ class ConnectorFilterTests(unittest.TestCase):
 
     def test_nothing_is_filtered_outside_a_tag_run_and_bad_files_fail_closed(self):
         with patch.dict(os.environ, {"TAG_ID": ""}):
-            self.assertEqual(connectors.codex_disable_args(self.workdir), [])
+            self.assertEqual(connectors.codex_run_args(self.workdir), [])
             self.assertEqual(connectors.claude_deny_rules(self.workdir), [])
         (self.codex_home / "config.toml").write_text("[broken")
         with self.assertRaisesRegex(connectors.ConnectorError, "Couldn't read"):
-            connectors.codex_disable_args(self.workdir)
+            connectors.codex_run_args(self.workdir)
         connectors.store_path(self.root).write_text("{")
         with self.assertRaisesRegex(connectors.ConnectorError, "Cannot read the connector list"):
             connectors.claude_deny_rules(self.workdir)
@@ -177,12 +192,25 @@ class ConnectorFilterTests(unittest.TestCase):
         self.store.forget_tag("acme-sales")
         self.assertEqual(self.store.allowed_for("acme-sales"), set())
 
-    @unittest.skipUnless(shutil.which("codex"), "codex CLI not installed")
+    @unittest.skipUnless(CODEX, "codex CLI not installed")
     def test_real_codex_accepts_the_overrides(self):
-        listed = subprocess.run(["codex", "mcp", "list", "--json", *connectors.codex_disable_args(self.workdir)],
-                                capture_output=True, text=True, timeout=60, check=True)
+        listed = subprocess.run([CODEX, "mcp", "list", "--json", *connectors.codex_run_args(self.workdir)],
+                                capture_output=True, text=True, timeout=60, check=True,
+                                env={**os.environ, "PATH": REAL_PATH})
         enabled = {row["name"]: row["enabled"] for row in json.loads(listed.stdout)}
         self.assertEqual(enabled, {"linear": True, "notion": False, "mine": True})
+
+    @unittest.skipUnless(CODEX, "codex CLI not installed")
+    def test_real_codex_accepts_env_names(self):
+        self.store.add("notes", command=["notes-mcp"], env=["NOTES_KEY"])
+        self.store.set_allowed("notes", ["sales"], True)
+        with (self.codex_home / "config.toml").open("a") as handle:
+            handle.write('[mcp_servers.notes]\ncommand = "notes-mcp"\n')
+        listed = subprocess.run([CODEX, "mcp", "list", "--json", *connectors.codex_run_args(self.workdir)],
+                                capture_output=True, text=True, timeout=60, check=True,
+                                env={**os.environ, "PATH": REAL_PATH})
+        notes = next(row for row in json.loads(listed.stdout) if row["name"] == "notes")
+        self.assertEqual(notes["transport"]["env_vars"], ["NOTES_KEY"])
 
 
 if __name__ == "__main__":

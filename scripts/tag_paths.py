@@ -221,7 +221,7 @@ def codex_workspace_args(workdir: Path) -> list[str]:
         from . import tag_connectors
     except ImportError:
         import tag_connectors
-    connectors = tag_connectors.codex_disable_args(workdir)
+    connectors = tag_connectors.codex_run_args(workdir)
     if not is_tag_workspace(workdir):
         return connectors
     return (codex_trust_args(workdir) if owns_workspace(workdir) else []) + _codex_mcp_args(workdir) + connectors
