@@ -404,6 +404,56 @@ class PaidRunGuardTests(unittest.TestCase):
             outcomes = [json.loads(line)["outcome"] for line in out_path.read_text(encoding="utf-8").splitlines()]
             self.assertEqual(["error", "score", "error", "error", "error"], outcomes)
 
+    def test_parallel_runs_reserve_cost_before_each_call(self) -> None:
+        import threading
+        name, cases = harness.load_cases()
+        lock, active, peak = threading.Lock(), [0], [0]
+
+        def scorer(*_args, **_kwargs):
+            with lock:
+                active[0] += 1
+                peak[0] = max(peak[0], active[0])
+            threading.Event().wait(0.01)
+            with lock:
+                active[0] -= 1
+            return watch_classifier.Score(0.5, "gpt-6-luna", 1_000_000)  # $0.10 a call.
+
+        with tempfile.TemporaryDirectory() as directory:
+            out_path = Path(directory) / "scores.jsonl"
+            with self.assertRaisesRegex(harness.BudgetStop, "Stopped before"):
+                harness.score_run(cases[:12], name, provider="openai-decisions", api_key="k", out_path=out_path,
+                                  max_usd=0.35, log=io.StringIO(), scorer=scorer, workers=4)
+            rows = out_path.read_text(encoding="utf-8").splitlines()
+        self.assertLessEqual(peak[0], 4)
+        # The first 4 go out on small estimates; after that each reservation is the largest call ($0.10).
+        self.assertLessEqual(len(rows), 6)
+        self.assertLess(sum(json.loads(r)["usd"] for r in rows), 0.65)
+        with self.assertRaises(ValueError):
+            harness.score_run(cases[:1], name, provider="openai-decisions", api_key="k", out_path=out_path,
+                              max_usd=1, log=io.StringIO(), scorer=scorer, workers=5)
+
+    def test_the_question_is_a_parameter_and_resumes_separately(self) -> None:
+        name, cases = harness.load_cases()
+        scorer = MagicMock(return_value=watch_classifier.Score(0.8, "jev-1.13.0", 10))
+        with tempfile.TemporaryDirectory() as directory:
+            out_path = Path(directory) / "scores.jsonl"
+            harness.score_run(cases[:2], name, provider="typesafe-jev", api_key="k", out_path=out_path,
+                              max_usd=1, log=io.StringIO(), scorer=scorer)
+            self.assertNotIn("questions", scorer.call_args.kwargs)
+            harness.score_run(cases[:2], name, provider="typesafe-jev", api_key="k", out_path=out_path,
+                              max_usd=1, log=io.StringIO(), scorer=scorer, question="invites_reactions")
+            self.assertEqual((watch_classifier.CHIME_IN,), scorer.call_args.kwargs["questions"])
+            self.assertEqual(4, scorer.call_count)  # Addressed scores don't count as chime-in scores.
+            rows = [json.loads(line) for line in out_path.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual([None, None, "invites_reactions", "invites_reactions"], [r.get("question") for r in rows])
+            with self.assertRaises(ValueError):
+                harness.score_run(cases[:1], name, provider="typesafe-jev", api_key="k", out_path=out_path,
+                                  max_usd=1, log=io.StringIO(), scorer=scorer, question="invites_reactions",
+                                  variant="few-shot")
+        out = io.StringIO()
+        harness.plan(cases[:2], name, out, "invites_reactions")
+        self.assertIn("typesafe-jev: 2 calls", out.getvalue())
+
     def test_paid_run_uses_mocked_http_end_to_end(self) -> None:
         class Response:
             def __enter__(self): return self

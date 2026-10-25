@@ -31,6 +31,7 @@ import sys
 import urllib.error
 from collections import Counter
 from collections.abc import Callable, Iterable
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TextIO
@@ -139,10 +140,13 @@ def case_state(case: Case, assistant_name: str) -> dict[str, Any]:
     )
 
 
-def estimated_tokens(provider: str, state: dict[str, Any], variant: str = "") -> int:
+def estimated_tokens(provider: str, state: dict[str, Any], variant: str = "",
+                     question: str = watch_classifier.QUESTION_NAME) -> int:
     spec = watch_classifier.PROVIDERS[provider]
-    build = _variant(variant, provider)[0] if variant else spec.payload
-    payload = build(state, spec.default_model)
+    if variant:
+        payload = _variant(variant, provider)[0](state, spec.default_model)
+    else:
+        payload = spec.payload(state, spec.default_model, (watch_classifier.QUESTIONS[question],))
     return -(-len(json.dumps(payload, ensure_ascii=False)) // CHARS_PER_TOKEN)
 
 
@@ -158,13 +162,15 @@ def _variant(variant: str, provider: str):
     return watch_prompt_variants.get(variant, provider)
 
 
-def plan(cases: list[Case], assistant_name: str, out: TextIO) -> dict[str, dict[str, float]]:
+def plan(cases: list[Case], assistant_name: str, out: TextIO,
+         question: str = watch_classifier.QUESTION_NAME) -> dict[str, dict[str, float]]:
     """Estimate one scoring run per provider without any network call."""
     totals: dict[str, dict[str, float]] = {}
     print(f"{len(cases)} cases. Estimates assume ~{CHARS_PER_TOKEN} characters per token "
           "and count the whole request body as input.", file=out)
     for provider, spec in watch_classifier.PROVIDERS.items():
-        tokens = sum(estimated_tokens(provider, case_state(case, assistant_name)) for case in cases)
+        tokens = sum(estimated_tokens(provider, case_state(case, assistant_name), question=question)
+                     for case in cases)
         usd = cost_usd(provider, tokens)
         totals[provider] = {"calls": len(cases), "tokens": tokens, "usd": usd}
         print(f"  {provider}: {len(cases)} calls × ~{tokens // len(cases):,} input tokens "
@@ -183,6 +189,9 @@ class BudgetStop(RuntimeError):
     """The run stopped before exceeding the budget or after a quota/auth failure."""
 
 
+MAX_WORKERS = 4  # The shared machine's limit for parallel API calls.
+
+
 def score_run(
     cases: list[Case],
     assistant_name: str,
@@ -196,62 +205,104 @@ def score_run(
     log: TextIO = sys.stderr,
     scorer: Callable[..., watch_classifier.Score] = watch_classifier.score,
     variant: str = "",
+    question: str = watch_classifier.QUESTION_NAME,
+    workers: int = 1,
 ) -> float:
-    """Score each case once, appending to ``out_path``; returns this run's spend."""
-    done = {(row["provider"], row["id"]) for row in _recorded(out_path)}
-    spent = last_call_usd = 0.0
+    """Score each case once for one question, appending to ``out_path``; returns this run's spend.
+
+    Up to ``workers`` calls run at once. Before each call its cost is reserved: the larger of its
+    estimate and the largest call so far. Nothing is dispatched once spent plus reserved would pass
+    ``max_usd``. A quota, auth, budget or rate-limit error stops dispatching at once; calls already
+    in flight are still recorded.
+    """
+    if not 1 <= workers <= MAX_WORKERS:
+        raise ValueError(f"workers must be 1 to {MAX_WORKERS}")
+    if variant and question != watch_classifier.QUESTION_NAME:
+        raise ValueError("prompt variants exist only for the addressed question")
+    extra: dict[str, Any] = {} if question == watch_classifier.QUESTION_NAME else {"question": question}
+    done = {(row["provider"], row["id"]) for row in _recorded(out_path)
+            if row.get("question", watch_classifier.QUESTION_NAME) == question}
+    hooks = dict(zip(("payload", "parse"), _variant(variant, provider))) if variant else {}
+    if extra:
+        hooks["questions"] = (watch_classifier.QUESTIONS[question],)
+    pending = [case for case in cases if (provider, case.id) not in done]
+    spent = reserved = largest = 0.0
     errors = 0
+    stop: BudgetStop | None = None
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    with out_path.open("a", encoding="utf-8") as handle:
-        for case in cases:
-            if (provider, case.id) in done:
-                continue
-            state = case_state(case, assistant_name)
-            # Assume the next call costs at least as much as the last one actually did.
-            estimate = max(cost_usd(provider, estimated_tokens(provider, state, variant)), last_call_usd)
-            if spent + estimate > max_usd:
-                raise BudgetStop(f"Stopped before ${max_usd:.2f}: spent ${spent:.4f}, next call ~${estimate:.4f}")
-            row: dict[str, Any] = {"provider": provider, "id": case.id, **({"variant": variant} if variant else {})}
-            hooks = dict(zip(("payload", "parse"), _variant(variant, provider))) if variant else {}
-            try:
-                answer = scorer(state, provider=provider, api_key=api_key, model=model, timeout=timeout, **hooks)
-            except watch_classifier.ClassifierRefusal:
-                row["outcome"] = "refusal"
-                spent += estimate
-            except watch_classifier.ClassifierError as exc:
-                cause = exc.__cause__
-                if isinstance(cause, urllib.error.HTTPError):
-                    # Classify the body without printing it: some providers echo part of the key.
-                    try:
-                        body = cause.read(4096) or b""
-                    except Exception:  # noqa: BLE001 - an unreadable body still has a status
-                        body = b""
-                    if cause.code in STOP_STATUSES or QUOTA_RE.search(body):
-                        raise BudgetStop(f"Stopped on HTTP {cause.code} from {provider} (auth, quota, budget or "
-                                         f"rate limit); not retrying. Spent ${spent:.4f}") from None
-                errors += 1
-                row.update(outcome="error", error=str(exc))
-                if errors >= MAX_CONSECUTIVE_ERRORS:
-                    handle.write(json.dumps(row) + "\n")
-                    raise BudgetStop(f"Stopped after {errors} errors in a row from {provider}: {exc}. "
-                                     f"Spent ${spent:.4f}")
-            else:
-                errors = 0
-                tokens = answer.input_tokens
-                call_usd = cost_usd(provider, tokens) if tokens is not None else estimate
-                spent += call_usd
-                last_call_usd = call_usd
-                row.update(outcome="score", probability=answer.probability, model=answer.model,
-                           input_tokens=tokens, usd=round(call_usd, 8),
-                           **({"cached_tokens": answer.cached_tokens} if answer.cached_tokens is not None else {}))
-            handle.write(json.dumps(row) + "\n")
-            handle.flush()
-            usage = (f" usage {row['input_tokens']} tokens vs ~{estimated_tokens(provider, state, variant)} estimated"
-                     + (f" ({row['cached_tokens']} cached)" if row.get("cached_tokens") is not None else "")
-                     if row.get("input_tokens") is not None else
-                     " (no usage reported; counted the estimate)" if row["outcome"] == "score" else "")
-            print(f"{provider} {case.id}: {row['outcome']} {row.get('probability', '')}{usage} "
-                  f"(running ${spent:.6f} / ${max_usd:.2f})", file=log)
+
+    def call(case: Case) -> Any:
+        try:
+            return scorer(case_state(case, assistant_name), provider=provider, api_key=api_key, model=model,
+                          timeout=timeout, **hooks)
+        except watch_classifier.ClassifierError as exc:
+            return exc
+
+    with out_path.open("a", encoding="utf-8") as handle, ThreadPoolExecutor(max_workers=workers) as pool:
+        running: dict[Future, tuple[Case, float]] = {}
+        while (pending and stop is None) or running:
+            while pending and stop is None and len(running) < workers:
+                case = pending[0]
+                estimate = max(cost_usd(provider, estimated_tokens(
+                    provider, case_state(case, assistant_name), variant, question)), largest)
+                if spent + reserved + estimate > max_usd:
+                    stop = BudgetStop(f"Stopped before ${max_usd:.2f}: spent ${spent:.4f}, "
+                                      f"next call ~${estimate:.4f}")
+                    break
+                pending.pop(0)
+                reserved += estimate
+                running[pool.submit(call, case)] = (case, estimate)
+            if not running:
+                break
+            finished, _ = wait(running, return_when=FIRST_COMPLETED)
+            for future in finished:
+                case, estimate = running.pop(future)
+                reserved -= estimate
+                answer = future.result()
+                row: dict[str, Any] = {"provider": provider, "id": case.id, **extra,
+                                       **({"variant": variant} if variant else {})}
+                if isinstance(answer, watch_classifier.ClassifierRefusal):
+                    row["outcome"] = "refusal"
+                    spent += estimate
+                elif isinstance(answer, watch_classifier.ClassifierError):
+                    cause = answer.__cause__
+                    if isinstance(cause, urllib.error.HTTPError):
+                        # Classify the body without printing it: some providers echo part of the key.
+                        try:
+                            body = cause.read(4096) or b""
+                        except Exception:  # noqa: BLE001 - an unreadable body still has a status
+                            body = b""
+                        if cause.code in STOP_STATUSES or QUOTA_RE.search(body):
+                            stop = stop or BudgetStop(
+                                f"Stopped on HTTP {cause.code} from {provider} (auth, quota, budget or "
+                                f"rate limit); not retrying. Spent ${spent:.4f}")
+                            continue
+                    errors += 1
+                    row.update(outcome="error", error=str(answer))
+                    if errors >= MAX_CONSECUTIVE_ERRORS:
+                        stop = stop or BudgetStop(f"Stopped after {errors} errors in a row from {provider}: "
+                                                  f"{answer}. Spent ${spent:.4f}")
+                else:
+                    errors = 0
+                    tokens = answer.input_tokens
+                    call_usd = cost_usd(provider, tokens) if tokens is not None else estimate
+                    spent += call_usd
+                    largest = max(largest, call_usd)
+                    row.update(outcome="score", probability=answer.probability, model=answer.model,
+                               input_tokens=tokens, usd=round(call_usd, 8),
+                               **({"cached_tokens": answer.cached_tokens} if answer.cached_tokens is not None else {}))
+                handle.write(json.dumps(row) + "\n")
+                handle.flush()
+                state = case_state(case, assistant_name)
+                usage = (f" usage {row['input_tokens']} tokens vs "
+                         f"~{estimated_tokens(provider, state, variant, question)} estimated"
+                         + (f" ({row['cached_tokens']} cached)" if row.get("cached_tokens") is not None else "")
+                         if row.get("input_tokens") is not None else
+                         " (no usage reported; counted the estimate)" if row["outcome"] == "score" else "")
+                print(f"{provider} {case.id}: {row['outcome']} {row.get('probability', '')}{usage} "
+                      f"(running ${spent:.6f} / ${max_usd:.2f})", file=log)
+    if stop is not None:
+        raise stop
     return spent
 
 
@@ -631,7 +682,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--derived-only", action="store_true", help="Only cases derived from mentions.")
     parser.add_argument("--confident-only", action="store_true", help="Leave out borderline and low-confidence labels.")
     commands = parser.add_subparsers(dest="command")
-    commands.add_parser("plan", help="Estimate cost per provider; no network.")
+    plan_parser = commands.add_parser("plan", help="Estimate cost per provider; no network.")
+    plan_parser.add_argument("--question", default=watch_classifier.QUESTION_NAME,
+                             choices=sorted(watch_classifier.QUESTIONS))
     score_parser = commands.add_parser("score", help="PAID: score fixtures with one provider.")
     score_parser.add_argument("--provider", required=True, choices=sorted(watch_classifier.PROVIDERS))
     score_parser.add_argument("--out", type=Path, required=True)
@@ -642,6 +695,11 @@ def main(argv: list[str] | None = None) -> int:
     score_parser.add_argument("--limit", type=int, default=0, help="Score at most this many new cases.")
     score_parser.add_argument("--cases", default="", help="Comma-separated case IDs to score.")
     score_parser.add_argument("--variant", default="", help="Prompt variant from watch_prompt_variants.")
+    score_parser.add_argument("--question", default=watch_classifier.QUESTION_NAME,
+                              choices=sorted(watch_classifier.QUESTIONS),
+                              help="Which classifier question to score; the cases' labels must be for it.")
+    score_parser.add_argument("--workers", type=int, default=MAX_WORKERS, choices=range(1, MAX_WORKERS + 1),
+                              help=f"Parallel calls, at most {MAX_WORKERS}.")
     score_parser.add_argument("--confirm-paid", action="store_true",
                               help="Required: acknowledge that this calls a paid API.")
     report_parser = commands.add_parser("report", help="Precision, recall and threshold sweep; no network.")
@@ -707,7 +765,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.confident_only:
         cases = [case for case in cases if not case.borderline]
     if args.command in {None, "plan"}:
-        plan(cases, assistant_name, sys.stdout)
+        plan(cases, assistant_name, sys.stdout, getattr(args, "question", watch_classifier.QUESTION_NAME))
         return 0
     if args.command == "rules":
         rows = [row for row in _recorded(args.scores) if row["provider"] == args.provider]
@@ -751,11 +809,13 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("unknown case IDs: " + ", ".join(sorted(unknown)))
         cases = [case for case in cases if case.id in wanted]
     if args.limit:
-        done = {row["id"] for row in _recorded(args.out) if row.get("provider") == args.provider}
+        done = {row["id"] for row in _recorded(args.out) if row.get("provider") == args.provider
+                and row.get("question", watch_classifier.QUESTION_NAME) == args.question}
         cases = [case for case in cases if case.id not in done][:args.limit]
     try:
         spent = score_run(cases, assistant_name, provider=args.provider, api_key=api_key,
-                          out_path=args.out, max_usd=args.max_usd, model=args.model, variant=args.variant)
+                          out_path=args.out, max_usd=args.max_usd, model=args.model, variant=args.variant,
+                          question=args.question, workers=args.workers)
     except BudgetStop as exc:
         print(exc, file=sys.stderr)
         return 2
