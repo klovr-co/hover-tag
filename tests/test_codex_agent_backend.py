@@ -675,6 +675,20 @@ for line in sys.stdin:
         self.assertNotIn("thread/resume", [request["method"] for request in requests])
         self.assertNotIn("session", [event["type"] for event in events])
 
+    def test_text_only_runs_can_see_images_as_local_image_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            script, log = root / "server.py", root / "requests.jsonl"
+            script.write_text(self.FAKE, encoding="utf-8")
+            server = CodexAppServer([sys.executable, "-u", str(script), "ok", str(log)], cwd=root,
+                                    timeout=5, max_timeout=10, text_only_instructions="Comment.")
+            image = root / "attachment-1-image.png"
+            server.run("{}", model=None, reasoning_effort=None, emit=lambda _event: None, images=(image,))
+            requests = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+        turn = next(request for request in requests if request["method"] == "turn/start")
+        self.assertEqual([{"type": "text", "text": "{}"}, {"type": "localImage", "path": str(image)}],
+                         turn["params"]["input"])
+
     def test_names_a_saved_thread_without_starting_a_turn(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)

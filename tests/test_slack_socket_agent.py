@@ -3334,6 +3334,35 @@ class SlackChannelWatchTests(unittest.TestCase):
             view = slack_socket_agent.app_home_view("C123,C456")
         self.assertIn("2 classifier calls", json.dumps(view))
 
+    def test_chime_in_takes_a_read_only_look_at_attachments(self) -> None:
+        from contextlib import ExitStack
+        self.chime_channel()
+        video = {"id": "F1", "mimetype": "video/quicktime", "title": "launch.mov", "duration_ms": 30_000,
+                 "thumb_video": "https://files.slack.com/frame", "url_private": "https://files.slack.com/v"}
+        seen: dict[str, Any] = {}
+
+        def prepare(event, directory, token, download):
+            frame = directory / "attachment-1-frame.jpg"
+            frame.write_bytes(b"jpeg")
+            seen["directory"] = directory
+            return [{"kind": "video", "name": "launch.mov", "shown": "preview frame", "captions": "we shipped"}], (frame,)
+
+        with ExitStack() as stack:
+            fake_app = self.app(stack)
+            stack.enter_context(patch.object(slack_socket_agent, "tag_temp_dir", return_value=self.home))
+            stack.enter_context(patch.object(slack_socket_agent.watch_attachments, "prepare", side_effect=prepare))
+            fake_app.events["message"](self.event(text="", subtype="file_share", files=[video]),
+                                       {"team_id": "T123"}, self.client, MagicMock())
+        classifier_state = self.evaluate.call_args.args[0]
+        self.assertEqual([{"kind": "video", "name": "launch.mov", "type": "video/quicktime", "seconds": 30}],
+                         classifier_state["current_attachments"])
+        self.assertNotIn("files.slack.com", json.dumps(classifier_state))
+        draft_state = self.draft_reply.call_args.args[0]
+        self.assertEqual("we shipped", draft_state["current_attachments"][0]["captions"])
+        self.assertEqual("attachment-1-frame.jpg", self.draft_reply.call_args.kwargs["images"][0].name)
+        self.assertFalse(seen["directory"].exists())  # Nothing is kept after the run.
+        self.client.chat_postMessage.assert_called_once()
+
     def test_chime_in_and_addressed_share_one_call_and_addressed_wins(self) -> None:
         self.chime_channel(slack_socket_agent.watch_classifier.ClassifierDecision(
             True, 0.96, "jev-1.13.0", "typesafe-jev", invites_reactions=0.99, should_chime=True))

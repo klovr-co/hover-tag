@@ -32,6 +32,12 @@ These notes go with the experimental channel-watching change, which supersedes #
   cover older installs, retries and repeated runs.
 - **Tuning.** Every score is logged privately. Feedback becomes labels, and `scripts/watch_eval.py` recommends a
   threshold only after 200 or more labelled messages.
+- **Attachments, read-only.** The classifier gets text descriptions of uploads and link previews (no URLs or
+  contents). The draft gets up to 3 images, a video's preview frame and its Slack captions, passed as Codex
+  `localImage` inputs or Claude image blocks, from a private temporary folder deleted after the run. Downloads
+  use the bot token only on Slack's file hosts, with size caps and a check of the image bytes. Unverified live:
+  Claude SDK image blocks (mocked here) and the form of Slack's `vtt` field (both a link and inline text are
+  handled).
 - **Cost per channel.** Classifier calls, input tokens and estimated spend per channel, in total and today, are
   kept in the watch state. `tag config watching [--json]` and the Home tab show them. Tag.app shows them in a
   follow-up.

@@ -417,11 +417,14 @@ class CodexAppServer:
         emit: Callable[[dict[str, Any]], None],
         instructions: str | None = None,
         continued_prompt: str | None = None,
+        images: tuple[Path, ...] = (),
     ) -> tuple[str, str]:
         """Answer ``prompt``; a resumed conversation receives ``continued_prompt`` when given.
 
         Standing ``instructions`` become the thread's developer instructions, so
         they are not repeated in the conversation history on every request.
+        ``images`` go in the first turn as ``localImage`` inputs; a text-only run uses them to
+        see attachments without any tools.
         """
         self._start()
         mapper = CodexEventMapper()
@@ -498,7 +501,8 @@ class CodexAppServer:
                 emit({"type": "session", "session_id": self.thread_id})
             turn_params: dict[str, Any] = {
                 "threadId": self.thread_id,
-                "input": [{"type": "text", "text": prompt}],
+                "input": [{"type": "text", "text": prompt},
+                          *({"type": "localImage", "path": str(image)} for image in images)],
             }
             if model:
                 turn_params["model"] = model

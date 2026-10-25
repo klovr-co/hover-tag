@@ -232,6 +232,15 @@ addressed to Tag. A chime-in is a short comment in the thread, a 🎉 reaction o
 nothing; it offers no actions. Every post is a paid classifier call, so cost
 grows with the channel's traffic.
 
+**Attachments, read-only.** The classifier sees only a text description of a
+watched message's uploads and link previews: names, types, video length and
+preview titles, never URLs or contents. When it says yes, the draft run, which
+still has no tools, also gets up to 3 images (5 MB each), a video's one preview
+frame, the video's Slack captions as text, and link previews as text. The
+bridge downloads them with the bot token, only from Slack's file hosts, into a
+private temporary folder that is deleted after the run. There is no `ffmpeg`
+step and no transcription service.
+
 **Cost per channel.** Tag counts every classifier call per channel, with its
 input tokens and a spend estimate at the provider's list price. A failed call
 counts at its estimated size. See them with `tag config watching` (add `--json`

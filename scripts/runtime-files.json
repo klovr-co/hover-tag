@@ -40,6 +40,7 @@
     "scripts/agent_usage.py",
     "scripts/channel_watch.py",
     "scripts/watch_classifier.py",
+    "scripts/watch_attachments.py",
     "scripts/claude_agent_backend.py",
     "scripts/codex_agent_backend.py",
     "scripts/install_dependencies.sh",

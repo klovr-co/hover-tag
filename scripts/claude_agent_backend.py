@@ -9,7 +9,9 @@ control-file interruption, and separate idle and maximum deadlines.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
+import mimetypes
 import os
 import re
 import shutil
@@ -808,8 +810,12 @@ class ClaudeAgentRun:
         fast_mode: bool = False,
         emit: Callable[[dict[str, Any]], None],
         continued_prompt: str | None = None,
+        images: tuple[Path, ...] = (),
     ) -> tuple[str, str]:
-        """Answer ``prompt``; a resumed session receives ``continued_prompt`` when given."""
+        """Answer ``prompt``; a resumed session receives ``continued_prompt`` when given.
+
+        ``images`` are sent as image blocks with the prompt, so a text-only run can see them."""
+        self.images = tuple(images)
         first = continued_prompt if self.resume_session_id and continued_prompt else prompt
         try:
             result = asyncio.run(self._run(first, model=model, reasoning_effort=reasoning_effort,
@@ -827,6 +833,21 @@ class ClaudeAgentRun:
         self.stderr.clear()
         return asyncio.run(self._run(prompt, model=model, reasoning_effort=reasoning_effort,
                                      fast_mode=fast_mode, emit=emit))
+
+    def _with_images(self, prompt: str) -> Any:
+        """The SDK's streaming input: one user message with the text and each image as base64."""
+        content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+        for image in self.images:
+            media_type = mimetypes.guess_type(image.name)[0] or "image/png"
+            content.append({"type": "image", "source": {
+                "type": "base64", "media_type": media_type,
+                "data": base64.b64encode(image.read_bytes()).decode("ascii")}})
+
+        async def messages() -> Any:
+            yield {"type": "user", "message": {"role": "user", "content": content},
+                   "parent_tool_use_id": None, "session_id": "default"}
+
+        return messages()
 
     async def _run(
         self,
@@ -851,7 +872,7 @@ class ClaudeAgentRun:
         try:
             try:
                 await asyncio.wait_for(self.client.connect(), timeout=max(1.0, max_deadline - time.monotonic()))
-                await self.client.query(prompt)
+                await self.client.query(self._with_images(prompt) if getattr(self, "images", ()) else prompt)
             except asyncio.TimeoutError as exc:
                 raise ClaudeAgentError("Claude Agent SDK did not start before the deadline") from exc
             except Exception as exc:  # noqa: BLE001 - SDK raises several connection error types

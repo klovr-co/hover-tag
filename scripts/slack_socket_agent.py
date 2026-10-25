@@ -72,7 +72,7 @@ try:
     from .agent_activity import THINKING_LABEL, show_thinking
     from .tag_paths import instance_home, tag_temp_dir
     from .record_output_artifact import channel_artifact_directory
-    from . import channel_watch, watch_classifier, slack_channels
+    from . import channel_watch, watch_attachments, watch_classifier, slack_channels
     from . import tag_memory
     from . import tag_handoff
 except ImportError:  # Direct script execution does not create a package context.
@@ -116,6 +116,7 @@ except ImportError:  # Direct script execution does not create a package context
     from record_output_artifact import channel_artifact_directory
     from tag_paths import instance_home, tag_temp_dir
     import channel_watch
+    import watch_attachments
     import watch_classifier
     import slack_channels
     import tag_memory
@@ -5494,7 +5495,8 @@ def create_app(
             # Ambient messages from other people are normal conversation, not denied requests.
             return
         chime = channel in channel_watch.chime_in_channel_ids()
-        if not message_text.strip() or f"<@{current_assistant_user_id(client)}" in message_text:
+        if not (message_text.strip() or (chime and watch_attachments.files(event))) \
+                or f"<@{current_assistant_user_id(client)}" in message_text:
             return  # Explicit bot mentions use app_mention.
         # Other member mentions are human-directed, though such a post may still be news to react to.
         mentions_people = bool(MENTION_RE.search(message_text))
@@ -5561,6 +5563,8 @@ def create_app(
             event, thread_messages, assistant_name=name,
             assistant_user_id=current_assistant_user_id(client) if thread_messages else "",
         )
+        if attachments := watch_attachments.describe(event):
+            state["current_attachments"] = attachments  # Text only: names, types, link titles.
         record = {"channel": channel, "thread_ts": anchor, "ts": event["ts"], "trigger": trigger,
                   "provider": classifier.provider, "threshold": classifier.threshold, "state": state}
         if chime:
@@ -5604,8 +5608,15 @@ def create_app(
             record["trigger"] = trigger = "chime-in"
         request_backend = default_settings.backend or backend
         try:
-            draft = channel_watch.draft_reply(state, request_backend, default_settings.model, name=name,
-                                              chime=chiming)
+            with tempfile.TemporaryDirectory(prefix="watch-attachments-", dir=tag_temp_dir()) as directory:
+                draft_state, images = state, ()
+                if attachments:
+                    # The read-only look: images, a video's preview frame and its captions, within caps.
+                    described, images = watch_attachments.prepare(
+                        event, Path(directory), os.getenv("SLACK_BOT_TOKEN", ""), watch_attachments.slack_download)
+                    draft_state = {**state, "current_attachments": described}
+                draft = channel_watch.draft_reply(draft_state, request_backend, default_settings.model, name=name,
+                                                  chime=chiming, images=images)
         except Exception as exc:  # noqa: BLE001 - a failed draft stays silent
             logger.warning("Watching draft failed: %s", type(exc).__name__)
             draft = ""

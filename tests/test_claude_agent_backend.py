@@ -417,6 +417,28 @@ class ClaudeAgentRunTests(unittest.TestCase):
         self.assertTrue(options.include_partial_messages)
         self.assertTrue(FakeClient.instances[0].disconnected)
 
+    def test_images_go_with_the_prompt_as_base64_image_blocks(self) -> None:
+        import asyncio
+        import base64
+
+        async def script(_client):
+            yield ResultMessage(result="ok")
+
+        image = self.root / "attachment-1-image.png"
+        image.write_bytes(b"\x89PNG\r\n\x1a\nimage")
+        self.run_agent(script, images=(image,))
+
+        async def collect(stream):
+            return [message async for message in stream]
+
+        [message] = asyncio.run(collect(FakeClient.instances[0].prompt))
+        text, block = message["message"]["content"]
+        self.assertEqual(({"type": "text", "text": "prompt"}, "user"), (text, message["type"]))
+        self.assertEqual({"type": "base64", "media_type": "image/png",
+                          "data": base64.b64encode(image.read_bytes()).decode()}, block["source"])
+        self.run_agent(script)
+        self.assertEqual("prompt", FakeClient.instances[-1].prompt)  # Plain text without images.
+
     def test_tag_thinking_level_reaches_the_sdk_effort_option(self) -> None:
         from scripts import agent_models, slack_socket_agent
 
