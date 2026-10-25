@@ -222,13 +222,15 @@ def bridge_script(root: Path) -> Path:
     return root / "tools/mcp-remote/node_modules/mcp-remote/dist/proxy.js"
 
 
-def auth_dir(root: Path) -> Path:
-    return root / "state/connector-auth"
+def auth_dir(root: Path, name: str) -> Path:
+    """mcp-remote's folder for one connector. mcp-remote keys sign-ins by URL only,
+    so a folder per connector keeps two accounts on one service apart."""
+    return root / "state/connector-auth" / validate_name(name)
 
 
-def sign_in_file(root: Path, url: str) -> Path:
+def sign_in_file(root: Path, name: str, url: str) -> Path:
     """Where mcp-remote keeps this connector's sign-in. Tag only checks it exists."""
-    return auth_dir(root) / MCP_REMOTE_STORE / f"{hashlib.md5(url.encode()).hexdigest()}_tokens.json"
+    return auth_dir(root, name) / MCP_REMOTE_STORE / f"{hashlib.md5(url.encode()).hexdigest()}_tokens.json"
 
 
 def run_plan() -> tuple[dict[str, dict], dict[str, str]]:
@@ -251,14 +253,14 @@ def run_plan() -> tuple[dict[str, dict], dict[str, str]]:
         node = node or shutil.which("node")
         if node is None or not bridge_script(store.root).is_file():
             skipped[name] = "Node or mcp-remote isn't installed; see tag doctor."
-        elif not sign_in_file(store.root, entry["url"]).is_file():
+        elif not sign_in_file(store.root, name, entry["url"]).is_file():
             skipped[name] = f"Not signed in; run tag connector sign-in {name}."
         else:
             definitions[name] = {
                 "command": node,
                 "args": [str(bridge_script(store.root)), entry["url"],
                          "--auth-timeout", str(RUN_AUTH_TIMEOUT_SECONDS)],
-                "env": {"MCP_REMOTE_CONFIG_DIR": str(auth_dir(store.root))}, "env_names": []}
+                "env": {"MCP_REMOTE_CONFIG_DIR": str(auth_dir(store.root, name))}, "env_names": []}
     return definitions, skipped
 
 
