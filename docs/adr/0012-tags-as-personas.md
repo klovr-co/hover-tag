@@ -163,32 +163,28 @@ text-only, so it can't see the video. Chime-in needs:
 selected provider's key (TypeSafe Jev or OpenAI Decisions) is a config error,
 so there is no fallback. Proposed, in this order:
 
-1. **Rules only,** with a stricter output. R1 (the message names the Tag) or
-   R2 (it continues the Tag's thread) triggers only a reaction (👀) or one
-   line, "Want me to take this on?", with the Take this on button. It never
-   triggers a full reply. #233 measured why: on 122 natural real messages,
-   R1 or R2 had precision 0.67 and 3 wrong triggers, against 1.00 and none
-   for Decisions at 0.95. R1 is off when the Tag's only name is "Tag",
-   because on the synthetic set it fired on "tag" as a verb (18 false
-   positives).
-2. **The Tag's own backend as the classifier,** if the owner turns it on: one
+1. **The Tag's own backend as the classifier,** if the owner turns it on: one
    tiny text-only call (no tools, no session) with the same question,
    answering yes or no. Self-reported confidences aren't calibrated, so there
    is no threshold. Cost: about 1,500 input and 10 output tokens a call
    (estimated from #233's state size, unverified). That is priced at the
    Tag's model rate with an API key, or taken from the plan's limits with a
-   subscription sign-in. It adds a backend start to each candidate message,
+   subscription sign-in. It adds a backend start to each message it checks,
    and it needs its own run on #233's eval sets, with a budget, before it is
    offered.
-3. **Otherwise the feature stays off,** and Tag.app and `tag config show` say
-   why and what would turn it on.
+2. **Otherwise the feature stays off,** and Tag.app and `tag config show` say
+   why and what would turn it on. @mentions and DMs work as always.
+
+A rules-only fallback (reacting when a message names Tag or continues its
+thread) was considered and dropped: on #233's 122 natural real messages those
+rules were right 0.67 of the time against 1.00 for Decisions at 0.95.
 
 Per feature:
 
 | Feature | With Jev or Decisions | Without a key |
 |---|---|---|
-| Watching (`when-addressed`) | rules, then classifier | rules only with a reaction or offer; backend if turned on |
-| Chime-in | its own question | backend if turned on; else off (no rule can spot a launch) |
+| Watching (`when-addressed`) | #233's free filters, then the classifier | backend if turned on; else off |
+| Chime-in | its own question on every new message | backend if turned on; else off |
 | Persona suggestion | scores the descriptions, precision first | Lead's loop suggests from the descriptions it already sees, at no extra call |
 | Connector narrowing | recall first, within the allow list | pass the whole allow list |
 
