@@ -24,12 +24,12 @@ import re
 import tempfile
 
 try:
-    from . import tag_chief, tag_config, tag_instances
+    from . import tag_lead, tag_config, tag_instances
     from .tag_layout import _rewrite
     from .tag_locks import LifecycleLock
     from .tag_paths import data_home
 except ImportError:
-    import tag_chief
+    import tag_lead
     import tag_config
     import tag_instances
     from tag_layout import _rewrite
@@ -218,8 +218,8 @@ def migrate(root: Path, lifecycle, tag_id: str = tag_instances.DEFAULT_TAG) -> s
             # Keep plain `tag start` on the Tag it already selected.
             if main == tag_id or (main is None and (tag_id == tag_instances.DEFAULT_TAG or not others)):
                 tag_instances.set_main_tag(root, name)
-            # Chief-of-Tag, and the list of Tags it created, follow the new name.
-            tag_chief.renamed(root, tag_id, name)
+            # Lead, and the list of Tags it created, follow the new name.
+            tag_lead.renamed(root, tag_id, name)
             # Verify the renamed Tag resolves before declaring the work done.
             tag_instances.resolve(root, name)
             _plan_path(root, tag_id).unlink(missing_ok=True)

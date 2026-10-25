@@ -102,27 +102,27 @@ function row(tag: TagRow, problem: string | null = null) {
 }
 
 describe("Tag rows", () => {
-  it("mark only Chief-of-Tag", () => {
+  it("mark only Lead", () => {
     row(maya);
-    expect(screen.getByTitle("Routes requests to one owner Tag, and is the only Tag that creates Tags").textContent).toBe("★ Chief-of-Tag");
+    expect(screen.getByTitle("Routes requests to one owner Tag, and is the only Tag that creates Tags").textContent).toBe("★ Lead");
     cleanup();
-    row({ ...maya, chief_of_tag: false });
-    expect(screen.queryByText("★ Chief-of-Tag")).toBeNull();
+    row({ ...maya, lead: false });
+    expect(screen.queryByText("★ Lead")).toBeNull();
   });
 
-  it("hop the badge only when a Tag becomes Chief-of-Tag, not when it is shown", () => {
+  it("hop the badge only when a Tag becomes Lead, not when it is shown", () => {
     const tags = { busy: new Set<string>(), toggle: vi.fn() } as unknown as Tags;
     const { rerender } = render(<TagRowView row={maya} tags={tags} problem={null} open={vi.fn()} />);
-    expect(screen.getByText("★ Chief-of-Tag").className).not.toContain("fresh");
-    rerender(<TagRowView row={{ ...maya, chief_of_tag: false }} tags={tags} problem={null} open={vi.fn()} />);
+    expect(screen.getByText("★ Lead").className).not.toContain("fresh");
+    rerender(<TagRowView row={{ ...maya, lead: false }} tags={tags} problem={null} open={vi.fn()} />);
     rerender(<TagRowView row={maya} tags={tags} problem={null} open={vi.fn()} />);
-    expect(screen.getByText("★ Chief-of-Tag").className).toContain("fresh");
+    expect(screen.getByText("★ Lead").className).toContain("fresh");
   });
 
   it("show the name, the model and a short thinking level, then the description", () => {
     const { open } = row(maya);
     const item = screen.getByRole("button", { name: "Open Maya's Tag, online, GPT-5.5, Medium thinking" });
-    expect(item.textContent).toContain("Maya's Tag★ Chief-of-TagGPT-5.5 · med");
+    expect(item.textContent).toContain("Maya's Tag★ LeadGPT-5.5 · med");
     expect(item.textContent).toContain("I'm Maya's personal assistant. I help with launch work.");
     expect(screen.getByText("GPT-5.5 · med").className).toBe("mname");
     fireEvent.click(item);

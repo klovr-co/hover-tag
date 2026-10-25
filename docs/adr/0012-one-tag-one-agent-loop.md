@@ -4,7 +4,7 @@
 - Date: 2026-10-25
 - Issue: [#232](https://github.com/klovr-co/hover-tag/issues/232), PR [#238](https://github.com/klovr-co/hover-tag/pull/238)
 - Related: [ADR 0001](0001-credential-boundary.md), [ADR 0005](0005-multiple-tag-instances.md),
-  [ADR 0011](0011-chief-of-tag.md), skills [#176](https://github.com/klovr-co/hover-tag/issues/176),
+  [ADR 0011](0011-lead-tag.md), skills [#176](https://github.com/klovr-co/hover-tag/issues/176),
   routines [#237](https://github.com/klovr-co/hover-tag/pull/237),
   handoffs [#177](https://github.com/klovr-co/hover-tag/pull/177),
   approvals [#208](https://github.com/klovr-co/hover-tag/pull/208)
@@ -15,11 +15,11 @@
 
 ## Context
 
-ADR 0011 gives an installation many Tags, with Chief-of-Tag routing each
+ADR 0011 gives an installation many Tags, with Lead routing each
 request to one owner and creating new Tags when a lane is missing. The first
 draft of this ADR kept that shape but made the specialists cheaper: one Slack
 app, with each specialist a "profile" (its own name, picture, instructions,
-memory and backend sessions) that Chief-of-Tag dispatched to by name.
+memory and backend sessions) that Lead dispatched to by name.
 
 Anthropic's article on folding subagents into the main loop argues for the
 opposite default:
@@ -91,7 +91,7 @@ an authorized user, approves it. That uses the approve/reject card, expiry and
   branch, unchanged and not called from any proposal flow. Resuming it needs a
   new decision.
 
-**Chief-of-Tag, honestly.** With one Tag per installation, Chief-of-Tag has
+**Lead, honestly.** With one Tag per installation, Lead has
 nothing to do: there is no other Tag to route to, and Tag creation is on hold.
 It helps only an installation that already runs several real instances, where
 it routes a request to the one that holds the right boundary. #238 keeps the
@@ -132,7 +132,7 @@ Every fold or split is decided by a small end-to-end set, not by argument.
 
 ## Plan for #238
 
-1. **Chief-of-Tag as it exists.** No new code. Point its standing
+1. **Lead as it exists.** No new code. Point its standing
    instructions at skills first: a proposal for a new Tag is refused while
    creation is on hold, and the agent offers a skill instead. Update ADR 0011's
    status to "Changed by ADR 0012".
@@ -169,5 +169,5 @@ go-ahead.
 - The skill and tool library, presets and install flow (#176).
 - Hosting uploaded display pictures (#206).
 - Resuming app-Tag creation, if an installation needs a second Slack app.
-- Removing Chief-of-Tag if no installation needs routing between real
+- Removing Lead if no installation needs routing between real
   instances.
