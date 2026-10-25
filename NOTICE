@@ -21,3 +21,9 @@ Routine scheduling takes its rules and test scenarios from Hermes Agent
 (https://github.com/NousResearch/hermes-agent) and OpenClaw
 (https://github.com/openclaw/openclaw), both available under the MIT License,
 and from Temporal and Kubernetes. The code is original to this project.
+
+Each Tag's knowledge history is written with Dulwich
+(https://github.com/jelmer/dulwich), which its authors offer under either the
+Apache License, Version 2.0, or the GNU General Public License, version 2 or
+later. Tag uses Dulwich under the Apache License, Version 2.0. It is installed
+as a dependency, not included in this repository.
