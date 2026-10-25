@@ -1,0 +1,5 @@
+{
+  "name": "tag",
+  "version": "1.0.0",
+  "description": "Procedures Tag's runtime agent loads on demand: files, attachments, memory, Slack search and actions, and asking other Tags."
+}

@@ -196,6 +196,12 @@ complete response without a fake typewriter animation.
   conversation (Codex `developerInstructions`, Claude system prompt) and send a
   continued conversation only the thread's new messages. See
   [ADR 0009](../docs/adr/0009-thread-scoped-agent-conversations.md).
+- Keep standing instructions lean and register Tag's runtime skills
+  (`runtime-skills/`) so procedures load only when a request needs them: Claude
+  loads the folder as a local plugin (`--plugin-dir`, or the SDK `plugins`
+  option, with its `Skill(tag:…)` calls allowed), and the Codex App Server adds
+  `runtime-skills/skills` with `skills/extraRoots/set`. The instructions also
+  name each skill's file, for transports that cannot register them.
 
 Generated images use a file handoff rather than a new stream event. For each
 Slack invocation, the prompt names a temporary `results/images` directory. A

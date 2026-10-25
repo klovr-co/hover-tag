@@ -624,6 +624,11 @@ for line in sys.stdin:
         send({"id": m["id"], "result": {"thread": {"id": "fresh"}}})
     elif method == "thread/name/set":
         send({"id": m["id"], "result": {}})
+    elif method == "skills/extraRoots/set":
+        if mode == "old-codex":
+            send({"id": m["id"], "error": {"code": -32601, "message": "method not found"}})
+        else:
+            send({"id": m["id"], "result": {}})
     elif method == "config/read":
         layers = [{"name": {"type": "project", "dotCodexFolder": m["params"].get("cwd", "") + "/.codex"},
                    "disabledReason": None if mode == "trusted" else "add it as a trusted project"}]
@@ -663,6 +668,19 @@ for line in sys.stdin:
         turn = next(request for request in requests if request["method"] == "turn/start")
         self.assertEqual("Standing rules", resume["params"]["developerInstructions"])
         self.assertEqual("Only new messages", turn["params"]["input"][0]["text"])
+
+    def test_runtime_skill_roots_are_registered_before_the_thread_starts(self) -> None:
+        roots = [Path("/tag/release/runtime-skills/skills")]
+        _result, _events, requests = self.run_server("ok", skill_roots=roots)
+        methods = [request["method"] for request in requests]
+        extra = next(request for request in requests if request["method"] == "skills/extraRoots/set")
+        self.assertEqual({"extraRoots": [str(roots[0])]}, extra["params"])
+        self.assertLess(methods.index("skills/extraRoots/set"), methods.index("thread/start"))
+        # An older Codex without the method still answers; the instructions name each skill's file.
+        result, _events, _requests = self.run_server("old-codex", skill_roots=roots)
+        self.assertEqual(("completed", ""), result)
+        _result, _events, requests = self.run_server("ok")
+        self.assertNotIn("skills/extraRoots/set", [request["method"] for request in requests])
 
     def test_fresh_thread_gets_the_full_prompt_after_a_failed_resume(self) -> None:
         _result, _events, requests = self.run_server_with("missing", resume_thread_id="gone")

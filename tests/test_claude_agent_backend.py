@@ -768,6 +768,24 @@ class ClaudeAgentRunTests(unittest.TestCase):
         self.assertEqual([{"type": "session", "session_id": "new"}],
                          [event for event in events if event["type"] == "session"])
 
+    def test_runtime_skills_load_as_a_plugin_whose_skills_need_no_approval(self) -> None:
+        plugin = self.root / "runtime-skills"
+        for name in ("tag-files", "tag-memory"):
+            (plugin / "skills" / name).mkdir(parents=True)
+            (plugin / "skills" / name / "SKILL.md").write_text("---\nname: x\n---\n", encoding="utf-8")
+        (plugin / ".claude-plugin").mkdir()
+        (plugin / ".claude-plugin/plugin.json").write_text('{"name": "tag"}', encoding="utf-8")
+
+        async def script(_client):
+            yield ResultMessage(result="ok")
+
+        FakeClient.script = script
+        ClaudeAgentRun(cwd=self.root, timeout=30, plugin_dirs=[plugin]).run(
+            "prompt", model=None, reasoning_effort=None, emit=lambda _event: None)
+        options = FakeClient.instances[0].options
+        self.assertEqual([{"type": "local", "path": str(plugin)}], options.plugins)
+        self.assertEqual(["Skill(tag:tag-files)", "Skill(tag:tag-memory)"], options.allowed_tools)
+
     def test_standing_instructions_are_the_system_prompt_and_resumes_get_new_messages(self) -> None:
         async def script(client):
             yield ResultMessage(result="ok", session_id="s-1")

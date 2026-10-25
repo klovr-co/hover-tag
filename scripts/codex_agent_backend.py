@@ -352,8 +352,10 @@ class CodexAppServer:
         approval_dir: Path | None = None,
         text_only_instructions: str | None = None,
         resume_thread_id: str | None = None,
+        skill_roots: list[Path] | None = None,
     ) -> None:
         self.command = command
+        self.skill_roots = skill_roots or []
         self.resume_thread_id = resume_thread_id
         self.chatgpt_token = ""
         self.gateway_proxy: agent_gateway.GatewayProxy | None = None
@@ -443,6 +445,14 @@ class CodexAppServer:
             )
             self._notify("initialized", {})
             self._check_tag_rules(mapper, emit, max_deadline)
+            if self.skill_roots and self.text_only_instructions is None:
+                try:
+                    # Tag's on-demand procedures; the instructions name their files for older Codex.
+                    self._request("skills/extraRoots/set",
+                                  {"extraRoots": [str(path) for path in self.skill_roots]},
+                                  mapper, emit, max_deadline)
+                except CodexAppServerError:
+                    pass
             # Saved threads let sub-agents load their parent's context and let a
             # Slack thread resume its conversation; summaries stay out of history.
             thread_params: dict[str, Any] = {
