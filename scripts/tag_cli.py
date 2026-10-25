@@ -71,7 +71,7 @@ CAPABILITIES = (
     "autostart", "autostart-keep", "logs-json", "upgrade-json", "install-progress",
     "ai-connections", "shared-ai-connections", "thinking-level", "logs-activity", "activity-details", "setup-v2", "abandon-setup", "remove-tag",
     "describe", "telemetry-events", "start-progress", "api-connections", "saved-models", "permission-rules", "routines",
-    "knowledge", "knowledge-add",
+    "knowledge", "knowledge-add", "tag-export",
 )
 UPDATE_CHECK_INTERVAL_SECONDS = 24 * 60 * 60
 COMMANDS = tuple(sorted(tag_instances.RESERVED_NAMES))
@@ -2609,6 +2609,19 @@ def _run_cli() -> int:
         if tag_id == tag_instances.DEFAULT_TAG:
             tag_id = tag_instances.select_unnamed(root)
         return _knowledge_command(root, tag_id, raw_arguments[1:])
+    if raw_arguments[:1] in (["export"], ["import"]):
+        try:
+            import tag_transfer
+        except ImportError:
+            from scripts import tag_transfer
+        root = tag_home()
+        if raw_arguments[0] == "import":
+            return tag_transfer.run_import(root, raw_arguments[1:])
+        if explicit_tag:
+            tag_id = tag_instances.resolve_reference(root, tag_id)
+        if tag_id == tag_instances.DEFAULT_TAG:
+            tag_id = tag_instances.select_unnamed(root)
+        return tag_transfer.run_export(root, tag_instances.resolve(root, tag_id), raw_arguments[1:])
     args = parser.parse_args(raw_arguments)
     if args.activity and (args.command != "logs" or args.follow):
         parser.error("--activity requires logs and cannot be combined with --follow")
