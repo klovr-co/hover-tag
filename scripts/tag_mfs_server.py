@@ -24,7 +24,8 @@ except ImportError:
     from tag_slack_backoff import Coordinator
     from tag_config import save_config
 
-RUNTIME_VERSION = 2
+RUNTIME_VERSION = 3
+MIRROR_EVENT_TYPES = frozenset({"hover_whatsapp_mirror"})
 # Milvus Lite appends every write to a log and only tidies that log into
 # indexed storage once 10,000 *different* chunks have changed. Slack syncs keep
 # rewriting the same few thousand chunks, so it never tidies up: the log fills
@@ -139,6 +140,18 @@ def install_connector(state: Path):
             )
 
     class RateAwareSlackPlugin(SlackPlugin):
+        async def read_records(self, path, range=None):
+            # Skip what an approved app (Hover) posts: its mirror of WhatsApp chats is indexed
+            # elsewhere, and its requests and logs are not knowledge. Human messages stay.
+            skipped = {part.strip() for part in os.environ.get("SLACK_ALLOWED_BOT_IDS", "").split(",") if part.strip()}
+            async for message in super().read_records(path, range):
+                metadata = message.get("metadata")
+                if isinstance(metadata, dict) and metadata.get("event_type") in MIRROR_EVENT_TYPES:
+                    continue
+                if skipped and skipped & {message.get("bot_id"), message.get("user"), message.get("app_id")}:
+                    continue
+                yield message
+
         async def connect(self):
             self._client = PacedClient(self._cfg("token") or self.credential)
             token_key = self._client.identity

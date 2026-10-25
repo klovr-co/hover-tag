@@ -610,6 +610,15 @@ def run_limits(environ: Any) -> dict[str, Any]:
     return limits
 
 
+def plugin_skills(plugin_dir: Path) -> list[str]:
+    """``plugin:skill`` names of a local plugin's skills, as Claude's Skill tool calls them."""
+    try:
+        name = json.loads((plugin_dir / ".claude-plugin/plugin.json").read_text(encoding="utf-8"))["name"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return []
+    return sorted(f"{name}:{path.parent.name}" for path in (plugin_dir / "skills").glob("*/SKILL.md"))
+
+
 class ClaudeAgentRun:
     """One Claude Agent SDK client for one request-scoped Tag run."""
 
@@ -626,8 +635,10 @@ class ClaudeAgentRun:
         text_only_instructions: str | None = None,
         resume_session_id: str | None = None,
         instructions: str | None = None,
+        plugin_dirs: list[Path] | None = None,
     ) -> None:
         self.instructions = instructions
+        self.plugin_dirs = plugin_dirs or []
         self.cwd = cwd
         self.resume_session_id = resume_session_id
         self.add_dirs = add_dirs or []
@@ -759,8 +770,13 @@ class ClaudeAgentRun:
         if self.instructions:
             # Sent as the system prompt each run, so it never accumulates in the session.
             kwargs["system_prompt"] = self.instructions
+        if self.plugin_dirs:
+            # Tag's on-demand procedures load without a Slack approval for each skill.
+            kwargs["plugins"] = [{"type": "local", "path": str(path)} for path in self.plugin_dirs]
+            kwargs["allowed_tools"] = [f"Skill({plugin_skill})" for path in self.plugin_dirs
+                                       for plugin_skill in plugin_skills(path)]
         if self.text_only_instructions is not None:
-            kwargs.update(tools=[], mcp_servers={}, setting_sources=[], add_dirs=[],
+            kwargs.update(tools=[], mcp_servers={}, setting_sources=[], add_dirs=[], plugins=[], allowed_tools=[],
                           permission_mode="dontAsk", max_turns=1,
                           system_prompt=self.text_only_instructions,
                           env={**text_only_environment(os.environ), **CLAUDE_NATIVE_MEMORY_ENV},

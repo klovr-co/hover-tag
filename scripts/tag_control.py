@@ -382,8 +382,8 @@ def _choose_search_model() -> None:
 
 def _settings_menu(home: Path, ai=None) -> None:
     groups = (
-        ("Slack connection and access", ("SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_ALLOWED_USER_IDS", "SLACK_CHANNEL_IDS", "OPENTAG_BOT_NAME", "OPENTAG_BOT_DESCRIPTION", "SLACK_CHANNEL_POLICY", "change_app", "reconnect")),
-        ("Workspace and memory", ("MFS_SLACK_HISTORY_DAYS", "MFS_ALLOWED_SCOPES", "MFS_URL", "MFS_TOKEN", "memory_model")),
+        ("Slack connection and access", ("SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_ALLOWED_USER_IDS", "SLACK_CHANNEL_IDS", "OPENTAG_BOT_NAME", "OPENTAG_BOT_DESCRIPTION", "SLACK_CHANNEL_POLICY", "SLACK_ALLOWED_BOT_IDS", "change_app", "reconnect")),
+        ("Workspace and memory", ("MFS_SLACK_HISTORY_DAYS", "MFS_ALLOWED_SCOPES", "MFS_URL", "MFS_TOKEN", "memory_model", "MFS_CHANNEL_SCOPES")),
         ("AI & models", ("OPENTAG_DEFAULT_MODEL",)),
         ("Advanced", ("OPENTAG_TIMEOUT_SECONDS", "OPENTAG_MAX_TIMEOUT_SECONDS", "OPENTAG_BACKEND_ATTEMPTS", "OPENTAG_SLACK_STREAMING",
                       "OPENTAG_SLACK_DM_ENABLED", "OPENTAG_SHOW_THINKING",
