@@ -2017,6 +2017,31 @@ def _routine_command(installation_root: Path, tag_id: str, arguments: list[str])
                                channels=_channels(values, context.home), tag_running=slack_ready)
 
 
+def _prepare_memory(context: tag_instances.InstanceContext) -> tuple[str, bool]:
+    """Move JSON memory from an earlier Tag to markdown, then bring its history up to date.
+
+    Memory keeps working when this fails: the JSON stays the memory until the
+    move succeeds, and history catches up on a later start or run.
+    """
+    try:
+        import tag_knowledge, tag_memory
+    except ImportError:
+        from scripts import tag_knowledge, tag_memory
+    places = tag_knowledge.Places.for_tag(context.installation_root, context.home, context.workspace, context.tag_id)
+    try:
+        migrated = tag_knowledge.read_format(places.memory) is None and (places.legacy or Path()).is_dir()
+        tag_memory.prepare(places)
+    except tag_memory.MemoryRefused as exc:
+        return f"Still using the earlier memory files · {exc}", False
+    try:
+        status = tag_knowledge.sync(places)
+    except (OSError, ValueError, tag_knowledge.KnowledgeError) as exc:
+        return f"Ready · history not updated yet ({exc})", False
+    if not status["available"]:
+        return "Ready · history waits for Tag's runtime to be complete", False
+    return ("Moved to markdown files with history" if migrated else "Ready with history"), True
+
+
 def _abandon_command(context: tag_instances.InstanceContext, args) -> int:
     """Set aside a Tag whose setup never reached Slack. It is moved, never deleted."""
     import shutil
@@ -3360,6 +3385,8 @@ def _run_cli() -> int:
                 "Private report storage migrated" if diagnostics_migrated else "Private report storage ready",
                 good=True,
             )
+            memory_row = _prepare_memory(context)
+            display.info_row("Memory", memory_row[0], good=memory_row[1])
             manifest_changed = slack_manifest_migrations.reconcile(home, config_path, values)
             if manifest_changed:
                 values = read_config(config_path)
