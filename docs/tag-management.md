@@ -35,16 +35,37 @@ Its menu has **Open Tag…**, **Add Tag…**, **Settings…**, **Start All Tags*
 keeps the app running there. The app tells you if a Tag goes offline
 unexpectedly.
 
-### A Tag's tabs
+### Threads
 
-Click a Tag to open it. It has four tabs.
+Click a Tag to open **Threads**. Each Slack thread a Tag works in is one
+conversation, and the list on the left holds every Tag's threads.
 
+- A thread that waits for you, such as an approval or a teammate asking your
+  Tag to run work, shows **Needs you** at the top of the list. Your computer
+  also shows a notification. Answer in the app or in Slack: answering in one
+  place closes the question in both.
+- Threads that finished more than a day ago fold into **Settled**.
+- **All Tags** at the top of the list shows one Tag's threads instead. Search
+  finds threads by title, channel, or person.
+- The conversation shows people's messages and the Tag's full answers.
+  Click the line with the Tag's steps to see each step.
+- Files the Tag made and what it remembered open beside the conversation.
+- Reply at the bottom. A reply stays in the app unless you switch on **Also
+  post in Slack** for that message. The Tag answers in the app either way.
+- Threads are kept 90 days after their last message. Change this with
+  `tag NAME threads retention DAYS`.
 
-- **Activity** shows the Tag's replies, newest at the bottom. Click a reply's
-  step count to see what the Tag did. Replies in the same Slack thread are
-  grouped together. To see failed requests, tick **Show errors**.
-- **Channels** lists where the Tag can reply. Click a channel to see every
-  Tag's activity in it.
+Threads from before this version show a short preview of each reply. New
+threads start in Slack for now: mention the Tag in a channel or send it a direct
+message.
+
+### A Tag's settings
+
+The Tag picker at the top chooses a Tag. **Knowledge** shows what it remembers.
+Click the gear next to it for the Tag's settings:
+
+- **Channels** lists where the Tag can reply.
+- **Routines** lists the Tag's routines.
 - **Logs** shows the Tag's log. Click **Copy full log** to share it.
 - **Details** shows the Tag's name, description, workspace, model, and working
   folder. You can rename, describe, or remove the Tag here.
@@ -52,7 +73,8 @@ Click a Tag to open it. It has four tabs.
 ![A Tag's Details tab: name, description, model and thinking level, working folder, and Remove](assets/screenshots/tag-details.png)
 
 When a Slack message mentions **the Tag app**, click the link to open that
-Tag's Details in the app.
+Tag's Details in the app. A link to a thread opens that conversation. It works
+only on the computer that runs the Tag.
 
 ### Settings
 
@@ -228,7 +250,9 @@ doesn't have this. Remove the Tag and add a new one instead.
 | Add a Tag | **Add Tag** on Home | `tag setup` (first Tag), `tag add` |
 | See your Tags | **Home** | `tag list` |
 | Start or stop | The Tag's switch, **Start all**, **Stop all** | `tag NAME start` / `stop` / `restart` |
-| See activity | The Tag → **Activity** | `tag NAME logs --activity RUN_ID` |
+| See threads | The Tag → **Threads** | `tag NAME threads`, `tag NAME thread CHANNEL THREAD_TS` |
+| Reply in a thread | **Threads** → the reply box | `tag NAME thread CHANNEL THREAD_TS reply --text "…"` |
+| See activity | The Tag → **Threads** → a thread's steps | `tag NAME logs --activity RUN_ID` |
 | See logs | The Tag → **Logs** | `tag NAME logs` |
 | Find a problem | **Fix** or **View logs** | `tag NAME status`, `tag NAME doctor` |
 | Rename | Details → **Rename** | `tag NAME rename "Name"` |

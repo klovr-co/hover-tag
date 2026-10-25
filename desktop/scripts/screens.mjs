@@ -12,7 +12,7 @@ const shot = async (page, name) => {
 };
 const button = (page, name) => page.getByRole("button", { name }).first();
 for (const scheme of ["light", "dark"]) {
-  const page = await browser.newPage({ viewport: { width: 800, height: 1100 }, deviceScaleFactor: 2, colorScheme: scheme });
+  const page = await browser.newPage({ viewport: { width: 1040, height: 1100 }, deviceScaleFactor: 2, colorScheme: scheme });
   const suffix = scheme === "dark" ? "-dark" : "";
   // Home, with every Tag, then with one and none.
   await page.goto(base);
@@ -31,12 +31,15 @@ for (const scheme of ["light", "dark"]) {
   await page.goto(base + "/?telemetry=ask");
   await page.getByText("Tag shares anonymous usage data").waitFor();
   await shot(page, "usage-note" + suffix);
-  // Tag detail is the wide screen.
+  // Tag detail is the wide screen: every Tag's threads beside the open conversation.
   await page.goto(base);
   await button(page, "Open Maya's Tag").click();
-  await page.getByText("Replied in").waitFor();
-  width = 800;
-  await shot(page, "tag-activity" + suffix);
+  await page.getByText("Before launch").waitFor();
+  width = 1040;
+  await shot(page, "tag-threads" + suffix);
+  await page.getByRole("tab", { name: "Knowledge" }).click();
+  await shot(page, "tag-knowledge" + suffix);
+  await button(page, "Maya's Tag settings").click();
   await page.getByRole("tab", { name: "Channels" }).click();
   await page.waitForTimeout(600);
   await shot(page, "tag-channels" + suffix);

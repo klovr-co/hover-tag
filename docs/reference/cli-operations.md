@@ -33,7 +33,8 @@ The Tag desktop app and the CLI use the same Tags, settings, and lifecycle: the 
 | Start after setup | Automatic, with start progress | Run the `tag NAME start` command setup prints |
 | See your Tags | **Home** | `tag list` |
 | Start or stop | The Tag's switch, or **Start all** / **Stop all** for a workspace | `tag NAME start` / `stop` / `restart`; `--workspace TEAM` |
-| See activity | The Tag → **Activity** | `tag NAME logs --json`, `tag NAME logs --activity RUN_ID` |
+| See threads | The Tag → **Threads** | `tag NAME threads --json`, `tag NAME thread CHANNEL THREAD_TS --json` |
+| See activity | The Tag → **Threads** → a thread's steps | `tag NAME logs --json`, `tag NAME logs --activity RUN_ID` |
 | See logs | The Tag → **Logs** | `tag NAME logs [--follow]` |
 | Diagnose | The **Fix** or **View logs** notice | `tag NAME status`, `tag NAME doctor` |
 | Rename | Details → **Rename** | `tag NAME rename "Name"` |

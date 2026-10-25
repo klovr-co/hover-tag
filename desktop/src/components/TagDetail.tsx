@@ -1,9 +1,9 @@
 // Copyright 2026 klovr.co
 // SPDX-License-Identifier: Apache-2.0
-// Tag detail, laid out like Slack: workspaces in a rail, that workspace's Tags
-// and channels in a sidebar, and the selected Tag's Activity, Channels and
-// Details. It replaces the Logs screen and Home's ··· menu.
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+// Tag detail, thread first: every Tag's conversations in one list beside the open one,
+// the picked Tag's Knowledge, and its Channels, Routines, Logs and Details under ⚙.
+// A Tag picker in the top bar chooses which Tag Knowledge and ⚙ show.
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ComponentType, type ReactNode } from "react";
 import type { Bridge } from "../lib/bridge";
 import { effortLabel, effortShort, generationTime, liveRows, modelText, placeText, type ActivityItem } from "../lib/home";
 import { ActivityDetails, StepsToggle } from "./ActivityDetails";
@@ -12,25 +12,42 @@ import { ActivityTokens } from "./ActivityTokens";
 import { useModelChoice } from "../lib/model";
 import { usePresence } from "../lib/motion";
 import { usePermissions } from "../lib/permissions";
-import { collapseRepeats, groups, parseJSON, problemHelp, problemText, status, title, type Group, type TagRow } from "../lib/protocol";
+import { collapseRepeats, groups, parseJSON, problemHelp, problemText, status, title, type TagRow } from "../lib/protocol";
 import type { Tags } from "../lib/tags";
+import { threadKey, type ListedThread, type Threads } from "../lib/threads";
 import teamArt from "../assets/art/tag-team.png";
 import keyArt from "../assets/art/tag-key.png";
 import { workingFolder } from "./Home";
 import { modelSaveText, ModelMenu, ModelWarning, PermissionsRow, SaveBar, ThinkingRow } from "./AI";
 import { Routines } from "./Routines";
-import { Avatar, dragWindow, ErrorLine, fitText, Icon, Primary, Switch, useCopied, workspaceColor, WorkspaceMark, source, tagIcon } from "./ui";
+import { Conversation, ThreadList, type ThreadTarget } from "./Threads";
+import { Avatar, dragWindow, ErrorLine, fitText, Icon, Primary, Switch, useCopied, WorkspaceMark, tagIcon } from "./ui";
 
-export type Selection = { kind: "tag"; id: string } | { kind: "channel"; id: string };
-export type Tab = "activity" | "channels" | "routines" | "logs" | "details";
+/** The Tag's own settings, under ⚙. */
+export type Tab = "channels" | "routines" | "logs" | "details";
+export type View = "threads" | "knowledge" | "settings";
+
+/**
+ * Knowledge, and moving a Tag between computers, come from their own components when this
+ * build has them; until then the Knowledge tab says it's on its way and the buttons stay away.
+ */
+type KnowledgeParts = {
+  Knowledge?: ComponentType<{ api: Bridge; row: TagRow; say: (text: string) => void; openThread?: (tag: string, channel: string, ts: string) => void }>;
+  ExportTag?: ComponentType<{ api: Bridge; row: TagRow; say: (text: string) => void }>;
+  ImportTag?: ComponentType<{ api: Bridge; say: (text: string) => void; onImported: () => void }>;
+};
+const parts: KnowledgeParts = Object.assign({}, ...Object.values(
+  import.meta.glob<KnowledgeParts>(["./Knowledge*.tsx", "./*Tag.tsx", "!./*.test.tsx"], { eager: true })));
 
 interface Props {
   api: Bridge;
   tags: Tags;
   /** The Tag that was opened from Home. */
   initial: string;
-  /** The tab to show first; a Slack link opens Details. */
+  /** Open this Tag's settings at this tab; a Slack link to a Tag opens Details. */
   initialTab?: Tab;
+  /** Open this thread first; a Slack link to a thread opens it. */
+  initialThread?: { channel: string; thread: string };
   problems: Record<string, string | null>;
   back: () => void;
   add: () => void;
@@ -38,6 +55,11 @@ interface Props {
   finishSetup: (row: TagRow) => void;
   openAI: (tag: string) => void;
   say: (text: string) => void;
+  /** Every Tag's threads (`threads-json`); without it, the Threads tab shows the Tag's Activity. */
+  threads?: Threads;
+  /** The installed Tag can take replies (`thread-reply`) and answers (`thread-prompts`) from the app. */
+  canReply?: boolean;
+  canAnswer?: boolean;
   /** The installed Tag can change descriptions (`describe` capability). */
   canDescribe?: boolean;
   /** The installed Tag has routines (`routines` capability). */
@@ -55,32 +77,50 @@ export const shortPath = (path: string) => path.replace(/^(\/Users\/[^/]+|\/home
 /** A channel's name for people, or its ID while Tag hasn't recorded one. */
 const channelName = (channel: { id: string; name: string | null }) => channel.name ?? channel.id;
 
-export function TagDetail({ api, tags, initial, initialTab = "activity", problems, back, add, showSettings, finishSetup, openAI, say, canDescribe = false, canRefreshModels = false, canRoutines = false }: Props) {
+export function TagDetail({ api, tags, initial, initialTab, initialThread, problems, back, add, showSettings, finishSetup, openAI, say, threads,
+  canReply = false, canAnswer = false, canDescribe = false, canRefreshModels = false, canRoutines = false }: Props) {
   const rows = tags.rows;
-  const start = rows.find((row) => row.id === initial);
-  const [workspace, setWorkspace] = useState(start?.slack_workspace ?? "");
-  const [selected, setSelected] = useState<Selection>({ kind: "tag", id: initial });
-  const [tab, setTab] = useState<Tab>(initialTab);
+  const [picked, setPicked] = useState(initial);
+  const [view, setView] = useState<View>(initialTab ? "settings" : "threads");
+  const [tab, setTab] = useState<Tab>(initialTab ?? "channels");
+  // A Tag too old to report threads shows its Activity here, beside its other tabs.
+  const [olderTab, setOlderTab] = useState<PaneTab>("activity");
   const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<string | null>(null);
   const [hideErrors, setHideErrors] = useState(true);
-  const all = groups(rows);
-  const group = all.find((g) => g.key === workspace) ?? all[0];
+  const [open, setOpen] = useState<ThreadTarget | null>(initialThread ? { tag: initial, channel: initialThread.channel, thread_ts: initialThread.thread } : null);
+  const [starting, setStarting] = useState(false);
+  const row = rows.find((r) => r.id === picked) ?? liveRows(rows)[0] ?? rows[0];
+  // With nothing open, the thread at the top of the list opens.
+  const first = threads?.rows.find((thread) => thread.status === "needs_you") ?? threads?.rows[0];
+  useEffect(() => {
+    if (!open && view === "threads" && first) setOpen({ tag: first.tag, channel: first.channel, thread_ts: first.thread_ts });
+  }, [open, view, first]);
+  const pick = (id: string) => { setPicked(id); if (view === "threads" && filter) setFilter(id); };
+  const select = (thread: ListedThread) => { setOpen({ tag: thread.tag, channel: thread.channel, thread_ts: thread.thread_ts }); setPicked(thread.tag); };
   const top = (
     <div className="sl-top" onMouseDown={dragWindow}>
       <button className="sky-btn" onClick={back} aria-label="Back to Your Tags"><Icon name="left" />Your Tags</button>
-      <label className="sl-search"><Icon name="search" size={16} />
-        <input placeholder="Search Tags and channels" value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Search Tags and channels" />
-      </label>
-      <button className="sky-btn" aria-label="Settings" title="Settings" onClick={showSettings}><Icon name="gear" size={16} /></button>
+      {row && <TagPicker api={api} rows={rows} row={row} pick={pick} add={add} showSettings={showSettings} say={say} refresh={() => void tags.refresh()} />}
+      <div className="sl-views" role="tablist" aria-label="View">
+        <button role="tab" aria-selected={view === "threads"} onClick={() => setView("threads")}>Threads</button>
+        <button role="tab" aria-selected={view === "knowledge"} onClick={() => setView("knowledge")}>Knowledge</button>
+      </div>
+      {view === "threads" ? (
+        <label className="sl-search"><Icon name="search" size={16} />
+          <input placeholder="Search threads" value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Search threads" />
+        </label>
+      ) : <span className="sl-gap" />}
+      <button className={view === "settings" ? "sky-btn on" : "sky-btn"} aria-label={row ? `${title(row)} settings` : "Tag settings"} aria-pressed={view === "settings"}
+        title="Channels, routines, logs and details" onClick={() => setView(view === "settings" ? "threads" : "settings")}><Icon name="gear" size={16} /></button>
       <button className="add" onClick={add}><Icon name="plus" />Add Tag</button>
     </div>
   );
-  if (!group) {
+  if (!row) {
     return (
       <>
         {top}
-        <div className="sl-grid" style={{ gridTemplateColumns: "64px 1fr" }}>
-          <div className="sl-rail"><button className="sl-ws plus" aria-label="Add Tag" onClick={add}><Icon name="plus" /></button></div>
+        <div className="sl-grid" style={{ gridTemplateColumns: "1fr" }}>
           <div className="sl-main"><div className="sl-empty">
             <img src={teamArt} alt="" style={{ width: 300, imageRendering: "pixelated" }} />
             <div className="h2">Bring your first Tag to Slack</div>
@@ -91,162 +131,175 @@ export function TagDetail({ api, tags, initial, initialTab = "activity", problem
       </>
     );
   }
-  const live = liveRows(group.rows);
-  const setup = group.rows.filter((row) => status(row) === "setup");
-  const channels = channelsOf(live);
-  const q = query.trim().toLocaleLowerCase().replace(/^#/, "");
-  const match = (text: string) => !q || text.toLocaleLowerCase().includes(q);
-  // Keep the selection inside this workspace.
-  let sel = selected;
-  if (sel.kind === "tag" && !group.rows.some((row) => row.id === sel.id)) sel = { kind: "tag", id: (live[0] ?? group.rows[0]).id };
-  if (sel.kind === "channel" && !channels.some((c) => c.id === sel.id)) sel = { kind: "tag", id: (live[0] ?? group.rows[0]).id };
-  const running = live.filter((row) => row.state === "running").length;
-  const allOn = live.length > 0 && running >= live.length;
-  const choose = (next: Selection) => { setSelected(next); setTab("activity"); };
-  const item = (row: TagRow) => {
-    const state = status(row);
-    return (
-      <button key={row.id} className={sel.kind === "tag" && sel.id === row.id ? "sl-item on" : "sl-item"} onClick={() => choose({ kind: "tag", id: row.id })}>
-        <Avatar row={row} size={22} badge={false} className="" />
-        <span className="nm">{title(row)}</span>
-        <span className="pd" style={{ background: PRESENCE[state], boxShadow: state === "offline" ? "inset 0 0 0 1.5px var(--faint)" : undefined }} />
-      </button>
-    );
+  const live = liveRows(rows);
+  const openTag = open ? rows.find((r) => r.id === open.tag) ?? null : null;
+  const startTag = (tag: TagRow | null) => {
+    if (!tag || starting) return;
+    setStarting(true);
+    void Promise.resolve(tags.toggle(tag)).finally(() => setStarting(false));
   };
+  const Knowledge = parts.Knowledge;
   return (
     <>
       {top}
-      <div className="sl-grid">
-        <div className="sl-rail">
-          {all.map((g) => <RailButton key={g.key} group={g} on={g === group} pick={() => { setWorkspace(g.key); setSelected({ kind: "tag", id: "" }); setTab("activity"); }} />)}
-          <button className="sl-ws plus" aria-label="Add Tag" title="Add Tag" onClick={add}><Icon name="plus" /></button>
-        </div>
-        <div className="sl-side">
-          <div className="sl-wshead"><b>{group.label}</b><span className="sl-meta">{live.length ? `${running} of ${live.length} online` : "Not connected yet"}</span></div>
-          <div className="sl-list">
-            {live.some((row) => match(title(row))) && <><div className="sl-sec">Tags</div>{live.filter((row) => match(title(row))).map(item)}</>}
-            {setup.some((row) => match(title(row))) && <><div className="sl-sec" style={{ color: "var(--amber)" }}>Finish setting up</div>{setup.filter((row) => match(title(row))).map(item)}</>}
-            {channels.some((c) => match(channelName(c))) && <><div className="sl-sec">Channels</div>
-              {channels.filter((c) => match(channelName(c))).map((c) => (
-                <button key={c.id} className={sel.kind === "channel" && sel.id === c.id ? "sl-item on" : "sl-item"} onClick={() => choose({ kind: "channel", id: c.id })}>
-                  <span className="hs">#</span><span className="nm">{channelName(c)}</span>
-                </button>
-              ))}</>}
-          </div>
-          {live.length > 1 && group.key && (
-            <div className="sl-foot">
-              <button className="link" disabled={tags.busy.has(group.key)} onClick={() => void tags.workspace(group.key, allOn ? "stop" : "start")}>
-                <Icon name={allOn ? "stop" : "play"} size={10} />{allOn ? "Stop all" : "Start all"}
-              </button>
+      {view === "threads" && (threads ? (
+        <div className="sl-grid th-grid">
+          <div className="sl-side">
+            <div className="th-side-head">
+              <FilterMenu rows={live} filter={filter} setFilter={setFilter} />
+              <NewThread row={row} api={api} />
             </div>
-          )}
+            <ThreadList threads={threads} tags={rows} selected={open ? threadKey(open) : null} select={select} filter={filter} query={query} newThread={null} />
+          </div>
+          <div className="sl-main">
+            {open
+              ? <Conversation key={threadKey(open)} api={api} target={open} tag={openTag} canReply={canReply} canAnswer={canAnswer} say={say}
+                changed={threads.refresh} openKnowledge={Knowledge ? () => { if (openTag) setPicked(openTag.id); setView("knowledge"); } : null}
+                startTag={() => startTag(openTag)} />
+              : <div className="sl-empty"><img src={tagIcon} alt="" style={{ width: 48, borderRadius: 12 }} /><div className="label">Pick a thread</div></div>}
+          </div>
         </div>
-        <div className="sl-main">
-          {sel.kind === "channel"
-            ? <ChannelPane key={`${group.key}:${sel.id}:${hideErrors}`} hideErrors={hideErrors} setHideErrors={setHideErrors} api={api} channel={channels.find((c) => c.id === sel.id)!} rows={live} team={group.key} open={(id) => choose({ kind: "tag", id })} />
-            : <TagPane key={`${sel.id}:${hideErrors}`} hideErrors={hideErrors} setHideErrors={setHideErrors} api={api} tags={tags} row={group.rows.find((r) => r.id === sel.id)!} tab={tab} setTab={setTab}
-              problem={problems[sel.id] ?? null} finishSetup={finishSetup} openAI={openAI} say={say} canDescribe={canDescribe} canRefreshModels={canRefreshModels} canRoutines={canRoutines} />}
+      ) : (
+        <div className="sl-grid" style={{ gridTemplateColumns: "1fr" }}>
+          <div className="sl-main">
+            <TagPane key={`${row.id}:${hideErrors}`} hideErrors={hideErrors} setHideErrors={setHideErrors} api={api} tags={tags} row={row} tab={olderTab} setTab={setOlderTab}
+              problem={problems[row.id] ?? null} finishSetup={finishSetup} openAI={openAI} say={say} canDescribe={canDescribe} canRefreshModels={canRefreshModels} canRoutines={canRoutines}
+              withActivity />
+          </div>
         </div>
-      </div>
+      ))}
+      {view === "knowledge" && (
+        <div className="sl-grid" style={{ gridTemplateColumns: "1fr" }}>
+          <div className="sl-main">
+            {Knowledge && status(row) !== "setup"
+              ? <Knowledge key={row.id} api={api} row={row} say={say}
+                openThread={(tag, channel, ts) => { setOpen({ tag, channel, thread_ts: ts }); setView("threads"); }} />
+              : <div className="sl-empty">
+                <img src={keyArt} alt="" style={{ width: 88, imageRendering: "pixelated" }} />
+                <div className="h2">{status(row) === "setup" ? `Finish setting up ${title(row)}` : "Knowledge is on its way"}</div>
+                <p className="lead">{status(row) === "setup" ? "Its memory starts once it's in Slack." : `What ${title(row)} remembers, and the threads it learned it in, will show here.`}</p>
+              </div>}
+          </div>
+        </div>
+      )}
+      {view === "settings" && (
+        <div className="sl-grid" style={{ gridTemplateColumns: "1fr" }}>
+          <div className="sl-main">
+            <TagPane key={`${row.id}:${hideErrors}`} hideErrors={hideErrors} setHideErrors={setHideErrors} api={api} tags={tags} row={row} tab={tab} setTab={(next) => setTab(next as Tab)}
+              problem={problems[row.id] ?? null} finishSetup={finishSetup} openAI={openAI} say={say} canDescribe={canDescribe} canRefreshModels={canRefreshModels} canRoutines={canRoutines}
+              exportTag={parts.ExportTag ? <parts.ExportTag api={api} row={row} say={say} /> : null} />
+          </div>
+        </div>
+      )}
     </>
   );
 }
 
-function RailButton({ group, on, pick }: { group: Group; on: boolean; pick: () => void }) {
-  const [failed, setFailed] = useState(false);
-  const picture = !failed ? source(group.icon) : null;
-  const unfinished = group.rows.filter((row) => status(row) === "setup").length;
+/** A small menu that opens under its button, fades out when it closes, and closes on Escape or a click outside. */
+function useMenu() {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const shown = usePresence(open ? true : null, 120);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: Event) => {
+      if (e instanceof KeyboardEvent ? e.key === "Escape" : !ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    window.addEventListener("mousedown", close);
+    window.addEventListener("keydown", close);
+    return () => { window.removeEventListener("mousedown", close); window.removeEventListener("keydown", close); };
+  }, [open]);
+  return { open, setOpen, ref, shown: !!shown.shown, leaving: shown.leaving };
+}
+
+/** Chooses the Tag that Knowledge and ⚙ show; replaces the old icon rail and Tag header. */
+function TagPicker({ api, rows, row, pick, add, showSettings, say, refresh }: {
+  api: Bridge; rows: TagRow[]; row: TagRow; pick: (id: string) => void; add: () => void; showSettings: () => void; say: (text: string) => void; refresh: () => void;
+}) {
+  const menu = useMenu();
+  const state = status(row);
+  const Import = parts.ImportTag;
   return (
-    <button className={on ? "sl-ws on" : "sl-ws"} style={{ background: group.key ? workspaceColor(group.label) : "var(--faint)" }}
-      title={group.label} aria-label={group.label} aria-pressed={on} onClick={pick}>
-      {picture ? <img src={picture} alt="" onError={() => setFailed(true)} /> : (group.label[0] ?? "?").toUpperCase()}
-      {unfinished > 0 && <span className="dotn">{unfinished}</span>}
-    </button>
+    <div className="tag-pick" ref={menu.ref} onMouseDown={(e) => e.stopPropagation()}>
+      <button className="sky-btn pick" aria-haspopup="menu" aria-expanded={menu.open} aria-label={`Tag: ${title(row)}`} onClick={() => menu.setOpen(!menu.open)}>
+        <Avatar row={row} size={22} badge={false} className="" />
+        <span className="nm">{title(row)}</span>
+        <span className="pd" style={{ background: PRESENCE[state], boxShadow: state === "offline" ? "inset 0 0 0 1.5px rgba(255,255,255,.7)" : undefined }} />
+        <Icon name="chevdown" size={12} />
+      </button>
+      {menu.shown && (
+        <div className={menu.leaving ? "menu tag-menu leaving" : "menu tag-menu"} role="menu" aria-label="Tags">
+          {groups(rows).map((group) => (
+            <div key={group.key} className="grp">
+              {groups(rows).length > 1 && <div className="gl"><WorkspaceMark label={group.label} icon={group.icon} />{group.label}</div>}
+              {group.rows.map((tag) => {
+                const s = status(tag);
+                return (
+                  <button key={tag.id} role="menuitemradio" aria-checked={tag.id === row.id} onClick={() => { menu.setOpen(false); pick(tag.id); }}>
+                    <Avatar row={tag} size={20} badge={false} className="" still />
+                    <span className="nm">{title(tag)}</span>
+                    <span className="st">{WORD[s]}</span>
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+          <hr />
+          <button role="menuitem" onClick={() => { menu.setOpen(false); add(); }}><Icon name="plus" />Add Tag</button>
+          {Import && <Import api={api} say={say} onImported={() => { menu.setOpen(false); refresh(); }} />}
+          <button role="menuitem" onClick={() => { menu.setOpen(false); showSettings(); }}><Icon name="gear" />Tag.app settings</button>
+        </div>
+      )}
+    </div>
   );
 }
 
-/** Every channel the workspace's Tags answer in, by name. */
-function channelsOf(rows: TagRow[]) {
-  const seen = new Map<string, { id: string; name: string | null }>();
-  for (const row of rows) for (const c of row.channels ?? []) if (!seen.has(c.id)) seen.set(c.id, c);
-  return [...seen.values()].sort((a, b) => channelName(a).localeCompare(channelName(b)));
+/** Show every Tag's threads, or one Tag's. */
+function FilterMenu({ rows, filter, setFilter }: { rows: TagRow[]; filter: string | null; setFilter: (id: string | null) => void }) {
+  const menu = useMenu();
+  const current = rows.find((row) => row.id === filter) ?? null;
+  return (
+    <div className="th-filter" ref={menu.ref}>
+      <button className="link" aria-haspopup="menu" aria-expanded={menu.open} onClick={() => menu.setOpen(!menu.open)}>
+        {current ? <><Avatar row={current} size={16} badge={false} className="" still />{title(current)}</> : "All Tags"}<Icon name="chevdown" size={11} />
+      </button>
+      {menu.shown && (
+        <div className={menu.leaving ? "menu leaving" : "menu"} role="menu" aria-label="Show threads of">
+          <button role="menuitemradio" aria-checked={!filter} onClick={() => { menu.setOpen(false); setFilter(null); }}>All Tags</button>
+          {rows.map((row) => (
+            <button key={row.id} role="menuitemradio" aria-checked={filter === row.id} onClick={() => { menu.setOpen(false); setFilter(row.id); }}>
+              <Avatar row={row} size={18} badge={false} className="" still />{title(row)}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Starting a thread without Slack needs the Tag to hold a conversation outside Slack, which it can't yet.
+ * Until it can, this says how to start one.
+ */
+function NewThread({ row, api }: { row: TagRow; api: Bridge }) {
+  const menu = useMenu();
+  return (
+    <div className="th-new" ref={menu.ref}>
+      <button className="sky-ico" aria-label="New thread" title="New thread" aria-haspopup="dialog" aria-expanded={menu.open} onClick={() => menu.setOpen(!menu.open)}>
+        <Icon name="chat" size={15} />
+      </button>
+      {menu.shown && (
+        <div className={menu.leaving ? "menu th-new-pop leaving" : "menu th-new-pop"} role="dialog" aria-label="New thread">
+          <b>New threads start in Slack for now</b>
+          <p>Mention <span className="mention">@{title(row)}</span> in a channel, or send it a direct message. The thread shows here as soon as it starts, and you can reply to it from here.</p>
+          <button className="p-btn soft sm" onClick={() => { menu.setOpen(false); void api.open(`slack://open?team=${encodeURIComponent(row.slack_workspace ?? "")}`); }}>Open Slack <Icon name="external" /></button>
+        </div>
+      )}
+    </div>
+  );
 }
 
 const slackChannel = (team: string, id: string) => `slack://channel?team=${encodeURIComponent(team)}&id=${encodeURIComponent(id)}`;
-
-function ChannelPane({ api, channel, rows, team, open, hideErrors, setHideErrors }: FilterProps & {
-  api: Bridge; channel: { id: string; name: string | null }; rows: TagRow[]; team: string; open: (id: string) => void;
-}) {
-  const here = rows.filter((row) => (row.channels ?? []).some((c) => c.id === channel.id));
-  const [tab, setTab] = useState<"activity" | "tags">("activity");
-  const [entries, setEntries] = useState<ActivityEntry[] | null>(null);
-  const [failedTags, setFailedTags] = useState<string[]>([]);
-  const [limit, setLimit] = useState(50);
-  const [hasMore, setHasMore] = useState(false);
-  const [loading, setLoading] = useState(false);
-  // Read every Tag in this workspace, including historical activity after it left the channel.
-  const rowIds = JSON.stringify(rows.map((row) => row.id));
-  useEffect(() => {
-    if (tab !== "activity") return;
-    let cancelled = false;
-    let loading = false;
-    const load = async () => {
-      if (loading) return;
-      loading = true;
-      setLoading(true);
-      const results = await Promise.allSettled((JSON.parse(rowIds) as string[]).map(async (id) => {
-        const result = await api.tag([id, "logs", "--json", "--activity-channel", channel.id, "--activity-limit", String(limit), ...(hideErrors ? ["--hide-errors"] : [])]);
-        if (result.code !== 0) throw new Error("Activity unavailable");
-        const data = parseJSON<{ activity?: ActivityItem[]; activity_has_more?: boolean }>(result.stdout);
-        return { entries: (data.activity ?? []).filter((item) => item.channel === channel.id).map((item) => ({ tag: id, item })), more: data.activity_has_more === true };
-      }));
-      if (!cancelled) {
-        const combined = results.flatMap((result) => result.status === "fulfilled" ? result.value.entries : [])
-          .sort((a, b) => new Date(b.item.at).getTime() - new Date(a.item.at).getTime());
-        setEntries((previous) => mergeActivity(previous, combined.slice(0, limit)));
-        setHasMore(combined.length > limit || results.some((result) => result.status === "fulfilled" && result.value.more));
-        setLoading(false);
-        const ids = JSON.parse(rowIds) as string[];
-        setFailedTags(results.flatMap((result, index) => result.status === "rejected" ? [ids[index]] : []));
-      }
-      loading = false;
-    };
-    void load();
-    const timer = setInterval(() => void load(), 30_000);
-    return () => { cancelled = true; clearInterval(timer); };
-  }, [api, rowIds, channel.id, hideErrors, tab, limit]);
-  return (
-    <>
-      <div className="sl-mhead">
-        <span className="hash" style={{ width: 42, height: 42, fontSize: 20 }}>#</span>
-        <div className="txt"><span className="name">{channelName(channel)}</span><span className="sub">{here.length === 1 ? "1 Tag answers here" : `${here.length} Tags answer here`}</span></div>
-        <button className="p-btn soft sm" onClick={() => void api.open(slackChannel(team, channel.id))}>Open in Slack <Icon name="external" /></button>
-      </div>
-      <div className="sl-tabbar">
-      <div className="sl-tabs" role="tablist">
-        <button role="tab" aria-selected={tab === "activity"} onClick={() => setTab("activity")}>Activity</button>
-        <button role="tab" aria-selected={tab === "tags"} onClick={() => setTab("tags")}>Tags in this channel</button>
-      </div>
-      {tab === "activity" && <ActivityFilter hideErrors={hideErrors} setHideErrors={setHideErrors} />}
-      </div>
-      <div key={tab} className="sl-body" role="tabpanel">
-        {tab === "activity" ? <>
-          {failedTags.length > 0 && <ErrorLine>{`Couldn't load activity for ${failedTags.map((id) => { const row = rows.find((row) => row.id === id); return row ? title(row) : id; }).join(", ")}. Retrying automatically.`}</ErrorLine>}
-          <ActivityFeed api={api} rows={rows} entries={entries} showReplyPlace={false} hasMore={hasMore} loading={loading} loadOlder={() => setLimit((value) => value + 50)} hideErrors={hideErrors}
-            empty={failedTags.length ? "Some activity is unavailable" : `No activity in #${channelName(channel)} yet`} />
-        </> : <div className="card">
-          {here.map((row) => (
-            <div key={row.id} className="r">
-              <Avatar row={row} />
-              <div className="txt"><span className="name"><span className="nm">{title(row)}</span></span><span className="sub">{WORD[status(row)]}</span></div>
-              <button className="link" onClick={() => open(row.id)}>View</button>
-            </div>
-          ))}
-        </div>}
-      </div>
-    </>
-  );
-}
 
 const ACTIVITY_TEXT: Record<string, string> = { replied: "Replied in", failed: "Couldn't finish a request in", stopped: "Stopped a request in", working: "Working in" };
 
@@ -263,9 +316,15 @@ function dayLabel(at: Date, now: Date) {
   return diff === 0 ? "Today" : diff === 1 ? "Yesterday" : at.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
 }
 
-function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, say, canDescribe, canRefreshModels, canRoutines, hideErrors, setHideErrors }: FilterProps & {
-  api: Bridge; tags: Tags; row: TagRow; tab: Tab; setTab: (tab: Tab) => void; problem: string | null;
+/** "activity" is the Threads tab for a Tag too old to report threads. */
+type PaneTab = Tab | "activity";
+
+function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, say, canDescribe, canRefreshModels, canRoutines, hideErrors, setHideErrors, exportTag = null, withActivity = false }: FilterProps & {
+  api: Bridge; tags: Tags; row: TagRow; tab: PaneTab; setTab: (tab: PaneTab) => void; problem: string | null;
   finishSetup: (row: TagRow) => void; openAI: (tag: string) => void; say: (text: string) => void; canDescribe: boolean; canRefreshModels: boolean; canRoutines: boolean;
+  exportTag?: ReactNode;
+  /** Show the Tag's Activity as a tab, for a Tag too old to report threads. */
+  withActivity?: boolean;
 }) {
   const state = status(row);
   const [activity, setActivity] = useState<ActivityItem[] | null>(null);
@@ -342,11 +401,14 @@ function TagPane({ api, tags, row, tab, setTab, problem, finishSetup, openAI, sa
               {channels.length > 0 && ` · in ${channels.length === 1 ? `#${channelName(channels[0])}` : `${channels.length} channels`}`}</span>
           </span>
         </div>
+        {exportTag}
         <Switch on={on} busy={tags.busy.has(row.id)} label={`${on ? "Stop" : "Start"} ${title(row)}`} onClick={() => void tags.toggle(row)} />
       </div>
       <div className="sl-tabbar">
       <div className="sl-tabs" role="tablist">
-        {([["activity", "Activity", null], ["channels", "Channels", channels.length], ...(canRoutines ? [["routines", "Routines", null] as const] : []), ["logs", "Logs", null], ["details", "Details", null]] as const).map(([key, label, count]) => (
+        {([...(withActivity ? [["activity", "Activity", null] as const] : []), ["channels", "Channels", channels.length] as const,
+          ...(canRoutines ? [["routines", "Routines", null] as const] : []), ["logs", "Logs", null] as const, ["details", "Details", null] as const])
+          .map(([key, label, count]) => (
           <button key={key} role="tab" aria-selected={tab === key} onClick={() => setTab(key)}>
             {label}{count !== null && <> <span className="tcount">{count}</span></>}
           </button>
@@ -443,12 +505,7 @@ type ActivityEntry = { tag: string; item: ActivityItem };
 type HistoryProps = { hasMore: boolean; loading: boolean; loadOlder: () => void };
 const activityKey = ({ tag, item }: ActivityEntry) => `${tag}:${item.run_id ?? item.at}`;
 /** Older Tags report no thread, so each of their runs stays its own entry. */
-const threadKey = (entry: ActivityEntry) => entry.item.thread ? `${entry.tag}:thread:${entry.item.thread}` : activityKey(entry);
-function mergeActivity(previous: ActivityEntry[] | null, incoming: ActivityEntry[]) {
-  const merged = new Map((previous ?? []).map((entry) => [activityKey(entry), entry]));
-  for (const entry of incoming) merged.set(activityKey(entry), entry);
-  return [...merged.values()];
-}
+const activityThread = (entry: ActivityEntry) => entry.item.thread ? `${entry.tag}:thread:${entry.item.thread}` : activityKey(entry);
 
 function ActivityFilter({ hideErrors, setHideErrors }: FilterProps) {
   return <label className="activity-filter"><input type="checkbox" checked={!hideErrors}
@@ -468,9 +525,9 @@ function ActivityFeed({ api, rows, entries, hideErrors, hasMore, loading, loadOl
   const [openThreads, setOpenThreads] = useState<Record<string, boolean>>({});
   // Every reply in one Slack thread continues one conversation, so it is one entry.
   const threads = [...sorted.reduce((groups, entry) => {
-    const group = groups.get(threadKey(entry)) ?? [];
+    const group = groups.get(activityThread(entry)) ?? [];
     group.push(entry);
-    return groups.set(threadKey(entry), group);
+    return groups.set(activityThread(entry), group);
   }, new Map<string, ActivityEntry[]>()).values()]
     .sort((a, b) => new Date(a[a.length - 1].item.at).getTime() - new Date(b[b.length - 1].item.at).getTime());
   const feed = useRef<HTMLDivElement>(null);
@@ -478,7 +535,7 @@ function ActivityFeed({ api, rows, entries, hideErrors, hasMore, loading, loadOl
   // Older activity can join existing threads, so the first thread doesn't always change.
   const olderRequested = useRef(false);
   const requestOlder = useCallback(() => { olderRequested.current = true; loadOlder(); }, [loadOlder]);
-  const first = threads[0] ? threadKey(threads[0][0]) : "";
+  const first = threads[0] ? activityThread(threads[0][0]) : "";
   useLayoutEffect(() => {
     const scroller = feed.current?.closest<HTMLElement>(".sl-body");
     if (!scroller || entries === null) return;
@@ -551,7 +608,7 @@ function ActivityFeed({ api, rows, entries, hideErrors, hasMore, loading, loadOl
         const earlier = thread.slice(0, -1);
         const label = dayLabel(new Date(latest.item.at), now);
         const divider = label !== day;
-        const group = threadKey(latest);
+        const group = activityThread(latest);
         day = label;
         return (
           <div key={group}>

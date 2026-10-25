@@ -136,8 +136,14 @@ other actions remain visible until those actions succeed or are dismissed.
 The CLI already reports these errors; this display change applies to both
 backends and needs no stored-data migration.
 
-**Tag detail** opens from a Home row at 800 px wide (`fitWindow` sets the
-width too). It reads `channels` from `tag list --json`, the Tag's `activity`
+**Tag detail** opens from a Home row at 1040 px wide (`fitWindow` sets the
+width too). It is thread first: **Threads** lists every Tag's threads from
+`tag NAME threads --json` (every 10 seconds while it shows, every 30 in the
+background so a thread that starts waiting on its owner shows a notification)
+beside the open conversation from `tag NAME thread CHANNEL TS --json`. Replies
+and answers run `thread … reply` and `thread … answer`. A Tag picker chooses the
+Tag that **Knowledge** and the gear (Channels, Routines, Logs, Details) show. A
+Tag whose CLI lacks `threads-json` shows its Activity instead, as below. It reads `channels` from `tag list --json`, the Tag's `activity`
 from `tag NAME logs --json` every 30 seconds, and the model and thinking level
 from `tag NAME settings ai --json` and `models --json`; saving runs
 `tag NAME settings ai model VALUE --effort LEVEL`, with `--restart` only after

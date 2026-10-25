@@ -203,10 +203,11 @@ and the card shows complete when the task succeeds. See the
 Short activity descriptions are shared with the thread; full tool inputs and
 results are not shown. The separate Activity button in Slack is currently hidden.
 
-On the computer running Tag, the Tag's **Activity** tab in the app keeps a
-summary of each reply, grouped by Slack thread, with its saved steps. From the
-terminal, `tag logs --json` lists the same records, and
-`tag logs --activity RUN_ID` shows one request's saved steps.
+On the computer running Tag, the Tag's **Threads** tab in the app keeps each
+Slack thread as one conversation: the messages, the Tag's full answers, and the
+steps of each run. From the terminal, `tag threads --json` lists the threads,
+`tag logs --json` lists each request, and `tag logs --activity RUN_ID` shows
+one request's saved steps.
 
 ## Stop a task
 

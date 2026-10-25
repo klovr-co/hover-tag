@@ -6,6 +6,20 @@ All notable changes to Tag are documented here.
 
 ### Added
 
+- Tag.app is thread first. Each Slack thread a Tag works in is one
+  conversation in **Threads**: people's messages and the Tag's full answers in
+  Markdown, its steps folded into one line, and the files and memory it
+  changed beside them. One list holds every Tag's threads; **Needs you** stays
+  on top and finished threads fold into **Settled**. Reply from the app: the
+  reply stays in the app unless you also post it in Slack. Approvals and Queue
+  or Steer show in the app and privately in Slack, with a notification, and
+  answering in either place closes both. A `hover-tag://` link to a thread
+  opens it. **Knowledge** sits beside **Threads**, and Channels, Routines, Logs
+  and Details move under the gear, with a Tag picker at the top. In the
+  terminal, `tag NAME threads` and `tag NAME thread CHANNEL THREAD_TS` show the
+  same, and `reply` and `answer` act on it. Threads are kept 90 days after
+  their last message (`tag NAME threads retention DAYS`). Threads from before
+  this version show a preview of each reply.
 - Choose what each Tag may do without asking, with each agent's own
   settings. In the Tag's **Details**, **Permissions** shows Codex's sandbox
   (Read only, Workspace write, Full access), approval policy (Default,
