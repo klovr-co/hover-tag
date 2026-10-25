@@ -1,0 +1,171 @@
+/* Copyright 2026 klovr.co
+   SPDX-License-Identifier: Apache-2.0
+   Knowledge: the tree on the left, the document in the middle, History on the right.
+   Motion follows the Microinteractions section in styles.css: rows and buttons ease
+   their colours and give a little on press, entries and changes slide in and out,
+   History and the add dialog grow out of where they open. Reduced motion turns it off. */
+.kn { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0; min-height: 420px; height: 100%;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--paper-2); overflow: hidden; container-type: inline-size; }
+/* In a narrow pane the tree gets slimmer and drops its hints. */
+@container (max-width: 620px) {
+  .kn .kn-tree { width: 172px; }
+  .kn .kn-tree .kn-ds { display: none; }
+  .kn .kn-history { width: min(300px, 92%); }
+}
+
+/* ── Tree ── */
+.kn-tree { width: 216px; display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); background: var(--fill); }
+.kn-tree-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 6px; display: flex; flex-direction: column; gap: 1px; }
+.kn-kids { display: flex; flex-direction: column; gap: 1px; animation: rise2 .18s var(--ease); }
+.kn-folder, .kn-leaf { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 28px; padding: 3px 8px; border-radius: 7px;
+  text-align: left; font-size: 13.5px; color: var(--text); white-space: nowrap;
+  transition: background-color .16s var(--ease), color .16s var(--ease), transform .16s var(--ease); }
+.kn-folder { font-weight: 600; color: var(--ink); }
+.kn-folder:hover, .kn-leaf:hover { background: color-mix(in srgb, var(--blue) 8%, transparent); }
+.kn-folder:active, .kn-leaf:active:not(.none) { transform: scale(.985); transition-duration: .06s; }
+.kn-leaf.sel { background: color-mix(in srgb, var(--blue) 15%, transparent); color: var(--ink); font-weight: 600; }
+.kn-leaf.none { color: var(--muted); cursor: default; }
+.kn-leaf > svg { flex: none; color: var(--faint); transition: color .16s; }
+.kn-leaf.sel > svg, .kn-leaf:hover > svg { color: var(--blue); }
+.d1 { padding-left: 22px; } .d2 { padding-left: 36px; } .d3 { padding-left: 50px; } .d4 { padding-left: 64px; }
+.kn-folder .chev { display: grid; color: var(--faint); transition: transform .18s var(--ease), color .16s; }
+.kn-folder .chev.turn { transform: rotate(90deg); }
+.kn-folder:hover .chev:not(.turn) { transform: translateX(2px); color: var(--muted); }
+.kn-label { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.kn-ds { color: var(--faint); font-size: 12px; font-weight: 400; overflow: hidden; text-overflow: ellipsis; }
+.kn-sz { margin-left: auto; padding-left: 6px; color: var(--faint); font-size: 12px; font-weight: 400; font-variant-numeric: tabular-nums; }
+.kn-empty { margin: 4px 8px 6px 36px; font-size: 12.5px; color: var(--muted); white-space: normal; }
+.kn-empty.big { margin: 18px 0; font-size: 14px; }
+.kn-add-btn { display: flex; align-items: center; gap: 8px; margin: 6px; padding: 6px 8px; border-radius: 8px; font-size: 13.5px; font-weight: 600;
+  color: var(--link); text-align: left; transition: background-color .16s var(--ease), transform .16s var(--ease); }
+.kn-add-btn:hover { background: color-mix(in srgb, var(--blue) 8%, transparent); }
+.kn-add-btn:active { transform: scale(.985); transition-duration: .06s; }
+.kn-add-btn .gi { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; background: var(--paper-2); border: 1px solid var(--line); }
+
+/* ── Document ── */
+.kn-doc { min-width: 0; min-height: 0; overflow-y: auto; padding: 14px 18px 18px; }
+.kn-page { display: flex; flex-direction: column; gap: 10px; }
+.kn-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; }
+.kn-title { flex: 1 1 220px; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.kn-title b { color: var(--ink); font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kn-path { color: var(--faint); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kn-hbtn { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--line-strong);
+  font-size: 13px; font-weight: 600; color: var(--muted); transition: background-color .16s var(--ease), color .16s, border-color .16s, transform .16s var(--ease); }
+.kn-hbtn:hover { color: var(--ink); background: var(--fill); }
+.kn-hbtn:active { transform: scale(.97); transition-duration: .06s; }
+.kn-hbtn.on { color: var(--ink); background: color-mix(in srgb, var(--blue) 12%, transparent); border-color: color-mix(in srgb, var(--blue) 30%, transparent); }
+.kn-details { margin: -4px 0 2px; font-size: 12.5px; color: var(--faint); }
+.kn-entries { display: flex; flex-direction: column; gap: 8px; }
+.kn-entry { position: relative; border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px 10px; background: var(--paper);
+  transition: border-color .16s var(--ease), box-shadow .16s var(--ease); }
+.kn-entry:hover, .kn-entry:focus-within { border-color: var(--line-strong); box-shadow: var(--shadow-card); }
+.kn-entry.fresh { animation: kn-flash .9s ease-out; }
+@keyframes kn-flash { from { background: color-mix(in srgb, var(--green) 14%, var(--paper)); border-color: color-mix(in srgb, var(--green) 40%, transparent); } }
+.kn-entry.entering { overflow: hidden; animation: kn-in .32s var(--ease); }
+.kn-entry.leaving { overflow: hidden; pointer-events: none; animation: kn-out .22s var(--ease) forwards; }
+@keyframes kn-in { from { max-height: 0; padding-top: 0; padding-bottom: 0; opacity: 0; } to { max-height: 420px; } }
+@keyframes kn-out { from { max-height: 420px; } to { max-height: 0; padding-top: 0; padding-bottom: 0; opacity: 0; } }
+.kn-entry.single { border: 0; padding: 0; background: none; box-shadow: none; }
+.kn-eh { display: flex; align-items: center; gap: 8px; min-height: 22px; font-size: 12.5px; color: var(--muted); }
+.kn-eh code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink); font-size: 12.5px; }
+.kn-when { flex: none; color: var(--faint); white-space: nowrap; }
+.sp { flex: 1; }
+.kn-acts { flex: none; display: inline-flex; gap: 2px; opacity: 0; transition: opacity .16s var(--ease); }
+.kn-entry:hover .kn-acts, .kn-entry:focus-within .kn-acts, .kn-acts.shown { opacity: 1; }
+.kn-act { padding: 2px 7px; border-radius: 6px; font-size: 12.5px; font-weight: 600; color: var(--link);
+  transition: background-color .16s var(--ease), transform .16s var(--ease); }
+.kn-act:hover:not(:disabled) { background: var(--fill); }
+.kn-act:active:not(:disabled) { transform: scale(.96); transition-duration: .06s; }
+.kn-prose { font-size: 14.5px; line-height: 1.5; color: var(--ink); overflow-wrap: anywhere; }
+.kn-prose p { margin: 0 0 6px; white-space: pre-wrap; }
+.kn-prose p:last-child, .kn-prose ul:last-child, .kn-prose ol:last-child { margin-bottom: 0; }
+.kn-prose ul, .kn-prose ol { margin: 0 0 6px; padding-left: 20px; }
+.kn-prose code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; background: var(--fill); border-radius: 4px; padding: 0 4px; }
+.kn-prose a { color: var(--link); }
+.kn-h { font-weight: 700; } .kn-h.h1 { font-size: 17px; } .kn-h.h2 { font-size: 15.5px; }
+.kn-key { color: var(--link); font-weight: 600; border-bottom: 1px dashed color-mix(in srgb, var(--link) 50%, transparent);
+  transition: color .16s, border-color .16s; }
+.kn-key:hover { border-bottom-style: solid; }
+.kn-key.missing { color: var(--muted); border-bottom-color: var(--faint); }
+/* Where an entry came from: one line that fades in while the entry is hovered or focused. */
+.kn-src { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; max-height: 0; margin-top: 0; overflow: hidden; opacity: 0;
+  font-size: 12px; color: var(--muted); transition: opacity .16s var(--ease), max-height .2s var(--ease), margin-top .2s var(--ease); }
+.kn-entry:hover .kn-src, .kn-entry:focus-within .kn-src { max-height: 40px; margin-top: 6px; opacity: 1; }
+.kn-src-link { display: inline-flex; align-items: center; gap: 2px; color: var(--link); font-weight: 600; font-size: 12px; padding: 0 2px; border-radius: 4px;
+  transition: background-color .16s; }
+.kn-src-link:hover { background: var(--fill); }
+.kn-src-link svg { transition: transform .16s var(--ease); }
+.kn-src-link:hover svg { transform: translateX(2px); }
+.kn-editing { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; animation: rise2 .2s var(--ease); }
+.kn-text { height: auto; min-height: 64px; padding: 8px 10px; font-size: 14px; line-height: 1.45; resize: vertical; }
+.kn-text.mono { min-height: 300px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; line-height: 1.6; }
+.kn-md { display: flex; flex-direction: column; gap: 8px; }
+.kn-hint { margin: 0; }
+.kn-hint code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.kn-bar { display: flex; justify-content: flex-end; gap: 6px; }
+.kn-bar.left { justify-content: flex-start; flex-wrap: wrap; }
+.kn-bar.savebar { animation: rise2 .2s var(--ease); }
+.kn-shake { animation: kn-shake .32s var(--ease); }
+@keyframes kn-shake { 20% { transform: translateX(-4px); } 45% { transform: translateX(4px); } 70% { transform: translateX(-2px); } }
+
+/* ── History ── */
+.kn-history { position: absolute; top: 0; right: 0; bottom: 0; width: 320px; display: flex; flex-direction: column; gap: 8px; padding: 12px 12px 14px;
+  background: var(--paper-2); border-left: 1px solid var(--line); box-shadow: -10px 0 24px rgba(16, 40, 70, .08); overflow-y: auto; z-index: 3;
+  animation: kn-drawer-in .22s var(--ease); }
+.kn-history.leaving { pointer-events: none; animation: kn-drawer-out .2s var(--ease) forwards; }
+@keyframes kn-drawer-in { from { opacity: 0; transform: translateX(16px); } }
+@keyframes kn-drawer-out { to { opacity: 0; transform: translateX(16px); } }
+.kn-hh { display: flex; align-items: center; gap: 8px; }
+.kn-hh b { color: var(--ink); }
+.kn-hh .segc button { padding: 3px 9px; font-size: 12.5px; }
+.kn-x { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 6px; color: var(--muted); transition: background-color .16s, color .16s, transform .16s var(--ease); }
+.kn-x:hover { background: var(--fill); color: var(--ink); }
+.kn-x:active { transform: scale(.96); }
+.kn-changes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.kn-chg { border-radius: 9px; transition: background-color .16s var(--ease); }
+.kn-chg.sel { background: var(--fill); }
+.kn-chg.entering { overflow: hidden; animation: kn-in .32s var(--ease); }
+.kn-chg.leaving { overflow: hidden; pointer-events: none; animation: kn-out .22s var(--ease) forwards; }
+.kn-chg-row { display: flex; gap: 9px; width: 100%; padding: 7px 8px; border-radius: 9px; text-align: left; font-size: 13.5px;
+  transition: background-color .16s var(--ease), transform .16s var(--ease); }
+.kn-chg-row:hover { background: var(--fill); }
+.kn-chg-row:active { transform: scale(.985); transition-duration: .06s; }
+.kn-chg-txt { min-width: 0; display: flex; flex-direction: column; }
+.kn-chg-sum { color: var(--ink); overflow-wrap: anywhere; }
+.kn-chg-txt small { font-size: 12px; color: var(--muted); }
+.kn-sign { flex: none; width: 20px; height: 20px; border-radius: 6px; display: grid; place-items: center; font-weight: 700; font-size: 12px; }
+.kn-sign.a { background: color-mix(in srgb, var(--green) 16%, transparent); color: var(--ok-text); }
+.kn-sign.c { background: var(--amber-bg); color: var(--warn-text); }
+.kn-sign.r { background: var(--red-bg); color: var(--bad-text); }
+.kn-chg-detail { display: flex; flex-direction: column; gap: 8px; padding: 0 8px 10px 37px; animation: rise2 .2s var(--ease); }
+.kn-diff { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; background: var(--paper); }
+.kn-diff > div { padding: 2px 8px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted); }
+.kn-diff .kn-diff-path { color: var(--faint); border-bottom: 1px solid var(--line); padding: 4px 8px; }
+.kn-diff .dp { background: color-mix(in srgb, var(--green) 14%, transparent); color: var(--ok-text); }
+.kn-diff .dm { background: var(--red-bg); color: var(--bad-text); }
+.kn-diff .gap { color: var(--faint); text-align: center; }
+
+/* ── Add to knowledge ── */
+.kn-scrim { position: absolute; inset: 0; z-index: 5; display: grid; place-items: center; padding: 16px;
+  background: rgba(16, 40, 58, .18); animation: fadein .16s ease-out; }
+.kn-scrim.leaving { pointer-events: none; animation: kn-fade-out .18s var(--ease) forwards; }
+@keyframes kn-fade-out { to { opacity: 0; } }
+.kn-dialog { width: min(440px, 100%); display: flex; flex-direction: column; gap: 10px; padding: 16px; border-radius: 12px; background: var(--lift);
+  border: 1px solid var(--line-strong); box-shadow: 0 18px 48px rgba(16, 40, 70, .22); animation: kn-pop .2s var(--spring); }
+.kn-scrim.leaving .kn-dialog { animation: kn-pop-out .18s var(--ease) forwards; }
+@keyframes kn-pop { from { opacity: 0; transform: scale(.96) translateY(6px); } }
+@keyframes kn-pop-out { to { opacity: 0; transform: scale(.97) translateY(4px); } }
+.kn-dialog b { color: var(--ink); font-size: 15px; }
+.kn-dialog .meta { margin: -4px 0 2px; }
+.kn-field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; font-weight: 600; color: var(--muted); }
+.kn-input { height: 36px; font-size: 14px; }
+.kn-row2 { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+.kn-row2 > .kn-field:first-child { flex: 1; min-width: 160px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .kn-kids, .kn-entry.fresh, .kn-entry.entering, .kn-entry.leaving, .kn-editing, .kn-bar.savebar, .kn-shake, .kn-history, .kn-history.leaving,
+  .kn-chg.entering, .kn-chg.leaving, .kn-chg-detail, .kn-scrim, .kn-scrim.leaving, .kn-dialog, .kn-scrim.leaving .kn-dialog { animation: none !important; }
+  .kn-folder, .kn-leaf, .kn-hbtn, .kn-act, .kn-add-btn, .kn-chg-row, .kn-x, .kn-src, .kn-acts, .kn-folder .chev, .kn-src-link svg, .kn-entry { transition: none; }
+  .kn-folder:active, .kn-leaf:active, .kn-hbtn:active, .kn-add-btn:active, .kn-act:active, .kn-chg-row:active, .kn-x:active,
+  .kn-folder:hover .chev:not(.turn), .kn-src-link:hover svg { transform: none !important; }
+}
