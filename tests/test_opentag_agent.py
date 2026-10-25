@@ -61,7 +61,9 @@ class OpenTagAgentPromptTests(unittest.TestCase):
         # Search scope is a procedure: the prompt routes unclear scope to the skill that settles it.
         self.assertNotIn("runtime-agent.md", prompt)
         self.assertIn("search general workspace all", prompt)
-        self.assertIn("unclear scope, or this channel's history, use\n  tag-slack-search", prompt)
+        # The guard must fire before any search, so it stays in the base, not only in the skill.
+        self.assertIn("ask a short scope question and do not search", prompt)
+        self.assertIn("this channel's history, use tag-slack-search", prompt)
         search = skill_text("tag-slack-search")
         self.assertIn("`search general workspace all` is ambiguous: ask a short scope question and do not call a search helper", search)
         self.assertIn("Never silently fix a typo", search)
