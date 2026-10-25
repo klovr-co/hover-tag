@@ -16,10 +16,11 @@ try:
     import slack_channels
     import setup_ui as ui
     import tag_slack_backoff
+    import tag_profiles
     from tag_paths import default_workspace, tag_home
 except ImportError:
     from scripts import agent_models, slack_channels, tag_config as settings, setup_ui as ui
-    from scripts import tag_slack_backoff
+    from scripts import tag_slack_backoff, tag_profiles
     from scripts.tag_paths import default_workspace, tag_home
 
 
@@ -45,7 +46,7 @@ def inspect(home: Path, lifecycle, *, offline: bool = False, tag_id: str = "defa
         values = settings.load_config(path)
     except (OSError, ValueError):
         error = "Cannot read settings as a JSON object of string values; repair the file before continuing"
-    errors = settings.config_errors(values)
+    errors = settings.config_errors(values, profile=tag_profiles.is_profile(home))
     backend = values.get("OPENTAG_BACKEND", "codex")
     search_path = str(home / "integrations/bin") + os.pathsep + os.environ.get("PATH", "")
     installed = backend in {"codex", "claude"} and shutil.which(backend, path=search_path) is not None
@@ -229,9 +230,11 @@ def config_command(home: Path, words: list[str], *, json_output: bool, stdin: bo
     elif action == "show" and len(words) <= 1:
         values = settings.load_config(path)
         result = {"schema_version": 1, "tag": tag_id, "path": str(path), "settings": settings.public_config(values),
-                  "fields": settings.config_errors(values)}
+                  "fields": settings.config_errors(values, profile=tag_profiles.is_profile(home))}
     elif action == "set" and ((stdin and len(words) == 2) or (not stdin and len(words) == 3)):
         key = words[1]
+        if key in settings.PROFILE_SHARED and tag_profiles.is_profile(home):
+            raise ValueError(f"{key} belongs to Chief-of-Tag's Slack app; a profile keeps no Slack tokens")
         if key not in settings.PUBLIC and not stdin:
             raise ValueError("Use --stdin for secret settings so they do not enter shell history")
         value = sys.stdin.read().rstrip("\r\n") if stdin else words[2]

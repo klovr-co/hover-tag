@@ -39,6 +39,7 @@ try:
     import tag_autostart as autostart
     import agent_models
     import tag_chief
+    import tag_profiles
     import slack_cli_config
 except ImportError:
     from scripts.tag_paths import initialize_instance, initialize_workspace, runtime_environment, tag_home
@@ -52,7 +53,7 @@ except ImportError:
     from scripts import tag_mfs_runtime, tag_slack_backoff
     from scripts import tag_display as display
     from scripts import tag_autostart as autostart
-    from scripts import tag_chief, slack_cli_config
+    from scripts import tag_chief, tag_profiles, slack_cli_config
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_DEPENDENCIES = ("mfs_server", "psutil", "slack_bolt")
@@ -68,7 +69,7 @@ CAPABILITIES = (
     "autostart", "autostart-keep", "logs-json", "upgrade-json", "install-progress",
     "ai-connections", "shared-ai-connections", "thinking-level", "logs-activity", "activity-details", "setup-v2", "abandon-setup", "remove-tag",
     "describe", "telemetry-events", "start-progress", "api-connections",
-    "chief-of-tag", "setup-preset", "setup-tag-event",
+    "chief-of-tag", "setup-preset", "setup-tag-event", "profiles",
 )
 UPDATE_CHECK_INTERVAL_SECONDS = 24 * 60 * 60
 COMMANDS = tuple(sorted(tag_instances.RESERVED_NAMES))
@@ -2093,8 +2094,17 @@ AGENT_RUN_MARKERS = ("OPENTAG_CALLER_ID", "OPENTAG_HANDOFF_DEPTH")
 AGENT_REFUSED_COMMANDS = frozenset({"add", "setup", "reset", "remove", "abandon", "chief-of-tag"})
 PRESET_KEYS = frozenset({
     "OPENTAG_BOT_NAME", "OPENTAG_BOT_DESCRIPTION", "OPENTAG_DEFAULT_MODEL", "OPENTAG_DEFAULT_EFFORT",
-    "SLACK_ALLOWED_USER_IDS", slack_cli_config.TAG_SETTING,
+    "SLACK_ALLOWED_USER_IDS", slack_cli_config.TAG_SETTING, tag_profiles.ICON_SETTING,
 })
+# A new profile starts from Chief-of-Tag's choices for these, then its preset.
+# Slack tokens and the app's identity are never copied (tag_profiles.SHARED_SLACK_KEYS).
+PROFILE_INHERITED_KEYS = (
+    "OPENTAG_BACKEND", "OPENTAG_BACKENDS", "OPENTAG_DEFAULT_MODEL", "OPENTAG_DEFAULT_EFFORT",
+    "OPENTAG_CODEX_TRANSPORT", "OPENTAG_CLAUDE_TRANSPORT", "OPENTAG_CLAUDE_PERMISSION_MODE",
+    "OPENTAG_SLACK_STREAMING", "OPENTAG_SLACK_DM_ENABLED", "OPENTAG_FILE_DELIVERY",
+    "MFS_URL", "MFS_ALLOWED_SCOPES", "MFS_SLACK_HISTORY_DAYS",
+    "SLACK_ALLOWED_USER_IDS", "SLACK_CHANNEL_IDS", "SLACK_CHANNEL_ID", "SLACK_CHANNEL_POLICY",
+)
 
 
 def inside_agent_run() -> bool:
@@ -2123,6 +2133,49 @@ def _read_preset(path: Path) -> dict[str, str]:
         elif error := settings.validation_error(key, value):
             raise ValueError(f"{key}: {error}")
     return {key: value for key, value in preset.items() if value}
+
+
+def _add_profile(installation_root: Path, preset: dict[str, str], *, json_output: bool) -> int:
+    """Create a Tag that answers through Chief-of-Tag's Slack app: no app, no Slack setup (ADR 0012)."""
+    try:
+        import tag_config as settings
+    except ImportError:
+        from scripts import tag_config as settings
+    name = preset.get("OPENTAG_BOT_NAME", "").strip()
+    if not name:
+        raise ValueError("add --profile needs --preset with OPENTAG_BOT_NAME, the profile's name")
+    tag_profiles.shared_slack_values(installation_root)  # Chief-of-Tag must already be connected.
+    tag_id = tag_instances.slugify(name)
+    if not tag_id:
+        raise ValueError("Use a profile name with letters or digits")
+    taken = set()
+    for item in tag_instances.discover(installation_root):
+        if item.get("valid") and Path(str(item.get("home", ""))).exists():
+            home = Path(str(item["home"]))
+            taken |= {str(item["id"]).casefold(), (_slack_name(home) or "").casefold(),
+                      (tag_instances.nickname(home) or "").casefold()}
+    if tag_id in taken or name.casefold() in taken:
+        raise ValueError(f"Another Tag is already called '{name}'; profiles need a unique name")
+    chief = tag_chief.chief_id(installation_root)
+    chief_values = read_config(tag_instances.resolve(installation_root, chief).home / "config/settings.json")
+    values = {key: chief_values[key] for key in PROFILE_INHERITED_KEYS if chief_values.get(key)}
+    values.update(preset)
+    context = tag_instances.create(installation_root, tag_id, profile=True)
+    initialize_instance(context.home)
+    settings.update_config(context.home / "config/settings.json", values)
+    errors = settings.config_errors(read_config(context.home / "config/settings.json"), profile=True)
+    if json_output:
+        _setup_ui().emit({"type": "tag", "tag": tag_id})
+        _setup_ui().emit({"type": "result", "status": "paused" if errors else "complete", "tag": tag_id,
+                          "exit_code": 0, "kind": tag_profiles.KIND_PROFILE})
+    else:
+        display.header("Add", f"{name} · profile")
+        display.info_row("Home", display.short_path(context.home), good=True)
+        display.info_row("Slack", f"Answers through {tag_chief.ROLE_NAME}'s app as {name}", good=True)
+        for key, problem in errors.items():
+            display.info_row(key, problem, good=False)
+        display.next_action("Start it", context.command("start"))
+    return 0
 
 
 def _apply_slack_cli_setting(home: Path) -> None:
@@ -2285,7 +2338,8 @@ def _setup_result(code: int, tag_id: str, protocol: bool) -> int:
             except ImportError:
                 from scripts import tag_config as settings
             context = tag_instances.resolve(tag_home(), tag_id)
-            configured = not settings.config_errors(read_config(context.home / "config/settings.json"))
+            configured = not settings.config_errors(read_config(context.home / "config/settings.json"),
+                                                    profile=tag_profiles.is_profile(context.home))
         except (OSError, ValueError, RuntimeError):
             pass
         status = "complete" if code == 0 and configured else "paused" if code == 0 else "failed"
@@ -2525,6 +2579,7 @@ def _run_cli() -> int:
     parser.add_argument("--confirm-app", help="remove --delete-app: the App ID to delete, typed to confirm")
     parser.add_argument("--workspace", help="start, stop, restart: every Tag in this Slack workspace (team ID or name)")
     parser.add_argument("--preset", type=Path, metavar="FILE", help="add: JSON settings for the new Tag, such as its name, model and owners")
+    parser.add_argument("--profile", action="store_true", help="add: a profile that answers through Chief-of-Tag's Slack app; needs --preset with its name")
     raw_arguments = sys.argv[1:]
     explicit_tag = bool(
         raw_arguments
@@ -2546,6 +2601,8 @@ def _run_cli() -> int:
         parser.error("--no-start, --test and --review are only for setup")
     if args.arguments and args.command not in {"add", "memory", "config", "telemetry", "rename", "describe", "autostart", "chatgpt", "settings", "chief-of-tag"}:
         parser.error("Only add, memory, config, telemetry, rename, describe, autostart, chatgpt, settings, and chief-of-tag accept additional positional arguments")
+    if args.profile and args.command != "add":
+        parser.error("--profile works only with add")
     if args.preset and args.command != "add":
         parser.error("--preset is only for add")
     if args.command in AGENT_REFUSED_COMMANDS and inside_agent_run():
@@ -2709,6 +2766,10 @@ def _run_cli() -> int:
     if args.command == "add":
         if args.arguments:
             parser.error("add does not accept a name; the workspace alias is chosen during onboarding")
+        if args.profile:
+            # A profile has no Slack app to set up, so it needs no terminal.
+            return _add_profile(installation_root, _read_preset(args.preset) if args.preset else {},
+                                json_output=args.json_output)
         if not display.stdin_is_terminal() and not args.json_output:
             print(
                 "Interactive setup requires a terminal. Use tag inspect --json and tag config set for automation.",
@@ -2780,6 +2841,7 @@ def _run_cli() -> int:
                                   default_effort=agent_models.effective_effort(context.home, values),
                                   description=values.get("OPENTAG_BOT_DESCRIPTION") or None,
                                   channels=_channels(values, context.home),
+                                  kind=tag_profiles.kind(context.home),
                                   chief_of_tag=context.tag_id == chief,
                                   created_by_chief=context.tag_id in created)
                 except (OSError, ValueError, RuntimeError) as exc:
@@ -3131,7 +3193,7 @@ def _run_cli() -> int:
         if args.command in {"start", "dev"}:
             settings.migrate_file_delivery(home, config_path)
         values = read_config(config_path)
-        if args.command in {"start", "dev"} and settings.config_errors(values):
+        if args.command in {"start", "dev"} and settings.config_errors(values, profile=tag_profiles.is_profile(home)):
             raise RuntimeError("Configuration is incomplete or invalid. Run tag inspect or tag setup.")
         if args.command in {"start", "dev"}:
             assert_unique_slack_app(context, values)

@@ -295,7 +295,7 @@ def ensure_default(installation_root: Path) -> InstanceContext:
     return _create(root, DEFAULT_TAG)
 
 
-def _write_metadata(path: Path, tag_id: str, *, provisional: bool = False) -> None:
+def _write_metadata(path: Path, tag_id: str, *, provisional: bool = False, profile: bool = False) -> None:
     metadata = {
         "schema_version": SCHEMA_VERSION,
         "id": tag_id,
@@ -304,6 +304,9 @@ def _write_metadata(path: Path, tag_id: str, *, provisional: bool = False) -> No
     if provisional:
         # Renamed after its Slack name once setup chooses one (tag_rename).
         metadata["provisional"] = True
+    if profile:
+        # Answers through Chief-of-Tag's Slack app instead of its own (tag_profiles).
+        metadata["kind"] = "profile"
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
         json.dump(metadata, handle, indent=2, sort_keys=True)
@@ -312,12 +315,14 @@ def _write_metadata(path: Path, tag_id: str, *, provisional: bool = False) -> No
         os.fsync(handle.fileno())
 
 
-def create(installation_root: Path, tag_id: str, *, provisional: bool = False) -> InstanceContext:
+def create(installation_root: Path, tag_id: str, *, provisional: bool = False,
+           profile: bool = False) -> InstanceContext:
     validate_name(tag_id, allow_default=False)
-    return _create(installation_root, tag_id, provisional=provisional)
+    return _create(installation_root, tag_id, provisional=provisional, profile=profile)
 
 
-def _create(installation_root: Path, tag_id: str, *, provisional: bool = False) -> InstanceContext:
+def _create(installation_root: Path, tag_id: str, *, provisional: bool = False,
+            profile: bool = False) -> InstanceContext:
     validate_name(tag_id)
     root = installation_root.expanduser().absolute()
     destination = instance_path(root, tag_id)
@@ -329,7 +334,7 @@ def _create(installation_root: Path, tag_id: str, *, provisional: bool = False) 
     try:
         initialize_instance(staging)
         path = staging / "instance.json"
-        _write_metadata(path, tag_id, provisional=provisional)
+        _write_metadata(path, tag_id, provisional=provisional, profile=profile)
         try:
             os.rename(staging, destination)
         except OSError as exc:

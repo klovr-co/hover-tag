@@ -35,6 +35,8 @@ DEFAULT_MODEL_RE = re.compile(r"(?:codex|claude)(?::[A-Za-z0-9][A-Za-z0-9._\[\]-
 REQUIRED = ("OPENTAG_BACKEND", "MFS_URL", "MFS_ALLOWED_SCOPES",
             "SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_ALLOWED_USER_IDS",
             "SLACK_TEAM_ID", "SLACK_APP_ID")
+# A profile answers through Chief-of-Tag's Slack app, so it keeps no Slack tokens of its own.
+PROFILE_SHARED = frozenset({"SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_TEAM_ID", "SLACK_APP_ID"})
 # Unknown extension settings are preserved but never exposed by config show.
 PUBLIC = frozenset((*DEFAULTS, "MFS_ALLOWED_SCOPES", "OPENTAG_WORKDIR",
                     "SLACK_CHANNEL_ID", "SLACK_CHANNEL_IDS", "SLACK_TEAM_ID",
@@ -46,7 +48,8 @@ PUBLIC = frozenset((*DEFAULTS, "MFS_ALLOWED_SCOPES", "OPENTAG_WORKDIR",
                     "OPENTAG_CLAUDE_MODELS", "OPENTAG_DEFAULT_MODEL", "OPENTAG_BACKENDS",
                     "OPENTAG_DEFAULT_EFFORT", "OPENTAG_BOT_DESCRIPTION",
                     "OPENTAG_PEER_TAGS", "OPENTAG_CHIEF_MAX_TAGS", "OPENTAG_CHIEF_SLACK_SIGN_IN",
-                    "OPENTAG_CHIEF_SLACK_CONFIG", "OPENTAG_SLACK_CLI_CONFIG"))
+                    "OPENTAG_CHIEF_SLACK_CONFIG", "OPENTAG_SLACK_CLI_CONFIG",
+                    "OPENTAG_PROFILE_ICON"))
 EDITABLE = PUBLIC - {"OPENTAG_WORKDIR"} | {
     "SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "MFS_TOKEN", "MFS_SLACK_TOKEN", "MFS_HOME"
 }
@@ -77,6 +80,7 @@ LABELS = {
     "OPENTAG_TRANSPORT": "Chat service",
     "OPENTAG_PEER_TAGS": "Other Tags this Tag may ask (Name=MEMBERID, comma-separated)",
     "OPENTAG_CHIEF_MAX_TAGS": "Chief-of-Tag: most Tags in this installation (default 10)",
+    "OPENTAG_PROFILE_ICON": "Profile picture: a character name or a public https:// URL",
     "OPENTAG_CHIEF_SLACK_SIGN_IN": "Chief-of-Tag: service account's Slack sign-in (T… or E…)",
     "OPENTAG_CHIEF_SLACK_CONFIG": "Chief-of-Tag: service account's Slack CLI folder (absolute; empty for the default)",
     "OPENTAG_SLACK_CLI_CONFIG": "Slack CLI sign-in folder for this Tag's app (absolute; empty for this computer's)",
@@ -209,6 +213,13 @@ def validation_error(key: str, value: str) -> str | None:
         return "Use the Slack sign-in's Team ID (T…) or organization ID (E…)"
     if key in {"OPENTAG_CHIEF_SLACK_CONFIG", "OPENTAG_SLACK_CLI_CONFIG"} and value and not Path(value).is_absolute():
         return "Use an absolute folder, or leave empty"
+    if key == "OPENTAG_PROFILE_ICON" and value:
+        try:
+            from tag_profiles import icon_error
+        except ImportError:
+            from scripts.tag_profiles import icon_error
+        if error := icon_error(value):
+            return error
     if key == "OPENTAG_TRANSPORT" and value != "slack":
         return "Only slack is supported"
     if key in {"OPENTAG_TIMEOUT_SECONDS", "OPENTAG_MAX_TIMEOUT_SECONDS", "OPENTAG_BACKEND_ATTEMPTS"} and (not value.isascii() or not value.isdigit() or int(value) < 1):
@@ -263,14 +274,14 @@ def validation_error(key: str, value: str) -> str | None:
     return None
 
 
-def config_errors(values: dict[str, str]) -> dict[str, str]:
+def config_errors(values: dict[str, str], *, profile: bool = False) -> dict[str, str]:
     # A Tag that follows invitations may start with no channels, and so no
     # memory sources yet: it picks up each channel it's invited to while it runs.
     no_channels = not (values.get("SLACK_CHANNEL_IDS", "").strip() or values.get("SLACK_CHANNEL_ID", "").strip())
     follows_invitations = values.get("SLACK_CHANNEL_POLICY") == "invited"
     waiting = no_channels and follows_invitations
     errors = {key: "Required" for key in REQUIRED if not values.get(key, "").strip()
-              and not (waiting and key == "MFS_ALLOWED_SCOPES")}
+              and not (waiting and key == "MFS_ALLOWED_SCOPES") and not (profile and key in PROFILE_SHARED)}
     if no_channels and not follows_invitations:
         errors["SLACK_CHANNEL_IDS"] = "Select at least one Slack channel"
     for key, value in values.items():
