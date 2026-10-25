@@ -69,7 +69,7 @@ class SlackManifestMigrationTests(unittest.TestCase):
         current, _ = migrations.migrate_manifest(original)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "slack-app-manifest.yaml").write_text(yaml.safe_dump(current))
+            (root / "slack-app-manifest.yaml").write_text(yaml.safe_dump(current), encoding="utf-8")
             self.assertEqual([], validate_manifest(root))
         self.assertIn("reactions:read", current["oauth_config"]["scopes"]["bot"])
         self.assertIn("reaction_added", current["settings"]["event_subscriptions"]["bot_events"])
@@ -174,7 +174,7 @@ class SlackManifestMigrationTests(unittest.TestCase):
             ) as run:
                 self.assertFalse(migrations.reconcile(home, config, self.values()))
             run.assert_not_called()
-            marker = json.loads((home / "state/slack-manifest-migrations.json").read_text())
+            marker = json.loads((home / "state/slack-manifest-migrations.json").read_text(encoding="utf-8"))
             self.assertEqual(marker["version"], migrations.MIGRATION_VERSION)
 
     def test_background_start_syncs_refreshes_and_checkpoints(self):
@@ -205,10 +205,159 @@ class SlackManifestMigrationTests(unittest.TestCase):
             saved = migrations.settings.read_config(config)
             self.assertEqual(saved["SLACK_BOT_TOKEN"], "xoxb-fresh-token")
             self.assertTrue((home / "state/slack-manifest-migrations.json").is_file())
-            self.assertEqual(migrations.MIGRATION_VERSION, json.loads(marker.read_text())["version"])
+            self.assertEqual(migrations.MIGRATION_VERSION, json.loads(marker.read_text(encoding="utf-8"))["version"])
             with patch.object(migrations, "remote_manifest") as inspect:
                 self.assertFalse(migrations.reconcile(home, config, self.values() | fresh))
                 inspect.assert_not_called()
+
+    def test_rejected_bot_token_is_replaced_through_slack_cli_instead_of_stopping_the_start(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home, config = self.linked_home(Path(directory))
+            current = migrations.migrate_manifest(self.manifest())[0]
+            fresh = {"SLACK_APP_TOKEN": "xapp-fresh-token", "SLACK_BOT_TOKEN": "xoxb-fresh-token"}
+            dead = migrations.BotTokenRejected("Slack rejected the bot token; reconnect it with `tag setup`")
+            with patch.object(migrations.shutil, "which", return_value="/bin/slack"), patch.object(
+                migrations, "remote_manifest", side_effect=[current, current]
+            ), patch.object(
+                migrations, "granted_bot_scopes", side_effect=[dead, set(migrations.REQUIRED_BOT_SCOPES)]
+            ), patch.object(migrations, "_run") as run, patch.object(
+                migrations.slack_credentials, "receive", return_value=fresh
+            ) as receive:
+                self.assertTrue(migrations.reconcile(home, config, self.values()))
+            run.assert_not_called()  # The manifest was already current: only the token is renewed.
+            receive.assert_called_once()
+            self.assertEqual(migrations.settings.read_config(config)["SLACK_BOT_TOKEN"], "xoxb-fresh-token")
+
+    def test_uninstalled_app_is_reinstalled_before_its_settings_are_synced(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home, config = self.linked_home(Path(directory))
+            current = migrations.migrate_manifest(self.manifest())[0]
+            reinstalled = {"SLACK_APP_TOKEN": "xapp-reinstalled", "SLACK_BOT_TOKEN": "xoxb-reinstalled"}
+            fresh = {"SLACK_APP_TOKEN": "xapp-fresh-token", "SLACK_BOT_TOKEN": "xoxb-fresh-token"}
+            dead = migrations.BotTokenRejected("Slack rejected the bot token; reconnect it with `tag setup`")
+            uninstalled = subprocess.CompletedProcess([], 1, "", "A valid installation of this app is required"
+                                                      " to take this action (installation_required)\n"
+                                                      "Suggestion\n   Install the app with `slack install`\n")
+            synced = subprocess.CompletedProcess([], 0, "", "")
+            with patch.object(migrations.shutil, "which", return_value="/bin/slack"), patch.object(
+                migrations, "remote_manifest", side_effect=[self.manifest(), current]
+            ), patch.object(
+                migrations, "granted_bot_scopes", side_effect=[dead, set(migrations.REQUIRED_BOT_SCOPES)]
+            ), patch.object(migrations, "_sync_command", return_value=["slack", "manifest", "sync"]), patch.object(
+                migrations, "_run", side_effect=[uninstalled, synced]
+            ) as run, patch.object(
+                migrations.slack_credentials, "receive", side_effect=[reinstalled, fresh]
+            ) as receive:
+                self.assertTrue(migrations.reconcile(home, config, self.values()))
+            self.assertEqual(2, run.call_count)  # The sync is retried once the app is installed again.
+            self.assertEqual(2, receive.call_count)  # Reinstall, then refresh for the new permissions.
+            self.assertEqual(migrations.settings.read_config(config)["SLACK_BOT_TOKEN"], "xoxb-fresh-token")
+            self.assertTrue((home / "state/slack-manifest-migrations.json").is_file())
+
+    def test_enterprise_reinstall_token_is_validated_before_it_is_saved(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home, config = self.linked_home(Path(directory))
+            migrations.settings.save_config(home / "integrations/slack-cli/.slack/apps.dev.json", {
+                "ETEST": {"team_id": "ETEST", "app_id": "ATEST"}
+            })
+            values = self.values() | {"SLACK_ENTERPRISE_ID": "ETEST"}
+            uninstalled = subprocess.CompletedProcess([], 1, "", "(installation_required)\n")
+            wrong = {"SLACK_APP_TOKEN": "xapp-wrong", "SLACK_BOT_TOKEN": "xoxb-wrong-org"}
+            with patch.object(migrations.shutil, "which", return_value="/bin/slack"), patch.object(
+                migrations, "remote_manifest", return_value=self.manifest()
+            ), patch.object(
+                migrations, "granted_bot_scopes", side_effect=migrations.BotTokenRejected("dead")
+            ), patch.object(migrations, "_sync_command", return_value=["slack", "manifest", "sync"]), patch.object(
+                migrations, "_run", return_value=uninstalled
+            ) as run, patch.object(
+                migrations.slack_credentials, "receive", return_value=wrong
+            ), patch.object(
+                migrations.slack_identity, "validate", side_effect=RuntimeError("Bot token belongs to another organization")
+            ) as validate:
+                with self.assertRaisesRegex(RuntimeError, "another organization"):
+                    migrations.reconcile(home, config, values)
+            validate.assert_called_once()
+            self.assertEqual("xoxb-wrong-org", validate.call_args.args[0])
+            self.assertEqual(1, run.call_count)  # No sync retry with an unverified installation.
+            self.assertEqual("xoxb-test-token", migrations.settings.read_config(config)["SLACK_BOT_TOKEN"])
+            self.assertFalse((home / "state/slack-manifest-migrations.json").exists())
+
+    def test_sync_still_fails_when_the_reinstalled_app_cannot_be_synced(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home, config = self.linked_home(Path(directory))
+            uninstalled = subprocess.CompletedProcess([], 1, "", "(installation_required)\n"
+                                                      "Install the app with `slack install`\n")
+            with patch.object(migrations.shutil, "which", return_value="/bin/slack"), patch.object(
+                migrations, "remote_manifest", return_value=self.manifest()
+            ), patch.object(
+                migrations, "granted_bot_scopes", return_value=set()
+            ), patch.object(migrations, "_sync_command", return_value=["slack", "manifest", "sync"]), patch.object(
+                migrations, "_run", return_value=uninstalled
+            ), patch.object(
+                migrations.slack_credentials, "receive", return_value={"SLACK_APP_TOKEN": "xapp-a", "SLACK_BOT_TOKEN": "xoxb-a"}
+            ):
+                with self.assertRaisesRegex(RuntimeError, "Slack app settings migration failed"):
+                    migrations.reconcile(home, config, self.values())
+            self.assertFalse((home / "state/slack-manifest-migrations.json").exists())
+
+    def test_history_credential_copied_from_the_bot_token_follows_the_reinstall(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home, config = self.linked_home(Path(directory))
+            migrations.settings.update_config(config, {"MFS_SLACK_TOKEN": "xoxb-test-token"})
+            fresh = {"SLACK_APP_TOKEN": "xapp-fresh-token", "SLACK_BOT_TOKEN": "xoxb-fresh-token"}
+            migrations._save_credentials(home, config, fresh)
+            saved = migrations.settings.read_config(config)
+            self.assertEqual("xoxb-fresh-token", saved["MFS_SLACK_TOKEN"])
+            self.assertEqual("xoxb-fresh-token", (home / "config/credentials/mfs-slack-token").read_text(encoding="utf-8"))
+
+    def test_separate_history_credential_is_kept_when_the_bot_token_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home, config = self.linked_home(Path(directory))
+            migrations.settings.update_config(config, {"MFS_SLACK_TOKEN": "xoxp-person-token"})
+            migrations._save_credentials(home, config, {"SLACK_APP_TOKEN": "xapp-f", "SLACK_BOT_TOKEN": "xoxb-f"})
+            self.assertEqual("xoxp-person-token", migrations.settings.read_config(config)["MFS_SLACK_TOKEN"])
+            self.assertFalse((home / "config/credentials/mfs-slack-token").exists())
+
+    def test_history_credential_revoked_by_an_earlier_reinstall_is_repaired(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home, config = self.linked_home(Path(directory))
+            values = self.values() | {"MFS_SLACK_TOKEN": "xoxb-revoked"}
+            migrations.settings.save_config(config, values)
+            def scopes(token):
+                if token == "xoxb-revoked":
+                    raise migrations.BotTokenRejected("dead")
+                return set(migrations.REQUIRED_BOT_SCOPES)
+            with patch.object(migrations, "granted_bot_scopes", side_effect=scopes):
+                self.assertTrue(migrations.repair_history_credential(home, config, values))
+                repaired = migrations.settings.read_config(config)
+                self.assertEqual("xoxb-test-token", repaired["MFS_SLACK_TOKEN"])
+                self.assertFalse(migrations.repair_history_credential(home, config, repaired))  # Idempotent.
+            self.assertEqual("xoxb-test-token", (home / "config/credentials/mfs-slack-token").read_text(encoding="utf-8"))
+
+    def test_history_credential_is_kept_when_it_works_or_slack_cannot_say(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home, config = self.linked_home(Path(directory))
+            for history, outcome in (("xoxb-other-working", set()), ("xoxb-unknown", RuntimeError("offline")),
+                                     ("xoxp-person-token", migrations.BotTokenRejected("dead"))):
+                values = self.values() | {"MFS_SLACK_TOKEN": history}
+                migrations.settings.save_config(config, values)
+                with patch.object(migrations, "granted_bot_scopes", side_effect=lambda token: (_ for _ in ()).throw(outcome)
+                                  if isinstance(outcome, Exception) else outcome):
+                    self.assertFalse(migrations.repair_history_credential(home, config, values))
+                self.assertEqual(history, migrations.settings.read_config(config)["MFS_SLACK_TOKEN"])
+
+    def test_auth_test_tells_a_dead_token_from_a_passing_slack_error(self):
+        class Response:
+            headers = {}
+            def __init__(self, payload): self.payload = payload
+            def __enter__(self): return self
+            def __exit__(self, *exc): return False
+            def read(self): return json.dumps(self.payload).encode()
+        for error, expected in (("token_revoked", migrations.BotTokenRejected), ("ratelimited", RuntimeError)):
+            with patch.object(migrations.urllib.request, "urlopen", return_value=Response({"ok": False, "error": error})):
+                with self.assertRaises(expected) as caught:
+                    migrations.granted_bot_scopes("xoxb-old")
+                self.assertEqual(type(caught.exception) is migrations.BotTokenRejected, expected is migrations.BotTokenRejected)
 
     def test_current_manifest_with_stale_grant_refreshes_without_sync(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -243,6 +392,100 @@ class SlackManifestMigrationTests(unittest.TestCase):
                         migrations.reconcile(home, config, self.values())
                 self.assertFalse((home / "state/slack-manifest-migrations.json").exists())
 
+    def test_optional_team_read_never_blocks_an_older_installation(self):
+        # An installation from the previous release: every required permission, no team:read.
+        with tempfile.TemporaryDirectory() as directory:
+            home, config = self.linked_home(Path(directory))
+            marker = home / "state/slack-manifest-migrations.json"
+            migrations.settings.save_config(marker, {"version": 3, "team_id": "TTEST", "app_id": "ATEST"})
+            remote = migrations.migrate_manifest(self.manifest())[0]
+            remote["oauth_config"]["scopes"]["bot"].remove("team:read")
+            needed = set(migrations.NEEDED_BOT_SCOPES)
+            with patch.object(migrations.shutil, "which", return_value="/bin/slack"), patch.object(
+                migrations, "remote_manifest", side_effect=[remote, migrations.migrate_manifest(remote)[0]]
+            ), patch.object(migrations, "granted_bot_scopes", return_value=needed), patch.object(
+                migrations, "_sync_command", return_value=["/bin/slack", "manifest", "sync"]
+            ), patch.object(migrations, "_run", return_value=subprocess.CompletedProcess([], 0, "", "")), patch.object(
+                migrations.slack_credentials, "receive", side_effect=RuntimeError("An admin must approve this app")
+            ):
+                # The workspace needs admin approval: the start continues and the request is remembered.
+                self.assertFalse(migrations.reconcile(home, config, self.values()))
+            saved = json.loads(marker.read_text(encoding="utf-8"))
+            self.assertEqual(saved["version"], migrations.MIGRATION_VERSION)
+            self.assertEqual(saved["optional_pending"], ["team:read"])
+            self.assertIn("admin must approve", saved["optional_error"])
+            self.assertEqual(migrations.optional_pending(home), ["team:read"])
+            self.assertEqual("xoxb-test-token", migrations.settings.read_config(config)["SLACK_BOT_TOKEN"])
+
+            # Repeated starts within a day don't ask Slack again.
+            with patch.object(migrations, "remote_manifest") as inspect:
+                self.assertFalse(migrations.reconcile(home, config, self.values()))
+                inspect.assert_not_called()
+
+            # A day later Tag asks again; once approved, the new token carries team:read.
+            later = migrations._now() + migrations.OPTIONAL_RETRY
+            fresh = {"SLACK_APP_TOKEN": "xapp-fresh", "SLACK_BOT_TOKEN": "xoxb-fresh"}
+            current = migrations.migrate_manifest(remote)[0]
+            with patch.object(migrations, "_now", return_value=later), patch.object(
+                migrations.shutil, "which", return_value="/bin/slack"
+            ), patch.object(migrations, "remote_manifest", return_value=current), patch.object(
+                migrations, "granted_bot_scopes", side_effect=[needed, set(migrations.REQUIRED_BOT_SCOPES)]
+            ), patch.object(migrations, "_run") as run, patch.object(
+                migrations.slack_credentials, "receive", return_value=fresh
+            ):
+                self.assertTrue(migrations.reconcile(home, config, self.values() | fresh))
+            run.assert_not_called()
+            self.assertEqual(json.loads(marker.read_text(encoding="utf-8")),
+                             {"version": migrations.MIGRATION_VERSION, "team_id": "TTEST", "app_id": "ATEST"})
+            self.assertEqual(migrations.optional_pending(home), [])
+            self.assertEqual("xoxb-fresh", migrations.settings.read_config(config)["SLACK_BOT_TOKEN"])
+
+    def test_reinstall_without_team_read_saves_credentials_and_continues(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home, config = self.linked_home(Path(directory))
+            remote = migrations.migrate_manifest(self.manifest())[0]
+            remote["oauth_config"]["scopes"]["bot"].remove("users:read")
+            fresh = {"SLACK_APP_TOKEN": "xapp-fresh", "SLACK_BOT_TOKEN": "xoxb-fresh"}
+            with patch.object(migrations.shutil, "which", return_value="/bin/slack"), patch.object(
+                migrations, "remote_manifest", side_effect=[remote, migrations.migrate_manifest(remote)[0]]
+            ), patch.object(migrations, "granted_bot_scopes", side_effect=[set(), set(migrations.NEEDED_BOT_SCOPES)]), patch.object(
+                migrations, "_sync_command", return_value=["/bin/slack", "manifest", "sync"]
+            ), patch.object(migrations, "_run", return_value=subprocess.CompletedProcess([], 0, "", "")), patch.object(
+                migrations.slack_credentials, "receive", return_value=fresh
+            ):
+                self.assertTrue(migrations.reconcile(home, config, self.values()))
+            self.assertEqual("xoxb-fresh", migrations.settings.read_config(config)["SLACK_BOT_TOKEN"])
+            self.assertEqual(migrations.optional_pending(home), ["team:read"])
+
+    def test_required_permissions_still_block_while_team_read_is_optional(self):
+        for pending in (False, True):
+            with self.subTest(retry_of_optional=pending), tempfile.TemporaryDirectory() as directory:
+                home, config = self.linked_home(Path(directory))
+                marker = home / "state/slack-manifest-migrations.json"
+                if pending:  # Even a retry for team:read stops if a reinstall dropped a required permission.
+                    migrations.settings.save_config(marker, {
+                        "version": migrations.MIGRATION_VERSION, "team_id": "TTEST", "app_id": "ATEST",
+                        "optional_pending": ["team:read"], "optional_checked_at": "2000-01-01T00:00:00+00:00"})
+                current = migrations.migrate_manifest(self.manifest())[0]
+                granted = [set(migrations.NEEDED_BOT_SCOPES), {"im:history"}] if pending else [{"im:history"}, {"im:history"}]
+                with patch.object(migrations.shutil, "which", return_value="/bin/slack"), patch.object(
+                    migrations, "remote_manifest", return_value=current
+                ), patch.object(migrations, "granted_bot_scopes", side_effect=granted), patch.object(
+                    migrations.slack_credentials, "receive", return_value={"SLACK_APP_TOKEN": "xapp-f", "SLACK_BOT_TOKEN": "xoxb-f"}
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "users:read"):
+                        migrations.reconcile(home, config, self.values())
+                if not pending:
+                    self.assertFalse(marker.exists())
+
+    def test_optional_scope_is_requested_but_not_needed(self):
+        self.assertIn("team:read", migrations.REQUIRED_BOT_SCOPES)
+        self.assertNotIn("team:read", migrations.NEEDED_BOT_SCOPES)
+        original = self.manifest()
+        self.assertIn("team:read", migrations.migrate_manifest(original)[0]["oauth_config"]["scopes"]["bot"])
+        without = migrations.migrate_manifest(original, include_optional=False)[0]
+        self.assertNotIn("team:read", without["oauth_config"]["scopes"]["bot"])
+
     def test_temporary_project_uses_local_source_without_changing_linked_project(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -252,7 +495,7 @@ class SlackManifestMigrationTests(unittest.TestCase):
                 temporary = migrations._migration_project(
                     project, self.manifest(), "TTEST", "ATEST", Path(transaction)
                 )
-                config = json.loads((temporary / ".slack/config.json").read_text())
+                config = json.loads((temporary / ".slack/config.json").read_text(encoding="utf-8"))
                 self.assertEqual(config["manifest"]["source"], "local")
             self.assertFalse((project / ".slack/config.json").exists())
 
@@ -269,3 +512,21 @@ class SlackManifestMigrationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SlackCliFailureTests(unittest.TestCase):
+    def failure(self, stdout="", stderr=""):
+        result = subprocess.CompletedProcess(["slack"], 1, stdout=stdout, stderr=stderr)
+        return str(migrations._cli_failure(result, "Slack could not change the description", 'tag t1 describe "x"'))
+
+    def test_says_what_slack_reported_and_only_suggests_login_for_sign_in_problems(self):
+        busy = self.failure(stderr="\x1b[31m✗ The request to Slack timed out (ratelimited)\x1b[0m\n")
+        self.assertEqual(busy, "Slack could not change the description (The request to Slack timed out (ratelimited)); "
+                               'retry `tag t1 describe "x"`')
+        signed_out = self.failure(stderr="Error: invalid_auth: Your session has expired\n")
+        self.assertIn("run `slack login`, then retry", signed_out)
+        self.assertIn("invalid_auth", signed_out)
+
+    def test_never_repeats_a_token_and_falls_back_to_login_without_output(self):
+        self.assertNotIn("xoxb-secret", self.failure(stdout="token xoxb-secret-123 was rejected"))
+        self.assertEqual(self.failure(), 'Slack could not change the description; run `slack login`, then retry `tag t1 describe "x"`')

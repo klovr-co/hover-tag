@@ -1,18 +1,20 @@
 # Why Tag
 
-Your personal assistant, in the workspace you share.
+Multiplayer AI, in the workspace you share.
 
-## Your personal assistant, in your own environment
+## A coworker in the thread, on your own setup
 
-A shared AI coworker has a whole team to work for. Your @Tag has you.
+Your @Tag works where your team already talks. Everyone in the thread sees what it
+does and can build on it, the way they would with a coworker. It just runs on your
+setup and takes instructions from you.
 
-It runs on a computer you control, using your Codex setup. You choose its skills, connect your accounts, and give it a place to work. Add your weekly report template or the checklist you use before a launch. Make it yours.
+It runs on a computer you control, using your own AI connection through Codex or Claude Code. You choose its skills, connect your accounts, and give it a place to work. Add your weekly report template or the checklist you use before a launch. Make it yours.
 
-We don’t host your conversations or working files. Codex and connected services still process the information needed for your requests, under their own data policies.
+We don’t host your conversations or working files. Your AI provider and connected services still process the information needed for your requests, under their own data policies.
 
 By default, only you give your @Tag instructions. Your teammates can bring
-their own, with their own setup. You share the conversation and the results;
-each assistant stays personal. See [Sharing access to your Tag](../concepts/sharing-access.md)
+their own, with their own setup. You share the conversation and the results,
+and you decide who can ask your Tag. See [Sharing access to your Tag](../concepts/sharing-access.md)
 when you need to authorize another person to make requests.
 
 See [Your own @Tag](../concepts/access.md) and [Adding integrations](../concepts/adding-integrations.md) for how to make it yours.

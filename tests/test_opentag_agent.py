@@ -12,6 +12,33 @@ from scripts import opentag_agent
 
 
 class OpenTagAgentPromptTests(unittest.TestCase):
+    def test_standing_instructions_hold_nothing_that_changes_between_requests(self) -> None:
+        root = Path("/tag")
+        instructions = opentag_agent.build_instructions(
+            skill_dir=root / "skill", workdir=root / "workspace", channel_id="C123", output_files=True)
+        request = opentag_agent.build_request(
+            channel_id="C123", question="Summarize the plan", thread_text="U1: first\nU2: second",
+            attachments_dir=root / "inv-7/attachments", allowed_scopes="file://local/tag/workspace",
+            output_manifest=root / "inv-7/manifest.json")
+        self.assertNotIn("inv-7", instructions)
+        self.assertNotIn("Summarize the plan", instructions)
+        self.assertIn("record_output_artifact.py", instructions)
+        attachments = root / "inv-7/attachments"
+        for value in (str(attachments), str(attachments / "results/images"),
+                      str(attachments / "results/artifacts"), str(root / "inv-7/manifest.json"),
+                      "file://local/tag/workspace", "Summarize the plan", "Slack thread context:"):
+            self.assertIn(value, request)
+
+    def test_continued_request_carries_only_new_thread_messages(self) -> None:
+        request = opentag_agent.build_request(
+            channel_id="C123", question="And now?", thread_text="U2: new message", attachments_dir=None,
+            allowed_scopes="x", continued=True)
+        self.assertIn("New Slack thread messages since your last reply", request)
+        self.assertIn("U2: new message", request)
+        empty = opentag_agent.build_request(channel_id="C123", question="And now?", thread_text="", attachments_dir=None,
+                                            allowed_scopes="x", continued=True)
+        self.assertIn("(none)", empty)
+
     def test_slack_prompt_requires_clarification_for_ambiguous_scope(self) -> None:
         prompt = opentag_agent.build_prompt(
             skill_dir=Path("/tmp/open-tag"),
@@ -22,18 +49,59 @@ class OpenTagAgentPromptTests(unittest.TestCase):
             attachments_dir=None,
             allowed_scopes="slack://tag-t1/channels/general__C123",
         )
-        self.assertIn("/tmp/open-tag/references/runtime-agent.md", prompt)
+        self.assertIn(str(Path("/tmp/open-tag/references/runtime-agent.md")), prompt)
         self.assertNotIn("/tmp/open-tag/SKILL.md", prompt)
         self.assertIn("search general workspace all", prompt)
         self.assertIn("ask a short scope", prompt)
         self.assertIn("do not call a search helper", prompt)
+
+    def test_prompt_loads_channel_memory_and_explains_the_memory_helper(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "memory"
+            from scripts.tag_memory import MemoryStore
+
+            MemoryStore(root, "C123", "UANA").save("deadline", "Reports are due Friday.", all_channels=True)
+            MemoryStore(root, "C123", "UBEN").save("pricing", "Launch pricing is 49 per seat.", kind="note")
+            with patch.dict(os.environ, {"OPENTAG_MEMORY_ROOT": str(root)}):
+                prompt = opentag_agent.build_prompt(
+                    skill_dir=Path("/tmp/open-tag"),
+                    workdir=Path("/tmp/workspace"),
+                    channel_id="C123",
+                    question="what is due?",
+                    thread_text="",
+                    attachments_dir=None,
+                    allowed_scopes="slack://tag-t1/channels/general__C123",
+                )
+        self.assertIn("- deadline: Reports are due Friday.", prompt)
+        self.assertIn("- pricing: Launch pricing is 49 per seat. (this channel)", prompt)
+        self.assertIn(str(Path("/tmp/open-tag/scripts/tag_memory.py")), prompt)
+        self.assertIn("Do not save memory on your own initiative", prompt)
+        self.assertIn("only when the\n  user explicitly says it is for all channels", prompt)
+        self.assertLess(prompt.index("<tag-memory"), prompt.index("User question:"))
+
+    def test_native_memory_is_disabled_for_both_backends(self) -> None:
+        with patch.dict(os.environ, {"CLAUDE_CODE_DISABLE_AUTO_MEMORY": "0"}):
+            opentag_agent.disable_native_memory()
+            self.assertEqual("1", os.environ["CLAUDE_CODE_DISABLE_AUTO_MEMORY"])
+        with patch.object(opentag_agent, "codex_workspace_args", return_value=[]), \
+                patch.object(opentag_agent, "backend_command", side_effect=lambda name: [name]):
+            commands = [
+                opentag_agent.codex_app_server_command(Path("/work")),
+                opentag_agent.codex_stream_command(
+                    "prompt", skill_dir=Path("/skill"), workdir=Path("/work"),
+                    attachments_dir=None, output_path=Path("/tmp/final.txt"),
+                ),
+            ]
+        for command in commands:
+            index = command.index("features.memories=false")
+            self.assertEqual("-c", command[index - 1])
 
     def test_windows_npm_backend_bypasses_command_shell(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             script = root / "node_modules/@openai/codex/bin/codex.js"
             script.parent.mkdir(parents=True)
-            script.write_text("// fixture")
+            script.write_text("// fixture", encoding="utf-8")
             shim = root / "codex.cmd"
             with patch.object(opentag_agent, "os", SimpleNamespace(name="nt")), patch(
                 "scripts.opentag_agent.shutil.which", side_effect=[str(shim), "node.exe"]
@@ -51,15 +119,17 @@ class OpenTagAgentPromptTests(unittest.TestCase):
         previous_transport = os.environ.get("OPENTAG_TRANSPORT")
         os.environ["OPENTAG_TRANSPORT"] = "slack"
         try:
-            prompt = opentag_agent.build_prompt(
-                skill_dir=Path("/tmp/open-tag"),
-                workdir=Path("/tmp/workspace"),
-                channel_id="C123",
-                question="Use an installed local tool",
-                thread_text="",
-                attachments_dir=None,
-                allowed_scopes="file://local/tmp/workspace",
-            )
+            # CI interpreter paths are random and can contain "gws" by chance.
+            with patch.object(opentag_agent.sys, "executable", "/usr/bin/python3"):
+                prompt = opentag_agent.build_prompt(
+                    skill_dir=Path("/tmp/open-tag"),
+                    workdir=Path("/tmp/workspace"),
+                    channel_id="C123",
+                    question="Use an installed local tool",
+                    thread_text="",
+                    attachments_dir=None,
+                    allowed_scopes="file://local/tmp/workspace",
+                )
         finally:
             if previous_transport is None:
                 del os.environ["OPENTAG_TRANSPORT"]
@@ -94,6 +164,8 @@ class OpenTagAgentPromptTests(unittest.TestCase):
         self.assertIn("slack_post_message.py", prompt)
         self.assertIn("new top-level channel message", prompt)
         self.assertIn("only when the user", prompt)
+        self.assertIn("slack_thread_file.py", prompt)
+        self.assertIn("Never comment on a file you have not opened", prompt)
 
     def test_slack_prompt_registers_only_explicitly_requested_output_files(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
@@ -112,8 +184,9 @@ class OpenTagAgentPromptTests(unittest.TestCase):
         self.assertIn("record_output_artifact.py", prompt)
         self.assertIn("file type is supported", prompt)
         self.assertIn("supporting files", prompt)
-        self.assertIn("adds a host-local Open button", prompt)
-        self.assertIn("Add `--attach` only when", prompt)
+        self.assertIn("Individual Open file buttons appear only", prompt)
+        self.assertIn("Add `--attach` when", prompt)
+        self.assertIn("Add `--local-only`", prompt)
         self.assertIn("every file in a multi-file request", prompt)
         self.assertIn("Do not claim a file is attached", prompt)
         self.assertIn("Do not mention the manifest helper", prompt)
@@ -130,10 +203,10 @@ class OpenTagAgentPromptTests(unittest.TestCase):
             allowed_scopes="file://local/tmp/workspace",
         )
 
-        self.assertIn("/tmp/invocation/results/images", prompt)
+        self.assertIn(str(Path("/tmp/invocation/results/images")), prompt)
         self.assertIn("Slack bridge uploads supported files", prompt)
         self.assertIn("Do not call Slack's API to upload them", prompt)
-        self.assertIn("/tmp/invocation/results/artifacts", prompt)
+        self.assertIn(str(Path("/tmp/invocation/results/artifacts")), prompt)
         self.assertIn("including generated HTML", prompt)
 
     @patch("scripts.opentag_agent.backend_command", return_value=["codex"])
@@ -157,11 +230,23 @@ class OpenTagAgentPromptTests(unittest.TestCase):
         self.assertEqual("done", output)
         self.assertIn("--approve-for-me", command)
         self.assertIn("features.fast_mode=true", command)
+        self.assertIn("features.memories=false", command)
         self.assertIn('service_tier="default"', command)
         self.assertNotIn("--dangerously-bypass-approvals-and-sandbox", command)
 
 
 class BackendStreamEventTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # On Windows, Tag resolves codex's npm shim on PATH; these tests don't install Codex.
+        resolve = patch.object(opentag_agent, "backend_command", side_effect=lambda name: [name])
+        resolve.start()
+        self.addCleanup(resolve.stop)
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        usage_home = patch("scripts.agent_usage.instance_home", return_value=Path(temporary.name))
+        usage_home.start()
+        self.addCleanup(usage_home.stop)
+
     def test_backend_progress_requires_a_recognized_lifecycle_event(self) -> None:
         self.assertTrue(opentag_agent.backend_made_progress({"type": "item.started"}))
         self.assertTrue(opentag_agent.backend_made_progress({"type": "stream_event"}))
@@ -170,18 +255,19 @@ class BackendStreamEventTests(unittest.TestCase):
 
     def test_watchdog_resets_idle_deadline_but_not_maximum_runtime(self) -> None:
         stopped = threading.Event()
+        # Proportions matter, not absolute times; generous margins keep slow CI runners honest.
         watchdog = opentag_agent.BackendWatchdog(
-            idle_timeout=0.08,
-            max_timeout=0.18,
+            idle_timeout=0.8,
+            max_timeout=1.8,
             stop=stopped.set,
         )
         watchdog.start()
         try:
-            self.assertFalse(stopped.wait(0.05))
+            self.assertFalse(stopped.wait(0.5))
             watchdog.touch()
-            self.assertFalse(stopped.wait(0.05))
+            self.assertFalse(stopped.wait(0.5))
             watchdog.touch()
-            self.assertTrue(stopped.wait(0.12))
+            self.assertTrue(stopped.wait(1.2))
             self.assertEqual("maximum", watchdog.reason)
         finally:
             watchdog.close()
@@ -250,6 +336,54 @@ class BackendStreamEventTests(unittest.TestCase):
         server_class.assert_called_once()
         self.assertNotIn("status", [item.args[0] for item in emit.call_args_list])
 
+    def test_claude_event_transport_defaults_to_sdk_and_keeps_print_rollback(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual("sdk", opentag_agent.claude_event_transport())
+        with patch.dict(os.environ, {"OPENTAG_CLAUDE_TRANSPORT": "print"}, clear=True):
+            self.assertEqual("print", opentag_agent.claude_event_transport())
+        with patch.dict(os.environ, {"OPENTAG_CLAUDE_TRANSPORT": "socket"}, clear=True):
+            with self.assertRaisesRegex(ValueError, "print or sdk"):
+                opentag_agent.claude_event_transport()
+
+    def test_claude_sdk_run_uses_shared_retry_and_exit_codes(self) -> None:
+        run = MagicMock()
+        run.run.side_effect = [("failed", "API Error: 529 overloaded"), ("interrupted", "")]
+        with patch.dict(os.environ, {"OPENTAG_BACKEND_ATTEMPTS": "3"}, clear=False), patch.object(
+            opentag_agent, "ClaudeAgentRun", return_value=run
+        ) as run_class, patch.object(opentag_agent, "emit_event") as emit, patch.object(
+            opentag_agent.time, "sleep"
+        ):
+            result = opentag_agent.run_claude_sdk_events(
+                "prompt", skill_dir=Path("/skill"), workdir=Path("/work"),
+                attachments_dir=Path("/attachments"), timeout=30, model="opus",
+                reasoning_effort="high", fast_mode=True,
+            )
+
+        self.assertEqual(130, result)
+        self.assertEqual(2, run_class.call_count)
+        self.assertEqual([Path("/skill"), Path("/attachments")], run_class.call_args.kwargs["add_dirs"])
+        self.assertEqual(
+            {"model": "opus", "reasoning_effort": "high", "fast_mode": True},
+            {key: run.run.call_args.kwargs[key] for key in ("model", "reasoning_effort", "fast_mode")},
+        )
+        self.assertIn(call("status", "Backend busy — retrying (2/3)…"), emit.call_args_list)
+
+    def test_claude_sdk_timeout_and_failure_are_reported(self) -> None:
+        run = MagicMock()
+        run.run.side_effect = [("timeout", "no backend activity for 30s"),
+                               opentag_agent.ClaudeAgentError("Claude Agent SDK failed: auth")]
+        with patch.object(opentag_agent, "ClaudeAgentRun", return_value=run), patch.object(
+            opentag_agent, "emit_event"
+        ) as emit:
+            kwargs = {"skill_dir": Path("/s"), "workdir": Path("/w"), "attachments_dir": None, "timeout": 30}
+            self.assertEqual(124, opentag_agent.run_claude_sdk_events("p", **kwargs))
+            self.assertEqual(1, opentag_agent.run_claude_sdk_events("p", **kwargs))
+        self.assertEqual(
+            [call("error", "Tag backend timed out: no backend activity for 30s"),
+             call("error", "Claude Agent SDK failed: auth")],
+            emit.call_args_list,
+        )
+
     def test_codex_event_transport_defaults_to_app_server_and_keeps_exec_rollback(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
             self.assertEqual("app-server", opentag_agent.codex_event_transport())
@@ -260,7 +394,8 @@ class BackendStreamEventTests(unittest.TestCase):
                 opentag_agent.codex_event_transport()
 
     def test_app_server_command_applies_selected_fast_mode(self) -> None:
-        with patch.object(opentag_agent, "codex_workspace_args", return_value=[]):
+        with patch.object(opentag_agent, "codex_workspace_args", return_value=[]), \
+                patch.object(opentag_agent, "backend_command", side_effect=lambda name: [name]):
             command = opentag_agent.codex_app_server_command(
                 Path("/work"),
                 fast_mode=True,
@@ -391,7 +526,7 @@ class ChannelArtifactRoutingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             legacy = root / 'existing.md'
-            legacy.write_text('existing')
+            legacy.write_text('existing', encoding="utf-8")
             def backend(prompt, **kwargs):
                 self.assertEqual(kwargs['workdir'], root)
                 self.assertTrue((root / 'artifacts/C123').is_dir())
@@ -399,12 +534,67 @@ class ChannelArtifactRoutingTests(unittest.TestCase):
                 self.assertIn('--channel-id C123', prompt)
                 self.assertIn('edit existing', prompt)
                 self.assertIn('workspace root for older files', prompt)
-                self.assertEqual(legacy.read_text(), 'existing')
+                self.assertEqual(legacy.read_text(encoding="utf-8"), 'existing')
                 return 0
-            with patch.dict(os.environ, {}, clear=True), patch.object(sys, 'argv', [
+            # Without --event-stream this is claude -p, which runs only as Bypass.
+            with patch.dict(os.environ, {"OPENTAG_CLAUDE_PERMISSION_MODE": "bypassPermissions"}, clear=True), patch.object(sys, 'argv', [
                 'opentag_agent', '--backend', 'claude', '--channel-id', 'C123',
                 '--question', 'Create a report.md', '--workdir', str(root),
                 '--thread-file', str(legacy),
                 '--output-manifest', str(root / 'manifest.json'),
             ]), patch.object(opentag_agent, 'run_claude', side_effect=backend):
                 self.assertEqual(opentag_agent.main(), 0)
+
+class TagRulesAtStartTests(unittest.TestCase):
+    """Before Codex runs, the Tag's folder gets the rules for all Tags, or the run is refused."""
+
+    def run_main(self, root: Path, workdir: Path) -> tuple[int, list]:
+        import sys
+        from scripts import agent_permissions
+        seen = []
+        (root / "thread.md").write_text("", encoding="utf-8")
+        env = {"TAG_HOME": str(root / "install"), "TAG_INSTANCE_HOME": str(root / "home" / ".tag")}
+        with patch.dict(os.environ, env, clear=True), patch.object(sys, "argv", [
+            "opentag_agent", "--backend", "codex", "--channel-id", "C123", "--question", "hi", "--workdir", str(workdir),
+            "--thread-file", str(root / "thread.md"),
+        ]), patch.object(opentag_agent, "run_codex", side_effect=lambda prompt, **kw: seen.append(kw) or 0), \
+                patch("sys.stderr"):
+            agent_permissions.add_rule("codex", None, "block", "git push")
+            return opentag_agent.main(), seen
+
+    def test_a_tags_own_folder_gets_a_copy_of_the_rules_for_all_tags(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            own = root / "home"
+            own.mkdir()
+            code, seen = self.run_main(root, own)
+            self.assertIn('"git", "push"', (own / ".codex/rules/all-tags.rules").read_text(encoding="utf-8"))
+            # The exec rollback can't confirm Codex read them, so it refuses a block.
+            self.assertEqual((1, []), (code, seen))
+
+    def test_a_folder_of_yours_never_gets_tag_rules_and_refuses_blocks_for_all_tags(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            yours = root / "my-repo"
+            yours.mkdir()
+            code, seen = self.run_main(root, yours)
+            self.assertEqual((1, []), (code, seen))
+            self.assertFalse((yours / ".codex").exists())
+
+
+class ClaudePrintModelTests(unittest.TestCase):
+    def test_both_print_paths_forward_only_explicit_models(self):
+        for model in (None, "default", "opus"):
+            with self.subTest(model=model), patch.object(
+                opentag_agent, "stream_command", return_value=(0, "ok", True, False)
+            ) as stream, patch.object(opentag_agent.subprocess, "run") as run, \
+                    patch.object(opentag_agent, "backend_command", side_effect=lambda name: [name]):
+                run.return_value = SimpleNamespace(stdout="", returncode=0)
+                kwargs = dict(skill_dir=Path('/skill'), workdir=Path('/work'),
+                              attachments_dir=None, timeout=30, model=model)
+                opentag_agent.run_claude_events("prompt", **kwargs)
+                opentag_agent.run_claude("prompt", **kwargs)
+                for command in (stream.call_args.args[0], run.call_args.args[0]):
+                    self.assertEqual(model == "opus", "--model" in command)
+                    if model == "opus":
+                        self.assertEqual("opus", command[command.index("--model") + 1])

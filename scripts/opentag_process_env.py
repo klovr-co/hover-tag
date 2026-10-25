@@ -10,6 +10,7 @@ SLACK_BRIDGE_ONLY_ENV = {
     "SLACK_APP_TOKEN",
     "SLACK_APP_ID",
     "SLACK_TEAM_ID",
+    "SLACK_ENTERPRISE_ID",
     "SLACK_CHANNEL_ID",
     "SLACK_CHANNEL_IDS",
     "SLACK_CHANNEL_POLICY",
@@ -34,6 +35,15 @@ def without_telemetry_environment(source: Mapping[str, str]) -> dict[str, str]:
         and not key.upper().startswith("TAG_TELEMETRY_")
         and not key.upper().startswith("TAG_POSTHOG_")
     }
+
+
+def text_only_environment(source: Mapping[str, str]) -> dict[str, str]:
+    """Preserve provider auth while blanking task/bridge data, also for SDK env merges."""
+    clean = without_telemetry_environment(source)
+    return {key: "" if key not in clean or key.startswith(("SLACK_", "MFS_"))
+            or key in {"OPENTAG_CALLER_ID", "OPENTAG_CURRENT_CHANNEL_ID",
+                       "OPENTAG_SLACK_SEARCH_GRANT", "OPENTAG_SLACK_CHANNEL_LABELS"}
+            else value for key, value in source.items()}
 
 
 def current_channel_scopes(raw_scopes: str, conversation_id: str) -> str:
@@ -65,6 +75,9 @@ def backend_environment(
     authorized_scopes: str | None = None,
     channel_labels: str | None = None,
     slack_search_grant: str | None = None,
+    memory_receipts: str | None = None,
+    handoff_requests: str | None = None,
+    handoff_depth: int = 0,
 ) -> dict[str, str]:
     clean = without_telemetry_environment(
         isolated_environment(source, transport=transport)
@@ -89,4 +102,13 @@ def backend_environment(
         clean["OPENTAG_SLACK_SEARCH_GRANT"] = slack_search_grant
     else:
         clean.pop("OPENTAG_SLACK_SEARCH_GRANT", None)
+    if memory_receipts:
+        clean["OPENTAG_MEMORY_RECEIPTS"] = memory_receipts
+    else:
+        clean.pop("OPENTAG_MEMORY_RECEIPTS", None)
+    if handoff_requests:
+        clean["OPENTAG_HANDOFF_REQUESTS"] = handoff_requests
+    else:
+        clean.pop("OPENTAG_HANDOFF_REQUESTS", None)
+    clean["OPENTAG_HANDOFF_DEPTH"] = str(handoff_depth)
     return clean

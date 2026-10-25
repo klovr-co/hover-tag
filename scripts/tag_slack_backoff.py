@@ -35,7 +35,7 @@ def cooldown(state: Path, identity: str) -> float:
     latest = 0.0
     for path in state.glob(f"{workspace_key(identity)}-*.json"):
         try:
-            record = json.loads(path.read_text())
+            record = json.loads(path.read_text(encoding="utf-8"))
             deadline = float(record["retry_at"])
             if record.get("version") == 1 and math.isfinite(deadline):
                 latest = max(latest, deadline)
@@ -53,7 +53,7 @@ class Gate:
         self.retry_at = 0.0
         self.next_at = 0.0
         try:
-            record = json.loads(self.path.read_text())
+            record = json.loads(self.path.read_text(encoding="utf-8"))
             deadline = float(record["retry_at"])
             if record.get("version") == 1 and math.isfinite(deadline):
                 self.retry_at = deadline

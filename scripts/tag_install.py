@@ -6,13 +6,11 @@ import argparse
 import hashlib
 import json
 import os
-import platform
 import re
 import shlex
 import shutil
 import subprocess
 import sys
-import tarfile
 import tempfile
 import textwrap
 import urllib.error
@@ -36,24 +34,6 @@ API_RELEASES = "https://api.github.com/repos/klovr-co/hover-tag/releases"
 RELEASE_DOWNLOADS = "https://github.com/klovr-co/hover-tag/releases/download"
 CHANNEL_INDEX_URL = RELEASE_DOWNLOADS + "/channels/tag-release-channels.json"
 CHANNELS = ("stable", "beta", "alpha", "edge")
-MFS_CLI_RELEASES = {
-    ("darwin", "arm64"): (
-        "mfs-cli-aarch64-apple-darwin.tar.xz",
-        "1fd7c9fe38d5f27e72cde3fca8e895c2185eb6113d17d352bc33c1e661e18cfe",
-    ),
-    ("darwin", "x86_64"): (
-        "mfs-cli-x86_64-apple-darwin.tar.xz",
-        "807eeba5c7d35b02123a25bfc244ad8dae3b478d79757d30373d282f234bbd25",
-    ),
-    ("linux", "arm64"): (
-        "mfs-cli-aarch64-unknown-linux-musl.tar.xz",
-        "a6a4cc90dc73118ae6f6b2c0fd779a43057ae1fd88b27e6cc32a3352ac3cc978",
-    ),
-    ("linux", "x86_64"): (
-        "mfs-cli-x86_64-unknown-linux-musl.tar.xz",
-        "2b4721bce6ebcea84d19a33d517d4963932d0696a106555753f145de6e767ae4",
-    ),
-}
 VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta)(?:\.(\d+))?)?$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 ACCENT = "38;2;56;207;241"
@@ -150,6 +130,17 @@ def paragraph(text: str, code: str = "", *, indent: str = "  ") -> None:
         emit(indent + (styled(line, code) if code else line))
 
 
+def progress(step: str, **fields: Any) -> None:
+    """Machine-readable install progress for desktop apps (TAG_INSTALL_PROGRESS=jsonl).
+
+    Steps, in order: tools, python, download, release (with version),
+    components, memory, command, done; or failed (with message).
+    """
+    if os.getenv("TAG_INSTALL_PROGRESS") == "jsonl":
+        line = json.dumps({"schema_version": 1, "step": step, **fields}, ensure_ascii=False)
+        print("@tag-progress " + line, file=sys.stderr, flush=True)
+
+
 def header(section: str, detail: str = "") -> None:
     emit()
     emit("  " + styled("tag", "1;" + ACCENT) + "  /  " + styled(section, MUTED))
@@ -192,45 +183,6 @@ def download(url: str, *, timeout: float = 120) -> bytes:
         ):
             raise RuntimeError("GitHub API rate limit exceeded; try again later") from error
         raise RuntimeError(f"Download failed with HTTP {error.code}: {url}") from error
-
-
-def install_mfs_cli(release: Path, python: Path) -> Path | None:
-    """Install the pinned MFS client beside Tag's managed Python executable."""
-    requirements = (release / "requirements-runtime.txt").read_text(encoding="utf-8")
-    match = re.search(r"(?m)^mfs-server(?:\[[^]]+\])?==([^\s;]+)", requirements)
-    if not match:
-        raise ValueError("requirements-runtime.txt does not pin mfs-server")
-    version = match.group(1)
-    machine = platform.machine().lower()
-    machine = {"aarch64": "arm64", "amd64": "x86_64"}.get(machine, machine)
-    target = MFS_CLI_RELEASES.get((sys.platform, machine))
-    if target is None:
-        # Upstream does not currently publish a native Windows client. Keep the
-        # existing PATH fallback there until an official artifact is available.
-        return None
-    artifact, expected = target
-    url = f"https://github.com/zilliztech/mfs/releases/download/v{version}/{artifact}"
-    archive_data = download(url)
-    actual = hashlib.sha256(archive_data).hexdigest()
-    if actual != expected:
-        raise ValueError(f"MFS CLI checksum mismatch for {artifact}")
-    with tempfile.TemporaryDirectory(prefix="tag-mfs-cli-") as temporary:
-        archive = Path(temporary) / artifact
-        archive.write_bytes(archive_data)
-        with tarfile.open(archive, "r:xz") as bundle:
-            members = [
-                member for member in bundle.getmembers()
-                if member.isfile() and Path(member.name).name == "mfs"
-            ]
-            if len(members) != 1:
-                raise ValueError("MFS CLI archive does not contain exactly one client executable")
-            source = bundle.extractfile(members[0])
-            if source is None:
-                raise ValueError("MFS CLI executable could not be read")
-            destination = python.parent / "mfs"
-            destination.write_bytes(source.read())
-    destination.chmod(0o755)
-    return destination
 
 
 def _json_download(url: str, *, timeout: float = 120) -> Any:
@@ -480,6 +432,7 @@ def fetch_release(
     destination.mkdir(parents=True, exist_ok=True)
     if version is not None and channel is not None:
         raise ValueError("Choose either --channel or --version, not both")
+    progress("download")
     if version is not None:
         release, version, selected_channel = resolve_version(version)
         provenance_channel = "release"
@@ -527,7 +480,7 @@ def fetch_release(
     archive = destination / name
     archive.write_bytes(data)
     source = unpack_release(archive, destination / "source")
-    if (source / "VERSION").read_text().strip() != version:
+    if (source / "VERSION").read_text(encoding="utf-8").strip() != version:
         raise ValueError("Release version does not match requested version")
     return FetchedRelease(
         source,
@@ -632,7 +585,11 @@ def install(
     sys.path.insert(0, scripts_dir)
     try:
         if tag_dependencies is None:
-            import tag_dependencies
+            try:
+                import tag_dependencies
+            except ImportError:
+                # Releases before managed dependencies do not ship this module.
+                tag_dependencies = None
         from tag_paths import initialize
         import tag_instances
         from release_check import validate_release
@@ -657,10 +614,13 @@ def install(
         )
     lock = home / "state/install.lock"
     install_lock = LifecycleLock(lock).acquire()
+    skip_memory_model = os.environ.get("TAG_SKIP_MFS_MODEL", "").strip().lower() in {"1", "true", "yes", "on"}
+    download_model = False
     try:
-        version = (source / "VERSION").read_text().strip()
+        version = (source / "VERSION").read_text(encoding="utf-8").strip()
         if selection is not None and selection.version != version:
             raise ValueError("Selected release metadata does not match the installed source")
+        progress("release", version=version)
         header("Install", f"Preparing Tag v{version} in an isolated runtime.")
         section("Preparing")
         row("Release", f"Tag v{version}")
@@ -678,11 +638,12 @@ def install(
         python = release / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
         if dependencies:
             runtime_python = Path(sys.executable)
-            if os.name != "nt":
+            if tag_dependencies is not None:
                 runtime_python, uv_path = tag_dependencies.prepare_python(source, home)
                 uv = str(uv_path)
             else:
                 uv = shutil.which("uv")
+            progress("components")
             paragraph("Installing runtime dependencies…", MUTED, indent="    ")
             if uv:
                 install_step(
@@ -703,19 +664,19 @@ def install(
                      "-r", str(release / "requirements-runtime.txt")],
                     "Installing Tag dependencies with pip",
                 )
-            mfs_client = install_mfs_cli(release, python)
             row("Runtime", f"Python {sys.version_info.major}.{sys.version_info.minor} · dependencies ready")
-            if mfs_client is not None:
-                row("MFS CLI", f"Bundled {mfs_client.name} in the managed runtime")
-            paragraph("Preparing the local memory model…", MUTED, indent="    ")
-            install_step(
-                [str(python), str(release / "scripts/preload_mfs_model.py")],
-                "Preparing the MFS embedding model",
-            )
-            row("Memory", "Local embedding model cached")
-            if os.name != "nt":
+            progress("memory")
+            if skip_memory_model:
+                paragraph("Skipping the built-in search model (using a custom one)…", MUTED, indent="    ")
+                row("Memory", "Custom search model; built-in model not downloaded")
+            elif custom_model_configured(home):
+                row("Memory", "Custom search model kept; built-in model not downloaded")
+            else:
+                download_model = True
+                row("Memory", "Search model (560 MB) downloads in the background")
+            if tag_dependencies is not None:
                 tag_dependencies.ensure_slack(home)
-                install_step([str(python), "-c", "import mfs_server, psutil, slack_bolt"], "Checking the prepared runtime")
+            install_step([str(python), "-c", "import mfs_server, psutil, slack_bolt"], "Checking the prepared runtime")
         else:
             # Explicit test/development mode; never advertised as a complete install.
             python = Path(sys.executable)
@@ -733,7 +694,8 @@ def install(
                 bundled = workspace / backend / "skills/open-tag-admin"
                 skill = bundled / "SKILL.md"
                 try:
-                    managed = skill.is_file() and skill.read_bytes() in {
+                    # Older installs on Windows wrote it with CRLF line endings.
+                    managed = skill.is_file() and skill.read_bytes().replace(b"\r\n", b"\n") in {
                         LEGACY_ADMIN_SKILL.encode(), ADMIN_SKILL.encode()
                     }
                 except OSError:
@@ -743,6 +705,7 @@ def install(
                     if not any(bundled.iterdir()):
                         bundled.rmdir()
         # Keep the launcher fixed while the pointer changes atomically on upgrade.
+        progress("command")
         launcher = home / "bin/tag-launch.py"
         launcher_text = '''# TAG managed launcher
 import json, os, pathlib, subprocess, sys
@@ -750,7 +713,12 @@ home = pathlib.Path(__file__).resolve().parent.parent
 record = json.loads((home / "current.json").read_text(encoding="utf-8"))
 release = home / "releases" / record["release"]
 os.environ["TAG_HOME"] = str(home)
-raise SystemExit(subprocess.call([record["python"], str(release / "scripts/tag_cli.py"), *sys.argv[1:]]))
+# UTF-8 everywhere, including Windows, for files and subprocess text.
+os.environ.setdefault("PYTHONUTF8", "1")
+# Started windowless on Windows (pythonw, e.g. at login): keep the child windowless too.
+flags = 0x08000000 if os.name == "nt" and sys.stdout is None else 0
+raise SystemExit(subprocess.call([record["python"], str(release / "scripts/tag_cli.py"), *sys.argv[1:]],
+                                 creationflags=flags))
 '''
         atomic_text(launcher, launcher_text)
         launcher_python = runtime_python if dependencies else Path(sys.executable)
@@ -759,14 +727,14 @@ raise SystemExit(subprocess.call([record["python"], str(release / "scripts/tag_c
         if (command.exists() or command.is_symlink()) and command_owner(command) is None:
             raise RuntimeError(f"Refusing to replace unrelated command: {command}")
         if os.name == "nt":
-            if any(c in str(path) for path in (Path(sys.executable), launcher) for c in '%\r\n"'):
+            if any(c in str(path) for path in (launcher_python, launcher) for c in '%\r\n"'):
                 raise ValueError("Windows launcher paths cannot contain percent signs, quotes or newlines")
-            script = f'@rem TAG managed launcher\n@"{sys.executable}" "{launcher}" %*\n'
+            script = f'@rem TAG managed launcher\n@"{launcher_python}" "{launcher}" %*\n'
         else:
             script = f'#!/bin/sh\n# TAG managed launcher\nexec {shlex.quote(str(launcher_python))} {shlex.quote(str(launcher))} "$@"\n'
         atomic_text(command, script, 0o755)
         current = home / "current.json"
-        original_record = json.loads(current.read_text()) if current.exists() else {}
+        original_record = json.loads(current.read_text(encoding="utf-8")) if current.exists() else {}
         if current.exists() and not migrate_dependencies:
             atomic_text(home / "previous.json", current.read_text(encoding="utf-8"))
         current_record: dict[str, Any] = {
@@ -776,7 +744,7 @@ raise SystemExit(subprocess.call([record["python"], str(release / "scripts/tag_c
             "bin_dir": str(bin_dir.resolve()),
             "installed_version": version,
         }
-        if dependencies and os.name != "nt":
+        if dependencies and tag_dependencies is not None:
             current_record["dependency_schema"] = 1
         if selection is not None:
             current_record.update({
@@ -790,8 +758,16 @@ raise SystemExit(subprocess.call([record["python"], str(release / "scripts/tag_c
                 if key in original_record:
                     current_record[key] = original_record[key]
         atomic_text(current, json.dumps(current_record, indent=2, sort_keys=True) + "\n")
+        if download_model:
+            try:
+                start_model_download(python, release / "scripts/preload_mfs_model.py", home)
+            except OSError as error:
+                # The install is complete without it; MFS fetches the model itself when memory first starts.
+                row("Memory", f"Couldn't start the search model download ({error}); memory fetches it when it starts")
+                download_model = False
         row("Command", short_path(command))
         row("Home", short_path(home))
+        progress("done", version=version, command=str(command))
         emit()
         emit("  " + styled("─" * content_width(), MUTED))
         paragraph("✓  Tag is installed", "1;" + SUCCESS)
@@ -799,12 +775,60 @@ raise SystemExit(subprocess.call([record["python"], str(release / "scripts/tag_c
         emit()
         paragraph("Next step", MUTED)
         paragraph("› tag setup", "1;" + ACCENT)
+        if skip_memory_model:
+            paragraph("Then point memory at your search model, giving its address, model name and key:", MUTED)
+            paragraph("› tag memory embedding custom --base-url URL --embedding-model NAME", "1;" + ACCENT)
+        if download_model:
+            paragraph("The search model keeps downloading in the background (560 MB).", MUTED)
+            paragraph("Search is off until it finishes; tag memory status shows progress.", MUTED)
         paragraph("Already configured? Run tag stop, then tag start.", MUTED)
         paragraph(f"If needed, add {short_path(bin_dir)} to PATH.", MUTED)
         emit()
         return release
     finally:
         install_lock.release()
+
+
+def custom_model_configured(home: Path) -> bool:
+    """Whether an earlier install already pointed memory at the person's own search model."""
+    try:
+        data = json.loads((home / "shared/mfs/embedding.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(data, dict) and data.get("provider") == "custom"
+
+
+def start_model_download(python: Path, script: Path, home: Path) -> None:
+    """Fetch the built-in search model on its own, so it keeps going after the installer exits.
+
+    The script records its progress in the memory folder for `tag memory status` and Tag.app.
+    """
+    shared = home / "shared/mfs"
+    shared.mkdir(parents=True, exist_ok=True, mode=0o700)
+    options: dict[str, Any] = {}
+    if os.name == "nt":
+        options["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        options["start_new_session"] = True
+    with open(shared / "model-download.log", "ab") as log:
+        process = subprocess.Popen([str(python), str(script), "--progress"], stdin=subprocess.DEVNULL, stdout=log,
+                                   stderr=log, env=dict(os.environ, TAG_HOME=str(home)), close_fds=True, **options)
+    # Mark it at once so Tag.app sees the download even before the script reports its first bytes.
+    # The script replaces this with the model name and progress; "x" never overwrites what it already wrote.
+    try:
+        with open(shared / "model-download.json", "x", encoding="utf-8") as marker:
+            json.dump({"state": "downloading", "model": "", "done": 0, "total": 0, "error": "", "pid": process.pid}, marker)
+    except FileExistsError:
+        pass
+
+
+def ask_skip_memory_model() -> bool:
+    """In a terminal, offer to skip the 560 MB built-in search model. Never asks the app, scripts, or a settled choice."""
+    if (os.environ.get("TAG_SKIP_MFS_MODEL") or os.environ.get("TAG_INSTALL_PROGRESS")
+            or not sys.stdin.isatty()):
+        return False
+    answer = input("Use your own search model (OpenAI, Ollama, …) instead of the built-in one (560 MB download)? [y/N] ")
+    return answer.strip().lower() in {"y", "yes"}
 
 
 def main() -> int:
@@ -816,9 +840,15 @@ def main() -> int:
     parser.add_argument("--bin-dir", type=Path)
     parser.add_argument("--skip-dependencies", action="store_true", help="development/test installs only")
     parser.add_argument("--migrate-dependencies", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--skip-memory-model", action="store_true",
+        help="skip the 560 MB built-in search-model download (you will point memory at your own, such as OpenAI or Ollama)",
+    )
     args = parser.parse_args()
     if args.source and (args.channel or args.version):
         parser.error("--source cannot be combined with --channel or --version")
+    if args.skip_memory_model or (not args.skip_dependencies and ask_skip_memory_model()):
+        os.environ["TAG_SKIP_MFS_MODEL"] = "1"  # read by preload_mfs_model.py in the memory step
     if sys.version_info < (3, 10):
         raise RuntimeError("Python 3.10 or newer is required")
     with tempfile.TemporaryDirectory(prefix="tag-install-") as temporary:
@@ -843,5 +873,6 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as exc:
+        progress("failed", message=str(exc))
         print(f"Installation failed: {exc}", file=sys.stderr)
         raise SystemExit(1)

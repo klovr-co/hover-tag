@@ -1,0 +1,353 @@
+// Copyright 2026 klovr.co
+// SPDX-License-Identifier: Apache-2.0
+// Tag.app: installs Tag on first run, then lists, starts and adds Tags.
+import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
+import { bridge, type AppInfo, type Bridge } from "./lib/bridge";
+import { compatibility, isDraft, parseJSON, parseList, status, type Group, type VersionInfo } from "./lib/protocol";
+import { setEmbedding } from "./lib/memory";
+import { checkUpdate, initialUpdate, installUpdate, updateReducer, useDeferral } from "./lib/updates";
+import { useTags } from "./lib/tags";
+import { TrackContext, useTelemetry, type AppEvents } from "./lib/telemetry";
+import { useWatch } from "./lib/watch";
+import { MoodContext, useMoods } from "./lib/mood";
+import { deepLinkTarget } from "./lib/deeplink";
+import { glide } from "./lib/motion";
+import { Connect } from "./components/Connect";
+import { Home } from "./components/Home";
+import { QuickAdd } from "./components/QuickAdd";
+import { Installing, NO_CUSTOM, Starting, Welcome, type InstallChoice } from "./components/Install";
+import { AI_CAPABILITY, API_CAPABILITY, RULES_CAPABILITY, SAVED_MODELS_CAPABILITY, SHARED_AI_CAPABILITY } from "./lib/ai";
+import { AISettings } from "./components/AISettings";
+import { MemorySettings, Settings, type SettingsTab } from "./components/Settings";
+import { TagDetail, type Tab as TagTab } from "./components/TagDetail";
+import { source, Toast } from "./components/ui";
+
+type Screen =
+  | { name: "loading" }
+  | { name: "welcome" }
+  | ({ name: "installing"; attempt: number } & InstallChoice)
+  | { name: "home" }
+  | { name: "connect"; args: string[]; workspace?: string; workspaceName?: string; enterprise?: string | null }
+  | { name: "settings"; tab?: SettingsTab; privacy?: boolean }
+  | { name: "ai"; resume?: string[] }
+  | { name: "memory" }
+  /** `opened` counts Slack links, so a second link resets an open Tag screen. */
+  | { name: "tag"; id: string; tab?: TagTab; opened?: number }
+  /** Settings > Replay onboarding: the first-run screens again, changing nothing. */
+  | { name: "replay" };
+
+/** What each screen counts as in usage data. */
+const SCREEN_EVENT: Partial<Record<Screen["name"], AppEvents["app_screen_viewed"]["screen"]>> = {
+  home: "home", tag: "tag", settings: "settings", ai: "ai_settings", connect: "setup",
+};
+
+/** Capabilities this app needs from the installed Tag. */
+const NEEDED = ["list", "setup-jsonl"];
+/** How often Tag checks for a complete product update. */
+const APP_UPDATE_HOURS = 6;
+/** While a release waits for its Tag.app builds, look again soon so the banner appears as soon as it can. */
+const PREPARING_RECHECK_MINUTES = 5;
+const DEVELOPMENT_UPDATES = "Updates are off in development builds. Use the installed Tag.app to update.";
+/** Window widths: everyday screens, and Tag detail's Slack layout. */
+export const WIDTH = 520;
+export const WIDE = 800;
+
+/** Keep the Tags the Swift app restored at login, then let the login service do it. */
+export async function migrateFromSwiftApp(api: Bridge, legacy: string[], existing: string[]) {
+  const version = await api.tag(["version", "--json"]);
+  if (version.code !== 0 || !parseJSON<VersionInfo>(version.stdout).capabilities.includes("autostart-keep")) return false;
+  const keep = legacy.filter((id) => existing.includes(id));
+  if (keep.length && (await api.tag(["autostart", "keep", ...keep, "--json"])).code !== 0) return false;
+  if ((await api.tag(["autostart", "on", "--json"])).code !== 0) return false;
+  // Done only once the result is verified; otherwise the next launch retries.
+  const status = await api.tag(["autostart", "status", "--json"]);
+  if (status.code !== 0) return false;
+  const result = parseJSON<{ enabled: boolean; tags: { tag: string; keep_running: boolean }[] }>(status.stdout);
+  const kept = new Set(result.tags.filter((t) => t.keep_running).map((t) => t.tag));
+  if (!result.enabled || !keep.every((id) => kept.has(id))) return false;
+  await api.markMigrated();
+  return true;
+}
+
+export function App() {
+  const [api, setApi] = useState<Bridge | null>(null);
+  const [info, setInfo] = useState<AppInfo | null>(null);
+  const [screen, setScreen] = useState<Screen>({ name: "loading" });
+  // The quick-add dialog over Home, for one workspace.
+  const [quick, setQuick] = useState<{ workspace: string; workspaceName: string; workspaceIcon: string | null; enterprise: string | null;
+    modelsFrom: string | null } | null>(null);
+  const [bootError, setBootError] = useState("");
+  const [bootAttempt, setBootAttempt] = useState(0);
+  const [outdated, setOutdated] = useState(false);
+  const [capabilities, setCapabilities] = useState<string[]>([]);
+  const [update, dispatchUpdate] = useReducer(updateReducer, initialUpdate);
+  const deferral = useDeferral();
+  const [toast, setToast] = useState<string | null>(null);
+  const installed = !!info?.cli && !["loading", "welcome", "installing"].includes(screen.name);
+  const tags = useTags(api, installed);
+  const watch = useWatch(api, tags.rows, {
+    ai: installed && capabilities.includes(AI_CAPABILITY),
+    activity: installed && capabilities.includes("logs-activity"),
+  });
+  // Every Tag's waterdrop plays what that Tag is doing, on every screen.
+  const moods = useMoods(tags.rows, { busy: tags.busy, problems: watch.problems, activity: watch.activity, url: source });
+  const telemetry = useTelemetry(api, !!info?.cli);
+  const { track } = telemetry;
+  const [root, setRoot] = useState<HTMLElement | null>(null);
+  // Segmented controls and tab bars slide their highlight to the new choice.
+  useEffect(() => root ? glide(root) : undefined, [root]);
+
+  useEffect(() => {
+    let live = true;
+    setBootError("");
+    void bridge().then(async (b) => {
+      const i = await b.info();
+      if (!live) return;
+      setApi(b);
+      setInfo(i);
+      setScreen(i.cli ? { name: "home" } : { name: "welcome" });
+    }).catch((error) => { if (live) setBootError(String(error)); });
+    return () => { live = false; };
+  }, [bootAttempt]);
+
+  const say = useCallback((text: string) => {
+    setToast(text);
+    setTimeout(() => setToast((current) => (current === text ? null : current)), 2600);
+  }, []);
+
+  // Make sure this Tag can be driven by this app.
+  useEffect(() => {
+    if (!api || !info?.cli || screen.name !== "home") return;
+    // A failed call or unreadable output counts as outdated, so the notice offers an update.
+    void api.tag(["version", "--json"]).then((r) => {
+      try {
+        const version = parseJSON<VersionInfo>(r.stdout);
+        setOutdated(!(r.code === 0 && compatibility(version, NEEDED).ok));
+        setCapabilities(r.code === 0 ? version.capabilities : []);
+      } catch {
+        setOutdated(true);
+      }
+    }, () => setOutdated(true));
+  }, [api, info?.cli, screen.name]);
+
+  // Usage data: once per run, then each screen, while it is on.
+  const opened = useRef(false);
+  useEffect(() => {
+    if (!info || !telemetry.recording || opened.current) return;
+    opened.current = true;
+    track("app_opened", { app_version: info.version });
+  }, [info, track, telemetry.recording]);
+  // The first-run usage data note shows once: at the end of setup, or on Home for people who skip setup.
+  // It goes away when the person leaves the screen where they first saw it.
+  const notedOn = useRef<Screen["name"] | null>(null);
+  const { announced, acknowledge, seen } = telemetry;
+  const sawOnHome = useCallback(() => { notedOn.current ??= "home"; seen(); }, [seen]);
+  const sawOnSetup = useCallback(() => { notedOn.current ??= "connect"; seen(); }, [seen]);
+  useEffect(() => {
+    if (announced && notedOn.current && screen.name !== notedOn.current) acknowledge();
+  }, [screen.name, announced, acknowledge]);
+  const learnUsage = useCallback(() => setScreen({ name: "settings", tab: "general", privacy: true }), []);
+  useEffect(() => {
+    const viewed = SCREEN_EVENT[screen.name];
+    if (viewed) track("app_screen_viewed", { screen: viewed });
+  }, [screen.name, track]);
+
+  // Once: the Swift Tag.app restored Tags at login itself; the CLI's login service does that now.
+  const migrating = useRef(false);
+  useEffect(() => {
+    const legacy = info?.legacyWantedTags;
+    if (!api || !legacy?.length || !tags.loaded || migrating.current) return;
+    migrating.current = true;
+    void migrateFromSwiftApp(api, legacy, tags.rows.map((r) => r.id)).catch(() => false).then((done) => {
+      if (done) setInfo((current) => current && { ...current, legacyWantedTags: null });
+      void tags.refresh();
+      void tags.refreshAutostart();
+    });
+  }, [api, info?.legacyWantedTags, tags.loaded, tags.rows, tags]);
+
+  // Check the complete product; installation always waits for a click.
+  const check = useCallback(async () => {
+    if (!api || !info) return;
+    // A development build's version names its release line, not a release; updating would replace it.
+    if (info.development) { dispatchUpdate({ type: "checkFailed", error: DEVELOPMENT_UPDATES }); return; }
+    dispatchUpdate({ type: "checking" });
+    try { dispatchUpdate({ type: "checked", update: await checkUpdate(api, info.version) }); }
+    catch (error) { dispatchUpdate({ type: "checkFailed", error: error instanceof Error ? error.message : String(error) }); }
+  }, [api, info]);
+
+  useEffect(() => {
+    if (!api || !info?.cli || info.development || screen.name !== "home") return;
+    void check();
+    const timer = setInterval(() => void check(), APP_UPDATE_HOURS * 3600 * 1000);
+    return () => clearInterval(timer);
+  }, [api, info?.cli, info?.development, screen.name, check]);
+
+  // Keep looking while the last good check found a release still being prepared, including during
+  // a recheck and after one fails; only a successful check without it (or an available update) stops this.
+  const preparing = ["current", "checking", "idle"].includes(update.status) && !!update.update?.preparing;
+  useEffect(() => {
+    if (!preparing || screen.name !== "home") return;
+    const timer = setInterval(() => void check(), PREPARING_RECHECK_MINUTES * 60 * 1000);
+    return () => clearInterval(timer);
+  }, [preparing, screen.name, check]);
+
+  const runUpdate = useCallback(async () => {
+    if (!api || !info || info.development) return;
+    dispatchUpdate({ type: "updating" });
+    try {
+      const done = await installUpdate(api, info.version, undefined, (phase) => dispatchUpdate({ type: "phase", phase }));
+      dispatchUpdate({ type: "updated", update: done });
+      setOutdated(false);
+      track("app_update_finished", { outcome: "succeeded" });
+      setTimeout(() => dispatchUpdate({ type: "settled" }), 3200);
+    } catch (error) {
+      dispatchUpdate({ type: "failed", error: error instanceof Error ? error.message : String(error) });
+      track("app_update_finished", { outcome: "failed" });
+    } finally {
+      void tags.refresh();
+      telemetry.reload();
+    }
+  }, [api, info, tags, track, telemetry.reload]);
+
+  // The window fits its content; most screens hold one fixed height (see `fixed` below), and Tag detail is wider.
+  const width = screen.name === "tag" ? WIDE : WIDTH;
+  useLayoutEffect(() => {
+    if (!api || !root) return;
+    const observer = new ResizeObserver(([entry]) => void api.fitWindow(width, Math.ceil(entry.target.getBoundingClientRect().height)));
+    observer.observe(root);
+    return () => observer.disconnect();
+  }, [api, width, root]);
+
+  // Tray menu actions arrive here, even while the window is hidden.
+  useEffect(() => {
+    if (!api) return;
+    return api.onTray((action, id) => {
+      const row = tags.rows.find((r) => r.id === id);
+      if (action === "toggle" && row) {
+        if (status(row) === "setup") { setScreen({ name: "connect", args: [row.id, "setup"] }); void api.showWindow(); }
+        else void tags.toggle(row);
+      }
+      // Removing is confirmed on the Tag's own screen, never straight from the menu.
+      if (action === "remove" && row) { setScreen({ name: "tag", id: row.id }); void api.showWindow(); }
+      if (action === "start-all" || action === "stop-all") void tags.all(action === "start-all" ? "start" : "stop");
+      if (action === "keep-running") void tags.setAutostart(!tags.keepRunning);
+      if (action === "add") setScreen({ name: "connect", args: tags.rows.length ? ["add"] : ["setup"] });
+      if (action === "settings") setScreen({ name: "settings" });
+    });
+  }, [api, tags]);
+
+  // Links from Slack, such as "Choose another model in the Tag app", open that Tag's Details.
+  const ready = installed && tags.loaded;
+  const [link, setLink] = useState<string | null>(null);
+  const links = useRef(0);
+  useEffect(() => api?.onDeepLink(setLink), [api]);
+  useEffect(() => {
+    if (!api || !link || !ready) return;
+    setLink(null);
+    const id = deepLinkTarget(link);
+    if (id && tags.rows.some((r) => r.id === id)) setScreen({ name: "tag", id, tab: "details", opened: ++links.current });
+    else if (id) say("That Tag isn't on this computer.");
+    void api.showWindow();
+  }, [api, link, ready, tags.rows, say]);
+
+  // Tag was removed after this app started, even while Home is showing: offer to install it again.
+  useEffect(() => {
+    if (!api || screen.name !== "home" || !tags.error) return;
+    let live = true;
+    void api.info().then((i) => {
+      if (!live || i.cli) return;
+      setInfo(i);
+      setScreen({ name: "welcome" });
+    }, () => {});
+    return () => { live = false; };
+  }, [api, screen.name, tags.error]);
+
+  // Setups that never reached Slack are set aside once the setup flow has ended.
+  // The quick-add dialog runs a setup on Home, so nothing is set aside while it's open.
+  useEffect(() => {
+    if ((screen.name !== "home" && screen.name !== "tag") || quick) return;
+    const timer = setTimeout(() => void tags.discardDrafts(), 2000);
+    return () => clearTimeout(timer);
+  }, [screen.name, tags.rows, tags.discardDrafts, quick]);
+  if (!api || !info || screen.name === "loading") {
+    return <main ref={setRoot} className="app"><Starting error={bootError} retry={() => setBootAttempt((value) => value + 1)} /></main>;
+  }
+  const home = () => { setScreen({ name: "home" }); void tags.refresh(); watch.recheck(); };
+  // A reinstall keeps existing Tags: return to them instead of setting up a first Tag again.
+  const afterInstall = async (command: string, choice: InstallChoice = NO_CUSTOM) => {
+    setInfo({ ...info, cli: command || info.cli || "tag" });
+    // The installer skipped the built-in model, so save the custom choice now; otherwise memory
+    // would fetch that model the first time it starts.
+    if (choice.skipModel && choice.baseUrl && choice.model) {
+      const saved = await setEmbedding(api, "custom", choice.apiKey, { model: choice.model, baseUrl: choice.baseUrl });
+      if (!saved.ok) say(`Memory will use the default search model until you fix this in Settings → AI. ${saved.error}`);
+    } else if (choice.skipModel) {
+      say("Set your search model in Settings → AI. Until then, memory downloads the built-in model when it starts.");
+    }
+    const listed = await api.tag(["list", "--json"]).catch(() => null);
+    let empty = false;
+    // Only a list that reads cleanly may start first-Tag setup; otherwise Home shows the error and retries.
+    try { empty = !!listed && listed.code === 0 && !parseList(listed.stdout).some((row) => !isDraft(row)); } catch { /* go Home */ }
+    if (empty) setScreen({ name: "connect", args: ["setup"] }); else home();
+  };
+  const add = () => setScreen({ name: "connect", args: tags.rows.length ? ["add"] : ["setup"] });
+  const addTo = (group: Group) =>
+    setQuick({ workspace: group.key, workspaceName: group.label, workspaceIcon: group.icon, enterprise: group.enterprise,
+      modelsFrom: group.rows.find((row) => row.valid && !isDraft(row))?.id ?? null });
+  // These screens are always --flow-h tall and scroll inside, so moving between them never resizes the window.
+  const fixed = screen.name === "home" || screen.name === "settings" || screen.name === "ai" || screen.name === "memory";
+  return (
+    <TrackContext.Provider value={track}>
+      <MoodContext.Provider value={moods}>
+        <main ref={setRoot} className={`app${info.platform === "macos" ? " overlay" : ""}${screen.name === "home" ? " home" : ""}${fixed ? " fixed" : ""}${screen.name === "tag" ? " wide" : ""}`}>
+          {screen.name === "replay" && <Welcome api={api} platform={info.platform} preview={() => setScreen({ name: "settings", tab: "about" })} />}
+          {screen.name === "welcome" && <Welcome api={api} platform={info.platform} install={(choice) => setScreen({ name: "installing", attempt: 0, ...choice })} />}
+          {screen.name === "installing" && (
+            <Installing key={screen.attempt} api={api} skipModel={screen.skipModel}
+              retry={() => setScreen({ ...screen, attempt: screen.attempt + 1 })}
+              cancel={() => setScreen({ name: "welcome" })}
+              done={(command) => void afterInstall(command, screen)} />
+          )}
+          {screen.name === "home" && !tags.loaded && <Starting error={tags.error} retry={() => void tags.refresh()} />}
+          {screen.name === "home" && tags.loaded && (
+            <Home api={api} tags={tags} reports={watch.reports} problems={watch.problems} activity={watch.activity}
+              firstName={info.firstName ?? null} update={update} outdated={outdated} runUpdate={() => void runUpdate()} defer={deferral}
+              add={add} addTo={addTo} usageNote={telemetry.announced} seenUsageNote={sawOnHome}
+              finishSetup={(row) => setScreen({ name: "connect", args: [row.id, "setup"] })}
+              open={(row) => setScreen({ name: "tag", id: row.id })}
+              fixAI={() => capabilities.includes(SHARED_AI_CAPABILITY) ? setScreen({ name: "ai" }) : say("Update Tag to manage shared AI accounts in Settings.")}
+              showSettings={(tab, privacy) => setScreen({ name: "settings", tab, privacy })} />
+          )}
+          {screen.name === "home" && quick && (
+            <QuickAdd api={api} {...quick} start={(id) => tags.start(id)}
+              close={() => { setQuick(null); void tags.refresh(); }}
+              handOff={(tag) => { setQuick(null); setScreen({ name: "connect", args: [tag, "setup"], workspace: quick.workspace, workspaceName: quick.workspaceName, enterprise: quick.enterprise }); }} />
+          )}
+          {screen.name === "connect" && (
+            <Connect api={api} args={screen.args} workspace={screen.workspace} workspaceName={screen.workspaceName} enterprise={screen.enterprise} start={(id, onLine) => tags.start(id, capabilities.includes("start-progress") ? onLine : undefined)} openAI={capabilities.includes(SHARED_AI_CAPABILITY) ? (resume) => setScreen({ name: "ai", resume }) : undefined} done={home}
+              paused={() => { home(); say("Progress saved. Finish setup from Home any time."); }}
+              usageNote={telemetry.announced ? { learnMore: learnUsage, seen: sawOnSetup } : undefined} />
+          )}
+          {screen.name === "settings" && (
+            <Settings key={screen.tab} initialTab={screen.tab} showPrivacy={screen.privacy} api={api} info={info} tags={tags} telemetry={telemetry} close={home} update={update} check={() => void check()}
+              runUpdate={() => void runUpdate()} replay={() => setScreen({ name: "replay" })} switched={(done) => dispatchUpdate({ type: "updated", update: done })}
+              openAI={capabilities.includes(SHARED_AI_CAPABILITY) ? () => setScreen({ name: "ai" }) : undefined}
+              openMemory={() => setScreen({ name: "memory" })} />
+          )}
+          {screen.name === "memory" && <MemorySettings api={api} close={() => setScreen({ name: "settings", tab: "ai" })} />}
+          {screen.name === "ai" && (
+            <AISettings api={api} tags={tags} apiConnections={capabilities.includes(API_CAPABILITY)} rules={capabilities.includes(RULES_CAPABILITY)} close={() => { watch.recheck(); setScreen(screen.resume ? { name: "connect", args: screen.resume } : { name: "settings", tab: "ai" }); }} />
+          )}
+          {screen.name === "tag" && (
+            <TagDetail key={screen.opened ?? 0} api={api} tags={tags} initial={screen.id} initialTab={screen.tab} problems={watch.problems} back={home} add={add}
+              canDescribe={capabilities.includes("describe")} canRefreshModels={capabilities.includes(SAVED_MODELS_CAPABILITY)}
+              showSettings={() => setScreen({ name: "settings" })}
+              finishSetup={(row) => setScreen({ name: "connect", args: [row.id, "setup"] })}
+              openAI={() => capabilities.includes(SHARED_AI_CAPABILITY) ? setScreen({ name: "ai" }) : say("Update Tag to manage shared AI accounts in Settings.")} say={say} />
+          )}
+          <Toast text={toast} />
+        </main>
+      </MoodContext.Provider>
+    </TrackContext.Provider>
+  );
+}

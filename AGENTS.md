@@ -24,6 +24,12 @@ canonical record for discussion, specification, and implementation history.
 Use the repository's default five-role triage vocabulary. See
 `docs/agents/triage-labels.md`.
 
+### Live Slack testing
+
+When asked to test in the sandbox or live in Slack, follow
+`.agents/skills/live-slack-test/SKILL.md`. Run it in the main session, not
+through an improvised subagent.
+
 ### Destructive Slack app operations
 
 Always obtain a fresh, explicit confirmation from the user immediately before
@@ -49,7 +55,8 @@ use at most one of these release labels:
 - No release label — continue the active prerelease line. For example,
   `v0.2.0-alpha.3` becomes `v0.2.0-alpha.4`, and `v0.2.0-beta.1` becomes
   `v0.2.0-beta.2`. If no numbered prerelease line is active, automation starts
-  the release line configured by `VERSION`.
+  the release line configured by `VERSION`. While `VERSION` names a published
+  stable release, unlabeled merges publish nothing.
 - `release:next-patch` — start the next patch line at `alpha.1`. For example,
   `v0.1.0-alpha` becomes `v0.1.1-alpha.1`.
 - `release:next-minor` — start the next minor line at `alpha.1` and reset the
@@ -61,6 +68,15 @@ Do not add `release:next-minor` for ordinary alpha increments. Conflicting or
 unknown `release:*` labels intentionally prevent publication. Beta lines only
 accept `release:skip`; patch and minor labels begin alpha lines. Stable releases
 remain manually qualified and published; see `RELEASE.md`.
+
+### Release line targeting
+
+Before merging or recommending a merge, confirm which release the PR targets:
+the current `VERSION` line on `main`, also an older stable release (merge to
+`main`, then cherry-pick to `release/vX.Y.x`), or a later version (keep it
+unmerged as a draft with a `target:vX.Y` label). Never merge a PR labeled for a
+later version into `main` before the current line ships stable. Never merge
+`main` into a maintenance branch. See "Release lines" in `RELEASE.md`.
 
 ### Automatic upgrade migrations
 
@@ -85,6 +101,79 @@ installations, repeated runs, and failure recovery.
 When Slack or another provider requires fresh sign-in or administrator approval,
 report the exact remaining action and resume the migration on retry. Existing
 confirmation requirements for destructive operations still apply.
+
+### CLI and Tag.app consistency
+
+Whenever the CLI or Tag.app changes, check whether the change should also be
+reflected in the other interface. Review affected commands, options, behavior,
+output, and setup flows for shared dependencies and corresponding user
+experiences. Update the other interface where applicable and validate the
+affected flows in both the CLI and Tag.app. If no corresponding change is
+needed, briefly explain why in the change summary or PR description.
+
+### Tag.app microanimations
+
+Tag.app animates at the level of its current Microinteractions section in
+`desktop/src/styles.css`. Every new or changed control, list, flow step, or
+state change must ship with motion at that level, in the same change. Reuse the
+`--ease` and `--spring` tokens, and do not add new easing curves. For motion
+that CSS cannot do alone, use the helpers in `desktop/src/lib/motion.ts`:
+`useFresh` (react to a change), `usePresence` (exit animations),
+`useListMotion` (list items enter and leave), and `glide` (sliding selection
+indicators).
+
+Cover each of these:
+
+- **Press and hover:** every clickable element gives on press (scale about
+  `.96`–`.985`) and fades its hover state. Rows nudge their chevron, and
+  avatars react to hover.
+- **Appearing and leaving:** menus, details, toasts, and dialogs animate in
+  and out, about 120–280 ms. Errors give one small shake.
+- **State changes:** switches, checks, radios, completed steps, status colors,
+  and progress bars transition instead of snapping. A selection highlight
+  glides to the new choice.
+- **Life events:** starting a Tag, a new reply, adding or removing a Tag,
+  finishing setup, live work, and finishing an update each get a visible
+  moment, such as a hop, ripple, confetti, shimmer, or flash.
+- **Overflow:** cut-off text that matters, such as a Tag's description,
+  scrolls to show the rest only while its row is hovered or focused, then
+  eases back. Never autoplay it on every row.
+
+Keep it calm:
+
+- **No flashing:** do not fade whole screens or panels in on mount. Animate
+  the contents, not the sky or the frosted panel. Do not replay entrance
+  animations each time a screen opens; use `useFresh` so only real changes
+  animate.
+- **Cheap properties:** animate only `opacity` and `transform`, except for the
+  list height animations.
+- **No lasting transform on containers:** it breaks `position: fixed` dialogs
+  and tooltips inside them. Avoid `animation-fill-mode` on containers.
+- **Reduced motion:** `prefers-reduced-motion: reduce` must turn the new
+  motion off, including loops, marquees, and hover movement. Helpers must not
+  delay unmounting when motion is reduced.
+- **Tests:** add tests for new helpers or state-driven motion classes.
+
+### Agent backend parity
+
+Tag supports two agent backends: Codex (`scripts/codex_agent_backend.py`, App
+Server) and Claude (`scripts/claude_agent_backend.py`, Agent SDK). Any feature
+that depends on the backend must be implemented, tested, and documented for
+both in the same change. This includes streaming, activity, approvals,
+cancellation, timeouts, retries, model and settings controls, error
+classification, setup, sign-in checks, doctor output, and upgrade migrations.
+
+- Keep the Slack bridge backend-neutral. Backends emit the normalized event
+  contract described in `references/backends.md`; the bridge must never parse
+  backend-native payloads or branch on the backend name for behavior.
+- Put shared vocabulary and policy in backend-neutral modules such as
+  `scripts/agent_activity.py`, not in one backend's adapter.
+- If a provider cannot support a capability, make the limitation explicit in
+  code and in `docs/reference/supported-capabilities.md`, and degrade safely
+  (fail closed for approvals and permissions). Do not silently ship it for one
+  backend only.
+- Add regression tests for each backend. Claude tests use a fake
+  `claude_agent_sdk` module, so CI does not need the SDK installed.
 
 ### Domain docs
 

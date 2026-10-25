@@ -1,380 +1,260 @@
 # Set up and manage Tag
 
-## Multiple Slack workspaces
+The Tag desktop app is the easiest way to manage your Tags. Everything it does, you can
+also do with the `tag` command in a terminal. Both show the same Tags, so use
+whichever you like.
 
-One installation can run independent Tags for separate Slack apps/workspaces.
-The reserved `default` Tag uses the same isolated layout as every named Tag:
-
-```sh
-tag add
-tag list
-tag personal setup
-tag personal start
-tag personal status
-tag personal logs
-tag personal stop
-```
-
-Omitting the alias selects `~/Tag/default`, with private data in its `.tag` folder. During `tag add`, Tag connects
-Slack first and suggests a lowercase workspace alias derived from the selected workspace's
-name. The alias is only used in local commands; it is independent of the Slack app's display
-name. Paused onboarding appears in `tag list` and resumes
-with the targeted setup command. Each Tag has its own settings, Slack app,
-agent working folder, conversations, logs, and lifecycle. Use Slack's settings
-for that specific app to change its remote name or profile image.
-
-MFS is shared by the installation. `tag NAME stop`, restart, reset, and
-failed startup leave shared memory and other Tags running. Inspect it with
-`tag memory status`; after stopping every Tag bridge, an installation-owned
-service can be stopped explicitly with `tag memory stop`. Tag refuses to stop
-an externally managed MFS process.
-
-An upgrade restarts each previously running Tag, leaving stopped Tags stopped
-and shared MFS online. `--no-restart` defers activation until you restart those
-Tags. On startup, legacy root-level settings and old working folders are migrated
-automatically after stopping the affected bridge. Private data is consolidated under `~/Tag/NAME/.tag`. Originals are retained;
-conflicting destination files stop migration with an actionable path. Interrupted
-copies resume on retry, and completed migrations do not overwrite later edits.
-
-Shared storage does not authorize cross-workspace retrieval. Normal Slack
-retrieval remains limited to the selected Tag's approved workspace/channel
-scopes. These local Tags share the trusted-sandbox limitations described
-in the security model; they are not hardened tenants from one another.
-
-For automation, `tag list --json` returns `schema_version`, the installation
-root, and one independently readable record per Tag. Existing inspect/status
-objects retain their fields and add `tag` plus nullable `slack_workspace`;
-their `next_command` starts with `tag NAME` for named Tags. A malformed Tag is
-returned with its own error and does not suppress other records.
-
-The CLI and guided settings share the same settings and lifecycle operations.
-Use `tag` for a status summary and next command. An assistant managing Tag should
-begin with `tag inspect --json` to inspect what is already configured.
-Slack runtime agents load the runtime contract; Tag does not bundle an admin
-skill into their workspace.
-
-## The journey
+## A quick tour of the app
 
 ```mermaid
-flowchart TD
-    Request[Open Tag or ask the setup assistant] --> Inspect[Inspect existing settings and services]
-    Inspect --> Missing[Not configured or incomplete]
-    Inspect --> Stopped[Configured and stopped]
-    Inspect --> Running[Running and connected]
-    Inspect --> Problem[Needs attention]
-    Missing --> Setup[Save defaults and only ask for missing answers]
-    Setup --> Start[Check and start]
-    Stopped --> Start
-    Start --> Reply[Mention the bot and confirm its reply in Slack]
-    Running --> Manage[Status, settings, or stop]
-    Problem --> Diagnose[Diagnose and fix the failed check]
-    Diagnose --> Inspect
-    Manage --> Inspect
+flowchart LR
+    Home["Home<br/>Tags by workspace"] -->|Click a Tag| Detail["A Tag"]
+    Detail --> Activity["Activity"]
+    Detail --> Channels["Channels"]
+    Detail --> Logs["Logs"]
+    Detail --> Details["Details"]
+    Home -->|Gear| Settings["Settings"]
 ```
 
-Plain `tag` suggests the next command based on current state.
-Use `tag status` for health and `tag doctor` for diagnostics. Settings groups Slack connection/access,
-workspace/memory, agent choice, and advanced options. The workspace is managed
-by Tag's persistent home. Changing memory scopes does not index new sources.
+### Home
 
-`tag` and `tag status` share the same overview, including agent sign-in, Slack,
-memory and first-reply caveats. `tag status --json` reports the same checks in
-structured form. `tag restart` stops Tag's managed processes and starts them
-through the normal readiness checks; a failed stop prevents starting again.
+**Home** lists your Tags, grouped by Slack workspace. Each workspace shows how
+many Tags are online, with **Start all** or **Stop all**. Each Tag has a switch
+to start or stop it.
 
-Failed Slack requests use a separate, local error-report store. Startup creates
-or verifies its owner-only directory before dependent services and records the
-versioned migration only after verification succeeds; interrupted migrations
-remain retryable. The store keeps at most 50 bounded records for 30 days.
-Reports are private previews for the authorized request caller and contain no
-raw conversation, file contents, tokens, or raw logs by default. Sharing with
-[Hover Community](https://join.slack.com/t/hover-community/shared_invite/zt-4aghkshid-n7fRukS7_J5sR2jDLBXK9A)
-is manual. A troubleshooting handoff needs local coding-agent access to repair
-Tag; an upstream code bug is handled through a regression-tested GitHub PR and
-canonical issue, while a local repair is explained in the community report.
+The line at the top shows what matters most right now. That could be a Tag
+that can't answer (click **Fix**), the latest reply, or a greeting. Tags that
+aren't finished appear under **Finish setting up**. Use search to find a Tag or
+channel.
 
-Contributors using a prepared source checkout can run `./tag dev` for a
-foreground loop that watches `scripts/**/*.py`, reloads the Slack bridge, and
-streams bridge logs. It owns both Slack and loopback MFS for the session, so
-Ctrl-C stops both; configured remote MFS endpoints remain external. Managed
-releases do not expose development watching.
+![Home in Tag: the latest reply, a Tag to finish setting up, and Tags grouped by workspace with on/off switches](assets/screenshots/home.png)
 
-Completed `tag setup` checks readiness and exits without repeating onboarding.
-Setup saves approved choices and verifies the MFS client, but it does
-not start services or index history; run `tag start` when ready. Use
-`tag setup --review` to review choices explicitly. For a separate,
-resumable test configuration, use `tag setup --test`; it keeps data under
-`<TAG_HOME>/testing/onboarding`. This is not a Slack
-sandbox: CLI sign-ins are shared and approved Slack app/channel operations are
-real. Test mode labels its banner, app-creation choice, review warning, and
-default app name (`TEST · <first name>'s Tag`) accordingly. A test home needs a
-separate MFS server before you deliberately start it.
+The app also lives in the menu bar.
+Its menu has **Open Tag…**, **Add Tag…**, **Settings…**, **Start All Tags**,
+**Stop All Tags**, **Keep Tags Running**, and **Quit Tag**. Closing the window
+keeps the app running there. The app tells you if a Tag goes offline
+unexpectedly.
 
-Settings offers guided app/workspace changes, credential reconnection,
-multi-channel selection, history windows and invitation-memory policy.
-Stop Tag first with `tag stop` for these changes. They are prepared in a private
-draft using onboarding's validation and approval steps. Pausing or declining
-Apply keeps active settings unchanged; reopen the same Settings action to
-resume a draft. Slack-side actions already approved are not undone by cancelling
-the local draft. Apply preserves the previous settings and app links in the
-printed draft directory, keeps unrelated configuration, and never starts Tag
-or indexes history. Run `tag start` when ready to use the new settings.
+### A Tag's tabs
 
-`tag setup` saves each completed answer. Ctrl-C pauses; running it again skips
-valid saved answers. It defaults to Codex and puts timeouts, retries, and other
-advanced settings outside the required questions. Claude Code is available in
-Settings or with `tag config set OPENTAG_BACKEND claude` and remains experimental.
+Click a Tag to open it. It has four tabs.
 
-To start onboarding over, run `tag reset`. A confirmation defaults to Cancel.
-After confirmation, Tag stops its managed services, moves saved settings and
-local Slack CLI app-link/creation checkpoints into a private timestamped backup
-under `config/backups/` in the Tag home, and launches setup from the beginning.
-It also archives the old invitation-memory sync status. Your workspace, skills,
-connector files, and CLI sign-ins are kept. Tag unregisters this instance's
-Slack history connector from shared MFS, removing the indexed records owned by
-that connector without stopping shared memory or affecting other Tags. A
-separate prompt offers to keep or permanently delete the Slack app, defaulting
-to **Keep**.
-It shows the saved bot name, App ID, and workspace Team ID. Deletion requires
-typing the exact App ID and matching saved Slack CLI app-link metadata. Tag
-backs up the local setup first, then calls Slack CLI with that explicit app and
-team. Remote deletion is permanent: the local backup cannot restore the app or
-its Slack app data. If deletion fails or its outcome is uncertain, setup does
-not restart; check the app in Slack before running `tag setup`. The backup's
-`app-deletion.json` records the outcome. Missing or ambiguous identity never
-triggers deletion.
-Setup offers **Create a new Tag app**, **Use an existing app**, or
-**Exit · finish setup later**.
-Profile-picture selection and upload require Slack CLI 4.7 or newer.
-Before creating a new app, setup proposes **&lt;your first name&gt;'s Tag** and a
-curated version of Tag's waterdrop. Choose Metal (white), Wood (green), Water
-(the default blue), Fire (red), or Soil (yellow). Backgrounds, highlights, and
-16 subtle signatures provide 960 identities. Tag remembers the assignment and
-avoids known collisions for that workspace on the same installation. Choose an
-element to keep that branded identity, or **Choose my own picture** and drag or paste one
-local PNG, JPEG, or GIF path into the terminal. Images must be 512–2000 pixels
-in each dimension. Before creating anything remotely, Tag reviews the chosen
-name and picture and offers to open the PNG in the system image viewer, change
-either choice, continue, or finish setup later. Tag copies the result into its private
-Slack CLI project and the Slack CLI uploads it during the approved app creation.
-For an existing app, open https://api.slack.com/apps, sign in if asked, and select
-an app you manage for the chosen workspace. In **Basic Information → App Credentials**,
-copy the **App ID** (starting with `A`) and paste it into Tag. This is not a token
-or Client ID. Tag asks before linking and checks the app's configuration afterward.
-No browser-session integration is needed. Saved or archived app identities are
-not presented as a list of your Slack apps.
-When the compatibility check finds missing settings, it shows the full
-checklist. If Agent messaging is missing, setup offers **Enable Agent messaging
-with Slack CLI**. Tag exports the remote manifest, adds only the Agent view while
-preserving unrelated settings, syncs it, and verifies Slack's saved state. A
-legacy Assistant view requires explicit confirmation because Slack does not
-allow that conversion to be reversed. Other missing settings still offer
-**Open app settings**, **Check again**, or **Exit · finish setup later**. Open app settings
-takes you to the selected Slack app; make every listed change there, save it,
-then choose Check again. If bot scopes are listed, reinstall the app in Slack
-afterward so they take effect. Tag never requests a configuration token.
-If setup pauses or fails, run
-`tag setup` to resume the new answers. Reset requires an interactive terminal.
-The printed backup contains `restore-paths.json`, mapping each saved item to its
-original location. To recover the previous setup, stop Tag and move those items
-back, first keeping a copy of any newer configuration you want to preserve.
 
-The terminal follows four steps: Connect Slack → App → Channels → Finish.
-Finish setup saves configuration. Run `tag start` to initialize shared memory
-and connect Slack. Starting memory for the first time can take a couple of minutes.
-Channels Tag has already joined are included automatically and cannot be
-removed from setup. Use arrow keys and Enter to continue; Space opens an
-optional checklist only after choosing **Add public channels**. Plain terminals
-fall back to numbered input. `q` exits so setup can be finished later. The channel
-summary offers Change channels and Change defaults (history window and agent)
-before approval. Approving Finish setup saves these choices without starting
-services or indexing history.
+- **Activity** shows the Tag's replies, newest at the bottom. Click a reply's
+  step count to see what the Tag did. Replies in the same Slack thread are
+  grouped together. To see failed requests, tick **Show errors**.
+- **Channels** lists where the Tag can reply. Click a channel to see every
+  Tag's activity in it.
+- **Logs** shows the Tag's log. Click **Copy full log** to share it.
+- **Details** shows the Tag's name, description, workspace, model, and working
+  folder. You can rename, describe, or remove the Tag here.
 
-After the first successful `tag start`, Tag sends a welcome DM to the single
-account configured under **Who can use Tag?**, including a first-task suggestion
-and the [Hover Community help link](https://join.slack.com/t/hover-community/shared_invite/zt-4aghkshid-n7fRukS7_J5sR2jDLBXK9A).
-Multiple allowed accounts do not receive a broadcast; the welcome is skipped
-when there is no single recipient. Delivery is recorded per Slack workspace,
-app, and user in private versioned state, so normal restarts and setup reviews
-do not repeat it. Existing installations receive it on their next successful
-start after upgrading. A delivery failure leaves Tag running and retries on
-the next `tag start`. The welcome confirms connectivity, not a tested agent reply.
+![A Tag's Details tab: name, description, model and thinking level, working folder, and Remove](assets/screenshots/tag-details.png)
 
-An app compatibility failure stays on the selected app with Open settings,
-Check again, and Exit · finish setup later. Linking is saved separately from compatibility,
-so returning does not repeat a successful link. Browser pages open only through
-an explicit action. Codex sign-in and startup failures have their own retry step.
-Slack onboarding is contained in `tag setup`: it checks Slack CLI authorization,
-offers the real CLI login handoff, creates or links an app with explicit
-approval, validates three credential roles separately, and uses its existing
-channel membership as the fixed baseline. Public channels are optional: setup
-asks before joining only those you explicitly add with `channels:join`, then
-verifies membership before saving stable channel IDs. New-app templates request
-this scope; existing apps need an approved permission update/reinstall or a
-manual invitation if it is absent. Private channels require an invitation to
-appear.
-New onboarding approves invitation-following memory (`SLACK_CHANNEL_POLICY=invited`):
-all channels the bot has joined, including later invitations, become eligible
-for replies and automatic indexing with the configured history window. Anyone
-able to invite the app can expand this set. Public channels the bot has not
-joined are never automatically indexed. Authorized callers remain restricted.
-The running bridge reconciles membership about every minute and requests an
-incremental MFS sync on changes and about every five minutes. History credentials
-are validated independently before a request. Current-channel reply scoping
-remains enforced by the normal helper flow, not a hardened boundary (ADR 0001).
-Leaving a channel removes normal retrieval access after reconciliation; already
-indexed data is not automatically erased, and an in-flight index job may finish.
-`tag status`/`tag inspect --json` distinguish invitation-memory sync state from
-service health. `sync_requested` is not proof of index completion or a reply.
+When a Slack message mentions **the Tag app**, click the link to open that
+Tag's Details in the app.
 
-Existing completed setups without this setting retain selected-channel behavior.
-To opt in using the updated installation, set
-`tag config set SLACK_CHANNEL_POLICY invited`, then stop/start Tag. This authorizes
-indexing all currently joined channels as well as future invitations. Use
-`selected` to retain a manual allowlist. In invited mode App Home explains the
-invitation policy instead of offering a conflicting manual channel picker.
-In selected mode its picker changes reply destinations only; setup still approves
-new memory channels. Raw IDs remain in the JSON/automation interface by design.
-An invalid JSON file must be repaired before settings can be changed; setup
-never replaces it silently.
+### Settings
 
-For new apps, Tag runs `slack app install` in its private
-`<TAG_HOME>/integrations/slack-cli` project after showing the requested scopes
-and receiving approval. Slack CLI owns authorization and app creation; Tag reads
-the resulting App ID from CLI metadata instead of asking you to copy it. The
-CLI's `deployed` environment label identifies the app record, not a hosted Tag
-service: the bridge still runs on your computer. Tag does not run `slack deploy`
-or `slack run` during creation.
+Click the gear to open **Settings**. It has four tabs:
 
-Installation is checked separately from creation. Pending approval can be
-resumed with the same App ID; an uncertain creation without a saved ID stops
-instead of automatically creating another app. Existing apps still use explicit
-link-by-ID and settings review. Connection now attempts automatic
-credential handoff once through Slack CLI's documented custom deploy hook. It repeats
-installation checks for the exact saved app in a temporary project using remote
-settings; the hook only receives credentials, with no hosted deployment or bot
-startup. Approval delays or missing credentials cannot count as connected.
-Failures pause on a recovery menu: retry after resolving the issue, enter tokens
-privately, open app settings, or finish setup later. Opening settings does not retry.
-Recognized CLI error codes receive fixed, actionable explanations; raw CLI output
-is never displayed. A service-limit error requires review by the operator/admin
-or Slack support, not repeated installation attempts or automatic permission repair.
-Bot and Socket Mode credentials are validated separately before being saved
-together. History connector credentials remain separate. Hidden terminal entry
-is an explicit fallback, not the default. Temporary credential files are private
-and removed on exit; these safeguards are not a hardened isolation boundary
-(ADR 0001). Live credential handoff acceptance remains pending.
+- **General**: **Open Tag at login**, **Appearance**, **Keep Tags running**,
+  and **Share usage data**.
+- **AI**: **AI connections** (your Codex and Claude accounts) and **Memory**
+  (start or stop it, and choose its search model).
+- **Updates**: **Update Tag** and the **Release channel** (Stable, Beta, or
+  Alpha).
+- **About**: documentation and **Replay onboarding**.
 
-## Commands for people and skills
+![Settings, General tab: Open Tag at login, Appearance, Keep Tags running, and usage data](assets/screenshots/settings.png)
 
-After an upgrade, `tag start` applies versioned Slack app migrations before
-preflight. Existing Slack CLI authorization is used to reconcile the release's
-required bot scopes, events, App Home, Socket Mode, and interactivity settings,
-refresh the installation,
-and save replacement credentials privately. This works without an interactive
-terminal and preserves unrelated app settings. The migration is marked complete
-only after remote settings and the replacement token's required grants are verified.
-An existing legacy Assistant view requires explicit approval through
-`tag setup --review` before the irreversible Agent conversion. If Slack requires
-workspace approval or renewed CLI sign-in, startup stops with recovery guidance;
-resolve that requirement and retry `tag start`.
+![Settings, Updates tab: Update Tag and the release channel (Stable, Beta, or Alpha)](assets/screenshots/settings-updates.png)
 
-Lifecycle locks for startup, shared-memory startup, reset, and settings apply
-are released by the operating system if the CLI exits unexpectedly. A later
-attempt recovers the leftover marker without taking a live operation's lock.
+**AI connections** shows your Codex and Claude accounts. Click **Check
+connections** to make sure they work, or sign in again.
 
-Permission failures pause setup and show the missing scope, the operation it blocks,
-and instructions to fix it yourself in Slack (or ask a workspace admin).
-Choose **Open app settings**, **Check again**, or **Exit · finish setup later**; channel joining
-also lets you return to channel selection. Outside the versioned upgrade migrations
-above, Tag does not repair permissions or reinstall apps as part of error recovery.
-Bot scopes, Socket Mode app-token scopes,
-and separate history credentials require different fixes. If Slack issues a new
-token, update it privately in Tag settings before retrying. Normal approved
-credential handoff remains unchanged; it uses remote app settings without `--force`.
-Manual permission recovery still needs live acceptance testing.
+![The AI connections screen: Codex and Claude sign-ins with Check connections, and Add your own API](assets/screenshots/ai.png)
 
-| Intent | Command | Behavior |
+## Add a Tag
+
+1. On **Home**, click **Add Tag**.
+2. Choose a name, a one-line description, and a picture. Click **Shuffle
+   picture** for a new one, or upload your own.
+3. Choose the AI model.
+4. Choose the Slack workspace. Sign in to Slack if asked.
+5. Check the recap. Nothing changes in Slack until you click **Create in
+   Slack**.
+6. Choose channels. You can skip this and `/invite` the Tag to a channel in
+   Slack later.
+
+![Add a Tag, first step: the @mention name, a one-line description, and a picture to shuffle or upload](assets/screenshots/add-meet.png)
+
+![Add a Tag recap: what will be created in Slack before anything changes](assets/screenshots/add-create.png)
+
+Your new Tag then starts by itself. The app shows each step.
+
+![The new Tag starting, with each step and how long the current one has taken](assets/screenshots/add-starting.png)
+
+The Tag can answer before it finishes reading your channels. If setup stops,
+choose the Tag under **Finish setting up** to carry on.
+
+### Use an existing app
+
+Already have a Slack app you want your Tag to use? On the first step, click
+**Use an existing app**. The app keeps its own name and picture, so you skip
+naming. The steps become **AI**, **Workspace**, **Your app**, and
+**Channels**.
+
+1. Choose the AI model and the workspace your app is in.
+2. On **Which app?**, pick your app. The list shows apps made with Tag, apps
+   from the Slack CLI, and apps your other Tags use. One app serves one Tag,
+   so those can't be picked. To use another app, click **Use a different
+   app** and paste its link from `api.slack.com/apps`, or its App ID, which
+   starts with `A`.
+3. Tag checks the app's settings. If something is missing, click **Add them**.
+   Tag adds only what's missing, and Slack asks you to reinstall the app. Or
+   click **I'll do it myself** to see the steps in Slack.
+4. Click **Connect**, then choose channels.
+
+To add another Tag to a workspace you already use, click **Add Tag** on that
+workspace's card on **Home**. Give it a name, a one-line description and a
+picture, then click **Create in Slack**. Tag uses your default model; click
+**Change** beside it to pick another model and its thinking level, or change them later in the Tag's
+**Details**. Tag starts it when it's ready. Invite it to a
+channel with `/invite`. For every setup choice, use **Add Tag** at the top of
+**Home** instead.
+
+In the terminal: `tag setup` for your first Tag, `tag add` for another. Then
+run the `tag NAME start` command it prints. Choose **Use an existing app** on
+the first question to link an app you already have.
+
+## Start or stop
+
+Use the Tag's switch on **Home**. To start or stop every Tag in a workspace,
+click **Start all** or **Stop all**. Two Tags can start at the same time, so
+you don't have to wait for one to finish before you switch on the next.
+
+In the terminal: `tag NAME start`, `tag NAME stop`, or `tag NAME restart`.
+
+## Change the model
+
+1. Open the Tag and go to **Details**.
+2. Choose a **Model** and thinking level.
+
+Tag saves both and restarts the Tag if it is running. Every request in Slack
+uses this model. To add an AI account, open **Settings** → **General** → **AI
+connections**.
+
+In the terminal: `tag NAME settings ai model VALUE`.
+
+## Rename or describe
+
+1. Open the Tag and go to **Details**.
+2. Click **Rename** next to the name, or **Edit** next to the description.
+
+The description is one line, up to 140 characters. It appears on the Tag's
+Slack profile. Tag changes it in Slack first. If Slack asks you to sign in
+again, nothing changes.
+
+In the terminal: `tag NAME rename "Research Tag"` or
+`tag NAME describe "Digs through docs to answer research questions"`.
+
+## Keep Tags running
+
+Open **Settings** → **General** and turn on **Keep Tags running**. Your Tags
+start after you sign in to your computer and restart if they stop. Turn on
+**Open Tag at login** to open the app too.
+
+In the terminal: `tag autostart on`.
+
+Keep Tags running also restarts memory (MFS) if it stops. **Settings** → **AI** →
+**Memory** shows whether memory is running, whether it restarts itself, and
+which search model it uses. Turn it off to stop memory (stop your Tags first);
+in the terminal, `tag memory status`, `start`, and `stop`.
+
+After a first install the built-in search model downloads in the background (about
+560 MB). Home shows the model, how far it is, and that memory search isn't available
+until it finishes; Settings → AI shows the same. If it stops, choose **Try again** on
+Home, or run `tag memory download`. `tag memory start` waits for a running download
+instead of giving up.
+
+**Search model** (in **Settings** → **AI**, under Memory) chooses how memory
+turns text into searchable vectors. **Default** is built in: it runs on this
+computer, is private, works offline, and is about 560 MB. **Custom** points memory
+at any OpenAI-compatible endpoint: OpenAI itself (`https://api.openai.com/v1`
+with a key), Ollama (`http://localhost:11434/v1`, no key), LM Studio, vLLM, or
+your own gateway. Give its address and the model's name; the key is optional.
+Choose **Switch**. Tag tries the endpoint first, so a wrong address, model or
+key changes nothing, and then memory indexes your Slack channels again, so
+search is partial until it finishes. A remote endpoint receives the text of
+indexed messages. In the terminal: `tag memory embedding local` or `custom`, or
+**Workspace and memory** in `tag settings`.
+
+Tags started this way find `claude` and `codex` in the usual install folders
+(`~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`). They also look in the
+folders on your PATH when you last started a Tag or turned this on yourself.
+
+## Update
+
+Open **Settings** → **Updates** and click **Update Tag**. This updates the app
+and your Tags together. Your settings are kept. To change how new your updates
+are, choose a **Release channel**. See
+[Release channels](installation.md#release-channels).
+
+In the terminal: `tag upgrade`.
+
+## Remove a Tag
+
+1. Open the Tag and go to **Details**.
+2. Click **Remove this Tag…**.
+
+This stops the Tag and moves its files to an `abandoned` folder. It never
+deletes them. The Slack app stays.
+
+To delete the Slack app too, click **Also delete the Slack app…**. Tag shows
+the app name, App ID, and workspace, and asks you to type the App ID. This is
+permanent. A new app gets a different App ID and bot.
+
+In the terminal: `tag NAME remove`. To also delete the Slack app:
+`tag NAME remove --delete-app --confirm-app A0XYZ789`.
+
+To start a Tag's setup over, run `tag NAME reset` in the terminal. The app
+doesn't have this. Remove the Tag and add a new one instead.
+
+## Command reference
+
+| Task | App | Terminal |
 | --- | --- | --- |
-| Decide what to do next | `tag inspect --json` | Read settings, check service health, report state and next command |
-| Inspect without network or process probes | `tag inspect --offline --json` | Report configuration and executable availability only |
-| Seed defaults | `tag config init --json` | Save missing defaults, preserve all existing values |
-| See settings | `tag config show --json` | Redact secrets and unknown extension values |
-| Discover editable settings | `tag config keys --json` | List supported keys |
-| Change one setting | `tag config set OPENTAG_BACKEND claude --json` | Validate and atomically save only that setting |
-| Store a token | `tag config set SLACK_BOT_TOKEN --stdin --json` | Read its value from standard input; never echo it |
-| Diagnose | `tag doctor --json` | Check configuration, memory, backend executable, and Slack API access |
-| Check services | `tag status --json` | Require healthy MFS and a connected Slack bridge for exit 0 |
-| Check for updates | `tag upgrade --dry-run --json` | Verify the saved channel's target without changing the installation |
-| Upgrade | `tag upgrade` | Stage and atomically select the verified release, restarting managed services when needed |
-| Install an older release | `tag upgrade --version X.Y.Z --allow-downgrade` | Explicitly override the downgrade guard; prefer rollback for the previous release |
-| Start or stop | `tag start` / `tag stop` | Use the existing managed-process lifecycle |
+| Add a Tag | **Add Tag** on Home | `tag setup` (first Tag), `tag add` |
+| See your Tags | **Home** | `tag list` |
+| Start or stop | The Tag's switch, **Start all**, **Stop all** | `tag NAME start` / `stop` / `restart` |
+| See activity | The Tag → **Activity** | `tag NAME logs --activity RUN_ID` |
+| See logs | The Tag → **Logs** | `tag NAME logs` |
+| Find a problem | **Fix** or **View logs** | `tag NAME status`, `tag NAME doctor` |
+| Rename | Details → **Rename** | `tag NAME rename "Name"` |
+| Describe | Details → **Edit** | `tag NAME describe "…"` |
+| Model | Details → **Model** | `tag NAME settings ai model VALUE` |
+| Permissions | Details → **Permissions** | `tag NAME settings ai permissions codex-sandbox=… claude-mode=…` |
+| Rules for one Tag | Details → **Permissions** → **Rules** | `tag NAME settings ai permissions block codex 'git push'` (or `allow`, `remove`) |
+| Rules for all Tags | Settings → AI → **AI connections** → **Rules for all Tags** | `tag settings ai rules block codex 'git push'` (or `allow`, `remove`) |
+| AI accounts | Settings → AI → **AI connections** | `tag settings ai` |
+| Keep Tags running | Settings → General → **Keep Tags running** | `tag autostart on` |
+| Start or stop memory | Settings → AI → **Memory** | `tag memory start` / `stop` / `status` |
+| Update | Settings → Updates → **Update Tag** | `tag upgrade` |
+| Release channel | Settings → Updates → **Release channel** | `tag upgrade --channel beta` |
+| Usage data | Settings → General → **Share usage data** | `tag telemetry on\|off` |
+| Remove a Tag | Details → **Remove this Tag…** | `tag NAME remove` |
+| Start setup over | Not available | `tag NAME reset` |
+| Channels and advanced settings | Not available | `tag NAME settings` |
 
-Pass secrets through a process stdin pipe or use settings' hidden token prompt;
-do not put literal tokens in command arguments or shell history. There is no
-unredacted `config show` mode. Empty values clear optional settings in automation, for example
-`tag config set SLACK_CHANNEL_ID ''`; required settings cannot be cleared.
-Changes take effect on the next start. Restart running Tag with `tag stop` then
-`tag start` after reviewing the intended change.
+`NAME` is the Tag's name from `tag list`. Commands without a name use your main
+Tag.
 
-Inspection is read-only and exits 0 when it can describe the current state, even
-if setup is incomplete. `status` exits 1 for unhealthy services; `doctor` exits 1
-for failed checks. Operational errors exit 1; invalid command usage exits 2.
-JSON commands emit a single object with `schema_version: 1`; consumers should
-ignore unknown fields. Argparse usage errors are still written to stderr.
-Plain `tag` prints a summary, and `tag settings` / `tag setup` reject nonterminal
-input rather than waiting for answers. Agents should use configuration commands.
+## More help
 
-The inspection object includes `configuration.fields` (missing/invalid settings),
-`backend`, `services`, `runtime`, `state`, and `next_command`. Offline services
-are `null`, never assumed healthy. The current settings file is the source of
-configuration state; ambient Slack/backend variables do not complete setup.
-
-## What verification means
-
-Interactive `tag doctor` offers an optional Codex diagnosis after normal checks.
-It previews a fixed-field report (health booleans and recognized historical error
-categories), then asks `Send this report to Codex? [y/N]`. Raw logs, configuration,
-channel names, and Slack messages are not included. Old log signals do not prove
-the current cause. Empty input declines; offline/JSON/noninteractive runs never
-prompt. Existing Codex authentication and usage apply.
-
-The diagnostic invocation uses read-only mode, disabled shell execution, ignored
-user configuration, a temporary working directory and a restricted environment.
-Unsupported Codex versions fail closed. These are safeguards, not a hardened
-credential-isolation boundary (ADR 0001). Suggestions are not verified or applied;
-repairs, restarts and permission changes still require separate approval.
-
-Executable discovery does not prove sign-in or a successful agent run. Inspection
-and diagnosis explicitly report backend authentication and task execution as
-`not_checked`. Sign in using the chosen backend's own interface. No model task
-is launched by inspection or diagnosis.
-
-`doctor` checks API access and memory; `status` checks actual service readiness.
-Neither proves a Slack mention produced a reply. After startup, send a mention
-in the permitted channel and observe the answer before declaring that journey
-verified. `first_reply` stays `not_verified`; it is not an automatic receipt.
-
-For Slack memory failures, rerun setup and review the selected channels,
-history credential, window, and indexing approval. `tag start` registers the
-saved connector after MFS is healthy. Additional sources still require normal
-MFS configuration and an exact URI in `MFS_ALLOWED_SCOPES`.
-
-If an interrupted settings write leaves `settings.json.lock`, first ensure no
-configuration writer is active before removing that specific lock and retrying.
-Writes use a private temporary file and atomic replacement to keep the previous
-configuration intact on failure.
-# Everyday interface
-
-Use `tag setup` to onboard, `tag start` to start services, `tag status` to check
-readiness, and `tag settings` to change configuration. Plain `tag` opens the
-status summary and next command without prompting, including outside a terminal.
-There is no main menu. Use `tag --help` to discover supporting commands such as
-`tag stop`, `tag logs`, and `tag doctor`. Only setup and settings are interactive.
-Reading the summary leaves services unchanged. Service readiness does not prove
-a successful reply.
-
-The older installed CLI also offers `tag update` and `tag restart`.
-Its `slack-run` command remains a compatibility
-alias for `run`; use `run` only for foreground debugging. The workspace lifecycle
-does not yet expose the same update/restart commands.
+- [Use your ChatGPT plan](reference/chatgpt-connection.md)
+- [Models and your own API](reference/api-connections.md)
+- [Enterprise Grid and developer sandboxes](reference/slack-organizations.md)
+- [Troubleshooting](troubleshooting.md)
+- [Tag in the terminal](reference/cli-operations.md): multiple Tags,
+  setup details, upgrades, and automation, for operators and developers.

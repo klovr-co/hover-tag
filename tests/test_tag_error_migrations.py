@@ -20,7 +20,7 @@ class ErrorReportMigrationTests(unittest.TestCase):
             self.assertTrue(migrate(home))
             self.assertFalse(migrate(home))
             self.assertEqual("keep\n", existing.read_text(encoding="utf-8"))
-            marker = json.loads((home / "state/migrations/tag-error-reporting.json").read_text())
+            marker = json.loads((home / "state/migrations/tag-error-reporting.json").read_text(encoding="utf-8"))
             self.assertEqual(MIGRATION_VERSION, marker["version"])
 
     def test_failed_target_is_retryable_and_not_marked_complete(self) -> None:

@@ -82,7 +82,8 @@ def _copy(source: Path, destination: Path, mappings=()):
                         return
                 except (ValueError, UnicodeError):
                     pass  # Preserve malformed destination files as conflicts too.
-        existing = destination.read_bytes() if destination.name == "config.toml" else b""
+        # Windows text mode wrote the template with CRLF line endings.
+        existing = destination.read_bytes().replace(b"\r\n", b"\n") if destination.name == "config.toml" else b""
         # Workspace initialization may have created only this empty template.
         templates = {
             b'# TAG-only Codex MCP servers go here: [mcp_servers.NAME]\n',
@@ -117,7 +118,7 @@ def _migrate_workspace(context, lifecycle) -> bool:
     """Preserve originals; only copy while the affected managed bridge is stopped."""
     root, home, workspace = context.installation_root, context.home, context.workspace
     marker = home / "state/layout-migrations.json"
-    if marker.is_file() and json.loads(marker.read_text()).get("version") == VERSION:
+    if marker.is_file() and json.loads(marker.read_text(encoding="utf-8")).get("version") == VERSION:
         return False
     legacy = context.is_default and (root / "config/settings.json").is_file()
     sources = [(home / "workspace", workspace)] if home / "workspace" != workspace else []
@@ -128,7 +129,7 @@ def _migrate_workspace(context, lifecycle) -> bool:
         return False
     with LifecycleLock(root / "state/layout.lock"):
         with LifecycleLock(home / "state/start.lock"):
-            if marker.is_file() and json.loads(marker.read_text()).get("version") == VERSION:
+            if marker.is_file() and json.loads(marker.read_text(encoding="utf-8")).get("version") == VERSION:
                 return False
             # Identity-checked stop never signals an unrelated reused PID.
             if legacy:

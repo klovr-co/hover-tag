@@ -10,6 +10,47 @@ Use Tag's installer and installed `tag` CLI for all setup and service operations
 This skill contains no runtime implementation. Do not launch bridge Python
 scripts directly or manually build an MFS connector for initial onboarding.
 
+## Talk like a person
+
+Most people using this skill are not developers. The rules below are for you;
+what you say to the user should be plain and short.
+
+- Keep the number of messages low. Setup already takes many turns, so do
+  everything you can without the user, and stop only when you need them. Put
+  every step they must do in one place, such as the Slack sign-in, together in
+  one numbered message, and ask all questions you already know you need in one
+  go. Say why in a few words.
+- Describe outcomes, not commands. Say "I'll install Tag now", not "running
+  `install.sh`". Mention a command only if the user asks or must run it.
+- Write like a helpful coworker: short sentences, no headings or bullet walls
+  in chat unless listing choices, no filler like "Great question" or "Let's
+  dive in".
+- Translate internal terms. Never show these as written:
+
+| Internal term | Say instead |
+| --- | --- |
+| invitation-following memory | Tag will also read channels you add it to later |
+| selected-channel policy | Tag only reads the channels you picked |
+| authorization ticket, `/slackauthticket` | a one-time sign-in line from Slack |
+| Agent messaging, legacy Assistant experience | Slack's chat feature for the app |
+| App ID | the app's ID, shown in Slack's app settings |
+| MFS, index sync, App Server | Tag's search of your messages (only if asked) |
+| `first_reply: not_verified` | I haven't seen Tag answer in Slack yet |
+
+- When something fails, say what happened, what it means for them, and the one
+  next step. Keep stack traces and raw logs out of chat.
+- When setup is blocked, lead with the outcome in plain words: nothing was
+  changed, what broke in one sentence, and who can fix it. Say whether it's
+  something the user can do or a Tag bug to report. Don't name internal modules
+  or files unless the user asks.
+- If the user is stuck or it looks like a Tag bug, point them to the developers:
+  the [Slack community](https://join.slack.com/t/hover-community/shared_invite/zt-4aghkshid-n7fRukS7_J5sR2jDLBXK9A)
+  for quick help, or a [GitHub issue](https://github.com/klovr-co/hover-tag/issues)
+  for bugs. Offer to draft the issue with redacted details. If the Slack link
+  has expired, use the community link on https://hover.team/tag instead.
+- Report "Tag is running" and "Tag answered in Slack" as two separate facts, in
+  everyday words.
+
 ## Inspect before installing
 
 The primary path is macOS/Linux with Codex CLI already installed, signed in,
@@ -75,7 +116,7 @@ normal installations keep default configuration in `~/Tag/default/.tag/config/se
 not a checkout `.env`.
 
 For Windows requests, use the checkout's `install.ps1` and platform instructions
-in `docs/installation.md`; do not adapt POSIX shell commands blindly.
+in `docs/reference/installation-details.md`; do not adapt POSIX shell commands blindly.
 
 ## Agree on the setup once
 
@@ -89,85 +130,94 @@ recommended defaults. Include every choice or approval setup is likely to need:
 - authorized caller, channel or invitation-following policy, and history window;
 - Codex or the requested backend; and
 - permission to perform the described app creation or linking, installation,
-  indexing, and service startup. If Slack authorization is needed, include the
-  handoff choice: show the one-time connection in chat (default), or use the
-  local clipboard to keep the one-time values out of chat.
+  indexing, and service startup.
 
-Ask the user to reply **Use these defaults** or list all changes in one message.
+Write the proposal for someone who has never seen Tag. Start with what you
+found and what you're about to do, in one or two sentences, such as "Tag is
+already installed on this computer and connected to your klovr-co Slack. I'll
+keep that and finish setup." Then list each choice in everyday words with the
+value you'd use. Avoid "authorized caller", "indexing", "preserving data" and
+similar; say "only you can ask Tag to do things" and "Tag will read the last 30
+days of messages so it has context". If the choice is about to reuse an
+existing setup, never offer an alternative like a different workspace or a
+fresh setup unless you say what it means and what would be lost. Spell out any
+workspace name you mention. Ask the user to reply **Use these defaults** or
+list all changes in one message.
 Do not ask separately for values that inspection can discover. Treat that reply
 as the answer to matching later setup prompts, but do not broaden it to new
 actions or unexpected permission changes. Ask again only for an unavoidable
 just-in-time Slack approval, a genuinely missing choice, or a new condition
 that changes the agreed plan.
 
-Drive `tag setup` yourself in an interactive tool session and answer its prompts
-from the agreed plan. Do not tell the user to open Terminal, copy terminal
-output, or answer setup's numbered prompts. Do not pipe guessed answers; keep the
-session interactive and pause if a prompt is not covered by the plan.
+## Drive setup one question at a time
 
-## Connect Slack without exposing the CLI flow
+Run setup with `--step` and answer its questions from the agreed plan. Do not
+tell the user to open Terminal, copy terminal output, or answer numbered
+prompts. Setup keeps running in the background between your commands, so it
+is fine for a question to wait while you talk with the user.
 
-If the requested workspace is already present in `slack auth list`, select it
-and skip authorization. Otherwise, keep the Slack CLI mechanics behind the
-agent. Never describe “Terminal inside Slack” or teach the user what an
-authorization ticket is.
+```sh
+tag setup --step                                  # start, or show the current question
+tag setup --answer '0' --question workspace       # answer it; prints the next question
+tag setup --stop                                  # pause; progress is saved
+```
 
-### Visible handoff in chat
+Use `tag add --step` for another workspace. Each command prints one JSON
+object. `state` is `waiting` (a `question` needs an answer), `working` (setup is
+busy; run `--step` again), or `ended` (see `result`). `events` holds what
+happened since your last command. `message` events are progress text: relay
+only what matters, in plain words.
 
-Use this by default unless the user selected the private clipboard option:
+Every question has a stable `id`, such as `workspace`, `slack_app`,
+`assistant_name`, `history_days`, or `approve_setup`. Map the agreed plan to
+these IDs, and always pass `--question <id>` so an answer can't land on the
+wrong question. `--answer` takes a JSON value that depends on the question's `kind`:
 
-1. Run `slack auth login --no-prompt`, retaining its one-time ticket for the
-   completion command. Show only the complete `/slackauthticket …` line to the
-   user; do not dump the surrounding CLI output.
-2. In the same message, say: “In the Slack workspace you want to connect, paste
-   the line above into the message box of **any channel or DM** and send it. It
-   does not need to be a Tag channel. Choose **Confirm**, then copy the short
-   code from the next Slack window and send that code back here.” Do not split
-   those actions into separate turns.
-3. When the user replies with the code, complete the exchange with `slack auth
-   login --ticket <ticket> --challenge <code>`. Do not echo either value again.
-4. Verify the resulting workspace with `slack auth list`, then continue the
-   agreed setup without asking the user to repeat prior choices.
+- `choose`: an index or the exact label from `options`.
+- `multi`: a list of indexes or labels; `selected` holds the current picks.
+- `text`: a JSON string; `default` is the suggestion.
+- `confirm`: `true` or `false`.
+- `people`: a member ID from `people`, or `"manual"` to type one instead.
+- `slack_login`: see "Connect Slack" below.
+- `secret`: never answer with a value from chat. See "Connect Slack".
 
-Tell the user that the displayed command and returned code are one-time,
-short-lived connection values. Keep them confined to the active setup exchange;
-do not copy them into summaries, diagnostics, screenshots, issue trackers, or
-persistent application logs.
+Answer only questions the agreed plan covers. If an `id` isn't in the plan, or
+a question changes the plan, ask the user first while setup waits. A `result`
+`status` of `paused` means progress was saved and `--step` resumes it. `failed`
+means setup stopped. Report it in plain words with the next step. If nothing
+happens for 30 minutes, setup pauses by itself; `--step` picks it up again.
 
-Always include Slack's illustrated
-[Authorizing the Slack CLI](https://docs.slack.dev/tools/slack-cli/guides/authorizing-the-slack-cli/)
-guide in the first handoff message, whether using chat or the private clipboard.
-Present it as an optional visual reference, not a required setup step.
+## Connect Slack
 
-### Private clipboard handoff
+If the requested workspace is already in `slack auth list`, setup reuses it.
+Otherwise setup asks a `slack_login` question whose `sign_in_line` is a
+one-time `/slackauthticket …` line. Never describe "Terminal inside Slack" or
+teach the user what an authorization ticket is.
 
-Use this only when the user selects it and a supported local clipboard is
-available. Explain in the initial proposal that it temporarily replaces the
-clipboard with a one-time Slack connection command and later reads the short
-code the user copies from Slack. After approval:
+1. Show the user only the `sign_in_line`, and in the same message give short
+   numbered steps, for example: "Slack needs to confirm it's really you. This
+   takes about a minute.
+   1. Open the Slack workspace you want to connect.
+   2. Paste the line above into the message box of any channel or DM, then send
+      it. It doesn't need to be a Tag channel.
+   3. Click **Confirm**.
+   4. Slack will show a short code. Copy it and paste it here."
+   Do not split those steps into separate turns. Always include Slack's
+   illustrated
+   [Authorizing the Slack CLI](https://docs.slack.dev/tools/slack-cli/guides/authorizing-the-slack-cli/)
+   guide as an optional visual reference.
+2. Send the user's code with `--answer '"<code>"' --question slack_login`. Setup finishes the sign-in itself and
+   never echoes the code. If it rejects the code, setup says so and asks again
+   with the same line. Do not echo the line or code again yourself.
 
-1. Run `scripts/slack_auth_clipboard.py begin`. Do not print or repeat the
-   command it places on the clipboard.
-2. Tell the user: “In the Slack workspace you want to connect, paste into the
-   message box of **any channel or DM** and send. It does not need to be a Tag
-   channel. Choose **Confirm**, copy the short code from the next Slack window,
-   then reply **copied** here.” This is one user turn; do not split it into
-   separate checks.
-3. After the user replies, run `scripts/slack_auth_clipboard.py complete --state
-   <state_file>` using the state path returned by `begin`.
-4. Verify the resulting workspace with `slack auth list`, then continue the
-   already-running setup plan without asking the user to repeat prior choices.
+Tell the user the line and code are one-time, short-lived values. Keep them
+inside the active exchange. Do not copy them into summaries, diagnostics,
+screenshots, issue trackers, or logs.
 
-The helper keeps the one-time command and short code out of agent chat and tool
-output. Never inspect, print, summarize, or ask the user to send either value.
-If clipboard access becomes unavailable, offer the visible chat handoff instead
-of reverting to a terminal tutorial. On a failed or expired exchange, discard
-the saved state and begin once with a fresh command rather than retrying the old
-values.
-
-Run the installed `tag setup` in an interactive tool session. Ask the user before
-answering authorization or policy prompts when their choice is not already
-explicit. Do not invent a noninteractive setup API.
+A `secret` question asks for a Slack token, which is only a recovery path.
+Never ask for tokens in chat. Pause the session and have the user finish that
+step with `tag setup` in their own terminal, where the token prompt is hidden,
+then resume with `--step`.
 
 Setup owns these steps:
 
@@ -183,7 +233,8 @@ Setup owns these steps:
   Preserve the caller allowlist; widen access only on explicit user request.
 - Finish approval, which starts services and indexing unless `--no-start` is used.
 
-Explain the policy shown by the installed version. Current new setups include
+Explain the policy shown by the installed version in one or two plain
+sentences, using the table in "Talk like a person". Current new setups include
 all channels the bot already joined and default to invitation-following memory:
 future invitations can expand the channels eligible for replies and indexing.
 Private channels require an invitation. Do not describe this as permanently
@@ -192,15 +243,16 @@ selected-channel policy; preserve it unless the user requests a change.
 
 Setup saves completed answers; rerunning it resumes. Use `tag setup --review`
 only when the user wants to revisit choices. `tag setup --no-start` saves choices
-without starting services or indexing. `tag setup --test` implies `--no-start`
+without starting services or indexing. `tag setup --test` (not combinable with `--step`) implies `--no-start`
 and requires a separate MFS server before you run `tag start`. This is not a
 Slack sandbox: approved Slack actions remain real and CLI sign-ins are shared.
 
-To connect an additional Slack workspace, run `tag add`. The flow selects the
-workspace first, suggests a lowercase local workspace alias from its real Slack
-name, and then continues setup. The alias appears in commands such as
-`tag klovr status`; it is separate from the assistant display name, so multiple
-workspaces may all use a Slack name such as “Maya's Tag.”
+To add another Tag, in the same or another Slack workspace, run `tag add`. The
+flow selects the workspace first, then continues setup. Tag names each Tag after
+its Slack team and app IDs once the app exists, for example
+`tag t0abc123-a0xyz789 status`; nobody chooses a name. Commands without a name use
+the main Tag. The Slack display name, such as “Maya's Tag,” is separate and may
+repeat across Tags.
 
 For compatibility or permission failures, use setup's targeted Agent messaging
 repair when offered. Otherwise follow the displayed checklist and have the user
@@ -235,6 +287,14 @@ presence does not prove Codex sign-in. Inspection does not run a model task,
 and `first_reply: not_verified` is not a receipt that changes automatically.
 A healthy service or requested index sync does not prove a successful Slack task.
 If the reply cannot be observed or confirmed, state that verification is pending.
+Close with a short plain summary, for example: “Tag is running on this
+computer. I haven't seen it answer in Slack yet. Mention @Tag in a channel it's
+in and say hi, then tell me what happens.”
+
+Once the first reply works, invite them once to join the
+[Tag community on Slack](https://join.slack.com/t/hover-community/shared_invite/zt-4aghkshid-n7fRukS7_J5sR2jDLBXK9A)
+for tips and to talk with the developers. Keep it to one friendly line, and
+don't repeat it if they ignore it.
 
 ## Recover only what failed
 
@@ -256,7 +316,7 @@ Repair invalid configuration JSON without silently replacing it. Do not use
 `tag reset`, upgrades, or additional data sources as routine onboarding fixes.
 
 For version-specific details, consult the installed CLI's `--help` and the
-matching Tag release's `docs/tag-management.md` and `docs/installation.md`.
+matching Tag release's `docs/tag-management.md`, `docs/reference/cli-operations.md`, and `docs/reference/installation-details.md`.
 These are product references, not files bundled with this skill. In a checkout,
 read them locally; otherwise obtain them from the matching revision in
 https://github.com/klovr-co/hover-tag. Keep setup mechanics in Tag rather than copying

@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from contextlib import redirect_stdout
 from io import StringIO
@@ -12,6 +13,7 @@ from unittest.mock import ANY, patch
 
 from scripts import tag_cli, tag_control, tag_config, tag_instances, tag_reconfigure, opentag_setup
 from scripts.tag_paths import initialize_instance
+from scripts.tag_locks import LifecycleLock
 
 
 class FlowTests(unittest.TestCase):
@@ -78,7 +80,11 @@ class FlowTests(unittest.TestCase):
         ), patch.object(tag_cli, "development_loop", return_value=0) as development:
             code, _ = self.invoke(["dev"])
         self.assertEqual(code, 0)
-        development.assert_called_once_with(self.home)
+        # Starting a configured built-in Tag first names it after its Slack IDs.
+        renamed = self.root / "instances/told-aold"
+        development.assert_called_once_with(renamed)
+        self.assertFalse(self.home.exists())
+        self.assertEqual(tag_instances.main_tag(self.root), "told-aold")
         self.assertEqual(os.environ["OPENTAG_BACKEND"], "codex")
 
     def test_development_loop_owns_and_cleans_up_slack_bridge(self):
@@ -100,6 +106,77 @@ class FlowTests(unittest.TestCase):
                 unittest.mock.call(self.home, "mfs"),
             ],
         )
+
+    def start_while_locked(self, wait, release_after=None, args=("start",)):
+        """Run tag start while another operation holds this Tag's start lock."""
+        other = LifecycleLock(self.home / "state/start.lock").acquire()
+        timer = threading.Timer(release_after, other.release) if release_after is not None else None
+        pending_row, started = tag_cli.display.pending_row, []
+
+        def waiting(name, value):
+            # Release only once start is waiting, so a slow runner cannot free the lock before start looks.
+            pending_row(name, value)
+            if timer and not started:
+                started.append(True)
+                timer.start()
+
+        try:
+            # The one-time shared AI migration and ID rename are already done on set-up Tags.
+            with patch.object(tag_cli, "START_LOCK_WAIT_SECONDS", wait), patch.object(
+                tag_cli, "_migrate_shared_ai"
+            ), patch.object(tag_cli, "_rename", return_value=None), patch.object(tag_cli, "missing_runtime_dependencies", return_value=()), patch.object(
+                tag_cli, "slack_ready", return_value=True
+            ), patch.object(tag_cli, "ensure_shared_memory") as memory, patch.object(
+                tag_cli.display, "pending_row", side_effect=waiting
+            ):
+                try:
+                    return self.invoke(list(args)), memory
+                except RuntimeError as error:
+                    return error, memory
+        finally:
+            if started:
+                timer.join()
+            else:
+                other.release()
+
+    def test_start_waits_for_a_start_in_progress_and_does_not_start_twice(self):
+        self.seed()
+        result, memory = self.start_while_locked(10, release_after=0.3)
+        self.assertNotIsInstance(result, Exception, result)  # Show why start failed.
+        code, output = result
+        self.assertEqual(code, 0)
+        self.assertIn("Waiting for another start, stop or setup to finish", output)
+        self.assertIn("Already connected", output)
+        memory.assert_not_called()
+        # Every lock was let go.
+        LifecycleLock(self.home / "state/start.lock").acquire().release()
+        LifecycleLock(self.root / "state/ai-start.lock").acquire().release()
+
+    def test_start_json_reports_each_step_as_it_happens(self):
+        self.seed()
+        self.addCleanup(tag_cli.display.progress_events, False)
+        result, _ = self.start_while_locked(10, release_after=0.3, args=("start", "--json"))
+        self.assertNotIsInstance(result, Exception, result)  # Show why start failed.
+        code, output = result
+        self.assertEqual(code, 0)
+        events = [json.loads(line) for line in output.splitlines()]
+        # Only JSON lines: no banner or completion text for the client to skip.
+        self.assertEqual([(e["step"], e["state"]) for e in events], [("runtime", "done"), ("start", "running"), ("slack", "done")])
+        promised = json.loads((Path(tag_cli.ROOT) / "protocol/examples/start-progress.jsonl").read_text(
+            encoding="utf-8").splitlines()[0])
+        for event in events:
+            self.assertEqual(set(event), set(promised))
+        with redirect_stdout(StringIO()) as result:
+            tag_cli.display.progress_result(1, "Slack bridge did not become ready")
+        self.assertEqual(json.loads(result.getvalue()),
+                         {"type": "result", "status": "failed", "error": "Slack bridge did not become ready"})
+
+    def test_start_reports_a_lock_that_stays_busy(self):
+        self.seed()
+        error, memory = self.start_while_locked(0.6)
+        self.assertIsInstance(error, RuntimeError)
+        self.assertIn("Another lifecycle operation is in progress", str(error))
+        memory.assert_not_called()
 
     def test_logs_are_bounded_redacted_and_offer_follow_mode(self):
         log = self.home / "state/slack.log"
@@ -162,7 +239,7 @@ class FlowTests(unittest.TestCase):
             self.assertEqual(opentag_setup.main(), 0)
         guided.assert_called_once()
         status.assert_not_called()
-        self.assertTrue(json.loads(self.config.with_name("setup-progress.json").read_text())["completed"])
+        self.assertTrue(json.loads(self.config.with_name("setup-progress.json").read_text(encoding="utf-8"))["completed"])
 
     def test_review_forwards_no_start_and_only_success_writes_receipt(self):
         self.seed()
@@ -193,7 +270,7 @@ class FlowTests(unittest.TestCase):
     def test_settings_channels_use_plural_guided_flow(self):
         self.seed()
         with patch.object(tag_control.ui, "keyboard_available", return_value=True), patch.object(
-            tag_control.ui, "choose", side_effect=[0, 3, 4]
+            tag_control.ui, "choose", side_effect=[0, 3, 6]
         ), patch.object(tag_reconfigure, "edit") as edit, redirect_stdout(StringIO()):
             tag_control.settings_menu(self.home)
         edit.assert_called_once_with(self.home, "channels")
@@ -246,7 +323,7 @@ class FlowTests(unittest.TestCase):
         )
         connector = Path(original["MFS_SLACK_CONNECTOR_CONFIG"])
         connector.write_text(
-            connector.read_text().replace(
+            connector.read_text(encoding="utf-8").replace(
                 'token = "env:MFS_SLACK_TOKEN"',
                 "token = " + json.dumps("file:" + str(old_credential)),
             ),

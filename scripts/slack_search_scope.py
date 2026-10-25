@@ -254,9 +254,16 @@ def _visible_channels(
 ) -> tuple[VisibleChannel, ...]:
     user_response = client.users_info(user=caller_id)
     user = _response_mapping(user_response, "user")
+    enterprise_user = user.get("enterprise_user") or {}
+    enterprise_id = os.getenv("SLACK_ENTERPRISE_ID", "")
+    member_of_workspace = user.get("team_id") == team_id or (
+        bool(enterprise_id) and isinstance(enterprise_user, dict)
+        and enterprise_user.get("enterprise_id") == enterprise_id
+        and team_id in (enterprise_user.get("teams") or [])
+    )
     if (
         user.get("id") != caller_id
-        or user.get("team_id") != team_id
+        or not member_of_workspace
         or user.get("deleted") is True
         or user.get("is_bot") is True
     ):

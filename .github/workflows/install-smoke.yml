@@ -3,7 +3,7 @@ name: Install smoke
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, 'release/v*.x']
   workflow_dispatch:
 
 permissions:
@@ -17,7 +17,7 @@ jobs:
   clean-install:
     name: ${{ matrix.os }} clean install
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:

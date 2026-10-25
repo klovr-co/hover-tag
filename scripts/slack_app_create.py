@@ -11,10 +11,11 @@ import subprocess
 import sys
 
 try:
+    import slack_identity
     import setup_ui as ui
     import tag_config as settings
 except ImportError:
-    from scripts import setup_ui as ui, tag_config as settings
+    from scripts import slack_identity, setup_ui as ui, tag_config as settings
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -89,12 +90,19 @@ def is_tag_manifest_hook(hooks: dict) -> bool:
     )
 
 
-def prepare_project(project: Path, name: str) -> dict:
+def prepare_project(project: Path, name: str, *, enterprise: bool = False, description: str = "") -> dict:
     import yaml
 
     manifest = yaml.safe_load((ROOT / "slack-app-manifest.yaml").read_text(encoding="utf-8"))
+    if enterprise:
+        manifest["settings"]["org_deploy_enabled"] = True
     manifest["display_information"]["name"] = name
     manifest["features"]["bot_user"]["display_name"] = name
+    # The Tag's one-line description, on its Slack profile and in Slack's agent
+    # view. Without one, the manifest's default text stays.
+    if description.strip():
+        manifest["display_information"]["description"] = description.strip()
+        manifest["features"]["agent_view"]["agent_description"] = description.strip()
     # Remote source prevents subsequent installations from overwriting app settings.
     config = read_object(project / ".slack/config.json")
     if config.get("manifest", {}).get("source") != "remote":
@@ -136,13 +144,29 @@ def is_installed(project: Path, team_id: str, app_id: str) -> bool:
     )
 
 
-def create_app(project: Path, team_id: str, config_path: Path, run_cli) -> str:
-    """Create/install only after approval; never blindly repeat an ambiguous creation."""
+def create_app(project: Path, team_id: str, config_path: Path, run_cli, *,
+               approved: bool = False, progress=None) -> str:
+    """Create/install only after approval; never blindly repeat an ambiguous creation.
+
+    ``approved`` means the person already approved creation (setup's recap), so
+    no separate question is asked. ``progress(step)`` is told when creation
+    reaches ``create``, ``picture``, and ``install``.
+    """
+    def report(step: str) -> None:
+        if progress:
+            progress(step)
+
     marker = project / "tag-create.json"
     state = read_object(marker) if marker.exists() else {}
     values = settings.load_config(config_path)
+    enterprise_id = values.get("SLACK_ENTERPRISE_ID", "")
+    workspace_id = values.get("SLACK_TEAM_ID", "") or team_id
+    grant = slack_identity.grant_flags(workspace_id, enterprise_id)
+    team_id = enterprise_id or team_id
     app_id = linked_app(project, team_id)
     if state:
+        if enterprise_id and state.get("workspace_id") != workspace_id:
+            raise RuntimeError("Saved app creation belongs to another workspace grant. No app was changed.")
         if state.get("team_id") != team_id:
             raise RuntimeError("Saved app creation belongs to another workspace. No app was changed.")
         if state.get("app_id") and state["app_id"] != app_id:
@@ -158,15 +182,23 @@ def create_app(project: Path, team_id: str, config_path: Path, run_cli) -> str:
     elif app_id:
         raise RuntimeError("An app is already linked to this workspace. Link its App ID instead of creating another.")
     else:
-        manifest = prepare_project(project, values.get("OPENTAG_BOT_NAME", "Tag"))
-        print()
-        ui.message(f"Create {manifest['display_information']['name']} in workspace {team_id}?")
-        ui.message("Slack CLI will create and install the app. Tag still runs on this computer.")
-        ui.message("Requested bot permissions: " + ", ".join(manifest["oauth_config"]["scopes"]["bot"]))
-        ui.message("Channel indexing and service startup are approved separately.")
-        if ui.choose("Create this app?", ["Create and install app", "Save and exit"], default=1) == 1:
-            raise ui.Paused()
+        manifest = prepare_project(project, values.get("OPENTAG_BOT_NAME", "Tag"),
+                                   **({"enterprise": True} if enterprise_id else {}),
+                                   **({"description": values["OPENTAG_BOT_DESCRIPTION"]}
+                                      if values.get("OPENTAG_BOT_DESCRIPTION") else {}))
+        if not approved:
+            print()
+            target = f"organization {team_id}, workspace {workspace_id}" if enterprise_id else f"workspace {team_id}"
+            ui.message(f"Create {manifest['display_information']['name']} in {target}?")
+            ui.message("Slack CLI will create and install the app. Tag still runs on this computer.")
+            ui.message("Requested bot permissions: " + ", ".join(manifest["oauth_config"]["scopes"]["bot"]))
+            ui.message("Channel indexing and service startup are approved separately.")
+            if ui.choose("Create this app?", ["Create and install app", "Save and exit"], default=1, qid="create_app") == 1:
+                raise ui.Paused()
+        report("create")
         state = {"team_id": team_id, "status": "attempting"}
+        if enterprise_id:
+            state["workspace_id"] = workspace_id
         # Exclusive checkpoint prevents two setup processes from creating two apps.
         try:
             descriptor = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -177,24 +209,27 @@ def create_app(project: Path, team_id: str, config_path: Path, run_cli) -> str:
             handle.flush()
             os.fsync(handle.fileno())
         try:
-            run_cli(["app", "install", "--team", team_id, "--environment", "deployed"],
+            run_cli(["app", "install", "--team", team_id, "--environment", "deployed", *grant],
                     cwd=project, interactive=True)
         finally:
             # CLI saves identity before installation. Recover it even on Ctrl-C/error.
             app_id = linked_app(project, team_id)
             if app_id:
                 state.update(app_id=app_id, status="created")
+                ui.commit()  # A real Slack app now exists: Back stops here.
                 settings.save_config(marker, state)
                 settings.update_config(config_path, {"SLACK_APP_ID": app_id})
         if not app_id:
             raise RuntimeError("Slack did not save an App ID. Creation is unverified; rerun setup for recovery guidance.")
+        report("picture")  # Slack CLI uploads the picture as it creates the app.
 
     settings.update_config(config_path, {"SLACK_APP_ID": app_id})
+    report("install")
     while not is_installed(project, team_id, app_id):
         print()
         ui.message(f"App {app_id} is saved; installation is not confirmed.")
         ui.message("Slack may need administrator approval. You can leave and resume later.")
-        action = ui.choose("Finish app installation", ["Check approval again", "Continue installation", "Save and exit"], default=2)
+        action = ui.choose("Finish app installation", ["Check approval again", "Continue installation", "Save and exit"], default=2, qid="app_install")
         if action == 2:
             raise ui.Paused()
         if action == 1:
@@ -203,7 +238,7 @@ def create_app(project: Path, team_id: str, config_path: Path, run_cli) -> str:
                 raise RuntimeError("Manifest source changed. Installation stopped to preserve app settings.")
             if linked_app(project, team_id) != app_id:
                 raise RuntimeError("The saved Slack link changed. Installation stopped.")
-            run_cli(["app", "install", "--team", team_id, "--app", app_id], cwd=project, interactive=True)
+            run_cli(["app", "install", "--team", team_id, "--app", app_id, *grant], cwd=project, interactive=True)
     state.update(app_id=app_id, status="installed")
     settings.save_config(marker, state)
     ui.message("✓ App installed · connection checks are next")

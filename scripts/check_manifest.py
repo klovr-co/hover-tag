@@ -22,6 +22,7 @@ REQUIRED_SCOPES = {
     "groups:history",
     "groups:read",
     "im:history",
+    "team:read",
     "users:read",
 }
 
@@ -40,6 +41,8 @@ def validate_manifest(root: Path) -> list[str]:
     events = settings.get("event_subscriptions", {}).get("bot_events", [])
     if "app_mention" not in events:
         errors.append("app_mention must be subscribed")
+    if "member_joined_channel" not in events:
+        errors.append("member_joined_channel must be subscribed")
     if "message.im" not in events:
         errors.append("message.im must be subscribed")
     if "app_home_opened" not in events:

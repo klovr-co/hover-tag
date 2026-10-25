@@ -1,0 +1,271 @@
+import { StrictMode } from "react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, expect, it, vi } from "vitest";
+import { App } from "./App";
+import { bridge, demoBridge, type AppInfo } from "./lib/bridge";
+
+vi.mock("./lib/bridge", async (original) => ({ ...await original<typeof import("./lib/bridge")>(), bridge: vi.fn() }));
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.clearAllMocks(); });
+
+it("shows a styled startup and recovers when reading app information fails", async () => {
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  const api = demoBridge({ installed: false });
+  let reject!: (error: Error) => void;
+  api.info = vi.fn().mockImplementationOnce(() => new Promise<AppInfo>((_resolve, fail) => { reject = fail; }))
+    .mockRejectedValueOnce(new Error("Tag unavailable"))
+    .mockResolvedValue({ platform: "macos", cli: null, version: "test" });
+  vi.mocked(bridge).mockResolvedValue(api);
+  render(<StrictMode><App /></StrictMode>);
+  expect(screen.getByText("Welcome to Tag")).toBeTruthy();
+  await vi.waitFor(() => expect(api.info).toHaveBeenCalledTimes(2));
+  expect(await screen.findByText("Couldn't open Tag")).toBeTruthy();
+  // The discarded mount must not overwrite the surviving mount's state.
+  reject(new Error("Stale error"));
+  fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+  expect(await screen.findByRole("button", { name: "Continue" })).toBeTruthy();
+  expect(screen.queryByText("Couldn't open Tag")).toBeNull();
+});
+
+it("shows a broken launcher error on first open and recovers after retry", async () => {
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  const api = demoBridge();
+  const working = api.tag;
+  let repaired = false;
+  api.tag = vi.fn(async (args: string[]) => args[0] === "list" && !repaired
+    ? { code: 126, stdout: "", stderr: "tag: missing-python: No such file or directory\n" }
+    : working(args));
+  vi.mocked(bridge).mockResolvedValue(api);
+  render(<App />);
+  expect(await screen.findByText("Couldn't open Tag")).toBeTruthy();
+  expect(screen.getByText(/missing-python: No such file or directory/)).toBeTruthy();
+  repaired = true;
+  fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+  expect(await screen.findByRole("heading", { name: "Your Tags" })).toBeTruthy();
+  expect(screen.queryByText(/missing-python/)).toBeNull();
+});
+
+it("offers to install Tag again when it was removed after the app started", async () => {
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  const api = demoBridge();
+  const working = api.tag;
+  api.info = vi.fn().mockResolvedValueOnce({ platform: "macos", cli: "/missing/tag", version: "test" })
+    .mockResolvedValue({ platform: "macos", cli: null, version: "test" });
+  api.tag = vi.fn(async (args: string[]) => {
+    if (args[0] === "list") throw new Error("Tag isn't installed yet.");
+    return working(args);
+  });
+  vi.mocked(bridge).mockResolvedValue(api);
+  render(<App />);
+  expect(await screen.findByRole("button", { name: "Continue" })).toBeTruthy();
+  expect(screen.queryByText("Couldn't open Tag")).toBeNull();
+});
+
+it("returns to existing Tags after reinstalling instead of setting up a first Tag", async () => {
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  const api = demoBridge();
+  api.info = vi.fn().mockResolvedValue({ platform: "macos", cli: null, version: "test" });
+  api.tag = vi.fn(async (args: string[]) => args[0] === "telemetry"
+    ? { code: 0, stderr: "", stdout: JSON.stringify({ schema_version: 1, enabled: false, available: true,
+      saved_preference: "off", process_override: null, privacy_notice: "" }) }
+    : await demoBridge().tag(args));
+  api.install = vi.fn(async (_channel, _onLine, onExit) => { setTimeout(() => onExit(0)); return { stop() {}, send() {} }; });
+  const setup = vi.spyOn(api, "setup");
+  vi.mocked(bridge).mockResolvedValue(api);
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
+  fireEvent.click(screen.getByRole("button", { name: "Install Tag" }));
+  fireEvent.click(await screen.findByRole("button", { name: /Set up your first Tag/ }));
+  expect(await screen.findByRole("heading", { name: "Your Tags" })).toBeTruthy();
+  expect(setup).not.toHaveBeenCalled();
+});
+
+it("goes Home, not first-Tag setup, when the list can't be read after installing", async () => {
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  const api = demoBridge();
+  api.info = vi.fn().mockResolvedValue({ platform: "macos", cli: null, version: "test" });
+  let failList = true;
+  api.tag = vi.fn(async (args: string[]) => {
+    if (args[0] === "telemetry") return { code: 0, stderr: "", stdout: JSON.stringify({ schema_version: 1, enabled: false,
+      available: true, saved_preference: "off", process_override: null, privacy_notice: "" }) };
+    if (args[0] === "list" && failList) { failList = false; return { code: 1, stdout: "", stderr: "busy\n" }; }
+    return demoBridge().tag(args);
+  });
+  api.install = vi.fn(async (_channel, _onLine, onExit) => { setTimeout(() => onExit(0)); return { stop() {}, send() {} }; });
+  const setup = vi.spyOn(api, "setup");
+  vi.mocked(bridge).mockResolvedValue(api);
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
+  fireEvent.click(screen.getByRole("button", { name: "Install Tag" }));
+  fireEvent.click(await screen.findByRole("button", { name: /Set up your first Tag/ }));
+  expect(await screen.findByRole("heading", { name: "Your Tags" })).toBeTruthy();
+  expect(setup).not.toHaveBeenCalled();
+});
+
+it("offers to install Tag again when it is removed while Home is open", async () => {
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  const api = demoBridge();
+  const working = api.tag;
+  let removed = false;
+  api.info = vi.fn(async () => ({ platform: "macos", cli: removed ? null : "/tag", version: "test" }) as AppInfo);
+  api.tag = vi.fn(async (args: string[]) => {
+    if (args[0] === "telemetry") return { code: 0, stderr: "", stdout: JSON.stringify({ schema_version: 1, enabled: false,
+      available: true, saved_preference: "off", process_override: null, privacy_notice: "" }) };
+    if (removed && args[0] === "list") throw new Error("Tag isn't installed yet.");
+    return working(args);
+  });
+  vi.mocked(bridge).mockResolvedValue(api);
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  render(<App />);
+  expect(await screen.findByRole("heading", { name: "Your Tags" })).toBeTruthy();
+  removed = true;
+  await act(async () => { await vi.advanceTimersByTimeAsync(31_000); });
+  vi.useRealTimers();
+  expect(await screen.findByRole("button", { name: "Continue" })).toBeTruthy();
+});
+
+it("turns usage data on at first run and notes it on Home until the person leaves", async () => {
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  const api = demoBridge();
+  const demo = api.tag;
+  let saved = "not_set";
+  api.tag = vi.fn(async (args: string[]) => {
+    if (args[0] !== "telemetry" || args[1] === "record") return demo(args);
+    if (args[1] === "on" || args[1] === "off") saved = args[1];
+    return { code: 0, stderr: "", stdout: JSON.stringify({ schema_version: 1, enabled: saved === "on", available: true,
+      saved_preference: saved, process_override: null, privacy_notice: "https://example.invalid/privacy" }) };
+  });
+  vi.mocked(bridge).mockResolvedValue(api);
+  render(<StrictMode><App /></StrictMode>);
+  expect(await screen.findByText(/anonymous usage data/)).toBeTruthy();
+  const records = () => vi.mocked(api.tag).mock.calls.map(([args]) => args).filter((args) => args[1] === "record");
+  await vi.waitFor(() => expect(records().map((args) => args[2])).toEqual(expect.arrayContaining(["app_opened", "app_screen_viewed"])));
+  expect(api.tag).toHaveBeenCalledWith(["telemetry", "on", "--json"]);
+  expect(records().filter((args) => args[2] === "app_opened")).toHaveLength(1);
+  fireEvent.click(screen.getByRole("button", { name: "Learn more" }));
+  expect(await screen.findByText("Share usage data")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: /Back|Done|Close/ }));
+  expect(await screen.findByRole("heading", { name: "Your Tags" })).toBeTruthy();
+  expect(screen.queryByText(/anonymous usage data/)).toBeNull();
+});
+
+
+it("replays onboarding from Settings without saving, installing, or quitting", async () => {
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  const api = demoBridge();
+  api.tag = vi.fn(api.tag);
+  api.quit = vi.fn(api.quit);
+  api.install = vi.fn(api.install);
+  vi.mocked(bridge).mockResolvedValue(api);
+  render(<StrictMode><App /></StrictMode>);
+  fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
+  fireEvent.click(await screen.findByRole("tab", { name: "About" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Replay" }));
+  expect(await screen.findByRole("button", { name: "Done" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Install Tag" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Quit" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Done" }));
+  expect(await screen.findByRole("button", { name: "Replay" })).toBeTruthy();
+  expect(api.tag).not.toHaveBeenCalledWith(["telemetry", "off", "--json"]);
+  expect(api.quit).not.toHaveBeenCalled();
+  expect(api.install).not.toHaveBeenCalled();
+});
+
+it("keeps AI settings together on their own tab instead of crowding General", async () => {
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  vi.mocked(bridge).mockResolvedValue(demoBridge());
+  render(<StrictMode><App /></StrictMode>);
+  fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
+  expect(await screen.findByRole("switch", { name: "Keep Tags running" })).toBeTruthy();
+  expect(screen.queryByRole("switch", { name: "Memory" })).toBeNull();
+  expect(screen.queryByText("Search model")).toBeNull();
+  fireEvent.click(screen.getByRole("tab", { name: "AI" }));
+  expect(await screen.findByRole("button", { name: "Open memory" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Open AI connections" })).toBeTruthy();
+  // Memory folds into its own page, like AI connections, instead of sitting open in the list.
+  expect(screen.queryByRole("switch", { name: "Memory" })).toBeNull();
+  expect(screen.queryByRole("switch", { name: "Keep Tags running" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Open memory" }));
+  expect(await screen.findByRole("switch", { name: "Memory" })).toBeTruthy();
+  expect(screen.getByRole("radiogroup", { name: "Search model" })).toBeTruthy();
+});
+
+it("keeps measuring Home after it replaces the startup element", async () => {
+  const observed = new Map<Element, ResizeObserverCallback>();
+  vi.stubGlobal("ResizeObserver", class {
+    element?: Element;
+    constructor(private callback: ResizeObserverCallback) {}
+    observe(element: Element) { this.element = element; observed.set(element, this.callback); }
+    disconnect() { if (this.element) observed.delete(this.element); }
+  });
+  const api = demoBridge();
+  api.fitWindow = vi.fn(async () => {});
+  vi.mocked(bridge).mockResolvedValue(api);
+  const { container } = render(<StrictMode><App /></StrictMode>);
+  const startup = container.querySelector("main")!;
+  await screen.findByRole("heading", { name: "Your Tags" });
+  const home = container.querySelector("main")!;
+  expect(home).not.toBe(startup);
+  expect([...observed.keys()]).toEqual([home]);
+  vi.spyOn(home, "getBoundingClientRect").mockReturnValue({ height: 720 } as DOMRect);
+  act(() => observed.get(home)!([{ target: home, contentRect: home.getBoundingClientRect(),
+    borderBoxSize: [], contentBoxSize: [], devicePixelContentBoxSize: [] }], {} as ResizeObserver));
+  expect(api.fitWindow).toHaveBeenLastCalledWith(520, 720);
+});
+
+it("reports a missing feed as a check failure after retry and opens channel settings", async () => {
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  const api = demoBridge();
+  const tag = api.tag;
+  api.tag = vi.fn(async (args: string[]) => args[0] === "upgrade"
+    ? { code: 0, stderr: "", stdout: JSON.stringify({ ok: true, status: "current", current: { version: "0.2.0", channel: "stable" } }) }
+    : tag(args));
+  api.checkAppUpdate = vi.fn(async () => { throw new Error("Stable feed unavailable"); });
+  vi.mocked(bridge).mockResolvedValue(api);
+  render(<App />);
+  await screen.findByText("Couldn't check for updates");
+  fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+  await screen.findByText("Couldn't check for updates");
+  expect(screen.queryByText("The update didn't finish")).toBeNull();
+  expect(vi.mocked(api.tag).mock.calls.filter(([args]) => args[0] === "upgrade").every(([args]) => args.includes("--dry-run"))).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "Release channel settings" }));
+  expect(await screen.findByRole("radio", { name: /Beta/ })).toBeTruthy();
+});
+
+it("never offers an update in a development build, whose version names a release line", async () => {
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  const api = demoBridge();
+  const info = api.info;
+  api.info = vi.fn(async () => ({ ...await info(), development: true }));
+  const tag = api.tag;
+  api.tag = vi.fn((args: string[]) => tag(args));
+  api.checkAppUpdate = vi.fn(async () => ({ version: "9.9.9", notes: "" }) as never);
+  vi.mocked(bridge).mockResolvedValue(api);
+  render(<App />);
+  expect(await screen.findByText("Your Tags")).toBeTruthy();
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+  expect(api.checkAppUpdate).not.toHaveBeenCalled();
+  expect(vi.mocked(api.tag).mock.calls.some(([args]) => args[0] === "upgrade")).toBe(false);
+  expect(screen.queryByText(/is ready/)).toBeNull();
+});
+
+it("opens a linked Tag's Details from Slack and ignores Tags that aren't here", async () => {
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  const api = demoBridge();
+  const demo = api.tag;
+  api.tag = vi.fn(async (args: string[]) => args[0] === "telemetry" && args[1] !== "record"
+    ? { code: 0, stderr: "", stdout: JSON.stringify({ schema_version: 1, enabled: false, available: true,
+      saved_preference: "off", process_override: null, privacy_notice: "" }) }
+    : demo(args));
+  let open: (url: string) => void = () => {};
+  api.onDeepLink = (handler) => { open = handler; handler("hover-tag://tag/t0klovr1-a0rese02"); return () => {}; };
+  api.showWindow = vi.fn(async () => {});
+  vi.mocked(bridge).mockResolvedValue(api);
+  render(<App />);
+  expect((await screen.findByRole("tab", { name: "Details" })).getAttribute("aria-selected")).toBe("true");
+  expect(api.showWindow).toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("tab", { name: "Activity" }));
+  act(() => open("hover-tag://tag/t0klovr1-a0rese02"));
+  await vi.waitFor(() => expect(screen.getByRole("tab", { name: "Details" }).getAttribute("aria-selected")).toBe("true"));
+  act(() => open("hover-tag://tag/missing"));
+  expect(await screen.findByText("That Tag isn't on this computer.")).toBeTruthy();
+});

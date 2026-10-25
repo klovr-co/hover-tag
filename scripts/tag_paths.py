@@ -190,27 +190,55 @@ def runtime_environment(
     }
 
 
-def codex_workspace_args(workdir: Path) -> list[str]:
-    # CLI trust overrides do not activate project config in Codex 0.147.0.
-    # Layer only TAG's MCP definitions explicitly, preserving global settings/auth.
+def codex_trust_args(workdir: Path) -> list[str]:
+    """Trust only the Tag's folder, so Codex adds its `.codex/rules` (the Tag's own rules)
+    to the operator's global rules. Codex 0.162 honours this; older versions ignore it."""
+    return ["-c", "projects={ %s = { trust_level = \"trusted\" } }" % json.dumps(str(workdir.resolve()))]
+
+
+def is_tag_workspace(workdir: Path) -> bool:
+    """Whether `workdir` is the folder the running Tag works in, not some other project."""
     selected = Path(os.getenv("OPENTAG_WORKDIR", str(default_workspace(instance_home())))).expanduser()
-    if os.getenv("TAG_HOME") and workdir.resolve() == selected.resolve():
-        try:
-            import tomllib
-        except ImportError:
-            import tomli as tomllib
-        config = workdir / ".codex/config.toml"
-        if not config.exists():
-            return []
-        with config.open("rb") as handle:
-            servers = tomllib.load(handle).get("mcp_servers", {})
-        arguments = []
-        for name, definition in servers.items():
-            if not re.fullmatch(r"[A-Za-z0-9_-]+", name):
-                raise ValueError("TAG MCP server names must use letters, digits, underscores or hyphens")
-            arguments.extend(["-c", f"mcp_servers.{name}={toml_value(definition)}"])
-        return arguments
-    return []
+    return bool(os.getenv("TAG_HOME")) and workdir.resolve() == selected.resolve()
+
+
+def owns_workspace(workdir: Path, home: Path | None = None) -> bool:
+    """Whether `workdir` is the Tag's own default folder. A Tag pointed at a folder of
+    yours (OPENTAG_WORKDIR) gets no Codex rules or trust there, since they would also
+    change how your own Codex behaves in that folder."""
+    if home is None:
+        if not is_tag_workspace(workdir):
+            return False
+        home = instance_home()
+    return workdir.expanduser().resolve() == default_workspace(home).expanduser().resolve()
+
+
+def codex_workspace_args(workdir: Path) -> list[str]:
+    """Codex settings for the Tag's folder: trust (for its own rules) only in its own
+    default folder, and its MCP servers; any other folder gets none."""
+    if not is_tag_workspace(workdir):
+        return []
+    return (codex_trust_args(workdir) if owns_workspace(workdir) else []) + _codex_mcp_args(workdir)
+
+
+def _codex_mcp_args(workdir: Path) -> list[str]:
+    # CLI trust overrides did not activate project config before Codex 0.162.
+    # Layer only TAG's MCP definitions explicitly, preserving global settings/auth.
+    try:
+        import tomllib
+    except ImportError:
+        import tomli as tomllib
+    config = workdir / ".codex/config.toml"
+    if not config.exists():
+        return []
+    with config.open("rb") as handle:
+        servers = tomllib.load(handle).get("mcp_servers", {})
+    arguments = []
+    for name, definition in servers.items():
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", name):
+            raise ValueError("TAG MCP server names must use letters, digits, underscores or hyphens")
+        arguments.extend(["-c", f"mcp_servers.{name}={toml_value(definition)}"])
+    return arguments
 
 
 def toml_value(value) -> str:

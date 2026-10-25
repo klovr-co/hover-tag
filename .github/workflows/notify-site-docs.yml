@@ -35,14 +35,14 @@ jobs:
         with:
           app-id: ${{ vars.DOCS_SYNC_APP_ID }}
           private-key: ${{ secrets.DOCS_SYNC_APP_PRIVATE_KEY }}
-          owner: mmtmr
+          owner: klovr-co
           repositories: hover-site
           permission-contents: write
       - name: Request current-docs site PR
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
-          gh api --method POST repos/mmtmr/hover-site/dispatches \
+          gh api --method POST repos/klovr-co/hover-site/dispatches \
             -f event_type=tag-docs-updated
   notify:
     if: github.event_name != 'push'
@@ -94,7 +94,13 @@ jobs:
           if [ -n "$EXPECTED_SHA" ]; then test "$sha" = "$EXPECTED_SHA"; fi
           git fetch origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
           test "$(git rev-parse "$RELEASE_TAG^{commit}")" = "$sha"
-          git merge-base --is-ancestor "$sha" origin/main
+          line=${RELEASE_TAG#v}
+          line=${line%.*}
+          git fetch origin "+refs/heads/release/v$line.x:refs/remotes/origin/release/v$line.x" || true
+          git merge-base --is-ancestor "$sha" origin/main || {
+            [ "$channel" = stable ] &&
+              git merge-base --is-ancestor "$sha" "origin/release/v$line.x"
+          }
           version=${RELEASE_TAG#v}
           mkdir -p verified
           gh release download "$RELEASE_TAG" --dir verified \
@@ -108,7 +114,7 @@ jobs:
         with:
           app-id: ${{ vars.DOCS_SYNC_APP_ID }}
           private-key: ${{ secrets.DOCS_SYNC_APP_PRIVATE_KEY }}
-          owner: mmtmr
+          owner: klovr-co
           repositories: hover-site
           permission-contents: write
       - name: Request release-specific site PR
@@ -117,7 +123,7 @@ jobs:
           CHANNEL: ${{ steps.release.outputs.channel }}
           SHA: ${{ steps.release.outputs.sha }}
         run: |
-          gh api --method POST repos/mmtmr/hover-site/dispatches \
+          gh api --method POST repos/klovr-co/hover-site/dispatches \
             -f event_type=tag-docs-release \
             -f "client_payload[tag]=$RELEASE_TAG" \
             -f "client_payload[channel]=$CHANNEL" \

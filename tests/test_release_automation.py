@@ -20,10 +20,14 @@ from scripts.release_automation import (
     build_channel_index,
     derive_next_version,
     find_edge_artifact,
+    find_edge_runs,
     promote_edge_bundle,
     select_auto_prerelease,
     successful_run,
     validate_candidate,
+    validate_maintenance_candidate,
+    validate_source_ref,
+    validate_source_branch,
     validate_edge_bundle,
     validate_release_bundle,
     validate_release_tag,
@@ -136,6 +140,34 @@ class VersionTransitionTests(unittest.TestCase):
         ))
         self.assertIsNone(select_auto_prerelease("0.2.0", tags, []))
 
+    def test_release_labels_start_a_line_after_stable(self) -> None:
+        tags = ["v0.2.0-beta.13", "v0.2.0"]
+
+        self.assertIsNone(select_auto_prerelease("0.2.0", tags, []))
+        self.assertEqual(
+            str(select_auto_prerelease("0.2.0", tags, ["release:next-patch"])),
+            "0.2.1-alpha.1",
+        )
+        self.assertEqual(
+            str(select_auto_prerelease("0.2.0", tags, ["release:next-minor"])),
+            "0.3.0-alpha.1",
+        )
+
+    def test_release_labels_never_select_a_line_below_source(self) -> None:
+        tags = ["v0.2.0"]
+
+        for labels in ([], ["release:next-patch"], ["release:next-minor"]):
+            self.assertEqual(
+                str(select_auto_prerelease("0.3.0-alpha", tags, labels)),
+                "0.3.0-alpha.1",
+            )
+        self.assertEqual(
+            str(select_auto_prerelease(
+                "0.3.0-alpha", tags + ["v0.3.0-alpha.2"], ["release:next-patch"]
+            )),
+            "0.3.1-alpha.1",
+        )
+
     def test_automatic_beta_starts_after_alpha_and_then_increments(self) -> None:
         self.assertEqual(
             str(select_auto_prerelease(
@@ -214,6 +246,34 @@ class ChannelIndexTests(unittest.TestCase):
             "commit_sha": "d" * 40,
         })
 
+    def test_waits_for_tag_app_builds_before_advancing_a_channel(self) -> None:
+        def with_desktop(release: dict, platforms=("macos", "windows", "linux")) -> dict:
+            release["assets"] += [{"name": f"DESKTOP-SHA256SUMS-{name}"} for name in platforms]
+            return release
+
+        stable = self.release("1.0.0", "a" * 40, prerelease=False)
+        alpha = self.release("1.1.0-alpha.1", "b" * 40, prerelease=True)
+        first = with_desktop(self.release("1.1.0-beta.1", "c" * 40, prerelease=True))
+        built = with_desktop(self.release("1.1.0-beta.2", "d" * 40, prerelease=True))
+        partial = with_desktop(self.release("1.1.0-beta.3", "e" * 40, prerelease=True), ("macos", "linux"))
+        pending = self.release("1.1.0-beta.4", "f" * 40, prerelease=True)
+
+        def channels(*releases: dict) -> dict:
+            return build_channel_index(
+                releases, repository="klovr-co/hover-tag", generated_at="2026-10-05T18:41:49Z",
+            )["channels"]
+
+        index = channels(stable, alpha, first, built, partial, pending)
+        # Releases from before Tag.app shipped remain selectable.
+        self.assertEqual(index["stable"]["version"], "1.0.0")
+        self.assertEqual(index["alpha"]["version"], "1.1.0-alpha.1")
+        self.assertEqual(index["beta"]["version"], "1.1.0-beta.2")
+
+        with_desktop(pending)
+        self.assertEqual(channels(stable, alpha, first, built, partial, pending)["beta"]["version"], "1.1.0-beta.4")
+        # Without any Tag.app release, CLI-only releases advance as before.
+        self.assertEqual(channels(stable, self.release("1.1.0-beta.1", "c" * 40, prerelease=True))["beta"]["version"], "1.1.0-beta.1")
+
     def test_rejects_selected_release_with_missing_verified_assets(self) -> None:
         release = self.release("1.1.0-alpha.1", "a" * 40, prerelease=True)
         release["assets"] = [{"name": "tag-1.1.0-alpha.1.zip"}]
@@ -224,6 +284,120 @@ class ChannelIndexTests(unittest.TestCase):
                 repository="klovr-co/hover-tag",
                 generated_at="2026-09-22T00:00:00Z",
             )
+
+
+class MaintenanceReleaseTests(unittest.TestCase):
+    TAGS = ["v0.3.0", "v0.3.0-beta.20", "v0.4.0-alpha.3"]
+
+    def test_accepts_the_next_stable_patch_despite_a_newer_main_line(self) -> None:
+        self.assertEqual(validate_maintenance_candidate("0.3.1", "0.3", self.TAGS), [])
+        self.assertEqual(
+            validate_maintenance_candidate("0.3.2", "0.3", [*self.TAGS, "v0.3.1"]), [],
+        )
+
+    def test_rejects_wrong_line_phase_skipped_or_repeated_patch(self) -> None:
+        for version in ("0.4.1", "0.3.1-alpha.1", "0.3.0", "0.2.9"):
+            with self.subTest(version=version):
+                self.assertTrue(validate_maintenance_candidate(version, "0.3", self.TAGS))
+        self.assertTrue(validate_maintenance_candidate("0.3.1", "0.3", [*self.TAGS, "v0.3.1"]))
+
+    def test_may_skip_a_withdrawn_patch_number(self) -> None:
+        # v0.3.1 was shown publicly, then withdrawn without ever being tagged.
+        self.assertEqual(validate_maintenance_candidate("0.3.2", "0.3", self.TAGS), [])
+        self.assertTrue(validate_maintenance_candidate("0.3.1", "0.3", [*self.TAGS, "v0.3.2"]))
+
+    def test_allows_republishing_an_existing_draft_version(self) -> None:
+        self.assertEqual(validate_maintenance_candidate(
+            "0.3.1", "0.3", [*self.TAGS, "v0.3.1"], allow_existing_version=True,
+        ), [])
+
+    def test_requires_a_published_stable_release_on_the_line(self) -> None:
+        self.assertTrue(validate_maintenance_candidate("0.5.1", "0.5", self.TAGS))
+
+    def test_provenance_branch_must_match_the_version_line(self) -> None:
+        self.assertEqual(validate_source_ref("refs/heads/main", "0.4.0-alpha.1"), [])
+        self.assertEqual(validate_source_branch("release/v0.3.x", "0.3.2"), [])
+        self.assertTrue(validate_source_branch("release/v0.3.x", "0.4.1"))
+        self.assertTrue(validate_source_ref("refs/heads/feature", "0.3.1"))
+        self.assertTrue(validate_source_ref("refs/heads/release/v0.3.x/../main", "0.3.1"))
+
+    def test_selected_commit_error_names_the_branch(self) -> None:
+        sha = "a" * 40
+        errors = validate_selected_sha(sha, sha, False, "origin/release/v0.3.x")
+        self.assertEqual(errors, ["selected commit is not reachable from origin/release/v0.3.x"])
+
+
+class InstalledClientCompatibilityTests(unittest.TestCase):
+    """Released Tag versions verify provenance and cannot be updated to relax it."""
+
+    def package(self, *extra: str) -> dict:
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "out"
+            argv = ["package_release.py", "--output", str(output), "--version", "0.3.1",
+                    "--commit-sha", "a" * 40, "--source-ref", "refs/heads/main",
+                    "--built-at", "2026-10-09T00:00:00Z", *extra]
+            with patch("sys.argv", argv), patch("builtins.print"):
+                package_release.main()
+            data = (output / "BUILD-PROVENANCE.json").read_bytes()
+            archive = next(output.glob("tag-0.3.1.zip")).read_bytes()
+        digest = hashlib.sha256(archive).hexdigest()
+        self.assertEqual(json.loads(data)["archive"]["sha256"], digest)
+        return {"data": data, "digest": digest}
+
+    def test_maintenance_build_provenance_passes_the_installed_client_check(self) -> None:
+        from scripts.tag_install import _verify_provenance
+        built = self.package("--source-branch", "release/v0.3.x")
+        self.assertEqual(json.loads(built["data"])["source_branch"], "release/v0.3.x")
+        self.assertEqual(json.loads(built["data"])["source_ref"], "refs/heads/main")
+        self.assertEqual(_verify_provenance(
+            built["data"], expected_channel="release", archive_name="tag-0.3.1.zip",
+            digest=built["digest"], version="0.3.1",
+        ), "a" * 40)
+
+    def test_main_build_provenance_has_no_source_branch(self) -> None:
+        self.assertNotIn("source_branch", json.loads(self.package()["data"]))
+
+    def test_source_branch_must_match_the_version_line(self) -> None:
+        provenance = {
+            "schema_version": 1, "channel": "release", "source_ref": "refs/heads/main",
+            "version": "0.3.1", "archive": {"name": "tag-0.3.1.zip", "sha256": "d"},
+            "commit_sha": "a" * 40, "built_at": "2026-10-09T00:00:00Z",
+        }
+        from scripts.release_automation import _validate_provenance
+        def check(branch: object) -> list[str]:
+            return _validate_provenance(
+                {**provenance, "source_branch": branch}, channel="release",
+                archive_name="tag-0.3.1.zip", digest="d", version="0.3.1", sha=None,
+            )
+        self.assertEqual(check("release/v0.3.x"), [])
+        self.assertTrue(check("release/v0.4.x"))
+        self.assertTrue(check("main"))
+        self.assertTrue(check(7))
+
+    def test_rehearsal_uses_the_previous_installer_not_a_cached_module(self) -> None:
+        import scripts.tag_install  # noqa: F401 - the current installer is already imported
+        from scripts import rehearse_upgrade
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            previous = root / "previous"
+            (previous / "scripts").mkdir(parents=True)
+            (root / "tag-0.3.1.zip").write_bytes(b"archive")
+            (root / "BUILD-PROVENANCE.json").write_text("{}", encoding="utf-8")
+            installer = previous / "scripts" / "tag_install.py"
+            installer.write_text(
+                "def _verify_provenance(*_a, **_k):\n"
+                "    raise ValueError('old installer says no')\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "old installer says no"):
+                rehearse_upgrade.rehearse(previous, root, "0.3.1")
+            installer.write_text(
+                "def _verify_provenance(*_a, **_k):\n    return 'a' * 40\n", encoding="utf-8")
+            self.assertEqual(rehearse_upgrade.rehearse(previous, root, "0.3.1"), "a" * 40)
+
+    def test_only_the_published_v0_3_1_may_keep_its_branch_in_source_ref(self) -> None:
+        self.assertEqual(validate_source_ref("refs/heads/release/v0.3.x", "0.3.1"), [])
+        self.assertTrue(validate_source_ref("refs/heads/release/v0.3.x", "0.3.2"))
+        self.assertTrue(validate_source_ref("refs/heads/release/v0.4.x", "0.3.1"))
+        self.assertEqual(validate_source_ref("refs/heads/main", "0.3.2"), [])
 
 
 class SelectedCommitTests(unittest.TestCase):
@@ -304,6 +478,124 @@ class SelectedCommitTests(unittest.TestCase):
             }]
         }):
             self.assertEqual(wait_for_predecessor("klovr-co/hover-tag", sha, 0), [])
+
+    @staticmethod
+    def predecessor_responses(sha, *, gate_runs=True, artifact_run=None, edge_runs=()):
+        def github_response(repository, path, parameters=None):
+            if path in ("actions/workflows/ci.yml/runs", "actions/workflows/install-smoke.yml/runs"):
+                return {"workflow_runs": [{
+                    "id": 1,
+                    "head_sha": sha,
+                    "event": "push",
+                    "status": "completed",
+                    "conclusion": "success",
+                }] if gate_runs else []}
+            if path == "actions/artifacts":
+                return {"artifacts": [{
+                    "name": f"tag-edge-{sha}",
+                    "expired": False,
+                    "created_at": "2026-09-21T00:00:00Z",
+                    "workflow_run": {"id": 42},
+                }] if artifact_run else []}
+            if path == "actions/runs/42":
+                return artifact_run
+            if path == "actions/workflows/edge-build.yml/runs":
+                return {"workflow_runs": list(edge_runs)}
+            raise AssertionError(path)
+
+        return github_response
+
+    def test_predecessor_without_gate_runs_is_ineligible(self) -> None:
+        sha = "b" * 40
+        responses = self.predecessor_responses(sha, gate_runs=False)
+        with patch("scripts.release_automation._github_json", side_effect=responses):
+            self.assertEqual(wait_for_predecessor("klovr-co/hover-tag", sha, 0), [])
+
+    def test_failed_predecessor_edge_build_does_not_block_later_commit(self) -> None:
+        sha = "b" * 40
+        failed = {"status": "completed", "conclusion": "failure"}
+        for responses in (
+            self.predecessor_responses(sha, artifact_run=failed),
+            self.predecessor_responses(sha, edge_runs=[{
+                "display_title": f"Edge build {sha}", "head_sha": "c" * 40, **failed,
+            }]),
+        ):
+            with patch("scripts.release_automation._github_json", side_effect=responses):
+                self.assertEqual(wait_for_predecessor("klovr-co/hover-tag", sha, 0), [])
+
+    def test_predecessor_edge_build_in_progress_still_blocks(self) -> None:
+        sha = "b" * 40
+        for responses in (
+            self.predecessor_responses(sha),
+            self.predecessor_responses(sha, artifact_run={"status": "in_progress"}),
+            self.predecessor_responses(sha, edge_runs=[{
+                "display_title": f"Edge build {sha}", "status": "in_progress",
+            }]),
+        ):
+            with patch("scripts.release_automation._github_json", side_effect=responses):
+                self.assertEqual(wait_for_predecessor("klovr-co/hover-tag", sha, 0), [
+                    f"predecessor {sha} has not completed release processing"
+                ])
+
+    def test_edge_runs_match_titled_commit_before_head_sha(self) -> None:
+        sha = "b" * 40
+        runs = [
+            {"id": 1, "display_title": f"Edge build {sha}", "head_sha": "c" * 40},
+            {"id": 2, "display_title": f"Edge build {'d' * 40}", "head_sha": sha},
+            {"id": 3, "display_title": "Edge build", "head_sha": sha},
+            {"id": 4, "display_title": "Edge build", "head_sha": "e" * 40},
+        ]
+        with patch("scripts.release_automation._github_json", return_value={"workflow_runs": runs}):
+            self.assertEqual([run["id"] for run in find_edge_runs("klovr-co/hover-tag", sha)], [1, 3])
+
+    def test_edge_runs_paginate_past_matches_and_stop_at_empty_page(self) -> None:
+        """Older active retries must not be hidden by a newer completed run."""
+        sha = "b" * 40
+        completed = {"display_title": f"Edge build {sha}", "status": "completed"}
+        active = {"display_title": "Edge build", "head_sha": sha, "status": "queued"}
+        unrelated = {"display_title": "Edge build", "head_sha": "c" * 40}
+        for first_match in (True, False):
+            pages = [
+                {"workflow_runs": [completed if first_match else unrelated] + [unrelated] * 99},
+                {"workflow_runs": [active] + [unrelated] * 99},
+                {"workflow_runs": []},
+            ]
+            with self.subTest(first_match=first_match), patch(
+                "scripts.release_automation._github_json", side_effect=pages
+            ) as github:
+                self.assertEqual(
+                    find_edge_runs("klovr-co/hover-tag", sha),
+                    [completed, active] if first_match else [active],
+                )
+                self.assertEqual(
+                    [call.args[2] for call in github.call_args_list],
+                    [{"event": "workflow_run", "per_page": "100", "page": str(page)}
+                     for page in (1, 2, 3)],
+                )
+
+    def test_completed_artifact_does_not_hide_active_edge_retry(self) -> None:
+        """An old artifact cannot allow publication while a retry is active."""
+        sha = "b" * 40
+        for conclusion in ("success", "failure"):
+            for status in ("queued", "in_progress", "completed"):
+                responses = self.predecessor_responses(
+                    sha,
+                    artifact_run={"status": "completed", "conclusion": conclusion},
+                    edge_runs=[{
+                        "display_title": f"Edge build {sha}",
+                        "status": status,
+                        "conclusion": "success" if status == "completed" else None,
+                    }],
+                )
+                with self.subTest(conclusion=conclusion, status=status), patch(
+                    "scripts.release_automation._github_json", side_effect=responses
+                ):
+                    self.assertEqual(
+                        wait_for_predecessor("klovr-co/hover-tag", sha, 0),
+                        [] if status == "completed" else [
+                            f"predecessor {sha} has not completed release processing"
+                        ],
+                    )
 
 
 class ReleaseArtifactTests(unittest.TestCase):
@@ -409,7 +701,7 @@ class ReleaseArtifactTests(unittest.TestCase):
         for name in sorted(names):
             if not name.endswith(".py"):
                 continue
-            tree = ast.parse((root / name).read_text())
+            tree = ast.parse((root / name).read_text(encoding="utf-8"))
             for node in ast.walk(tree):
                 imports = []
                 if isinstance(node, ast.Import):
@@ -428,17 +720,20 @@ class ReleaseArtifactTests(unittest.TestCase):
             (root / "scripts").mkdir()
             manifest = root / "scripts/runtime-files.json"
             def policy(name):
-                manifest.write_text(json.dumps({"schema_version": 1, "files": ["scripts/runtime-files.json", name]}))
+                manifest.write_text(json.dumps({"schema_version": 1, "files": ["scripts/runtime-files.json", name]}), encoding="utf-8")
             policy("missing.txt")
             with self.assertRaisesRegex(FileNotFoundError, "Required runtime file missing"):
                 build_archive(root, root / "invalid.zip", epoch=315532800)
-            for name in ("../private.env", "/absolute", "C:/absolute", "directory\\secret"):
+            # "/absolute" is drive-relative, not absolute, on Windows; releases are packaged on Linux.
+            names = ("../private.env", "C:/absolute", "directory\\secret") if os.name == "nt" else (
+                "../private.env", "/absolute", "C:/absolute", "directory\\secret")
+            for name in names:
                 policy(name)
                 with self.subTest(name=name), self.assertRaises(ValueError):
                     build_archive(root, root / "invalid.zip", epoch=315532800)
             policy("included.txt")
-            (root / "included.txt").write_text("included")
-            (root / "secret.env").write_text("must not ship")
+            (root / "included.txt").write_text("included", encoding="utf-8")
+            (root / "secret.env").write_text("must not ship", encoding="utf-8")
             build_archive(root, root / "valid.zip", epoch=315532800)
             with zipfile.ZipFile(root / "valid.zip") as bundle:
                 self.assertEqual(set(bundle.namelist()), {"scripts/runtime-files.json", "included.txt"})
@@ -449,8 +744,8 @@ class ReleaseArtifactTests(unittest.TestCase):
             root = Path(temp)
             (root / "scripts").mkdir()
             (root / "scripts/runtime-files.json").write_text(json.dumps({
-                "schema_version": 1, "files": ["scripts/runtime-files.json", "linked.txt"]}))
-            (root / "target.txt").write_text("private")
+                "schema_version": 1, "files": ["scripts/runtime-files.json", "linked.txt"]}), encoding="utf-8")
+            (root / "target.txt").write_text("private", encoding="utf-8")
             (root / "linked.txt").symlink_to(root / "target.txt")
             with self.assertRaisesRegex(ValueError, "symlinks"):
                 build_archive(root, root / "invalid.zip", epoch=315532800)
@@ -508,13 +803,23 @@ class ReleaseArtifactTests(unittest.TestCase):
 
 
 class ReleasePreflightTests(unittest.TestCase):
-    def test_beta_guidance_uses_a_complete_source_version(self) -> None:
+    def test_beta_guidance_names_the_line_not_a_candidate(self) -> None:
         root = Path(__file__).resolve().parents[1]
         for relative_path in ("RELEASE.md", ".agents/skills/tag-release/SKILL.md"):
             guidance = (root / relative_path).read_text(encoding="utf-8")
-            self.assertIn("<major>.<minor>.<patch>-beta.1", guidance)
+            self.assertIn("<major>.<minor>.<patch>-beta`", guidance)
+            self.assertNotIn("<major>.<minor>.<patch>-beta.1", guidance)
             self.assertNotIn("`VERSION` set to\n`beta.1`", guidance)
             self.assertNotIn("update `VERSION` to `beta.1`", guidance)
+
+    def test_unnumbered_beta_line_continues_numbering_from_tags(self) -> None:
+        from scripts.release_automation import select_auto_prerelease, validate_release_tag
+
+        tags = ["v0.3.0-alpha.4", "v0.3.0-beta.1", "v0.3.0-beta.8"]
+        self.assertEqual("0.3.0-beta.9", str(select_auto_prerelease("0.3.0-beta", tags, [])))
+        self.assertEqual([], validate_release_tag("0.3.0-beta", "v0.3.0-beta.9"))
+        source = (Path(__file__).resolve().parents[1] / "VERSION").read_text(encoding="utf-8").strip()
+        self.assertRegex(source, r"^\d+\.\d+\.\d+(?:-(?:alpha|beta))?$")
 
     def test_main_gates_preserve_every_push_and_cancel_stale_pr_runs(self) -> None:
         root = Path(__file__).resolve().parents[1]
@@ -539,6 +844,9 @@ class ReleasePreflightTests(unittest.TestCase):
         self.assertIn('startswith("release:")', workflow)
         self.assertIn("edge-release-${{ github.event.workflow_run.head_sha }}", workflow)
         self.assertIn("wait-for-predecessor", workflow)
+        self.assertIn(
+            "run-name: Edge build ${{ github.event.workflow_run.head_sha }}", workflow
+        )
 
     def test_release_workflows_gate_telemetry_stamping_on_explicit_approval(self) -> None:
         root = Path(__file__).resolve().parents[1]
@@ -552,6 +860,31 @@ class ReleasePreflightTests(unittest.TestCase):
             self.assertIn("https://eu.i.posthog.com", workflow)
             self.assertIn("docs/reference/telemetry.md", workflow)
             self.assertIn('--posthog-project-token "$TAG_POSTHOG_PROJECT_TOKEN"', workflow)
+
+    def test_automatic_prereleases_explicitly_dispatch_desktop_packaging(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        edge = (root / ".github/workflows/edge-build.yml").read_text(encoding="utf-8")
+        package = (root / ".github/workflows/release-package.yml").read_text(encoding="utf-8")
+        # GITHUB_TOKEN publication does not fire release:published. Only expose
+        # the tag after verifying its uploaded CLI archive, then dispatch it.
+        self.assertLess(edge.index('--directory published --version'), edge.index('echo "release_tag=$tag"'))
+        dispatch = edge.split("  package-desktop:\n", 1)[1].split("  notify-site-docs:\n", 1)[0]
+        self.assertIn("needs: publish-edge", dispatch)
+        self.assertIn("if: needs.publish-edge.outputs.release_tag != ''", dispatch)
+        self.assertIn("actions: write", dispatch)
+        self.assertIn("RELEASE_TAG: ${{ needs.publish-edge.outputs.release_tag }}", dispatch)
+        self.assertIn('gh workflow run release-package.yml --repo "$GITHUB_REPOSITORY" --ref main -f tag="$RELEASE_TAG"', dispatch)
+        self.assertIn("workflow_dispatch:", package)
+        self.assertIn("RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}", package)
+        self.assertIn("ref: ${{ inputs.tag || github.event.release.tag_name }}", package)
+        # Dispatch has no release event object: validate the actual published
+        # release and don't let a failed validation publish a manifest anyway.
+        self.assertIn('--json isDraft,isPrerelease', package)
+        self.assertIn('test "$(jq -r .isDraft <<<"$release")" = false', package)
+        self.assertIn('test "$expected_prerelease" = "$(jq -r .isPrerelease <<<"$release")"', package)
+        manifests = package.split("  desktop-updates:\n", 1)[1]
+        self.assertIn("needs: [package, desktop]", manifests)
+        self.assertIn("needs.package.result == 'success'", manifests)
 
     def test_prepare_workflow_uses_candidate_preflight(self) -> None:
         workflow = (
@@ -585,6 +918,7 @@ class ReleasePreflightTests(unittest.TestCase):
         self.assertIn("gh release upload channels", workflow)
         self.assertIn("--clobber", workflow)
 
+    @unittest.skipIf(os.name == "nt", "release preflight is a shell script run in Linux CI")
     def test_draft_preparation_does_not_require_publication_approval(self) -> None:
         source_root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -639,6 +973,7 @@ class ReleasePreflightTests(unittest.TestCase):
             self.assertNotEqual(publication.returncode, 0)
             self.assertIn("publication approval is not PASS", publication.stderr)
 
+    @unittest.skipIf(os.name == "nt", "release preflight is a shell script run in Linux CI")
     def test_allows_only_evidence_changes_after_the_live_candidate(self) -> None:
         source_root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as temporary_directory:

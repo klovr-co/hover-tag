@@ -44,8 +44,8 @@ Do not expose tokens or dump unbounded logs.
 
 Derive the next beta version from the latest published release and confirm it
 with the repository validator. Prepare a focused change with `VERSION` set to
-the complete semantic beta version `<major>.<minor>.<patch>-beta.1` (for example,
-`0.2.0-beta.1`) and factual release notes at `docs/releases/v<VERSION>.md`. Keep
+the beta line `<major>.<minor>.<patch>-beta` (for example, `0.2.0-beta`; never a
+candidate number) and factual release notes at `docs/releases/v<VERSION>.md`. Keep
 the default channel set to `stable`. Do not create release evidence or dispatch
 a manual workflow. After the change merges, CI, clean-install checks, and the
 edge workflow publish the immutable beta from the retained artifact
@@ -60,6 +60,7 @@ Prepare a focused candidate change containing:
 
 - `VERSION` set to the intended version.
 - `docs/releases/v<VERSION>.md` with factual release notes and accurate limitations.
+- `CHANGELOG.md` with a dated, nonempty entry for the intended stable version.
 
 Do not claim qualification before it has happened. Keep the default channel set to `stable`; preparing a prerelease must not change it. Run the relevant tests, `python3 scripts/release_check.py`, and:
 

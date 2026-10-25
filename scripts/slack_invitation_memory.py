@@ -8,26 +8,26 @@ import time
 from urllib.parse import urlsplit
 
 try:
-    from . import slack_channels, tag_config, tag_cli
+    from . import slack_identity, slack_channels, slack_channel_names, tag_config, tag_cli
     from .opentag_setup import connector_scope, connector_uri, write_slack_connector
     from . import tag_credentials
 except ImportError:
+    import slack_identity
     import slack_channels
+    import slack_channel_names
     import tag_config
     import tag_cli
     from opentag_setup import connector_scope, connector_uri, write_slack_connector
     import tag_credentials
 
 
-def validate_slack_identity(token: str, *, team_id: str, app_id: str = "", label: str) -> None:
+def validate_slack_identity(token: str, *, team_id: str, app_id: str = "", enterprise_id: str = "", label: str) -> None:
     """Background validation must never enter onboarding's interactive recovery."""
     if tag_config.validation_error("MFS_SLACK_TOKEN", token):
         raise RuntimeError("Missing or invalid credential")
-    payload = slack_channels.slack_api(token, "auth.test", {})
-    if payload.get("team_id") != team_id:
-        raise RuntimeError("Credential workspace mismatch")
-    if app_id and payload.get("app_id") and payload["app_id"] != app_id:
-        raise RuntimeError("Credential app mismatch")
+    slack_identity.validate(token, team_id=team_id, app_id=app_id, enterprise_id=enterprise_id,
+                            label=label, api=slack_channels.slack_api)
+
 
 
 class InvitationMemory:
@@ -38,6 +38,7 @@ class InvitationMemory:
         self.environment = os.environ if environment is None else environment
         self.stop_event = threading.Event()
         self.ready_event = threading.Event()
+        self.wake_event = threading.Event()
         self.thread = None
         self.last_sync = 0.0
         self.last_signature = None
@@ -72,16 +73,23 @@ class InvitationMemory:
             if not team or tag_config.validation_error("SLACK_TEAM_ID", team):
                 raise RuntimeError("Invalid workspace")
             validate_slack_identity(values["SLACK_BOT_TOKEN"], team_id=team,
-                                    app_id=values.get("SLACK_APP_ID", ""), label="Bot token")
-            channels = [c for c in slack_channels.list_channels(values["SLACK_BOT_TOKEN"]) if c.is_member]
+                                    app_id=values.get("SLACK_APP_ID", ""), enterprise_id=values.get("SLACK_ENTERPRISE_ID", ""), label="Bot token")
+            channels = [c for c in slack_channels.list_channels(values["SLACK_BOT_TOKEN"],
+                **({"team_id": team} if values.get("SLACK_ENTERPRISE_ID") else {})) if c.is_member]
+            try:
+                slack_channel_names.remember(self.home, team, {c.channel_id: c.name for c in channels})
+            except OSError:
+                pass  # Display metadata must not change membership or memory readiness.
             ids = ",".join(c.channel_id for c in channels)
             scopes = [connector_scope(team, c, values.get("SLACK_APP_ID", "")) for c in channels]
             # Remove lost membership from live access before any index operation.
             self.restrict(unrelated + scopes, ids)
             if not channels:
-                self.ready_event.clear()
+                # Ready with no channels: the empty allowlist admits none, DMs work, and
+                # the first invitation is confirmed live. A new Tag starts and waits for it.
                 self.last_signature = None
                 self.status("no_joined_channels")
+                self.ready_event.set()
                 return  # Never send an empty connector allowlist to MFS.
             signature = (tuple(sorted(scopes)), values.get("MFS_SLACK_HISTORY_DAYS", "30"),
                          values.get("MFS_SLACK_TOKEN"), values.get("MFS_URL"), values.get("MFS_TOKEN"))
@@ -91,7 +99,7 @@ class InvitationMemory:
             self.status("syncing", len(channels))
             check = "history_access"
             history = values.get("MFS_SLACK_TOKEN", "")
-            validate_slack_identity(history, team_id=team, label="Slack-history credential")
+            validate_slack_identity(history, team_id=team, enterprise_id=values.get("SLACK_ENTERPRISE_ID", ""), label="Slack-history credential")
             for channel in channels:
                 slack_channels.slack_api(history, "conversations.history", {"channel": channel.channel_id, "limit": "1"})
             # Do not continue if settings changed while Slack checks were running.
@@ -162,9 +170,15 @@ class InvitationMemory:
                 except Exception:
                     self.ready_event.clear()
                     self.restrict([])
-                self.stop_event.wait(60)
+                # Poll every minute, but check at once when Slack reports an invite.
+                self.wake_event.wait(60)
+                self.wake_event.clear()
         self.thread = threading.Thread(target=work, name="tag-invitation-memory", daemon=True)
         self.thread.start()
+
+    def refresh(self) -> None:
+        """Check membership now instead of waiting for the next minute."""
+        self.wake_event.set()
 
     def ready_for_requests(self) -> bool:
         """Return whether current invitation policy permits serving Slack requests."""
@@ -172,3 +186,4 @@ class InvitationMemory:
 
     def stop(self) -> None:
         self.stop_event.set()
+        self.wake_event.set()

@@ -35,7 +35,11 @@ def report(doctor_exit, slack, memory, logs):
 
 
 def offer(payload):
-    if not sys.stdin.isatty():
+    try:
+        from tag_display import stdin_is_terminal
+    except ImportError:
+        from scripts.tag_display import stdin_is_terminal
+    if not stdin_is_terminal():
         return
     print("\nOptional Codex diagnosis · suggestions only")
     print("Only this report will be supplied (no raw logs, tokens, or Slack messages):")

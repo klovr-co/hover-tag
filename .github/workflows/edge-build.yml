@@ -1,10 +1,11 @@
 name: Edge build
+run-name: Edge build ${{ github.event.workflow_run.head_sha }}
 
 on:
   workflow_run:
     workflows: [CI]
     types: [completed]
-    branches: [main]
+    branches: [main, 'release/v*.x']
 
 permissions:
   actions: read
@@ -24,7 +25,9 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       EDGE_SHA: ${{ github.event.workflow_run.head_sha }}
+      SOURCE_BRANCH: ${{ github.event.workflow_run.head_branch }}
     outputs:
+      release_tag: ${{ steps.prerelease.outputs.release_tag }}
       docs_tag: ${{ steps.prerelease.outputs.docs_tag }}
       docs_sha: ${{ steps.prerelease.outputs.docs_sha }}
     steps:
@@ -37,8 +40,17 @@ jobs:
           python-version: '3.12'
       - name: Verify exact main commit and required workflows
         run: |
-          git fetch origin main --tags
-          python scripts/release_automation.py validate-commit --sha "$EDGE_SHA"
+          python scripts/release_automation.py validate-branch --name "$SOURCE_BRANCH"
+          git fetch origin main "$SOURCE_BRANCH" --tags
+          # Maintenance branches (release/vX.Y.x) keep a build for a later stable
+          # release, but never move the edge channel or publish a prerelease.
+          if [ "$SOURCE_BRANCH" = main ]; then
+            echo "MAINTENANCE=false" >> "$GITHUB_ENV"
+          else
+            echo "MAINTENANCE=true" >> "$GITHUB_ENV"
+          fi
+          python scripts/release_automation.py validate-commit --sha "$EDGE_SHA" \
+            --main-ref "origin/$SOURCE_BRANCH"
           previous_sha=$(git rev-parse "$EDGE_SHA^")
           python scripts/release_automation.py wait-for-predecessor \
             --repository "$GITHUB_REPOSITORY" --sha "$previous_sha" --wait-seconds 600
@@ -46,6 +58,11 @@ jobs:
             --repository "$GITHUB_REPOSITORY" --sha "$EDGE_SHA" --wait-seconds 600
       - name: Resolve automatic prerelease intent
         run: |
+          if [ "$MAINTENANCE" = true ]; then
+            echo "AUTO_PUBLISH=false" >> "$GITHUB_ENV"
+            echo "RELEASE_VERSION=$(head -n 1 VERSION)" >> "$GITHUB_ENV"
+            exit 0
+          fi
           mapfile -t labels < <(
             gh api "repos/$GITHUB_REPOSITORY/commits/$EDGE_SHA/pulls" \
               --jq '.[].labels[].name | select(startswith("release:"))'
@@ -75,8 +92,12 @@ jobs:
               --privacy-notice-url https://github.com/klovr-co/hover-tag/blob/main/docs/reference/telemetry.md
             )
           fi
+          # Installed Tag versions accept only source_ref refs/heads/main, so a
+          # maintenance build keeps it and names its real branch separately.
+          branch_arguments=()
+          if [ "$SOURCE_BRANCH" != main ]; then branch_arguments+=(--source-branch "$SOURCE_BRANCH"); fi
           python scripts/package_release.py --channel edge --commit-sha "$EDGE_SHA" \
-            --source-ref refs/heads/main --built-at "$built_at" \
+            --source-ref refs/heads/main "${branch_arguments[@]}" --built-at "$built_at" \
             --version "$RELEASE_VERSION" "${telemetry_arguments[@]}"
           python scripts/release_automation.py validate-edge \
             --directory out --sha "$EDGE_SHA" --version "$RELEASE_VERSION"
@@ -91,6 +112,7 @@ jobs:
           if-no-files-found: error
           retention-days: 90
       - name: Update public edge channel
+        if: env.MAINTENANCE != 'true'
         run: |
           if [ "$(git ls-remote origin refs/heads/main | cut -f1)" != "$EDGE_SHA" ]; then
             echo "A newer main commit exists; leaving the moving edge tag unchanged."
@@ -136,10 +158,26 @@ jobs:
             --pattern SHA256SUMS --pattern BUILD-PROVENANCE.json
           python scripts/release_automation.py validate-release \
             --directory published --version "$RELEASE_VERSION" --sha "$EDGE_SHA"
+          echo "release_tag=$tag" >> "$GITHUB_OUTPUT"
           if [[ "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-(alpha|beta)\.[1-9][0-9]*$ ]]; then
             echo "docs_tag=$tag" >> "$GITHUB_OUTPUT"
             echo "docs_sha=$EDGE_SHA" >> "$GITHUB_OUTPUT"
           fi
+  package-desktop:
+    needs: publish-edge
+    if: needs.publish-edge.outputs.release_tag != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ needs.publish-edge.outputs.release_tag }}
+    steps:
+      # Releases made with GITHUB_TOKEN do not trigger release:published.
+      # workflow_dispatch does, and keeps platform builds out of the edge queue.
+      - name: Start desktop packaging for the verified prerelease
+        run: gh workflow run release-package.yml --repo "$GITHUB_REPOSITORY" --ref main -f tag="$RELEASE_TAG"
   notify-site-docs:
     needs: publish-edge
     if: needs.publish-edge.outputs.docs_tag != ''

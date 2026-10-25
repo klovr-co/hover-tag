@@ -1,0 +1,4 @@
+{"type": "progress", "step": "stopping", "text": "Stopping Maya's Tag…"}
+{"type": "progress", "step": "saving", "text": "Saving the connection…"}
+{"type": "progress", "step": "restarting", "text": "Starting Maya's Tag again…"}
+{"type": "api", "action": "set", "backend": "claude", "status": "saved", "api": {"backend": "claude", "kind": "anthropic", "kind_name": "Anthropic-compatible", "base_url": "https://gateway.example.com", "host": "gateway.example.com", "models": ["claude-sonnet-5-5", "claude-haiku-4-5"], "api_version": "", "key_set": true, "problem": ""}, "default_model": "claude:claude-sonnet-5-5", "restarted": true, "restart_required": false, "unchanged": false, "in_use": true}

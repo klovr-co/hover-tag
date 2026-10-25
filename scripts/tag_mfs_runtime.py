@@ -4,15 +4,15 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-VERSION = 1
+VERSION = 2
 
 
 def active(shared: Path, process) -> bool:
     if process is None:
         return False
     try:
-        record = json.loads((shared / "mfs.json").read_text())
-        ready = json.loads((shared / "slack-runtime-ready-v1.json").read_text())
+        record = json.loads((shared / "mfs.json").read_text(encoding="utf-8"))
+        ready = json.loads((shared / "slack-runtime-ready-v1.json").read_text(encoding="utf-8"))
         return (
             record.get("slack_runtime_version") == VERSION
             and ready.get("version") == VERSION

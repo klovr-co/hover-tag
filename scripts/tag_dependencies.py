@@ -12,6 +12,7 @@ import sys
 import tarfile
 import tempfile
 import urllib.request
+import zipfile
 from pathlib import Path
 
 SLACK_VERSION = "4.8.0"
@@ -21,7 +22,12 @@ SLACK_ARTIFACTS = {
     ("darwin", "x86_64"): ("macOS_amd64", "7c00a576e571e291ffb25710ecb6ffa7733455682eb879acd4f40812285fc55b"),
     ("linux", "arm64"): ("linux_arm64", "dbfc62385ac35d66aa3356d2a99ee1444bd05eafb7b14ef08235e408a2fae6cb"),
     ("linux", "x86_64"): ("linux_amd64", "533ebc242561a79c6aaf238c3417ce113d1257ace80cf90f1e5f852d8ec9ca7b"),
+    ("win32", "x86_64"): ("windows_64-bit", "ccf7ac1fcdbf39cdbd66cbc04d3018c5c293b70e489a85e07b140693377c6d24"),
 }
+
+
+def slack_executable() -> str:
+    return "slack.exe" if sys.platform == "win32" else "slack"
 
 
 def slack_compatible(command: str | Path) -> bool:
@@ -59,33 +65,48 @@ def ensure_slack(home: Path) -> Path:
     target = SLACK_ARTIFACTS.get((sys.platform, machine))
     if target is None:
         raise RuntimeError("Automatic Slack CLI setup is unavailable on this platform; install Slack CLI 4.7+ (4.x) and retry")
-    destination = home / "runtime/slack" / SLACK_VERSION / "slack"
+    name = slack_executable()
+    destination = home / "runtime/slack" / SLACK_VERSION / name
     if slack_compatible(destination):
         return destination
     destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     artifact, digest = target
-    url = f"https://github.com/slackapi/slack-cli/releases/download/v{SLACK_VERSION}/slack_cli_{SLACK_VERSION}_{artifact}.tar.gz"
+    suffix = "zip" if sys.platform == "win32" else "tar.gz"
+    url = f"https://github.com/slackapi/slack-cli/releases/download/v{SLACK_VERSION}/slack_cli_{SLACK_VERSION}_{artifact}.{suffix}"
     # Extract only a regular executable: never archive paths or symlinks. Publish
     # only after validation; a killed download cannot become the selected CLI.
     with tempfile.TemporaryDirectory(prefix=".prepare-", dir=destination.parent) as directory:
         temporary = Path(directory)
-        archive = temporary / "slack.tar.gz"
+        archive = temporary / f"slack.{suffix}"
         download_verified(url, archive, digest)
-        with tarfile.open(archive, "r:gz") as bundle:
-            members = [m for m in bundle.getmembers() if m.isfile() and Path(m.name).name == "slack"]
-            if len(members) != 1:
-                raise RuntimeError("Slack archive must contain exactly one CLI executable")
-            source = bundle.extractfile(members[0])
-            if source is None:
-                raise RuntimeError("Slack archive has no executable data")
-            candidate = temporary / "slack"
-            with candidate.open("wb") as output:
-                shutil.copyfileobj(source, output)
+        candidate = temporary / name
+        extract_executable(archive, name, candidate)
         candidate.chmod(0o755)
         if not slack_compatible(candidate):
             raise RuntimeError("Downloaded Slack CLI cannot run on this machine; retry after checking OS compatibility")
         os.replace(candidate, destination)
     return destination
+
+
+def extract_executable(archive: Path, name: str, candidate: Path) -> None:
+    """Copy the single regular file called ``name`` out of a .tar.gz or .zip."""
+    if archive.suffix == ".zip":
+        with zipfile.ZipFile(archive) as bundle:
+            members = [m for m in bundle.infolist() if not m.is_dir() and Path(m.filename).name == name]
+            if len(members) != 1:
+                raise RuntimeError("Slack archive must contain exactly one CLI executable")
+            with bundle.open(members[0]) as source, candidate.open("wb") as output:
+                shutil.copyfileobj(source, output)
+        return
+    with tarfile.open(archive, "r:gz") as bundle:
+        members = [m for m in bundle.getmembers() if m.isfile() and Path(m.name).name == name]
+        if len(members) != 1:
+            raise RuntimeError("Slack archive must contain exactly one CLI executable")
+        source = bundle.extractfile(members[0])
+        if source is None:
+            raise RuntimeError("Slack archive has no executable data")
+        with candidate.open("wb") as output:
+            shutil.copyfileobj(source, output)
 
 
 def activate_slack(command: Path) -> None:
@@ -94,8 +115,12 @@ def activate_slack(command: Path) -> None:
 
 
 def prepare_python(source: Path, home: Path) -> tuple[Path, Path]:
-    result = subprocess.run(["sh", str(source / "install.sh"), "--runtime-info"],
-                            env=dict(os.environ, TAG_HOME=str(home)), stdout=subprocess.PIPE,
+    if sys.platform == "win32":
+        command = ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                   "-File", str(source / "install.ps1"), "-RuntimeInfo"]
+    else:
+        command = ["sh", str(source / "install.sh"), "--runtime-info"]
+    result = subprocess.run(command, env=dict(os.environ, TAG_HOME=str(home)), stdout=subprocess.PIPE,
                             text=True, check=False)
     if result.returncode:
         raise RuntimeError("Tag runtime preparation failed; check the download error above and retry")
@@ -118,10 +143,10 @@ def migrate(home: Path, source: Path) -> None:
         if (home / "runtime/slack").is_dir():
             activate_slack(ensure_slack(home))
         return  # A fresh source checkout still provisions Slack during setup.
-    record = json.loads(current.read_text())
+    record = json.loads(current.read_text(encoding="utf-8"))
     if record.get("dependency_schema", 0) < 1:
-        if os.name == "nt":
-            return  # Native Windows retains its existing Python prerequisite.
+        # Includes Windows installs made with a system Python: they move to
+        # Tag's private Python, and the system one is no longer needed.
         python, _ = prepare_python(source, home)
         result = subprocess.run(
             [str(python), str(source / "scripts/tag_install.py"), "--source", str(source),
@@ -130,11 +155,15 @@ def migrate(home: Path, source: Path) -> None:
         )
         if result.returncode:
             raise RuntimeError("Tag runtime migration failed; the active release was preserved. Retry startup to resume")
-        updated = json.loads(current.read_text())
+        updated = json.loads(current.read_text(encoding="utf-8"))
         if updated.get("dependency_schema") != 1:
             raise RuntimeError("Runtime migration did not finish; retry Tag startup")
         # Reload both the release code and recorded credentials through normal startup.
-        os.execv(updated["python"], [updated["python"], str(home / "releases" / updated["release"] / "scripts/tag_cli.py"), *sys.argv[1:]])
+        command = [updated["python"], str(home / "releases" / updated["release"] / "scripts/tag_cli.py"), *sys.argv[1:]]
+        if sys.platform == "win32":
+            # Windows execv starts a new process and exits 0 at once; wait for its real result.
+            sys.exit(subprocess.call(command))
+        os.execv(updated["python"], command)
     command = ensure_slack(home)
     activate_slack(command)
     # Recheck actual executable even if a previous checkpoint exists.

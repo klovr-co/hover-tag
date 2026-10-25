@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import unittest
 from unittest.mock import patch
 
@@ -311,6 +312,19 @@ class ScopePlanningTests(unittest.TestCase):
         self.assertEqual("clarify", plan.mode)
         self.assertIn("#support", plan.clarification)
         self.assertNotIn("leadership", plan.clarification)
+
+    def test_org_member_can_search_only_the_selected_workspace_in_shared_memory(self):
+        client = FakeSlackClient()
+        client.user["team_id"] = "T2"
+        client.user["enterprise_user"] = {"enterprise_id": "EORG", "teams": ["T1", "T2"]}
+        with patch.dict(os.environ, {"SLACK_ENTERPRISE_ID": "EORG"}):
+            plan = self.plan("search all channels", client)
+            self.assertTrue(plan.scopes)
+            self.assertTrue(all(scope.startswith("slack://tag-t1/") for scope in plan.scopes))
+            client.user["enterprise_user"]["teams"] = ["T2"]
+            self.assertEqual(self.plan("search all channels", client).scopes, ())
+            client.user["enterprise_user"] = {"enterprise_id": "EOTHER", "teams": ["T1"]}
+            self.assertEqual(self.plan("search all channels", client).scopes, ())
 
     def test_caller_and_workspace_identity_must_match(self) -> None:
         client = FakeSlackClient()

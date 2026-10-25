@@ -1,14 +1,17 @@
-"""Privacy-bounded, installation-wide telemetry for the Tag CLI.
+"""Privacy-bounded, installation-wide telemetry for the Tag CLI and Tag.app.
 
-CLI callers can only use the event-specific functions in this module. There is
+Callers can only use the event-specific functions in this module. There is
 deliberately no public generic capture API: event names, property names, and
 values are constrained here before anything reaches disk or the network.
+Tag.app records its fixed events through `tag telemetry record`, which maps
+onto the same functions.
 """
 from __future__ import annotations
 
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -43,6 +46,19 @@ ERROR_CATEGORIES = frozenset({
     "configuration", "dependency", "interrupted", "network", "permission",
     "runtime", "unknown", "validation",
 })
+# Usage the CLI records about itself. Tag.app reports its own app_* events
+# instead, so these are dropped when the app runs the CLI.
+CLI_USAGE_EVENTS = frozenset({
+    "tui_started", "setup_started", "setup_step_completed", "setup_abandoned",
+    "setup_completed", "command_completed", "command_failed",
+})
+APP_SCREENS = frozenset({"home", "tag", "settings", "ai_settings", "setup"})
+APP_SETUP_ENTRY_POINTS = frozenset({"first_tag", "add_tag", "finish_tag"})
+APP_SETUP_STEPS = frozenset({"tag", "ai", "workspace", "app", "create", "channels"})
+APP_SETUP_ABANDON_REASONS = frozenset({"cancelled", "failed", "ai_settings"})
+APP_UPDATE_OUTCOMES = frozenset({"succeeded", "failed"})
+APP_CHANNELS = frozenset({"stable", "beta", "alpha"})
+VERSION_PATTERN = re.compile(r"\d{1,4}\.\d{1,4}\.\d{1,4}(?:-(?:alpha|beta|rc)(?:\.\d{1,4})?)?")
 
 
 def duration_bucket(seconds: float) -> str:
@@ -59,6 +75,12 @@ def duration_bucket(seconds: float) -> str:
 def hard_disabled(environment: dict[str, str] | None = None) -> bool:
     source = os.environ if environment is None else environment
     return source.get("TAG_TELEMETRY", "").strip().lower() == "off"
+
+
+def started_by_app(environment: dict[str, str] | None = None) -> bool:
+    """Tag.app runs the CLI with TAG_TELEMETRY_SOURCE=app."""
+    source = os.environ if environment is None else environment
+    return source.get("TAG_TELEMETRY_SOURCE", "").strip().lower() == "app"
 
 
 def preference_path(installation_root: Path) -> Path:
@@ -110,6 +132,7 @@ def status(installation_root: Path) -> dict[str, object]:
     return {
         "schema_version": SCHEMA_VERSION,
         "enabled": False if hard_disabled() else saved is True,
+        "available": collection_available(),
         "saved_preference": "on" if saved is True else "off" if saved is False else "not_set",
         "process_override": "off" if hard_disabled() else None,
         "privacy_notice": build_config.PRIVACY_NOTICE_URL or None,
@@ -191,6 +214,8 @@ def _enqueue(
     *, launch_worker: bool = True,
 ) -> None:
     if hard_disabled() or saved_preference(installation_root) is not True or not collection_available():
+        return
+    if event in CLI_USAGE_EVENTS and started_by_app():
         return
     try:
         identifier = _installation_identifier(installation_root)
@@ -370,6 +395,100 @@ def command_failed(installation_root: Path, command_group: str, error_category: 
 
 def telemetry_preference_enabled(installation_root: Path) -> None:
     _enqueue(installation_root, "telemetry_preference_changed", {"preference": "enabled"})
+
+
+def app_opened(installation_root: Path, app_version: str) -> None:
+    if VERSION_PATTERN.fullmatch(app_version):
+        _enqueue(installation_root, "app_opened", {
+            "app_version": app_version,
+            "tag_version": _version(),
+            "os_family": platform.system().lower() or "unknown",
+            "cpu_architecture": platform.machine().lower() or "unknown",
+        })
+
+
+def app_screen_viewed(installation_root: Path, screen: str) -> None:
+    if screen in APP_SCREENS:
+        _enqueue(installation_root, "app_screen_viewed", {"screen": screen})
+
+
+def app_setup_started(installation_root: Path, entry_point: str) -> None:
+    if entry_point in APP_SETUP_ENTRY_POINTS:
+        _enqueue(installation_root, "app_setup_started", {"entry_point": entry_point})
+
+
+def app_setup_step_completed(installation_root: Path, step: str, elapsed_seconds: float) -> None:
+    if step in APP_SETUP_STEPS:
+        _enqueue(installation_root, "app_setup_step_completed", {
+            "step": step, "elapsed_time": duration_bucket(elapsed_seconds),
+        })
+
+
+def app_setup_abandoned(
+    installation_root: Path, last_step: str, reason: str, elapsed_seconds: float,
+) -> None:
+    if last_step in APP_SETUP_STEPS and reason in APP_SETUP_ABANDON_REASONS:
+        _enqueue(installation_root, "app_setup_abandoned", {
+            "last_step": last_step, "reason": reason,
+            "elapsed_time": duration_bucket(elapsed_seconds),
+        })
+
+
+def app_setup_completed(installation_root: Path, entry_point: str, elapsed_seconds: float) -> None:
+    if entry_point in APP_SETUP_ENTRY_POINTS:
+        _enqueue(installation_root, "app_setup_completed", {
+            "entry_point": entry_point, "elapsed_time": duration_bucket(elapsed_seconds),
+        })
+
+
+def app_update_finished(installation_root: Path, outcome: str) -> None:
+    if outcome in APP_UPDATE_OUTCOMES:
+        _enqueue(installation_root, "app_update_finished", {"outcome": outcome})
+
+
+def app_channel_switched(installation_root: Path, channel: str) -> None:
+    if channel in APP_CHANNELS:
+        _enqueue(installation_root, "app_channel_switched", {"channel": channel})
+
+
+def _seconds(value: str) -> float:
+    seconds = float(value)
+    if not 0 <= seconds < 7 * 24 * 60 * 60:
+        raise ValueError("elapsed_seconds is out of range")
+    return seconds
+
+
+# Tag.app's events: each takes exactly these fields, checked by its function.
+APP_EVENTS: dict[str, tuple[tuple[str, ...], Callable[..., None]]] = {
+    "app_opened": (("app_version",), app_opened),
+    "app_screen_viewed": (("screen",), app_screen_viewed),
+    "app_setup_started": (("entry_point",), app_setup_started),
+    "app_setup_step_completed": (("step", "elapsed_seconds"), app_setup_step_completed),
+    "app_setup_abandoned": (("last_step", "reason", "elapsed_seconds"), app_setup_abandoned),
+    "app_setup_completed": (("entry_point", "elapsed_seconds"), app_setup_completed),
+    "app_update_finished": (("outcome",), app_update_finished),
+    "app_channel_switched": (("channel",), app_channel_switched),
+}
+
+
+def record_app_event(installation_root: Path, event: str, fields: dict[str, str]) -> bool:
+    """Record one of Tag.app's fixed events; false when the event or its fields are unknown.
+
+    Values outside each field's closed set are dropped by the event function.
+    """
+    known = APP_EVENTS.get(event)
+    if known is None or set(fields) != set(known[0]):
+        return False
+    names, record = known
+    try:
+        values = [
+            _seconds(fields[name]) if name == "elapsed_seconds" else fields[name]
+            for name in names
+        ]
+    except ValueError:
+        return False
+    record(installation_root, *values)
+    return True
 
 
 class SetupSession:

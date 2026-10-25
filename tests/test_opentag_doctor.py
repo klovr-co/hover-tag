@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import io
 import os
+import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -10,6 +13,35 @@ from scripts.opentag_doctor import check_offline
 
 
 class OpenTagDoctorTests(unittest.TestCase):
+    def test_api_configuration_reports_exact_missing_key_for_both_backends(self):
+        for backend in ("codex", "claude"):
+            with self.subTest(backend=backend):
+                prefix = f"OPENTAG_{backend.upper()}_"
+                environment = {"OPENTAG_BACKEND": backend, prefix + "AUTH": "api",
+                               prefix + "MODELS": "test-model", prefix + "BASE_URL": "http://localhost:8000/v1"}
+                checks = []
+                with patch.dict(os.environ, environment, clear=True), patch.object(opentag_doctor, "CHECK_RESULTS", checks):
+                    self.assertFalse(opentag_doctor.check_backend())
+                self.assertIn(f"tag config set {prefix}API_KEY --stdin", checks[0]["next_action"])
+                self.assertNotIn("sign in", checks[0]["next_action"])
+
+    def test_api_configuration_recovery_never_exposes_key_or_invalid_url(self):
+        checks = []
+        environment = {"OPENTAG_BACKEND": "codex", "OPENTAG_CODEX_AUTH": "api",
+                       "OPENTAG_CODEX_API_KEY": "private-test-key", "OPENTAG_CODEX_MODELS": "test-model",
+                       "OPENTAG_CODEX_BASE_URL": "https://user:private-url-password@example.com/v1"}
+        with patch.dict(os.environ, environment, clear=True), patch.object(opentag_doctor, "CHECK_RESULTS", checks):
+            self.assertFalse(opentag_doctor.check_backend())
+        self.assertIn("HTTPS base URL", checks[0]["next_action"])
+        self.assertNotIn("private-test-key", str(checks))
+        self.assertNotIn("private-url-password", str(checks))
+
+    def test_raw_remote_error_details_stay_out_of_structured_checks(self):
+        checks = []
+        with patch.object(opentag_doctor, "CHECK_RESULTS", checks):
+            opentag_doctor.print_check(False, "Slack connection", "remote-secret-text")
+        self.assertNotIn("remote-secret-text", str(checks))
+
     def test_slack_diagnosis_detects_missing_search_permission(self) -> None:
         checks = []
         with patch.object(opentag_doctor, "CHECK_RESULTS", checks), patch.object(
@@ -75,3 +107,48 @@ class OpenTagDoctorTests(unittest.TestCase):
 
         with patch.dict(os.environ, environment, clear=True):
             self.assertFalse(check_offline(root))
+
+    def test_a_tag_following_invitations_may_have_no_memory_sources_yet(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        environment = {
+            "OPENTAG_TRANSPORT": "slack", "OPENTAG_BACKEND": "codex", "OPENTAG_WORKDIR": str(root),
+            "MFS_URL": "http://127.0.0.1:13619", "SLACK_ALLOWED_USER_IDS": "UOWNER",
+        }
+        with patch.dict(os.environ, {**environment, "SLACK_CHANNEL_POLICY": "invited"}, clear=True), patch.object(
+            opentag_doctor, "check_runtime_dependencies", return_value=True
+        ):
+            self.assertTrue(check_offline(root))
+        with patch.dict(os.environ, {**environment, "SLACK_CHANNEL_POLICY": "selected"}, clear=True), patch.object(
+            opentag_doctor, "check_runtime_dependencies", return_value=True
+        ):
+            self.assertFalse(check_offline(root))
+
+    def test_memory_check_counts_entries_and_reports_damaged_files(self) -> None:
+        from scripts.tag_memory import MemoryStore
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            MemoryStore(root, "C1", "U1").save("deadline", "Due Friday.")
+            MemoryStore(root, "C1", "U1").save("detail", "Long detail.", kind="note")
+            output = io.StringIO()
+            with patch.dict(os.environ, {"OPENTAG_MEMORY_ROOT": temp}), redirect_stdout(output):
+                self.assertTrue(opentag_doctor.check_memory())
+            self.assertIn("1 always-loaded entries and 1 notes in 1 scope(s)", output.getvalue())
+            self.assertIn("Codex memories are turned off", output.getvalue())
+
+            (root / "global.json").write_text("{broken", encoding="utf-8")
+            output = io.StringIO()
+            with patch.dict(os.environ, {"OPENTAG_MEMORY_ROOT": temp}), redirect_stdout(output):
+                self.assertFalse(opentag_doctor.check_memory())
+            self.assertIn("[fail] Tag memory - cannot read", output.getvalue())
+
+class ClaudeTransportDoctorTests(unittest.TestCase):
+    def test_sdk_case_and_whitespace_still_check_dependency(self):
+        for transport in ("sdk", "SDK", " SDK ", "print"):
+            with self.subTest(transport=transport), patch.dict(os.environ, {
+                "OPENTAG_BACKEND": "claude", "OPENTAG_CLAUDE_TRANSPORT": transport,
+            }), patch.object(opentag_doctor.shutil, "which", return_value="/bin/claude"), patch.object(
+                opentag_doctor.importlib.util, "find_spec", return_value=None
+            ) as find, patch.object(opentag_doctor, "print_check"):
+                self.assertEqual(transport == "print", opentag_doctor.check_backend())
+                self.assertEqual(transport != "print", find.called)

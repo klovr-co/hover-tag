@@ -3,7 +3,7 @@
 Ask Tag to help set up Gmail access, then find an email about a launch.
 This tutorial uses Google Workspace CLI (`gws`); an MCP connection is not needed.
 
-This guide uses Codex and assumes you have completed
+This guide works with Codex or Claude Code and assumes you have completed
 [your first Tag task](../getting-started/first-task.md).
 See [Adding integrations](../concepts/adding-integrations.md)
 for how Tag uses commands, skills, and tool configuration.
@@ -16,14 +16,17 @@ in a DM. The example reply shows how Tag might hand the login step back to you:
 > Help me set up Gmail access using https://github.com/googleworkspace/cli.
 >
 > Check what's already installed and authenticated, install any missing tools
-> and the gws-shared and gws-gmail skills for Codex in your workspace, and
+> and the gws-shared and gws-gmail skills in your workspace, and
 > guide me through any login steps I need to complete.
 >
 > **Zara's Tag:** If gws isn't authenticated yet, complete its login on the machine
 > running Tag. Once you're signed in, ask me to check Gmail access.
 
-Tag can attempt the setup using its available tools and permissions. If an
-installation needs approval or an interactive terminal, complete that step
+Tag can attempt the setup using its available tools and permissions. If the
+agent asks for permission, for example to install outside its folder or use the
+network, Tag sends you a private approval prompt; see
+[Control your Tag](../concepts/control-your-tag.md). If an installation needs an
+interactive terminal, complete that step
 on the machine running Tag, following the
 [Google Workspace CLI installation guide](https://github.com/googleworkspace/cli#installation).
 
@@ -88,7 +91,7 @@ or send an email.
 | Symptom | What to check |
 | --- | --- |
 | Tag cannot find `gws` | Run `gws --version` in the terminal you use to start Tag; restart after changing the environment. |
-| Codex cannot find the Gmail skill | Check the workspace's `.agents/skills` directory and each skill's `SKILL.md`, then send a new request. |
+| The agent cannot find the Gmail skill | Check the workspace's `.agents/skills` (Codex) or `.claude/skills` (Claude) directory and each skill's `SKILL.md`, then start a new thread. |
 | Gmail returns an authorization error | Follow the [authentication guide](https://github.com/googleworkspace/cli#authentication) to resolve the `gws` login or scope error, then ask Tag to check Gmail access again. |
 | Gmail works in your terminal but fails through Tag | Check that Tag runs under the same local account with the same tool configuration and required environment variables. |
 

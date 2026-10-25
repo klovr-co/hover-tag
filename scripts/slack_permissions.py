@@ -59,7 +59,7 @@ def recover(check, app_id):
             ui.message(str(error))
             guidance(error, app_id)
             while True:
-                choice = ui.choose("Permission check paused", ["Open app settings", "Check again", "Save and exit"])
+                choice = ui.choose("Permission check paused", ["Open app settings", "Check again", "Save and exit"], qid="permission_check")
                 if choice == 0:
                     open_settings(app_id)
                 elif choice == 1:

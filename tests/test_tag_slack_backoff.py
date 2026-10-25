@@ -97,5 +97,5 @@ class BackoffTests(unittest.IsolatedAsyncioTestCase):
         request = AsyncMock(side_effect=[*[Limited("2") for _ in range(6)], "ok"])
         self.assertEqual(await self.gate.call(request), "ok")
         self.assertEqual(self.clock.delays, [2] * 6)
-        saved = json.loads(self.gate.path.read_text())
+        saved = json.loads(self.gate.path.read_text(encoding="utf-8"))
         self.assertEqual(set(saved), {"version", "retry_at"})
