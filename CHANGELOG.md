@@ -6,6 +6,16 @@ All notable changes to Tag are documented here.
 
 ### Added
 
+- See and edit what each Tag knows. The Tag's **Knowledge** tab shows its
+  memory (for all channels and for each channel) and its skills as plain
+  documents, with a Visual or Markdown view. Hover an entry to see who saved
+  it and open the Slack thread it came from. **History** lists every change
+  with its diff, and **Undo** puts back what a change replaced, including
+  restoring something the Tag was asked to forget. **Add to knowledge** gives
+  the Tag something to remember from the app. Edits keep the same limits and
+  safety checks as memory saved in Slack, and the Tag uses them from its next
+  reply. In the terminal, `tag NAME knowledge list|read|edit|add|forget|history|show|undo`
+  does the same.
 - Each Tag's memory is now plain markdown files with a full history. What
   someone asked a Tag to remember lives in `memory/core.md` (always loaded),
   `memory/notes/` and `memory/channels/<channel>/`. Every change is recorded
