@@ -239,10 +239,13 @@ built when the first such instance is needed.
 requester and carry the persona's name and picture. The requester check is
 unchanged. Saved approval rules belong to the instance, not the persona.
 
-**Tag proposes, a person approves.** In a thread, Lead may propose a new
-persona, a skill or a routine. Nothing is written until the requester, who
-must be an authorized user, approves it on the card. The card, expiry and
-"one open proposal" checks are the ones ADR 0011 built for Tag proposals.
+**Tag proposes, a person approves.** In a thread, the Tag under its own name
+(Lead, on Lead's Tag) may propose a new persona or a skill. Nothing is written
+until the requester, who must be an authorized user, approves it on the card
+within an hour. The card, expiry and one-decision checks are the ones ADR 0011
+built for Tag proposals. A skill is text only and is written only into the
+Tag's own workspace. Routines need no card: #237's `tag routine add` already
+approves a routine in the requester's name.
 
 **Creating app Tags stays on hold.** No Tag creates a Slack app. ADR 0011's
 service-account, Slack CLI and `apps.manifest.create` code stays in the
@@ -394,10 +397,11 @@ Each source was read in full on 25 Oct 2026, except where marked.
    the thread's persona, persona instructions and
    memory scope and voice for the run, `username` and `icon_url` on posts,
    and persona labels in thread context. Approval prompts carry the persona.
-4. **Proposals.** Lead proposes a persona, a `SKILL.md` (text only, with a
-   size cap), or a routine. The requester approves on the card. Routines go to
-   `tag NAME routine add --from-json` when #237's `routines` capability
-   exists, and to `state/pending-routines.json` until then.
+   Until streaming under a custom name is checked live, a Tag with personas
+   posts its replies whole instead of streaming them.
+4. **Proposals.** The Tag proposes a persona or a `SKILL.md` (text only, up
+   to 8,000 characters). The requester approves on the card. Routines use
+   #237's `tag routine add`, approved in the requester's name.
 5. **Evaluation harness** with the golden tasks above, in the migration
    kit's results layout, run offline. The first paid run waits for a budget.
 

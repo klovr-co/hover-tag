@@ -508,3 +508,33 @@ class ProposalTests(BridgeCase):
 def tag_persona_proposals_store(home: Path):
     from scripts import tag_persona_proposals
     return tag_persona_proposals.store(home)
+
+
+class EvalHarnessTests(unittest.TestCase):
+    """The golden-task harness runs offline with the fake model and writes the kit's layout."""
+
+    def test_the_smoke_run_passes_and_writes_results_the_compare_script_reads(self) -> None:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("persona_eval", Path(__file__).resolve().parents[1]
+                                                      / "evals/personas/run_eval.py")
+        harness = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(harness)
+        with tempfile.TemporaryDirectory() as raw, redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            self.assertEqual(0, harness.main(["--variant", "smoke", "--reps", "1", "--only", "t02,t05,t07,t10",
+                                              "--out", raw]))
+            rows = [json.loads(line) for line in (Path(raw) / "smoke/results.jsonl").read_text().splitlines()]
+            self.assertEqual(4, len(rows))
+            for row in rows:
+                self.assertEqual({"task_complete": 1}, row["grade"], row["checks"])
+                self.assertEqual("fake", row["model"])
+                self.assertTrue((Path(raw) / f"smoke/traces/{row['prompt_id']}_rep0.json").is_file())
+            self.assertEqual(4, json.loads((Path(raw) / "smoke/run.json").read_text())["runs"][0]["rows_written"])
+
+    def test_a_real_backend_run_needs_an_agreed_budget(self) -> None:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("persona_eval", Path(__file__).resolve().parents[1]
+                                                      / "evals/personas/run_eval.py")
+        harness = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(harness)
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            harness.main(["--variant", "paid", "--real-backend"])

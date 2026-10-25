@@ -17,3 +17,6 @@ node_modules
 
 # Vite dependency pre-bundle cache
 .vite/
+
+# Persona eval runs (evals/personas/run_eval.py)
+/evals/personas/results/
