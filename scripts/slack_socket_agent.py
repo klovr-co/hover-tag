@@ -3433,6 +3433,15 @@ def slack_user_allowed(user_id: str, allowed_user_ids: frozenset[str]) -> bool:
     return bool(user_id) and user_id in allowed_user_ids
 
 
+def watching_off_reason() -> str | None:
+    """Why configured watching is off for this bridge, such as a missing classifier key."""
+    try:
+        import tag_config as settings
+    except ImportError:
+        from scripts import tag_config as settings
+    return settings.watching_off_reason(os.environ)
+
+
 def watch_home_blocks() -> list[dict[str, Any]]:
     """Owner control for watching: a mode per channel, off by default, labelled experimental.
 
@@ -3464,6 +3473,8 @@ def watch_home_blocks() -> list[dict[str, Any]]:
         {"type": "context", "elements": [{"type": "mrkdwn", "text":
             "Needs a classifier key: see `tag config keys`. Quiet hours, a daily limit and a "
             "cooldown after 👎 apply. Anyone can turn it off with “Don't do this here”."}]},
+        *([{"type": "section", "text": {"type": "mrkdwn", "text": f":warning: {reason}"}}]
+          if (reason := watching_off_reason()) else []),
         *watch_usage_blocks(modes),
     ]
 
@@ -3617,6 +3628,7 @@ def print_live_summary(backend: str, allowed_user_ids: frozenset[str]) -> None:
     dm_status = "enabled" if direct_messages_enabled() else "disabled"
     watched = channel_watch.watched_channel_ids()
     untagged_status = (
+        f"off: {off}" if watched and (off := watching_off_reason()) else
         f"{len(watched)} channel(s), classifier "
         f"{os.getenv('OPENTAG_WATCH_CLASSIFIER') or watch_classifier.DEFAULT_PROVIDER}"
         if watched else "off"
@@ -5502,7 +5514,7 @@ def create_app(
         mentions_people = bool(MENTION_RE.search(message_text))
         if mentions_people and not chime:
             return
-        if not watch_ready(channel):
+        if not watch_ready(channel) or watching_off_reason():
             return
         if channel_watch.in_quiet_hours(channel_watch.quiet_hours(), datetime.now()):
             return
@@ -5726,6 +5738,10 @@ def create_app(
 
     def post_watch_notices(client: Any, logger: Any) -> None:
         """Announce watching in each newly opted-in channel; watching waits for the notice."""
+        if reason := watching_off_reason():
+            # Never announce watching that can't happen; the notice goes out once the key is set.
+            logger.warning("%s", reason)
+            return
         if not channel_watch.reactions_granted(watch_home()):
             if channel_watch.watched_channel_ids():
                 logger.warning("Watching is off until Slack grants %s; run tag start to approve them",

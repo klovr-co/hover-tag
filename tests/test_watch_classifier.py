@@ -43,23 +43,23 @@ class ConfigurationTests(unittest.TestCase):
             if "WATCH" in key or "TYPESAFE" in key or "DECISIONS" in key or "JEV" in key
         })
 
-    def test_enabled_configuration_requires_the_selected_providers_private_key(self) -> None:
+    def test_without_the_selected_providers_key_watching_is_off_with_a_reason(self) -> None:
         values = dict(tag_config.DEFAULTS, OPENTAG_WATCH_CHANNEL_IDS="C123", OPENTAG_WATCH_CLASSIFIER="typesafe-jev")
-        self.assertIn("TypeSafe API key is required", tag_config.config_errors(values)["OPENTAG_TYPESAFE_API_KEY"])
+        self.assertNotIn("OPENTAG_TYPESAFE_API_KEY", tag_config.config_errors(values))  # The Tag still starts.
+        self.assertIn("needs OPENTAG_TYPESAFE_API_KEY", tag_config.watching_off_reason(values))
         values["OPENTAG_TYPESAFE_API_KEY"] = "secret-key"
-        self.assertNotIn("OPENTAG_TYPESAFE_API_KEY", tag_config.config_errors(values))
+        self.assertIsNone(tag_config.watching_off_reason(values))
 
         values["OPENTAG_WATCH_CLASSIFIER"] = "openai-decisions"
-        errors = tag_config.config_errors(values)
-        self.assertIn("OpenAI Decisions API key is required", errors["OPENTAG_OPENAI_DECISIONS_API_KEY"])
+        self.assertIn("needs OPENTAG_OPENAI_DECISIONS_API_KEY", tag_config.watching_off_reason(values))
         values["OPENTAG_OPENAI_DECISIONS_API_KEY"] = "sk-decisions"
-        self.assertNotIn("OPENTAG_OPENAI_DECISIONS_API_KEY", tag_config.config_errors(values))
+        self.assertIsNone(tag_config.watching_off_reason(values))
 
     def test_any_watching_mode_requires_the_key_but_off_does_not(self) -> None:
         values = dict(tag_config.DEFAULTS, OPENTAG_WATCH_CHANNEL_MODES="C123=chimes-in")
-        self.assertIn("OPENTAG_OPENAI_DECISIONS_API_KEY", tag_config.config_errors(values))
+        self.assertIn("OPENTAG_OPENAI_DECISIONS_API_KEY", tag_config.watching_off_reason(values))
         values["OPENTAG_WATCH_CHANNEL_MODES"] = "C123=off"
-        self.assertNotIn("OPENTAG_OPENAI_DECISIONS_API_KEY", tag_config.config_errors(values))
+        self.assertIsNone(tag_config.watching_off_reason(values))
 
     def test_tags_already_watching_keep_typesafe_after_the_default_changes(self) -> None:
         import tempfile

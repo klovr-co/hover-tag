@@ -38,6 +38,11 @@ These notes go with the experimental channel-watching change, which supersedes #
   use the bot token only on Slack's file hosts, with size caps and a check of the image bytes. Unverified live:
   Claude SDK image blocks (mocked here) and the form of Slack's `vtt` field (both a link and inline text are
   handled).
+- **Without a key.** A missing classifier key is no longer a config error that stops `tag start`. Watching and
+  chime-in are off, with the reason in `tag config show`, `tag config watching`, the Home tab and the startup
+  summary, and no notice is posted. The backend-as-classifier path (`channel_watch.backend_classify`, YES or NO
+  from a text-only run, failing closed on anything else) is built and tested with mocks, but not offered until
+  its evaluation runs.
 - **Cost per channel.** Classifier calls, input tokens and estimated spend per channel, in total and today, are
   kept in the watch state. `tag config watching [--json]` and the Home tab show them. Tag.app shows them in a
   follow-up.

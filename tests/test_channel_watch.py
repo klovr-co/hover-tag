@@ -220,6 +220,29 @@ class DraftTests(unittest.TestCase):
                 self.assertEqual(channel_watch.DRAFT_TIMEOUT, options["max_timeout"])
                 self.assertEqual("model-x", runner.run.call_args.kwargs["model"])
 
+    def test_backend_classifier_answers_yes_or_no_and_fails_closed_otherwise(self) -> None:
+        from scripts import watch_classifier
+        runner = MagicMock()
+        answers = iter(["YES", " no. ", "Probably yes", ""])
+
+        def run(prompt, *, model, reasoning_effort, emit):
+            emit({"type": "message_complete", "phase": "final_answer", "text": next(answers)})
+            return "completed", ""
+
+        runner.run.side_effect = run
+        with patch("scripts.claude_agent_backend.ClaudeAgentRun", return_value=runner) as claude:
+            ask = lambda: channel_watch.backend_classify(  # noqa: E731
+                {"current_message": "We launched!"}, "claude", None, name="Tag", question=watch_classifier.CHIME_IN)
+            self.assertTrue(ask())
+            instructions = claude.call_args.kwargs["text_only_instructions"]
+            self.assertIn(watch_classifier.CHIME_TRUE_CRITERIA, instructions)
+            self.assertIn("exactly YES or NO", instructions)
+            self.assertFalse(ask())
+            for _ in range(2):
+                with self.assertRaises(watch_classifier.ClassifierError):
+                    ask()
+        self.assertNotIn("tag-backend", watch_classifier.PROVIDERS)  # Built, not offered yet.
+
     def test_failed_or_unknown_runs_produce_no_text(self) -> None:
         runner = MagicMock()
         runner.run.return_value = ("failed", "boom")

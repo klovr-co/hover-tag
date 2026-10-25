@@ -58,6 +58,10 @@ class TagControlTests(unittest.TestCase):
         with redirect_stdout(StringIO()) as output:
             tag_control.config_command(self.home, ["watching"], json_output=True, stdin=False)
         result = json.loads(output.getvalue())
+        self.assertIn("needs OPENTAG_OPENAI_DECISIONS_API_KEY", result["off_reason"])
+        with redirect_stdout(StringIO()) as shown:
+            tag_control.config_command(self.home, ["show"], json_output=True, stdin=False)
+        self.assertIn("Watching and chime-in are off", json.loads(shown.getvalue())["watching_off"])
         rows = {row["channel"]: row for row in result["channels"]}
         self.assertEqual(("chimes-in", 2, 1500, 1), (rows["C1"]["mode"], rows["C1"]["calls"],
                                                       rows["C1"]["input_tokens"], rows["C1"]["estimated_calls"]))

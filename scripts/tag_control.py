@@ -241,11 +241,14 @@ def config_command(home: Path, words: list[str], *, json_output: bool, stdin: bo
                   "channels": [{"channel": channel, "mode": modes.get(channel, "off"), **usage.get(channel, {
                       "calls": 0, "input_tokens": 0, "usd": 0.0, "since": "", "today_calls": 0, "today_usd": 0.0,
                       "estimated_calls": 0})} for channel in sorted(set(modes) | set(usage))],
+                  "off_reason": settings.watching_off_reason(values),
                   "note": "Spend is estimated from list prices; the provider's dashboard has the billed amount."}
     elif action == "show" and len(words) <= 1:
         values = settings.load_config(path)
         result = {"schema_version": 1, "tag": tag_id, "path": str(path), "settings": settings.public_config(values),
                   "fields": settings.config_errors(values)}
+        if reason := settings.watching_off_reason(values):
+            result["watching_off"] = reason
     elif action == "set" and ((stdin and len(words) == 2) or (not stdin and len(words) == 3)):
         key = words[1]
         if key not in settings.PUBLIC and not stdin:
@@ -276,6 +279,8 @@ def config_command(home: Path, words: list[str], *, json_output: bool, stdin: bo
             ui.display.info_row(key, value or "not set")
         for key, problem in result["fields"].items():
             ui.display.info_row(key, problem, good=False)
+        if result.get("watching_off"):
+            ui.display.info_row("Watching", result["watching_off"], good=False)
         ui.display.next_action("Edit settings interactively", tag_command(tag_id, "settings"))
     elif action == "init":
         ui.display.header("Config", target_detail(identity, tag_id, suffix="Existing values are preserved"))
@@ -284,6 +289,8 @@ def config_command(home: Path, words: list[str], *, json_output: bool, stdin: bo
         ui.display.header("Watching", target_detail(identity, tag_id, suffix=f"Classifier: {result['classifier']}"))
         if not result["channels"]:
             ui.message("No channels are watched. Set OPENTAG_WATCH_CHANNEL_MODES or use Tag's Home tab.")
+        if result["off_reason"]:
+            ui.display.info_row("Off", result["off_reason"], good=False)
         for item in result["channels"]:
             ui.display.info_row(f"{item['channel']} ({item['mode']})", channel_watch.usage_line(item))
         ui.message(result["note"])

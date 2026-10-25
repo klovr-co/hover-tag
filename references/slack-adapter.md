@@ -254,7 +254,14 @@ dashboard has the billed amount.
   `input`.
 
 A timeout (`OPENTAG_WATCH_CLASSIFIER_TIMEOUT_SECONDS`, default `5`), error,
-refusal, malformed answer or missing key all stay silent.
+refusal or malformed answer stays silent.
+
+**Without a key.** If the selected classifier's key isn't set, watching and
+chime-in are off and the rest of the Tag works as usual. `tag config show`,
+`tag config watching`, the Home tab and the startup summary say why, and Tag
+posts no notice until the key is set. Using the Tag's own backend as the
+classifier (one tiny yes-or-no text-only call) is built but not offered yet: it
+needs its own evaluation first.
 
 For each message that passes the free checks, the classifier receives:
 

@@ -3413,6 +3413,20 @@ class SlackChannelWatchTests(unittest.TestCase):
         self.assertIn("classifier checks every new post", self.client.chat_postMessage.call_args.kwargs["text"])
         self.assertTrue(self.state.noticed("C123"))
 
+    def test_without_a_key_watching_is_off_with_the_reason_shown(self) -> None:
+        from contextlib import ExitStack
+        self.state.set_noticed("C123", False)
+        self.environment = self.ENVIRONMENT | {"OPENTAG_TYPESAFE_API_KEY": ""}
+        with ExitStack() as stack:
+            self.app(stack)
+            slack_socket_agent.App.return_value.tag_post_watch_notices(self.client, MagicMock())
+            self.assertIn("needs OPENTAG_TYPESAFE_API_KEY", json.dumps(slack_socket_agent.app_home_view("C123")))
+        self.client.chat_postMessage.assert_not_called()  # No notice for watching that can't happen.
+        self.state.set_noticed("C123", True)
+        self.deliver(self.event())
+        self.evaluate.assert_not_called()
+        self.assertEqual([], self.log())
+
     def test_home_tab_sets_a_mode_per_channel(self) -> None:
         from contextlib import ExitStack
         self.environment = self.ENVIRONMENT | {"OPENTAG_WATCH_CHANNEL_IDS": "",

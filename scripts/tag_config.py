@@ -6,6 +6,7 @@ import os
 import re
 import tempfile
 import unicodedata
+from collections.abc import Mapping
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -337,14 +338,25 @@ def config_errors(values: dict[str, str]) -> dict[str, str]:
             continue
         if key in EDITABLE and (error := validation_error(key, value)):
             errors[key] = error
-    if values.get("OPENTAG_WATCH_CHANNEL_IDS", "").strip() or any(
-            not item.strip().endswith("=off") for item in values.get("OPENTAG_WATCH_CHANNEL_MODES", "").split(",")
-            if item.strip()):
-        provider = values.get("OPENTAG_WATCH_CLASSIFIER") or DEFAULTS["OPENTAG_WATCH_CLASSIFIER"]
-        key, label = CLASSIFIER_PROVIDERS.get(provider, ("", ""))
-        if key and not values.get(key, "").strip():
-            errors[key] = f"{label} is required when channel watching uses {provider}"
     return errors
+
+
+def watching_configured(values: Mapping[str, str]) -> bool:
+    return bool(values.get("OPENTAG_WATCH_CHANNEL_IDS", "").strip()) or any(
+        not item.strip().endswith("=off") for item in values.get("OPENTAG_WATCH_CHANNEL_MODES", "").split(",")
+        if item.strip())
+
+
+def watching_off_reason(values: Mapping[str, str]) -> str | None:
+    """Why configured watching is off, or None. A missing key turns watching off, not the Tag."""
+    if not watching_configured(values):
+        return None
+    provider = values.get("OPENTAG_WATCH_CLASSIFIER") or DEFAULTS["OPENTAG_WATCH_CLASSIFIER"]
+    key, label = CLASSIFIER_PROVIDERS.get(provider, ("", ""))
+    if key and not values.get(key, "").strip():
+        return (f"Watching and chime-in are off: {provider} needs {key} ({label}). "
+                f"Set it with tag config set {key} --stdin, or choose another classifier.")
+    return None
 
 
 def public_config(values: dict[str, str]) -> dict[str, str]:
@@ -458,10 +470,7 @@ def migrate_watch_classifier(home: Path, path: Path) -> bool:
     if isinstance(checkpoint, dict) and checkpoint.get("version") == "1":
         return False
     saved = read_config(path)
-    watching = saved.get("OPENTAG_WATCH_CHANNEL_IDS", "").strip() or any(
-        not item.strip().endswith("=off") for item in saved.get("OPENTAG_WATCH_CHANNEL_MODES", "").split(",")
-        if item.strip())
-    if watching and not saved.get("OPENTAG_WATCH_CLASSIFIER", "").strip():
+    if watching_configured(saved) and not saved.get("OPENTAG_WATCH_CLASSIFIER", "").strip():
         update_config(path, {"OPENTAG_WATCH_CLASSIFIER": "typesafe-jev"})
     # Atomic checkpoint comes last. Interrupted writes can be retried safely.
     save_config(marker, {"version": "1"})
