@@ -18,6 +18,7 @@ import type { ActivityItem } from "./home";
 import { windowFitter } from "./fit";
 import { DEMO_ROUTINE_REFERENCE, demoRoutines } from "./routines";
 import { demoKnowledge } from "./knowledge";
+import { demoTransfer } from "./transfer";
 
 export interface AppInfo {
   platform: "macos" | "windows" | "linux" | string;
@@ -86,6 +87,10 @@ export interface Bridge {
   installAppUpdate(version: string): Promise<void>;
   /** Choose a picture file; Tag checks it. Null when the person cancels. */
   pickImage(): Promise<string | null>;
+  /** Choose a file to open, such as a Tag export. Null when the person cancels. */
+  pickFile(filters: { name: string; extensions: string[] }[]): Promise<string | null>;
+  /** Choose where to save a new file. Null when the person cancels. */
+  saveFile(defaultName: string, filters: { name: string; extensions: string[] }[]): Promise<string | null>;
   /** Files dropped on the window, while `over` reports a drag above it. */
   onFileDrop(handler: (paths: string[]) => void, over?: (dragging: boolean) => void): () => void;
 }
@@ -166,6 +171,15 @@ async function tauriBridge(): Promise<Bridge> {
       const { open } = await import("@tauri-apps/plugin-dialog");
       const picked = await open({ multiple: false, directory: false, filters: [{ name: "Pictures", extensions: ["png", "jpg", "jpeg", "gif"] }] });
       return typeof picked === "string" ? picked : null;
+    },
+    pickFile: async (filters) => {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const picked = await open({ multiple: false, directory: false, filters });
+      return typeof picked === "string" ? picked : null;
+    },
+    saveFile: async (defaultName, filters) => {
+      const { save } = await import("@tauri-apps/plugin-dialog");
+      return (await save({ defaultPath: defaultName, filters })) ?? null;
     },
     onFileDrop: (handler, over) => {
       const stop = import("@tauri-apps/api/webview").then(({ getCurrentWebview }) => getCurrentWebview().onDragDropEvent((event) => {
@@ -288,7 +302,7 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
       }
       if (first === "version") {
         return json({ ...versionExample, version: runtimeVersion,
-          capabilities: [...new Set([...versionExample.capabilities, "ai-connections", "shared-ai-connections", "logs-activity", "thinking-level", "describe", "telemetry-events", "api-connections", "saved-models", "permission-rules", "routines", "knowledge", "knowledge-add"])] });
+          capabilities: [...new Set([...versionExample.capabilities, "ai-connections", "shared-ai-connections", "logs-activity", "thinking-level", "describe", "telemetry-events", "api-connections", "saved-models", "permission-rules", "routines", "knowledge", "knowledge-add", "tag-export"])] });
       }
       if (second === "settings" && args[2] === "ai" && args[3] === "api" && args[4] === "check") {
         await sleep(500);
@@ -421,6 +435,13 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
             ...(row === rows[0] ? [`ERROR Routine r-3f9a1c2e7b failed [${DEMO_ROUTINE_REFERENCE}]: rate_limit: usage limit reached`] : [])],
           mfs: ["Memory server ready"] }, activity: matches.slice(0, limit), activity_has_more: matches.length > limit });
       }
+      if (first === "import" || (row && second === "export")) {
+        const answer = demoTransfer(args, rows);
+        if (first === "import" && !rows.some((r) => r.id === "mayas-tag-2")) {
+          rows.push({ ...structuredClone(rows[0]), id: "mayas-tag-2", state: "setup_incomplete", has_app: false, keep_running: false, channels: [] });
+        }
+        return json(answer);
+      }
       if (row && second === "knowledge") {
         const result = knowledge(args.slice(2));
         return { code: result.ok ? 0 : 1, stdout: JSON.stringify({ schema_version: 1, tag: row.id, ...result }), stderr: "" };
@@ -518,6 +539,8 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
     checkAppUpdate: async () => desktopVersion !== targetVersion && updateDemo !== "preparing" ? { version: targetVersion } : null,
     installAppUpdate: async () => { desktopVersion = targetVersion; await sleep(1500); },
     pickImage: async () => null,
+    pickFile: async () => "/Users/maya/Downloads/mayas-tag-2026-10-26.hovertag",
+    saveFile: async (name) => `/Users/maya/Downloads/${name}`,
     onFileDrop: () => () => {},
   };
 }
