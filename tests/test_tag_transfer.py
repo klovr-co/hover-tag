@@ -99,7 +99,8 @@ class ExportTests(TransferTestCase):
         settings = json.loads(zipfile.ZipFile(exported["path"]).read("settings/settings.json"))
         self.assertEqual({"OPENTAG_BOT_NAME", "OPENTAG_DEFAULT_MODEL", "OPENTAG_THREAD_MAX_CONTEXT_TOKENS", "SLACK_CHANNEL_IDS"},
                          set(settings))
-        self.assertEqual(0o600, Path(exported["path"]).stat().st_mode & 0o777)
+        if os.name != "nt":
+            self.assertEqual(0o600, Path(exported["path"]).stat().st_mode & 0o777)
 
     def test_it_holds_memory_skills_threads_and_settings(self) -> None:
         exported = self.export()
