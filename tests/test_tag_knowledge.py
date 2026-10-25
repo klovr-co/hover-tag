@@ -92,6 +92,13 @@ class FormatTests(KnowledgeTestCase):
         meta, _ = knowledge.parse_front((self.places.memory / "channels/CLAUNCH/core.md").read_text(encoding="utf-8"))
         self.assertEqual("hover-tag://tag/t0team-a0app/thread/CLAUNCH/1729.1", meta["from_thread"])
 
+    def test_a_file_saved_with_windows_line_endings_still_reads(self) -> None:
+        self.store().save("cto", "Dana is CTO.")
+        path = self.places.memory / "channels/CLAUNCH/core.md"
+        path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n") + b"## tone\r\nShort replies.\r\n")
+        entries = knowledge.load_scope(self.places, "CLAUNCH")["entries"]
+        self.assertEqual({"cto": "Dana is CTO.", "tone": "Short replies."}, {k: e["text"] for k, e in entries.items()})
+
     def test_a_persons_edit_may_add_blank_lines_but_not_loose_text(self) -> None:
         self.assertEqual({"a": "one", "b": "two"}, knowledge.parse_core("\n## a\n\none\n\n\n## b\ntwo\n\n", lenient=True))
         with self.assertRaises(knowledge.KnowledgeError) as refused:
@@ -208,15 +215,15 @@ class HistoryTests(KnowledgeTestCase):
         for commit in commits:
             self.assertEqual((thread, "t0team-a0app", "UBEN"),
                              (commit.trailers["Thread"], commit.trailers["Tag"], commit.trailers["Written-by"]))
-        self.assertEqual("", knowledge.read_text(self.places.memory / knowledge.JOURNAL))
+        self.assertEqual("", knowledge.read_file(self.places.memory / knowledge.JOURNAL))
         self.assertFalse(str(self.places.history_dir()).startswith(str(self.home)),
                          "history lives outside the Tag's folder")
 
     def test_a_repeated_sync_after_a_crash_adds_no_duplicates(self) -> None:
         self.store().save("cto", "Dana is CTO.")
-        journal = knowledge.read_text(self.places.memory / knowledge.JOURNAL)
+        journal = knowledge.read_file(self.places.memory / knowledge.JOURNAL)
         knowledge.sync(self.places)
-        knowledge.write_text(self.places.memory / knowledge.JOURNAL, journal or "")  # As if truncation never happened.
+        knowledge.write_file(self.places.memory / knowledge.JOURNAL, journal or "")  # As if truncation never happened.
         self.assertEqual(0, knowledge.sync(self.places)["committed"])
         self.assertEqual(1, len(list(self.history().log())))
 

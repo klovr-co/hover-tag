@@ -154,7 +154,13 @@ def validate_channel(channel: str) -> str:
 
 
 def parse_front(raw: str) -> tuple[dict[str, str], str]:
-    """Split a ``---`` header of ``key: value`` lines from the body."""
+    """Split a ``---`` header of ``key: value`` lines from the body.
+
+    Tag writes plain ``\n`` line endings. A file saved with Windows line
+    endings throughout (for example edited by hand) is read as if it had them.
+    """
+    if raw.startswith("---\r\n"):
+        raw = raw.replace("\r\n", "\n")
     if not raw.startswith("---\n"):
         return {}, raw
     end = raw.find("\n---\n", 3)
@@ -190,6 +196,8 @@ def render_core(sections: dict[str, str]) -> str:
 def parse_core(body: str, *, lenient: bool = False) -> dict[str, str]:
     """``## key`` sections in file order. Canonical files round-trip exactly; a
     person's edit (``lenient``) may add or drop blank lines around entries."""
+    if lenient or re.match(r"## [a-z0-9][a-z0-9-]{0,63}[ \t]*\r\n", body):
+        body = body.replace("\r\n", "\n")  # A hand edit with Windows line endings throughout.
     sections: dict[str, list[str]] = {}
     current: str | None = None
     preamble: list[str] = []
@@ -233,7 +241,7 @@ def core_file(meta: dict[str, str], sections: dict[str, str]) -> str:
 # Files -------------------------------------------------------------------------
 
 
-def read_text(path: Path) -> str | None:
+def read_file(path: Path) -> str | None:
     try:
         with open(path, encoding="utf-8", newline="") as handle:
             return handle.read()
@@ -241,7 +249,7 @@ def read_text(path: Path) -> str | None:
         return None
 
 
-def write_text(path: Path, text: str) -> None:
+def write_file(path: Path, text: str) -> None:
     """Durably replace one file; a crash leaves the old or the new copy."""
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
@@ -326,7 +334,7 @@ def memory_lock(root: Path, timeout: float = LOCK_TIMEOUT_SECONDS) -> Iterator[N
 
 
 def read_format(memory: Path) -> dict[str, Any] | None:
-    raw = read_text(memory / FORMAT_FILE)
+    raw = read_file(memory / FORMAT_FILE)
     if raw is None:
         return None
     try:
@@ -342,7 +350,7 @@ def read_format(memory: Path) -> dict[str, Any] | None:
 
 def write_format(memory: Path, **extra: Any) -> dict[str, Any]:
     record = {"format": "markdown", "version": FORMAT_VERSION, "history": uuid.uuid4().hex, **extra}
-    write_text(memory / FORMAT_FILE, json.dumps(record, indent=2, sort_keys=True) + "\n")
+    write_file(memory / FORMAT_FILE, json.dumps(record, indent=2, sort_keys=True) + "\n")
     return record
 
 
@@ -405,11 +413,11 @@ def load_scope(places: Places, scope: str) -> dict[str, Any]:
     directory = places.scope_dir(scope)
     files: dict[str, str | None] = {}
     for path in (directory / "core.md", directory / SIDE):
-        files[logical(places, path)] = read_text(path)
+        files[logical(places, path)] = read_file(path)
     notes = directory / "notes"
     if notes.is_dir():
         for path in sorted(notes.glob("*.md")):
-            files[logical(places, path)] = read_text(path)
+            files[logical(places, path)] = read_file(path)
     try:
         return scope_state(places, scope, files)
     except KnowledgeError as exc:
@@ -518,7 +526,7 @@ def apply_files(places: Places, files: dict[str, str | None]) -> None:
         if content is None:
             remove_file(path)
         else:
-            write_text(path, content)
+            write_file(path, content)
 
 
 def record(places: Places, files: dict[str, str | None], change: Change) -> None:
@@ -556,7 +564,7 @@ def scrub_journal(places: Places, target: dict[str, Any]) -> None:
             item["files"][target["path"]] = scrubbed
             changed = True
     if changed:
-        write_text(places.memory / JOURNAL, "".join(json.dumps(i, ensure_ascii=False) + "\n" for i in journal))
+        write_file(places.memory / JOURNAL, "".join(json.dumps(i, ensure_ascii=False) + "\n" for i in journal))
 
 
 def purge_content(content: str, key: str | None, keep: str | None) -> str:
@@ -571,7 +579,7 @@ def purge_content(content: str, key: str | None, keep: str | None) -> str:
 
 
 def read_journal(memory: Path) -> list[dict[str, Any]]:
-    raw = read_text(memory / JOURNAL) or ""
+    raw = read_file(memory / JOURNAL) or ""
     entries = []
     for line in raw.split("\n"):
         if not line.strip():
@@ -898,7 +906,7 @@ def sync(places: Places) -> dict[str, Any]:
             from dulwich.gc import prune_unreachable_objects
             prune_unreachable_objects(history.store, history.repo.refs, grace_period=0)
         if journal:
-            write_text(places.memory / JOURNAL, "")
+            write_file(places.memory / JOURNAL, "")
     return {"committed": committed, "pending": False, "available": True}
 
 
@@ -947,7 +955,7 @@ def scrub_legacy(places: Places, target: dict[str, Any]) -> None:
     if scope is None:
         return
     path = places.legacy / ("global.json" if scope == GLOBAL else f"channels/{scope}.json")
-    raw = read_text(path)
+    raw = read_file(path)
     if raw is None:
         return
     try:
@@ -961,7 +969,7 @@ def scrub_legacy(places: Places, target: dict[str, Any]) -> None:
         del document["entries"][key]
         changed = True
     if changed:
-        write_text(path, json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+        write_file(path, json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
 
 
 # Migration ---------------------------------------------------------------------
@@ -1048,7 +1056,7 @@ def migrate(places: Places, verify: Callable[[], None] | None = None) -> bool:
             for path in [directory / "core.md", directory / SIDE, *(directory / "notes").glob("*.md")]:
                 path.unlink(missing_ok=True)
         apply_files(places, {name: content for name, content in latest.items() if content is not None})
-        write_text(places.memory / JOURNAL, "".join(json.dumps(line, ensure_ascii=False) + "\n" for line in lines))
+        write_file(places.memory / JOURNAL, "".join(json.dumps(line, ensure_ascii=False) + "\n" for line in lines))
         if verify is not None:
             verify()
         write_format(places.memory, migrated_from="json", migrated_at=utc_now())
