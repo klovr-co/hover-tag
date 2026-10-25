@@ -40,6 +40,9 @@ The Tag desktop app and the CLI use the same Tags, settings, and lifecycle: the 
 | Describe | Details → description **Edit** | `tag NAME describe "…"` |
 | Model and thinking level | Details → **Model** | `tag NAME settings ai model VALUE [--effort LEVEL]` |
 | Routines | The Tag → **Routines** | `tag NAME routine list\|show\|add\|edit\|pause\|resume\|remove\|run-now`; see [Routines](../concepts/routines.md) |
+| Permissions | Details → **Permissions** | `tag NAME settings ai permissions codex-sandbox=… claude-mode=…` |
+| Rules for one Tag | Details → **Permissions** → **Rules** | `tag NAME settings ai permissions allow\|block\|remove codex\|claude RULE`; `tag NAME settings ai permissions` lists them |
+| Rules for all Tags | Settings → AI → **AI connections** → **Rules for all Tags** | `tag settings ai rules [allow\|block\|remove codex\|claude RULE]` |
 | AI accounts | Settings → AI → **AI connections** | `tag settings ai`, `tag settings ai sign-in codex\|claude` |
 | Keep Tags running | Settings → General → **Keep Tags running** | `tag autostart on` |
 | Search model (Default or Custom) | Settings → AI → **Search model** | `tag memory embedding local\|custom` |
@@ -83,6 +86,20 @@ name. A Tag gets its name when setup creates or links its Slack app; until then
 a new Tag from `tag add` is called `new-tag` (or `new-tag-2`, …), and the first
 Tag of a fresh installation is set up before it is named. The Slack display name
 (for example “Maya's Tag”) is separate and can be the same for several Tags.
+
+To add a Tag to a workspace you are already signed in to without going through
+the questions, name the workspace:
+
+```sh
+tag add --workspace T0ABC123 --name "Research Tag"
+```
+
+`--workspace` takes a team ID or the workspace's name, and `--name` is optional.
+Tag uses the suggested picture, your default model, and you as the owner; it
+approves creating the Slack app and leaves the channels for you to invite it
+to. If a question has no obvious answer, such as an AI that isn't connected, an
+organization, or a workspace you aren't signed in to, setup pauses with your
+progress saved and prints the `tag NAME setup` command to continue.
 
 Rename a Tag with `tag NAME rename "Research Tag"`. This changes the
 assistant's name in Slack, verifies Slack saved it, and gives the Tag a
@@ -290,6 +307,9 @@ tag settings ai models              # models from connected accounts
 tag settings ai model claude:opus   # save the default model
 tag settings ai effort high         # save the default thinking level
 tag settings ai effort default      # use the model's own thinking level
+tag NAME settings ai permissions claude-mode=default codex-sandbox=read-only
+tag NAME settings ai permissions block codex 'git push'   # a rule for this Tag only
+tag settings ai rules block codex 'git push'              # a rule for every Tag (no Tag name)
 tag settings ai sign-in claude      # sign in, reconnect, or change account
 tag settings ai sign-in codex --method chatgpt --restart
 ```

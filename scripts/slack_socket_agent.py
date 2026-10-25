@@ -1477,6 +1477,8 @@ class WorkingIndicator:
         self.wait_labels: dict[str, str] = {}
         self.preparing_answer = False
         self.public_status: str | None = None
+        self.stopping = False
+        self.done = False
         self.last_status: str | None = None
         self.last_status_at = float("-inf")
         self.lock = threading.RLock()
@@ -1525,6 +1527,8 @@ class WorkingIndicator:
 
     def current_status(self) -> str:
         """Return the most useful truthful progress copy for the current work."""
+        if self.stopping:
+            return STOPPING_STATUS
         if self.public_status:
             return self.public_status
         if self.activities:
@@ -1643,6 +1647,18 @@ class WorkingIndicator:
                     self.set_display_status(force=True)
                 except Exception as exc:  # noqa: BLE001 - processing remains active
                     self.logger.warning("Could not update Slack progress: %s", exc)
+
+    def stop_requested(self) -> None:
+        """Show at once that a stop is in progress until the backend exits."""
+        with self.lock:
+            if self.done:
+                return  # The request ended; a late stop must not replace the final reply.
+            self.stopping = True
+            if self.legacy_status or self.message_ts is not None:
+                try:
+                    self.set_display_status(force=True)
+                except Exception as exc:  # noqa: BLE001 - the stop itself continues
+                    self.logger.warning("Could not show the Slack stopping status: %s", exc)
 
     def schedule_activity(self) -> None:
         """Coalesce events and hold the displayed copy briefly; caller holds lock."""
@@ -1766,6 +1782,8 @@ class WorkingIndicator:
 
     def clear(self, *, complete_session: bool = True) -> None:
         with self.lock:
+            if complete_session:
+                self.done = True
             if self.activity_timer is not None:
                 self.activity_timer.cancel()
                 self.activity_timer = None
@@ -2148,6 +2166,8 @@ class ActiveBackendRun:
     # The posted prompt, so "More options" can redraw it without trusting Slack.
     pending_approval_prompts: dict[str, dict[str, Any]] = field(default_factory=dict)
     kill_timer: threading.Timer | None = None
+    # Called once when a stop is requested, so Slack can show it before the backend exits.
+    on_stop_requested: Callable[[], None] | None = None
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def cancel(self) -> None:
@@ -2165,7 +2185,12 @@ class ActiveBackendRun:
                 self.kill_timer.daemon = True
                 self.kill_timer.start()
         if should_force_stop:
-            self.force_stop()
+            self.force_stop()  # Kill first; the Slack call below can be slow.
+        if self.on_stop_requested is not None:
+            try:
+                self.on_stop_requested()
+            except Exception:  # noqa: BLE001 - showing the stop must not block it
+                pass
 
     def force_stop(self) -> None:
         if self.process.poll() is not None:
@@ -2257,6 +2282,8 @@ ACTIVE_RUNS_LOCK = threading.Lock()
 
 THREAD_BUSY_MESSAGE = "I'm still working on an earlier request in this thread. Mention me again when I finish."
 WAITING_REQUEST_MESSAGE = "I'm still working on an earlier request in this thread."
+STOPPING_REQUEST_MESSAGE = "I'm stopping an earlier request in this thread. I'll answer this right after."
+STOPPING_STATUS = "Stopping…"
 # Seconds a Queue or Steer choice stays available before the request must be sent again.
 WAITING_OFFER_SECONDS = 3600.0
 BUSY_THREADS: set[RunKey] = set()
@@ -2410,6 +2437,30 @@ def cancel_active_run(key: RunKey, event_ts: str | None = None) -> bool:
         return False
     run.cancel()
     return True
+
+
+# Seconds between sending a Slack message and Tag receiving it before the delay is logged.
+SLACK_DELIVERY_LAG_SECONDS = 5.0
+
+
+def log_slack_delivery_lag(event: dict[str, Any], kind: str, now: float | None = None) -> float | None:
+    """Log when Slack delivers a message late, so slow replies can be traced to delivery."""
+    try:
+        lag = (time.time() if now is None else now) - float(event.get("ts") or "")
+    except ValueError:
+        return None
+    if lag >= SLACK_DELIVERY_LAG_SECONDS:
+        print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} Slack delivered a {kind} {lag:.0f}s after it was sent "
+              f"(channel {event.get('channel', '?')}, thread {event.get('thread_ts') or event.get('ts')})",
+              flush=True)
+    return lag
+
+
+def thread_stopping(key: RunKey) -> bool:
+    """Return whether the thread's current run was asked to stop and has not exited yet."""
+    with ACTIVE_RUNS_LOCK:
+        run = ACTIVE_RUNS.get(key)
+    return run is not None and run.cancel_requested
 
 
 def pending_approval_prompt(key: RunKey, approval_id: str) -> dict[str, Any] | None:
@@ -2578,6 +2629,7 @@ def run_backend_events(
     run_limits: dict[str, float | int] | None = None,
     routine_id: str | None = None,
     on_cancelled: Callable[[], None] | None = None,
+    on_stop_requested: Callable[[], None] | None = None,
 ) -> tuple[str, bool]:
     """Consume normalized lifecycle events and forward only final-answer text."""
     if max_timeout is None:
@@ -2682,7 +2734,8 @@ def run_backend_events(
         approval_dir_context.cleanup()
         raise
     run_key = RunKey(team, channel, thread_ts)
-    active_run = ActiveBackendRun(process, control_file, run_id, approval_dir)
+    active_run = ActiveBackendRun(process, control_file, run_id, approval_dir,
+                                  on_stop_requested=on_stop_requested)
     register_active_run(run_key, active_run)
     timed_out = threading.Event()
 
@@ -3861,6 +3914,8 @@ def create_app(
         channel = event.get("channel", "")
         thread_ts = event.get("thread_ts", "")
         user_id = event.get("user", "")
+        if isinstance(event.get("event_ts"), str):
+            log_slack_delivery_lag({**event, "ts": event["event_ts"]}, "stop request")
         team = body.get("team_id") or event.get("team_id") or ""
         if not (
             isinstance(channel, str)
@@ -4589,6 +4644,8 @@ def create_app(
     ) -> None:
         channel = event["channel"]
         thread_ts = event.get("thread_ts") or event["ts"]
+        if queued is None:
+            log_slack_delivery_lag(event, "message")
         # Answering another Tag or combining replies never starts another handoff.
         handoff_depth = 1 if peer_request or combine else 0
         user_id = event.get("user", "")
@@ -4637,6 +4694,49 @@ def create_app(
         request_backend = agent_settings.backend or backend
         request_started = time.monotonic()
         reported_runs: list[dict[str, str]] = []
+        # Hold the thread until this request ends so two mentions cannot resume one conversation.
+        thread_key = RunKey(team, channel, thread_ts)
+        waiting = queued or (
+            WaitingRequest(event, body, direct_message, client, logger)
+            if peer_request is None and combine is None
+            else None
+        )
+        if queued is not None:
+            queued.settled = True
+        if not reserve_thread(thread_key, queued):
+            # The status belongs to the run holding the thread, so leave it alone here.
+            if queued is not None:
+                return  # Back at the front of the queue; the current request starts it next.
+            if waiting is None:
+                client.chat_postMessage(
+                    channel=channel,
+                    thread_ts=thread_ts,
+                    text=THREAD_BUSY_MESSAGE,
+                )
+                return
+            if thread_stopping(thread_key):
+                # Queue or Steer means nothing once a stop is underway; answer right after it.
+                if not queue_waiting_request(thread_key, waiting, first=True):
+                    start_waiting_request(waiting)
+                    return
+                client.chat_postEphemeral(
+                    channel=channel,
+                    user=user_id,
+                    thread_ts=thread_ts,
+                    text=STOPPING_REQUEST_MESSAGE,
+                )
+                return
+            client.chat_postEphemeral(
+                channel=channel,
+                user=user_id,
+                thread_ts=thread_ts,
+                text=WAITING_REQUEST_MESSAGE,
+                blocks=waiting_request_blocks(
+                    offer_waiting_request(thread_key, waiting), team, channel, thread_ts, user_id,
+                ),
+            )
+            return
+
         indicator = WorkingIndicator(
             client,
             channel,
@@ -4646,16 +4746,22 @@ def create_app(
             team=team,
         )
         indicator.start()
-        slack_search_grant = plan_search_scopes(
-            request_text=question,
-            current_channel_id=channel,
-            caller_id=user_id,
-            team_id=policy_team,
-            configured_channels=configured_channels,
-            allowed_scopes=os.getenv("MFS_ALLOWED_SCOPES", ""),
-            client=client,
-            intent=SearchIntent("all"),
-        )
+        try:
+            slack_search_grant = plan_search_scopes(
+                request_text=question,
+                current_channel_id=channel,
+                caller_id=user_id,
+                team_id=policy_team,
+                configured_channels=configured_channels,
+                allowed_scopes=os.getenv("MFS_ALLOWED_SCOPES", ""),
+                client=client,
+                intent=SearchIntent("all"),
+            )
+        except BaseException:
+            indicator.clear()
+            if (next_request := release_thread(thread_key)) is not None:
+                start_waiting_request(next_request)
+            raise
         answer_stream: SlackAnswerStream | None = None
         backend_error_code: str | None = None
         backend_error_events: list[str] = []
@@ -4685,37 +4791,6 @@ def create_app(
                     logger.warning("Could not save the activity model")
 
         session_workdir = str(default_workdir())
-
-        # Hold the thread until this request ends so two mentions cannot resume one conversation.
-        thread_key = RunKey(team, channel, thread_ts)
-        waiting = queued or (
-            WaitingRequest(event, body, direct_message, client, logger)
-            if peer_request is None and combine is None
-            else None
-        )
-        if queued is not None:
-            queued.settled = True
-        if not reserve_thread(thread_key, queued):
-            indicator.clear()
-            if queued is not None:
-                return  # Back at the front of the queue; the current request starts it next.
-            if waiting is None:
-                client.chat_postMessage(
-                    channel=channel,
-                    thread_ts=thread_ts,
-                    text=THREAD_BUSY_MESSAGE,
-                )
-                return
-            client.chat_postEphemeral(
-                channel=channel,
-                user=user_id,
-                thread_ts=thread_ts,
-                text=WAITING_REQUEST_MESSAGE,
-                blocks=waiting_request_blocks(
-                    offer_waiting_request(thread_key, waiting), team, channel, thread_ts, user_id,
-                ),
-            )
-            return
 
         continued = thread_sessions.get(team, channel, thread_ts, request_backend,
                                         workdir=session_workdir, requester=user_id)
@@ -4851,6 +4926,7 @@ def create_app(
                         reasoning_effort=agent_settings.reasoning_effort,
                         on_answer_start=indicator.answer_started,
                         on_status=indicator.status,
+                        on_stop_requested=indicator.stop_requested,
                         on_approval=lambda approval: post_backend_approval(
                             client,
                             team=team,
@@ -5584,6 +5660,24 @@ def create_app(
             return
         handle_invocation(event, body, client, logger, direct_message=False)
 
+    @app.event("member_joined_channel")
+    def handle_member_joined_channel(event: dict[str, Any], body: dict[str, Any], client: Any) -> None:
+        """Pick up a new invitation now rather than at the next membership poll."""
+        refresh = getattr(app, "tag_refresh_invitations", None)
+        if refresh is None:
+            return
+        # Slack sends this for anyone joining a channel Tag is in; only Tag's own
+        # invitation changes what Tag may serve.
+        bot_ids = {a.get("user_id") for a in body.get("authorizations") or [] if isinstance(a, dict)}
+        if not bot_ids:
+            try:
+                bot_ids = {client.auth_test().get("user_id")}
+            except Exception:  # noqa: BLE001 - unknown identity: leave it to the next poll
+                return
+        if event.get("user") not in bot_ids:
+            return
+        refresh()
+
     @app.event("message")
     def handle_direct_message(
         event: dict[str, Any],
@@ -5701,12 +5795,15 @@ def main() -> None:
 
     allowed_user_ids = configured_slack_user_ids()
     session_journal = SlackSessionJournal(slack_session_journal_path())
+    activity_store = ActivityStore()
+    activity_store.publish_now()  # Nothing is running yet, whatever a previous bridge left.
     app = create_app(
         args.backend,
         args.timeout,
         allowed_user_ids,
         max_timeout=args.max_timeout,
         session_journal=session_journal,
+        activity_store=activity_store,
     )
     print_live_summary(args.backend, allowed_user_ids)
     app_token = require_env("SLACK_APP_TOKEN")
@@ -5736,6 +5833,7 @@ def main() -> None:
             from tag_paths import instance_home
         invitation_memory = InvitationMemory(instance_home())
         invitation_memory.start()
+        app.tag_refresh_invitations = invitation_memory.refresh
     next_handoff_check = 0.0
     next_routine_check = 0.0
     try:

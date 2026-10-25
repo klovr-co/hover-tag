@@ -22,7 +22,7 @@ from typing import Any
 
 try:
     from .opentag_process_env import text_only_environment
-    from . import agent_connection, agent_usage
+    from . import agent_connection, agent_permissions, agent_usage
     from .agent_activity import (
         APPROVAL_POLL_SECONDS,
         APPROVAL_TIMEOUT_SECONDS,
@@ -38,7 +38,7 @@ try:
     from .tag_memory import CLAUDE_NATIVE_MEMORY_ENV
 except ImportError:  # Direct script execution does not create a package context.
     from opentag_process_env import text_only_environment
-    import agent_connection, agent_usage
+    import agent_connection, agent_permissions, agent_usage
     from agent_activity import (
         APPROVAL_POLL_SECONDS,
         APPROVAL_TIMEOUT_SECONDS,
@@ -56,7 +56,6 @@ except ImportError:  # Direct script execution does not create a package context
 
 CONTROL_POLL_SECONDS = 0.1
 CATALOG_TIMEOUT_SECONDS = 30.0
-PERMISSION_MODES = frozenset({"default", "acceptEdits", "auto", "bypassPermissions", "dontAsk"})
 FINAL_STOP_REASONS = frozenset({"end_turn", "stop_sequence", "max_tokens", "refusal", "pause_turn"})
 READ_TOOLS = frozenset({"Read", "Glob", "Grep", "LS", "NotebookRead"})
 FILE_CHANGE_TOOLS = frozenset({"Edit", "MultiEdit", "Write", "NotebookEdit"})
@@ -83,11 +82,8 @@ class ClaudeAgentError(RuntimeError):
 
 
 def claude_permission_mode() -> str:
-    """Return the validated permission mode; auto mirrors Codex auto review."""
-    mode = os.getenv("OPENTAG_CLAUDE_PERMISSION_MODE", "auto").strip()
-    if mode not in PERMISSION_MODES:
-        raise ValueError("OPENTAG_CLAUDE_PERMISSION_MODE must be one of " + ", ".join(sorted(PERMISSION_MODES)))
-    return mode
+    """Return the validated permission mode for the Tag's permissions; auto mirrors Codex auto review."""
+    return agent_permissions.claude_mode()
 
 
 def claude_cli_path() -> str | None:
@@ -743,8 +739,17 @@ class ClaudeAgentRun:
             kwargs["model"] = model
         if reasoning_effort:
             kwargs["effort"] = reasoning_effort
+        # The all-Tags rules, and the block on editing the Tag's own, arrive as extra
+        # settings, added to the user, project and local ones.
+        try:
+            if self.text_only_instructions is None:
+                agent_permissions.check_claude_folder(self.cwd)
+            settings = agent_permissions.claude_settings()
+        except ValueError as exc:
+            raise ClaudeAgentError(str(exc)) from None
         if fast_mode:
-            kwargs["settings"] = json.dumps({"fastMode": True})
+            settings["fastMode"] = True
+        kwargs["settings"] = json.dumps(settings)
         if show_thinking():
             # Newer models omit thinking text unless asked; summaries are all the API offers.
             kwargs["extra_args"] = {"thinking-display": "summarized"}

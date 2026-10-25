@@ -116,6 +116,14 @@ naming. The steps become **AI**, **Workspace**, **Your app**, and
    click **I'll do it myself** to see the steps in Slack.
 4. Click **Connect**, then choose channels.
 
+To add another Tag to a workspace you already use, click **Add Tag** on that
+workspace's card on **Home**. Give it a name, a one-line description and a
+picture, then click **Create in Slack**. Tag uses your default model; click
+**Change** beside it to pick another model and its thinking level, or change them later in the Tag's
+**Details**. Tag starts it when it's ready. Invite it to a
+channel with `/invite`. For every setup choice, use **Add Tag** at the top of
+**Home** instead.
+
 In the terminal: `tag setup` for your first Tag, `tag add` for another. Then
 run the `tag NAME start` command it prints. Choose **Use an existing app** on
 the first question to link an app you already have.
@@ -226,6 +234,9 @@ doesn't have this. Remove the Tag and add a new one instead.
 | Rename | Details → **Rename** | `tag NAME rename "Name"` |
 | Describe | Details → **Edit** | `tag NAME describe "…"` |
 | Model | Details → **Model** | `tag NAME settings ai model VALUE` |
+| Permissions | Details → **Permissions** | `tag NAME settings ai permissions codex-sandbox=… claude-mode=…` |
+| Rules for one Tag | Details → **Permissions** → **Rules** | `tag NAME settings ai permissions block codex 'git push'` (or `allow`, `remove`) |
+| Rules for all Tags | Settings → AI → **AI connections** → **Rules for all Tags** | `tag settings ai rules block codex 'git push'` (or `allow`, `remove`) |
 | AI accounts | Settings → AI → **AI connections** | `tag settings ai` |
 | Keep Tags running | Settings → General → **Keep Tags running** | `tag autostart on` |
 | Start or stop memory | Settings → AI → **Memory** | `tag memory start` / `stop` / `status` |

@@ -146,12 +146,39 @@ def reply_preview(answer: object) -> str:
     return clipped.rstrip() + "…"
 
 
+NOW_FILE = "activity-now.json"
+
+
 class ActivityStore:
-    """One JSON file per run, with atomic updates and bounded retention."""
+    """One JSON file per run, with atomic updates and bounded retention.
+
+    Beside the runs, ``activity-now.json`` says what this bridge is doing right
+    now, so Tag.app can animate a Tag while it works without running a command.
+    It lists only runs this process started, so a crashed bridge leaves none behind.
+    """
 
     def __init__(self, root: Path | None = None) -> None:
         self.root = root or instance_home() / "state/activity"
         self.lock = threading.RLock()
+        self.live: dict[str, dict[str, str]] = {}
+        self.last: dict[str, str] | None = None
+
+    @property
+    def now_path(self) -> Path:
+        return self.root.parent / NOW_FILE
+
+    def publish_now(self) -> None:
+        """Replace activity-now.json; a failure never affects the run itself."""
+        with self.lock:
+            state = {"schema_version": SCHEMA_VERSION, "updated_at": _timestamp(),
+                     "running": sorted(self.live.values(), key=lambda run: run["started_at"]), "last": self.last}
+            try:
+                self.root.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                temporary = self.root.parent / f".{NOW_FILE}.{uuid.uuid4().hex}.tmp"
+                temporary.write_text(json.dumps(state, separators=(",", ":")), encoding="utf-8")
+                os.replace(temporary, self.now_path)
+            except OSError:
+                pass
 
     def _path(self, run_id: str) -> Path | None:
         return self.root / f"{run_id}.json" if RUN_ID_RE.fullmatch(run_id) else None
@@ -208,6 +235,8 @@ class ActivityStore:
         with self.lock:
             self._write(record)
             self._prune()
+            self.live[run_id] = {"run_id": run_id, "thread": thread_id(record), "started_at": record["started_at"]}
+            self.publish_now()
         return run_id
 
     def set_thread(self, run_id: str, thread_ts: str) -> None:
@@ -319,16 +348,25 @@ class ActivityStore:
 
     def finish(self, run_id: str, outcome: str) -> None:
         with self.lock:
-            record = self.get(run_id)
-            if record is None or record["outcome"] != "running":
-                return
-            record["outcome"] = outcome if outcome in OUTCOMES - {"running"} else "failed"
-            record["finished_at"] = _timestamp()
-            for event in record["events"]:
-                if event["status"] == "running":
-                    event["status"] = "interrupted" if outcome == "interrupted" else "unknown"
-                    event["finished_at"] = record["finished_at"]
-            self._write(record)
+            # The run leaves activity-now.json even when its record is missing or can't be
+            # written, so Tag.app never shows it working forever.
+            was_live = self.live.pop(run_id, None) is not None
+            try:
+                record = self.get(run_id)
+                if record is None or record["outcome"] != "running":
+                    return
+                record["outcome"] = outcome if outcome in OUTCOMES - {"running"} else "failed"
+                record["finished_at"] = _timestamp()
+                for event in record["events"]:
+                    if event["status"] == "running":
+                        event["status"] = "interrupted" if outcome == "interrupted" else "unknown"
+                        event["finished_at"] = record["finished_at"]
+                self.last = {"run_id": run_id, "thread": thread_id(record),
+                             "outcome": record["outcome"], "at": record["finished_at"]}
+                self._write(record)
+            finally:
+                if was_live or (self.last or {}).get("run_id") == run_id:
+                    self.publish_now()
 
     def attach_error(self, run_id: str, reference: str) -> None:
         """Keep the exact failure association, including when a Slack request is retried."""

@@ -70,7 +70,7 @@ CAPABILITIES = (
     "list", "setup-jsonl", "setup-back", "rename", "workspace-lifecycle",
     "autostart", "autostart-keep", "logs-json", "upgrade-json", "install-progress",
     "ai-connections", "shared-ai-connections", "thinking-level", "logs-activity", "activity-details", "setup-v2", "abandon-setup", "remove-tag",
-    "describe", "telemetry-events", "start-progress", "api-connections", "saved-models", "routines",
+    "describe", "telemetry-events", "start-progress", "api-connections", "saved-models", "permission-rules", "routines",
 )
 UPDATE_CHECK_INTERVAL_SECONDS = 24 * 60 * 60
 COMMANDS = tuple(sorted(tag_instances.RESERVED_NAMES))
@@ -231,6 +231,10 @@ def process_for(path: Path):
     return None
 
 
+# Seconds a new service may take to fail before it counts as started.
+STARTUP_GRACE_SECONDS = 1.5
+
+
 def start_process(
     home: Path,
     name: str,
@@ -265,7 +269,11 @@ def start_process(
     identity = {"pid": child.pid, "created": process.create_time(),
                 "command_marker": Path(marker_source).name, **(metadata or {})}
     record.write_text(json.dumps(identity), encoding="utf-8")
-    time.sleep(0.3)
+    # A slow runner (Windows CI) can take over 0.3 s to start and fail, so wait for the exit itself.
+    try:
+        child.wait(timeout=STARTUP_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        pass
     if child.poll() is not None:
         record.unlink(missing_ok=True)
         detail = log_tail(home, name, 20, state_dir=state)
@@ -2106,6 +2114,34 @@ def _refresh_avatar(home: Path, values: dict[str, str]) -> str:
     return slack_profile_icon.refresh_safely(home, values)
 
 
+def _picture(home: Path) -> dict | None:
+    """The picture setup gave the Tag in Slack; a waterdrop includes its sprite for Tag.app.
+
+    None when Tag did not choose it: an existing Slack app keeps its own picture.
+    """
+    try:
+        from . import tag_waterdrop
+    except ImportError:
+        import tag_waterdrop
+    try:
+        if json.loads((home / "config/setup-progress.json").read_text(encoding="utf-8")).get("app_path") == "existing":
+            return None
+    except (OSError, ValueError, AttributeError):
+        pass
+    try:
+        state = json.loads((home / "integrations/slack-cli/assets/tag-picture.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(state, dict):
+        return None
+    if state.get("picture") == "waterdrop" and isinstance(state.get("index"), int) and not isinstance(state["index"], bool):
+        index = state["index"] % tag_waterdrop.WATERDROP_RECIPE_COUNT
+        return {"kind": "waterdrop", "index": index, "sprite": tag_waterdrop.sprite(index)}
+    if state.get("picture") == "custom":
+        return {"kind": "custom"}
+    return None
+
+
 def _workspace_icon(home: Path) -> str | None:
     """The saved Slack workspace icon, for apps that show it beside the workspace name."""
     try:
@@ -2250,6 +2286,39 @@ def _setup_result(code: int, tag_id: str, protocol: bool) -> int:
                 pass
         _setup_ui().emit({"type": "result", "status": status, "tag": tag_id, "exit_code": code,
                           **({"ready": ready} if ready else {})})
+    return code
+
+
+def _quick_add(command: list[str], environment: dict[str, str], args: argparse.Namespace, resume: str) -> int:
+    """Run setup for ``tag add --workspace``, answering the questions that have an obvious answer."""
+    try:
+        import tag_quick_add
+    except ImportError:
+        from scripts import tag_quick_add
+
+    def forward(event: dict, line: str) -> None:
+        if args.json_output:
+            _setup_ui().emit(event)
+        elif event.get("type") in {"message", "progress"} and event.get("text"):
+            print(f"  {event['text']}", flush=True)
+
+    # A Tag already in the workspace knows its team ID and, in an organization, the organization's.
+    team = enterprise = ""
+    for tag_id in _workspace_tags(tag_home(), args.workspace):
+        path = tag_instances.resolve(tag_home(), tag_id).home / "config/settings.json"
+        values = read_config(path) if path.is_file() else {}
+        if values.get("SLACK_TEAM_ID"):
+            team, enterprise = values["SLACK_TEAM_ID"], values.get("SLACK_ENTERPRISE_ID", "")
+            break
+    code, reason = tag_quick_add.drive(command, {**environment, SETUP_PROTOCOL_ENV: "jsonl"},
+                                       workspace=args.workspace, name=args.name, team=team,
+                                       enterprise=enterprise, forward=forward)
+    if reason:
+        message = f"Setup paused: {reason} Your choices are saved; run {resume} to continue."
+        if args.json_output:
+            _setup_ui().message(message)
+        else:
+            print(message, file=sys.stderr)
     return code
 
 
@@ -2435,7 +2504,7 @@ def _run_cli() -> int:
                                      ),
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("command", nargs="?", choices=COMMANDS)
-    parser.add_argument("arguments", nargs="*", help="memory: start | status | stop; config: init | show | keys | set KEY VALUE; chatgpt: status | login [ACCOUNT] | use ACCOUNT | logout [ACCOUNT] | use-codex; settings: ai [status | models [--refresh] | sign-in codex|claude | resume | model VALUE | effort LEVEL|default | api [status | set | clear | check]]")
+    parser.add_argument("arguments", nargs="*", help="memory: start | status | stop; config: init | show | keys | set KEY VALUE; chatgpt: status | login [ACCOUNT] | use ACCOUNT | logout [ACCOUNT] | use-codex; settings: ai [status | models [--refresh] | sign-in codex|claude | resume | model VALUE | effort LEVEL|default | permissions [codex-sandbox=V ...] | permissions allow|block|remove codex|claude RULE | rules [allow|block|remove codex|claude RULE] | api [status | set | clear | check]]")
     parser.add_argument("--offline", action="store_true")
     parser.add_argument("--json", action="store_true", dest="json_output", help="structured output for inspect, status, doctor, config, paths, upgrade, usage, and chatgpt")
     parser.add_argument("--consent", action="store_true", help="chatgpt login: request plan permission again")
@@ -2475,7 +2544,8 @@ def _run_cli() -> int:
     parser.add_argument("--nickname", help="rename: short name for commands (default: derived from the new name)")
     parser.add_argument("--delete-app", action="store_true", help="remove: also permanently delete the Tag's Slack app")
     parser.add_argument("--confirm-app", help="remove --delete-app: the App ID to delete, typed to confirm")
-    parser.add_argument("--workspace", help="start, stop, restart: every Tag in this Slack workspace (team ID or name)")
+    parser.add_argument("--workspace", help="start, stop, restart: every Tag in this Slack workspace (team ID or name); add: create the new Tag there without asking")
+    parser.add_argument("--name", help="add --workspace: the new Tag's name (default: the suggested one)")
     raw_arguments = sys.argv[1:]
     explicit_tag = bool(
         raw_arguments
@@ -2524,8 +2594,10 @@ def _run_cli() -> int:
         parser.error("--delete-app and --confirm-app are only for remove")
     if args.nickname and args.command != "rename":
         parser.error("--nickname is only for rename")
-    if args.workspace and args.command not in {"start", "stop", "restart"}:
-        parser.error("--workspace is only for start, stop, and restart")
+    if args.workspace and args.command not in {"start", "stop", "restart", "add"}:
+        parser.error("--workspace is only for start, stop, restart, and add")
+    if args.name and not (args.command == "add" and args.workspace):
+        parser.error("--name is only for add --workspace")
     if args.workspace and explicit_tag:
         parser.error("--workspace selects Tags itself; don't also name a Tag")
     if args.json_output and args.command in {"setup", "add"}:
@@ -2552,10 +2624,11 @@ def _run_cli() -> int:
     if args.limit is not None and args.limit < 1:
         parser.error("--limit must be at least 1")
     installation_root = tag_home()
-    global_ai = settings_ai and args.arguments[1:2] in (["connections"], ["sign-in"], ["resume"])
+    global_ai = settings_ai and args.arguments[1:2] in (["connections"], ["sign-in"], ["resume"], ["rules"])
     if global_ai:
         if explicit_tag:
-            parser.error("AI connections are shared by all Tags. Use tag settings ai " + " ".join(args.arguments[1:]))
+            what = "Rules for all Tags are" if args.arguments[1] == "rules" else "AI connections are"
+            parser.error(f"{what} shared by all Tags. Use tag settings ai " + " ".join(args.arguments[1:]))
         try:
             import tag_ai
         except ImportError:
@@ -2662,7 +2735,7 @@ def _run_cli() -> int:
     if args.command == "add":
         if args.arguments:
             parser.error("add does not accept a name; the workspace alias is chosen during onboarding")
-        if not display.stdin_is_terminal() and not args.json_output:
+        if not display.stdin_is_terminal() and not args.json_output and not args.workspace:
             print(
                 "Interactive setup requires a terminal. Use tag inspect --json and tag config set for automation.",
                 file=sys.stderr,
@@ -2678,7 +2751,11 @@ def _run_cli() -> int:
         display.info_row("Home", display.short_path(context.home), good=True)
         display.info_row("Command", context.command("setup"), good=True)
         command = [sys.executable, str(ROOT / "scripts/tag_cli.py"), *context.command_arguments("setup")]
-        result = subprocess.call(command, env={**instance_environment(context), DEFER_RENAME_ENV: "1"})
+        environment = {**instance_environment(context), DEFER_RENAME_ENV: "1"}
+        if args.workspace:
+            result = _quick_add(command, environment, args, context.command("setup"))
+        else:
+            result = subprocess.call(command, env=environment)
         renamed = _rename(installation_root, context.tag_id) if result == 0 else None
         if renamed and not args.json_output:
             display.info_row("Tag", f"Named '{renamed}' after its Slack team and app IDs", good=True)
@@ -2702,10 +2779,13 @@ def _run_cli() -> int:
                                   workspace_name=tag_instances.workspace_name(context.home),
                                   slack_name=_slack_name(context.home),
                                   slack_app_id=values.get("SLACK_APP_ID") or None,
+                                  slack_enterprise=values.get("SLACK_ENTERPRISE_ID") or None,
                                   has_app=bool(values.get("SLACK_APP_ID")) or (
                                       context.home / "integrations/slack-cli/tag-create.json").exists(),
                                   nickname=tag_instances.nickname(context.home),
                                   avatar=_avatar(context.home, values),
+                                  picture=_picture(context.home),
+                                  activity_now=str(context.home / "state/activity-now.json"),
                                   workspace_icon=_workspace_icon(context.home),
                                   keep_running=autostart.wanted(context.home) is True,
                                   main=context.tag_id == tag_id,
@@ -3276,6 +3356,9 @@ def _run_cli() -> int:
             )
             manifest_changed = slack_manifest_migrations.reconcile(home, config_path, values)
             if manifest_changed:
+                values = read_config(config_path)
+            history_repaired = slack_manifest_migrations.repair_history_credential(home, config_path, values)
+            if manifest_changed or history_repaired:
                 # A migration may rotate credentials; preflight and the bridge
                 # must use the saved replacement during this same start.
                 values = read_config(config_path)

@@ -37,6 +37,7 @@ it shows is listed in `capabilities`; otherwise it offers to upgrade Tag.
 | `shared-ai-connections` | Global `tag settings ai connections\|sign-in\|resume --json`; shared accounts, model-only setup |
 | `api-connections` | `tag NAME settings ai api [set\|clear\|check] --json`: a Tag's own API connection; `api_connections` in `tag settings ai connections --json`; see [API connections](#api-connections) |
 | `thinking-level` | `tag NAME settings ai effort LEVEL --json`, `model VALUE --effort LEVEL`; thinking-level fields in `settings ai`, `models`, and `tag list` |
+| `permission-rules` | `tag NAME settings ai permissions …` and `tag settings ai rules …`: each agent's permission settings and rules for a Tag and for all Tags; see `permissions` below |
 | `saved-models` | `tag NAME settings ai models --refresh --json`; `cached`, `cached_at`, `refresh_failed`, and each group's `cached` and `fetched_at` in `models`; `cached_at` in setup's `default_model` |
 | `logs-activity` | `activity` in `tag NAME logs --json` |
 | `activity-details` | `tag NAME logs --activity RUN_ID --json` |
@@ -47,7 +48,7 @@ it shows is listed in `capabilities`; otherwise it offers to upgrade Tag.
 
 `tag list --json` returns `tags`, one object per Tag with `id`, `valid`,
 `state`, `slack_workspace`, `workspace_name`, `workspace_icon`, `slack_name`,
-`slack_app_id`, `has_app`, `nickname`, `avatar`, `keep_running`, `main`, `description`, `default_model`,
+`slack_app_id`, `slack_enterprise` (the organization's ID for a workspace in an Enterprise Grid organization, else `null`), `has_app`, `nickname`, `avatar`, `picture`, `activity_now`, `keep_running`, `main`, `description`, `default_model`,
 `default_model_label`, `default_model_name`, `default_effort`, and `channels`. `state` is
 `running`, `stopped`, `not_configured`, `setup_incomplete`, `needs_attention`,
 `invalid_configuration`, or `invalid_tag`; treat unknown states as needing
@@ -84,6 +85,26 @@ Claude. The last good picture stays available offline. Until the first successfu
 sync, `avatar` uses the setup picture, or `null` if none exists. A changed picture
 gets a new local filename so apps reload it. `tag list` only reads this cache;
 it does not make network requests. Syncing never changes the Slack app's picture.
+
+`picture` is the picture setup gave the Tag in Slack: `{"kind": "waterdrop",
+"index": 42, "sprite": {...}}` for one of Tag's 960 waterdrops, `{"kind":
+"custom"}` for a picture someone uploaded, or `null` when Tag did not choose
+it (an existing Slack app keeps its own). `sprite` lets an app draw and animate
+the same drop: `element`, `background`, `palette` (a colour for every letter of
+the 28 × 34 map in `scripts/tag_mascot.json`; letters `B`–`G` are background),
+and `marks`, the look's decoration as `[column, row, cells wide, cells high,
+colour]` in map cells, painted in order. Someone can still change the app's
+picture in Slack itself, which Tag can't see; `avatar` shows that picture.
+
+`activity_now` is the path to the Tag's `activity-now.json`, which the running
+bridge replaces whenever a Slack request starts or finishes:
+`{"schema_version": 1, "updated_at": …, "running": [{"run_id", "thread",
+"started_at"}], "last": {"run_id", "thread", "outcome", "at"} | null}`. `thread`
+is the same opaque key as in `activity`, so runs of several Tags in one Slack
+thread share it. `outcome` is `completed`, `failed`, or `interrupted`. The file
+lists only runs the current bridge started and is reset when it starts. It may
+not exist yet; read it only while `state` is `running`. Apps can read this small
+file often instead of running `tag NAME logs --json`.
 
 `tag NAME logs --json` returns `services`, each service's recent log lines,
 and `activity`: up to 50 of the Tag's recent Slack requests, newest first.
@@ -419,6 +440,50 @@ applies. It returns `ok`, `default_effort`, `restart_required`, and
 `restarted`, and accepts `--restart` like `model`. A level the model doesn't
 offer is refused. Every request uses the Tag's level.
 See `protocol/examples/ai-effort.json`.
+
+`tag NAME settings ai permissions SETTING=VALUE … --json` saves the Tag's
+permissions. Codex and Claude keep their own settings: `codex-sandbox`
+(`read-only`, `workspace-write`, `danger-full-access`), `codex-approvals`
+(`untrusted`, `on-request`, `never`), `codex-reviewer` (`auto_review`,
+`user`), and `claude-mode` (`default`, `acceptEdits`, `auto`, `dontAsk`,
+`bypassPermissions`). Only the settings named change. It returns `ok`,
+`permissions`, `restart_required`, and `restarted`, and accepts `--restart`
+like `model`. Without settings, `tag NAME settings ai permissions --json`
+returns the permissions themselves at the top level: `schema_version`,
+`own_folder`, `codex`, `claude`, `options`, and `errors` when there are any.
+The status report carries the same object as `permissions`, and saving returns
+it as `permissions`: `codex` and `claude` hold the
+values in effect, and `options` lists each setting's choices with the `label`
+and `detail` Tag.app shows. `codex.rules` and `claude.rules` hold four lists:
+`tag`, the Tag's own rules (its folder's `.claude/settings.local.json` and
+`.codex/rules/tag.rules`); `folder`, other rule files in the Tag's folder (its
+`.claude/settings.json`, other `.codex/rules/*.rules`), which the agent reads
+too; `all_tags`, the rules every Tag follows (the installation's
+`shared/permissions/claude.json` and `codex.rules`); and `personal`, the
+operator's own (`~/.claude/settings.json` or `$CLAUDE_CONFIG_DIR`, and
+`$CODEX_HOME/rules/*.rules`), which Tag only reads. Each rule has `kind`
+(`rule` or `folder` for Claude, `command` or `host` for Codex), `value`, and
+`decision` (`allow`, `ask`, or `block`). A list is `null` when its file can't
+be read. `own_folder` is `false` when the Tag works in a folder of the
+operator's, where Tag keeps no Codex rules: `permissions allow|block|remove
+codex` fails there. A saved value Tag won't run with is reported as it is, with the reason in
+`errors` by setting name. An empty `codex.approvals` means Codex's own
+configuration; `codex-approvals=` returns to it. See
+`protocol/examples/ai-permissions.json`.
+
+`tag NAME settings ai permissions allow|block|remove codex|claude RULE --json`
+changes one of the Tag's own rules and returns `ok` and `permissions`. For Codex,
+`RULE` is the start of a command, such as `git push`; for Claude it is a
+permission rule, such as `Bash(git push:*)`. Adding a rule that exists changes
+its decision; `remove` matches exactly. Other settings in the files stay as they
+were, and only the Tag's own rules change. The Tag's next request uses the
+change, with no restart.
+
+`tag settings ai rules --json`, without a Tag name, returns `ok`, `scope`
+(`installation`), and `rules`: `all_tags` and `personal` for `codex` and
+`claude`. `tag settings ai rules allow|block|remove codex|claude RULE --json`
+changes one rule for all Tags the same way and returns the same shape. See
+`protocol/examples/ai-rules.json`.
 
 `tag settings ai sign-in BACKEND --json` runs the backend's browser
 sign-in and writes JSON lines: `progress` events with `step` (`stopping`,

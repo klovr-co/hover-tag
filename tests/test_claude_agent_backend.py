@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-from scripts import claude_agent_backend
+from scripts import agent_permissions, claude_agent_backend
 from scripts.claude_agent_backend import (
     APPROVAL_LABEL_COMMAND,
     APPROVAL_LABEL_TOOL,
@@ -396,7 +396,7 @@ class ClaudeAgentRunTests(unittest.TestCase):
                                                 "claude_agent_sdk.types": FAKE_SDK_TYPES})
         patcher.start()
         self.addCleanup(patcher.stop)
-        env = patch.dict(os.environ, {"OPENTAG_CLAUDE_CLI": "/bin/claude"}, clear=False)
+        env = patch.dict(os.environ, {"OPENTAG_CLAUDE_CLI": "/bin/claude", "TAG_HOME": str(self.root / "install")}, clear=False)
         env.start()
         self.addCleanup(env.stop)
         self.addCleanup(self.directory.cleanup)
@@ -421,7 +421,9 @@ class ClaudeAgentRunTests(unittest.TestCase):
         options = FakeClient.instances[0].options
         self.assertEqual("completed", status)
         self.assertEqual(("opus", "xhigh", "auto"), (options.model, options.effort, options.permission_mode))
-        self.assertEqual({"fastMode": True}, json.loads(options.settings))
+        # Claude never edits the Tag's own rules; you change them in Slack or Tag.app.
+        self.assertEqual({"permissions": {"deny": list(agent_permissions.CLAUDE_KEEPS_OUT)}, "fastMode": True},
+                         json.loads(options.settings))
         self.assertEqual([str(self.root / "skill")], options.add_dirs)
         self.assertEqual("/bin/claude", options.cli_path)
         self.assertTrue(options.include_partial_messages)
@@ -465,7 +467,7 @@ class ClaudeAgentRunTests(unittest.TestCase):
 
         self.run_agent(script, model="default")
         self.assertFalse(hasattr(FakeClient.instances[0].options, "model"))
-        self.assertFalse(hasattr(FakeClient.instances[0].options, "settings"))
+        self.assertNotIn("fastMode", json.loads(FakeClient.instances[0].options.settings))
 
     def test_workspace_mcp_config_is_layered(self) -> None:
         (self.root / ".mcp.json").write_text('{"mcpServers": {}}', encoding="utf-8")
@@ -909,6 +911,39 @@ class ClaudeAgentRunTests(unittest.TestCase):
         with patch.dict(os.environ, {"OPENTAG_CLAUDE_PERMISSION_MODE": "plan"}):
             with self.assertRaisesRegex(ValueError, "OPENTAG_CLAUDE_PERMISSION_MODE"):
                 claude_agent_backend.claude_permission_mode()
+        for mode in ("default", "acceptEdits", "dontAsk", "bypassPermissions"):
+            with patch.dict(os.environ, {"OPENTAG_CLAUDE_PERMISSION_MODE": mode}):
+                self.assertEqual(mode, claude_agent_backend.claude_permission_mode())
+
+    def test_rules_for_all_tags_reach_the_sdk_as_extra_settings(self) -> None:
+        async def script(_client):
+            yield ResultMessage(result="ok")
+
+        agent_permissions.add_rule("claude", None, "block", "Bash(git push:*)")
+        self.run_agent(script, fast_mode=True)
+        self.assertEqual({"permissions": {"deny": ["Bash(git push:*)", *agent_permissions.CLAUDE_KEEPS_OUT]}, "fastMode": True},
+                         json.loads(FakeClient.instances[-1].options.settings))
+        agent_permissions.claude_all_tags_file().write_text("{broken", encoding="utf-8")
+        with self.assertRaisesRegex(claude_agent_backend.ClaudeAgentError, "Couldn't read"):
+            self.run_agent(script)  # Not without the blocks every Tag must follow.
+
+    def test_a_tags_claude_rules_it_cant_read_stop_the_run(self) -> None:
+        async def script(_client):
+            yield ResultMessage(result="ok")
+
+        path = agent_permissions.claude_tag_file(self.root)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{"permissions": {"deny": ["Bash(git push:*)"]', encoding="utf-8")
+        with self.assertRaisesRegex(claude_agent_backend.ClaudeAgentError, "Couldn't read"):
+            self.run_agent(script)  # Claude would skip that file, and its blocks.
+
+    def test_the_tags_claude_mode_reaches_the_sdk(self) -> None:
+        async def script(_client):
+            yield ResultMessage(result="ok")
+
+        with patch.dict(os.environ, {"OPENTAG_CLAUDE_PERMISSION_MODE": "acceptEdits"}):
+            self.run_agent(script)
+        self.assertEqual("acceptEdits", FakeClient.instances[-1].options.permission_mode)
 
 
 class CatalogTests(unittest.TestCase):

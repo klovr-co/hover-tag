@@ -6,6 +6,9 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import icon from "../../../assets/branding/tag-icon.png";
 import { status, type Status, type TagRow } from "../lib/protocol";
 import { usePresence } from "../lib/motion";
+import { useMoodOf } from "../lib/mood";
+import type { Mood } from "../lib/sprite";
+import { TagSprite } from "./TagSprite";
 
 export const tagIcon = icon;
 
@@ -43,6 +46,7 @@ const PATHS: Record<string, ReactNode> = {
   share: <path d="M12 3v12M7 8l5-5 5 5M5 13v7h14v-7" />,
   chevdown: <path d="M6 9l6 6 6-6" />,
   close: <path d="M6 6l12 12M18 6 6 18" />,
+  more: <><circle cx="5" cy="12" r="1.7" fill="currentColor" stroke="none" /><circle cx="12" cy="12" r="1.7" fill="currentColor" stroke="none" /><circle cx="19" cy="12" r="1.7" fill="currentColor" stroke="none" /></>,
 };
 const FILLED = new Set(["play", "stop", "spark"]);
 const WEIGHT: Record<string, number> = { plus: 2.6, check: 3, bang: 3.4, up: 2.6, left: 2.6, right: 2.6, arrow: 2.4, updown: 2.4, chevdown: 3 };
@@ -192,19 +196,30 @@ export function source(path: string | null | undefined, revision?: string | null
   }
 }
 
-/** Each Tag's Slack profile picture; otherwise the Tag waterdrop, tinted per Tag. */
-export function Avatar({ row, size = 42, badge = true, className = "av" }: {
-  row: TagRow | null; size?: number; badge?: boolean; className?: string;
+/**
+ * Each Tag's picture. A waterdrop Tag gave itself is drawn live and plays its mood
+ * (`mood`, or what the Tag is doing); otherwise its Slack profile picture, or the
+ * Tag waterdrop tinted per Tag.
+ */
+export function Avatar({ row, size = 42, badge = true, className = "av", mood, still }: {
+  row: TagRow | null; size?: number; badge?: boolean; className?: string; mood?: Mood; still?: boolean;
 }) {
   const [failedSource, setFailedSource] = useState<string | null>(null);
-  const hue = row ? ([...row.id].reduce((sum, c) => sum + c.charCodeAt(0), 0) % 6) * 60 : 0;
+  const moodOf = useMoodOf();
+  const seed = row ? [...row.id].reduce((sum, c) => sum + c.charCodeAt(0), 0) : 0;
+  const hue = (seed % 6) * 60;
   const avatarSource = source(row?.avatar);
   const picture = avatarSource !== failedSource ? avatarSource : null;
   const state = row ? status(row) : "offline";
-  const img = (
+  const look = { width: size, height: size, borderRadius: size * 0.26 };
+  const sprite = row?.picture?.kind === "waterdrop" ? row.picture.sprite : undefined;
+  const img = row && sprite ? (
+    <TagSprite sprite={sprite} mood={mood ?? moodOf(row)} seed={seed % 7} still={still}
+      className={`${className}${state === "setup" ? " dim" : ""}`} style={look} />
+  ) : (
     <img className={`${className}${state === "setup" ? " dim" : ""}`} alt="" width={size} height={size} src={picture ?? tagIcon}
       onError={() => setFailedSource(avatarSource)}
-      style={{ width: size, height: size, borderRadius: size * 0.26, filter: picture ? undefined : `hue-rotate(${hue}deg)` }} />
+      style={{ ...look, filter: picture ? undefined : `hue-rotate(${hue}deg)` }} />
   );
   if (!badge || !row) return img;
   return (
@@ -259,8 +274,13 @@ export function fitText(el: HTMLTextAreaElement | null) {
   el.style.height = `${el.scrollHeight + el.offsetHeight - el.clientHeight}px`;
 }
 
-export function ErrorLine({ children }: { children: ReactNode }) {
-  return <div className="err-line selectable" role="alert"><Icon name="warn" />{children}</div>;
+export function ErrorLine({ children, onDismiss, leaving = false }: { children: ReactNode; onDismiss?: () => void; leaving?: boolean }) {
+  return (
+    <div className={leaving ? "err-line selectable leaving" : "err-line selectable"} role="alert">
+      <Icon name="warn" /><span className="err-text">{children}</span>
+      {onDismiss && <button className="err-x" aria-label="Dismiss" title="Dismiss" onClick={onDismiss}><Icon name="close" size={12} /></button>}
+    </div>
+  );
 }
 
 /** A short message at the bottom of the window. */

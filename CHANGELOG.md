@@ -6,6 +6,29 @@ All notable changes to Tag are documented here.
 
 ### Added
 
+- Choose what each Tag may do without asking, with each agent's own
+  settings. In the Tag's **Details**, **Permissions** shows Codex's sandbox
+  (Read only, Workspace write, Full access), approval policy (Default,
+  Untrusted, On request, Never), and approvals reviewer (Auto review or
+  User), and Claude's permission mode (Default, Accept edits, Auto, Don't
+  ask, Bypass permissions), using each agent's own names. In the terminal, `tag NAME settings ai permissions codex-sandbox=read-only
+  claude-mode=acceptEdits` does the same. Existing Tags keep today's settings.
+  Each agent also has **Rules**: allow or block a command or tool for that Tag
+  only. **Settings → AI connections → Rules for all Tags** does the same for
+  every Tag. Your own Codex and Claude Code rules also apply, and Tag never
+  changes them. A block anywhere wins. In the terminal,
+  `tag NAME settings ai permissions block codex 'git push'` sets one Tag's
+  rules and `tag settings ai rules block codex 'git push'` every Tag's. Codex
+  rules need the Tag's own folder; Tag keeps none in a folder of yours. Codex
+  Block rules need Codex 0.162 or newer: with an older Codex, a Tag whose Codex
+  rules block or ask stops with a message to update Codex instead of running
+  without them. Claude's file edits can't change its own rules, and a Tag
+  stops rather than run without a Claude settings file it can't read.
+- Add a Tag to a workspace you already use in one step. On Home, click **Add
+  Tag** on the workspace's card: a dialog asks only for the name, description
+  and picture, then creates and starts the Tag with your default model, or the
+  model and thinking level you pick under **Change**. In the terminal, `tag add --workspace T0ABC123` (a team ID or name) does the
+  same; it pauses with progress saved if something needs your input.
 - Routines: a Tag can now do work on a schedule without anyone asking, such as
   a weekly digest posted in a channel. Add them in Tag.app → the Tag →
   **Routines**, or with `tag NAME routine add`. Each routine posts only in its
@@ -39,9 +62,9 @@ All notable changes to Tag are documented here.
 - With Claude, a message sent right after stopping a request that was running a
   command now gets an answer. Before, Tag replied "Open Tag finished without
   output."
-
-### Fixed
-
+- A new Tag that isn't in any channel yet now starts. Before, `tag start` waited
+  for the Slack connection and gave up, even though setup said to invite the Tag
+  once it was running.
 - `tag autostart` now keeps memory (MFS) running too. If MFS stops, the login
   service restarts it with the same back-off it uses for Tags, whether it was
   started by a Tag or by `tag memory start`. On Linux, Tag turns on systemd
@@ -77,6 +100,12 @@ All notable changes to Tag are documented here.
 
 ### Changed
 
+- Always allow in Slack now saves a Codex rule for that Tag only, in the Tag's
+  folder, instead of in your global Codex rules. Rules saved before stay global.
+- `OPENTAG_CLAUDE_TRANSPORT=print` now runs only when the Claude permission
+  mode is Bypass permissions, because `claude -p` always skips Claude's
+  permission checks. Before, a Tag set to Auto on that rollback quietly ran as
+  Bypass permissions.
 - Choosing a model is now immediate. Tag saves each signed-in account's model
   list once for all Tags instead of starting Codex and Claude every time setup
   or the app lists models, and reads accounts without a saved list at the same

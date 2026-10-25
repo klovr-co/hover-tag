@@ -4,6 +4,8 @@
 // file only reads what `tag … --json` prints. Tests parse the shared examples
 // in protocol/examples, the same files the CLI tests check.
 
+import type { Sprite } from "./sprite";
+
 /** Newest incompatible protocol this app understands. */
 export const APP_PROTOCOL = 1;
 
@@ -25,10 +27,16 @@ export interface TagRow {
   slack_name?: string | null;
   /** The Slack app Tag created or linked; null before setup reaches that step. */
   slack_app_id?: string | null;
+  /** The Enterprise Grid organization the workspace belongs to; null outside one. */
+  slack_enterprise?: string | null;
   /** False for a setup that never reached Slack: nothing exists there to continue or delete. */
   has_app?: boolean;
   nickname?: string | null;
   avatar?: string | null;
+  /** The picture setup gave the Tag in Slack; a waterdrop carries the sprite to animate it. */
+  picture?: { kind: "waterdrop" | "custom" | string; index?: number; sprite?: Sprite } | null;
+  /** Path to activity-now.json: what the running Tag is doing right now. */
+  activity_now?: string | null;
   keep_running?: boolean;
   main?: boolean;
   error?: string;
@@ -107,6 +115,8 @@ export interface Group {
   key: string;
   label: string;
   icon: string | null;
+  /** The workspace's Enterprise Grid organization, when it's in one. */
+  enterprise: string | null;
   rows: TagRow[];
 }
 
@@ -121,6 +131,7 @@ export function groups(rows: TagRow[]): Group[] {
     key,
     label: members[0].workspace_name || key || "Not connected yet",
     icon: members.find((row) => row.workspace_icon)?.workspace_icon ?? null,
+    enterprise: members.find((row) => row.slack_enterprise)?.slack_enterprise ?? null,
     rows: members,
   }));
 }

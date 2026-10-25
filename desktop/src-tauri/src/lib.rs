@@ -296,6 +296,7 @@ fn install_start(app: AppHandle, sessions: State<Arc<Sessions>>, channel: String
         .env("PYTHONUTF8", "1")
         .env("PYTHONIOENCODING", "utf-8")
         .env("PATH", cli::tool_path());
+    cli::clean_appimage_env(&mut command);
     let saved = cli::saved_command_file(&config_dir(&app));
     sessions.start(command, true, output, move |line| {
         // Remember the exact command the installer reported, so PATH never matters.
@@ -380,6 +381,7 @@ mod tests {
         });
         assert!(allowed("$HOME/Tag/default/.tag/state/slack-avatar-abc.png"));
         assert!(allowed("$HOME/Tag/default/.tag/state/workspace-icon.png"));
+        assert!(allowed("$HOME/Tag/default/.tag/state/activity-now.json"));
         assert!(allowed("$HOME/Tag/default/.tag/integrations/slack-cli/assets/tag-profile.png"));
         assert!(!allowed("$HOME/Tag/default/.tag/config/settings.json"));
         assert!(!allowed("$HOME/Tag/default/.tag/state/slack-avatar.json"));

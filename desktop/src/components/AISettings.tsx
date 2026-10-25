@@ -10,13 +10,17 @@ import { title } from "../lib/protocol";
 import { ChangeAccount, ConnectionRow, type RowAction } from "./AI";
 import { ApiDialog, ApiList } from "./ApiConnections";
 import { CompactSky, ErrorLine, Icon, Spinner } from "./ui";
+import { RulesEditor } from "./Rules";
+import { useAllTagsRules, type RuleBackend } from "../lib/permissions";
 import { RiverFoot } from "./Settings";
 
 /** Installation-wide accounts. Models belong to each Tag's Details tab. */
-export function AISettings({ api, tags, close, apiConnections = false }: {
+export function AISettings({ api, tags, close, apiConnections = false, rules = false }: {
   api: Bridge; tags: Tags; close: () => void;
   /** The installed Tag supports `settings ai api` (the api-connections capability). */
   apiConnections?: boolean;
+  /** The installed Tag supports `settings ai rules` (the permission-rules capability). */
+  rules?: boolean;
 }) {
   const [report, setReport] = useState<AIConnections | null>(null);
   const [error, setError] = useState("");
@@ -109,7 +113,8 @@ export function AISettings({ api, tags, close, apiConnections = false }: {
             <span><b>Add your own API</b><span className="meta">Use an OpenAI, Anthropic, or Azure OpenAI key instead of your plan.</span></span>
           </button>}
       </div>}
-      {toast && <div className="savebar" role="status"><span className="t"><Icon name="check" size={12} />{toast}</span></div>}
+      {rules && <AllTagsRulesSection api={api} say={setToast} />}
+      {toast && <div className="savebar float" role="status"><span className="t"><Icon name="check" size={12} />{toast}</span></div>}
       {error && <ErrorLine>{error}</ErrorLine>}
       <RiverFoot />
     </div>
@@ -119,4 +124,33 @@ export function AISettings({ api, tags, close, apiConnections = false }: {
       running={tags.rows.some((r) => r.state === "running" && (editingApi === "new" || editingApi.tags.some((t) => t.id === r.id)))}
       close={() => setEditingApi(null)} saved={apiChanged} />}
   </>;
+}
+
+/** Rules every Tag follows, on top of your own Codex and Claude Code rules. Each Tag adds its own in its Details. */
+function AllTagsRulesSection({ api, say }: { api: Bridge; say: (text: string) => void }) {
+  const [backend, setBackend] = useState<RuleBackend>("codex");
+  const all = useAllTagsRules(api, {
+    onChanged: (action, rule) => say(`${{ allow: "Allowed", block: "Blocked", remove: "Removed" }[action]} ${rule} for every Tag.`),
+  });
+  const found = all.rules?.[backend];
+  const busyRule = all.busy?.startsWith(`${backend}:`) ? all.busy.slice(backend.length + 1) : null;
+  return (
+    <div className="section">
+      <div className="sec-head"><h3>Rules for all Tags</h3></div>
+      <div className="card pallcard">
+        <div className="segc" role="radiogroup" aria-label="Agent">
+          {(["codex", "claude"] as const).map((b) => (
+            <button key={b} role="radio" aria-checked={backend === b} onClick={() => setBackend(b)}>{b === "codex" ? "Codex" : "Claude"}</button>
+          ))}
+        </div>
+        {!found ? (!all.error && <span className="cstat"><span className="spin" />Reading rules…</span>) : (
+          <RulesEditor key={backend} backend={backend} own={found.all_tags} busy={all.busy !== null} busyRule={busyRule}
+            change={(action, rule) => all.changeRule(backend, action, rule)}
+            inherited={[{ label: "of your own", where: backend === "codex" ? "~/.codex/rules" : "~/.claude/settings.json", rules: found.personal }]} />
+        )}
+      </div>
+      <p className="mcap">Every Tag follows these, plus its own rules in its Details. A block anywhere wins. Your own Codex and Claude Code rules also apply, and Tag doesn't change them.</p>
+      {all.error && <ErrorLine>{all.error}</ErrorLine>}
+    </div>
+  );
 }

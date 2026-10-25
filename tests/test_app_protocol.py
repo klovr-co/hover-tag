@@ -107,6 +107,23 @@ class ProtocolTests(unittest.TestCase):
                          {key: row[key] for key in ("description", "default_model", "default_model_label",
                                                     "default_model_name", "default_effort")})
 
+    def test_list_rows_describe_the_picture_tag_gave_the_tag(self) -> None:
+        home = tag_instances.create(self.root, "t1-a1").home
+        assets = home / "integrations/slack-cli/assets"
+        assets.mkdir(parents=True)
+        row = lambda: self.cli("list", "--json")["tags"][0]
+        self.assertIsNone(row()["picture"])
+        self.assertEqual(str(home / "state/activity-now.json"), row()["activity_now"])
+        (assets / "tag-picture.json").write_text(json.dumps({"picture": "waterdrop", "index": 962}), encoding="utf-8")
+        picture = row()["picture"]
+        self.assertEqual(("waterdrop", 2, "water"), (picture["kind"], picture["index"], picture["sprite"]["element"]))
+        self.assertEqual(example("list.json")["tags"][0]["picture"], picture)
+        (assets / "tag-picture.json").write_text(json.dumps({"picture": "custom"}), encoding="utf-8")
+        self.assertEqual({"kind": "custom"}, row()["picture"])
+        # An existing Slack app keeps its own picture, whatever setup previewed.
+        (home / "config/setup-progress.json").write_text(json.dumps({"app_path": "existing"}), encoding="utf-8")
+        self.assertIsNone(row()["picture"])
+
     def test_autostart_and_logs_provide_what_apps_read(self) -> None:
         home = tag_instances.create(self.root, "t1-a1").home
         (home / "state/slack.log").write_text("Connected to Slack\n", encoding="utf-8")

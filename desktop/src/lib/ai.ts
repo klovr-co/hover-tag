@@ -8,6 +8,8 @@ import { parseJSON } from "./protocol";
 export const AI_CAPABILITY = "ai-connections";
 export const SHARED_AI_CAPABILITY = "shared-ai-connections";
 export const API_CAPABILITY = "api-connections";
+/** The installed Tag reads and changes permission rules, for each Tag and for all Tags. */
+export const RULES_CAPABILITY = "permission-rules";
 /** Saved model lists and `settings ai models --refresh`. */
 export const SAVED_MODELS_CAPABILITY = "saved-models";
 
@@ -89,7 +91,52 @@ export interface AIStatus {
   effort_levels?: string[];
   /** Whether a thinking level was chosen for this Tag, rather than the model's default. */
   effort_chosen?: boolean;
+  /** What the Tag may do without asking, set separately for Codex and Claude. */
+  permissions?: Permissions;
   checked_at?: string;
+}
+
+/** One choice for a permission setting, worded by Tag. */
+export interface PermissionOption {
+  value: string;
+  label: string;
+  detail: string;
+}
+
+/** One permission rule: a Claude tool rule or folder, or a Codex command start or host. */
+export interface PermissionRule {
+  kind: "rule" | "folder" | "command" | "host";
+  value: string;
+  decision: "allow" | "ask" | "block";
+}
+
+/** One agent's rules by scope: the Tag's own (in a Tag's report), Tag's rules for all
+ *  Tags, and your own Codex or Claude Code rules. Null when a file couldn't be read. */
+export interface AgentRules {
+  tag?: PermissionRule[] | null;
+  /** Other rule files in the Tag's folder, which the agent also reads. */
+  folder?: PermissionRule[] | null;
+  all_tags: PermissionRule[] | null;
+  personal: PermissionRule[] | null;
+}
+
+/** `tag settings ai rules --json`: the rules every Tag follows. */
+export interface AllTagsRules {
+  rules: { codex: AgentRules; claude: AgentRules };
+}
+
+/** Each agent's own permission settings; they're separate because the agents work differently. */
+export interface Permissions {
+  /** False when the Tag works in a folder of yours, where Tag keeps no Codex rules. */
+  own_folder?: boolean;
+  /** Saved values Tag won't run with, by setting, with the reason. */
+  errors?: Record<string, string>;
+  codex: { sandbox: string; approvals: string; reviewer: string; rules?: AgentRules };
+  claude: { mode: string; rules?: AgentRules };
+  options: {
+    codex: { sandbox: PermissionOption[]; approvals: PermissionOption[]; reviewer: PermissionOption[] };
+    claude: { mode: PermissionOption[] };
+  };
 }
 
 export interface ModelEntry {
@@ -170,7 +217,7 @@ const LABEL: Record<string, string> = {
   misconfigured: "API needs attention",
 };
 
-/** The status line under a backend's name, e.g. "Connected · ChatGPT sign-in". */
+/** The status line under a backend's name, e.g. "Connected · Codex sign-in on this Mac". */
 export function statusLine(connection: Connection): { text: string; tone: Tone } {
   if (connection.state === "connected") {
     return { text: `Connected${connection.account ? ` · ${connection.account}` : ""}`, tone: "good" };
