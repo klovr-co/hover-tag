@@ -22,7 +22,7 @@ from typing import Any
 
 try:
     from .opentag_process_env import text_only_environment
-    from . import agent_connection, agent_permissions, agent_usage
+    from . import agent_connection, agent_permissions, agent_usage, tag_connectors
     from .agent_activity import (
         APPROVAL_POLL_SECONDS,
         APPROVAL_TIMEOUT_SECONDS,
@@ -38,7 +38,7 @@ try:
     from .tag_memory import CLAUDE_NATIVE_MEMORY_ENV
 except ImportError:  # Direct script execution does not create a package context.
     from opentag_process_env import text_only_environment
-    import agent_connection, agent_permissions, agent_usage
+    import agent_connection, agent_permissions, agent_usage, tag_connectors
     from agent_activity import (
         APPROVAL_POLL_SECONDS,
         APPROVAL_TIMEOUT_SECONDS,
@@ -716,6 +716,9 @@ class ClaudeAgentRun:
             if self.text_only_instructions is None:
                 agent_permissions.check_claude_folder(self.cwd)
             settings = agent_permissions.claude_settings()
+            # Hide the tools of shared connectors this Tag may not use (ADR 0014).
+            denied = settings.setdefault("permissions", {}).setdefault("deny", [])
+            denied += [rule for rule in tag_connectors.claude_deny_rules(self.cwd) if rule not in denied]
         except ValueError as exc:
             raise ClaudeAgentError(str(exc)) from None
         if fast_mode:

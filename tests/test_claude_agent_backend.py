@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-from scripts import agent_permissions, claude_agent_backend
+from scripts import agent_permissions, claude_agent_backend, tag_connectors
 from scripts.claude_agent_backend import (
     APPROVAL_LABEL_COMMAND,
     APPROVAL_LABEL_TOOL,
@@ -418,6 +418,17 @@ class ClaudeAgentRunTests(unittest.TestCase):
         self.assertEqual("/bin/claude", options.cli_path)
         self.assertTrue(options.include_partial_messages)
         self.assertTrue(FakeClient.instances[0].disconnected)
+
+    def test_denies_shared_connectors_the_tag_may_not_use(self) -> None:
+        async def script(_client):
+            yield ResultMessage(result="ok")
+
+        with patch.object(tag_connectors, "claude_deny_rules", return_value=["mcp__gmail"]) as rules:
+            (status, _), _events = self.run_agent(script)
+        rules.assert_called_once_with(self.root)
+        self.assertEqual("completed", status)
+        deny = json.loads(FakeClient.instances[0].options.settings)["permissions"]["deny"]
+        self.assertEqual([*agent_permissions.CLAUDE_KEEPS_OUT, "mcp__gmail"], deny)
 
     def test_tag_thinking_level_reaches_the_sdk_effort_option(self) -> None:
         from scripts import agent_models, slack_socket_agent

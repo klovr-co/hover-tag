@@ -24,12 +24,13 @@ import re
 import tempfile
 
 try:
-    from . import tag_config, tag_instances
+    from . import tag_config, tag_connectors, tag_instances
     from .tag_layout import _rewrite
     from .tag_locks import LifecycleLock
     from .tag_paths import data_home
 except ImportError:
     import tag_config
+    import tag_connectors
     import tag_instances
     from tag_layout import _rewrite
     from tag_locks import LifecycleLock
@@ -217,6 +218,8 @@ def migrate(root: Path, lifecycle, tag_id: str = tag_instances.DEFAULT_TAG) -> s
             # Keep plain `tag start` on the Tag it already selected.
             if main == tag_id or (main is None and (tag_id == tag_instances.DEFAULT_TAG or not others)):
                 tag_instances.set_main_tag(root, name)
+            # Shared connectors follow the Tag to its new name.
+            tag_connectors.Store(root).rename_tag(tag_id, name)
             # Verify the renamed Tag resolves before declaring the work done.
             tag_instances.resolve(root, name)
             _plan_path(root, tag_id).unlink(missing_ok=True)

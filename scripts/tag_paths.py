@@ -215,10 +215,16 @@ def owns_workspace(workdir: Path, home: Path | None = None) -> bool:
 
 def codex_workspace_args(workdir: Path) -> list[str]:
     """Codex settings for the Tag's folder: trust (for its own rules) only in its own
-    default folder, and its MCP servers; any other folder gets none."""
+    default folder, and its MCP servers; any other folder gets none. Connectors from
+    Tag's shared list that this Tag may not use are switched off in every folder."""
+    try:
+        from . import tag_connectors
+    except ImportError:
+        import tag_connectors
+    connectors = tag_connectors.codex_disable_args(workdir)
     if not is_tag_workspace(workdir):
-        return []
-    return (codex_trust_args(workdir) if owns_workspace(workdir) else []) + _codex_mcp_args(workdir)
+        return connectors
+    return (codex_trust_args(workdir) if owns_workspace(workdir) else []) + _codex_mcp_args(workdir) + connectors
 
 
 def _codex_mcp_args(workdir: Path) -> list[str]:

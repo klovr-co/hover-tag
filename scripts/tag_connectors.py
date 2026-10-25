@@ -41,7 +41,7 @@ USAGE = ("tag connector list | show NAME | add NAME (--url URL | --command \"CMD
          "remove NAME | allow NAME TAG... | deny NAME TAG... | sync")
 
 
-class ConnectorError(RuntimeError):
+class ConnectorError(ValueError):
     """A connector request that can't be done; the message says what to do instead."""
 
 
@@ -207,6 +207,87 @@ class Store:
         """Names of the connectors this Tag may use."""
         return {name for name, entry in self.read()["connectors"].items()
                 if any(row.get("tag") == tag_id for row in entry.get("allowed", []))}
+
+    def blocked_for(self, tag_id: str) -> set[str]:
+        """Names of the connectors this Tag may not use; each run switches them off."""
+        return set(self.read()["connectors"]) - self.allowed_for(tag_id)
+
+    def rename_tag(self, old: str, new: str) -> None:
+        """Carry a renamed Tag's access over to its new name."""
+        if not self.path.exists():
+            return
+        with self.change() as data:
+            for entry in data["connectors"].values():
+                for row in entry.get("allowed", []):
+                    if row.get("tag") == old:
+                        row["tag"] = new
+
+    def forget_tag(self, tag_id: str) -> None:
+        """Drop a removed Tag from every allow list, so a later Tag of that name starts with none."""
+        if not self.path.exists():
+            return
+        with self.change() as data:
+            for entry in data["connectors"].values():
+                entry["allowed"] = [row for row in entry.get("allowed", []) if row.get("tag") != tag_id]
+
+
+def _run_store() -> tuple[Store, str] | None:
+    """The store and Tag a backend run filters for; None outside a Tag run."""
+    tag_id = os.getenv("TAG_ID")
+    if not tag_id or not os.getenv("TAG_HOME"):
+        return None
+    return Store(), tag_id
+
+
+def codex_disable_args(workdir: Path) -> list[str]:
+    """Codex -c overrides that switch off the connectors this Tag may not use.
+
+    Only servers present in the user's Codex config are named: Codex rejects an
+    override for a server it has no transport for. A server the Tag's own
+    workspace defines is the Tag's choice and stays on.
+    """
+    run = _run_store()
+    if run is None:
+        return []
+    store, tag_id = run
+    blocked = store.blocked_for(tag_id)
+    if not blocked:
+        return []
+    try:
+        import tomllib
+    except ImportError:
+        import tomli as tomllib
+    codex_home = Path(os.getenv("CODEX_HOME", str(Path.home() / ".codex"))).expanduser()
+    configured: set[str] = set()
+    for path, required in ((codex_home / "config.toml", True), (workdir / ".codex/config.toml", False)):
+        try:
+            with path.open("rb") as handle:
+                servers = tomllib.load(handle).get("mcp_servers", {})
+        except FileNotFoundError:
+            continue
+        except (OSError, ValueError):
+            raise ConnectorError(f"Couldn't read {path} to switch off connectors this Tag may not use.") from None
+        names = set(servers) if isinstance(servers, dict) else set()
+        configured = configured | names if required else configured - names
+    return [argument for name in sorted(blocked & configured)
+            for argument in ("-c", f"mcp_servers.{name}.enabled=false")]
+
+
+def claude_deny_rules(workdir: Path) -> list[str]:
+    """Claude permission rules that hide the tools of connectors this Tag may not use."""
+    run = _run_store()
+    if run is None:
+        return []
+    store, tag_id = run
+    blocked = store.blocked_for(tag_id)
+    try:
+        workspace = json.loads((workdir / ".mcp.json").read_text(encoding="utf-8")).get("mcpServers", {})
+    except FileNotFoundError:
+        workspace = {}
+    except (OSError, ValueError, AttributeError):
+        raise ConnectorError(f"Couldn't read {workdir / '.mcp.json'} to switch off connectors "
+                             "this Tag may not use.") from None
+    return [f"mcp__{name}" for name in sorted(blocked - set(workspace if isinstance(workspace, dict) else ()))]
 
 
 def view(name: str, entry: dict, backend_states: dict | None = None) -> dict:
