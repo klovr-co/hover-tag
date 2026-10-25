@@ -53,7 +53,8 @@ checks on helpers, and validation in `tag_*` commands.
   to a commit of this repository, or any public HTTPS URL;
 - a short description;
 - the skills it bundles;
-- optionally a memory scope, a subset of the instance's `MFS_ALLOWED_SCOPES`.
+- optionally a memory scope, a subset of the instance's `MFS_ALLOWED_SCOPES`;
+- a voice and a proactivity level, with optional per-channel overrides (below).
 
 Personas live in the instance's settings. They have no Slack tokens,
 sessions, backend credentials or process of their own.
@@ -76,6 +77,112 @@ the router. In practice:
   in context and loads the new persona's skills. Nothing is retold, summarized
   or handed over.
 - DMs work the same way.
+
+**Voice and proactivity.** Two short fields set how a persona sounds and how
+often it speaks up. Both follow the article's warning about the
+"Frankenprompt" (every team adds a sentence, "resulting in conflicting rules
+and no consistent voice"):
+
+- **Voice:** free text of at most 200 characters about tone and length, for
+  example "warm, upbeat colleague; short replies; light humour". It isn't a
+  place for rules or procedures; those are skills. Only the active persona's
+  voice goes into a run, as one line. Lead sees only names and one-line
+  descriptions. A voice never overrides the Tag's standing rules (approvals,
+  formatting, what it may post).
+- **Proactivity:** one of three levels, each including the ones before it.
+  - `only-when-asked` (default): @mentions and DMs only.
+  - `when-addressed`: also messages that name the Tag or continue its
+    thread, in watched channels (#233).
+  - `chimes-in`: also announcements that invite reactions, such as launches,
+    demos and wins (planned, below).
+- **Per-channel overrides:** a persona may have a different voice or
+  proactivity in a channel. The owner's channel settings are the ceiling: a
+  persona can't be more proactive in a channel than the Tag is allowed to be
+  there. At most one persona chimes in per channel, so a launch post gets one
+  reply, not one per persona.
+
+`tag NAME persona add|set` take `--voice TEXT` and `--proactivity LEVEL`,
+plus `--channel ID` for an override. `tag NAME persona show` prints the
+level that applies in each channel and, when a level can't apply, why (for
+example "chimes-in needs a classifier; none configured"). Tag.app's Details
+tab gets the same as a persona sheet: a one-line Voice field with a character
+count, a three-way "Speaks up" control, and a per-channel list. A level that
+can't apply is disabled, with the reason beside it.
+
+**Chime-in mode (planned, with #233).** Example: "when I post a launch video,
+Tag comments on it like a coworker I really like." #233 can't do this today.
+Its classifier asks whether the requester is talking to the assistant, and by
+design answers no to posts not addressed to Tag. Its watched replies are also
+text-only, so it can't see the video. Chime-in needs:
+
+- **Its own classifier question:** "Does this post invite colleagues'
+  reactions, for example a launch, demo, release, milestone or win?" Requests,
+  questions to someone else, incidents, routine status and sensitive personal
+  news are no. It is tuned for precision (threshold 0.95 or higher), with its
+  own threshold setting and its own labelled set, because positives are rare.
+- **Narrow triggers:** top-level posts in channels where a persona's level is
+  `chimes-in`, by an authorized user, never from a bot, never inside a thread
+  Tag is already in (that is watching).
+- **Rate limits:** at most one reply per post, and at most N chime-ins per
+  channel per day (default 1). #233's quiet hours and its cooldown after 👎 or
+  "stop" apply too.
+- **The persona's voice:** one short threaded reply, a reaction only, or
+  nothing; the draft may still decide `NO_REPLY`. A small label says Tag is
+  chiming in and offers to turn it off for the channel.
+- **A read-only look at the attachment:** images as images; link previews
+  from the message's unfurl fields; video as a few frames (about 8) and a
+  transcript when one is available, all within size caps. The run has no tools,
+  memory, connectors, credentials or writes. Whether Slack exposes a
+  transcript for uploaded videos through the API is unverified; without one,
+  Tag would need a local or paid transcription step, which needs its own
+  decision. Extracting frames needs `ffmpeg` on the computer, also unverified.
+
+#233 would need to change in six ways:
+
+1. Its free filters pass only messages that name Tag or sit in Tag's threads.
+   They need a path for top-level posts in chime-in channels.
+2. `watch_classifier.py` has one question (`tag_is_addressed`). It needs a
+   second question with its own instructions, criteria, threshold and eval
+   set.
+3. Its watched draft is text-only. It needs a read-only attachment mode that
+   reuses the bridge's attachment download with caps.
+4. A separate daily cap for chime-ins.
+5. Per-channel modes (watch or chime-in) instead of the single
+   `OPENTAG_WATCH_CHANNEL_IDS` list, with the Home tab to match.
+6. `watch_eval.py` needs to take the question as a parameter.
+
+**Without a classifier key.** On #233 today, turning on watching without the
+selected provider's key (TypeSafe Jev or OpenAI Decisions) is a config error,
+so there is no fallback. Proposed, in this order:
+
+1. **Rules only,** with a stricter output. R1 (the message names the Tag) or
+   R2 (it continues the Tag's thread) triggers only a reaction (👀) or one
+   line, "Want me to take this on?", with the Take this on button. It never
+   triggers a full reply. #233 measured why: on 122 natural real messages,
+   R1 or R2 had precision 0.67 and 3 wrong triggers, against 1.00 and none
+   for Decisions at 0.95. R1 is off when the Tag's only name is "Tag",
+   because on the synthetic set it fired on "tag" as a verb (18 false
+   positives).
+2. **The Tag's own backend as the classifier,** if the owner turns it on: one
+   tiny text-only call (no tools, no session) with the same question,
+   answering yes or no. Self-reported confidences aren't calibrated, so there
+   is no threshold. Cost: about 1,500 input and 10 output tokens a call
+   (estimated from #233's state size, unverified). That is priced at the
+   Tag's model rate with an API key, or taken from the plan's limits with a
+   subscription sign-in. It adds a backend start to each candidate message,
+   and it needs its own run on #233's eval sets, with a budget, before it is
+   offered.
+3. **Otherwise the feature stays off,** and Tag.app and `tag config show` say
+   why and what would turn it on.
+
+Per feature:
+
+| Feature | With Jev or Decisions | Without a key |
+|---|---|---|
+| Watching (`when-addressed`) | rules, then classifier | rules only with a reaction or offer; backend if turned on |
+| Chime-in | its own question | backend if turned on; else off (no rule can spot a launch) |
+| Persona suggestion | scores the descriptions, precision first | Lead's loop suggests from the descriptions it already sees, at no extra call |
+| Connector narrowing | recall first, within the allow list | pass the whole allow list |
 
 **Replies carry the persona's name and picture.** The bridge posts with
 `chat:write.customize` (`username`, `icon_url`) on `chat.postMessage`,
@@ -136,16 +243,106 @@ branch, unchanged and not called. Resuming it needs a new decision.
 
 Each fold or split is decided by a small end-to-end set, not by argument.
 
-- About 10 golden tasks, each a real Slack request with the expected outcome:
-  the right persona, the right skill loaded, the right tool or helper called,
-  and the answer checked against a short rubric.
+- About 10 golden tasks, each a real Slack request with the expected outcome.
+  Pass or fail is graded on the outcome: what Tag did (its writes, from the
+  fake Slack client and helper logs) and what it said, against checks and a
+  short rubric. The persona chosen, the skills read and the tools called are
+  recorded alongside as diagnostics, not graded. The migration kit warns that
+  "Path checks break the moment the design changes", while the article says
+  to check "whether the agent loaded the right skill or called the right
+  tool". Recording the path without failing on it serves both.
 - The harness runs them through the bridge's backend path with a fake Slack
   client, so no live Slack is involved. It reads the backend's event stream to
   see which skill files were read and which tools ran.
+- Each task runs at least twice. Compare which tasks flipped, not only the
+  total. In the article's example, a break "only showed up in one run out of
+  two".
 - Fold one thing at a time and run the set before and after. Keep a split
   only if the folded version scores worse.
+- The harness writes the migration kit's `results.jsonl` layout, so the kit's
+  `compare.py` and `estimate.py` can be used as they are (Apache-2.0,
+  dependency-free). Chime-in, watching and persona suggestion keep their own
+  labelled sets in #233's `watch_eval.py`.
 - The runs call paid models, so each run needs an agreed budget and a cost
-  estimate first.
+  estimate first (`estimate.py` gives the tokens; prices come from the
+  provider's price list).
+
+## Further reading and how it applies
+
+Each source was read in full on 25 Oct 2026, except where marked.
+
+- **Anthropic, [Building agents: When to fold subagents into your main agent
+  loop](https://claude.com/resources/articles/building-agents-when-to-fold-subagents-into-your-main-agent-loop)**
+  (Diane Sarkis, 22 Oct 2026). It is the basis of this ADR. Its examples are
+  unnamed ("one customer", "one company"). The figures it gives are "a roughly
+  2x faster runtime" for one customer's single loop, a system prompt cut "by
+  over 80%", tool choice degrading past "30-50 tool definitions", and "a set
+  of 10 golden examples is enough to start". *Applies:* everything in the
+  Decision section.
+- **Cognition, [Don't Build Multi-Agents](https://cognition.com/blog/dont-build-multi-agents)**
+  (Walden Yan, 12 Jun 2025). Two principles: "Share context, and share full
+  agent traces, not just individual messages" and "Actions carry implicit
+  decisions, and conflicting decisions carry bad results". Its Flappy Bird
+  example shows two subagents building mismatched parts. It gives no numbers.
+  *Applies:* switching persona keeps the same session, so the full trace is
+  shared. A handoff to a boundary instance passes the thread link, not a
+  summary. Personas never work on one request in parallel.
+- **Anthropic, [How we built our multi-agent research
+  system](https://www.anthropic.com/engineering/multi-agent-research-system)**
+  (Hadfield et al., 13 Jun 2025). An Opus 4 lead with Sonnet 4 subagents
+  "outperformed single-agent Claude Opus 4 by 90.2% on our internal research
+  eval". Agents use "about 4× more tokens than chat interactions, and
+  multi-agent systems use about 15× more", and on BrowseComp "token usage by
+  itself explains 80% of the variance". It pays off for "breadth-first
+  queries" and tasks valuable enough for the cost. It is a poor fit where
+  agents "share the same context or involve many dependencies", such as "most
+  coding tasks". Its evals started with "about 20 queries", an LLM judge with
+  a rubric, and "end-state evaluation". *Applies:* Tag's requests are mostly
+  conversational and share context, so one loop. Breadth-first research stays
+  with the backend's own subagents inside a run, not personas. The golden set
+  grades end states.
+- **Anthropic, [Building multi-agent systems: When and how to use
+  them](https://claude.com/resources/articles/building-multi-agent-systems-when-and-how-to-use-them)**
+  (Cara Phillips, 23 Jan 2026). Three situations favour several agents:
+  context pollution, parallel tasks and specialization. One kind of
+  specialization: "Different tasks sometimes require different personas,
+  constraints, or instructions that conflict when combined." Multi-agent
+  setups "typically use 3-10x more tokens". It says to split by context, not
+  by kind of work, which otherwise becomes a "telephone game". Its tool-count
+  signal is "often 20+", lower than the October article's 30–50. *Applies:*
+  if two personas' voices or rules conflict when combined, that is a reason
+  for a separate instance, which is why a voice stays one line. Connector
+  narrowing (#233 follow-up) should start before about 20 tools, not 30.
+- **Anthropic, [Building effective agents](https://www.anthropic.com/engineering/building-effective-agents)**
+  (Erik S. and Barry Zhang, 19 Dec 2024). It starts from "finding the simplest
+  solution possible", and adds complexity "only when it demonstrably improves
+  outcomes". Routing "works well for complex tasks where there are distinct
+  categories that are better handled separately, and where classification can
+  be handled accurately". The page now notes that much of its tooling advice
+  has changed since then. *Applies:* #233's classifier is a narrow routing
+  gate (answer or stay silent), and chime-in adds one more category. Persona
+  suggestion by a classifier is justified only if it is measured as accurate.
+- **H. Floyd, [Your Multi-Agent System Is an Org
+  Chart](https://harryfloyd.substack.com/p/your-multi-agent-system-is-an-org)**
+  (7 Jul 2026). **Read only in part:** the post is paywalled after its
+  opening. Its subtitle reads "Cognition said don't build them. Anthropic said
+  do. A year on, they converge on the one question that decides it." The rest,
+  including its answer, is unverified, so this ADR relies on none of it. The
+  org-chart point is taken from the October article ("Conway's law at work").
+- **[anthropics/single-agent-loop-kit](https://github.com/anthropics/single-agent-loop-kit)**
+  (Apache-2.0, "Reference implementation. Not maintained"). It is a Claude
+  Code skill (audit, baseline, merge, fold, as-tool and upkeep steps), four
+  dependency-free scripts, a reference loop, and a support-desk example. The
+  example has a router, six subagents and 19 golden tasks (`golden.jsonl`).
+  *Usable for us:* the golden-task check format (`answer_includes`,
+  `actions`, `forbidden_actions`, `answer_excludes`,
+  `only_expected_writes`); the `results.jsonl` layout; `compare.py` (a change
+  "does not hold" if it completes fewer tasks, plus flipped tasks and changed
+  writes); `estimate.py` (token estimates before a paid run); and offline
+  smoke runs with a fake model. *Not usable as is:* its runner is tied to the
+  example's backend, so ours drives the bridge instead. The audit steps
+  assume existing subagents, and we have none. The kit itself says "You have
+  no subagents yet. Start with one loop."
 
 ## Trade-offs
 
@@ -157,6 +354,9 @@ Each fold or split is decided by a small end-to-end set, not by argument.
   which picks a persona.
 - **One context can still overflow.** Many personas and skills add
   descriptions to every run. The evaluation shows when to split.
+- **Speaking up unasked can annoy people.** Chime-in is off by default,
+  limited per channel per day, tuned for precision, and stops after a 👎 or
+  "stop". A missed launch costs less than an unwanted comment.
 - **Slack shows one app** in audit logs, analytics and channel membership.
 - **Pictures need a public URL**, visible to anyone who has it. Hosting
   uploads is a follow-up under [#206](https://github.com/klovr-co/hover-tag/issues/206).
@@ -168,22 +368,27 @@ Each fold or split is decided by a small end-to-end set, not by argument.
    instances while creation is on hold. Set ADR 0011's status to "Changed by
    ADR 0012".
 2. **Personas.** `tag NAME persona add|list|show|set|remove` with name,
-   description, picture, skills and memory scope, and a `personas`
-   capability for Tag.app. Carry over from `wip/tag-profiles`: the picture
+   description, picture, skills, memory scope, voice and proactivity
+   (including per-channel overrides), and a `personas` capability for
+   Tag.app. Until #233 lands, only `only-when-asked` takes effect; `persona
+   show` says so for the other levels. Carry over from `wip/tag-profiles`: the picture
    check and pinned characters, the name parser, thread personas and the
    message record, with their tests. Leave behind what made a profile an
    instance: `tag add --profile`, `kind: profile`, the shared Slack values and
    the inbox.
 3. **Calling and display.** The name parser in the bridge, persona choice by
    the agent through a helper, the thread's persona, persona instructions and
-   memory scope for the run, `username` and `icon_url` on posts, and persona
-   labels in thread context. Approval prompts carry the persona.
+   memory scope and voice for the run, `username` and `icon_url` on posts,
+   and persona labels in thread context. Approval prompts carry the persona.
 4. **Proposals.** Lead proposes a persona, a `SKILL.md` (text only, with a
    size cap), or a routine. The requester approves on the card. Routines go to
    `tag NAME routine add --from-json` when #237's `routines` capability
    exists, and to `state/pending-routines.json` until then.
-5. **Evaluation harness** with the golden tasks above, run offline. The first
-   paid run waits for a budget.
+5. **Evaluation harness** with the golden tasks above, in the migration
+   kit's results layout, run offline. The first paid run waits for a budget.
+
+Chime-in, the no-key fallback and the classifier follow-ups belong to #233
+and its follow-up PRs, not #238. #238 only stores the fields they read.
 
 Tests use fake Slack clients. No step creates, reinstalls or deletes a Slack
 app. `chat:write.customize` is added to the manifest by a person, and live
@@ -196,4 +401,7 @@ name) wait for an explicit go-ahead.
 - Hosting uploaded pictures (#206).
 - Boundary instances under the one Slack app (the inbox design).
 - Resuming app-Tag creation, if an installation needs a second Slack app.
-- Personas in Tag.app's Details tab.
+- Personas in Tag.app's Details tab, including the voice, "Speaks up" and
+  per-channel controls.
+- Chime-in mode and the no-key fallback, on #233 (six changes listed above).
+- Transcripts for uploaded videos, if Slack offers none through the API.
