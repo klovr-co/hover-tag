@@ -282,6 +282,21 @@ class WatchState:
                 usage["estimated_calls"] = usage.get("estimated_calls", 0) + 1
             self._save()
 
+    def digests_today(self, channel: str, today: str) -> int:
+        with self.lock:
+            usage = self.data["usage"].get(channel, {})
+            return int(usage.get("day_digests", 0)) if usage.get("digest_day") == today else 0
+
+    def record_digest(self, channel: str, *, today: str) -> None:
+        """Count one digest run for this channel, in total and for today."""
+        with self.lock:
+            usage = self.data["usage"].setdefault(channel, {"since": today})
+            if usage.get("digest_day") != today:
+                usage.update(digest_day=today, day_digests=0)
+            usage["digests"] = usage.get("digests", 0) + 1
+            usage["day_digests"] += 1
+            self._save()
+
     def engage(self, channel: str, thread_ts: str) -> None:
         """A person engaged Tag explicitly in this thread: an @mention, Take this on, or 👍.
 

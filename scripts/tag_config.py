@@ -30,6 +30,7 @@ DEFAULTS = {
     "OPENTAG_WATCH_CHANNEL_IDS": "", "OPENTAG_WATCH_CHANNEL_MODES": "", "OPENTAG_WATCH_NAMES": "",
     "OPENTAG_WATCH_QUIET_HOURS": "19:00-08:00", "OPENTAG_WATCH_DAILY_LIMIT": "5",
     "OPENTAG_WATCH_COOLDOWN_HOURS": "24",
+    "OPENTAG_DIGEST_CHANNEL_IDS": "", "OPENTAG_DIGEST_OWN_HOSTS": "", "OPENTAG_DIGEST_DAILY_LIMIT": "20",
     "OPENTAG_WATCH_CLASSIFIER": "openai-decisions", "OPENTAG_WATCH_CLASSIFIER_TIMEOUT_SECONDS": "5",
     "OPENTAG_JEV_MODEL": "jev-latest", "OPENTAG_JEV_THRESHOLD": "0.9", "OPENTAG_JEV_CHIME_THRESHOLD": "0.95",
     "OPENTAG_DECISIONS_MODEL": "gpt-6-luna", "OPENTAG_DECISIONS_THRESHOLD": "0.95",
@@ -92,6 +93,9 @@ LABELS = {
     "OPENTAG_WATCH_CHANNEL_MODES": ("Watched channels and their mode, experimental "
                                     "(CHANNEL=when-addressed or CHANNEL=chimes-in, comma-separated)"),
     "OPENTAG_WATCH_NAMES": "Other names people call this Tag (comma-separated)",
+    "OPENTAG_DIGEST_CHANNEL_IDS": "Digest shared links and files in these channels (experimental; comma-separated IDs)",
+    "OPENTAG_DIGEST_OWN_HOSTS": "Your own sites and repos, never digested (comma-separated hosts)",
+    "OPENTAG_DIGEST_DAILY_LIMIT": "Digests per channel per day",
     "OPENTAG_WATCH_QUIET_HOURS": "Watching quiet hours, this computer's time (HH:MM-HH:MM, empty for none)",
     "OPENTAG_WATCH_DAILY_LIMIT": "Unprompted replies per watched channel per day",
     "OPENTAG_WATCH_COOLDOWN_HOURS": "Hours to stay quiet in a channel after a 👎 or stop",
@@ -251,6 +255,15 @@ def validation_error(key: str, value: str) -> str | None:
             re.fullmatch(r"[CG][A-Z0-9]+=(?:off|when-addressed|chimes-in)", item.strip()) for item in value.split(",")):
         return ("Use comma-separated CHANNEL=MODE pairs, where MODE is off, when-addressed or chimes-in; "
                 "leave empty to watch no channels")
+    if key == "OPENTAG_DIGEST_CHANNEL_IDS" and value.strip() and not all(
+            re.fullmatch(r"[CG][A-Z0-9]+", item.strip()) for item in value.split(",")):
+        return "Use comma-separated Slack channel IDs, or leave empty to digest nothing"
+    if key == "OPENTAG_DIGEST_OWN_HOSTS" and value.strip() and not all(
+            re.fullmatch(r"(?:[a-z0-9-]+\.)+[a-z]{2,}(?:/[A-Za-z0-9._-]+)?", item.strip().lower())
+            for item in value.split(",")):
+        return "Use comma-separated host names such as hover.team"
+    if key == "OPENTAG_DIGEST_DAILY_LIMIT" and not (value.isascii() and value.isdigit() and 1 <= int(value) <= 200):
+        return "Use a whole number from 1 to 200"
     if key == "OPENTAG_WATCH_NAMES" and any(
             not item.strip() or len(item.strip()) > 35
             or any(unicodedata.category(character) in {"Cc", "Zl", "Zp"} for character in item)

@@ -27,8 +27,10 @@ posts, and almost all of set A are thread replies or addressed to Tag.
 - **No wrong chime-ins on real posts at 0.9 or 0.95.** Below 0.9, false positives appear quickly (3 at 0.85,
   13 at 0.5). Nearly all are shared links and other companies' launches (at 0.85: 2 competitor posts and 1 share; at 0.5: 7 shares and 3 competitor posts).
 - **The synthetic false positive** at 0.95 is a competitor's launch, which the label says is not the team's news.
-- **Misses** are posts that are only a file with little or no text (a launch video, a demo screen recording). The
-  classifier sees only attachment descriptions, not the contents.
+- **Misses at 0.95** (5 of 8 real positives) are short posts of 4 to 12 words: a win and a demo scored 0.90 to
+  0.93, a launch with an image 0.86, a demo video 0.62, and one demo errored. Three carry a file, and the
+  classifier sees only its description, not the contents. On the synthetic set the worst miss is a launch post
+  that is only a video (0.27).
 
 ## OpenAI Decisions
 
