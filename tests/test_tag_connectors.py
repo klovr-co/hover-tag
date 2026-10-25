@@ -134,6 +134,13 @@ class ConnectorRunTests(unittest.TestCase):
                                       "PATH": str(base / "bin")})
         env.start()
         self.addCleanup(env.stop)
+        self.node = base / "bin/node"
+        self.node.write_text("#!/bin/sh\n")
+        self.node.chmod(0o755)
+        self.bridge = connectors.bridge_script(self.root)
+        self.bridge.parent.mkdir(parents=True)
+        self.bridge.write_text("")
+        self.auth = str(connectors.auth_dir(self.root))
         tag_instances.create(self.root, "sales")
         self.store = connectors.Store(self.root)
         self.store.add("linear", url="https://mcp.linear.app/mcp")
@@ -141,16 +148,34 @@ class ConnectorRunTests(unittest.TestCase):
         self.store.add("notes", command=["notes-mcp", "--read-only"], env=["NOTES_KEY"])
         self.store.set_allowed("linear", ["sales"], True)
         self.store.set_allowed("notes", ["sales"], True)
+        self.sign_in("https://mcp.linear.app/mcp")
 
-    def test_codex_gets_only_allowed_connectors_with_env_names(self):
+    def sign_in(self, url):
+        path = connectors.sign_in_file(self.root, url)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}")
+
+    def bridge_args(self, url):
+        return [str(self.bridge), url, "--auth-timeout", "10"]
+
+    def test_sign_in_file_matches_mcp_remote_layout(self):
+        # mcp-remote 0.15.2: <dir>/mcp-remote-v1/<md5 of the URL>_tokens.json
+        self.assertEqual(connectors.sign_in_file(self.root, "https://mcp.linear.app/mcp"),
+                         connectors.auth_dir(self.root) / "mcp-remote-v1/fcc436b0d1e0a1ed9a2b15bbd638eb13_tokens.json")
+
+    def test_codex_gets_only_allowed_connectors_through_the_bridge(self):
         self.assertEqual(connectors.codex_run_args(self.workdir), [
-            "-c", 'mcp_servers.linear={"url" = "https://mcp.linear.app/mcp"}',
+            "-c", 'mcp_servers.linear={"command" = ' + json.dumps(str(self.node)) + ', "args" = ['
+                  + ", ".join(json.dumps(arg) for arg in self.bridge_args("https://mcp.linear.app/mcp"))
+                  + '], "env" = {"MCP_REMOTE_CONFIG_DIR" = ' + json.dumps(self.auth) + '}}',
             "-c", 'mcp_servers.notes={"command" = "notes-mcp", "args" = ["--read-only"], '
                   '"env_vars" = ["NOTES_KEY"]}'])
 
     def test_claude_gets_allowed_connectors_and_the_workspace_wins(self):
         self.assertEqual(connectors.claude_mcp_servers(self.workdir), {
-            "linear": {"type": "http", "url": "https://mcp.linear.app/mcp"},
+            "linear": {"type": "stdio", "command": str(self.node),
+                       "args": self.bridge_args("https://mcp.linear.app/mcp"),
+                       "env": {"MCP_REMOTE_CONFIG_DIR": self.auth}},
             "notes": {"type": "stdio", "command": "notes-mcp", "args": ["--read-only"],
                       "env": {"NOTES_KEY": "${NOTES_KEY}"}}})
         mine = {"command": "my-linear"}
@@ -160,6 +185,17 @@ class ConnectorRunTests(unittest.TestCase):
         (self.workdir / ".codex/config.toml").write_text('[mcp_servers.linear]\ncommand = "my-linear"\n')
         self.assertEqual([argument.split("=")[0] for argument in connectors.codex_run_args(self.workdir)],
                          ["-c", "mcp_servers.notes"])
+
+    def test_remote_connectors_wait_for_sign_in_and_the_bridge(self):
+        self.store.set_allowed("gmail", ["sales"], True)
+        definitions, skipped = connectors.run_plan()
+        self.assertEqual(set(definitions), {"linear", "notes"})
+        self.assertEqual(skipped, {"gmail": "Not signed in; run tag connector sign-in gmail."})
+        self.bridge.unlink()
+        definitions, skipped = connectors.run_plan()
+        self.assertEqual(set(definitions), {"notes"})
+        self.assertEqual(set(skipped), {"linear", "gmail"})
+        self.assertIn("tag doctor", skipped["linear"])
 
     def test_without_connectors_the_workspace_config_passes_as_before(self):
         self.store.forget_tag("sales")
@@ -197,9 +233,9 @@ class ConnectorRunTests(unittest.TestCase):
                                 env={**os.environ, "PATH": REAL_PATH})
         rows = {row["name"]: row for row in json.loads(listed.stdout)}
         self.assertEqual(set(rows), {"linear", "notes"})
-        self.assertEqual(rows["linear"]["transport"]["url"], "https://mcp.linear.app/mcp")
+        self.assertEqual(rows["linear"]["transport"]["args"], self.bridge_args("https://mcp.linear.app/mcp"))
+        self.assertEqual(rows["linear"]["transport"]["env"], {"MCP_REMOTE_CONFIG_DIR": self.auth})
         self.assertEqual(rows["notes"]["transport"]["env_vars"], ["NOTES_KEY"])
-
 
 if __name__ == "__main__":
     unittest.main()
