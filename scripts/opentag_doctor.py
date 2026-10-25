@@ -297,6 +297,22 @@ def check_backend() -> bool:
     return False
 
 
+def check_connectors() -> bool:
+    """Node, mcp-remote and sign-ins for the shared connectors Tags may use (ADR 0014)."""
+    try:
+        from . import tag_connectors
+    except ImportError:
+        import tag_connectors
+    try:
+        results = tag_connectors.doctor_checks()
+    except ValueError as exc:
+        print_check(False, "connector list", str(exc), next_action=str(exc))
+        return False
+    for ok, label, detail, next_action in results:
+        print_check(ok, label, detail, next_action=next_action)
+    return all(ok for ok, *_ in results)
+
+
 def check_offline(root: Path) -> bool:
     """Validate a launch configuration without credentials or network access."""
     backend = env("OPENTAG_BACKEND")
@@ -350,6 +366,7 @@ def run_checks(offline: bool, channel_ids: list[str] | None) -> int:
         check_mfs(scopes) if scopes or env("SLACK_CHANNEL_POLICY") == "invited" else False,
         check_backend(),
         check_memory(),
+        check_connectors(),
     ]
     configured = channel_ids or []
     checks.extend(check_slack(channel_id) for channel_id in configured)

@@ -556,12 +556,6 @@ def approval_choices(suggestions: Any, tool_name: str = "", tool_input: dict[str
 
 
 
-def workspace_mcp_config(workdir: Path) -> Path | None:
-    """Layer only the workspace's Tag-owned MCP servers, like Codex's config."""
-    config = workdir / ".mcp.json"
-    return config if config.is_file() else None
-
-
 def normalize_catalog(models: Any) -> list[dict[str, Any]]:
     """Convert the CLI's initialize model list into Tag's catalog fields."""
     catalog: list[dict[str, Any]] = []
@@ -703,9 +697,13 @@ class ClaudeAgentRun:
         cli_path = claude_cli_path()
         if cli_path:
             kwargs["cli_path"] = cli_path
-        mcp_config = workspace_mcp_config(self.cwd)
-        if mcp_config is not None:
-            kwargs["mcp_servers"] = mcp_config
+        # The workspace's servers plus the shared connectors this Tag may use (ADR 0014).
+        try:
+            mcp_servers = tag_connectors.claude_mcp_servers(self.cwd)
+        except ValueError as exc:
+            raise ClaudeAgentError(str(exc)) from None
+        if mcp_servers is not None:
+            kwargs["mcp_servers"] = mcp_servers
         if model and model != "default":
             kwargs["model"] = model
         if reasoning_effort:
@@ -716,9 +714,6 @@ class ClaudeAgentRun:
             if self.text_only_instructions is None:
                 agent_permissions.check_claude_folder(self.cwd)
             settings = agent_permissions.claude_settings()
-            # Hide the tools of shared connectors this Tag may not use (ADR 0014).
-            denied = settings.setdefault("permissions", {}).setdefault("deny", [])
-            denied += [rule for rule in tag_connectors.claude_deny_rules(self.cwd) if rule not in denied]
         except ValueError as exc:
             raise ClaudeAgentError(str(exc)) from None
         if fast_mode:

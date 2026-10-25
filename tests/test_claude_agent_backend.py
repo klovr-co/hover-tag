@@ -419,16 +419,16 @@ class ClaudeAgentRunTests(unittest.TestCase):
         self.assertTrue(options.include_partial_messages)
         self.assertTrue(FakeClient.instances[0].disconnected)
 
-    def test_denies_shared_connectors_the_tag_may_not_use(self) -> None:
+    def test_passes_the_connectors_the_tag_may_use(self) -> None:
         async def script(_client):
             yield ResultMessage(result="ok")
 
-        with patch.object(tag_connectors, "claude_deny_rules", return_value=["mcp__gmail"]) as rules:
+        servers = {"linear": {"type": "http", "url": "https://mcp.linear.app/mcp"}}
+        with patch.object(tag_connectors, "claude_mcp_servers", return_value=servers) as found:
             (status, _), _events = self.run_agent(script)
-        rules.assert_called_once_with(self.root)
+        found.assert_called_once_with(self.root)
         self.assertEqual("completed", status)
-        deny = json.loads(FakeClient.instances[0].options.settings)["permissions"]["deny"]
-        self.assertEqual([*agent_permissions.CLAUDE_KEEPS_OUT, "mcp__gmail"], deny)
+        self.assertEqual(servers, FakeClient.instances[0].options.mcp_servers)
 
     def test_tag_thinking_level_reaches_the_sdk_effort_option(self) -> None:
         from scripts import agent_models, slack_socket_agent
