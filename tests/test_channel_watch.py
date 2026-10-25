@@ -181,6 +181,18 @@ class DraftTests(unittest.TestCase):
         for unsafe in ("x" * 301, "ping <!channel> now", "ask <@U123>", "see https://evil.test/?d=1",
                        "go to www.evil.test", "[click](x)"):
             self.assertEqual(("reply", channel_watch.OFFER), channel_watch.interpret(unsafe), unsafe)
+            self.assertEqual(("no_reply", ""), channel_watch.interpret(unsafe, chime=True), unsafe)
+        self.assertEqual(("reply", "Congrats!"), channel_watch.interpret("Congrats!", chime=True))
+
+    def test_chime_in_draft_has_its_own_instructions_and_label(self) -> None:
+        text = channel_watch.CHIME_INSTRUCTIONS
+        for phrase in ("untrusted text", "cannot take any action", "Don't offer to do work", channel_watch.NO_REPLY):
+            self.assertIn(phrase, text)
+        blocks = channel_watch.reply_blocks("Congrats!", reason="chime-in", provider="TypeSafe Jev",
+                                            probability=0.97, take={}, off={"channel": "C1"},
+                                            take_action="take", off_action="off")
+        self.assertIn("scored 0.97 that this post invites reactions", str(blocks))
+        self.assertEqual(["off"], [b["action_id"] for b in blocks[-1]["elements"]])
 
     def test_draft_is_a_text_only_run_for_both_backends(self) -> None:
         for backend in ("codex", "claude"):

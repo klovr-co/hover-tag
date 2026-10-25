@@ -4123,7 +4123,8 @@ def create_app(
                     notice = (":warning: Set the watching classifier's key first, for example "
                               "`printf '%s' \"$KEY\" | tag config set OPENTAG_TYPESAFE_API_KEY --stdin`.")
                 else:
-                    for channel in set(before) - set(modes):
+                    # A channel that stops, or changes mode, gets a fresh notice saying what Tag now does.
+                    for channel in set(before) - set(modes) | {c for c in modes if before.get(c, modes[c]) != modes[c]}:
                         watching().set_noticed(channel, False)
                     save_watch_modes(modes)
                     post_watch_notices(client, logger)
@@ -5473,8 +5474,12 @@ def create_app(
         if not slack_user_allowed(user_id, allowed_user_ids):
             # Ambient messages from other people are normal conversation, not denied requests.
             return
-        if not message_text.strip() or MENTION_RE.search(message_text):
-            # Explicit bot mentions use app_mention; other member mentions are human-directed.
+        chime = channel in channel_watch.chime_in_channel_ids()
+        if not message_text.strip() or f"<@{current_assistant_user_id(client)}" in message_text:
+            return  # Explicit bot mentions use app_mention.
+        # Other member mentions are human-directed, though such a post may still be news to react to.
+        mentions_people = bool(MENTION_RE.search(message_text))
+        if mentions_people and not chime:
             return
         if not watch_ready(channel):
             return
@@ -5485,16 +5490,23 @@ def create_app(
                                    today=date.today().isoformat()):
             logger.info("Watching stayed quiet in %s: %s", channel, reason)
             return
-        if channel_watch.names_tag(message_text, channel_watch.watch_names()):
+        if mentions_people:
+            trigger = ""
+        elif channel_watch.names_tag(message_text, channel_watch.watch_names()):
             trigger = "named"
         elif anchor != event["ts"] and state.is_engaged(channel, anchor):
             trigger = "thread"
         else:
-            return  # Channel-wide watching is a later, separate opt-in.
+            trigger = ""
+        # Chime-in looks at every new top-level post from a person; thread replies need a trigger.
+        chime = chime and anchor == event["ts"]
+        if not trigger and not chime:
+            return
         if not state.claim(channel, anchor):
             return
         try:
-            decide_watched_reply(event, client, logger, anchor=anchor, trigger=trigger)
+            decide_watched_reply(event, client, logger, anchor=anchor, trigger=trigger or "chime-in",
+                                 addressed=bool(trigger), chime=chime)
         finally:
             state.release(channel, anchor)
 
@@ -5505,8 +5517,12 @@ def create_app(
         *,
         anchor: str,
         trigger: str,
+        addressed: bool = True,
+        chime: bool = False,
     ) -> None:
-        """Stages 2 and 3: the classifier on thread context, then a text-only draft."""
+        """Stages 2 and 3: the classifier on thread context, then a text-only draft.
+
+        The addressed and chime-in questions go in one call; addressed wins when both pass."""
         channel = event["channel"]
         try:
             classifier = watch_classifier.settings_from(os.environ)
@@ -5528,32 +5544,42 @@ def create_app(
         )
         record = {"channel": channel, "thread_ts": anchor, "ts": event["ts"], "trigger": trigger,
                   "provider": classifier.provider, "threshold": classifier.threshold, "state": state}
+        if chime:
+            record["chime_threshold"] = classifier.chime_threshold
         try:
             decision = watch_classifier.evaluate(
                 state, provider=classifier.provider, api_key=classifier.api_key,
                 threshold=classifier.threshold, model=classifier.model, timeout=classifier.timeout,
+                addressed=addressed, chime_in=chime, chime_threshold=classifier.chime_threshold,
             )
         except Exception as exc:  # noqa: BLE001 - routing failures must fail closed
             watch_scores().score(**record, outcome=f"classifier {type(exc).__name__}")
             logger.warning("Watching classifier failed closed (%s): %s", classifier.provider, type(exc).__name__)
             return
         record.update(model=decision.model, probability=decision.tag_is_addressed)
-        logger.info("Watching decision: invoke=%s addressed=%.3f provider=%s",
-                    decision.should_invoke, decision.tag_is_addressed, decision.provider)
-        if not decision.should_invoke:
+        if chime:
+            record["chime_probability"] = decision.invites_reactions
+        logger.info("Watching decision: invoke=%s chime=%s provider=%s",
+                    decision.should_invoke, decision.should_chime, decision.provider)
+        chiming = not decision.should_invoke and decision.should_chime
+        if not decision.should_invoke and not chiming:
             watch_scores().score(**record, outcome="below threshold")
             return
+        if chiming:
+            record["trigger"] = trigger = "chime-in"
         request_backend = default_settings.backend or backend
         try:
-            draft = channel_watch.draft_reply(state, request_backend, default_settings.model, name=name)
+            draft = channel_watch.draft_reply(state, request_backend, default_settings.model, name=name,
+                                              chime=chiming)
         except Exception as exc:  # noqa: BLE001 - a failed draft stays silent
             logger.warning("Watching draft failed: %s", type(exc).__name__)
             draft = ""
-        kind, text = channel_watch.interpret(draft)
+        kind, text = channel_watch.interpret(draft, chime=chiming)
         score_id = watch_scores().score(**record, outcome=kind)
         try:
             if kind == "react":
-                client.reactions_add(channel=channel, timestamp=event["ts"], name=channel_watch.REACTION)
+                client.reactions_add(channel=channel, timestamp=event["ts"],
+                                     name=channel_watch.CHIME_REACTION if chiming else channel_watch.REACTION)
             elif kind == "reply":
                 metadata = {"channel": channel, "thread_ts": anchor, "request_ts": event["ts"],
                             "team": event.get("team", ""), "score_id": score_id}
@@ -5561,7 +5587,8 @@ def create_app(
                     channel=channel, thread_ts=anchor, text=text, unfurl_links=False, unfurl_media=False,
                     blocks=channel_watch.reply_blocks(
                         text, reason=trigger, provider=watch_classifier.PROVIDERS[classifier.provider].label,
-                        probability=decision.tag_is_addressed, take=metadata,
+                        probability=(decision.invites_reactions if chiming else decision.tag_is_addressed) or 0.0,
+                        take=metadata,
                         off={"channel": channel, "score_id": score_id},
                         take_action=WATCH_TAKE_ACTION_ID, off_action=WATCH_OFF_ACTION_ID),
                 )
@@ -5663,7 +5690,8 @@ def create_app(
                 continue
             text, blocks = channel_watch.notice_blocks(
                 suggested_bot_name(backend), channel_watch.quiet_hours(),
-                off={"channel": channel}, off_action=WATCH_OFF_ACTION_ID)
+                off={"channel": channel}, off_action=WATCH_OFF_ACTION_ID,
+                chime=channel in channel_watch.chime_in_channel_ids())
             try:
                 client.chat_postMessage(channel=channel, text=text, blocks=blocks,
                                         unfurl_links=False, unfurl_media=False)

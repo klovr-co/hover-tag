@@ -81,3 +81,17 @@ capability:
   message. Their limits apply separately.
 - Moving to channel-wide watching, or giving watched runs any tools, needs a
   new decision.
+
+## Amendment, 26 Oct 2026: per-channel modes and chime-in
+
+Following ADR 0012 (Tags as personas, proposed separately), each channel now has a mode:
+`off`, `when-addressed` (everything above) or `chimes-in`. In `chimes-in`
+channels the first stage no longer requires a name or a Tag thread for
+top-level posts: every new post from a person goes to the classifier with a
+second question, whether it invites colleagues' reactions. That question is
+tuned for precision (threshold 0.95 by default) because positives are rare. The
+rest of this decision holds. The chime-in draft is the same text-only run with
+its own instructions, offers no actions, and is dropped if unsafe. The daily
+cap, quiet hours and cooldown are backstops, not the decision. The cost is one
+classifier call per post, so per-channel call and spend counts are shown to
+the owner.

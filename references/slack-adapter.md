@@ -217,6 +217,16 @@ tag restart
 Both providers get the same question: is the person talking to Tag, directly
 or as part of the audience, such that a reply is welcome now?
 
+**Chime-in.** In `chimes-in` channels, every new top-level post from a person
+also gets a second question: does it invite colleagues' reactions, such as a
+launch, demo, release or win? Requests, incidents, routine status and
+sensitive personal news are no. It has its own threshold per provider,
+`OPENTAG_JEV_CHIME_THRESHOLD` or `OPENTAG_DECISIONS_CHIME_THRESHOLD` (default
+`0.95`), and both questions go in one call when a message could also be
+addressed to Tag. A chime-in is a short comment in the thread, a 🎉 reaction or
+nothing; it offers no actions. Every post is a paid classifier call, so cost
+grows with the channel's traffic.
+
 - Jev answers it as a `noul` question with true and false criteria about a
   structured state.
 - Decisions answers it as a `predicate`, with the same criteria in the

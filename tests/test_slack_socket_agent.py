@@ -3293,6 +3293,77 @@ class SlackChannelWatchTests(unittest.TestCase):
                 ack=MagicMock(), body=body | {"user": {"id": "USAM"}}, client=self.client, logger=MagicMock())
             self.save_watch.assert_not_called()
 
+    def chime_channel(self, decision: Any = None) -> None:
+        self.environment |= {"OPENTAG_WATCH_CHANNEL_IDS": "", "OPENTAG_WATCH_CHANNEL_MODES": "C123=chimes-in"}
+        self.decision = decision or slack_socket_agent.watch_classifier.ClassifierDecision(
+            False, None, "jev-1.13.0", "typesafe-jev", invites_reactions=0.97, should_chime=True)
+        self.draft = "Congrats on the launch, the demo looks great!"
+
+    def test_chime_in_asks_only_its_question_for_a_top_level_post(self) -> None:
+        self.chime_channel()
+        self.deliver(self.event(text="We just launched the new onboarding flow :tada:"))
+        kwargs = self.evaluate.call_args.kwargs
+        self.assertEqual((False, True, 0.95), (kwargs["addressed"], kwargs["chime_in"], kwargs["chime_threshold"]))
+        self.assertTrue(self.draft_reply.call_args.kwargs["chime"])
+        post = self.client.chat_postMessage.call_args.kwargs
+        self.assertEqual("1.000", post["thread_ts"])
+        self.assertIn("Chiming in without an @mention", json.dumps(post["blocks"]))
+        self.assertEqual([slack_socket_agent.WATCH_OFF_ACTION_ID],
+                         [item["action_id"] for item in post["blocks"][-1]["elements"]])
+        [entry] = self.log()
+        self.assertEqual(("reply", "chime-in", 0.97, None),
+                         (entry["outcome"], entry["trigger"], entry["chime_probability"], entry["probability"]))
+
+    def test_chime_in_and_addressed_share_one_call_and_addressed_wins(self) -> None:
+        self.chime_channel(slack_socket_agent.watch_classifier.ClassifierDecision(
+            True, 0.96, "jev-1.13.0", "typesafe-jev", invites_reactions=0.99, should_chime=True))
+        self.deliver(self.event())
+        self.evaluate.assert_called_once()
+        self.assertEqual((True, True), (self.evaluate.call_args.kwargs["addressed"],
+                                        self.evaluate.call_args.kwargs["chime_in"]))
+        self.assertFalse(self.draft_reply.call_args.kwargs["chime"])
+        self.assertIn("this message names me", json.dumps(self.client.chat_postMessage.call_args.kwargs["blocks"]))
+
+    def test_chime_in_skips_thread_replies_and_low_scores_and_unsafe_drafts(self) -> None:
+        self.chime_channel()
+        self.deliver(self.event(ts="2.000", thread_ts="1.000", text="nice work"))
+        self.evaluate.assert_not_called()
+        self.chime_channel(slack_socket_agent.watch_classifier.ClassifierDecision(
+            False, None, "jev-1.13.0", "typesafe-jev", invites_reactions=0.9, should_chime=False))
+        self.deliver(self.event(text="Shipped v2 today"))
+        self.draft_reply.assert_not_called()
+        self.chime_channel()
+        self.draft = "Congrats <!channel>, see https://example.com"
+        self.deliver(self.event(ts="3.000", text="Shipped v3 today"))
+        self.client.chat_postMessage.assert_not_called()
+        self.assertEqual("no_reply", self.log()[-1]["outcome"])
+
+    def test_posts_mentioning_people_can_only_chime_in(self) -> None:
+        text = "Huge thanks <@USAM> for shipping the release"
+        self.deliver(self.event(text=text))
+        self.evaluate.assert_not_called()  # When-addressed channels leave human-directed posts alone.
+        self.chime_channel()
+        self.deliver(self.event(text=text))
+        self.assertEqual((False, True), (self.evaluate.call_args.kwargs["addressed"],
+                                         self.evaluate.call_args.kwargs["chime_in"]))
+        self.evaluate.reset_mock()
+        self.deliver(self.event(ts="5.000", text="<@UTAG> what do you think?"))
+        self.evaluate.assert_not_called()  # app_mention handles the Tag's own mentions.
+
+    def test_changing_a_channels_mode_posts_a_fresh_notice(self) -> None:
+        from contextlib import ExitStack
+        body = {"user": {"id": "UOWNER"}, "actions": [{"action_id": slack_socket_agent.HOME_CHIME_ACTION_ID,
+                                                       "selected_conversations": ["C123"]}]}
+        with ExitStack() as stack:
+            app = self.app(stack)
+            self.save_watch.side_effect = lambda modes: os.environ.update(
+                OPENTAG_WATCH_CHANNEL_MODES=slack_socket_agent.channel_watch.format_channel_modes(modes))
+            app.actions[slack_socket_agent.HOME_CHIME_ACTION_ID](
+                ack=MagicMock(), body=body, client=self.client, logger=MagicMock())
+        # C123 was noticed as when-addressed; moving it to chime-in posts the chime-in notice.
+        self.assertIn("classifier checks every new post", self.client.chat_postMessage.call_args.kwargs["text"])
+        self.assertTrue(self.state.noticed("C123"))
+
     def test_home_tab_sets_a_mode_per_channel(self) -> None:
         from contextlib import ExitStack
         self.environment = self.ENVIRONMENT | {"OPENTAG_WATCH_CHANNEL_IDS": "",

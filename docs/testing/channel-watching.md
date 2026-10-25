@@ -10,7 +10,15 @@ These notes go with the experimental channel-watching change, which supersedes #
   `chimes-in`, set from the Home tab or `OPENTAG_WATCH_CHANNEL_MODES`. `tag start` moves channels from the older
   `OPENTAG_WATCH_CHANNEL_IDS` list to `when-addressed`, once. Tag posts a
   visible notice before it starts watching a channel.
-- **Narrow scope.** Tag watches only messages that name it, and threads where it was @mentioned or engaged.
+- **Narrow scope.** In `when-addressed` channels, Tag watches only messages that name it, and threads where it was
+  @mentioned or engaged.
+- **Chime-in.** In `chimes-in` channels, the classifier also checks every new top-level post from a person (never a
+  bot) with a second question: does it invite colleagues' reactions, such as a launch, demo or win? It has its own
+  threshold, `OPENTAG_JEV_CHIME_THRESHOLD` or `OPENTAG_DECISIONS_CHIME_THRESHOLD` (default `0.95`). When a message
+  could also be addressed to Tag, both questions go in one call, and addressed wins. The draft is a short coworker
+  comment, a 🎉 reaction or nothing. It offers no actions, and only "Don't do this here". Unsafe drafts are dropped.
+  Posts that mention people can still get a chime-in, but never an addressed reply. The same daily cap, quiet hours
+  and cooldown apply. Changing a channel's mode posts a fresh notice.
 - **Reduced capability.** A watched reply is a text-only backend run with no tools, files, memory, credentials or
   session. It stays in the thread and says why Tag replied. **Take this on** or an @mention starts a normal run.
 - **Stages.** Deterministic filters run first, then the classifier on the thread context (the first message plus
