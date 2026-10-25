@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
 """Explicit Tag memory shared by every agent backend.
 
-Each Tag instance keeps one memory for all channels and one memory per Slack
-channel. Every scope is a single JSON document so that a save, correction or
-forget is one atomic replacement under that scope's lock. Always-loaded
-entries ("core") are added to every request in that channel; notes are listed
-by key and read on demand.
+Each Tag keeps one memory for all channels and one memory per Slack channel,
+as markdown files under ``<Tag home>/memory`` (see ``tag_knowledge``). Always-
+loaded entries ("core") are the ``## key`` sections of a scope's ``core.md`` and
+are added to every request in that channel; notes are one file each, listed by
+key and read on demand. Every change also goes into the Tag's private history.
 
-The runtime supplies the caller and channel through the environment
-(``OPENTAG_CALLER_ID``, ``OPENTAG_CURRENT_CHANNEL_ID``); the model only chooses
-the operation. Successful writes append a receipt to
-``OPENTAG_MEMORY_RECEIPTS`` so the Slack bridge can report the exact change
-even when the model's own answer omits or misstates it.
+The runtime supplies the caller, channel and thread through the environment
+(``OPENTAG_CALLER_ID``, ``OPENTAG_CURRENT_CHANNEL_ID``,
+``OPENTAG_CURRENT_THREAD_TS``); the model only chooses the operation.
+Successful writes append a receipt to ``OPENTAG_MEMORY_RECEIPTS`` so the Slack
+bridge can report the exact change even when the model's own answer omits or
+misstates it.
+
+The JSON scope files and their helpers below (``read_document``,
+``write_document``, ``scope_lock``) are what earlier Tags wrote; they stay for
+the one-time migration, the backup it keeps, and the handoff ledger.
 """
 from __future__ import annotations
 
@@ -30,11 +35,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+try:
+    import tag_knowledge as knowledge
+except ImportError:
+    from scripts import tag_knowledge as knowledge
+
 SCHEMA_VERSION = 1
 CORE_LIMIT = 6_000
 NOTE_LIMIT = 4_000
 MAX_NOTES = 200
-HISTORY_LIMIT = 10
+HISTORY_LIMIT = 10  # earlier values `history` prints; history itself keeps them all
 INDEX_LIMIT = 50
 LOCK_TIMEOUT_SECONDS = 10.0
 GLOBAL = "global"
@@ -95,14 +105,7 @@ def empty_document() -> dict[str, Any]:
 
 
 def default_root() -> Path:
-    configured = os.getenv("OPENTAG_MEMORY_ROOT")
-    if configured:
-        return Path(configured).expanduser()
-    try:
-        from tag_paths import instance_home
-    except ImportError:
-        from scripts.tag_paths import instance_home
-    return instance_home() / "state" / "memory"
+    return knowledge.memory_root_from_env()
 
 
 def validate_channel(channel: str) -> str:
@@ -224,17 +227,26 @@ def scope_lock(path: Path, timeout: float = LOCK_TIMEOUT_SECONDS) -> Iterator[No
 
 
 class MemoryStore:
-    def __init__(self, root: Path, channel: str, caller: str):
-        self.root = root
+    def __init__(self, root: Path, channel: str, caller: str, *, places: knowledge.Places | None = None,
+                 via: str = "slack", thread: str | None = None):
+        self.places = places or knowledge.Places.from_env(root)
+        self.root = self.places.memory
         self.channel = validate_channel(channel)
         if not caller:
             raise MemoryRefused("no_caller", "Memory changes need the Slack person who asked.")
         self.caller = caller
+        self.via = via
+        self.thread = thread if thread is not None else knowledge.thread_link(
+            self.places.tag, self.channel, os.getenv("OPENTAG_CURRENT_THREAD_TS", ""))
+        prepare(self.places)
 
     # Reading -----------------------------------------------------------------
 
     def document(self, scope: str) -> dict[str, Any]:
-        return read_document(scope_path(self.root, scope))
+        try:
+            return knowledge.load_scope(self.places, scope)
+        except knowledge.KnowledgeError as exc:
+            raise MemoryRefused(exc.code, str(exc)) from None
 
     def visible(self) -> list[tuple[str, dict[str, Any]]]:
         """Entries this channel can use; a channel entry hides a global one with the same key."""
@@ -252,9 +264,10 @@ class MemoryStore:
         raise MemoryRefused("not_found", f"Nothing is remembered as {key!r} for this channel.")
 
     def history(self, key: str) -> tuple[str, list[dict[str, Any]]]:
-        """Earlier values of a visible entry, newest first."""
-        scope, _entry = self.get(key)
-        return scope, list(reversed(self.document(scope)["history"].get(key, [])))
+        """Earlier values of a visible entry, newest first, from the Tag's history."""
+        scope, entry = self.get(key)
+        versions = knowledge.entry_versions(self.places, scope, key, entry["kind"], limit=HISTORY_LIMIT + 1)
+        return scope, [v for v in versions if v["text"] != entry["text"]][:HISTORY_LIMIT]
 
     def search(self, query: str) -> list[tuple[str, dict[str, Any]]]:
         needle = query.strip().lower()
@@ -268,28 +281,24 @@ class MemoryStore:
     def _scope(self, all_channels: bool) -> str:
         return GLOBAL if all_channels else self.channel
 
+    def _write(self, scope: str, before: dict[str, Any], entries: dict[str, Any], forgotten: dict[str, Any],
+               action: str, key: str, kind: str, *, purge: list[dict[str, Any]] | None = None) -> None:
+        where = "all channels" if scope == GLOBAL else f"channel {scope}"
+        change = knowledge.Change(action=action, summary=f"{action.capitalize()} {key} for {where}",
+                                  by=self.caller, via=self.via, thread=self.thread,
+                                  entries=[knowledge.entry_ref(self.places, scope, key, kind)],
+                                  purge=purge or [], at=utc_now())
+        files = knowledge.scope_files(self.places, scope, before, {"entries": entries, "forgotten": forgotten}, change)
+        try:
+            knowledge.record(self.places, files, change)
+        except knowledge.KnowledgeError as exc:
+            raise MemoryRefused(exc.code, str(exc)) from None
+
+    def _lock(self):
+        return _locked(self.places)
+
     def _check_text(self, document: dict[str, Any], key: str, text: str, kind: str) -> None:
-        if not KEY_PATTERN.fullmatch(key):
-            raise MemoryRefused("bad_key", "Keys use 1-64 lowercase letters, numbers and dashes, e.g. report-deadline.")
-        if kind not in KINDS:
-            raise MemoryRefused("bad_kind", "Kind must be core or note.")
-        if not text.strip():
-            raise MemoryRefused("empty", "Nothing to save: the text is empty.")
-        if unsafe(text):
-            raise MemoryRefused("unsafe", "Not saved: the text looks like an instruction to override Tag's rules.")
-        if kind == "note" and len(text) > NOTE_LIMIT:
-            raise MemoryRefused("too_long", f"Not saved: a note can hold up to {NOTE_LIMIT:,} characters.")
-        others = {k: e for k, e in document["entries"].items() if k != key}
-        if kind == "core":
-            used = sum(len(e["text"]) for e in others.values() if e["kind"] == "core") + len(text)
-            if used > CORE_LIMIT:
-                raise MemoryRefused(
-                    "core_full",
-                    f"Not saved: always-loaded memory would be {used:,}/{CORE_LIMIT:,} characters. "
-                    "Shorten or forget an entry, or save this as a note.",
-                )
-        elif sum(1 for e in others.values() if e["kind"] == "note") >= MAX_NOTES:
-            raise MemoryRefused("notes_full", f"Not saved: this scope already has {MAX_NOTES} notes.")
+        check_text(document["entries"], key, text, kind)
 
     def _receipt(self, receipt: Receipt) -> Receipt:
         target = os.getenv("OPENTAG_MEMORY_RECEIPTS")
@@ -303,10 +312,9 @@ class MemoryStore:
 
     def save(self, key: str, text: str, *, kind: str = "core", all_channels: bool = False) -> Receipt:
         scope = self._scope(all_channels)
-        path = scope_path(self.root, scope)
         notes: list[str] = []
-        with scope_lock(path):
-            document = read_document(path)
+        with self._lock():
+            document = self.document(scope)
             existing = document["entries"].get(key)
             if existing is not None and existing["text"] == text:
                 return Receipt("unchanged", scope, key, f"Already remembered for {scope_label(scope)} as {key!r}.")
@@ -320,13 +328,13 @@ class MemoryStore:
             if twin is not None:
                 return Receipt("unchanged", scope, twin["key"], f"Already remembered for {scope_label(scope)} as {twin['key']!r}.")
             self._check_text(document, key, text, kind)
-            forgotten = document["forgotten"].pop(key, None)
-            if forgotten:
-                notes.append(f"{key!r} was forgotten earlier at <@{forgotten['by']}>'s request.")
+            forgotten = dict(document["forgotten"])
+            marker = forgotten.pop(key, None)
+            if marker:
+                notes.append(f"{key!r} was forgotten earlier at <@{marker['by']}>'s request.")
             entry = {"key": key, "kind": kind, "text": text, "version": version_of(text),
-                     "saved_by": self.caller, "saved_at": utc_now()}
-            document["entries"][key] = entry
-            write_document(path, document)
+                     "saved_by": self.caller, "saved_at": utc_now(), "from_thread": self.thread}
+            self._write(scope, document, {**document["entries"], key: entry}, forgotten, "saved", key, kind)
         candidates = self.visible() if scope != GLOBAL else [(GLOBAL, e) for e in self.document(GLOBAL)["entries"].values()]
         similar = next((e for s, e in candidates if e["key"] != key and related(e["text"], text)), None)
         if similar is not None:
@@ -337,22 +345,21 @@ class MemoryStore:
         message = f"Saved for {scope_label(scope)} ({'always loaded' if kind == 'core' else 'note'}) as {key!r}: {text!r}."
         return self._receipt(Receipt("saved", scope, key, " ".join([message, *notes]), kind, text, entry["version"]))
 
-    def _owning_scope(self, key: str, all_channels: bool) -> tuple[str, Path]:
+    def _owning_scope(self, key: str, all_channels: bool) -> str:
         scope = self._scope(all_channels)
-        path = scope_path(self.root, scope)
-        if key not in read_document(path)["entries"] and not all_channels and key in self.document(GLOBAL)["entries"]:
+        if key not in self.document(scope)["entries"] and not all_channels and key in self.document(GLOBAL)["entries"]:
             raise MemoryRefused(
                 "needs_all_channels",
                 f"{key!r} is memory for all channels. Only change or forget it when the person explicitly asks "
                 "for all channels (use --all-channels).",
             )
-        return scope, path
+        return scope
 
     def change(self, key: str, text: str, *, version: str, all_channels: bool = False,
                drop_old: bool = False) -> Receipt:
-        scope, path = self._owning_scope(key, all_channels)
-        with scope_lock(path):
-            document = read_document(path)
+        scope = self._owning_scope(key, all_channels)
+        with self._lock():
+            document = self.document(scope)
             entry = document["entries"].get(key)
             if entry is None:
                 raise MemoryRefused("not_found", f"Nothing is remembered as {key!r} for {scope_label(scope)}.")
@@ -365,36 +372,102 @@ class MemoryStore:
             if entry["text"] == text:
                 return Receipt("unchanged", scope, key, f"{key!r} already says that.")
             self._check_text(document, key, text, entry["kind"])
-            if drop_old:
-                document["history"].pop(key, None)
-            else:
-                history = document["history"].setdefault(key, [])
-                history.append({"text": entry["text"], "version": entry["version"],
-                                "saved_by": entry["saved_by"], "saved_at": entry["saved_at"]})
-                del history[:-HISTORY_LIMIT]
             updated = {**entry, "text": text, "version": version_of(text),
-                       "saved_by": self.caller, "saved_at": utc_now()}
-            document["entries"][key] = updated
-            write_document(path, document)
+                       "saved_by": self.caller, "saved_at": utc_now(), "from_thread": self.thread}
+            purge = [purge_target(self.places, scope, key, entry["kind"], keep=text)] if drop_old else []
+            self._write(scope, document, {**document["entries"], key: updated}, document["forgotten"],
+                        "changed", key, entry["kind"], purge=purge)
         tail = ("The old value was not kept." if drop_old
                 else "The old value is kept in history so the change can be undone.")
         message = f"Changed {key!r} for {scope_label(scope)}: {entry['text']!r} -> {text!r}. {tail}"
         return self._receipt(Receipt("changed", scope, key, message, entry["kind"], text, updated["version"]))
 
-    def forget(self, key: str, *, all_channels: bool = False) -> Receipt:
-        scope, path = self._owning_scope(key, all_channels)
-        with scope_lock(path):
-            document = read_document(path)
-            if key not in document["entries"]:
+    def forget(self, key: str, *, all_channels: bool = False, drop_old: bool = False) -> Receipt:
+        scope = self._owning_scope(key, all_channels)
+        with self._lock():
+            document = self.document(scope)
+            entry = document["entries"].get(key)
+            if entry is None:
                 raise MemoryRefused("not_found", f"Nothing is remembered as {key!r} for {scope_label(scope)}.")
-            del document["entries"][key]
-            document["history"].pop(key, None)
-            # Keep only who asked and when, never the forgotten text.
-            document["forgotten"][key] = {"by": self.caller, "at": utc_now()}
-            write_document(path, document)
-        message = (f"Forgot {key!r} for {scope_label(scope)}; Tag can no longer reach it. "
+            entries = {k: e for k, e in document["entries"].items() if k != key}
+            # The marker keeps only who asked and when, never the forgotten text.
+            forgotten = {**document["forgotten"], key: {"by": self.caller, "at": utc_now()}}
+            purge = [purge_target(self.places, scope, key, entry["kind"], keep=None)] if drop_old else []
+            self._write(scope, document, entries, forgotten, "forgot", key, entry["kind"], purge=purge)
+        kept = ("Its earlier text was removed from the Tag's history too." if drop_old else
+                "Its text stays in the Tag's private history, where the Tag's owner can restore it; "
+                "ask to remove it completely to delete that too.")
+        message = (f"Forgot {key!r} for {scope_label(scope)}; Tag can no longer reach it. {kept} "
                    "Original Slack messages are unchanged.")
         return self._receipt(Receipt("forgot", scope, key, message))
+
+
+def check_text(entries: dict[str, Any], key: str, text: str, kind: str) -> None:
+    """The limits every write meets, from Slack or from Tag.app."""
+    if not KEY_PATTERN.fullmatch(key):
+        raise MemoryRefused("bad_key", "Keys use 1-64 lowercase letters, numbers and dashes, e.g. report-deadline.")
+    if kind not in KINDS:
+        raise MemoryRefused("bad_kind", "Kind must be core or note.")
+    if not text.strip():
+        raise MemoryRefused("empty", "Nothing to save: the text is empty.")
+    if unsafe(text):
+        raise MemoryRefused("unsafe", "Not saved: the text looks like an instruction to override Tag's rules.")
+    if kind == "note" and len(text) > NOTE_LIMIT:
+        raise MemoryRefused("too_long", f"Not saved: a note can hold up to {NOTE_LIMIT:,} characters.")
+    others = {k: e for k, e in entries.items() if k != key}
+    if kind == "core":
+        used = sum(len(e["text"]) for e in others.values() if e["kind"] == "core") + len(text)
+        if used > CORE_LIMIT:
+            raise MemoryRefused(
+                "core_full",
+                f"Not saved: always-loaded memory would be {used:,}/{CORE_LIMIT:,} characters. "
+                "Shorten or forget an entry, or save this as a note.",
+            )
+    elif sum(1 for e in others.values() if e["kind"] == "note") >= MAX_NOTES:
+        raise MemoryRefused("notes_full", f"Not saved: this scope already has {MAX_NOTES} notes.")
+
+
+def purge_target(places: knowledge.Places, scope: str, key: str, kind: str, *, keep: str | None) -> dict[str, Any]:
+    ref = knowledge.entry_ref(places, scope, key, kind)
+    path, _, section = ref.partition("#")
+    return {"path": path, "key": section or None, "keep": keep}
+
+
+@contextmanager
+def _locked(places: knowledge.Places) -> Iterator[None]:
+    try:
+        with knowledge.memory_lock(places.memory):
+            yield
+    except knowledge.KnowledgeError as exc:
+        raise MemoryRefused(exc.code, str(exc)) from None
+
+
+def prepare(places: knowledge.Places) -> None:
+    """Move JSON memory from an earlier Tag to markdown before the first read or write."""
+    try:
+        if knowledge.read_format(places.memory) is None:
+            knowledge.migrate(places, verify=lambda: verify_migration(places))
+    except knowledge.KnowledgeError as exc:
+        raise MemoryRefused(exc.code, str(exc)) from None
+
+
+def verify_migration(places: knowledge.Places) -> None:
+    """The always-loaded text must not change by a single byte when memory moves to markdown."""
+    legacy = places.legacy
+    if legacy is None:
+        return
+    channels = [path.stem for path in sorted((legacy / "channels").glob("*.json"))] if (legacy / "channels").is_dir() else []
+    for channel in [*channels, "C0MIGRATIONCHECK"]:
+        if not CHANNEL_PATTERN.fullmatch(channel):
+            continue
+        before = legacy_render_context(legacy, channel)
+        after = render_scopes(knowledge.load_scope(places, GLOBAL), knowledge.load_scope(places, channel))
+        if before != after:
+            raise knowledge.KnowledgeError(
+                "migration_mismatch",
+                f"Memory was not moved to markdown: the always-loaded text for {channel} would change. "
+                "The JSON memory is still in use.",
+            )
 
 
 # Recall ------------------------------------------------------------------------
@@ -406,14 +479,45 @@ def render_context(root: Path, channel: str) -> str:
     A read failure returns an explicit "unavailable" block, never an empty one,
     so the agent does not conclude that nothing was remembered.
     """
+    places = knowledge.Places.from_env(root)
+    try:
+        validate_channel(channel)
+        prepare(places)
+        global_doc = knowledge.load_scope(places, GLOBAL)
+        channel_doc = knowledge.load_scope(places, channel)
+    except (OSError, ValueError, MemoryRefused, knowledge.KnowledgeError) as exc:
+        if (places.legacy is not None and CHANNEL_PATTERN.fullmatch(channel or "")
+                and _unmigrated(places) and places.legacy.is_dir()):
+            # The move to markdown did not finish; the JSON memory is still the memory.
+            return legacy_render_context(places.legacy, channel)
+        return unavailable(exc)
+    return render_scopes(global_doc, channel_doc)
+
+
+def _unmigrated(places: knowledge.Places) -> bool:
+    try:
+        return knowledge.read_format(places.memory) is None
+    except knowledge.KnowledgeError:
+        return False
+
+
+def unavailable(exc: Exception) -> str:
+    reason = getattr(exc, "code", None) or type(exc).__name__
+    return ("Tag memory:\n- Unavailable for this request "
+            f"({reason}). Do not tell the user that nothing is remembered.")
+
+
+def legacy_render_context(root: Path, channel: str) -> str:
+    """The memory block from the JSON files Tag used before markdown (kept for one release)."""
     try:
         global_doc = read_document(scope_path(root, GLOBAL))
         channel_doc = read_document(scope_path(root, validate_channel(channel)))
     except (OSError, ValueError, MemoryRefused) as exc:
-        reason = exc.code if isinstance(exc, MemoryRefused) else type(exc).__name__
-        return ("Tag memory:\n- Unavailable for this request "
-                f"({reason}). Do not tell the user that nothing is remembered.")
+        return unavailable(exc)
+    return render_scopes(global_doc, channel_doc)
 
+
+def render_scopes(global_doc: dict[str, Any], channel_doc: dict[str, Any]) -> str:
     withheld = 0
 
     def lines(entries: dict[str, Any], hidden: set[str], kind: str) -> list[str]:
@@ -452,6 +556,22 @@ def render_context(root: Path, channel: str) -> str:
     if withheld:
         parts.append(f"- {withheld} saved entr{'y was' if withheld == 1 else 'ies were'} withheld by a safety check.")
     return "\n".join(parts)
+
+
+def record_history(log: Any = None) -> None:
+    """Commit what a finished run changed to the Tag's history.
+
+    The bridge calls this outside the agent's sandbox, where the history is
+    writable. A failure is logged and retried after the next run; the journal
+    keeps every change until then.
+    """
+    places = knowledge.Places.from_env()
+    try:
+        if knowledge.read_journal(places.memory):
+            knowledge.sync(places)
+    except Exception as exc:  # noqa: BLE001 - history must never break a reply
+        if log is not None:
+            log.warning("Tag memory history not updated yet (%s): %s", type(exc).__name__, exc)
 
 
 def summarize(text: str, limit: int = 80) -> str:
@@ -534,10 +654,11 @@ def main(argv: list[str] | None = None) -> int:
     change.add_argument("--text", required=True)
     change.add_argument("--version", required=True)
     change.add_argument("--all-channels", action="store_true")
-    change.add_argument("--drop-old", action="store_true", help="Do not keep the old value in history.")
+    change.add_argument("--drop-old", action="store_true", help="Remove the old value from the Tag's history.")
     forget = commands.add_parser("forget", help="Make an entry unreachable.")
     forget.add_argument("key")
     forget.add_argument("--all-channels", action="store_true")
+    forget.add_argument("--drop-old", action="store_true", help="Also remove its text from the Tag's history.")
     args = parser.parse_args(argv)
 
     try:
@@ -563,7 +684,7 @@ def main(argv: list[str] | None = None) -> int:
             print(store.change(args.key, args.text, version=args.version,
                                all_channels=args.all_channels, drop_old=args.drop_old).message)
         else:
-            print(store.forget(args.key, all_channels=args.all_channels).message)
+            print(store.forget(args.key, all_channels=args.all_channels, drop_old=args.drop_old).message)
     except MemoryRefused as exc:
         print(f"{exc.code}: {exc}", file=sys.stderr)
         return 1

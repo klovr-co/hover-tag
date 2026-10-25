@@ -182,7 +182,7 @@ def runtime_environment(
         "TAG_INSTANCE_HOME": str(home),
         "TAG_ID": tag_id,
         "OPENTAG_WORKDIR": str(workdir),
-        "OPENTAG_MEMORY_ROOT": str(home / "state/memory"),
+        "OPENTAG_MEMORY_ROOT": str(home / "memory"),
         "OPENTAG_SLACK_SETTINGS_FILE": str(home / "state/slack-user-settings.json"),
         "OPENTAG_SLACK_SESSIONS_FILE": str(home / "state/slack-active-sessions.json"),
         "TMPDIR": str(home / "tmp"), "TEMP": str(home / "tmp"), "TMP": str(home / "tmp"),

@@ -13,7 +13,7 @@ remember. Do not save memory on your own initiative.
 
 `list`, `get KEY`, `history KEY`, `search TEXT`,
 `save KEY --text TEXT [--kind core|note]`,
-`change KEY --text TEXT --version VERSION [--drop-old]`, `forget KEY`.
+`change KEY --text TEXT --version VERSION [--drop-old]`, `forget KEY [--drop-old]`.
 
 - Keys are short lowercase names such as `report-deadline`. To undo a change,
   read `history` and change the entry back.
@@ -24,8 +24,11 @@ remember. Do not save memory on your own initiative.
 - Before saving, reuse the key of an existing entry on the same topic; a channel
   entry replaces an all-channels entry with the same key in this channel.
 - To change an entry, run `get` first and pass its version. If the helper
-  reports a conflict, read it again and tell the user what changed. Pass
-  `--drop-old` only when the user says the old value was wrong or sensitive.
+  reports a conflict, read it again and tell the user what changed.
+- The Tag's private history keeps every earlier value, including forgotten
+  ones, so its owner can undo a change. Pass `--drop-old` to `change` or
+  `forget` only when the user says the old value was wrong or sensitive, or
+  asks to remove it completely; it also removes the old text from history.
 
 ## Reporting
 

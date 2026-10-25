@@ -106,6 +106,7 @@
     "scripts/tag_handoff.py",
     "scripts/tag_install.py",
     "scripts/tag_instances.py",
+    "scripts/tag_knowledge.py",
     "scripts/tag_layout.py",
     "scripts/tag_locks.py",
     "scripts/tag_mascot.json",

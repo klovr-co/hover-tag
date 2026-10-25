@@ -27,6 +27,10 @@ a local coding-agent backend with optional MFS retrieval.
   owns a working folder at `~/Tag/NAME` with private data in its `.tag` directory;
   implementation code calls this an instance.
 
+- **Knowledge** — what one Tag knows: its memory (markdown files people asked
+  it to remember, with a private history) and its skills. Each Tag has only
+  its own; Tags never share knowledge.
+
 - **Routine** — a saved prompt one Tag runs on a schedule and posts in one of
   its channels, approved by a person. Each Tag's bridge runs its own routines.
 
@@ -44,5 +48,6 @@ compatibility; they do not define a separate product name.
 - [Self-contained Tag folders](docs/adr/0007-self-contained-tag-folders.md)
 - [Login supervisor](docs/adr/0008-login-supervisor.md)
 - [Routines run in the bridge](docs/adr/0010-routines-run-in-the-bridge.md)
+- [Markdown memory with history](docs/adr/0011-markdown-memory-with-history.md)
 - [ChatGPT plan connection](docs/adr/0008-chatgpt-plan-connection.md)
 - [Claude Agent SDK transport](docs/adr/0008-claude-agent-sdk.md)
