@@ -29,9 +29,9 @@ DEFAULTS = {
     "OPENTAG_WATCH_CHANNEL_IDS": "", "OPENTAG_WATCH_CHANNEL_MODES": "", "OPENTAG_WATCH_NAMES": "",
     "OPENTAG_WATCH_QUIET_HOURS": "19:00-08:00", "OPENTAG_WATCH_DAILY_LIMIT": "5",
     "OPENTAG_WATCH_COOLDOWN_HOURS": "24",
-    "OPENTAG_WATCH_CLASSIFIER": "typesafe-jev", "OPENTAG_WATCH_CLASSIFIER_TIMEOUT_SECONDS": "5",
+    "OPENTAG_WATCH_CLASSIFIER": "openai-decisions", "OPENTAG_WATCH_CLASSIFIER_TIMEOUT_SECONDS": "5",
     "OPENTAG_JEV_MODEL": "jev-latest", "OPENTAG_JEV_THRESHOLD": "0.9", "OPENTAG_JEV_CHIME_THRESHOLD": "0.95",
-    "OPENTAG_DECISIONS_MODEL": "gpt-6-luna", "OPENTAG_DECISIONS_THRESHOLD": "0.9",
+    "OPENTAG_DECISIONS_MODEL": "gpt-6-luna", "OPENTAG_DECISIONS_THRESHOLD": "0.95",
     "OPENTAG_DECISIONS_CHIME_THRESHOLD": "0.95",
     "OPENTAG_FILE_DELIVERY": "local+slack",
     "OPENTAG_THREAD_MAX_CONTEXT_TOKENS": "150000", "OPENTAG_THREAD_IDLE_HOURS": "4",
@@ -443,6 +443,26 @@ def migrate_watch_modes(home: Path, path: Path) -> bool:
         if modes:
             changes["OPENTAG_WATCH_CHANNEL_MODES"] = ",".join(f"{c}={m}" for c, m in sorted(modes.items()))
         update_config(path, changes)
+    # Atomic checkpoint comes last. Interrupted writes can be retried safely.
+    save_config(marker, {"version": "1"})
+    return True
+
+
+def migrate_watch_classifier(home: Path, path: Path) -> bool:
+    """Version 1: a Tag that already watches channels keeps TypeSafe Jev, the default it started with."""
+    marker = home / "state/migrations/watch-classifier-v1.json"
+    try:
+        checkpoint = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        checkpoint = {}
+    if isinstance(checkpoint, dict) and checkpoint.get("version") == "1":
+        return False
+    saved = read_config(path)
+    watching = saved.get("OPENTAG_WATCH_CHANNEL_IDS", "").strip() or any(
+        not item.strip().endswith("=off") for item in saved.get("OPENTAG_WATCH_CHANNEL_MODES", "").split(",")
+        if item.strip())
+    if watching and not saved.get("OPENTAG_WATCH_CLASSIFIER", "").strip():
+        update_config(path, {"OPENTAG_WATCH_CLASSIFIER": "typesafe-jev"})
     # Atomic checkpoint comes last. Interrupted writes can be retried safely.
     save_config(marker, {"version": "1"})
     return True

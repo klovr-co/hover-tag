@@ -3117,6 +3117,7 @@ def _run_cli() -> int:
     if args.command in ("start", "dev", "doctor", "status") and config_path.is_file() and config_path.stat().st_size:
         if args.command in {"start", "dev"}:
             settings.migrate_file_delivery(home, config_path)
+            settings.migrate_watch_classifier(home, config_path)
             settings.migrate_watch_modes(home, config_path)
         values = read_config(config_path)
         if args.command in {"start", "dev"} and settings.config_errors(values):

@@ -32,16 +32,19 @@ def predicate(probability: object, *, name: str = "tag_is_addressed") -> dict:
 
 
 class ConfigurationTests(unittest.TestCase):
-    def test_disabled_by_default_with_typesafe_as_the_default_provider(self) -> None:
-        self.assertEqual("", tag_config.DEFAULTS["OPENTAG_WATCH_CHANNEL_IDS"])
-        self.assertEqual("typesafe-jev", tag_config.DEFAULTS["OPENTAG_WATCH_CLASSIFIER"])
+    def test_disabled_by_default_with_decisions_as_the_default_provider(self) -> None:
+        self.assertEqual("", tag_config.DEFAULTS["OPENTAG_WATCH_CHANNEL_MODES"])
+        self.assertEqual("openai-decisions", tag_config.DEFAULTS["OPENTAG_WATCH_CLASSIFIER"])
+        self.assertEqual("openai-decisions", watch_classifier.DEFAULT_PROVIDER)
+        self.assertEqual(("0.95", 0.95), (tag_config.DEFAULTS["OPENTAG_DECISIONS_THRESHOLD"],
+                                          watch_classifier.PROVIDERS["openai-decisions"].default_threshold))
         self.assertEqual({}, {
             key: error for key, error in tag_config.config_errors(dict(tag_config.DEFAULTS)).items()
             if "WATCH" in key or "TYPESAFE" in key or "DECISIONS" in key or "JEV" in key
         })
 
     def test_enabled_configuration_requires_the_selected_providers_private_key(self) -> None:
-        values = dict(tag_config.DEFAULTS, OPENTAG_WATCH_CHANNEL_IDS="C123")
+        values = dict(tag_config.DEFAULTS, OPENTAG_WATCH_CHANNEL_IDS="C123", OPENTAG_WATCH_CLASSIFIER="typesafe-jev")
         self.assertIn("TypeSafe API key is required", tag_config.config_errors(values)["OPENTAG_TYPESAFE_API_KEY"])
         values["OPENTAG_TYPESAFE_API_KEY"] = "secret-key"
         self.assertNotIn("OPENTAG_TYPESAFE_API_KEY", tag_config.config_errors(values))
@@ -54,9 +57,28 @@ class ConfigurationTests(unittest.TestCase):
 
     def test_any_watching_mode_requires_the_key_but_off_does_not(self) -> None:
         values = dict(tag_config.DEFAULTS, OPENTAG_WATCH_CHANNEL_MODES="C123=chimes-in")
-        self.assertIn("OPENTAG_TYPESAFE_API_KEY", tag_config.config_errors(values))
+        self.assertIn("OPENTAG_OPENAI_DECISIONS_API_KEY", tag_config.config_errors(values))
         values["OPENTAG_WATCH_CHANNEL_MODES"] = "C123=off"
-        self.assertNotIn("OPENTAG_TYPESAFE_API_KEY", tag_config.config_errors(values))
+        self.assertNotIn("OPENTAG_OPENAI_DECISIONS_API_KEY", tag_config.config_errors(values))
+
+    def test_tags_already_watching_keep_typesafe_after_the_default_changes(self) -> None:
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as directory:
+            for name, saved, expected in (
+                ("legacy", {"OPENTAG_WATCH_CHANNEL_IDS": "C1"}, "typesafe-jev"),
+                ("modes", {"OPENTAG_WATCH_CHANNEL_MODES": "C1=when-addressed"}, "typesafe-jev"),
+                ("chosen", {"OPENTAG_WATCH_CHANNEL_IDS": "C1", "OPENTAG_WATCH_CLASSIFIER": "openai-decisions"},
+                 "openai-decisions"),
+                ("off", {"OPENTAG_WATCH_CHANNEL_MODES": "C1=off"}, None),
+                ("new", {}, None),
+            ):
+                home = Path(directory) / name
+                path = tag_config.config_path(home)
+                tag_config.save_config(path, saved)
+                self.assertTrue(tag_config.migrate_watch_classifier(home, path))
+                self.assertEqual(expected, tag_config.read_config(path).get("OPENTAG_WATCH_CLASSIFIER"), name)
+                self.assertFalse(tag_config.migrate_watch_classifier(home, path))
 
     def test_modes_replace_the_older_list_which_still_counts_until_migrated(self) -> None:
         from scripts import channel_watch
@@ -145,10 +167,13 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(
             watch_classifier.Settings("openai-decisions", "openai-secret", "gpt-6-luna", 0.7, 3.0), settings
         )
-        settings = watch_classifier.settings_from({**environment, "OPENTAG_WATCH_CLASSIFIER": ""})
+        settings = watch_classifier.settings_from({**environment, "OPENTAG_WATCH_CLASSIFIER": "typesafe-jev"})
         self.assertEqual(
             watch_classifier.Settings("typesafe-jev", "typesafe-secret", "jev-latest", 0.95, 3.0), settings
         )
+        unset = {k: v for k, v in environment.items() if k != "OPENTAG_DECISIONS_THRESHOLD"}
+        settings = watch_classifier.settings_from({**unset, "OPENTAG_WATCH_CLASSIFIER": ""})
+        self.assertEqual(("openai-decisions", 0.95), (settings.provider, settings.threshold))
 
     def test_settings_fail_closed_without_a_key_or_with_bad_values(self) -> None:
         for environment in (
@@ -320,7 +345,7 @@ class ChimeInQuestionTests(unittest.TestCase):
                     watch_classifier.evaluate({}, provider=provider, api_key="k", threshold=0.5, chime_in=True)
 
     def test_chime_threshold_settings_default_to_095_per_provider(self) -> None:
-        base = {"OPENTAG_TYPESAFE_API_KEY": "k"}
+        base = {"OPENTAG_WATCH_CLASSIFIER": "typesafe-jev", "OPENTAG_TYPESAFE_API_KEY": "k"}
         self.assertEqual(0.95, watch_classifier.settings_from(base).chime_threshold)
         self.assertEqual(0.97, watch_classifier.settings_from(base | {"OPENTAG_JEV_CHIME_THRESHOLD": "0.97"}).chime_threshold)
         decisions = {"OPENTAG_WATCH_CLASSIFIER": "openai-decisions", "OPENTAG_OPENAI_DECISIONS_API_KEY": "k",
@@ -363,6 +388,7 @@ class OpenAIDecisionsTests(unittest.TestCase):
         for text in (watch_classifier.INSTRUCTIONS, watch_classifier.TRUE_CRITERIA, watch_classifier.FALSE_CRITERIA):
             self.assertIn(text, question["instructions"])
         self.assertIn("Answer true when:", question["instructions"])
+        self.assertIn(watch_classifier.ADDRESSED_EXAMPLES, question["instructions"])  # Few-shot, as evaluated.
         self.assertIn("Answer false when:", question["instructions"])
         self.assertTrue(payload["input"].startswith(watch_classifier.DECISIONS_INPUT_PREFIX))
         self.assertEqual(state, json.loads(payload["input"][len(watch_classifier.DECISIONS_INPUT_PREFIX):]))

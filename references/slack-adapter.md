@@ -205,11 +205,16 @@ model and threshold:
 
 | Provider | `OPENTAG_WATCH_CLASSIFIER` | Key | Model | Threshold |
 | --- | --- | --- | --- | --- |
-| TypeSafe Jev (default) | `typesafe-jev` | `OPENTAG_TYPESAFE_API_KEY` | `OPENTAG_JEV_MODEL`, default `jev-latest` | `OPENTAG_JEV_THRESHOLD`, default `0.9` |
-| OpenAI Decisions (beta) | `openai-decisions` | `OPENTAG_OPENAI_DECISIONS_API_KEY` | `OPENTAG_DECISIONS_MODEL`, default `gpt-6-luna` | `OPENTAG_DECISIONS_THRESHOLD`, default `0.9` |
+| OpenAI Decisions (beta, default) | `openai-decisions` | `OPENTAG_OPENAI_DECISIONS_API_KEY` | `OPENTAG_DECISIONS_MODEL`, default `gpt-6-luna` | `OPENTAG_DECISIONS_THRESHOLD`, default `0.95` |
+| TypeSafe Jev | `typesafe-jev` | `OPENTAG_TYPESAFE_API_KEY` | `OPENTAG_JEV_MODEL`, default `jev-latest` | `OPENTAG_JEV_THRESHOLD`, default `0.9` |
+
+Decisions became the default on 26 Oct 2026: on real Slack messages it was
+right 99% of the time at 0.95 (see `evals/channel_watch/`). A Tag that already
+watched channels without choosing a provider keeps TypeSafe Jev; `tag start`
+saves that choice once.
 
 ```sh
-printf '%s' "$TYPESAFE_API_KEY" | tag config set OPENTAG_TYPESAFE_API_KEY --stdin --json
+printf '%s' "$OPENAI_DECISIONS_KEY" | tag config set OPENTAG_OPENAI_DECISIONS_API_KEY --stdin --json
 tag config set OPENTAG_WATCH_CHANNEL_MODES C0123456789=when-addressed --json
 tag restart
 ```
@@ -235,8 +240,9 @@ dashboard has the billed amount.
 
 - Jev answers it as a `noul` question with true and false criteria about a
   structured state.
-- Decisions answers it as a `predicate`, with the same criteria in the
-  instructions and the state serialized into `input`.
+- Decisions answers it as a `predicate`, with the same criteria plus six
+  fixed synthetic examples in the instructions, and the state serialized into
+  `input`.
 
 A timeout (`OPENTAG_WATCH_CLASSIFIER_TIMEOUT_SECONDS`, default `5`), error,
 refusal, malformed answer or missing key all stay silent.

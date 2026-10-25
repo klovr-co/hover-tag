@@ -59,13 +59,7 @@ WELCOME_FALSE = (
     "or a reply would clearly interrupt."
 )
 
-FEW_SHOT = """Examples (earlier messages, then the current message, then the answer):
-1. No earlier messages. Current: "back from the dentist, catching up on messages now". Answer: false, an aside that invites no reply.
-2. No earlier messages. Current: "Tag's weekly digest was really useful this morning". Answer: false, it talks about the assistant without addressing it.
-3. requester: "Tag, list our open invoices"; tag: "Three are open: Acme, Brightline and Coastal." Current: "which one is oldest?". Answer: true, a follow-up to the assistant.
-4. another_bot: "BuildBot: release 4.2 is ready. Reply 'ship' to publish." Current: "ship". Answer: false, it answers the other bot.
-5. No earlier messages. Current: "does anyone know where the brand fonts live?". Answer: true, an inclusive question.
-6. requester: "Tag, draft the agenda"; tag: "Draft agenda: roadmap, hiring, Q4 budget."; participant: "can we add the offsite?". Current: "sure Lena, adding it now". Answer: false, it answers a person."""
+FEW_SHOT = wc.ADDRESSED_EXAMPLES
 
 
 # The baseline criteria, rewritten as standalone items with the same content.
@@ -151,7 +145,7 @@ def _predicate(name: str, instructions: str) -> dict[str, Any]:
 Q = wc.QUESTION_NAME
 VARIANTS: dict[str, dict[str, tuple]] = {
     "baseline": {
-        # The production prompt.
+        # The original prompt. Production Decisions has used "few-shot" since 26 Oct 2026; Jev still uses this.
         "typesafe-jev": (wc.jev_payload, wc.jev_parse),
         "openai-decisions": (_decisions([_predicate(Q, wc.DECISIONS_INSTRUCTIONS)]),
                              wc.decisions_parse),

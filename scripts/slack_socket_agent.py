@@ -4136,8 +4136,11 @@ def create_app(
                 except watch_classifier.ClassifierError:
                     ready = not modes
                 if not ready:
+                    provider = os.getenv("OPENTAG_WATCH_CLASSIFIER") or watch_classifier.DEFAULT_PROVIDER
+                    spec = watch_classifier.PROVIDERS.get(provider, watch_classifier.PROVIDERS[
+                        watch_classifier.DEFAULT_PROVIDER])
                     notice = (":warning: Set the watching classifier's key first, for example "
-                              "`printf '%s' \"$KEY\" | tag config set OPENTAG_TYPESAFE_API_KEY --stdin`.")
+                              f"`printf '%s' \"$KEY\" | tag config set {spec.key_setting} --stdin`.")
                 else:
                     # A channel that stops, or changes mode, gets a fresh notice saying what Tag now does.
                     for channel in set(before) - set(modes) | {c for c in modes if before.get(c, modes[c]) != modes[c]}:

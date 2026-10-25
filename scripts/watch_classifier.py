@@ -61,6 +61,15 @@ FALSE_CRITERIA = (
     "carry forward an old exchange with Tag after that shift unless the requester "
     "addresses Tag again or clearly resumes that exchange."
 )
+# Six fixed synthetic examples. Decisions uses them: they cut its false positives on real messages
+# (evals/channel_watch/results-2026-10-14-prompts.md). They didn't help Jev, which goes without.
+ADDRESSED_EXAMPLES = """Examples (earlier messages, then the current message, then the answer):
+1. No earlier messages. Current: "back from the dentist, catching up on messages now". Answer: false, an aside that invites no reply.
+2. No earlier messages. Current: "Tag's weekly digest was really useful this morning". Answer: false, it talks about the assistant without addressing it.
+3. requester: "Tag, list our open invoices"; tag: "Three are open: Acme, Brightline and Coastal." Current: "which one is oldest?". Answer: true, a follow-up to the assistant.
+4. another_bot: "BuildBot: release 4.2 is ready. Reply 'ship' to publish." Current: "ship". Answer: false, it answers the other bot.
+5. No earlier messages. Current: "does anyone know where the brand fonts live?". Answer: true, an inclusive question.
+6. requester: "Tag, draft the agenda"; tag: "Draft agenda: roadmap, hiring, Q4 budget."; participant: "can we add the offsite?". Current: "sure Lena, adding it now". Answer: false, it answers a person."""
 ASSISTANT_ROLE = (
     "The requester's personal AI assistant and a participant in this Slack "
     "channel. It can converse, offer opinions, answer questions, and perform "
@@ -301,6 +310,7 @@ def decisions_instructions(question: Question) -> str:
     return f"{question.instructions}\n\nAnswer true when: {question.true}\n\nAnswer false when: {question.false}"
 
 
+# The addressed question without its examples, as first evaluated.
 DECISIONS_INSTRUCTIONS = decisions_instructions(ADDRESSED)
 DECISIONS_INPUT_PREFIX = (
     "Slack conversation state as JSON. `thread_history` is oldest first and excludes "
@@ -318,7 +328,8 @@ def decisions_payload(state: dict[str, Any], model: str, questions: tuple[Questi
         "model": model,
         "input": decisions_input(state),
         "questions": [
-            {"type": "predicate", "name": question.name, "instructions": decisions_instructions(question)}
+            {"type": "predicate", "name": question.name, "instructions": decisions_instructions(question)
+             + (f"\n\n{ADDRESSED_EXAMPLES}" if question is ADDRESSED else "")}
             for question in questions
         ],
     }
@@ -370,14 +381,15 @@ PROVIDERS: dict[str, Provider] = {
         threshold_setting="OPENTAG_DECISIONS_THRESHOLD",
         chime_threshold_setting="OPENTAG_DECISIONS_CHIME_THRESHOLD",
         default_model="gpt-6-luna",
-        default_threshold=0.9,
+        default_threshold=0.95,
         usd_per_million_input=0.10,
         price_source="https://developers.openai.com/api/docs/guides/decisions (output free)",
         payload=decisions_payload,
         parse=decisions_parse,
     ),
 }
-DEFAULT_PROVIDER = "typesafe-jev"
+# Decisions with examples was the most precise on real Slack messages (99% at 0.95).
+DEFAULT_PROVIDER = "openai-decisions"
 
 
 def score(

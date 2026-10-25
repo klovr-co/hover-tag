@@ -2983,6 +2983,7 @@ class SlackChannelWatchTests(unittest.TestCase):
         "OPENTAG_BOT_NAME": "Iris's Tag",
         "OPENTAG_WATCH_CHANNEL_IDS": "C123",
         "OPENTAG_WATCH_QUIET_HOURS": "",
+        "OPENTAG_WATCH_CLASSIFIER": "typesafe-jev",
         "OPENTAG_TYPESAFE_API_KEY": "typesafe-secret",
     }
 
