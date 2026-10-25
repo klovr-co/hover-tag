@@ -300,6 +300,22 @@ class RuleTests(unittest.TestCase):
         self.assertEqual({"inclusive": 1}, table["classifier-only true positives @0.95"])
 
 
+class ChimeInSetTests(unittest.TestCase):
+    def test_chime_in_set_loads_with_attachments_mentions_and_every_post_reachable(self) -> None:
+        name, cases = harness.load_cases(harness.FIXTURES.with_name("chime-in-synthetic.json"))
+        self.assertGreaterEqual(len(cases), 70)
+        self.assertTrue(all(case.reachable for case in cases))
+        positives = sum(case.expected for case in cases)
+        self.assertTrue(20 <= positives <= len(cases) // 2)
+        video = next(case for case in cases if case.id == "chime-launch-video-only")
+        state = harness.case_state(video, name)
+        self.assertEqual("video", state["current_attachments"][0]["kind"])
+        thanks = next(case for case in cases if case.id == "chime-team-thanks")
+        self.assertIn("<@UPSOMEONE>", thanks.event["text"])
+        categories = {case.category for case in cases if not case.expected}
+        self.assertTrue({"incident", "sensitive", "request", "addressed", "status"} <= categories)
+
+
 class PaidRunGuardTests(unittest.TestCase):
     def run_score(self, scorer, *, max_usd: float = 1.0, out_path: Path, cases=None) -> float:
         name, all_cases = harness.load_cases()

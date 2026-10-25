@@ -1,0 +1,674 @@
+{
+ "schema_version": 1,
+ "assistant_name": "Tag",
+ "question": "invites_reactions",
+ "description": "SYNTHETIC cases for the chime-in question (invites_reactions): does a top-level post invite colleagues' reactions, such as a launch, demo, release, milestone or win? Written by hand, not taken from any workspace. Positives are rare in real channels, so this set over-represents them; report it as its own subset and never set a threshold from it alone. Hard negatives cover incidents (including sarcasm), requests, questions, routine status, logistics, sensitive personal news, posts already addressed to Tag, and shares of other people's work. `attachments` are the text descriptions the bridge gives the classifier. `{participant}` becomes a member mention. `borderline` marks cases reasonable people could label either way.",
+ "cases": [
+  {
+   "id": "chime-launch-onboarding",
+   "category": "launch",
+   "expected": true,
+   "message": "We just launched the new onboarding flow! Sign-up to first message is now under a minute",
+   "attachments": [
+    {
+     "kind": "video",
+     "name": "onboarding demo.mp4",
+     "type": "video/mp4",
+     "seconds": 48
+    }
+   ]
+  },
+  {
+   "id": "chime-launch-video-only",
+   "category": "launch",
+   "expected": true,
+   "message": "",
+   "attachments": [
+    {
+     "kind": "video",
+     "name": "launch day.mov",
+     "type": "video/mp4",
+     "seconds": 95
+    }
+   ]
+  },
+  {
+   "id": "chime-release-v2",
+   "category": "release",
+   "expected": true,
+   "message": "v2.0 is out 🚀 dark mode, offline drafts and a much faster search"
+  },
+  {
+   "id": "chime-release-notes-link",
+   "category": "release",
+   "expected": true,
+   "message": "Release 4.3 shipped this morning, notes here",
+   "attachments": [
+    {
+     "kind": "link preview",
+     "site": "GitHub",
+     "title": "Release 4.3 · klovr-co/app"
+    }
+   ]
+  },
+  {
+   "id": "chime-demo-recording",
+   "category": "demo",
+   "expected": true,
+   "message": "Recorded a quick demo of the Slack digest working end to end, have a look",
+   "attachments": [
+    {
+     "kind": "video",
+     "name": "digest demo.mp4",
+     "type": "video/mp4",
+     "seconds": 130
+    }
+   ]
+  },
+  {
+   "id": "chime-demo-screenshot",
+   "category": "demo",
+   "expected": true,
+   "message": "First working version of the dashboard 😄",
+   "attachments": [
+    {
+     "kind": "image",
+     "name": "dashboard.png",
+     "type": "image/png"
+    }
+   ]
+  },
+  {
+   "id": "chime-first-customer",
+   "category": "win",
+   "expected": true,
+   "message": "We signed our first paying customer today!! 🎉"
+  },
+  {
+   "id": "chime-deal-closed",
+   "category": "win",
+   "expected": true,
+   "message": "Closed the KSK renewal for another year, thanks everyone for the push"
+  },
+  {
+   "id": "chime-milestone-users",
+   "category": "milestone",
+   "expected": true,
+   "message": "We crossed 1,000 weekly active users this week",
+   "attachments": [
+    {
+     "kind": "image",
+     "name": "wau chart.png",
+     "type": "image/png"
+    }
+   ]
+  },
+  {
+   "id": "chime-milestone-revenue",
+   "category": "milestone",
+   "expected": true,
+   "message": "MRR passed RM10k for the first time"
+  },
+  {
+   "id": "chime-award",
+   "category": "win",
+   "expected": true,
+   "message": "We won best AI startup at the AIMTO pitch night!",
+   "attachments": [
+    {
+     "kind": "image",
+     "name": "stage photo.jpg",
+     "type": "image/png"
+    }
+   ]
+  },
+  {
+   "id": "chime-press",
+   "category": "win",
+   "expected": true,
+   "message": "We got featured in TechInAsia today",
+   "attachments": [
+    {
+     "kind": "link preview",
+     "site": "TechInAsia",
+     "title": "Klovr wants to make WhatsApp groups searchable"
+    }
+   ]
+  },
+  {
+   "id": "chime-finished-migration",
+   "category": "finished work",
+   "expected": true,
+   "message": "Azure migration is done, everything is running on the new cluster and nothing broke"
+  },
+  {
+   "id": "chime-design-done",
+   "category": "finished work",
+   "expected": true,
+   "message": "New landing page is live, took three rounds but I love how it turned out",
+   "attachments": [
+    {
+     "kind": "image",
+     "name": "landing.png",
+     "type": "image/png"
+    }
+   ]
+  },
+  {
+   "id": "chime-app-store",
+   "category": "launch",
+   "expected": true,
+   "message": "Our iOS app is now on the App Store",
+   "attachments": [
+    {
+     "kind": "link preview",
+     "site": "App Store",
+     "title": "Hover on the App Store"
+    }
+   ]
+  },
+  {
+   "id": "chime-hackathon",
+   "category": "win",
+   "expected": true,
+   "message": "Our team got second place at the Supabase hackathon"
+  },
+  {
+   "id": "chime-cn-launch",
+   "category": "launch",
+   "expected": true,
+   "message": "新版本上线了！大家可以试试新的搜索功能",
+   "attachments": [
+    {
+     "kind": "video",
+     "name": "搜索演示.mp4",
+     "type": "video/mp4",
+     "seconds": 40
+    }
+   ]
+  },
+  {
+   "id": "chime-ms-launch",
+   "category": "launch",
+   "expected": true,
+   "message": "Dah launch! Versi baru dah live untuk semua pengguna"
+  },
+  {
+   "id": "chime-feature-merged",
+   "category": "finished work",
+   "expected": true,
+   "message": "Merged the offline mode PR after two weeks of work, it finally works on flaky networks"
+  },
+  {
+   "id": "chime-customer-quote",
+   "category": "customer success",
+   "expected": true,
+   "message": "Aldrent just told us the digest saves them an hour every morning",
+   "attachments": [
+    {
+     "kind": "image",
+     "name": "whatsapp screenshot.png",
+     "type": "image/png"
+    }
+   ],
+   "borderline": true
+  },
+  {
+   "id": "chime-team-thanks",
+   "category": "win",
+   "expected": true,
+   "message": "Huge thanks {participant} for shipping the export feature, customers are already using it"
+  },
+  {
+   "id": "chime-benchmark",
+   "category": "milestone",
+   "expected": true,
+   "message": "Search is now 4x faster than last month on the same data",
+   "attachments": [
+    {
+     "kind": "image",
+     "name": "latency chart.png",
+     "type": "image/png"
+    }
+   ]
+  },
+  {
+   "id": "chime-open-source",
+   "category": "launch",
+   "expected": true,
+   "message": "We open-sourced the WhatsApp connector today",
+   "attachments": [
+    {
+     "kind": "link preview",
+     "site": "GitHub",
+     "title": "klovr-co/wa-connector"
+    }
+   ]
+  },
+  {
+   "id": "chime-anniversary",
+   "category": "milestone",
+   "expected": true,
+   "message": "Klovr is one year old today 🎂"
+  },
+  {
+   "id": "chime-pilot-live",
+   "category": "launch",
+   "expected": true,
+   "message": "The AIMTO pilot went live this morning and the first digests went out"
+  },
+  {
+   "id": "chime-incident-down",
+   "category": "incident",
+   "expected": false,
+   "message": "Prod is down, looking into it now"
+  },
+  {
+   "id": "chime-incident-sarcasm",
+   "category": "incident",
+   "expected": false,
+   "message": "great, the deploy broke login again 🎉"
+  },
+  {
+   "id": "chime-incident-postmortem",
+   "category": "incident",
+   "expected": false,
+   "message": "Postmortem for yesterday's outage is in the doc, please read before Monday",
+   "attachments": [
+    {
+     "kind": "link preview",
+     "site": "Google Docs",
+     "title": "Outage 23 Oct postmortem"
+    }
+   ]
+  },
+  {
+   "id": "chime-bug-screenshot",
+   "category": "incident",
+   "expected": false,
+   "message": "Customer sent this, the export button does nothing",
+   "attachments": [
+    {
+     "kind": "image",
+     "name": "bug.png",
+     "type": "image/png"
+    }
+   ]
+  },
+  {
+   "id": "chime-request-review",
+   "category": "request",
+   "expected": false,
+   "message": "Can someone review my PR before lunch?",
+   "attachments": [
+    {
+     "kind": "link preview",
+     "site": "GitHub",
+     "title": "Fix webhook retries #212"
+    }
+   ]
+  },
+  {
+   "id": "chime-request-video",
+   "category": "request",
+   "expected": false,
+   "message": "Can you check if the audio is fine in this before I send it to the client?",
+   "attachments": [
+    {
+     "kind": "video",
+     "name": "client update.mp4",
+     "type": "video/mp4",
+     "seconds": 60
+    }
+   ]
+  },
+  {
+   "id": "chime-question-person",
+   "category": "question",
+   "expected": false,
+   "message": "{participant} did you send the invoice to KSK yet?"
+  },
+  {
+   "id": "chime-question-channel",
+   "category": "question",
+   "expected": false,
+   "message": "Where do we keep the brand fonts?"
+  },
+  {
+   "id": "chime-status-routine",
+   "category": "status",
+   "expected": false,
+   "message": "Working on the billing page today, then the API docs"
+  },
+  {
+   "id": "chime-standup",
+   "category": "status",
+   "expected": false,
+   "message": "Yesterday: fixed the cron job. Today: digest templates. Blockers: none"
+  },
+  {
+   "id": "chime-reminder",
+   "category": "reminder",
+   "expected": false,
+   "message": "Reminder: timesheets are due Friday"
+  },
+  {
+   "id": "chime-meeting-moved",
+   "category": "logistics",
+   "expected": false,
+   "message": "Standup moved to 10:30 tomorrow"
+  },
+  {
+   "id": "chime-office-closed",
+   "category": "logistics",
+   "expected": false,
+   "message": "Office is closed on Monday for the public holiday"
+  },
+  {
+   "id": "chime-meeting-notes",
+   "category": "meeting notes",
+   "expected": false,
+   "message": "Notes from the KSK call: they want weekly reports, Synology sync by next month, follow-up on Thursday"
+  },
+  {
+   "id": "chime-assign-task",
+   "category": "request",
+   "expected": false,
+   "message": "{participant} please take the Azure billing alerts this week"
+  },
+  {
+   "id": "chime-sick",
+   "category": "sensitive",
+   "expected": false,
+   "message": "I'm down with fever, taking MC today"
+  },
+  {
+   "id": "chime-bereavement",
+   "category": "sensitive",
+   "expected": false,
+   "message": "My grandmother passed away last night, I'll be off for a few days"
+  },
+  {
+   "id": "chime-hospital",
+   "category": "sensitive",
+   "expected": false,
+   "message": "My dad is in hospital so I'll be slow to reply this week"
+  },
+  {
+   "id": "chime-resign",
+   "category": "sensitive",
+   "expected": false,
+   "message": "Today is my last day at Klovr, it's been a great two years. Thank you all",
+   "borderline": true
+  },
+  {
+   "id": "chime-layoffs",
+   "category": "sensitive",
+   "expected": false,
+   "message": "Sadly we have to let two people go this month because of the funding delay"
+  },
+  {
+   "id": "chime-burnout",
+   "category": "sensitive",
+   "expected": false,
+   "message": "Honestly I'm really burnt out, need to talk to someone about my workload"
+  },
+  {
+   "id": "chime-addressed-launch",
+   "category": "addressed",
+   "expected": false,
+   "message": "Tag, we launched today, can you draft the announcement email?"
+  },
+  {
+   "id": "chime-addressed-summary",
+   "category": "addressed",
+   "expected": false,
+   "message": "Tag summarise the release notes for the client",
+   "attachments": [
+    {
+     "kind": "link preview",
+     "site": "GitHub",
+     "title": "Release 4.3"
+    }
+   ]
+  },
+  {
+   "id": "chime-competitor-launch",
+   "category": "competitor",
+   "expected": false,
+   "message": "Notion just launched their own AI meeting notes",
+   "attachments": [
+    {
+     "kind": "link preview",
+     "site": "Notion",
+     "title": "Notion AI Meeting Notes"
+    }
+   ],
+   "borderline": true
+  },
+  {
+   "id": "chime-article-share",
+   "category": "share",
+   "expected": false,
+   "message": "Interesting read on agent memory",
+   "attachments": [
+    {
+     "kind": "link preview",
+     "site": "Substack",
+     "title": "How agents remember"
+    }
+   ]
+  },
+  {
+   "id": "chime-x-post-share",
+   "category": "share",
+   "expected": false,
+   "message": "",
+   "attachments": [
+    {
+     "kind": "link preview",
+     "site": "X",
+     "title": "Post by @swyx"
+    }
+   ]
+  },
+  {
+   "id": "chime-meme",
+   "category": "aside",
+   "expected": false,
+   "message": "lol",
+   "attachments": [
+    {
+     "kind": "image",
+     "name": "meme.png",
+     "type": "image/png"
+    }
+   ]
+  },
+  {
+   "id": "chime-lunch",
+   "category": "aside",
+   "expected": false,
+   "message": "anyone want nasi lemak? ordering in 10"
+  },
+  {
+   "id": "chime-complaint",
+   "category": "incident",
+   "expected": false,
+   "message": "The client is unhappy with the delay again"
+  },
+  {
+   "id": "chime-blocked",
+   "category": "status",
+   "expected": false,
+   "message": "Blocked on the Slack approval, can't test until they reply"
+  },
+  {
+   "id": "chime-cost-alert",
+   "category": "incident",
+   "expected": false,
+   "message": "Our OpenAI bill tripled this month, need to look at it",
+   "attachments": [
+    {
+     "kind": "image",
+     "name": "billing.png",
+     "type": "image/png"
+    }
+   ]
+  },
+  {
+   "id": "chime-planning",
+   "category": "planning",
+   "expected": false,
+   "message": "Plan for next week: finish migration, start on Lark connector"
+  },
+  {
+   "id": "chime-decision",
+   "category": "planning",
+   "expected": false,
+   "message": "Decided: we go with Azure, not AWS"
+  },
+  {
+   "id": "chime-todo",
+   "category": "planning",
+   "expected": false,
+   "message": "[[todo]] send the video to Andre by Friday"
+  },
+  {
+   "id": "chime-idea",
+   "category": "planning",
+   "expected": false,
+   "message": "[[idea]] combine the digest with the morning brief"
+  },
+  {
+   "id": "chime-draft-feedback",
+   "category": "request",
+   "expected": false,
+   "message": "Draft logo options, which one do you prefer?",
+   "attachments": [
+    {
+     "kind": "image",
+     "name": "logo a.png",
+     "type": "image/png"
+    },
+    {
+     "kind": "image",
+     "name": "logo b.png",
+     "type": "image/png"
+    }
+   ]
+  },
+  {
+   "id": "chime-wip-demo",
+   "category": "request",
+   "expected": false,
+   "message": "Rough WIP of the new sidebar, still broken on mobile, thoughts?",
+   "attachments": [
+    {
+     "kind": "video",
+     "name": "sidebar wip.mov",
+     "type": "video/mp4",
+     "seconds": 35
+    }
+   ]
+  },
+  {
+   "id": "chime-customer-churn",
+   "category": "incident",
+   "expected": false,
+   "message": "Murall Clinic cancelled their subscription"
+  },
+  {
+   "id": "chime-security",
+   "category": "incident",
+   "expected": false,
+   "message": "Someone pushed an API key to the public repo, rotating it now"
+  },
+  {
+   "id": "chime-hiring-post",
+   "category": "logistics",
+   "expected": false,
+   "message": "We're hiring a junior designer, please share with friends",
+   "attachments": [
+    {
+     "kind": "link preview",
+     "site": "LinkedIn",
+     "title": "Klovr is hiring: Junior Designer"
+    }
+   ]
+  },
+  {
+   "id": "chime-pricing-q",
+   "category": "question",
+   "expected": false,
+   "message": "Should we price the cloud tier at 40 or 50 USD?"
+  },
+  {
+   "id": "chime-thanks-reply",
+   "category": "aside",
+   "expected": false,
+   "message": "thanks, got it"
+  },
+  {
+   "id": "chime-ok",
+   "category": "aside",
+   "expected": false,
+   "message": "ok noted"
+  },
+  {
+   "id": "chime-cn-incident",
+   "category": "incident",
+   "expected": false,
+   "message": "服务器又挂了，我在看"
+  },
+  {
+   "id": "chime-ms-status",
+   "category": "status",
+   "expected": false,
+   "message": "Hari ni saya buat dokumentasi API je"
+  },
+  {
+   "id": "chime-customer-ask",
+   "category": "request",
+   "expected": false,
+   "message": "Aldrent wants a demo next Tuesday, who can take it?"
+  },
+  {
+   "id": "chime-deadline-slip",
+   "category": "status",
+   "expected": false,
+   "message": "The Lark connector will slip to next week, sorry"
+  },
+  {
+   "id": "chime-tax",
+   "category": "logistics",
+   "expected": false,
+   "message": "Please send your receipts to finance by the 5th"
+  },
+  {
+   "id": "chime-calendar",
+   "category": "logistics",
+   "expected": false,
+   "message": "Added the offsite to everyone's calendar"
+  },
+  {
+   "id": "chime-pr-merged-bot-like",
+   "category": "status",
+   "expected": false,
+   "message": "Merged #213 fix typo in README"
+  },
+  {
+   "id": "chime-vent",
+   "category": "aside",
+   "expected": false,
+   "message": "why is Slack's API so painful"
+  },
+  {
+   "id": "chime-personal-good",
+   "category": "sensitive",
+   "expected": false,
+   "message": "Got engaged over the weekend!",
+   "borderline": true
+  }
+ ]
+}

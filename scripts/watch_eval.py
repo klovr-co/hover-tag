@@ -73,6 +73,8 @@ class Case:
     reachable: bool = True
     derived: str | None = None
     borderline: bool = False
+    # Text descriptions of uploads and link previews, as the bridge gives the classifier.
+    attachments: tuple[dict[str, Any], ...] = ()
 
 
 def _participant_id(author: str) -> str:
@@ -99,7 +101,9 @@ def load_cases(path: Path = FIXTURES) -> tuple[str, list[Case]]:
                               reachable=item.get("reachable", True) is True, derived=item.get("derived"),
                               borderline=bool(item.get("borderline")) or item.get("confidence") == "low"))
             continue
-        if MENTION_RE.search(item["message"]):
+        # Chime-in sets may mention people: such posts still get the chime-in question.
+        chime_set = data.get("question") == watch_classifier.CHIME_QUESTION_NAME
+        if MENTION_RE.search(item["message"]) and not chime_set:
             raise ValueError(f"{case_id}: a message with a member mention never reaches the classifier")
         thread: list[dict[str, Any]] = []
         for index, entry in enumerate(item.get("thread", [])):
@@ -120,24 +124,31 @@ def load_cases(path: Path = FIXTURES) -> tuple[str, list[Case]]:
                 raise ValueError(f"{case_id}: unknown author {author!r}")
             thread.append(message)
         names = channel_watch.watch_names({"OPENTAG_BOT_NAME": data.get("assistant_name", "Tag")})
-        reachable = channel_watch.names_tag(item["message"], names) or any(
+        # In chime-in channels every top-level post reaches the classifier.
+        reachable = (chime_set and not thread) or channel_watch.names_tag(item["message"], names) or any(
             message.get("user") == TAG or f"<@{TAG}>" in message["text"] for message in thread)
         current_ts = f"{len(thread) + 1}.000"
-        event = {"ts": current_ts, "user": REQUESTER, "text": item["message"]}
+        event = {"ts": current_ts, "user": REQUESTER, "text": item["message"]
+                 .replace("{participant}", "<@UPSOMEONE>").replace("{requester}", f"<@{REQUESTER}>")}
         if thread:
             event["thread_ts"] = thread[0]["ts"]
             thread.append(dict(event))
-        cases.append(Case(case_id, item["category"], item["expected"], event, thread, reachable=reachable))
+        cases.append(Case(case_id, item["category"], item["expected"], event, thread, reachable=reachable,
+                          borderline=bool(item.get("borderline")),
+                          attachments=tuple(a for a in item.get("attachments", []) if isinstance(a, dict))))
     return data.get("assistant_name", "Tag"), cases
 
 
 def case_state(case: Case, assistant_name: str) -> dict[str, Any]:
     if case.state is not None:
         return case.state
-    return watch_classifier.message_state(
+    state = watch_classifier.message_state(
         case.event, case.thread, assistant_name=assistant_name,
         assistant_user_id=TAG if case.thread else "",
     )
+    if case.attachments:
+        state["current_attachments"] = list(case.attachments)
+    return state
 
 
 def estimated_tokens(provider: str, state: dict[str, Any], variant: str = "",
