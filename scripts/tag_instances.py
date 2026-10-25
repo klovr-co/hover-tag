@@ -27,7 +27,7 @@ RESERVED_NAMES = frozenset({
     "doctor", "start", "stop", "restart", "status", "logs", "dev",
     "telemetry", "rename", "describe", "autostart", "chatgpt", "usage", "abandon", "remove",
     "lead",
-    "routine",
+    "routine", "persona",
 })
 # Commands added after Tags could already use the name; such a Tag keeps working.
 LATE_RESERVED_NAMES = frozenset({"usage", "lead"})

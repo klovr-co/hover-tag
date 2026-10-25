@@ -56,6 +56,11 @@ All notable changes to Tag are documented here.
   skips it. On upgrade, your main Tag gets the role; move it with
   `tag NAME lead set` or in Tag.app's Details. With a Lead,
   a Tag can ask only Lead for help, for a judgment call.
+- Personas: give one Tag named faces such as Finance or Designer, each with
+  a picture, description, the skills it reaches for first, a short voice and
+  how often it speaks up, with `tag NAME persona add|list|show|set|remove`.
+  They share the Tag's permissions and Slack app. Calling them in Slack comes
+  next.
 - No Tag creates new Tags for now. Lead says which existing Tag can help, or
   answers itself ([ADR 0012](docs/adr/0012-tags-as-personas.md)).
 - `tag add --json` accepts `--preset FILE` and first reports the new Tag's ID.

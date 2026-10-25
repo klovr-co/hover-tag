@@ -118,6 +118,8 @@
     "scripts/tag_mfs_server.py",
     "scripts/tag_migrate.py",
     "scripts/tag_paths.py",
+    "scripts/tag_persona_cli.py",
+    "scripts/tag_personas.py",
     "scripts/tag_quick_add.py",
     "scripts/tag_reconfigure.py",
     "scripts/tag_rename.py",

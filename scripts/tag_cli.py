@@ -74,7 +74,7 @@ CAPABILITIES = (
     "autostart", "autostart-keep", "logs-json", "upgrade-json", "install-progress",
     "ai-connections", "shared-ai-connections", "thinking-level", "logs-activity", "activity-details", "setup-v2", "abandon-setup", "remove-tag",
     "describe", "telemetry-events", "start-progress", "api-connections", "saved-models", "permission-rules", "routines",
-    "lead", "setup-preset", "setup-tag-event",
+    "lead", "setup-preset", "setup-tag-event", "personas",
 )
 UPDATE_CHECK_INTERVAL_SECONDS = 24 * 60 * 60
 COMMANDS = tuple(sorted(tag_instances.RESERVED_NAMES))
@@ -2021,6 +2021,19 @@ def _routine_command(installation_root: Path, tag_id: str, arguments: list[str])
                                channels=_channels(values, context.home), tag_running=slack_ready)
 
 
+def _persona_command(installation_root: Path, tag_id: str, arguments: list[str]) -> int:
+    """tag [TAG] persona …: personas have their own options, so they parse separately."""
+    try:
+        import tag_persona_cli
+    except ImportError:
+        from scripts import tag_persona_cli
+    context = tag_instances.resolve(installation_root, tag_id)
+    path = context.home / "config/settings.json"
+    values = read_config(path) if path.is_file() else {}
+    return tag_persona_cli.run(context.home, context.tag_id, arguments, values=values,
+                               agent_run=inside_agent_run())
+
+
 def _abandon_command(context: tag_instances.InstanceContext, args) -> int:
     """Set aside a Tag whose setup never reached Slack. It is moved, never deleted."""
     import shutil
@@ -2744,14 +2757,15 @@ def _run_cli() -> int:
         ))
     )
     tag_id = raw_arguments.pop(0) if explicit_tag else "default"
-    if raw_arguments[:1] == ["routine"]:
+    if raw_arguments[:1] in (["routine"], ["persona"]):
         root = tag_home()
         if explicit_tag:
             # A nickname from `tag rename` works here too, and plain `tag routine` means the main Tag.
             tag_id = tag_instances.resolve_reference(root, tag_id)
         if tag_id == tag_instances.DEFAULT_TAG:
             tag_id = tag_instances.select_unnamed(root)
-        return _routine_command(root, tag_id, raw_arguments[1:])
+        command = _routine_command if raw_arguments[0] == "routine" else _persona_command
+        return command(root, tag_id, raw_arguments[1:])
     args = parser.parse_args(raw_arguments)
     if args.activity and (args.command != "logs" or args.follow):
         parser.error("--activity requires logs and cannot be combined with --follow")

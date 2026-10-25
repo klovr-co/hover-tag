@@ -199,7 +199,8 @@ request.
 
 ### The service account
 
-Tags that Lead creates belong to a service account, not one person.
+Creating Tags is on hold, so this applies only once it resumes. Tags that
+Lead creates belong to a service account, not one person.
 The service account signs in to its own Slack CLI folder, so your own Slack
 CLI sign-in (`~/.slack`), which other scripts may depend on, is never
 replaced:
@@ -240,6 +241,29 @@ link Lead posts and adds its app-level token in Tag.app or with
 - A proposal must name a real boundary: credentials, memory, parallel work,
   identity, or a different owner or runtime. Otherwise Lead uses a
   skill or a subagent.
+
+## Personas
+
+A persona is a named face over one Tag: a name, picture, description, the
+skills it reaches for first, an optional memory scope, a short voice, and how
+often it speaks up ([ADR 0012](../adr/0012-tags-as-personas.md)). Every
+persona is the same Tag, with the same permissions, memory access and Slack
+app. People call one with `@Tag Finance: …`; otherwise the Tag answers under
+its own name.
+
+```sh
+tag maya persona add Finance --description "Month-end close and invoices" \
+  --picture iris --skill month-end-close --voice "brisk, exact"
+tag maya persona set Finance --channel C0123ABCD=when-addressed
+tag maya persona list
+tag maya persona remove Finance
+```
+
+`--speaks-up` is `only-when-asked` (the default), `when-addressed` or
+`chimes-in`, and `--channel CHANNEL=LEVEL` overrides it in one channel. Only
+one persona can chime in per channel. Until channel watching ships, every
+persona answers only when asked, and `persona show` says so. A Tag's agent
+can't change personas from inside a request.
 
 ## Removing a Tag in detail
 
