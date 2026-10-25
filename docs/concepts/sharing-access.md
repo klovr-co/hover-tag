@@ -51,6 +51,31 @@ tag config set OPENTAG_PEER_TAGS "Research Tag=U0123ABCD,Writer Tag=U0456EFGH"
 tag restart
 ```
 
+## Letting another app's bot ask your Tag
+
+Some apps ask Tag to run a skill by mentioning it in a thread. For example,
+Hover posts `@Tag /draft-reply` with the details after a person clicks a
+button. Your Tag accepts such a mention only from a bot that you listed in
+`SLACK_ALLOWED_BOT_IDS`, and only when the message is a request: it starts with
+the mention and a command, and its code block holds a Hover request ID
+(`"request_id": "hv-…"`). Other messages from that bot, such as a mirror of
+WhatsApp text that happens to mention Tag, are ignored. Mentions from other
+bots are ignored.
+
+Tag's Slack memory also skips the messages that a listed bot posts, so an app's
+own copies and logs are not indexed. Run `tag restart` after you change the list.
+
+```bash
+tag config set SLACK_ALLOWED_BOT_IDS B0123ABCD
+tag restart
+```
+
+You can list a bot ID (starts with `B`) or the bot's member ID (starts with
+`U`). Tag runs the request with your Tag's environment and accounts. A bot
+cannot answer an approval prompt, so Tag declines every approval in a bot's
+request: allow the tools that the skill needs in advance. A bot's request
+never starts a handoff to another Tag.
+
 To add a caller, append their Slack member ID to the comma-separated
 `SLACK_ALLOWED_USER_IDS` setting. Keep your own ID first, then restart:
 

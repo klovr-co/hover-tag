@@ -106,6 +106,31 @@ class ConnectorTests(unittest.IsolatedAsyncioTestCase):
         cursors = [call.kwargs["params"].get("cursor") for call in self.call.await_args_list[1:]]
         self.assertEqual(cursors, [None, "page2", "page2"])
 
+    async def _read_with_bots(self, messages, bots="B0HOVER"):
+        await self.plugin.connect()
+        self.call.side_effect = [{"messages": messages, "has_more": False}]
+        with patch.dict(tag_mfs_server.os.environ, {"SLACK_ALLOWED_BOT_IDS": bots}):
+            return [m["ts"] async for m in self.plugin.read_records("/channels/team__C1/messages.jsonl")]
+
+    async def test_posts_from_an_approved_bot_are_not_indexed(self):
+        # Hover's WhatsApp mirror would otherwise be stored a second time in the index.
+        messages = [
+            {"ts": "1", "user": "UPERSON", "text": "a person"},
+            {"ts": "2", "user": "U0HOVER", "bot_id": "B0HOVER", "text": "mirror"},
+            {"ts": "3", "user": "UOTHER", "bot_id": "B0OTHER", "text": "another app"},
+            {"ts": "4", "user": "U0HOVER", "bot_id": "B0HOVER", "metadata": {"event_type": "hover_tag_request"}},
+        ]
+        self.assertEqual(await self._read_with_bots(messages), ["1", "3"])
+
+    async def test_mirror_metadata_is_skipped_whoever_posted_it(self):
+        messages = [{"ts": "1", "user": "UPERSON"},
+                    {"ts": "2", "user": "UX", "metadata": {"event_type": "hover_whatsapp_mirror"}}]
+        self.assertEqual(await self._read_with_bots(messages, bots=""), ["1"])
+
+    async def test_member_id_in_the_list_also_skips(self):
+        messages = [{"ts": "1", "user": "U0HOVER", "bot_id": "B0HOVER"}, {"ts": "2", "user": "UPERSON"}]
+        self.assertEqual(await self._read_with_bots(messages, bots="U0HOVER"), ["2"])
+
 
 if __name__ == "__main__":
     unittest.main()
