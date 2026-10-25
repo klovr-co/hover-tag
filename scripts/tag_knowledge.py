@@ -644,8 +644,8 @@ class Commit:
     def as_json(self) -> dict[str, Any]:
         t = self.trailers
         return {"id": self.id, "at": self.at, "action": t.get("Action", "changed"), "summary": self.summary,
-                "written_by": t.get("Written-by", ""), "via": t.get("Via", ""),
-                "from_thread": t.get("Thread", ""), "entries": [e for e in t.get("Entry", "").split(" ") if e],
+                "written_by": t.get("Written-by") or None, "via": t.get("Via") or None,
+                "from_thread": t.get("Thread") or None, "entries": [e for e in t.get("Entry", "").split(" ") if e],
                 "undo_of": t.get("Undo-of") or None}
 
 
