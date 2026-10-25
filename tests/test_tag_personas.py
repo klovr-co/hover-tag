@@ -8,6 +8,7 @@ import sys
 import tempfile
 import time
 import unittest
+import unittest.mock
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Any
@@ -278,13 +279,14 @@ class HelperAndPromptTests(unittest.TestCase):
                 skill_dir=Path("/skill")))
 
 
-class PersonaBridgeTests(unittest.TestCase):
-    """One Tag, Maya, with a Finance persona, on a fake Slack."""
+class BridgeCase(unittest.TestCase):
+    """One Tag, Maya, with Finance and Ops personas, on a fake Slack."""
 
     def setUp(self) -> None:
         from scripts import slack_socket_agent
         from scripts.tag_handoff import HandoffStore
-        from test_tag_handoff import MAYA, TAG_A, FakeApp, SlackBus
+        from test_tag_handoff import MAYA, TAG_A, SlackBus
+        from test_tag_lead import LeadApp
         self.sa, self.tag, self.maya = slack_socket_agent, TAG_A, MAYA
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -313,8 +315,15 @@ class PersonaBridgeTests(unittest.TestCase):
         self.customize = patch.object(slack_socket_agent, "slack_customize_granted", return_value=True)
         self.customize.start()
         self.addCleanup(self.customize.stop)
+        self.workspace = root / "workspace"
+        os.environ["OPENTAG_WORKDIR"] = str(self.workspace)
+        owned = patch.object(slack_socket_agent, "owns_workspace", side_effect=lambda path: path == self.workspace)
+        owned.start()
+        self.addCleanup(owned.stop)
+        self.proposal: dict[str, Any] | None = None
         self.bus = SlackBus()
-        app = FakeApp()
+        app = LeadApp()
+        self.app = app
         self.bus.apps[TAG_A] = app
         self.client = self.bus.client(TAG_A)
         with patch.object(slack_socket_agent, "App", return_value=app):
@@ -330,6 +339,8 @@ class PersonaBridgeTests(unittest.TestCase):
                           "scopes": kwargs.get("persona_scopes")})
         if self.handover_to and run_file:
             tag_personas.record_handover(run_file, self.handover_to)
+        if self.proposal and run_file:
+            tag_personas.record_proposal(run_file, self.proposal)
         return "Three items left.", True
 
     def ask(self, text: str, thread_ts: str | None = None) -> dict[str, Any]:
@@ -352,6 +363,14 @@ class PersonaBridgeTests(unittest.TestCase):
                 found.append((kwargs["text"], kwargs.get("username")))
         return found
 
+    def press(self, action_id: str, proposal_id: str, user: str | None = None) -> None:
+        body = {"user": {"id": user or self.maya}, "channel": {"id": "C123"},
+                "actions": [{"action_id": action_id, "value": json.dumps({"proposal": proposal_id})}]}
+        self.app.actions[action_id](unittest.mock.MagicMock(), body, self.client, unittest.mock.MagicMock())
+
+
+
+class PersonaBridgeTests(BridgeCase):
     def test_a_named_persona_answers_under_its_name_and_keeps_the_thread(self) -> None:
         origin = self.ask(f"<@{self.tag}> Finance: what's left for month-end?")
         self.assertEqual("what's left for month-end?", self.runs[-1]["question"])
@@ -418,3 +437,74 @@ class PersonaBridgeTests(unittest.TestCase):
         self.assertEqual("Finance: what's left?", self.runs[-1]["question"])
         self.assertIsNone(self.runs[-1]["active"])
         self.assertTrue(all(username is None for _text, username in self.replies(origin["ts"])))
+
+
+class ProposalTests(BridgeCase):
+    """The Tag proposes a persona or a skill; only the person who asked approves it."""
+
+    def test_the_default_persona_proposes_a_persona_and_the_requester_approves_it(self) -> None:
+        legal = tag_personas.validate({"name": "Legal", "description": "Contracts and NDAs.", "voice": "careful"})
+        self.proposal = {"kind": "persona", "persona": legal.to_json()}
+        origin = self.ask(f"<@{self.tag}> we need someone for contracts")
+        record = tag_persona_proposals_store(self.home).all()[0]
+        self.assertEqual("pending", record["state"])
+        card = next(m for m in self.bus.thread(origin["ts"]) if m["text"] == "A proposal needs your approval")
+        self.assertEqual(card["ts"], record["card_ts"])
+        self.assertIsNone(tag_personas.find(tag_personas.load(self.home), "Legal"))
+
+        self.press(self.sa.PERSONA_PROPOSAL_APPROVE_ACTION_ID, record["id"], user="UOTHER")
+        self.assertIsNone(tag_personas.find(tag_personas.load(self.home), "Legal"))
+        self.press(self.sa.PERSONA_PROPOSAL_APPROVE_ACTION_ID, record["id"])
+        self.assertEqual("careful", tag_personas.find(tag_personas.load(self.home), "Legal").voice)
+        self.assertEqual("created", tag_persona_proposals_store(self.home).get(record["id"])["state"])
+        self.press(self.sa.PERSONA_PROPOSAL_REJECT_ACTION_ID, record["id"])  # Decided once.
+        self.assertEqual("created", tag_persona_proposals_store(self.home).get(record["id"])["state"])
+
+    def test_a_proposed_skill_is_written_to_the_tags_own_folder_only_after_approval(self) -> None:
+        self.proposal = {"kind": "skill", "skill": {"name": "month-end-close", "description": "Closing the month.",
+                                                    "body": "1. Reconcile the bank.\n2. Post accruals."}}
+        self.ask(f"<@{self.tag}> remember how we close the month")
+        record = tag_persona_proposals_store(self.home).all()[0]
+        target = self.workspace / ".claude/skills/month-end-close/SKILL.md"
+        self.assertFalse(target.exists())
+        self.press(self.sa.PERSONA_PROPOSAL_APPROVE_ACTION_ID, record["id"])
+        self.assertIn("name: month-end-close", target.read_text(encoding="utf-8"))
+        self.assertTrue((self.workspace / ".agents/skills/month-end-close/SKILL.md").is_file())
+
+    def test_refused_rejected_and_expired_proposals_change_nothing(self) -> None:
+        self.proposal = {"kind": "persona", "persona": {"name": "Finance", "description": "Again."}}
+        origin = self.ask(f"<@{self.tag}> add finance")
+        self.assertIn("I can't propose that: There is already a persona named Finance.",
+                      [m["text"] for m in self.bus.thread(origin["ts"])])
+        self.assertEqual([], tag_persona_proposals_store(self.home).all())
+
+        self.proposal = {"kind": "persona", "persona": {"name": "Legal", "description": "Contracts."}}
+        self.ask(f"<@{self.tag}> add legal")
+        first = tag_persona_proposals_store(self.home).all()[0]
+        self.press(self.sa.PERSONA_PROPOSAL_REJECT_ACTION_ID, first["id"])
+        self.assertEqual("rejected", tag_persona_proposals_store(self.home).get(first["id"])["state"])
+
+        self.ask(f"<@{self.tag}> add legal again")
+        second = next(r for r in tag_persona_proposals_store(self.home).all() if r["id"] != first["id"])
+        tag_persona_proposals_store(self.home).update(second["id"], lambda record: record.update(expires_at=0))
+        self.press(self.sa.PERSONA_PROPOSAL_APPROVE_ACTION_ID, second["id"])
+        self.assertEqual("expired", tag_persona_proposals_store(self.home).get(second["id"])["state"])
+        self.assertIsNone(tag_personas.find(tag_personas.load(self.home), "Legal"))
+
+    def test_a_skill_is_refused_when_the_tag_works_in_a_folder_of_yours(self) -> None:
+        self.proposal = {"kind": "skill", "skill": {"name": "close", "description": "Close.", "body": "Steps."}}
+        with patch.object(self.sa, "owns_workspace", return_value=False):
+            origin = self.ask(f"<@{self.tag}> save this procedure")
+        texts = [m["text"] for m in self.bus.thread(origin["ts"])]
+        self.assertTrue(any("a folder of yours" in text for text in texts))
+
+    def test_a_persona_answering_cannot_propose(self) -> None:
+        with self.assertRaisesRegex(PersonaError, "Only the Tag under its own name proposes"):
+            run_file = Path(tempfile.mkdtemp()) / "run.json"
+            tag_personas.write_run_file(run_file, active=persona("Finance"), personas=[])
+            tag_personas.record_proposal(run_file, {"kind": "skill"})
+
+
+def tag_persona_proposals_store(home: Path):
+    from scripts import tag_persona_proposals
+    return tag_persona_proposals.store(home)

@@ -162,18 +162,24 @@ def persona_context(skill_dir: Path | None) -> str:
 Persona: answer as {tag_personas.brief_text(active)}
 It is this Tag under another name; your rules and permissions are unchanged.
 """
-    personas = [item for item in document.get("personas") or [] if isinstance(item, dict)]
-    if not personas or skill_dir is None:
+    if not document or skill_dir is None:
         return ""
-    lines = "\n".join(f"- {tag_personas.brief_text(item)}" for item in personas)
     helper = helper_command(skill_dir / "scripts" / "tag_persona.py")
+    proposing = f"""Only when someone asks for a new persona or a reusable procedure, propose one with
+`{helper} propose-persona --name NAME --description TEXT [--skill S] [--voice V]` or
+`{helper} propose-skill --name NAME --description WHEN --body-file FILE`; the person approves it.
+"""
+    personas = [item for item in document.get("personas") or [] if isinstance(item, dict)]
+    if not personas:
+        return f"\n{proposing}"
+    lines = "\n".join(f"- {tag_personas.brief_text(item)}" for item in personas)
     return f"""
 Personas: you answer under your own name. This Tag also has these personas:
 {lines}
 Only when the request is clearly one persona's area, run
 `{helper} handover --to "NAME"` once before answering, then answer as that
 persona. Tag posts a one-line handover first. Otherwise answer yourself.
-"""
+{proposing}"""
 
 
 def lead_instructions(skill_dir: Path, channel_id: str) -> str:

@@ -285,7 +285,7 @@ def write_run_file(destination: Path, *, active: Persona | None, personas: list[
     write_document(destination, {"schema_version": SCHEMA_VERSION,
                                  "active": brief(active) if active else None,
                                  "personas": [] if active else [brief(item) for item in personas],
-                                 "handover": None})
+                                 "handover": None, "proposal": None})
 
 
 def read_run_file(source: Path) -> dict[str, Any]:
@@ -314,6 +314,25 @@ def record_handover(source: Path, name: str) -> dict[str, Any]:
     document["handover"] = target["name"]
     write_document(source, document)
     return target
+
+
+def record_proposal(source: Path, proposal: dict[str, Any]) -> None:
+    """One persona or skill proposal per run, made under the Tag's own name; the bridge checks it again."""
+    document = read_run_file(source)
+    if not document:
+        raise PersonaError("Proposing is unavailable in this conversation.")
+    if document.get("active"):
+        raise PersonaError(f"Only the Tag under its own name proposes; you are answering as "
+                           f"{document['active'].get('name')}.")
+    if document.get("proposal"):
+        raise PersonaError("This reply already proposes something; each reply makes one proposal.")
+    document["proposal"] = proposal
+    write_document(source, document)
+
+
+def read_proposal(source: Path) -> dict[str, Any] | None:
+    value = read_run_file(source).get("proposal")
+    return value if isinstance(value, dict) else None
 
 
 def read_handover(source: Path) -> str | None:

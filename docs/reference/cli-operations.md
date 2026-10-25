@@ -258,6 +258,13 @@ posts one line ("That's Finance's area, handing you over.") and the persona's
 answer follows straight after, from the same run. A persona's memory scope
 narrows the sources that run may search.
 
+When someone asks for a new persona or a reusable procedure, the Tag proposes
+it in the thread: a persona, or a skill of up to 8,000 characters of
+instructions. The person who asked approves or rejects it on the card within
+an hour, and nothing changes before that. An approved skill is written to the
+Tag's own folder (`.claude/skills` and `.agents/skills`); a Tag that works in a
+folder of yours gets no skills from Slack.
+
 Replies show the persona's name and picture when the Slack app has the
 `chat:write.customize` scope. Tag doesn't add it for you: add it to the app's
 manifest and reinstall the app. Without it, replies start with the persona's

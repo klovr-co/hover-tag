@@ -120,6 +120,7 @@
     "scripts/tag_paths.py",
     "scripts/tag_persona.py",
     "scripts/tag_persona_cli.py",
+    "scripts/tag_persona_proposals.py",
     "scripts/tag_personas.py",
     "scripts/tag_quick_add.py",
     "scripts/tag_reconfigure.py",

@@ -70,13 +70,14 @@ try:
     from .tag_approval_choices import sanitize_review_details
     from .tag_activity_labels import activity_title_for_status, readable_activity_title
     from .agent_activity import THINKING_LABEL, show_thinking
-    from .tag_paths import instance_home, tag_temp_dir
+    from .tag_paths import instance_home, owns_workspace, tag_temp_dir
     from .record_output_artifact import channel_artifact_directory
     from . import slack_channels
     from . import tag_memory
     from . import tag_handoff
     from . import tag_lead
     from . import tag_personas
+    from . import tag_persona_proposals
     from . import tag_routines
     from .tag_routine_scheduler import RoutineScheduler
 except ImportError:  # Direct script execution does not create a package context.
@@ -118,12 +119,13 @@ except ImportError:  # Direct script execution does not create a package context
     from tag_activity_labels import activity_title_for_status, readable_activity_title
     from agent_activity import THINKING_LABEL, show_thinking
     from record_output_artifact import channel_artifact_directory
-    from tag_paths import instance_home, tag_temp_dir
+    from tag_paths import instance_home, owns_workspace, tag_temp_dir
     import slack_channels
     import tag_memory
     import tag_handoff
     import tag_lead
     import tag_personas
+    import tag_persona_proposals
     import tag_routines
     from tag_routine_scheduler import RoutineScheduler
 
@@ -178,6 +180,8 @@ APPROVAL_APPROVE_ACTION_ID = "opentag_approval_approve"
 APPROVAL_DENY_ACTION_ID = "opentag_approval_deny"
 APPROVAL_CHOICE_ACTION_PREFIX = "opentag_approval_choice_"
 APPROVAL_MORE_ACTION_ID = "opentag_approval_more"
+PERSONA_PROPOSAL_APPROVE_ACTION_ID = "opentag_persona_proposal_approve"
+PERSONA_PROPOSAL_REJECT_ACTION_ID = "opentag_persona_proposal_reject"
 TAG_CREATE_APPROVE_ACTION_ID = "opentag_tag_create_approve"
 TAG_CREATE_REJECT_ACTION_ID = "opentag_tag_create_reject"
 TAG_CREATE_CHECK_ACTION_ID = "opentag_tag_create_check"
@@ -3791,6 +3795,23 @@ def tag_proposal_blocks(record: dict[str, Any], status: str | None = None) -> li
     return blocks
 
 
+def persona_proposal_blocks(record: dict[str, Any], tag_name: str, status: str | None = None) -> list[dict[str, Any]]:
+    """The approval card for a proposed persona or skill; ``status`` replaces the buttons once decided."""
+    blocks: list[dict[str, Any]] = [{"type": "section", "text": {"type": "mrkdwn", "text": (
+        tag_persona_proposals.approval_text(record, tag_name=tag_name)[:2900])}}]
+    if status is not None:
+        blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": status[:2900]}]})
+        return blocks
+    value = json.dumps({"proposal": record["id"]})
+    blocks.append({"type": "actions", "elements": [
+        {"type": "button", "action_id": PERSONA_PROPOSAL_APPROVE_ACTION_ID, "style": "primary",
+         "text": {"type": "plain_text", "text": "Approve"}, "value": value},
+        {"type": "button", "action_id": PERSONA_PROPOSAL_REJECT_ACTION_ID,
+         "text": {"type": "plain_text", "text": "Reject"}, "value": value},
+    ]})
+    return blocks
+
+
 def tag_creation_step_blocks(record: dict[str, Any], text: str) -> list[dict[str, Any]]:
     return [{"type": "section", "text": {"type": "mrkdwn", "text": text[:2900]}},
             {"type": "actions", "elements": [{"type": "button", "action_id": TAG_CREATE_CHECK_ACTION_ID,
@@ -4860,6 +4881,87 @@ def create_app(
             post_in_thread(client, logger, record["channel"], record["thread_ts"], text,
                            tag_creation_step_blocks(record, text))
 
+    persona_proposals = tag_persona_proposals.store(instance_home())
+
+    def persona_limits() -> dict[str, Any]:
+        workdir = default_workdir()
+        return {"workspace": workdir if owns_workspace(workdir) else None,
+                "tag_name": os.getenv("OPENTAG_BOT_NAME", "") or "Tag",
+                "tag_channels": [item.strip() for item in os.getenv("SLACK_CHANNEL_IDS", "").split(",") if item.strip()],
+                "allowed_scopes": [item.strip() for item in os.getenv("MFS_ALLOWED_SCOPES", "").split(",")
+                                   if item.strip()]}
+
+    def start_persona_proposal(client: Any, logger: Any, team: str, channel: str, thread_ts: str, requester: str,
+                               proposal: dict[str, Any]) -> None:
+        """Post a proposed persona or skill for the requester to approve. Nothing is written before that."""
+        limits = persona_limits()
+        try:
+            clean = tag_persona_proposals.check(instance_home(), proposal, **limits)
+        except tag_personas.PersonaError as exc:
+            post_in_thread(client, logger, channel, thread_ts, f"I can't propose that: {exc}.")
+            return
+        record = persona_proposals.create(proposal=clean, lead=os.getenv("TAG_ID", ""), team=team, channel=channel,
+                                          thread_ts=thread_ts, requester=requester)
+        posted = post_in_thread(client, logger, channel, thread_ts, "A proposal needs your approval",
+                                persona_proposal_blocks(record, limits["tag_name"]))
+        if posted is None:
+            persona_proposals.transition(record["id"], {"pending"}, "failed", note="card_not_posted")
+            return
+        persona_proposals.set_fields(record["id"], card_ts=posted.get("ts"))
+
+    @app.action(PERSONA_PROPOSAL_APPROVE_ACTION_ID)
+    @app.action(PERSONA_PROPOSAL_REJECT_ACTION_ID)
+    def decide_persona_proposal(ack: Any, body: dict[str, Any], client: Any, logger: Any) -> None:
+        """Only the person who asked decides, once, within the hour; the change is checked again first."""
+        ack()
+        user_id = body.get("user", {}).get("id", "")
+        channel = body.get("channel", {}).get("id", "")
+        try:
+            action = body["actions"][0]
+            proposal_id = json.loads(action["value"])["proposal"]
+            record = persona_proposals.get(proposal_id)
+        except (KeyError, IndexError, TypeError, ValueError):
+            record, action = None, {}
+        if record is None or record.get("channel") != channel:
+            return
+        tag_name = os.getenv("OPENTAG_BOT_NAME", "") or "Tag"
+
+        def close(decided: dict[str, Any] | None, status: str) -> None:
+            if decided is None or not decided.get("card_ts"):
+                return
+            try:
+                client.chat_update(channel=channel, ts=decided["card_ts"], text=status,
+                                   blocks=persona_proposal_blocks(decided, tag_name, status))
+            except Exception as exc:  # noqa: BLE001 - the decision is already saved
+                logger.warning("Could not update the proposal card %s: %s", proposal_id, exc)
+
+        if user_id != record.get("requester") or not slack_user_allowed(user_id, allowed_user_ids):
+            try:
+                client.chat_postEphemeral(channel=channel, user=user_id, thread_ts=record["thread_ts"],
+                                          text=f"Only <@{record['requester']}>, who asked, can decide this.")
+            except Exception as exc:  # noqa: BLE001 - nothing was decided
+                logger.warning("Could not explain who decides a proposal: %s", exc)
+            return
+        if action.get("action_id") == PERSONA_PROPOSAL_REJECT_ACTION_ID:
+            close(persona_proposals.transition(proposal_id, {"pending"}, "rejected"),
+                  f"Rejected by <@{user_id}>. Nothing changed.")
+            return
+        if float(record.get("expires_at") or 0) <= time.time():
+            close(persona_proposals.transition(proposal_id, {"pending"}, "expired"),
+                  "This request expired. Nothing changed.")
+            return
+        decided = persona_proposals.transition(proposal_id, {"pending"}, "approved", note=f"approved by {user_id}")
+        if decided is None:
+            return
+        try:
+            done = tag_persona_proposals.apply(instance_home(), decided, **persona_limits())
+        except (tag_personas.PersonaError, OSError) as exc:
+            persona_proposals.transition(proposal_id, {"approved"}, "refused", note=str(exc)[:300])
+            close(decided, f"Approved by <@{user_id}>, but it can't be added now: {exc}. Nothing changed.")
+            return
+        persona_proposals.transition(proposal_id, {"approved"}, "created")
+        close(decided, f"Approved by <@{user_id}>. {done}")
+
     @app.action(TAG_CREATE_APPROVE_ACTION_ID)
     @app.action(TAG_CREATE_REJECT_ACTION_ID)
     @app.action(TAG_CREATE_CHECK_ACTION_ID)
@@ -5233,7 +5335,9 @@ def create_app(
             and handoff_depth == 0 and not direct_message
             else None
         )
-        persona_file = tag_temp_dir() / f"persona-{uuid.uuid4().hex}.json" if personas else None
+        # Every request a person makes may hand over or propose; only a persona's own reply may not.
+        persona_file = (tag_temp_dir() / f"persona-{uuid.uuid4().hex}.json"
+                        if handoff_depth == 0 and not bot_request else None)
         approval_identity = (active_persona.message_fields()
                              if active_persona is not None and slack_customize_granted(client) else None)
         persona_home = instance_home()
@@ -5532,6 +5636,9 @@ def create_app(
                                 text=f"{tag_handoff.result_prefix(handoff_id, sender, 'failed')} "
                                 "Tag couldn't complete this request.",
                             )
+                if succeeded and persona_file is not None and active_persona is None:
+                    if persona_proposal := tag_personas.read_proposal(persona_file):
+                        start_persona_proposal(client, logger, team, channel, thread_ts, user_id, persona_proposal)
                 if succeeded and handoff_requests is not None:
                     if request := tag_handoff.read_request(handoff_requests):
                         start_handoff(client, logger, team, channel, thread_ts, user_id, question, request)

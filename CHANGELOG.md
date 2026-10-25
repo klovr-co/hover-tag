@@ -65,6 +65,10 @@ All notable changes to Tag are documented here.
   straight after. Replies show the persona's name and picture once the app has
   the `chat:write.customize` scope; until then they start with its name.
   Persona replies are posted whole rather than streamed for now.
+- When you ask for a new persona or a reusable procedure, the Tag proposes it
+  in your thread: a persona, or a skill (one page of instructions). Nothing
+  changes until you approve the card, within an hour. Skills are added only to
+  the Tag's own folder, never to a folder of yours.
 - No Tag creates new Tags for now. Lead says which existing Tag can help, or
   answers itself ([ADR 0012](docs/adr/0012-tags-as-personas.md)).
 - `tag add --json` accepts `--preset FILE` and first reports the new Tag's ID.
