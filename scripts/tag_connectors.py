@@ -4,7 +4,8 @@ The list lives in ``state/connectors.json`` under the installation root and is
 shared by every Tag, like ChatGPT accounts. It holds connector definitions and
 which Tags may use each one. It never holds tokens or secret values: sign-ins
 stay in each backend's own store, and stdio servers get environment variable
-*names* that the backend reads from Tag's environment.
+*names* that the backend reads from Tag's environment. Each connector is also
+written into both backends' user-level config; see tag_connector_backends.
 """
 from __future__ import annotations
 
@@ -24,10 +25,11 @@ from pathlib import Path
 try:
     from .tag_locks import LifecycleLock, LockBusy
     from .tag_paths import restrict_windows_acl, tag_home
-    from . import tag_instances
+    from . import tag_connector_backends as backends, tag_instances
 except ImportError:
     from tag_locks import LifecycleLock, LockBusy
     from tag_paths import restrict_windows_acl, tag_home
+    import tag_connector_backends as backends
     import tag_instances
 
 SCHEMA_VERSION = 1
@@ -36,7 +38,7 @@ NAME_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9-]|_(?!_)){0,47}")
 ENV_NAME_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}")
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 USAGE = ("tag connector list | show NAME | add NAME (--url URL | --command \"CMD ARGS\") [--env NAME ...] | "
-         "remove NAME | allow NAME TAG... | deny NAME TAG...")
+         "remove NAME | allow NAME TAG... | deny NAME TAG... | sync")
 
 
 class ConnectorError(RuntimeError):
@@ -136,13 +138,15 @@ class Store:
             lock.release()
 
     def list(self) -> list[dict]:
-        return [view(name, entry) for name, entry in sorted(self.read()["connectors"].items())]
+        current = backends.snapshot()
+        return [view(name, entry, backends.states(name, entry, current))
+                for name, entry in sorted(self.read()["connectors"].items())]
 
     def get(self, name: str) -> dict:
         entry = self.read()["connectors"].get(name)
         if entry is None:
             raise ConnectorError(f"No connector named '{name}'. See tag connector list.")
-        return view(name, entry)
+        return view(name, entry, backends.states(name, entry, backends.snapshot()))
 
     def add(self, name: str, *, url: str | None = None, command: list[str] | None = None,
             env: list[str] | None = None) -> dict:
@@ -161,15 +165,32 @@ class Store:
             if name in data["connectors"]:
                 raise ConnectorError(f"A connector named '{name}' already exists. "
                                      f"Remove it first: tag connector remove {name}.")
+            current = backends.snapshot()
+            taken = backends.foreign_names(name, current)
+            if taken:
+                raise ConnectorError(f"{' and '.join(taken)} already {'have' if len(taken) > 1 else 'has'} "
+                                     f"an MCP server named '{name}' that Tag didn't add. "
+                                     "Choose another name for this connector.")
             data["connectors"][name] = entry
-        return view(name, entry)
+            # A backend that can't be written now stays pending; tag connector sync retries it.
+            states = backends.write(name, entry, current)
+        return view(name, entry, states)
 
     def remove(self, name: str) -> dict:
+        """Remove the connector and the backend entries Tag still owns; others are left alone."""
         with self.change() as data:
             entry = data["connectors"].pop(name, None)
             if entry is None:
                 raise ConnectorError(f"No connector named '{name}'. See tag connector list.")
-        return view(name, entry)
+            results = backends.remove(name, entry, backends.snapshot())
+        return view(name, entry, results)
+
+    def sync(self) -> list[dict]:
+        """Write pending backends and report every connector's state."""
+        with self.change() as data:
+            current = backends.snapshot()
+            return [view(name, entry, backends.write(name, entry, current))
+                    for name, entry in sorted(data["connectors"].items())]
 
     def set_allowed(self, name: str, tags: list[str], allowed: bool) -> dict:
         with self.change() as data:
@@ -188,7 +209,7 @@ class Store:
                 if any(row.get("tag") == tag_id for row in entry.get("allowed", []))}
 
 
-def view(name: str, entry: dict) -> dict:
+def view(name: str, entry: dict, backend_states: dict | None = None) -> dict:
     """The public shape of one connector, for --json and Tag.app."""
     row = {"name": name, "transport": entry.get("transport"),
            "allowed_tags": [row["tag"] for row in entry.get("allowed", []) if isinstance(row.get("tag"), str)],
@@ -197,6 +218,8 @@ def view(name: str, entry: dict) -> dict:
         row["url"] = entry.get("url")
     else:
         row.update(command=entry.get("command"), args=entry.get("args", []), env=entry.get("env", []))
+    if backend_states is not None:
+        row["backends"] = backend_states
     return row
 
 
@@ -222,7 +245,8 @@ class _Parser(argparse.ArgumentParser):
 def _parser() -> argparse.ArgumentParser:
     parser = _Parser(prog="tag connector", description="Manage the MCP connectors Tags may use.",
                                      usage=USAGE)
-    parser.add_argument("action", choices=("list", "show", "add", "remove", "allow", "deny"), nargs="?",
+    parser.add_argument("action", choices=("list", "show", "add", "remove", "allow", "deny", "sync"),
+                        nargs="?",
                         default="list")
     parser.add_argument("name", nargs="?")
     parser.add_argument("tags", nargs="*", help="allow, deny: Tag names or nicknames")
@@ -238,18 +262,27 @@ def _print_row(row: dict) -> None:
     target = row.get("url") or shlex.join([row.get("command") or "", *row.get("args", [])])
     tags = ", ".join(row["allowed_tags"]) or "no Tags yet"
     print(f"{row['name']}  {target}  · allowed for {tags}")
+    for backend, found in row.get("backends", {}).items():
+        print(f"  {backend}: {found['state'].replace('_', ' ')}"
+              + (f" ({found['detail']})" if found.get("detail") else ""))
+
+
+def _backend_notes(row: dict, quiet: set[str]) -> str:
+    return "".join(f" {backend}: {found.get('detail') or found['state'].replace('_', ' ')}"
+                   for backend, found in row["backends"].items() if found["state"] not in quiet)
 
 
 def cli(arguments: list[str], *, root: Path | None = None) -> int:
     args = _parser().parse_args(arguments)
     root = (root or tag_home()).expanduser().absolute()
     store = Store(root)
-    if args.action == "list":
+    if args.action in {"list", "sync"}:
         if args.name or args.tags:
-            raise ConnectorError("Use tag connector list without arguments.")
-        rows = store.list()
+            raise ConnectorError(f"Use tag connector {args.action} without arguments.")
+        rows = store.list() if args.action == "list" else store.sync()
         if args.json_output:
-            print(json.dumps({"schema_version": SCHEMA_VERSION, "connectors": rows}, indent=2))
+            result = {"schema_version": SCHEMA_VERSION, "connectors": rows}
+            print(json.dumps({**result, "ok": True} if args.action == "sync" else result, indent=2))
         elif not rows:
             print("No connectors yet. Add one: tag connector add NAME --url URL")
         else:
@@ -274,10 +307,10 @@ def cli(arguments: list[str], *, root: Path | None = None) -> int:
             raise ConnectorError("--command needs a program to run.")
         row = store.add(args.name, url=args.url, command=command, env=args.env)
         message = (f"Added {args.name}. No Tag can use it yet; "
-                   f"allow one with tag connector allow {args.name} TAG.")
+                   f"allow one with tag connector allow {args.name} TAG." + _backend_notes(row, {"written"}))
     elif args.action == "remove":
         row = store.remove(args.name)
-        message = f"Removed {args.name}."
+        message = f"Removed {args.name}." + _backend_notes(row, {"removed", "pending", "unsupported", "name_in_use"})
     else:
         tags = resolve_tags(root, args.tags)
         row = store.set_allowed(args.name, tags, args.action == "allow")
@@ -291,8 +324,7 @@ def cli(arguments: list[str], *, root: Path | None = None) -> int:
     else:
         if message:
             print(message)
-        if args.action != "remove":
-            _print_row(row)
+        _print_row(row)
     return 0
 
 

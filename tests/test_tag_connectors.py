@@ -17,7 +17,13 @@ class ConnectorStoreTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        env = patch.dict(os.environ, {"TAG_HOME": str(self.root)})
+        # No backend CLIs on PATH and temp configs, so the real ~/.claude* and ~/.codex stay untouched.
+        for name in ("bin", "home", "claude", "codex"):
+            (self.root / name).mkdir()
+        env = patch.dict(os.environ, {"TAG_HOME": str(self.root), "PATH": str(self.root / "bin"),
+                                      "HOME": str(self.root / "home"),
+                                      "CLAUDE_CONFIG_DIR": str(self.root / "claude"),
+                                      "CODEX_HOME": str(self.root / "codex")})
         env.start()
         self.addCleanup(env.stop)
         self.store = connectors.Store(self.root)
@@ -30,6 +36,8 @@ class ConnectorStoreTests(unittest.TestCase):
 
     def test_new_connector_is_allowed_for_no_tag(self):
         row = self.run_cli("add", "linear", "--url", "https://mcp.linear.app/mcp")["connector"]
+        self.assertEqual({backend: found["state"] for backend, found in row.pop("backends").items()},
+                         {"claude": "pending", "codex": "pending"})
         self.assertEqual(row, {"name": "linear", "transport": "http", "url": "https://mcp.linear.app/mcp",
                                "allowed_tags": [], "added_at": row["added_at"]})
         self.assertEqual(self.store.allowed_for("default"), set())
