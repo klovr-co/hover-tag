@@ -427,11 +427,8 @@ _SECRET_PATTERNS = (
 )
 
 
-def redact_sensitive_text(
-    value: str, *, limit: int = MAX_DIAGNOSTIC_CHARS,
-    preserve_whitespace: bool = False,
-) -> str:
-    """Redact common credentials before a value can enter a local/public report."""
+def redact_secrets(value: str) -> str:
+    """Replace common credentials, keeping the text's layout (for Markdown transcripts)."""
     redacted = str(value)
     for name in ("OPENTAG_CODEX_API_KEY", "OPENTAG_CLAUDE_API_KEY"):
         secret = os.getenv(name, "")
@@ -439,6 +436,15 @@ def redact_sensitive_text(
             redacted = redacted.replace(secret, "<redacted>")
     for pattern in _SECRET_PATTERNS:
         redacted = pattern.sub(lambda match: (match.group(1) if match.lastindex else "") + "<redacted>", redacted)
+    return redacted
+
+
+def redact_sensitive_text(
+    value: str, *, limit: int = MAX_DIAGNOSTIC_CHARS,
+    preserve_whitespace: bool = False,
+) -> str:
+    """Redact common credentials before a value can enter a local/public report."""
+    redacted = redact_secrets(value)
     if preserve_whitespace:
         redacted = redacted.replace("\r\n", "\n").replace("\r", "\n")
         redacted = re.sub(r"[\t ]{2,}", " ", redacted).strip()

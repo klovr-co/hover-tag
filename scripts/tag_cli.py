@@ -71,6 +71,7 @@ CAPABILITIES = (
     "autostart", "autostart-keep", "logs-json", "upgrade-json", "install-progress",
     "ai-connections", "shared-ai-connections", "thinking-level", "logs-activity", "activity-details", "setup-v2", "abandon-setup", "remove-tag",
     "describe", "telemetry-events", "start-progress", "api-connections", "saved-models", "permission-rules", "routines",
+    "threads-json", "thread-json", "thread-reply", "thread-prompts",
 )
 UPDATE_CHECK_INTERVAL_SECONDS = 24 * 60 * 60
 COMMANDS = tuple(sorted(tag_instances.RESERVED_NAMES))
@@ -2017,6 +2018,19 @@ def _routine_command(installation_root: Path, tag_id: str, arguments: list[str])
                                channels=_channels(values, context.home), tag_running=slack_ready)
 
 
+def _thread_command(installation_root: Path, tag_id: str, command: str, arguments: list[str]) -> int:
+    """tag [TAG] threads … and tag [TAG] thread CHANNEL THREAD_TS …: the Tag's conversations."""
+    try:
+        import tag_thread_cli
+    except ImportError:
+        from scripts import tag_thread_cli
+    context = tag_instances.resolve(installation_root, tag_id)
+    path = context.home / "config/settings.json"
+    values = read_config(path) if path.is_file() else {}
+    return tag_thread_cli.run(context.home, context.tag_id, command, arguments, values=values,
+                              channels=_channels(values, context.home), tag_running=slack_ready)
+
+
 def _abandon_command(context: tag_instances.InstanceContext, args) -> int:
     """Set aside a Tag whose setup never reached Slack. It is moved, never deleted."""
     import shutil
@@ -2563,6 +2577,13 @@ def _run_cli() -> int:
         if tag_id == tag_instances.DEFAULT_TAG:
             tag_id = tag_instances.select_unnamed(root)
         return _routine_command(root, tag_id, raw_arguments[1:])
+    if raw_arguments[:1] in (["threads"], ["thread"]):
+        root = tag_home()
+        if explicit_tag:
+            tag_id = tag_instances.resolve_reference(root, tag_id)
+        if tag_id == tag_instances.DEFAULT_TAG:
+            tag_id = tag_instances.select_unnamed(root)
+        return _thread_command(root, tag_id, raw_arguments[0], raw_arguments[1:])
     args = parser.parse_args(raw_arguments)
     if args.activity and (args.command != "logs" or args.follow):
         parser.error("--activity requires logs and cannot be combined with --follow")

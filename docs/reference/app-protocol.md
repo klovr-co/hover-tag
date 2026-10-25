@@ -24,6 +24,10 @@ it shows is listed in `capabilities`; otherwise it offers to upgrade Tag.
 | `rename` | `tag NAME rename "Name" --json` |
 | `describe` | `tag NAME describe "Description" --json`: changes the Slack app's one-line description and verifies Slack saved it; `""` clears it |
 | `routines` | `tag NAME routine list\|show\|runs\|add\|edit\|pause\|resume\|remove\|run-now --json`; see [Routines](#routines) |
+| `threads-json` | `tag NAME threads --json [--channel C] [--limit N]`, `tag NAME threads retention [DAYS] --json`; see [Threads](#threads) |
+| `thread-json` | `tag NAME thread CHANNEL THREAD_TS --json`: one conversation |
+| `thread-reply` | `tag NAME thread CHANNEL THREAD_TS reply --text TEXT\|- --json [--post-to-slack]` |
+| `thread-prompts` | `prompts` in `thread`, and `tag NAME thread CHANNEL THREAD_TS answer PROMPT CHOICE --json` |
 | `abandon-setup` | `tag NAME abandon --json`: moves a Tag that never reached Slack to `abandoned/` under the installation root; refuses a Tag that has a Slack app, a bot token, or a running bridge |
 | `remove-tag` | `tag NAME remove --json [--delete-app --confirm-app APP_ID]`: stops the Tag and moves its files to `abandoned/`. The Slack app is kept unless `--delete-app` is given with its exact App ID in `--confirm-app` |
 | `workspace-lifecycle` | `tag start\|stop\|restart --workspace TEAM --json` |
@@ -597,6 +601,99 @@ saved and requested channels. Switching to a channel whose newest release is
 older than the installed one saves the channel and keeps the installed
 release (`status` `channel-updated`) until that channel catches up.
 
+## Threads
+
+Each Slack thread a Tag works in is one conversation. While it works, the Tag
+appends the thread's transcript to
+`state/threads/<channel>-<thread_ts>.jsonl` in its home: people's Slack
+messages, its full Markdown answers, each step's public label and status, the
+files it made, the memory entries it changed, and the questions it asked with
+who answered them. Text is redacted like Activity. Raw tool output, prompts,
+and reasoning are never stored. A thread is deleted `retention_days` after its
+last entry (90 unless the owner changes it with `tag NAME threads retention DAYS`).
+
+| Command | Output |
+| --- | --- |
+| `tag NAME threads --json [--channel C] [--limit N]` | `retention_days`, `has_more`, and `threads`, newest first (default 50, at most 500). A thread waiting on its owner is always included, whatever the limit; see `threads.json` |
+| `tag NAME thread CHANNEL THREAD_TS --json` | `thread`: a row's fields plus `items`, `files`, `memory`, and `prompts`; see `thread.json`. A thread that isn't on this computer fails with `code` `not_found`; see `thread-not-found.json` |
+| `tag NAME thread CHANNEL THREAD_TS reply --text TEXT\|- --json [--post-to-slack]` | `request_id`, `queued`, `post_to_slack`; see `thread-reply.json` |
+| `tag NAME thread CHANNEL THREAD_TS answer PROMPT CHOICE --json` | `request_id`, `queued`; see `thread-answer.json` |
+| `tag NAME threads retention [DAYS] --json` | `retention_days` |
+
+Listing and reading work whether or not the Tag runs, and never change a file.
+`reply` and `answer` hand the request to the running Tag, which records it in
+the transcript within a few seconds; they fail with `code` `not_running` when
+the Tag is stopped, and with `inside_run` when a Tag's own run calls them. A
+request the Tag finds more than ten minutes old is dropped with a `notice`.
+
+Each row has `channel`, `thread_ts`, `team`, `channel_name` (null in a DM),
+`dm`, `source` (`slack`), `title` (the first question), `status`, `people`,
+`message_count`, `file_count`, `memory_count`, `pending_prompts`,
+`last_answer_preview`, `started_at`, `updated_at`, `link` (the thread's
+`hover-tag://tag/<id>/thread/<channel>/<ts>` link), and `preview_only`.
+`status` is `needs_you` (a question waits for the owner), `working`, `failed`,
+`stopped` (the Tag stopped during the run), or `done`. Threads from before
+transcripts existed come from Activity with `preview_only: true`: one `work`
+item and a short `answer` preview per run, and no messages. When a transcript
+starts in a thread that already has Activity runs, those runs come first as
+previews.
+
+`items` are in the order they happened:
+
+- `message`: `author` (`id`, `name`, and `bot` or `self` when true), `text`
+  as Markdown, `ts`, `via` (`slack` or `app`), and `posted_to_slack` for a reply
+  from Tag.app.
+- `work`: one run's steps folded together: `run_id`, `status` (`running`,
+  `completed`, `failed`, `interrupted`), `steps` (`id`, `label`, `status`),
+  `step_count`, `started_at`, `finished_at`, `duration_seconds`, `requester`,
+  and `via`.
+- `answer`: the Tag's full Markdown `text`, `run_id`, `outcome` (`completed`,
+  `failed`, `stopped`), `posted_to` (`slack`, or `app` for a reply that stayed
+  in Tag.app), and the run's `files` (`name`, `kind`, `delivery`, and `url` or `local_path`
+  when known) and `memory`
+  changes (`action` `saved`/`changed`/`forgot`, `scope`, `key`, `version`,
+  `summary`).
+- `prompt`: a question for the owner; see below.
+- `notice`: a short line from Tag, such as a reply that arrived while it was stopped.
+
+### Questions that wait for the owner
+
+A `prompt` has `prompt_id`, `kind`, `text`, `choices` (`id`, `label`, and
+`primary` or `style` `primary`/`danger`), `requester`, `status` (`pending`,
+`answered`, `expired`), `answer` (`choice`, `label`, `by`, `via` `slack` or
+`app`, `at`), and optionally `expires_at`, `url` (for a sign-in), and
+`run_id`. Tag opens these kinds:
+
+- `approval`: the agent needs approval for a risky action. Its choices are
+  `approve` and `deny`, or numbered choices.
+- `queue_steer`: someone writes while the Tag is still working in the thread.
+  Choices `queue` and `steer`; it expires with the Slack offer.
+- `run_request`: a teammate asks the Tag to run work that needs the owner's
+  yes, with the choices the Slack message offers.
+- `sign_in`: the Tag needs the owner to sign in. The client opens `url`; the
+  prompt closes when the sign-in completes.
+
+Each prompt is also sent privately in Slack. Answering in either place closes
+both: Tag records `prompt_closed` once, and the Slack message is updated or
+followed by a private note. While any prompt is `pending` the thread's status is
+`needs_you`, and a client should show a notification. Clients show unknown
+kinds with their choices, and answer them with `answer`; the Tag replies with a
+`notice` when a kind can only be answered in Slack.
+
+Other components open prompts with `tag_threads.ThreadStore.open_prompt` and
+let Tag.app answer them with `slack_socket_agent.register_prompt_handler(kind,
+handler)`; the handler raises `tag_threads.PromptExpired` when the question has
+stopped waiting.
+
+### Replies from Tag.app
+
+A reply from Tag.app goes to the Tag as the owner's next message in the thread.
+By default it stays in Tag.app: the Tag answers in the transcript, posts
+nothing in the Slack thread, and updates the thread's Slack card with the new
+result when the workspace has one. Approvals and other private prompts still
+reach the owner in Slack. With `--post-to-slack`, the reply is posted in the
+Slack thread with the owner's name, and the Tag answers there as usual.
+
 ## Routines
 
 A routine runs a saved prompt on a schedule and posts the result in one of the
@@ -638,4 +735,3 @@ its steps with `tag NAME logs --activity RUN --json` using `activity.run_id`
 `error_reference` names a failure's entry in the error report and the logs. Activity rows from `tag NAME logs --json` carry `trigger` with
 `type: "routine"`, `routine_id`, `name`, and `trigger` when a routine started
 the run.
-
