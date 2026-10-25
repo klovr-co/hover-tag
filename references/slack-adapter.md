@@ -227,6 +227,12 @@ addressed to Tag. A chime-in is a short comment in the thread, a 🎉 reaction o
 nothing; it offers no actions. Every post is a paid classifier call, so cost
 grows with the channel's traffic.
 
+**Cost per channel.** Tag counts every classifier call per channel, with its
+input tokens and a spend estimate at the provider's list price. A failed call
+counts at its estimated size. See them with `tag config watching` (add `--json`
+for scripts) or on the Home tab, under the channel pickers. The provider's
+dashboard has the billed amount.
+
 - Jev answers it as a `noul` question with true and false criteria about a
   structured state.
 - Decisions answers it as a `predicate`, with the same criteria in the

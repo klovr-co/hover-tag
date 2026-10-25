@@ -3463,7 +3463,23 @@ def watch_home_blocks() -> list[dict[str, Any]]:
         {"type": "context", "elements": [{"type": "mrkdwn", "text":
             "Needs a classifier key: see `tag config keys`. Quiet hours, a daily limit and a "
             "cooldown after 👎 apply. Anyone can turn it off with “Don't do this here”."}]},
+        *watch_usage_blocks(modes),
     ]
+
+
+def watch_usage_blocks(modes: dict[str, str]) -> list[dict[str, Any]]:
+    """Classifier calls and estimated spend per watched channel; nothing when there's no data."""
+    try:
+        usage = channel_watch.read_usage(instance_home() / "state/channel-watch.json",
+                                         today=date.today().isoformat())
+    except Exception:  # noqa: BLE001 - the Home tab still renders without counts
+        return []
+    lines = [f"<#{channel}> ({modes.get(channel, 'off')}): {channel_watch.usage_line(item)}"
+             for channel, item in sorted(usage.items()) if channel in modes or item["calls"]]
+    if not lines:
+        return []
+    return [{"type": "context", "elements": [{"type": "mrkdwn", "text":
+        "*Classifier use, estimated at list prices*\n" + "\n".join(lines[:20])}]}]
 
 
 def app_home_view(
@@ -5546,6 +5562,20 @@ def create_app(
                   "provider": classifier.provider, "threshold": classifier.threshold, "state": state}
         if chime:
             record["chime_threshold"] = classifier.chime_threshold
+
+        def count_call(input_tokens: int | None) -> None:
+            # A failed call may still be billed, so it counts at its estimate.
+            estimated = input_tokens is None
+            if estimated:
+                input_tokens = watch_classifier.estimated_input_tokens(
+                    classifier.provider, state, addressed=addressed, chime_in=chime)
+            try:
+                watching().record_usage(channel, input_tokens=input_tokens, estimated=estimated,
+                                        usd=watch_classifier.estimated_usd(classifier.provider, input_tokens),
+                                        today=date.today().isoformat())
+            except Exception as exc:  # noqa: BLE001 - counting never blocks a reply
+                logger.warning("Could not count a watching call: %s", type(exc).__name__)
+
         try:
             decision = watch_classifier.evaluate(
                 state, provider=classifier.provider, api_key=classifier.api_key,
@@ -5553,9 +5583,11 @@ def create_app(
                 addressed=addressed, chime_in=chime, chime_threshold=classifier.chime_threshold,
             )
         except Exception as exc:  # noqa: BLE001 - routing failures must fail closed
+            count_call(None)
             watch_scores().score(**record, outcome=f"classifier {type(exc).__name__}")
             logger.warning("Watching classifier failed closed (%s): %s", classifier.provider, type(exc).__name__)
             return
+        count_call(decision.input_tokens)
         record.update(model=decision.model, probability=decision.tag_is_addressed)
         if chime:
             record["chime_probability"] = decision.invites_reactions

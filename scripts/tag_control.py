@@ -227,6 +227,21 @@ def config_command(home: Path, words: list[str], *, json_output: bool, stdin: bo
     elif action == "keys" and len(words) == 1:
         result = {"schema_version": 1, "tag": tag_id, "editable": sorted(settings.EDITABLE),
                   "secret_input": "Use tag config set KEY --stdin; values are never returned"}
+    elif action == "watching" and len(words) == 1:
+        try:
+            import channel_watch
+        except ImportError:
+            from scripts import channel_watch
+        from datetime import date
+        values = settings.load_config(path)
+        modes = channel_watch.channel_modes(values)
+        usage = channel_watch.read_usage(home / "state/channel-watch.json", today=date.today().isoformat())
+        result = {"schema_version": 1, "tag": tag_id,
+                  "classifier": values.get("OPENTAG_WATCH_CLASSIFIER") or settings.DEFAULTS["OPENTAG_WATCH_CLASSIFIER"],
+                  "channels": [{"channel": channel, "mode": modes.get(channel, "off"), **usage.get(channel, {
+                      "calls": 0, "input_tokens": 0, "usd": 0.0, "since": "", "today_calls": 0, "today_usd": 0.0,
+                      "estimated_calls": 0})} for channel in sorted(set(modes) | set(usage))],
+                  "note": "Spend is estimated from list prices; the provider's dashboard has the billed amount."}
     elif action == "show" and len(words) <= 1:
         values = settings.load_config(path)
         result = {"schema_version": 1, "tag": tag_id, "path": str(path), "settings": settings.public_config(values),
@@ -242,7 +257,8 @@ def config_command(home: Path, words: list[str], *, json_output: bool, stdin: bo
                   "note": "Changes apply on next start. If running, use "
                           f"{tag_command(tag_id, 'stop')} then {tag_command(tag_id, 'start')}."}
     else:
-        raise ValueError("Use tag config init, tag config show, tag config keys, or tag config set KEY VALUE (secrets: --stdin)")
+        raise ValueError("Use tag config init, tag config show, tag config keys, tag config watching, "
+                         "or tag config set KEY VALUE (secrets: --stdin)")
     if not json_output:
         try:
             identity = settings.load_config(path)
@@ -264,6 +280,13 @@ def config_command(home: Path, words: list[str], *, json_output: bool, stdin: bo
     elif action == "init":
         ui.display.header("Config", target_detail(identity, tag_id, suffix="Existing values are preserved"))
         ui.display.completion("Defaults saved", result["note"], next_label="Inspect configuration", next_command=result["next_command"])
+    elif action == "watching":
+        ui.display.header("Watching", target_detail(identity, tag_id, suffix=f"Classifier: {result['classifier']}"))
+        if not result["channels"]:
+            ui.message("No channels are watched. Set OPENTAG_WATCH_CHANNEL_MODES or use Tag's Home tab.")
+        for item in result["channels"]:
+            ui.display.info_row(f"{item['channel']} ({item['mode']})", channel_watch.usage_line(item))
+        ui.message(result["note"])
     elif action == "keys":
         ui.display.header("Config keys", target_detail(identity, tag_id))
         ui.display.section("Editable")

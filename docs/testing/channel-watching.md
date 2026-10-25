@@ -32,6 +32,9 @@ These notes go with the experimental channel-watching change, which supersedes #
   cover older installs, retries and repeated runs.
 - **Tuning.** Every score is logged privately. Feedback becomes labels, and `scripts/watch_eval.py` recommends a
   threshold only after 200 or more labelled messages.
+- **Cost per channel.** Classifier calls, input tokens and estimated spend per channel, in total and today, are
+  kept in the watch state. `tag config watching [--json]` and the Home tab show them. Tag.app shows them in a
+  follow-up.
 - **Eval runs.** `watch_eval.py plan|score --question tag_is_addressed|invites_reactions` scores either question.
   Paid runs make at most 4 calls at once (`--workers`). Before each call they reserve its cost, the larger of its
   estimate and the largest call so far, and stop dispatching when spent plus reserved would pass `--max-usd`.

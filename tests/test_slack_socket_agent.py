@@ -3314,6 +3314,25 @@ class SlackChannelWatchTests(unittest.TestCase):
         self.assertEqual(("reply", "chime-in", 0.97, None),
                          (entry["outcome"], entry["trigger"], entry["chime_probability"], entry["probability"]))
 
+    def test_each_classifier_call_is_counted_for_its_channel(self) -> None:
+        self.decision = slack_socket_agent.watch_classifier.ClassifierDecision(
+            True, 0.96, "jev-1.13.0", "typesafe-jev", input_tokens=2_000)
+        from contextlib import ExitStack
+        self.deliver(self.event())
+        with ExitStack() as stack:
+            fake_app = self.app(stack)
+            self.evaluate.side_effect = slack_socket_agent.watch_classifier.ClassifierError("timeout")
+            fake_app.events["message"](self.event(ts="2.000"), {"team_id": "T123"}, self.client, MagicMock())
+        usage = self.state.data["usage"]["C123"]
+        self.assertEqual(2, usage["calls"])
+        self.assertEqual(1, usage["estimated_calls"])  # The failed call counts at its estimate.
+        self.assertGreater(usage["input_tokens"], 2_000)
+        self.assertAlmostEqual(usage["input_tokens"] * 0.042 / 1e6, usage["usd"], places=8)
+        with patch.object(slack_socket_agent, "instance_home", return_value=self.home), \
+                patch.dict(os.environ, self.environment, clear=True):
+            view = slack_socket_agent.app_home_view("C123,C456")
+        self.assertIn("2 classifier calls", json.dumps(view))
+
     def test_chime_in_and_addressed_share_one_call_and_addressed_wins(self) -> None:
         self.chime_channel(slack_socket_agent.watch_classifier.ClassifierDecision(
             True, 0.96, "jev-1.13.0", "typesafe-jev", invites_reactions=0.99, should_chime=True))

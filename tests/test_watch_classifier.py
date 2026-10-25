@@ -240,7 +240,7 @@ class TypeSafeJevTests(unittest.TestCase):
             )
 
         self.assertEqual(
-            watch_classifier.ClassifierDecision(False, 0.82, "jev-1.13.0", "typesafe-jev"), decision
+            watch_classifier.ClassifierDecision(False, 0.82, "jev-1.13.0", "typesafe-jev", input_tokens=812), decision
         )
         request = urlopen.call_args.args[0]
         self.assertEqual("https://api.typesafe.ai/v1/systemone", request.full_url)

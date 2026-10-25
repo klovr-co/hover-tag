@@ -119,6 +119,8 @@ class ClassifierDecision:
     # Set only when the chime-in question was asked.
     invites_reactions: float | None = None
     should_chime: bool = False
+    # Reported by the provider when it reports usage.
+    input_tokens: int | None = None
 
 
 @dataclass(frozen=True)
@@ -448,7 +450,25 @@ def evaluate(
         provider=provider,
         invites_reactions=chime_p,
         should_chime=chime_p is not None and chime_p >= chime_threshold,
+        input_tokens=answer.input_tokens,
     )
+
+
+CHARS_PER_TOKEN = 4
+
+
+def estimated_input_tokens(provider: str, state: dict[str, Any], *, addressed: bool = True,
+                           chime_in: bool = False) -> int:
+    """A rough input-token count for one call, from the request body's length."""
+    spec = PROVIDERS[provider]
+    questions = tuple(q for q, asked in ((ADDRESSED, addressed), (CHIME_IN, chime_in)) if asked)
+    body = json.dumps(spec.payload(state, spec.default_model, questions), ensure_ascii=False)
+    return -(-len(body) // CHARS_PER_TOKEN)
+
+
+def estimated_usd(provider: str, input_tokens: int) -> float:
+    """List-price estimate; output is free for both providers."""
+    return input_tokens * PROVIDERS[provider].usd_per_million_input / 1_000_000
 
 
 @dataclass(frozen=True)

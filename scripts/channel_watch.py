@@ -99,6 +99,36 @@ CHIME_INSTRUCTIONS = (
 )
 
 
+def read_usage(path: Path, *, today: str) -> dict[str, dict[str, Any]]:
+    """Per-channel classifier calls and estimated spend, read without changing the state file."""
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    usage = value.get("usage") if isinstance(value, dict) and value.get("version") == 1 else None
+    if not isinstance(usage, dict):
+        return {}
+    result = {}
+    for channel, item in usage.items():
+        if not isinstance(item, dict):
+            continue
+        fresh = item.get("day") == today
+        result[channel] = {
+            "calls": int(item.get("calls", 0)), "input_tokens": int(item.get("input_tokens", 0)),
+            "usd": float(item.get("usd", 0.0)), "since": str(item.get("since", "")),
+            "today_calls": int(item.get("day_calls", 0)) if fresh else 0,
+            "today_usd": float(item.get("day_usd", 0.0)) if fresh else 0.0,
+            "estimated_calls": int(item.get("estimated_calls", 0)),
+        }
+    return result
+
+
+def usage_line(item: Mapping[str, Any]) -> str:
+    calls = f"{item['calls']:,} classifier call{'' if item['calls'] == 1 else 's'}"
+    return (f"{calls}, ~${item['usd']:.6f} since {item['since'] or 'the start'}; "
+            f"today {item['today_calls']:,}, ~${item['today_usd']:.6f}")
+
+
 def channel_modes(environment: Mapping[str, str] = os.environ) -> dict[str, str]:
     """Each watched channel's mode; a channel that isn't listed is off.
 
@@ -217,7 +247,7 @@ class WatchState:
             value = {}
         self.data: dict[str, Any] = value if isinstance(value, dict) and value.get("version") == 1 else {}
         self.data.setdefault("version", 1)
-        for name in ("threads", "replies", "channels"):
+        for name in ("threads", "replies", "channels", "usage"):
             if not isinstance(self.data.get(name), dict):
                 self.data[name] = {}
 
@@ -233,6 +263,22 @@ class WatchState:
 
     def _channel(self, channel: str) -> dict[str, Any]:
         return self.data["channels"].setdefault(channel, {})
+
+    def record_usage(self, channel: str, *, input_tokens: int, usd: float, today: str,
+                     estimated: bool = False) -> None:
+        """Count one classifier call for this channel, in total and for today."""
+        with self.lock:
+            usage = self.data["usage"].setdefault(channel, {"since": today})
+            if usage.get("day") != today:
+                usage.update(day=today, day_calls=0, day_usd=0.0)
+            usage["calls"] = usage.get("calls", 0) + 1
+            usage["input_tokens"] = usage.get("input_tokens", 0) + input_tokens
+            usage["usd"] = round(usage.get("usd", 0.0) + usd, 8)
+            usage["day_calls"] += 1
+            usage["day_usd"] = round(usage["day_usd"] + usd, 8)
+            if estimated:
+                usage["estimated_calls"] = usage.get("estimated_calls", 0) + 1
+            self._save()
 
     def engage(self, channel: str, thread_ts: str) -> None:
         """A person engaged Tag explicitly in this thread: an @mention, Take this on, or 👍.

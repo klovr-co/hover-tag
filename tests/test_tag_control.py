@@ -44,6 +44,30 @@ class TagControlTests(unittest.TestCase):
             "Edit settings interactively", "tag personal settings"
         )
 
+    def test_config_watching_lists_modes_and_estimated_spend_per_channel(self):
+        import json
+        from datetime import date
+        from scripts import channel_watch
+        self.complete()
+        tag_config.update_config(self.path, {"OPENTAG_WATCH_CHANNEL_MODES": "C1=chimes-in,C2=when-addressed"})
+        state = channel_watch.WatchState(self.home / "state/channel-watch.json")
+        today = date.today().isoformat()
+        state.record_usage("C1", input_tokens=1000, usd=0.0001, today=today)
+        state.record_usage("C1", input_tokens=500, usd=0.00005, today=today, estimated=True)
+        state.record_usage("C9", input_tokens=10, usd=0.000001, today="2026-01-01")
+        with redirect_stdout(StringIO()) as output:
+            tag_control.config_command(self.home, ["watching"], json_output=True, stdin=False)
+        result = json.loads(output.getvalue())
+        rows = {row["channel"]: row for row in result["channels"]}
+        self.assertEqual(("chimes-in", 2, 1500, 1), (rows["C1"]["mode"], rows["C1"]["calls"],
+                                                      rows["C1"]["input_tokens"], rows["C1"]["estimated_calls"]))
+        self.assertAlmostEqual(0.00015, rows["C1"]["today_usd"])
+        self.assertEqual(("when-addressed", 0), (rows["C2"]["mode"], rows["C2"]["calls"]))
+        self.assertEqual(("off", 1, 0), (rows["C9"]["mode"], rows["C9"]["calls"], rows["C9"]["today_calls"]))
+        with redirect_stdout(StringIO()) as output:
+            tag_control.config_command(self.home, ["watching"], json_output=False, stdin=False)
+        self.assertIn("2 classifier calls, ~$0.000150", output.getvalue())
+
     def test_settings_model_cancel_preserves_configuration(self):
         self.complete()
         before = tag_config.read_config(self.path)
