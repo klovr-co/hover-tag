@@ -118,7 +118,7 @@ def skills(places: knowledge.Places) -> list[dict[str, Any]]:
             target = skill / "SKILL.md"
             if skill.name.startswith(".") or not target.is_file():
                 continue
-            text = knowledge.read_text(target) or ""
+            text = knowledge.read_file(target) or ""
             rows.append({"path": f"skills/{label}/{skill.name}/SKILL.md", "kind": "skill", "name": skill.name,
                          "backend": label, "summary": skill_description(text), "size": len(text)})
     return rows
@@ -161,7 +161,7 @@ def parse_path(name: str) -> tuple[str, str | None, str | None]:
 def read(places: knowledge.Places, name: str, channel_rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     kind, scope, key = parse_path(name)
     path = knowledge.disk_path(places, name)
-    raw = knowledge.read_text(path)
+    raw = knowledge.read_file(path)
     if raw is None:
         if kind == "core":
             raw = ""  # An empty core.md is a place to add the first entry.
@@ -235,7 +235,7 @@ def edit(places: knowledge.Places, name: str, body: str, base: str, via: str) ->
     change = knowledge.Change(action="edited", summary="", by=OPERATOR, via=via, at=when)
     try:
         with knowledge.memory_lock(places.memory):
-            raw = knowledge.read_text(path)
+            raw = knowledge.read_file(path)
             if kind == "skill" and raw is None:
                 raise knowledge.KnowledgeError("not_found", f"There is no {name}.")
             if file_version(raw if raw is not None else "") != base:
@@ -442,7 +442,7 @@ def undo(places: knowledge.Places, ident: str, via: str) -> str:
                                    for k in keys]
                 files.update(knowledge.scope_files(places, scope, now, {"entries": entries, "forgotten": forgotten}, change))
             for name in skill_names:
-                current = knowledge.read_text(knowledge.disk_path(places, name))
+                current = knowledge.read_file(knowledge.disk_path(places, name))
                 if current != new.get(name):
                     raise conflict
                 if old.get(name) is None:
