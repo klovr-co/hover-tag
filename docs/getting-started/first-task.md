@@ -37,7 +37,7 @@ through your first Tag.
    [GitHub releases](https://github.com/klovr-co/hover-tag/releases), and open
    it.
 2. Choose **Install Tag**. Installation takes a few minutes and needs about
-   650 MB. It needs no administrator password.
+   1.8 GB. It needs no administrator password.
 3. Choose **Set up your first Tag**.
 
 ### Name your Tag

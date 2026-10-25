@@ -29,16 +29,18 @@ from typing import Any
 
 try:
     import agent_models
+    import agent_permissions
+    import model_catalog
     import setup_ui as ui
     import tag_api
     import tag_chatgpt
     import tag_config as settings
     from opentag_process_env import without_telemetry_environment
-    from tag_paths import default_workspace
+    from tag_paths import default_workspace, owns_workspace
 except ImportError:
-    from scripts import agent_models, setup_ui as ui, tag_api, tag_chatgpt, tag_config as settings
+    from scripts import agent_models, agent_permissions, model_catalog, setup_ui as ui, tag_api, tag_chatgpt, tag_config as settings
     from scripts.opentag_process_env import without_telemetry_environment
-    from scripts.tag_paths import default_workspace
+    from scripts.tag_paths import default_workspace, owns_workspace
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -150,13 +152,13 @@ def _codex_connection(home: Path, executable: str, version: str | None) -> dict[
                            actions=("sign_in",), method="codex", **common)
     if result.returncode == 0:
         text = (result.stdout + result.stderr).lower()
-        account = "API key" if "api key" in text else "ChatGPT sign-in" if "chatgpt" in text else "Signed in"
+        account = "API key" if "api key" in text else "Codex sign-in on this Mac" if "chatgpt" in text else "Signed in"
         return _connection(backend, "connected", method="codex", account=account,
                            actions=("change_account",), **common)
     codex_home = Path(os.getenv("CODEX_HOME", str(Path.home() / ".codex"))).expanduser()
     if (codex_home / "auth.json").is_file():
         return _connection(backend, "expired", method="codex", detail="Sign in to Codex again.",
-                           actions=("reconnect",), **common)
+                           actions=("reconnect", "change_account"), **common)
     return _connection(backend, "signed_out", method="codex", actions=("sign_in",), **common)
 
 
@@ -284,7 +286,19 @@ def report(home: Path, values: dict[str, str], *, tag_id: str, running: bool) ->
         choice["available"] = False
     return {"schema_version": 1, "tag": tag_id, "running": running, "connections": found,
             "usable": ready, "default_model": choice, **thinking(home, values),
+            "permissions": permissions_report(home, values),
             "checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+
+
+def workdir(home: Path, values: dict[str, str]) -> Path:
+    """The Tag's folder, where the agents run and Claude saves this Tag's approvals."""
+    return Path(values.get("OPENTAG_WORKDIR") or default_workspace(home)).expanduser()
+
+
+def permissions_report(home: Path, values: dict[str, str]) -> dict[str, Any]:
+    """The Tag's permission settings and rules, and whether it works in its own folder."""
+    folder = workdir(home, values)
+    return agent_permissions.report(values, folder, own_folder=owns_workspace(folder, home))
 
 
 @contextmanager
@@ -308,39 +322,83 @@ def tag_environment(home: Path, values: dict[str, str]):
                 os.environ[key] = value
 
 
-def models(home: Path, values: dict[str, str], ready: list[str] | None = None) -> dict[str, Any]:
-    """Each usable backend's live catalog, grouped by backend, and whether the default is offered.
+def models(home: Path, values: dict[str, str], ready: list[str] | None = None, *,
+           refresh: bool = False, expect: str | None = None) -> dict[str, Any]:
+    """Each usable backend's catalog, grouped by backend, and whether the default is offered.
 
     Every group starts with the account's own default (the bare backend), which
-    is what a Tag without a chosen model uses.
+    is what a Tag without a chosen model uses. An account's saved catalog is
+    used when there is one (``cached_at`` says when it was read); the others
+    are read live, all at once, and saved. A saved catalog older than a day is
+    read again in the background. ``refresh`` reads every catalog live now.
+    A saved catalog without ``expect``, by default the Tag's chosen model, is
+    read live again before that model is called unavailable.
     """
     if ready is None:
         ready = usable(connections(home), values)
+    names = [backend for backend in allowed(values) if backend in ready]
+    default_backend = values.get("OPENTAG_BACKEND") or "codex"
+    choice = default_choice(home, values)
+    choice["chosen"] = bool(values.get("OPENTAG_DEFAULT_MODEL"))
+    expect = expect or (choice["value"] if choice["chosen"] else None)
+    with tag_environment(home, values):
+        found = _discover(names, live=names if refresh else ())
+        if expect:
+            backend = agent_models.parse_model_choice(expect, default_backend)[0]
+            options, source = found.get(backend, ([], None))
+            if source and source.cached and agent_models.choice_key(expect, default_backend) not in {
+                    backend, *(option.value for option in options)}:
+                found.update(_discover([backend], live=[backend]))
+        # Old saved catalogs are offered now and read again for next time.
+        if old := [name for name, (_, source) in found.items() if source and source.stale]:
+            model_catalog.refresh_in_background(old)
     groups: list[dict[str, Any]] = []
     discovered: list[agent_models.ModelOption] = []
-    with tag_environment(home, values):
-        for name in [backend for backend in allowed(values) if backend in ready]:
-            options = agent_models.discover_models(name)
-            discovered.extend(options)
-            # The account's own default model decides what the bare backend offers.
-            account = next((option for option in options if option.is_default), None)
-            entries = [{"value": name, "model": None, "label": "Account default", "default": False,
-                        **_levels(account)}]
-            # Claude's placeholder for an unreported catalog is that same account default.
-            entries += [{"value": option.value, "model": option.model_id, "label": option.label,
-                         "default": option.is_default, **_levels(option)}
-                        for option in options if option.model_id != "default"]
-            groups.append({"backend": name, "name": agent_models.backend_display_name(name), "models": entries})
+    for name in names:
+        options, source = found[name]
+        discovered.extend(options)
+        # The account's own default model decides what the bare backend offers.
+        account = next((option for option in options if option.is_default), None)
+        entries = [{"value": name, "model": None, "label": "Account default", "default": False,
+                    **_levels(account)}]
+        # Claude's placeholder for an unreported catalog is that same account default.
+        entries += [{"value": option.value, "model": option.model_id, "label": option.label,
+                     "default": option.is_default, **_levels(option)}
+                    for option in options if option.model_id != "default"]
+        fetched_at = source.fetched_at.isoformat(timespec="seconds") if source and source.fetched_at else None
+        groups.append({"backend": name, "name": agent_models.backend_display_name(name), "models": entries,
+                       "cached": bool(source and source.cached), "fetched_at": fetched_at})
     if settings.config_path(home).is_file():
         agent_models.remember_model_names(discovered, agent_models.model_names_path(home), account_defaults=True)
     offered = {entry["value"] for group in groups for entry in group["models"]}
-    choice = default_choice(home, values)
     choice["available"] = choice["value"] in offered
-    choice["chosen"] = bool(values.get("OPENTAG_DEFAULT_MODEL"))
     unavailable = [{"backend": backend.key, "name": backend.name, "reason": "not_connected"}
                    for backend in BACKENDS if backend.key not in ready]
+    cached = [group["fetched_at"] for group in groups if group["cached"]]
     return {"schema_version": 1, "groups": groups, "default": choice, "unavailable": unavailable,
-            "suggested": suggested_default(groups, choice)}
+            "suggested": suggested_default(groups, choice),
+            "cached": bool(cached), "cached_at": min(cached) if cached else None,
+            # Backends whose live read failed, so their saved catalog was kept.
+            "refresh_failed": [name for name in names if found[name][1] and found[name][1].failed]}
+
+
+def refresh_models(home: Path, values: dict[str, str], ready: list[str] | None = None) -> dict[str, Any]:
+    """Read every connected account's catalog live and save it for the next ``models``.
+
+    ``models`` already refreshes old catalogs in the background; this is for
+    someone who knows the list changed (see ``model_catalog.MAX_AGE_SECONDS``).
+    """
+    return models(home, values, ready, refresh=True)
+
+
+def _discover(names: list[str], *, live=()) -> dict[str, tuple[list[agent_models.ModelOption], Any]]:
+    """Each backend's models and the catalog source they came from (None for a Tag's own API), at once."""
+    def one(name: str):
+        source = model_catalog.Source(name, live=name in live) if model_catalog.cacheable(name) else None
+        return agent_models.discover_models(name, source), source
+
+    with ThreadPoolExecutor(max_workers=max(1, len(names))) as pool:
+        return dict(zip(names, pool.map(one, names)))
 
 
 def _levels(option: agent_models.ModelOption | None) -> dict[str, Any]:
@@ -416,7 +474,8 @@ def save_default_model(home: Path, value: str, *, ready: list[str] | None = None
     if model:
         names = agent_models.load_model_names(agent_models.model_names_path(home))
         if value not in names:
-            offered = {entry["value"] for group in models(home, values, ready)["groups"] for entry in group["models"]}
+            catalog = models(home, values, ready, expect=value)
+            offered = {entry["value"] for group in catalog["groups"] for entry in group["models"]}
             if value not in offered:
                 raise ValueError(f"{model} isn't available from your connected {name} account. Pick another model.")
     changes = {"OPENTAG_DEFAULT_MODEL": value}
@@ -448,6 +507,68 @@ def save_default_effort(home: Path, effort: str, *, values: dict[str, str] | Non
         _check_effort(level, offered_efforts(home, values, value, ready), default_choice(home, values)["label"])
     saved = settings.update_config(path, {"OPENTAG_DEFAULT_EFFORT": level})
     return agent_models.effective_effort(home, saved)
+
+
+def save_permissions(home: Path, assignments: list[str]) -> dict[str, Any]:
+    """Save some of the Tag's Codex and Claude permission settings, e.g. ``codex-sandbox=read-only``."""
+    saved = settings.update_config(settings.config_path(home), agent_permissions.changes(assignments))
+    return permissions_report(home, saved)
+
+
+RULE_ACTIONS = ("allow", "block", "remove")
+
+
+def change_rule(home: Path | None, action: str, backend: str, value: str) -> dict[str, Any]:
+    """Allow, block, or remove one rule for a Tag, or for all Tags when `home` is None.
+    Your own Codex and Claude Code rules stay as they are. The next request uses the
+    change, with no restart. Returns the Tag's permissions, or the rules for all Tags."""
+    values = settings.load_config(settings.config_path(home)) if home is not None else {}
+    folder = workdir(home, values) if home is not None else None
+    if folder is not None and backend == "codex" and not owns_workspace(folder, home):
+        raise ValueError(f"This Tag works in a folder of yours ({folder}). Tag keeps Codex rules only in a Tag's "
+                         "own folder, since they would also change your own Codex there.")
+    if action == "remove":
+        agent_permissions.remove_rule(backend, folder, value)
+    else:
+        agent_permissions.add_rule(backend, folder, action, value)
+    return permissions_report(home, values) if home is not None else agent_permissions.rules()
+
+
+def _label(name: str, value: str) -> str:
+    """The app's word for a value, or the value itself, marked, when Tag doesn't know it."""
+    return next((label for option, label, _ in agent_permissions.SETTINGS[name][1] if option == value),
+                f"{value} (not valid)")
+
+
+def permissions_text(result: dict[str, Any]) -> list[str]:
+    """``Codex · Workspace write · approval policy: default · Auto review`` and ``Claude · Auto``,
+    then a line for each saved value Tag won't run with."""
+    codex, claude = result["codex"], result["claude"]
+    approvals = codex["approvals"]
+    asks = f"approval policy: {_label('codex-approvals', approvals).lower()}"
+    if approvals != "never":
+        asks += f" · {_label('codex-reviewer', codex['reviewer'])}"
+    return [f"Codex · {_label('codex-sandbox', codex['sandbox'])} · {asks}" + _rules_text(codex),
+            f"Claude · {_label('claude-mode', claude['mode'])}" + _rules_text(claude),
+            *(f"Fix {name}: {error}" for name, error in result.get("errors", {}).items())]
+
+
+SCOPE_WORDS = {"tag": "for this Tag", "folder": "in its folder", "all_tags": "for all Tags", "personal": "your own"}
+
+
+def _rules_text(agent: dict[str, Any]) -> str:
+    """`` · rules: 2 for this Tag · 1 for all Tags`` when the report has rules."""
+    found = agent.get("rules", {})
+    parts = [f"{'unreadable' if found[scope] is None else len(found[scope])} {SCOPE_WORDS[scope]}"
+             for scope in agent_permissions.SCOPES if scope in found and found[scope] != []]
+    return " · rules: " + " · ".join(parts) if parts else ""
+
+
+def rule_lines(rules: dict[str, Any]) -> list[str]:
+    """Each rule, as ``claude · for this Tag · block · Bash(git push:*)``."""
+    return [f"{backend} · {SCOPE_WORDS[scope]} · {rule['decision']} · {rule['value']}"
+            for backend in ("codex", "claude") for scope in agent_permissions.SCOPES
+            for rule in rules[backend].get(scope) or []]
 
 
 # ---- Sign-in ------------------------------------------------------------------
@@ -566,6 +687,7 @@ def sign_in(home: Path, backend_key: str, *, method: str | None = None, account:
         _browser_login([executable, *backend.login_command], "claude", emit=emit,
                        cancelled=cancelled, timeout=timeout)
     _progress(emit, backend.key, "verifying")
+    model_catalog.forget(backend.key)  # Another account's models are wrong, not just old.
     result = connection(home, backend.key)
     if result["state"] != "connected":
         raise SignInError(f"Sign-in finished, but {backend.name} still isn't ready: "
@@ -660,7 +782,11 @@ def _print_progress(event: dict[str, Any]) -> None:
 
 
 def _choose_model(home: Path, values: dict[str, str], found: list[dict[str, Any]], ready: list[str]) -> tuple[str, str]:
-    """Choose model and effort together; legacy clients can still choose just a model."""
+    """Choose model and effort together; legacy clients can still choose just a model.
+
+    The accounts' saved catalogs make this immediate; only an account without
+    one is read now.
+    """
     ui.message("Loading models from your accounts…")
     catalog = models(home, values, ready)
     entries = [(entry["value"], f"{group['name']} · {entry['label']}")
@@ -679,7 +805,8 @@ def _choose_model(home: Path, values: dict[str, str], found: list[dict[str, Any]
         answer = ui.ask_client("choose", "Default model", qid="default_model", options=labels,
                                default=default, option_ids=ids, groups=catalog["groups"],
                                connections=found, tag_name=values.get("OPENTAG_BOT_NAME") or "Tag",
-                               supports_effort=True, default_effort=effort or None)
+                               supports_effort=True, default_effort=effort or None,
+                               cached_at=catalog["cached_at"])
         if isinstance(answer, dict):
             effort = answer.get("effort", "default")
             if not isinstance(effort, str):
@@ -714,8 +841,10 @@ def _choose_model(home: Path, values: dict[str, str], found: list[dict[str, Any]
 
 USAGE = ("tag settings ai connections | sign-in codex|claude [--method chatgpt|codex] "
          "[--account ID] | resume [--restart] [--json]; "
-         "tag [TAG] settings ai status | models | model VALUE [--effort LEVEL|default] | "
-         "effort LEVEL|default [--restart] [--json]; " + tag_api.USAGE)
+         "tag [TAG] settings ai status | models [--refresh] | model VALUE [--effort LEVEL|default] | "
+         "effort LEVEL|default | permissions [codex-sandbox=V] [codex-approvals=V] [codex-reviewer=V] "
+         "[claude-mode=V] [--restart] [--json] | permissions allow|block|remove codex|claude RULE [--json]; "
+         "tag settings ai rules [allow|block|remove codex|claude RULE] [--json]; " + tag_api.USAGE)
 
 
 @dataclass
@@ -736,7 +865,7 @@ def _restart_note(target: Target) -> str:
 
 def cli(arguments: list[str], target: Target, *, json_output: bool = False, restart: bool = False,
         method: str | None = None, account: str | None = None, effort: str | None = None,
-        api: dict[str, Any] | None = None) -> int:
+        api: dict[str, Any] | None = None, refresh: bool = False) -> int:
     action = arguments[0] if arguments else "status"
     if action == "api":
         if not target.tag_id:
@@ -745,6 +874,8 @@ def cli(arguments: list[str], target: Target, *, json_output: bool = False, rest
     values = settings.load_config(settings.config_path(target.home))
     if effort is not None and action != "model":
         raise ValueError("--effort is only for tag settings ai model VALUE")
+    if refresh and action != "models":
+        raise ValueError("--refresh is only for tag settings ai models")
     if action == "connections" and len(arguments) == 1:
         found = connections(target.home)
         result = {"schema_version": 1, "connections": found,
@@ -773,11 +904,13 @@ def cli(arguments: list[str], target: Target, *, json_output: bool = False, rest
         choice = result["default_model"]
         ui.message(f"Default model · {choice['backend_name']} · {choice['label']}")
         ui.message(thinking_text(target.home, values))
+        for line in permissions_text(result["permissions"]):
+            ui.message(line)
         if not result["usable"]:
             ui.message("No AI is connected. Run tag settings ai sign-in codex or claude.")
         return 0 if result["usable"] else 1
     if action == "models" and len(arguments) == 1:
-        result = models(target.home, values)
+        result = refresh_models(target.home, values) if refresh else models(target.home, values)
         if json_output:
             print(json.dumps(result, indent=2))
         else:
@@ -803,7 +936,7 @@ def cli(arguments: list[str], target: Target, *, json_output: bool = False, rest
         else:
             ui.message(f"✓ Default model · {choice['backend_name']} · {choice['label']}")
             ui.message(thinking_text(target.home, saved))
-            ui.message("People who picked their own model in Slack keep it.")
+            ui.message("Every Slack request to this Tag uses it.")
             ui.message(f"{target.name} restarted." if restarted else _restart_note(target))
         return 0
     if action == "effort" and len(arguments) == 2:
@@ -816,7 +949,60 @@ def cli(arguments: list[str], target: Target, *, json_output: bool = False, rest
             print(json.dumps(result, indent=2))
         else:
             ui.message("✓ " + thinking_text(target.home, settings.load_config(settings.config_path(target.home))))
-            ui.message("People who picked their own thinking level in Slack keep it.")
+            ui.message("Every Slack request to this Tag uses it.")
+            ui.message(f"{target.name} restarted." if restarted else _restart_note(target))
+        return 0
+    if action == "permissions" and len(arguments) == 1:
+        result = {"schema_version": 1, **permissions_report(target.home, values)}
+        if json_output:
+            print(json.dumps(result, indent=2))
+        else:
+            for line in permissions_text(result):
+                ui.message(line)
+            for name, (_, options, _) in agent_permissions.SETTINGS.items():
+                ui.message(f"  {name}: " + ", ".join(option[0] for option in options))
+            for line in rule_lines({b: result[b].get("rules", {}) for b in ("codex", "claude")}):
+                ui.message("  " + line)
+        return 0
+    if action == "rules" and len(arguments) in (1, 4) and (len(arguments) == 1 or arguments[1] in RULE_ACTIONS):
+        if target.tag_id:
+            raise ValueError("Rules for all Tags are shared. Use tag settings ai rules, or tag NAME settings ai permissions for one Tag.")
+        if len(arguments) == 1:
+            found = agent_permissions.rules()
+        else:
+            _, verb, backend, rule = arguments
+            found = change_rule(None, verb, backend, rule)
+        result = {"schema_version": 1, "ok": True, "scope": "installation", "rules": found}
+        if json_output:
+            print(json.dumps(result, indent=2))
+        elif len(arguments) == 1:
+            ui.display.header("Rules for all Tags", "Each Tag's own rules add to these")
+            for line in rule_lines(found) or ["No rules yet. Add one with tag settings ai rules block codex 'git push'."]:
+                ui.message(line)
+        else:
+            done = {"allow": "Allowed", "block": "Blocked", "remove": "Removed"}[verb]
+            ui.message(f"✓ {done} {rule} for every Tag's {BY_KEY[backend].name}. It applies from each Tag's next request.")
+        return 0
+    if action == "permissions" and len(arguments) == 4 and arguments[1] in RULE_ACTIONS:
+        _, verb, backend, rule = arguments
+        result = {"schema_version": 1, "ok": True, "permissions": change_rule(target.home, verb, backend, rule)}
+        if json_output:
+            print(json.dumps(result, indent=2))
+        else:
+            done = {"allow": "Allowed", "block": "Blocked", "remove": "Removed"}[verb]
+            ui.message(f"✓ {done} {rule} for {target.name}'s {BY_KEY[backend].name}. It applies from the next request.")
+        return 0
+    if action == "permissions":
+        saved = save_permissions(target.home, arguments[1:])
+        running = target.running()
+        restarted = bool(restart and running and target.restart("restart") == 0)
+        result = {"schema_version": 1, "ok": True, "permissions": saved,
+                  "restart_required": running and not restarted, "restarted": restarted}
+        if json_output:
+            print(json.dumps(result, indent=2))
+        else:
+            for line in permissions_text(saved):
+                ui.message("✓ " + line)
             ui.message(f"{target.name} restarted." if restarted else _restart_note(target))
         return 0
     if action in {"sign-in", "resume"} and len(arguments) == (2 if action == "sign-in" else 1):
@@ -907,7 +1093,10 @@ def settings_menu(target: Target) -> None:
         ui.message(f"Default model · {choice['backend_name']} · {choice['label']}"
                    + ("" if choice["available"] is not False else " · not available"))
         ui.message(thinking_text(target.home, values))
-        options = [("model", "Change default model"), ("effort", "Change thinking level")]
+        for line in permissions_text(result["permissions"]):
+            ui.message(line)
+        options = [("model", "Change default model"), ("effort", "Change thinking level"),
+                   ("permissions", "Change permissions")]
         ui.message("Manage shared accounts with tag settings ai connections or tag settings ai sign-in codex|claude --restart.")
         options += [("check", "Check connections"), ("back", "Back")]
         selected = options[ui.choose("AI & models", [label for _, label in options])][0]
@@ -934,11 +1123,15 @@ def settings_menu(target: Target) -> None:
             saved = save_default_model(target.home, ids[picked], ready=result["usable"], values=values)
             ui.message(f"✓ Default model · {saved['backend_name']} · {saved['label']}")
             ui.message(thinking_text(target.home, settings.load_config(settings.config_path(target.home))))
-            ui.message("People who picked their own model in Slack keep it.")
+            ui.message("Every Slack request to this Tag uses it.")
             _offer_restart(target)
             continue
         if selected == "effort":
             if _choose_effort(target, values, choice, result["usable"]):
+                _offer_restart(target)
+            continue
+        if selected == "permissions":
+            if _choose_permissions(target):
                 _offer_restart(target)
             continue
 
@@ -969,8 +1162,77 @@ def _choose_effort(target: Target, values: dict[str, str], choice: dict[str, Any
         ui.message(str(exc))
         return False
     ui.message("✓ " + thinking_text(target.home, settings.load_config(settings.config_path(target.home))))
-    ui.message("People who picked their own thinking level in Slack keep it.")
+    ui.message("Every Slack request to this Tag uses it.")
     return True
+
+
+def _choose_permissions(target: Target) -> bool:
+    """Change one Codex or Claude permission setting; return whether one was saved."""
+    config = settings.load_config(settings.config_path(target.home))
+    current = permissions_report(target.home, config)
+    titles = {"codex-sandbox": "Codex sandbox", "codex-approvals": "Codex approval policy",
+              "codex-reviewer": "Codex approvals reviewer", "claude-mode": "Claude permission mode"}
+    if current["codex"]["approvals"] == "never":
+        del titles["codex-reviewer"]  # Like Tag.app: with approval policy never, nothing is reviewed.
+    names = list(titles)
+    rule_menus = [("codex", True), ("claude", True), ("codex", False), ("claude", False)]
+    picked = ui.choose("Permissions", [*titles.values(), "Codex rules for this Tag", "Claude rules for this Tag",
+                                       "Codex rules for all Tags", "Claude rules for all Tags", "Cancel"])
+    if picked >= len(names) + len(rule_menus):
+        return False
+    if picked >= len(names):
+        backend, own = rule_menus[picked - len(names)]
+        _choose_rule(target, backend, current[backend]["rules"], own)
+        return False  # Rules apply from the next request; nothing to restart for.
+    name = names[picked]
+    key, options, _ = agent_permissions.SETTINGS[name]
+    now = {"codex-sandbox": current["codex"]["sandbox"], "codex-approvals": current["codex"]["approvals"],
+           "codex-reviewer": current["codex"]["reviewer"], "claude-mode": current["claude"]["mode"]}[name]
+    values = [option[0] for option in options]
+    choice = ui.choose(titles[name], [f"{label} · {detail}" for _, label, detail in options] + ["Cancel"],
+                       default=values.index(now) if now in values else 0)
+    if choice == len(values):
+        return False
+    for line in permissions_text(save_permissions(target.home, [f"{name}={values[choice]}"])):
+        ui.message("✓ " + line)
+    return True
+
+
+def _choose_rule(target: Target, backend: str, found: dict[str, Any], for_tag: bool) -> None:
+    """Add or remove one rule for one agent, for this Tag or for all Tags."""
+    scope = "tag" if for_tag else "all_tags"
+    own = found[scope] or []
+    for rule in own:
+        ui.message(f"  {SCOPE_WORDS[scope]} · {rule['decision']} · {rule['value']}")
+    for other in agent_permissions.SCOPES:
+        if other != scope and found.get(other):
+            count = len(found[other])
+            ui.message(f"  Also follows {count} rule{'' if count == 1 else 's'} {SCOPE_WORDS[other]}.")
+    actions = [("allow", "Allow something"), ("block", "Block something")]
+    actions += [("remove", "Remove a rule")] if own else []
+    picked = ui.choose(f"{BY_KEY[backend].name} rules", [label for _, label in actions] + ["Cancel"])
+    if picked == len(actions):
+        return
+    action = actions[picked][0]
+    if action == "remove":
+        values = [rule["value"] for rule in own]
+        gone = ui.choose("Remove which rule?", [*values, "Cancel"])
+        if gone == len(values):
+            return
+        rule = values[gone]
+    else:
+        example = "git push" if backend == "codex" else "Bash(git push:*)"
+        rule = ui.text(f"{'Command start' if backend == 'codex' else 'Claude rule'}, like {example}").strip()
+        if not rule:
+            return
+    try:
+        change_rule(target.home if for_tag else None, action, backend, rule)
+    except ValueError as exc:
+        ui.message(str(exc))
+        return
+    done = {"allow": "Allowed", "block": "Blocked", "remove": "Removed"}[action]
+    who = target.name if for_tag else "Every Tag"
+    ui.message(f"✓ {done} {rule}. {who} uses it from the next request.")
 
 
 def _offer_restart(target: Target) -> None:

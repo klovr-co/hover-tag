@@ -40,18 +40,19 @@ jobs:
           line=${line%.*}
           git fetch origin "+refs/heads/release/v$line.x:refs/remotes/origin/release/v$line.x" || true
           if git merge-base --is-ancestor "$RELEASE_TAG^{commit}" origin/main; then
-            source_ref=refs/heads/main
+            source_branch=main
           else
             git merge-base --is-ancestor "$RELEASE_TAG^{commit}" "origin/release/v$line.x"
             [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
-            source_ref="refs/heads/release/v$line.x"
+            source_branch="release/v$line.x"
           fi
-          echo "source_ref=$source_ref" >> "$GITHUB_OUTPUT"
+          echo "source_branch=$source_branch" >> "$GITHUB_OUTPUT"
           git checkout --detach "$RELEASE_TAG^{commit}"
       - name: Verify or create release archive
         id: archive
         env:
           GH_TOKEN: ${{ github.token }}
+          SOURCE_BRANCH: ${{ steps.source.outputs.source_branch }}
           TAG_POSTHOG_PROJECT_TOKEN: ${{ secrets.TAG_POSTHOG_PROJECT_TOKEN }}
           TAG_TELEMETRY_RELEASE_APPROVED: ${{ vars.TAG_TELEMETRY_RELEASE_APPROVED }}
         run: |
@@ -80,8 +81,11 @@ jobs:
                 --privacy-notice-url https://github.com/klovr-co/hover-tag/blob/main/docs/reference/telemetry.md
               )
             fi
+            # Installed Tag versions accept only source_ref refs/heads/main.
+            branch_arguments=()
+            if [ "$SOURCE_BRANCH" != main ]; then branch_arguments+=(--source-branch "$SOURCE_BRANCH"); fi
             python scripts/package_release.py --commit-sha "$(git rev-parse HEAD)" \
-              --source-ref "${{ steps.source.outputs.source_ref }}" --version "$version" \
+              --source-ref refs/heads/main "${branch_arguments[@]}" --version "$version" \
               "${telemetry_arguments[@]}"
             gh release upload "$RELEASE_TAG" \
               out/*.zip out/SHA256SUMS out/BUILD-PROVENANCE.json

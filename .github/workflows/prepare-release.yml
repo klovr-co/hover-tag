@@ -84,6 +84,22 @@ jobs:
             --directory candidate --output release --version "$version"
           python scripts/release_automation.py validate-release \
             --directory release --version "$version" --sha "$RELEASE_SHA"
+      - name: Rehearse the upgrade with the previous stable installer
+        run: |
+          # Installed versions verify releases with their own code and cannot be
+          # updated to relax it, so the release must pass that code before publication.
+          version=$(head -n 1 VERSION)
+          previous=$(
+            { git tag --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | grep -vx "v$version"
+              echo "v$version"; } | sort -V | grep -B1 -x "v$version" | head -n 1
+          )
+          if [ "$previous" = "v$version" ]; then
+            echo "No earlier stable release to rehearse against."
+            exit 0
+          fi
+          git worktree add --detach previous-release "$previous"
+          python scripts/rehearse_upgrade.py --previous-checkout previous-release \
+            --directory release --version "$version"
       - name: Create or refresh draft release
         run: |
           version=$(head -n 1 VERSION)

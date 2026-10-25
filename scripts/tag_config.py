@@ -10,11 +10,13 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 try:
+    import agent_permissions
     from agent_models import SUPPORTED_REASONING_EFFORTS
     from mfs_scope_policy import canonical_uri, parse_scopes
     from tag_handoff import parse_peers
     from opentag_process_env import parse_channel_scopes
 except ImportError:
+    from scripts import agent_permissions
     from scripts.agent_models import SUPPORTED_REASONING_EFFORTS
     from scripts.mfs_scope_policy import canonical_uri, parse_scopes
     from scripts.tag_handoff import parse_peers
@@ -27,7 +29,7 @@ DEFAULTS = {
     "OPENTAG_TRANSPORT": "slack", "OPENTAG_TIMEOUT_SECONDS": "420",
     "OPENTAG_MAX_TIMEOUT_SECONDS": "3600",
     "OPENTAG_BACKEND_ATTEMPTS": "3", "OPENTAG_SLACK_STREAMING": "1",
-    "OPENTAG_SLACK_DM_ENABLED": "1",
+    "OPENTAG_SLACK_DM_ENABLED": "1", "OPENTAG_SHOW_THINKING": "1",
     "OPENTAG_FILE_DELIVERY": "local+slack",
     "OPENTAG_THREAD_MAX_CONTEXT_TOKENS": "150000", "OPENTAG_THREAD_IDLE_HOURS": "4",
     "MFS_URL": "http://127.0.0.1:13619", "MFS_SLACK_HISTORY_DAYS": "30",
@@ -47,6 +49,7 @@ PUBLIC = frozenset((*DEFAULTS, "MFS_ALLOWED_SCOPES", "OPENTAG_WORKDIR",
                     "OPENTAG_CODEX_MODELS", "OPENTAG_CODEX_REASONING_EFFORTS",
                     "OPENTAG_CLAUDE_MODELS", "OPENTAG_DEFAULT_MODEL", "OPENTAG_BACKENDS",
                     "OPENTAG_DEFAULT_EFFORT", "OPENTAG_BOT_DESCRIPTION",
+                    "OPENTAG_CODEX_SANDBOX", "OPENTAG_CODEX_APPROVALS", "OPENTAG_CODEX_REVIEWER",
                     "OPENTAG_PEER_TAGS", "SLACK_ALLOWED_BOT_IDS", "MFS_CHANNEL_SCOPES"))
 EDITABLE = PUBLIC - {"OPENTAG_WORKDIR"} | {
     "SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "MFS_TOKEN", "MFS_SLACK_TOKEN", "MFS_HOME"
@@ -59,7 +62,10 @@ LABELS = {
     "OPENTAG_BACKENDS": "Backends users can choose (codex,claude)",
     "OPENTAG_CODEX_TRANSPORT": "Codex transport (exec or app-server)",
     "OPENTAG_CLAUDE_TRANSPORT": "Claude transport (print or sdk)",
-    "OPENTAG_CLAUDE_PERMISSION_MODE": "Claude permission mode",
+    "OPENTAG_CLAUDE_PERMISSION_MODE": "Claude permission mode (default, acceptEdits, auto, dontAsk, or bypassPermissions)",
+    "OPENTAG_CODEX_SANDBOX": "Codex sandbox (read-only, workspace-write, or danger-full-access)",
+    "OPENTAG_CODEX_APPROVALS": "Codex approval policy (untrusted, on-request, or never; empty for Codex's own setting)",
+    "OPENTAG_CODEX_REVIEWER": "Codex approvals reviewer (auto_review or user)",
     "SLACK_APP_TOKEN": "Slack app token", "SLACK_BOT_TOKEN": "Slack bot token",
     "SLACK_ALLOWED_USER_IDS": "Owners", "SLACK_CHANNEL_ID": "Legacy channel restriction",
     "SLACK_CHANNEL_IDS": "Selected channels", "SLACK_TEAM_ID": "Slack workspace",
@@ -75,6 +81,7 @@ LABELS = {
     "MFS_SLACK_CONNECTOR_CONFIG": "Slack history connector config",
     "OPENTAG_BACKEND_ATTEMPTS": "Retry attempts", "OPENTAG_SLACK_STREAMING": "Stream replies (1 on, 0 off)",
     "OPENTAG_SLACK_DM_ENABLED": "Direct messages (1 on, 0 off)",
+    "OPENTAG_SHOW_THINKING": "Show thinking summaries in Agent activity (1 on, 0 off)",
     "OPENTAG_FILE_DELIVERY": "File delivery (local or local+slack)",
     "OPENTAG_TRANSPORT": "Chat service",
     "OPENTAG_PEER_TAGS": "Other Tags this Tag may ask (Name=MEMBERID, comma-separated)",
@@ -193,8 +200,8 @@ def validation_error(key: str, value: str) -> str | None:
         return "Choose exec or app-server"
     if key == "OPENTAG_CLAUDE_TRANSPORT" and value not in {"print", "sdk"}:
         return "Choose print or sdk"
-    if key == "OPENTAG_CLAUDE_PERMISSION_MODE" and value not in {"auto", "acceptEdits", "default", "dontAsk", "bypassPermissions"}:
-        return "Choose auto, acceptEdits, default, dontAsk, or bypassPermissions"
+    if key in agent_permissions.KEYS and (error := agent_permissions.validation_error(key, value)):
+        return error
     if key == "OPENTAG_FILE_DELIVERY" and value not in {"local", "local+slack"}:
         return "Choose local or local+slack"
     if key == "OPENTAG_PEER_TAGS" and value.strip():
@@ -214,7 +221,7 @@ def validation_error(key: str, value: str) -> str | None:
         return "Use a slack:// connector URI"
     if key == "MFS_SLACK_CONNECTOR_CONFIG" and value and not Path(value).is_absolute():
         return "Use an absolute connector configuration path"
-    if key in {"OPENTAG_SLACK_STREAMING", "OPENTAG_SLACK_DM_ENABLED"} and value not in {"0", "1"}:
+    if key in {"OPENTAG_SLACK_STREAMING", "OPENTAG_SLACK_DM_ENABLED", "OPENTAG_SHOW_THINKING"} and value not in {"0", "1"}:
         return "Use 0 or 1"
     if key == "SLACK_CHANNEL_POLICY" and value not in {"selected", "invited"}:
         return "Choose selected or invited"

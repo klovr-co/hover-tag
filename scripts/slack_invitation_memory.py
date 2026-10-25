@@ -38,6 +38,7 @@ class InvitationMemory:
         self.environment = os.environ if environment is None else environment
         self.stop_event = threading.Event()
         self.ready_event = threading.Event()
+        self.wake_event = threading.Event()
         self.thread = None
         self.last_sync = 0.0
         self.last_signature = None
@@ -84,9 +85,11 @@ class InvitationMemory:
             # Remove lost membership from live access before any index operation.
             self.restrict(unrelated + scopes, ids)
             if not channels:
-                self.ready_event.clear()
+                # Ready with no channels: the empty allowlist admits none, DMs work, and
+                # the first invitation is confirmed live. A new Tag starts and waits for it.
                 self.last_signature = None
                 self.status("no_joined_channels")
+                self.ready_event.set()
                 return  # Never send an empty connector allowlist to MFS.
             signature = (tuple(sorted(scopes)), values.get("MFS_SLACK_HISTORY_DAYS", "30"),
                          values.get("MFS_SLACK_TOKEN"), values.get("MFS_URL"), values.get("MFS_TOKEN"))
@@ -167,9 +170,15 @@ class InvitationMemory:
                 except Exception:
                     self.ready_event.clear()
                     self.restrict([])
-                self.stop_event.wait(60)
+                # Poll every minute, but check at once when Slack reports an invite.
+                self.wake_event.wait(60)
+                self.wake_event.clear()
         self.thread = threading.Thread(target=work, name="tag-invitation-memory", daemon=True)
         self.thread.start()
+
+    def refresh(self) -> None:
+        """Check membership now instead of waiting for the next minute."""
+        self.wake_event.set()
 
     def ready_for_requests(self) -> bool:
         """Return whether current invitation policy permits serving Slack requests."""
@@ -177,3 +186,4 @@ class InvitationMemory:
 
     def stop(self) -> None:
         self.stop_event.set()
+        self.wake_event.set()

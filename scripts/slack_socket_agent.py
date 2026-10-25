@@ -68,6 +68,7 @@ try:
     from .tag_activity_details import sanitize_activity_details
     from .tag_approval_choices import sanitize_review_details
     from .tag_activity_labels import activity_title_for_status, readable_activity_title
+    from .agent_activity import THINKING_LABEL, show_thinking
     from .tag_paths import instance_home, tag_temp_dir
     from .record_output_artifact import channel_artifact_directory
     from . import slack_channels
@@ -110,6 +111,7 @@ except ImportError:  # Direct script execution does not create a package context
     from tag_activity_details import sanitize_activity_details
     from tag_approval_choices import sanitize_review_details
     from tag_activity_labels import activity_title_for_status, readable_activity_title
+    from agent_activity import THINKING_LABEL, show_thinking
     from record_output_artifact import channel_artifact_directory
     from tag_paths import instance_home, tag_temp_dir
     import slack_channels
@@ -132,6 +134,9 @@ STREAM_APPEND_CHARS = 200
 STREAM_FLUSH_SECONDS = 0.35
 MAX_STREAM_TASKS = 12
 MAX_STREAM_ACTIVITY_EVENTS = 60
+# Thinking rows in Agent activity; later thinking joins the last row so tools keep their rows.
+MAX_STREAM_THINKING_TASKS = 4
+MAX_STREAM_THINKING_CHARS = 500
 ACTIVITY_DEBOUNCE_SECONDS = 0.25
 ACTIVITY_HOLD_SECONDS = 1.5
 ACTIVITY_WAIT_SECONDS = 12.0
@@ -152,6 +157,8 @@ APPROVAL_APPROVE_ACTION_ID = "opentag_approval_approve"
 APPROVAL_DENY_ACTION_ID = "opentag_approval_deny"
 APPROVAL_CHOICE_ACTION_PREFIX = "opentag_approval_choice_"
 APPROVAL_MORE_ACTION_ID = "opentag_approval_more"
+WAITING_QUEUE_ACTION_ID = "opentag_waiting_queue"
+WAITING_STEER_ACTION_ID = "opentag_waiting_steer"
 REPORT_ISSUE_ACTION_ID = "opentag_report_issue"
 FIX_WITH_AGENT_ACTION_ID = "opentag_fix_with_coding_agent"
 JOIN_COMMUNITY_ACTION_ID = "opentag_join_hover_community"
@@ -610,9 +617,15 @@ def download_thread_images(
 
 
 def download_thread_text_files(
-    messages: list[dict[str, Any]], budget: AttachmentBudget | None = None
+    messages: list[dict[str, Any]],
+    budget: AttachmentBudget | None = None,
+    attachment_dir: Path | None = None,
 ) -> list[str]:
-    """Read Slack snippets and text attachments into the current prompt only."""
+    """Read Slack snippets and text attachments into the current prompt.
+
+    A long file is inlined as a bounded preview; the full copy is saved in
+    ``attachment_dir`` so the backend can read the rest instead of guessing.
+    """
     lines: list[str] = []
     seen_file_ids: set[str] = set()
     token = require_env("SLACK_BOT_TOKEN")
@@ -634,7 +647,15 @@ def download_thread_text_files(
                     budget.record(len(data))
                 text = data.decode("utf-8", errors="replace").strip()
                 if len(text) > MAX_ATTACHMENT_TEXT_CHARS:
-                    text = text[:MAX_ATTACHMENT_TEXT_CHARS] + "\n[Attachment text truncated]"
+                    notice = "[Attachment text truncated]"
+                    if attachment_dir is not None:
+                        target = attachment_dir / stored_attachment_name(file, len(seen_file_ids))
+                        target.write_bytes(data)
+                        notice = (
+                            f"[Attachment text truncated after {MAX_ATTACHMENT_TEXT_CHARS:,} of {len(text):,} characters. "
+                            f"Read the full file at {target}]"
+                        )
+                    text = text[:MAX_ATTACHMENT_TEXT_CHARS] + "\n" + notice
                 if text:
                     lines.append(f"[Slack text attachment: {name}]\n{text}")
                 else:
@@ -952,7 +973,7 @@ def build_thread_texts(
     selected_messages = [{"files": files}]
     file_lines = [
         *oversized_lines,
-        *download_thread_text_files(selected_messages, budget),
+        *download_thread_text_files(selected_messages, budget, attachment_dir),
         *download_thread_images(selected_messages, attachment_dir, budget),
         *download_thread_binary_files(selected_messages, attachment_dir, budget),
     ]
@@ -1439,6 +1460,8 @@ class WorkingIndicator:
         self.wait_labels: dict[str, str] = {}
         self.preparing_answer = False
         self.public_status: str | None = None
+        self.stopping = False
+        self.done = False
         self.last_status: str | None = None
         self.last_status_at = float("-inf")
         self.lock = threading.RLock()
@@ -1487,6 +1510,8 @@ class WorkingIndicator:
 
     def current_status(self) -> str:
         """Return the most useful truthful progress copy for the current work."""
+        if self.stopping:
+            return STOPPING_STATUS
         if self.public_status:
             return self.public_status
         if self.activities:
@@ -1605,6 +1630,18 @@ class WorkingIndicator:
                     self.set_display_status(force=True)
                 except Exception as exc:  # noqa: BLE001 - processing remains active
                     self.logger.warning("Could not update Slack progress: %s", exc)
+
+    def stop_requested(self) -> None:
+        """Show at once that a stop is in progress until the backend exits."""
+        with self.lock:
+            if self.done:
+                return  # The request ended; a late stop must not replace the final reply.
+            self.stopping = True
+            if self.legacy_status or self.message_ts is not None:
+                try:
+                    self.set_display_status(force=True)
+                except Exception as exc:  # noqa: BLE001 - the stop itself continues
+                    self.logger.warning("Could not show the Slack stopping status: %s", exc)
 
     def schedule_activity(self) -> None:
         """Coalesce events and hold the displayed copy briefly; caller holds lock."""
@@ -1728,6 +1765,8 @@ class WorkingIndicator:
 
     def clear(self, *, complete_session: bool = True) -> None:
         with self.lock:
+            if complete_session:
+                self.done = True
             if self.activity_timer is not None:
                 self.activity_timer.cancel()
                 self.activity_timer = None
@@ -1803,6 +1842,7 @@ class SlackAnswerStream:
         self.seen_tasks: set[str] = set()
         self.task_groups: dict[str, dict[str, Any]] = {}
         self.dirty_task_groups: set[str] = set()
+        self.thinking_rows = 0
         self.flush_timer: threading.Timer | None = None
         self.lock = threading.RLock()
 
@@ -1815,8 +1855,10 @@ class SlackAnswerStream:
             return
         if not isinstance(label, str) or label not in PUBLIC_LABELS:
             label = "Using a connected tool…"
-        tool = sanitize_activity_details(event.get("details")).get("tool", "")
-        title = readable_activity_title(tool, label)
+        details = sanitize_activity_details(event.get("details"))
+        thinking = label == THINKING_LABEL
+        tool = "" if thinking else details.get("tool", "")
+        title = "Thinking" if thinking else readable_activity_title(tool, label)
         compound = bool(re.search(r" (?:&&|\|\||\|) ", tool))
         item_id = hashlib.sha256(activity_id.encode("utf-8")).hexdigest()
         starting = event["type"] == "activity_start"
@@ -1831,8 +1873,17 @@ class SlackAnswerStream:
                     return
                 self.seen_tasks.add(item_id)
                 key = f"tool:{label}:{tool or title}"
-                if key not in self.task_groups and len(self.task_groups) >= MAX_STREAM_TASKS - 1:
-                    key = "overflow"
+                if thinking:
+                    key = f"thinking:{min(self.thinking_rows, MAX_STREAM_THINKING_TASKS - 1)}"
+                    self.thinking_rows += 1
+                    if key not in self.task_groups and len(self.task_groups) >= MAX_STREAM_TASKS:
+                        # Thinking never joins the mixed overflow row, where its summary would sit under a tool title.
+                        key = next((k for k in reversed(self.task_groups) if k.startswith("thinking:")), key)
+                elif key not in self.task_groups:
+                    # Until a Thinking row exists, keep a slot free for it so the rows stay within the limit.
+                    reserved = 1 if show_thinking() and not any(k.startswith("thinking:") for k in self.task_groups) else 0
+                    if len(self.task_groups) >= MAX_STREAM_TASKS - 1 - reserved:
+                        key = "overflow"
                 self.tasks[item_id] = key
                 group = self.task_groups.get(key)
                 if group is not None:
@@ -1863,6 +1914,9 @@ class SlackAnswerStream:
                 if tool and tool != "Command" and key != "overflow":
                     group["title"] = title
                     group["compound"] = compound
+                if thinking and details.get("output"):
+                    # Slack appends a task's details on every update, so send each summary once.
+                    group.setdefault("details", []).append(details["output"])
                 # Batch completions with the next start or final answer.
                 self.dirty_task_groups.add(key)
                 return
@@ -1884,6 +1938,9 @@ class SlackAnswerStream:
                         self.on_start()
                 else:
                     self.client.chat_appendStream(channel=self.channel, ts=self.ts, chunks=chunks)
+                for key in self.dirty_task_groups:
+                    if self.task_groups[key].pop("details", None):
+                        self.task_groups[key]["summarized"] = True
                 self.dirty_task_groups.clear()
             except Exception as exc:  # noqa: BLE001 - task UI is optional; answer delivery remains primary
                 self.task_updates_available = False
@@ -1910,7 +1967,20 @@ class SlackAnswerStream:
             status = "error" if final else "in_progress"
         if request_completed:
             status = "complete"
-        return {"type": "task_update", "id": group["id"], "title": title, "status": status}
+        chunk = {"type": "task_update", "id": group["id"], "title": title, "status": status}
+        if group.get("details"):
+            # Keep the newest summaries that fit; an oversized one is cut from its end.
+            kept: list[str] = []
+            for summary in reversed(group["details"]):
+                if len(summary) > MAX_STREAM_THINKING_CHARS:
+                    summary = summary[:MAX_STREAM_THINKING_CHARS - 1].rstrip() + "…"
+                if kept and sum(map(len, kept)) + 2 * len(kept) + len(summary) > MAX_STREAM_THINKING_CHARS:
+                    break
+                kept.insert(0, summary)
+            # Slack joins a task's details with nothing between, so later summaries start a new paragraph.
+            text = ("\n\n" if group.get("summarized") else "") + "\n\n".join(kept)
+            chunk["details"] = html.escape(text, quote=False)
+        return chunk
 
     def append(self, text: str) -> None:
         if not text:
@@ -2079,6 +2149,8 @@ class ActiveBackendRun:
     # The posted prompt, so "More options" can redraw it without trusting Slack.
     pending_approval_prompts: dict[str, dict[str, Any]] = field(default_factory=dict)
     kill_timer: threading.Timer | None = None
+    # Called once when a stop is requested, so Slack can show it before the backend exits.
+    on_stop_requested: Callable[[], None] | None = None
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def cancel(self) -> None:
@@ -2096,7 +2168,12 @@ class ActiveBackendRun:
                 self.kill_timer.daemon = True
                 self.kill_timer.start()
         if should_force_stop:
-            self.force_stop()
+            self.force_stop()  # Kill first; the Slack call below can be slow.
+        if self.on_stop_requested is not None:
+            try:
+                self.on_stop_requested()
+            except Exception:  # noqa: BLE001 - showing the stop must not block it
+                pass
 
     def force_stop(self) -> None:
         if self.process.poll() is not None:
@@ -2187,21 +2264,120 @@ ACTIVE_RUNS_LOCK = threading.Lock()
 
 
 THREAD_BUSY_MESSAGE = "I'm still working on an earlier request in this thread. Mention me again when I finish."
+WAITING_REQUEST_MESSAGE = "I'm still working on an earlier request in this thread."
+STOPPING_REQUEST_MESSAGE = "I'm stopping an earlier request in this thread. I'll answer this right after."
+STOPPING_STATUS = "Stopping…"
+# Seconds a Queue or Steer choice stays available before the request must be sent again.
+WAITING_OFFER_SECONDS = 3600.0
 BUSY_THREADS: set[RunKey] = set()
 
 
-def reserve_thread(key: RunKey) -> bool:
-    """Claim a Slack thread for one request; False while an earlier request still runs."""
+@dataclass
+class WaitingRequest:
+    """A Slack request that arrived while its thread was busy."""
+
+    event: dict[str, Any]
+    body: dict[str, Any]
+    direct_message: bool
+    client: Any
+    logger: Any
+    offered_at: float = field(default_factory=time.monotonic)
+    # Set once the request has reached the thread reservation, which then owns passing the queue on.
+    settled: bool = False
+
+
+# Requests offered Queue or Steer, by offer ID, until the requester chooses.
+WAITING_OFFERS: dict[str, tuple[RunKey, WaitingRequest]] = {}
+# Requests that run, in order, after the thread's current request ends.
+QUEUED_REQUESTS: dict[RunKey, list[WaitingRequest]] = {}
+
+
+def reserve_thread(key: RunKey, queued: WaitingRequest | None = None) -> bool:
+    """Claim a Slack thread for one request; False while an earlier request still runs.
+
+    A queued request that loses the thread to a newer one goes back to the front
+    of the queue, so the request that holds the thread starts it next.
+    """
     with ACTIVE_RUNS_LOCK:
         if key in BUSY_THREADS:
+            if queued is not None:
+                QUEUED_REQUESTS.setdefault(key, []).insert(0, queued)
             return False
         BUSY_THREADS.add(key)
         return True
 
 
-def release_thread(key: RunKey) -> None:
+def _pop_queued_request(key: RunKey) -> WaitingRequest | None:
+    """Remove the next queued request; the caller holds ACTIVE_RUNS_LOCK."""
+    queue = QUEUED_REQUESTS.get(key)
+    if not queue:
+        return None
+    request = queue.pop(0)
+    if not queue:
+        QUEUED_REQUESTS.pop(key, None)
+    return request
+
+
+def release_thread(key: RunKey) -> WaitingRequest | None:
+    """Free a Slack thread and return the queued request that should run next."""
     with ACTIVE_RUNS_LOCK:
         BUSY_THREADS.discard(key)
+        return _pop_queued_request(key)
+
+
+def take_next_if_idle(key: RunKey) -> WaitingRequest | None:
+    """The next queued request, unless a request holds the thread and will start it itself."""
+    with ACTIVE_RUNS_LOCK:
+        return None if key in BUSY_THREADS else _pop_queued_request(key)
+
+
+def offer_waiting_request(key: RunKey, request: WaitingRequest) -> str:
+    offer_id = uuid.uuid4().hex
+    with ACTIVE_RUNS_LOCK:
+        for stale in [i for i, (_, r) in WAITING_OFFERS.items()
+                      if request.offered_at - r.offered_at > WAITING_OFFER_SECONDS]:
+            WAITING_OFFERS.pop(stale, None)
+        WAITING_OFFERS[offer_id] = (key, request)
+    return offer_id
+
+
+def take_waiting_request(offer_id: str) -> tuple[RunKey, WaitingRequest] | None:
+    with ACTIVE_RUNS_LOCK:
+        offer = WAITING_OFFERS.pop(offer_id, None)
+    if offer is None or time.monotonic() - offer[1].offered_at > WAITING_OFFER_SECONDS:
+        return None
+    return offer
+
+
+def queue_waiting_request(key: RunKey, request: WaitingRequest, *, first: bool = False) -> bool:
+    """Queue a request behind the thread's current one; False when the thread is already free."""
+    with ACTIVE_RUNS_LOCK:
+        if key not in BUSY_THREADS:
+            return False
+        queue = QUEUED_REQUESTS.setdefault(key, [])
+        if first:
+            queue.insert(0, request)
+        else:
+            queue.append(request)
+        return True
+
+
+def waiting_request_blocks(offer_id: str, team: str, channel: str, thread_ts: str,
+                           user_id: str) -> list[dict[str, Any]]:
+    value = json.dumps({"offer_id": offer_id, "team": team, "channel": channel,
+                        "thread_ts": thread_ts, "user": user_id}, separators=(",", ":"))
+    return [
+        {"type": "section", "text": {"type": "plain_text", "text":
+            f"{WAITING_REQUEST_MESSAGE}\nWhat should I do with your new message?"}},
+        {"type": "actions", "elements": [
+            {"type": "button", "action_id": WAITING_QUEUE_ACTION_ID, "style": "primary",
+             "text": {"type": "plain_text", "text": "Queue"}, "value": value},
+            {"type": "button", "action_id": WAITING_STEER_ACTION_ID,
+             "text": {"type": "plain_text", "text": "Steer"}, "value": value},
+        ]},
+        {"type": "context", "elements": [{"type": "mrkdwn", "text":
+            "*Queue:* answer after. *Steer:* stop and answer this now."}]},
+    ]
 
 
 def register_active_run(key: RunKey, run: ActiveBackendRun) -> None:
@@ -2228,6 +2404,30 @@ def cancel_active_run(key: RunKey, event_ts: str | None = None) -> bool:
         return False
     run.cancel()
     return True
+
+
+# Seconds between sending a Slack message and Tag receiving it before the delay is logged.
+SLACK_DELIVERY_LAG_SECONDS = 5.0
+
+
+def log_slack_delivery_lag(event: dict[str, Any], kind: str, now: float | None = None) -> float | None:
+    """Log when Slack delivers a message late, so slow replies can be traced to delivery."""
+    try:
+        lag = (time.time() if now is None else now) - float(event.get("ts") or "")
+    except ValueError:
+        return None
+    if lag >= SLACK_DELIVERY_LAG_SECONDS:
+        print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} Slack delivered a {kind} {lag:.0f}s after it was sent "
+              f"(channel {event.get('channel', '?')}, thread {event.get('thread_ts') or event.get('ts')})",
+              flush=True)
+    return lag
+
+
+def thread_stopping(key: RunKey) -> bool:
+    """Return whether the thread's current run was asked to stop and has not exited yet."""
+    with ACTIVE_RUNS_LOCK:
+        run = ACTIVE_RUNS.get(key)
+    return run is not None and run.cancel_requested
 
 
 def pending_approval_prompt(key: RunKey, approval_id: str) -> dict[str, Any] | None:
@@ -2393,6 +2593,7 @@ def run_backend_events(
     on_session: Callable[[str], None] | None = None,
     thread_new_text: str | None = None,
     on_context: Callable[[int], None] | None = None,
+    on_stop_requested: Callable[[], None] | None = None,
 ) -> tuple[str, bool]:
     """Consume normalized lifecycle events and forward only final-answer text."""
     if max_timeout is None:
@@ -2495,7 +2696,8 @@ def run_backend_events(
         approval_dir_context.cleanup()
         raise
     run_key = RunKey(team, channel, thread_ts)
-    active_run = ActiveBackendRun(process, control_file, run_id, approval_dir)
+    active_run = ActiveBackendRun(process, control_file, run_id, approval_dir,
+                                  on_stop_requested=on_stop_requested)
     register_active_run(run_key, active_run)
     timed_out = threading.Event()
 
@@ -3499,7 +3701,10 @@ def create_app(
             raise RuntimeError(f"OPENTAG_PEER_TAGS is invalid: {exc}") from None
     # Other Tags whose bot messages this Tag accepts; everything else from bots is ignored.
     peer_ids = frozenset(peer.user_id for peer in peers)
-    handoff_store = handoff_store or tag_handoff.HandoffStore(instance_home() / "state" / "handoffs")
+    # Live-test automation only: Slack apps whose posts carry their user's identity. Empty by default.
+    test_app_ids = frozenset(app_id.strip() for app_id in os.getenv("OPENTAG_TEST_APP_IDS", "").split(",")
+                             if app_id.strip())
+    handoff_store =handoff_store or tag_handoff.HandoffStore(instance_home() / "state" / "handoffs")
     # A restart can end a combine run before it finishes; the next deadline scan picks it up again.
     handoff_store.requeue_combining()
     handled_peer_requests: set[tuple[str, str]] = set()
@@ -3708,6 +3913,8 @@ def create_app(
         channel = event.get("channel", "")
         thread_ts = event.get("thread_ts", "")
         user_id = event.get("user", "")
+        if isinstance(event.get("event_ts"), str):
+            log_slack_delivery_lag({**event, "ts": event["event_ts"]}, "stop request")
         team = body.get("team_id") or event.get("team_id") or ""
         if not (
             isinstance(channel, str)
@@ -4350,6 +4557,12 @@ def create_app(
                 name=f"tag-handoff-{record['id']}", daemon=True,
             ).start()
 
+    def posted_by_test_app(event: dict[str, Any]) -> bool:
+        """Whether a listed test app posted this as a person, which Slack marks with a bot id."""
+        app_id = event.get("app_id") or (event.get("bot_profile") or {}).get("app_id")
+        user = event.get("user")
+        return bool(event.get("bot_id") and app_id in test_app_ids and user and user not in peer_ids)
+
     def handle_peer_message(event: dict[str, Any], body: dict[str, Any], client: Any, logger: Any) -> None:
         sender = event.get("user", "")
         if sender not in peer_ids:
@@ -4427,9 +4640,12 @@ def create_app(
         peer_request: tuple[str, str] | None = None,
         combine: dict[str, Any] | None = None,
         bot_request: bool = False,
+        queued: WaitingRequest | None = None,
     ) -> None:
         channel = event["channel"]
         thread_ts = event.get("thread_ts") or event["ts"]
+        if queued is None:
+            log_slack_delivery_lag(event, "message")
         # Answering another Tag, combining replies or answering an approved bot never starts another handoff.
         handoff_depth = 1 if peer_request or combine or bot_request else 0
         user_id = event.get("user", "")
@@ -4479,6 +4695,50 @@ def create_app(
         request_backend = agent_settings.backend or backend
         request_started = time.monotonic()
         reported_runs: list[dict[str, str]] = []
+        # Hold the thread until this request ends so two mentions cannot resume one conversation.
+        thread_key = RunKey(team, channel, thread_ts)
+        waiting = queued or (
+            WaitingRequest(event, body, direct_message, client, logger)
+            # A bot cannot choose Queue or Steer, so a busy thread tells it so in the thread.
+            if peer_request is None and combine is None and not bot_request
+            else None
+        )
+        if queued is not None:
+            queued.settled = True
+        if not reserve_thread(thread_key, queued):
+            # The status belongs to the run holding the thread, so leave it alone here.
+            if queued is not None:
+                return  # Back at the front of the queue; the current request starts it next.
+            if waiting is None:
+                client.chat_postMessage(
+                    channel=channel,
+                    thread_ts=thread_ts,
+                    text=THREAD_BUSY_MESSAGE,
+                )
+                return
+            if thread_stopping(thread_key):
+                # Queue or Steer means nothing once a stop is underway; answer right after it.
+                if not queue_waiting_request(thread_key, waiting, first=True):
+                    start_waiting_request(waiting)
+                    return
+                client.chat_postEphemeral(
+                    channel=channel,
+                    user=user_id,
+                    thread_ts=thread_ts,
+                    text=STOPPING_REQUEST_MESSAGE,
+                )
+                return
+            client.chat_postEphemeral(
+                channel=channel,
+                user=user_id,
+                thread_ts=thread_ts,
+                text=WAITING_REQUEST_MESSAGE,
+                blocks=waiting_request_blocks(
+                    offer_waiting_request(thread_key, waiting), team, channel, thread_ts, user_id,
+                ),
+            )
+            return
+
         indicator = WorkingIndicator(
             client,
             channel,
@@ -4488,16 +4748,22 @@ def create_app(
             team=team,
         )
         indicator.start()
-        slack_search_grant = plan_search_scopes(
-            request_text=question,
-            current_channel_id=channel,
-            caller_id=user_id,
-            team_id=policy_team,
-            configured_channels=configured_channels,
-            allowed_scopes=os.getenv("MFS_ALLOWED_SCOPES", ""),
-            client=client,
-            intent=SearchIntent("all"),
-        )
+        try:
+            slack_search_grant = plan_search_scopes(
+                request_text=question,
+                current_channel_id=channel,
+                caller_id=user_id,
+                team_id=policy_team,
+                configured_channels=configured_channels,
+                allowed_scopes=os.getenv("MFS_ALLOWED_SCOPES", ""),
+                client=client,
+                intent=SearchIntent("all"),
+            )
+        except BaseException:
+            indicator.clear()
+            if (next_request := release_thread(thread_key)) is not None:
+                start_waiting_request(next_request)
+            raise
         answer_stream: SlackAnswerStream | None = None
         backend_error_code: str | None = None
         backend_error_events: list[str] = []
@@ -4527,17 +4793,6 @@ def create_app(
                     logger.warning("Could not save the activity model")
 
         session_workdir = str(default_workdir())
-
-        # Hold the thread until this request ends so two mentions cannot resume one conversation.
-        thread_key = RunKey(team, channel, thread_ts)
-        if not reserve_thread(thread_key):
-            indicator.clear()
-            client.chat_postMessage(
-                channel=channel,
-                thread_ts=thread_ts,
-                text=THREAD_BUSY_MESSAGE,
-            )
-            return
 
         continued = thread_sessions.get(team, channel, thread_ts, request_backend,
                                         workdir=session_workdir, requester=user_id)
@@ -4673,6 +4928,7 @@ def create_app(
                         reasoning_effort=agent_settings.reasoning_effort,
                         on_answer_start=indicator.answer_started,
                         on_status=indicator.status,
+                        on_stop_requested=indicator.stop_requested,
                         # No one can answer an approval for a bot, so a bot's request declines them.
                         on_approval=None if bot_request else lambda approval: post_backend_approval(
                             client,
@@ -4983,11 +5239,82 @@ def create_app(
                 bot_request=bot_request,
             )
         finally:
-            release_thread(thread_key)
             output_manifest.unlink(missing_ok=True)
             memory_receipts.unlink(missing_ok=True)
             if handoff_requests is not None:
                 handoff_requests.unlink(missing_ok=True)
+            next_request = release_thread(thread_key)
+            if next_request is not None:
+                start_waiting_request(next_request)
+
+    def run_queued_request(request: WaitingRequest) -> None:
+        """Run a queued request; if it ends before taking the thread, keep the queue moving."""
+        key = RunKey(request.body.get("team_id") or request.event.get("team") or "",
+                     request.event["channel"], request.event.get("thread_ts") or request.event["ts"])
+        try:
+            handle_invocation(request.event, request.body, request.client, request.logger,
+                              direct_message=request.direct_message, queued=request)
+        except Exception:  # noqa: BLE001 - one failed request must not strand those queued behind it
+            request.logger.exception("Could not run the queued Slack request")
+        finally:
+            if not request.settled:
+                following = take_next_if_idle(key)
+                if following is not None:
+                    start_waiting_request(following)
+
+    def start_waiting_request(request: WaitingRequest) -> None:
+        threading.Thread(target=run_queued_request, args=(request,),
+                         name="slack-queued-request", daemon=True).start()
+
+    @app.action(WAITING_QUEUE_ACTION_ID)
+    @app.action(WAITING_STEER_ACTION_ID)
+    def choose_waiting_request(ack: Any, body: dict[str, Any], client: Any, logger: Any,
+                               respond: Any) -> None:
+        ack()
+        user_id = body.get("user", {}).get("id", "")
+        channel = body.get("channel", {}).get("id", "")
+        body_team = body.get("team", {}).get("id", "") or body.get("team_id", "")
+        try:
+            action = body["actions"][0]
+            steer = action.get("action_id") == WAITING_STEER_ACTION_ID
+            metadata = json.loads(action["value"])
+            offer_id = metadata["offer_id"]
+            team = metadata["team"]
+            thread_ts = metadata["thread_ts"]
+            if not all(isinstance(value, str) and value for value in (
+                    offer_id, team, metadata["channel"], thread_ts, metadata["user"])):
+                raise ValueError("invalid waiting request metadata")
+            if (
+                body_team != team
+                or channel != metadata["channel"]
+                or user_id != metadata["user"]
+                or not slack_user_allowed(user_id, allowed_user_ids)
+                or not slack_conversation_allowed(
+                    channel,
+                    direct_message=is_direct_message_channel(channel),
+                )
+            ):
+                return
+            offer = take_waiting_request(offer_id)
+            if offer is None or offer[0] != RunKey(team, channel, thread_ts):
+                respond(text="This choice has expired. Mention me again to send your message.",
+                        response_type="ephemeral", replace_original=True)
+                return
+            key, request = offer
+            if not queue_waiting_request(key, request, first=steer):
+                text = "The earlier request has finished. Starting yours now."
+                start_waiting_request(request)
+            elif steer:
+                # The steering message's time keeps this from stopping a run that began after it.
+                stopped = cancel_active_run(key, request.event.get("ts"))
+                text = ("Stopping the current request. I'll answer yours next."
+                        if stopped else "I'll answer yours as soon as the current request ends.")
+            else:
+                text = "Queued. I'll answer it after the current request."
+            respond(text=text, blocks=[{"type": "section", "text": {"type": "plain_text", "text": text}}],
+                    response_type="ephemeral", replace_original=True)
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            logger.warning("Could not queue or steer the Slack request: %s", exc)
 
     @app.action(RETRY_ACTION_ID)
     def retry_request(ack: Any, body: dict[str, Any], client: Any, logger: Any) -> None:
@@ -5069,7 +5396,10 @@ def create_app(
         ):
             logger.warning("Ignoring Open Tag mention from unapproved Slack channel %s", channel)
             return
-        if event.get("user") not in peer_ids and slack_bot_allowed(event, allowed_bot_ids, own_bot_user_id(body)):
+        if posted_by_test_app(event):
+            # handle_invocation still requires the poster to be an authorized user.
+            event = {key: value for key, value in event.items() if key not in {"bot_id", "bot_profile", "app_id"}}
+        elif event.get("user") not in peer_ids and slack_bot_allowed(event, allowed_bot_ids, own_bot_user_id(body)):
             if not bot_request_valid(event):
                 logger.info("Ignoring a mention from approved bot %s that is not a Hover request",
                             event.get("bot_id") or event.get("user"))
@@ -5077,10 +5407,28 @@ def create_app(
             logger.info("Accepting a mention from approved bot %s", event.get("bot_id") or event.get("user"))
             handle_invocation(event, body, client, logger, direct_message=False, bot_request=True)
             return
-        if event.get("bot_id") or event.get("user") in peer_ids:
+        elif event.get("bot_id") or event.get("user") in peer_ids:
             handle_peer_message(event, body, client, logger)
             return
         handle_invocation(event, body, client, logger, direct_message=False)
+
+    @app.event("member_joined_channel")
+    def handle_member_joined_channel(event: dict[str, Any], body: dict[str, Any], client: Any) -> None:
+        """Pick up a new invitation now rather than at the next membership poll."""
+        refresh = getattr(app, "tag_refresh_invitations", None)
+        if refresh is None:
+            return
+        # Slack sends this for anyone joining a channel Tag is in; only Tag's own
+        # invitation changes what Tag may serve.
+        bot_ids = {a.get("user_id") for a in body.get("authorizations") or [] if isinstance(a, dict)}
+        if not bot_ids:
+            try:
+                bot_ids = {client.auth_test().get("user_id")}
+            except Exception:  # noqa: BLE001 - unknown identity: leave it to the next poll
+                return
+        if event.get("user") not in bot_ids:
+            return
+        refresh()
 
     @app.event("message")
     def handle_direct_message(
@@ -5199,12 +5547,15 @@ def main() -> None:
 
     allowed_user_ids = configured_slack_user_ids()
     session_journal = SlackSessionJournal(slack_session_journal_path())
+    activity_store = ActivityStore()
+    activity_store.publish_now()  # Nothing is running yet, whatever a previous bridge left.
     app = create_app(
         args.backend,
         args.timeout,
         allowed_user_ids,
         max_timeout=args.max_timeout,
         session_journal=session_journal,
+        activity_store=activity_store,
     )
     print_live_summary(args.backend, allowed_user_ids)
     app_token = require_env("SLACK_APP_TOKEN")
@@ -5234,6 +5585,7 @@ def main() -> None:
             from tag_paths import instance_home
         invitation_memory = InvitationMemory(instance_home())
         invitation_memory.start()
+        app.tag_refresh_invitations = invitation_memory.refresh
     next_handoff_check = 0.0
     try:
         connection.connect()

@@ -27,6 +27,8 @@ export function useModelChoice(api: Bridge, tag: string, { onSaved }: { onSaved?
   const [effort, setEffort] = useState<string | null>(null);
   const [save, setSave] = useState<SaveState>("idle");
   const [error, setError] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshError, setRefreshError] = useState("");
   const current = useRef(tag);
   current.current = tag;
 
@@ -51,8 +53,33 @@ export function useModelChoice(api: Bridge, tag: string, { onSaved }: { onSaved?
 
   useEffect(() => {
     setReport(null); setModels(null); setModel(null); setEffort(null); setSave("idle");
+    setRefreshing(false); setRefreshError("");
     void load();
   }, [load]);
+
+  /** Read the accounts' model lists again (`models --refresh`); a failure keeps the list shown now. */
+  const refresh = useCallback(async () => {
+    const id = tag;
+    setRefreshing(true);
+    setRefreshError("");
+    let problem = "";
+    try {
+      const listed = await api.tag(aiArgs(id, "models", "--refresh", "--json"));
+      if (current.current !== id) return;
+      if (listed.code !== 0) problem = "Couldn't refresh the list. Showing the saved one.";
+      else {
+        const next = parseModels(listed.stdout);
+        setModels(next);
+        const failed = (next.refresh_failed ?? []).map((b) => next.groups.find((g) => g.backend === b)?.name ?? b);
+        if (failed.length) problem = `Couldn't refresh ${failed.join(" or ")}. Showing the saved list.`;
+      }
+    } catch {
+      problem = "Couldn't refresh the list. Showing the saved one.";
+    }
+    if (current.current !== id) return;
+    setRefreshError(problem);
+    setRefreshing(false);
+  }, [api, tag]);
 
   const savedModel = report?.default_model.value ?? null;
   const savedEffort = report?.default_effort ?? null;
@@ -97,7 +124,8 @@ export function useModelChoice(api: Bridge, tag: string, { onSaved }: { onSaved?
     }
   };
 
-  return { report, models, value, level, entry, dirty, save, error, pick, pickEffort, discard, commit, reload: load };
+  return { report, models, value, level, entry, dirty, save, error, pick, pickEffort, discard, commit, reload: load,
+    refresh, refreshing, refreshError };
 }
 
 export type ModelChoice = ReturnType<typeof useModelChoice>;

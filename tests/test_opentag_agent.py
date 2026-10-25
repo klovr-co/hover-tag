@@ -119,15 +119,17 @@ class OpenTagAgentPromptTests(unittest.TestCase):
         previous_transport = os.environ.get("OPENTAG_TRANSPORT")
         os.environ["OPENTAG_TRANSPORT"] = "slack"
         try:
-            prompt = opentag_agent.build_prompt(
-                skill_dir=Path("/tmp/open-tag"),
-                workdir=Path("/tmp/workspace"),
-                channel_id="C123",
-                question="Use an installed local tool",
-                thread_text="",
-                attachments_dir=None,
-                allowed_scopes="file://local/tmp/workspace",
-            )
+            # CI interpreter paths are random and can contain "gws" by chance.
+            with patch.object(opentag_agent.sys, "executable", "/usr/bin/python3"):
+                prompt = opentag_agent.build_prompt(
+                    skill_dir=Path("/tmp/open-tag"),
+                    workdir=Path("/tmp/workspace"),
+                    channel_id="C123",
+                    question="Use an installed local tool",
+                    thread_text="",
+                    attachments_dir=None,
+                    allowed_scopes="file://local/tmp/workspace",
+                )
         finally:
             if previous_transport is None:
                 del os.environ["OPENTAG_TRANSPORT"]
@@ -534,13 +536,51 @@ class ChannelArtifactRoutingTests(unittest.TestCase):
                 self.assertIn('workspace root for older files', prompt)
                 self.assertEqual(legacy.read_text(encoding="utf-8"), 'existing')
                 return 0
-            with patch.dict(os.environ, {}, clear=True), patch.object(sys, 'argv', [
+            # Without --event-stream this is claude -p, which runs only as Bypass.
+            with patch.dict(os.environ, {"OPENTAG_CLAUDE_PERMISSION_MODE": "bypassPermissions"}, clear=True), patch.object(sys, 'argv', [
                 'opentag_agent', '--backend', 'claude', '--channel-id', 'C123',
                 '--question', 'Create a report.md', '--workdir', str(root),
                 '--thread-file', str(legacy),
                 '--output-manifest', str(root / 'manifest.json'),
             ]), patch.object(opentag_agent, 'run_claude', side_effect=backend):
                 self.assertEqual(opentag_agent.main(), 0)
+
+class TagRulesAtStartTests(unittest.TestCase):
+    """Before Codex runs, the Tag's folder gets the rules for all Tags, or the run is refused."""
+
+    def run_main(self, root: Path, workdir: Path) -> tuple[int, list]:
+        import sys
+        from scripts import agent_permissions
+        seen = []
+        (root / "thread.md").write_text("", encoding="utf-8")
+        env = {"TAG_HOME": str(root / "install"), "TAG_INSTANCE_HOME": str(root / "home" / ".tag")}
+        with patch.dict(os.environ, env, clear=True), patch.object(sys, "argv", [
+            "opentag_agent", "--backend", "codex", "--channel-id", "C123", "--question", "hi", "--workdir", str(workdir),
+            "--thread-file", str(root / "thread.md"),
+        ]), patch.object(opentag_agent, "run_codex", side_effect=lambda prompt, **kw: seen.append(kw) or 0), \
+                patch("sys.stderr"):
+            agent_permissions.add_rule("codex", None, "block", "git push")
+            return opentag_agent.main(), seen
+
+    def test_a_tags_own_folder_gets_a_copy_of_the_rules_for_all_tags(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            own = root / "home"
+            own.mkdir()
+            code, seen = self.run_main(root, own)
+            self.assertIn('"git", "push"', (own / ".codex/rules/all-tags.rules").read_text(encoding="utf-8"))
+            # The exec rollback can't confirm Codex read them, so it refuses a block.
+            self.assertEqual((1, []), (code, seen))
+
+    def test_a_folder_of_yours_never_gets_tag_rules_and_refuses_blocks_for_all_tags(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            yours = root / "my-repo"
+            yours.mkdir()
+            code, seen = self.run_main(root, yours)
+            self.assertEqual((1, []), (code, seen))
+            self.assertFalse((yours / ".codex").exists())
+
 
 class ClaudePrintModelTests(unittest.TestCase):
     def test_both_print_paths_forward_only_explicit_models(self):

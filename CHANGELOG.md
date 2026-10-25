@@ -6,6 +6,29 @@ All notable changes to Tag are documented here.
 
 ### Added
 
+- Choose what each Tag may do without asking, with each agent's own
+  settings. In the Tag's **Details**, **Permissions** shows Codex's sandbox
+  (Read only, Workspace write, Full access), approval policy (Default,
+  Untrusted, On request, Never), and approvals reviewer (Auto review or
+  User), and Claude's permission mode (Default, Accept edits, Auto, Don't
+  ask, Bypass permissions), using each agent's own names. In the terminal, `tag NAME settings ai permissions codex-sandbox=read-only
+  claude-mode=acceptEdits` does the same. Existing Tags keep today's settings.
+  Each agent also has **Rules**: allow or block a command or tool for that Tag
+  only. **Settings → AI connections → Rules for all Tags** does the same for
+  every Tag. Your own Codex and Claude Code rules also apply, and Tag never
+  changes them. A block anywhere wins. In the terminal,
+  `tag NAME settings ai permissions block codex 'git push'` sets one Tag's
+  rules and `tag settings ai rules block codex 'git push'` every Tag's. Codex
+  rules need the Tag's own folder; Tag keeps none in a folder of yours. Codex
+  Block rules need Codex 0.162 or newer: with an older Codex, a Tag whose Codex
+  rules block or ask stops with a message to update Codex instead of running
+  without them. Claude's file edits can't change its own rules, and a Tag
+  stops rather than run without a Claude settings file it can't read.
+- Add a Tag to a workspace you already use in one step. On Home, click **Add
+  Tag** on the workspace's card: a dialog asks only for the name, description
+  and picture, then creates and starts the Tag with your default model, or the
+  model and thinking level you pick under **Change**. In the terminal, `tag add --workspace T0ABC123` (a team ID or name) does the
+  same; it pauses with progress saved if something needs your input.
 - Let other apps' bots, such as Hover, ask Tag to run a skill by mentioning
   it. List each bot in `SLACK_ALLOWED_BOT_IDS` (bot IDs or bot member IDs). Tag
   works for that bot as if an owner asked, except that it declines any approval
@@ -19,7 +42,6 @@ All notable changes to Tag are documented here.
   MFS. Each must also be in `MFS_ALLOWED_SCOPES`. Keys must be channel IDs and
   URIs must not contain commas; otherwise the whole map is ignored. Before this, a Slack request
   never reached non-Slack sources, even when they were allowed.
-
 - Let one Tag ask other Tags for help and combine their answers. Tag posts one
   request that mentions every Tag, links it to your thread in both directions,
   shows their progress as steps, and writes the final answer once all have replied or the deadline passes. Each
@@ -29,6 +51,73 @@ All notable changes to Tag are documented here.
   the same with Codex and Claude, and each reply states exactly what changed.
   Tag now turns off Claude auto memory and Codex memories for its runs so that
   everything it remembers can be listed, corrected, and forgotten.
+- Choose **Queue** or **Steer** when you message Tag while it is still working
+  in the same thread. Queue answers your new message after the current request.
+  Steer stops the current request and answers the new one next, in the same
+  conversation. Before, Tag asked you to mention it again later.
+
+- Thinking now shows in the Slack thread for Claude and Codex. Each time the
+  model thinks, Agent activity adds a **Thinking** step with the model's summary
+  of that thinking, and the app's Activity tab keeps every summary. Everyone in the thread can read
+  them; run `tag NAME config set OPENTAG_SHOW_THINKING 0` to keep them private.
+
+### Fixed
+
+- With Claude, a message sent right after stopping a request that was running a
+  command now gets an answer. Before, Tag replied "Open Tag finished without
+  output."
+- A new Tag that isn't in any channel yet now starts. Before, `tag start` waited
+  for the Slack connection and gave up, even though setup said to invite the Tag
+  once it was running.
+- `tag autostart` now keeps memory (MFS) running too. If MFS stops, the login
+  service restarts it with the same back-off it uses for Tags, whether it was
+  started by a Tag or by `tag memory start`. On Linux, Tag turns on systemd
+  linger so the service also starts at boot, or shows the one command to run.
+- The installer no longer downloads the 560 MB memory model when your MFS
+  configuration uses a hosted embedding provider such as OpenAI. Set
+  `TAG_SKIP_MFS_MODEL=1` to skip it when the provider isn't chosen yet. The
+  local model is still the default.
+- The built-in search model now downloads in the background, so the install no longer
+  waits on 560 MB. Home in Tag.app shows the model and its progress and says that memory
+  search isn't available until it finishes, with **Try again** if it stops; `tag memory
+  status` and `tag settings` show it, and `tag memory download` restarts it. The install
+  screen names the model (bge-m3).
+- Tag.app and the terminal installer can skip the model download too: the install
+  has a **Memory search** step with **Your own endpoint**, and `./install.sh
+  --skip-memory-model` (`install.ps1 -SkipMemoryModel`) does the same.
+- Choose how memory computes search embeddings after install: the built-in
+  Default, or any OpenAI-compatible endpoint (OpenAI, Ollama, LM Studio, vLLM)
+  with your own model and an optional key. Settings → AI → **Memory**,
+  `tag memory embedding local|custom`, or `tag settings`. Tag tries the endpoint
+  first, stores the key privately, restarts memory, and indexes your Slack
+  channels again into the new index. The install screen and an interactive
+  terminal install offer the same choice up front.
+- Settings has a new **AI** tab with two pages: AI connections, and **Memory**,
+  which shows whether memory runs and restarts itself, and which search model it
+  uses. `tag memory status`
+  reports the same as `embedding` in `--json`.
+- `tag memory start` works after you remove your last Tag instead of failing on a
+  missing `~/Tag/default` folder.
+- The docs now say the install needs about 1.8 GB of disk, not 650 MB.
+- Tag now reads all of a long text file attached in Slack, such as a large
+  HTML or log file. Before, it saw only the first 12,000 characters.
+
+### Changed
+
+- Always allow in Slack now saves a Codex rule for that Tag only, in the Tag's
+  folder, instead of in your global Codex rules. Rules saved before stay global.
+- `OPENTAG_CLAUDE_TRANSPORT=print` now runs only when the Claude permission
+  mode is Bypass permissions, because `claude -p` always skips Claude's
+  permission checks. Before, a Tag set to Auto on that rollback quietly ran as
+  Bypass permissions.
+- Choosing a model is now immediate. Tag saves each signed-in account's model
+  list once for all Tags instead of starting Codex and Claude every time setup
+  or the app lists models, and reads accounts without a saved list at the same
+  time instead of one after another. A list older than a day is updated in the
+  background, and signing in with another account drops its saved list. To
+  read the lists now, choose **Refresh list** at the bottom of a Tag's model
+  menu in the app, or run `tag NAME settings ai models --refresh`. If an
+  account can't be read, its saved list stays.
 
 ## [0.3.0] - 2026-10-08
 

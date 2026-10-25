@@ -11,7 +11,7 @@ vi.mock("@tauri-apps/api/core", () => ({ convertFileSrc: (path: string) => `asse
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 const codex = { backend: "codex", name: "Codex", provider: "OpenAI models", state: "connected", installed: true, method: "codex",
-  account: "ChatGPT sign-in", detail: "", shared: true, actions: ["change_account"], install_url: "https://learn.chatgpt.com/docs/codex/cli", allowed: true };
+  account: "Codex sign-in on this Mac", detail: "", shared: true, actions: ["change_account"], install_url: "https://learn.chatgpt.com/docs/codex/cli", allowed: true };
 const QUESTIONS: Record<string, object> = {
   profile: { id: "profile", kind: "profile_picture", prompt: "Meet your new Tag", name: "Maya's Tag", name_limit: 35, description: "",
     description_limit: 140, preview: null, picture: "waterdrop", error: null, editing: false, can_use_existing: true, can_go_back: false },
@@ -29,7 +29,7 @@ const QUESTIONS: Record<string, object> = {
 };
 const ORDER = ["profile", "default_model", "workspace", "approve_setup", "channels"];
 
-function setup(track: Track = () => {}) {
+function setup(track: Track = () => {}, workspace?: string, workspaceName?: string) {
   const api = demoBridge();
   const answers: unknown[] = [];
   let emit: (line: string) => void = () => {};
@@ -62,7 +62,7 @@ function setup(track: Track = () => {}) {
     return session;
   };
   render(<StrictMode><TrackContext.Provider value={track}>
-    <Connect api={api} args={["setup"]} done={vi.fn()} paused={vi.fn()} />
+    <Connect api={api} args={["setup"]} workspace={workspace} workspaceName={workspaceName} done={vi.fn()} paused={vi.fn()} />
   </TrackContext.Provider></StrictMode>);
   return answers;
 }
@@ -160,6 +160,26 @@ it("reloads pictures replaced at the same path and keeps the selected picture in
 });
 
 describe("Add a Tag", () => {
+  it("adds to a workspace chosen on Home after asking only for the name, description and picture", async () => {
+    const answers = setup(() => {}, "T0KLOVR1", "Klovr");
+    expect(await screen.findByText("Meet your new Tag")).toBeTruthy();
+    expect(screen.getByText(/It joins Klovr with your default model/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Use an existing app" })).toBeNull();
+    fireEvent.change(screen.getByLabelText("Description"), { target: { value: "Launch help" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create in Slack" }));
+    expect(await screen.findByText("Say hi to Maya's Tag")).toBeTruthy();
+    expect(answers).toEqual([
+      { name: "Maya's Tag", description: "Launch help" }, "codex:gpt-5.5", "T0KLOVR1", "create", [],
+    ]);
+  });
+
+  it("asks as usual when you aren't signed in to the workspace chosen on Home", async () => {
+    const answers = setup(() => {}, "T0ELSEWHERE", "Elsewhere");
+    fireEvent.click(await screen.findByRole("button", { name: "Create in Slack" }));
+    expect(await screen.findByText("Which workspace?")).toBeTruthy();
+    expect(answers).toEqual([{ name: "Maya's Tag", description: "" }, "codex:gpt-5.5"]);
+  });
+
   it("asks for the name, picture and description first, then AI, workspace, Create and channels", async () => {
     const track = vi.fn();
     const answers = setup(track);

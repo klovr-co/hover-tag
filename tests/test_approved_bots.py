@@ -108,6 +108,17 @@ class ApprovedBotMentionTests(unittest.TestCase):
         client.chat_postMessage.assert_called_once_with(
             channel="C1", thread_ts="1.0", text=slack_socket_agent.UNAUTHORIZED_USER_MESSAGE)
 
+    def test_a_bot_request_in_a_busy_thread_is_told_so_in_the_thread(self) -> None:
+        # A bot cannot pick Queue or Steer, so it gets the thread-busy reply instead of a private offer.
+        key = slack_socket_agent.RunKey("T1", "C1", "1.0")
+        self.assertTrue(slack_socket_agent.reserve_thread(key))
+        self.addCleanup(slack_socket_agent.release_thread, key)
+        run, client = self.mention({"user": HOVER_USER, "bot_id": HOVER_BOT})
+        run.assert_not_called()
+        client.chat_postEphemeral.assert_not_called()
+        client.chat_postMessage.assert_called_once_with(
+            channel="C1", thread_ts="1.0", text=slack_socket_agent.THREAD_BUSY_MESSAGE)
+
     def test_owner_mentions_still_ask_for_approvals(self) -> None:
         run, _ = self.mention({"user": "UOWNER"})
         self.assertIsNotNone(run.call_args.kwargs["on_approval"])

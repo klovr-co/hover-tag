@@ -26,7 +26,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost https: data:; style-src 'self' 'unsafe-inline'",
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost asset: http://asset.localhost; img-src 'self' asset: http://asset.localhost https: data:; style-src 'self' 'unsafe-inline'",
       "assetProtocol": {
         "enable": true,
         "scope": [
@@ -34,6 +34,7 @@
           "$HOME/Tag/*/.tag/state/slack-avatar-*",
           "$HOME/Tag/*/.tag/state/workspace-icon.*",
           "$HOME/Tag/*/.tag/state/setup-icon-*",
+          "$HOME/Tag/*/.tag/state/activity-now.json",
           "$HOME/Tag/*/.tag/integrations/slack-cli/assets/tag-profile.*",
           "$HOME/Library/Application Support/Tag/**",
           "$HOME/.local/share/tag/**",

@@ -12,7 +12,8 @@ import setupExample from "../../../protocol/examples/setup.jsonl?raw";
 import startExample from "../../../protocol/examples/start-progress.jsonl?raw";
 import aiStatusExample from "../../../protocol/examples/ai-status.json";
 import aiModelsExample from "../../../protocol/examples/ai-models.json";
-import type { AIStatus, ApiConnection, Connection } from "./ai";
+import type { AIStatus, ApiConnection, Connection, PermissionRule } from "./ai";
+import type { RuleBackend } from "./permissions";
 import type { ActivityItem } from "./home";
 import { windowFitter } from "./fit";
 
@@ -59,7 +60,8 @@ export interface Bridge {
   setup(args: string[], onLine: (line: string) => void, onExit: (code: number, stderr: string) => void): Promise<Session>;
   /** `tag ARGS --json` for a command that reports progress as it goes, such as start. */
   follow(args: string[], onLine: (line: string) => void, onExit: (code: number, stderr: string) => void): Promise<Session>;
-  install(channel: string, onLine: (line: string) => void, onExit: (code: number) => void): Promise<Session>;
+  /** `skipMemoryModel` skips the built-in search-model download for people who will use their own. */
+  install(channel: string, onLine: (line: string) => void, onExit: (code: number) => void, options?: { skipMemoryModel?: boolean }): Promise<Session>;
   copy(text: string): Promise<void>;
   paste(): Promise<string>;
   open(target: string): Promise<void>;
@@ -126,7 +128,8 @@ async function tauriBridge(): Promise<Bridge> {
     setup: (args, onLine, onExit) => stream("setup_start", { args }, onLine, onExit),
     // The same streamed `tag ARGS --json` session as setup; start never reads input.
     follow: (args, onLine, onExit) => stream("setup_start", { args }, onLine, onExit),
-    install: (channel, onLine, onExit) => stream("install_start", { channel }, onLine, (code) => onExit(code)),
+    install: (channel, onLine, onExit, options) =>
+      stream("install_start", { channel, skipMemoryModel: !!options?.skipMemoryModel }, onLine, (code) => onExit(code)),
     copy: (text) => clipboard.writeText(text),
     paste: async () => (await clipboard.readText()) ?? "",
     open: (target) => (/^[a-z]+:/i.test(target) ? opener.openUrl(target) : opener.openPath(target)),
@@ -177,6 +180,19 @@ async function tauriBridge(): Promise<Bridge> {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const demoFail = (error: string) => ({ code: 1, stdout: JSON.stringify({ schema_version: 1, ok: false, error }), stderr: "" });
+
+/** The demo's allow, block, or remove for one rule list; a string is the CLI's error. */
+function demoRule(list: PermissionRule[], verb: string, backend: RuleBackend, rule: string, who: string): PermissionRule[] | string {
+  if (verb === "remove") {
+    return list.some((r) => r.value === rule) ? list.filter((r) => r.value !== rule) : `${who} has no ${backend} rule ${rule}`;
+  }
+  if (backend === "claude" ? !/^[A-Z][\w-]*(\(.+\))?$/.test(rule) : rule.startsWith("-")) {
+    return backend === "claude" ? "Write a Claude rule, like: Bash(git push:*)" : "Write the start of a command, like: git push";
+  }
+  return [...list.filter((r) => r.value !== rule), { kind: backend === "claude" ? "rule" : "command", value: rule, decision: verb as "allow" | "block" }];
+}
+
 export function demoBridge(options: { installed?: boolean } = {}): Bridge {
   const sharedAI = structuredClone(aiStatusExample) as AIStatus;
   const aiDemo = new Map<string, AIStatus>();
@@ -191,7 +207,7 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
   });
   rows.splice(2, 0, {
     ...rows[0], id: "t0acme01-a0ops003", slack_name: "Ops Tag", slack_workspace: "T0ACME01",
-    workspace_name: "Acme Inc", workspace_icon: null, main: false,
+    workspace_name: "Acme Inc", workspace_icon: null, main: false, picture: { kind: "custom" },
     description: "Keeps on-call notes and launch checklists up to date.",
     default_model: "codex:gpt-5.5-mini", default_model_label: "Codex · GPT-5.5 mini", default_model_name: "GPT-5.5 mini", default_effort: "medium",
     channels: [{ id: "C0GENERAL2", name: "general" }, { id: "C0LAUNCHOPS", name: "launch-ops" }],
@@ -209,8 +225,17 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
   let runtimeVersion = productVersion.trim();
   let desktopVersion = runtimeVersion;
   let savedChannel = runtimeVersion.includes("-alpha") ? "alpha" : runtimeVersion.includes("-beta") ? "beta" : "stable";
-  const targetVersion = new URLSearchParams(location.search).get("update") ? "0.4.0-alpha.1" : runtimeVersion;
+  const updateDemo = new URLSearchParams(location.search).get("update");
+  const targetVersion = updateDemo ? "0.4.0-alpha.1" : runtimeVersion;
   let keepRunning = false;
+  let memoryRunning = true;
+  let embedding = "onnx";
+  // ?download=1 shows the built-in model downloading in the background; ?download=failed shows it stopped.
+  const downloadDemo = typeof location === "undefined" ? null : new URLSearchParams(location.search).get("download");
+  let downloadState: "downloading" | "failed" | "ready" | null = downloadDemo === "failed" ? "failed" : downloadDemo ? "downloading" : null;
+  let downloaded = 0.18;
+  let embeddingModel = "";
+  let embeddingUrl = "";
   // ?api=1 starts with one Tag already using its own API.
   const apiDemo: ApiConnection[] = typeof location !== "undefined" && new URLSearchParams(location.search).get("api") ? [{
     tag: rows[0].id, tag_name: rows[0].slack_name ?? "Tag", backend: "codex", kind: "openai", kind_name: "OpenAI-compatible",
@@ -229,6 +254,21 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
     tag: async (args) => {
       await sleep(250);
       const [first, second] = args;
+      if (first === "settings" && second === "ai" && args[2] === "rules" && sharedAI.permissions) {
+        // One shared list; each Tag's report reads it, so the Tag page follows along.
+        if (["allow", "block", "remove"].includes(args[3])) {
+          const [verb, backend, rule] = [args[3], args[4] as RuleBackend, args[5]];
+          const rules = sharedAI.permissions[backend].rules!;
+          const changed = demoRule(rules.all_tags ?? [], verb, backend, rule, "All Tags");
+          if (typeof changed === "string") return demoFail(changed);
+          rules.all_tags = changed;
+        }
+        const shared = (backend: RuleBackend) => {
+          const { all_tags = [], personal = [] } = sharedAI.permissions![backend].rules ?? {};
+          return { all_tags, personal };
+        };
+        return json({ schema_version: 1, ok: true, scope: "installation", rules: { codex: shared("codex"), claude: shared("claude") } });
+      }
       if (first === "settings" && second === "ai" && args[2] === "connections") {
         return json({ connections: sharedAI.connections, usable: sharedAI.connections.filter((c) => c.state === "connected").map((c) => c.backend),
           running: rows.some((r) => r.state === "running"), scope: "installation", api_connections: structuredClone(apiDemo) });
@@ -242,7 +282,7 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
       }
       if (first === "version") {
         return json({ ...versionExample, version: runtimeVersion,
-          capabilities: [...new Set([...versionExample.capabilities, "ai-connections", "shared-ai-connections", "logs-activity", "thinking-level", "describe", "telemetry-events", "api-connections"])] });
+          capabilities: [...new Set([...versionExample.capabilities, "ai-connections", "shared-ai-connections", "logs-activity", "thinking-level", "describe", "telemetry-events", "api-connections", "saved-models", "permission-rules"])] });
       }
       if (second === "settings" && args[2] === "ai" && args[3] === "api" && args[4] === "check") {
         await sleep(500);
@@ -255,9 +295,13 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
         const [action, value] = args.slice(3).filter((a) => !a.startsWith("--"));
         if (!action) return json({ ...ai, running: rows.find((r) => r.id === first)?.state === "running" });
         if (action === "models") {
-          await sleep(900);
+          // --refresh reads each account again instead of the saved lists.
+          const refresh = args.includes("--refresh");
+          await sleep(refresh ? 1500 : 900);
           return json({ ...aiModelsExample, default: { ...ai.default_model, available: true, chosen: true },
-            groups: aiModelsExample.groups.filter((g) => ai.usable.includes(g.backend)) });
+            groups: aiModelsExample.groups.filter((g) => ai.usable.includes(g.backend))
+              .map((g) => refresh ? { ...g, cached: false, fetched_at: new Date().toISOString() } : g),
+            ...(refresh ? { cached: false, cached_at: null, refresh_failed: [] } : {}) });
         }
         if (action === "model" && value) {
           const entry = aiModelsExample.groups.flatMap((g) => g.models.map((m) => ({ ...m, group: g })))
@@ -276,6 +320,56 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
           return json({ schema_version: 1, ok: true, default_model: ai.default_model, default_effort: effort,
             restart_required: running && !restart, restarted: restart });
         }
+        if (action === "permissions" && ai.permissions && ["allow", "block", "remove"].includes(args[4])) {
+          const [verb, backend, rule] = [args[4], args[5] as RuleBackend, args[6]];
+          const next = structuredClone(ai.permissions);
+          const rules = next[backend].rules ?? { tag: [], all_tags: [], personal: [] };
+          const changed = demoRule(rules.tag ?? [], verb, backend, rule, "This Tag");
+          if (typeof changed === "string") return demoFail(changed);
+          next[backend].rules = { ...rules, tag: changed };
+          ai.permissions = next;
+          return json({ schema_version: 1, ok: true, permissions: next });
+        }
+        if (action === "permissions" && ai.permissions) {
+          const settings = args.slice(4).filter((a) => !a.startsWith("--"));
+          const next = structuredClone(ai.permissions);
+          for (const item of settings) {
+            const [name, picked] = item.split("=");
+            const [backend, key] = name === "claude-mode" ? ["claude", "mode"] : ["codex", name.replace("codex-", "")];
+            const options = (next.options as Record<string, Record<string, { value: string }[]> | undefined>)[backend]?.[key];
+            if (!options?.some((o) => o.value === picked)) {
+              return { code: 1, stdout: JSON.stringify({ schema_version: 1, ok: false, error: `${name}: choose another value` }), stderr: "" };
+            }
+            (next as unknown as Record<string, Record<string, string>>)[backend][key] = picked;
+          }
+          ai.permissions = next;
+          const running = rows.find((r) => r.id === first)?.state === "running";
+          const restart = args.includes("--restart") && running;
+          return json({ schema_version: 1, ok: true, permissions: next, restart_required: running && !restart, restarted: restart });
+        }
+      }
+      if (first === "memory") {
+        if (second === "start" || second === "stop") memoryRunning = second === "start";
+        if (second === "embedding") {
+          embedding = args[2] === "local" ? "onnx" : "custom";
+          if (embedding === "custom") { embeddingModel = args[args.indexOf("--embedding-model") + 1]; embeddingUrl = args[args.indexOf("--base-url") + 1]; }
+        }
+        if (second === "download") { downloadState = "downloading"; downloaded = 0.02; }
+        if (downloadState === "downloading" && second === "status") {
+          downloaded = Math.min(1, downloaded + 0.12);
+          if (downloaded >= 1) downloadState = "ready";
+        }
+        const bytes = 560 * 1048576;
+        const download = downloadState && embedding === "onnx" ? {
+          state: downloadState, model: "gpahal/bge-m3-onnx-int8", done: Math.round(bytes * downloaded), total: bytes,
+          percent: downloadState === "ready" ? 100 : Math.floor(downloaded * 100), error: downloadState === "failed" ? "no network" : "",
+          message: downloadState === "failed" ? "The search model download failed: no network. Search is off; run tag memory download to retry." : "" } : null;
+        return json({ schema_version: 1, managed: memoryRunning, healthy: memoryRunning, running_tags: [],
+          keep_running: keepRunning, embedding: { provider: embedding === "onnx" ? "onnx" : "openai", model: embeddingModel, local: embedding === "onnx", current: embedding, download,
+            choices: [
+              { id: "onnx", label: "Default", detail: "On this computer. Private, offline, 560 MB.", custom: false, model: "", base_url: "", key_saved: false },
+              { id: "custom", label: "Custom", detail: "Any OpenAI-compatible endpoint.",
+                custom: true, model: embeddingModel, base_url: embeddingUrl, key_saved: false }] } });
       }
       if (first === "autostart") {
         if (second === "on" || second === "off") keepRunning = second === "on";
@@ -371,9 +465,17 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
     install: async (_channel, onLine, onExit) => {
       let cancelled = false;
       (async () => {
+        // ?install=fail stops the demo install in the middle, to show the failure screen.
+        const failAt = new URLSearchParams(location.search).get("install") === "fail" ? 4 : -1;
+        let shown = 0;
         for (const line of progressExample.trim().split("\n")) {
           await sleep(1400);
           if (cancelled) return;
+          if (shown++ === failAt) {
+            onLine("Installation failed: Couldn't download the Slack components. Check your internet connection and try again.");
+            onExit(1);
+            return;
+          }
           onLine(line);
           onLine(`  ${line.includes('"release"') ? "✓  Release   Tag v0.2.0" : "…"}`);
         }
@@ -395,7 +497,8 @@ export function demoBridge(options: { installed?: boolean } = {}): Bridge {
     quit: async () => {},
     markMigrated: async () => {},
     markChannelInitialized: async () => {},
-    checkAppUpdate: async () => desktopVersion !== targetVersion ? { version: targetVersion } : null,
+    // ?update=preparing: the release is out but its Tag.app builds aren't published yet.
+    checkAppUpdate: async () => desktopVersion !== targetVersion && updateDemo !== "preparing" ? { version: targetVersion } : null,
     installAppUpdate: async () => { desktopVersion = targetVersion; await sleep(1500); },
     pickImage: async () => null,
     onFileDrop: () => () => {},
@@ -416,6 +519,11 @@ function demoAIFor(aiDemo: Map<string, AIStatus>, shared: AIStatus, tag: string,
   }
   const ai = aiDemo.get(tag)!;
   ai.connections = shared.connections;
+  for (const backend of ["codex", "claude"] as const) {
+    const own = ai.permissions?.[backend].rules;
+    const all = shared.permissions?.[backend].rules;
+    if (own && all) own.all_tags = all.all_tags;
+  }
   ai.usable = shared.connections.filter((c) => c.state === "connected").map((c) => c.backend);
   return ai;
 }
@@ -485,7 +593,7 @@ async function demoSignIn(ai: AIStatus, args: string[], onLine: (line: string) =
     if (cancelled) return;
     const index = ai.connections.findIndex((c) => c.backend === backend);
     const connection: Connection = { ...ai.connections[index], state: "connected", detail: "",
-      account: backend === "claude" ? "Claude Max · maya@klovr.co" : args.includes("chatgpt") ? "ChatGPT plan · maya@klovr.co" : "ChatGPT sign-in",
+      account: backend === "claude" ? "Claude Max · maya@klovr.co" : args.includes("chatgpt") ? "ChatGPT plan · maya@klovr.co" : "Codex sign-in on this Mac",
       method: backend === "claude" ? "claude" : args.includes("chatgpt") ? "chatgpt" : "codex",
       shared: true, actions: ["change_account"] };
     ai.connections[index] = connection;

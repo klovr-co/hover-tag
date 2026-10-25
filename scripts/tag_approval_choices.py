@@ -2,6 +2,10 @@
 
 Decision payloads stay in the transport. Slack receives display text and an
 opaque choice ID, never an editable permission or policy payload.
+
+Codex saves its own Always allow rules to the operator's global rules file. Tag
+keeps them per Tag instead: a saved choice answers Codex with a plain approval
+or denial and carries a `save` rule the backend writes to the Tag's own file.
 """
 from __future__ import annotations
 
@@ -20,13 +24,17 @@ except ImportError:
 def approval_choices(method: str, params: dict[str, Any]) -> list[dict[str, Any]]:
     choices: list[dict[str, Any]] = []
 
-    def add(label: str, result: dict[str, Any], detail: str = "", persistent: bool = False) -> None:
+    def add(label: str, result: dict[str, Any], detail: str = "", persistent: bool = False,
+            save: dict[str, Any] | None = None) -> None:
         if len(detail) > 1800 or len(choices) >= 20:
             return  # Never hide part of a rule the user would be approving.
-        if any(c["result"] == result for c in choices):
+        if any(c["result"] == result and c.get("save") == save for c in choices):
             return
-        choices.append({"id": str(len(choices)), "label": label, "detail": detail,
-                        "persistent": persistent, "result": result})
+        choice = {"id": str(len(choices)), "label": label, "detail": detail,
+                  "persistent": persistent, "result": result}
+        if save is not None:
+            choice["save"] = save
+        choices.append(choice)
 
     if method == "item/permissions/requestApproval":
         permissions = params.get("permissions")
@@ -74,24 +82,34 @@ def approval_choices(method: str, params: dict[str, Any]) -> list[dict[str, Any]
         elif command and isinstance(decision, dict) and len(decision) == 1:
             amendment = decision.get("acceptWithExecpolicyAmendment")
             network = decision.get("applyNetworkPolicyAmendment")
+            plain = [d for d in decisions if isinstance(d, str)]
+            # The plain answer that goes with a rule Tag saves itself.
+            approve = ("approved_for_session" if legacy else "acceptForSession" if "acceptForSession" in plain
+                       else "accept" if "accept" in plain else None)
+            refuse = {"denied": {"rejection": "Denied in Slack"}} if legacy else "decline" if "decline" in plain else None
             if isinstance(amendment, dict) and set(amendment) == {"execpolicy_amendment"}:
                 prefix = amendment["execpolicy_amendment"]
-                if (isinstance(prefix, list) and prefix
+                if (approve and isinstance(prefix, list) and prefix
                         and all(isinstance(p, str) and p and not any(ord(c) < 32 for c in p) for p in prefix)):
-                    native = ({"approved_execpolicy_amendment": {"proposed_execpolicy_amendment": prefix}}
-                              if legacy else decision)
-                    add("Always allow this prefix", {"decision": native},
-                        "Save a rule for future matching commands: " + shlex.join(prefix), True)
+                    add("Always allow this prefix", {"decision": approve},
+                        "Save for future requests to this Tag: " + shlex.join(prefix), True,
+                        {"kind": "command", "words": prefix, "decision": "allow"})
             elif isinstance(network, dict) and set(network) == {"network_policy_amendment"}:
                 rule = network["network_policy_amendment"]
+                context = params.get("networkApprovalContext")
+                protocol = context.get("protocol") if isinstance(context, dict) else None
                 if (isinstance(rule, dict) and set(rule) == {"host", "action"}
                         and isinstance(rule["host"], str) and rule["host"]
                         and not any(c.isspace() or ord(c) < 32 for c in rule["host"])
-                        and rule["action"] in ("allow", "deny")):
-                    native = {"network_policy_amendment": network} if legacy else decision
-                    verb = "allow" if rule["action"] == "allow" else "deny"
-                    add(f"Always {verb} this host", {"decision": native},
-                        f"Save a persistent network {verb} rule for host: " + rule["host"], True)
+                        and rule["action"] in ("allow", "deny") and isinstance(protocol, str)):
+                    allow = rule["action"] == "allow"
+                    native = approve if allow else refuse
+                    if native:
+                        verb = "allow" if allow else "deny"
+                        add(f"Always {verb} this host", {"decision": native},
+                            f"Save for future requests to this Tag: {verb} " + rule["host"], True,
+                            {"kind": "host", "host": rule["host"], "protocol": protocol,
+                             "decision": "allow" if allow else "block"})
     return mark_primary(choices)
 
 
@@ -113,7 +131,7 @@ def mark_primary(choices: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def public_approval_choices(choices: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [{k: v for k, v in choice.items() if k != "result"} for choice in choices]
+    return [{k: v for k, v in choice.items() if k not in {"result", "save"}} for choice in choices]
 
 
 def _review_text(value: Any, fallback: str, limit: int = 900) -> str:
