@@ -120,33 +120,41 @@ text-only, so it can't see the video. Chime-in needs:
   questions to someone else, incidents, routine status and sensitive personal
   news are no. It is tuned for precision (threshold 0.95 or higher), with its
   own threshold setting and its own labelled set, because positives are rare.
-- **Narrow triggers:** top-level posts in channels where a persona's level is
-  `chimes-in`, by an authorized user, never from a bot, never inside a thread
-  Tag is already in (that is watching).
-- **Rate limits:** at most one reply per post, and at most N chime-ins per
-  channel per day (default 1). #233's quiet hours and its cooldown after 👎 or
-  "stop" apply too.
+- **Every new message is asked:** in channels where a persona's level is
+  `chimes-in`, each new message from a person (never a bot) goes to Jev or
+  Decisions with this question. The classifier decides; there is no fixed
+  number of chime-ins per day. #233 measured about $0.0001 a call ($0.00009
+  with Decisions), so 1,000 messages cost about $0.09. Cost grows with channel
+  traffic, so Tag.app shows calls and spend per channel. Asking both #233's
+  question and this one in a single call, if the provider allows it, is
+  unverified.
+- **Backstops:** at most one reply per message. #233's quiet hours, its
+  cooldown after 👎 or "stop", and its existing daily reply cap stay as safety
+  nets, not as the decision.
 - **The persona's voice:** one short threaded reply, a reaction only, or
   nothing; the draft may still decide `NO_REPLY`. A small label says Tag is
   chiming in and offers to turn it off for the channel.
 - **A read-only look at the attachment:** images as images; link previews
-  from the message's unfurl fields; video as a few frames (about 8) and a
-  transcript when one is available, all within size caps. The run has no tools,
-  memory, connectors, credentials or writes. Whether Slack exposes a
-  transcript for uploaded videos through the API is unverified; without one,
-  Tag would need a local or paid transcription step, which needs its own
-  decision. Extracting frames needs `ffmpeg` on the computer, also unverified.
+  from the message's unfurl fields; video as a few frames (about 8), plus
+  Slack's own transcript when Slack provides one, all within size caps. As far
+  as we know, neither backend takes a video file directly (to be checked in
+  their docs), and the chime-in run has no tools to convert one itself, so the
+  bridge prepares the frames before the run. The agent then comments on what
+  it sees without further setup. There is no separate transcription service.
+  The run has no tools, memory, connectors, credentials or writes. Unverified:
+  whether Slack exposes transcripts for uploaded videos through the API, and
+  whether `ffmpeg` is on the computer for frames.
 
 #233 would need to change in six ways:
 
 1. Its free filters pass only messages that name Tag or sit in Tag's threads.
-   They need a path for top-level posts in chime-in channels.
+   In chime-in channels every new message needs to reach the classifier.
 2. `watch_classifier.py` has one question (`tag_is_addressed`). It needs a
    second question with its own instructions, criteria, threshold and eval
    set.
 3. Its watched draft is text-only. It needs a read-only attachment mode that
    reuses the bridge's attachment download with caps.
-4. A separate daily cap for chime-ins.
+4. Per-channel counts of classifier calls and spend, shown in Tag.app.
 5. Per-channel modes (watch or chime-in) instead of the single
    `OPENTAG_WATCH_CHANNEL_IDS` list, with the Home tab to match.
 6. `watch_eval.py` needs to take the question as a parameter.
@@ -355,8 +363,7 @@ Each source was read in full on 25 Oct 2026, except where marked.
 - **One context can still overflow.** Many personas and skills add
   descriptions to every run. The evaluation shows when to split.
 - **Speaking up unasked can annoy people.** Chime-in is off by default,
-  limited per channel per day, tuned for precision, and stops after a 👎 or
-  "stop". A missed launch costs less than an unwanted comment.
+  tuned for precision, and stops after a 👎 or "stop". A missed launch costs less than an unwanted comment.
 - **Slack shows one app** in audit logs, analytics and channel membership.
 - **Pictures need a public URL**, visible to anyone who has it. Hosting
   uploads is a follow-up under [#206](https://github.com/klovr-co/hover-tag/issues/206).
