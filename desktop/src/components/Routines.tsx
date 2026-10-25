@@ -92,6 +92,7 @@ export function Routines({ api, row, say, focus, showLogs }: {
         <RoutineRow key={item.id} api={api} tag={row.id} routine={item} state={state} tagRunning={list.tag_running}
           open={open === item.id} toggleOpen={() => setOpen(open === item.id ? null : item.id)}
           busy={busy === item.id} saved={saved === item.id} act={act} showLogs={showLogs}
+          turnLimit={(row.default_model ?? "").startsWith("claude")}
           edit={() => { setEditing(item); setOpen(null); }} />
       )} />
       {editing ? (
@@ -130,8 +131,10 @@ function RoutineRows({ routines, render }: { routines: Routine[]; render: (item:
   return <div className="card rt-list">{rows.map(({ item, state }) => render(item, state))}</div>;
 }
 
-function RoutineRow({ api, tag, routine, state, tagRunning, open, toggleOpen, busy, saved, act, edit, showLogs }: {
+function RoutineRow({ api, tag, routine, state, tagRunning, open, toggleOpen, busy, saved, act, edit, showLogs, turnLimit }: {
   api: Bridge; tag: string; routine: Routine; state: "stay" | "enter" | "leave"; tagRunning: boolean; showLogs?: (find: string) => void;
+  /** Only Claude can stop a run after a number of turns; Codex runs are bounded by spend and time. */
+  turnLimit?: boolean;
   open: boolean; toggleOpen: () => void; busy: boolean; saved: boolean;
   act: (id: string, args: string[], done: string) => Promise<boolean>; edit: () => void;
 }) {
@@ -161,7 +164,7 @@ function RoutineRow({ api, tag, routine, state, tagRunning, open, toggleOpen, bu
           <RoutineHistory api={api} tag={tag} routine={routine} showLogs={showLogs} />
           <p className="rt-prompt selectable">{routine.prompt}</p>
           <p className="meta" style={{ margin: 0 }}>
-            Up to ${routine.limits.max_budget_usd.toFixed(2)}, {routine.limits.max_turns} turns and {Math.round(routine.limits.timeout_seconds / 60)} minutes a run.
+            Up to ${routine.limits.max_budget_usd.toFixed(2)}{turnLimit ? `, ${routine.limits.max_turns} turns` : ""} and {Math.round(routine.limits.timeout_seconds / 60)} minutes a run.
             {routine.catch_up === "skip" ? " Skips runs it missed." : " Runs once to catch up after this computer sleeps."}
           </p>
           <div className="rt-acts">

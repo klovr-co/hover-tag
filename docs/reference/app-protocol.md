@@ -604,7 +604,7 @@ Tag's channels. See [Routines](../concepts/routines.md).
 
 | Command | Output |
 | --- | --- |
-| `tag NAME routine list --json` | `tag_running`, `routines`, `invalid` (entries that could not be read), and `limits` (`per_tag`, `per_channel`, `min_interval_seconds`); see `routine-list.json` |
+| `tag NAME routine list --json` | `tag_running`, `scheduler` (`ok`, `problem`: why a running Tag isn't checking its routines, or `null`, `last_check`, and `last_clock_jump`), `routines`, `invalid` (entries that could not be read), and `limits` (`per_tag`, `per_channel`, `min_interval_seconds`); see `routine-list.json` |
 | `tag NAME routine show ROUTINE --json` | `routine`, the next five run times in `upcoming`, and `history`, newest first; see `routine-show.json` |
 | `tag NAME routine runs ROUTINE [--limit N] [--offset N] --json` | `routine` (`id`, `name`, `timezone`), `runs` (history entries, newest first, at most 100 a page; default 20), `total`, and `has_more`; see `routine-runs.json` |
 | `tag NAME routine add --name … --schedule … --timezone … --channel … --prompt … [--owner U…] [--catch-up latest\|skip] [--max-budget-usd N] [--max-turns N] [--timeout-minutes N] [--paused] --json` | `routine` |

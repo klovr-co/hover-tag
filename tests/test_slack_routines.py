@@ -339,6 +339,20 @@ class RoutineRunTests(unittest.TestCase):
         self.fake_app.tag_routine_scheduler.on_crash(elsewhere, record)
         self.client.chat_postMessage.assert_not_called()
 
+    def test_search_uses_the_runs_workspace_when_none_is_configured(self):
+        # As for a mention: without SLACK_TEAM_ID, the workspace Tag is in is the search policy's.
+        os.environ.pop("SLACK_TEAM_ID")
+        teams = []
+        real = slack_socket_agent.plan_search_scopes
+
+        def plan(**kwargs):
+            teams.append(kwargs["team_id"])
+            return real(**kwargs)
+
+        with patch.object(slack_socket_agent, "plan_search_scopes", side_effect=plan):
+            self.run_routine(lambda kwargs: ("Done.", True))
+        self.assertEqual(teams, ["T1", "T1"])
+
     def test_the_agent_knows_it_is_inside_a_routine_run(self):
         self.run_routine(lambda kwargs: ("Done.", True))
         self.assertEqual(self.calls[0]["kwargs"]["routine_id"], self.routine["id"])

@@ -5426,14 +5426,16 @@ def create_app(
             return refuse("its owner isn't allowed to use this Tag any more.", notify=True)
         question = tag_routines.run_prompt(routine, trigger=trigger, slot=slot, last_success=last_success)
         configured_team = os.getenv("SLACK_TEAM_ID", "").strip()
+        # As for a mention: the run's workspace when none is configured, and never a different one.
+        policy_team = team if not configured_team or configured_team == team else ""
         configured_channels = (os.getenv("SLACK_CHANNEL_IDS", "").strip()
                                or os.getenv("SLACK_CHANNEL_ID", "").strip())
         scope_plan = plan_search_scopes(
-            request_text=question, current_channel_id=channel, caller_id=owner, team_id=configured_team,
+            request_text=question, current_channel_id=channel, caller_id=owner, team_id=policy_team,
             configured_channels=configured_channels, allowed_scopes=os.getenv("MFS_ALLOWED_SCOPES", ""),
             client=client, intent=SearchIntent("current"))
         search_grant = plan_search_scopes(
-            request_text=question, current_channel_id=channel, caller_id=owner, team_id=configured_team,
+            request_text=question, current_channel_id=channel, caller_id=owner, team_id=policy_team,
             configured_channels=configured_channels, allowed_scopes=os.getenv("MFS_ALLOWED_SCOPES", ""),
             client=client, intent=SearchIntent("all"))
         agent_settings = default_settings

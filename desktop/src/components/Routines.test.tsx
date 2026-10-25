@@ -238,6 +238,17 @@ describe("Routines", () => {
     Object.defineProperty(window, "innerHeight", { configurable: true, value: tall });
   });
 
+  it("names a turn limit only for a Tag on Claude, the agent that enforces one", async () => {
+    const api = demoBridge();
+    const rows: TagRow[] = parseList((await api.tag(["list", "--json"])).stdout);
+    for (const [model, text] of [["codex:gpt-5.5", "Up to $0.50 and 20 minutes a run."], ["claude:claude-opus-5-5", "Up to $0.50, 40 turns and 20 minutes a run."]]) {
+      cleanup();
+      render(<Routines api={api} row={{ ...rows[0], default_model: model }} say={vi.fn()} />);
+      fireEvent.click(await screen.findByRole("button", { name: /Weekly PR digest/ }));
+      expect(await screen.findByText(new RegExp(text.replace(/[$.]/g, "\\$&")))).toBeTruthy();
+    }
+  });
+
   it("opens the routine it was asked to focus", async () => {
     const api = demoBridge();
     const rows: TagRow[] = parseList((await api.tag(["list", "--json"])).stdout);

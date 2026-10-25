@@ -74,12 +74,14 @@ A run can't add or change routines. When you ask the Tag in Slack to change a
 routine, it can change only routines you own, and the change is approved in
 your name.
 
-Each run is limited to $0.50 of estimated spend, 40 turns, and 20 minutes by
-default, and to 2,000,000 tokens when Tag can't estimate cost. Change them with
-`--max-budget-usd`, `--max-turns`, `--timeout-minutes`, and `--max-tokens`, or
-the spend limit in Tag.app. Claude enforces turns and spend itself; for Codex,
-Tag estimates spend from the token prices in
-[API connections](../reference/api-connections.md) and stops the run.
+Each run is limited to $0.50 of estimated spend and 20 minutes by default, and
+to 2,000,000 tokens when Tag can't estimate cost. A Tag on Claude also stops a
+run after 40 turns; Codex has no turn count Tag can limit, so its runs are
+bounded by spend, tokens and time. Change them with `--max-budget-usd`,
+`--max-turns`, `--timeout-minutes`, and `--max-tokens`, or the spend limit in
+Tag.app. Claude enforces turns and spend itself; for Codex, Tag estimates spend
+from the token prices in [API connections](../reference/api-connections.md)
+and stops the run.
 
 ## When runs don't happen
 
