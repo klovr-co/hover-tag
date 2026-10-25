@@ -1,0 +1,13 @@
+{
+  "interface": 1,
+  "id": "example",
+  "name": "Example",
+  "version": "1.0.0",
+  "publisher": "example",
+  "entry_sha256": "8d0d1c1b6f9ab1d3ad2d5f4b0f6a2e7bd2a0b9f6c6a3e8f1e4c2d9b7a5f3e1c0",
+  "tag_commands": ["list", "version"],
+  "screens": [{"id": "reports", "title": "Reports", "icon": "📊"}],
+  "knowledge_folders": [{"id": "shared", "title": "Shared"}],
+  "buttons": [{"id": "open-web", "place": "thread.actions", "label": "Open on the web"}],
+  "channel_switches": [{"id": "sync", "label": "Sync", "detail": "Copies this channel's Tag answers to Example."}]
+}

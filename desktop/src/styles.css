@@ -1277,3 +1277,15 @@ button.activity-routine:hover { background: rgba(31, 126, 222, .16); }
 .sl-empty > .notice { align-self: stretch; box-sizing: border-box; min-width: 0; text-align: left; margin-bottom: 16px; }
 .notice .sl-kv { grid-template-columns: max-content minmax(0, 1fr); column-gap: 16px; row-gap: 6px; font-size: 13.5px; padding: 8px 0 6px; }
 .notice .sl-kv dd { column-gap: 6px; row-gap: 0; }
+
+/* ── Add-ons: the places they fill. Their own drawing goes inside .addon-mount. */
+.addon-nav span { font-size: 15px; line-height: 1; }
+.addon-body { overflow: auto; }
+.addon-mount { min-width: 0; }
+.addon-switch { display: inline-flex; align-items: center; gap: 8px; margin-right: 6px; }
+.addon-knowledge { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 14px; align-items: start; }
+.addon-tree .opt .txt { display: flex; flex-direction: column; min-width: 0; }
+.addon-tree .opt .sub { font-size: 12.5px; color: var(--muted); }
+.addon-folder { animation: rise2 .2s var(--ease); }
+.addon-connect .sub.bad { color: var(--red); }
+@media (prefers-reduced-motion: reduce) { .addon-folder { animation: none; } }

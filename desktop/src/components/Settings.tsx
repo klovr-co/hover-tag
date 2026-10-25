@@ -15,6 +15,7 @@ import {
 } from "../lib/updates";
 import building from "../assets/art/tag-building.png";
 import puzzled from "../assets/art/tag-puzzled.png";
+import { AddonConnections } from "./Addons";
 import { CommunityLinks } from "./CommunityLinks";
 import { CompactSky, ErrorLine, Icon, Primary, Secondary, Spinner, Switch, tagIcon } from "./ui";
 
@@ -224,6 +225,7 @@ export function Settings({ api, info, tags, telemetry, close, replay, initialTab
         {/* Tabs differ in length; they scroll here so the window stays one height. */}
         <div className="settings-pane">
         {tab === "general" && <>
+        <AddonConnections />
         <div className="section">
           <div className="sec-head"><h3>General</h3></div>
           <div className="card">

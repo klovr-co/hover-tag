@@ -3,6 +3,7 @@ import type { Bridge } from "../lib/bridge";
 import type { ActivityDetail, ActivityItem } from "../lib/home";
 import { parseJSON } from "../lib/protocol";
 import { Icon } from "./ui";
+import { AddonThreadActions } from "./Addons";
 
 const states: Record<string, string> = { running: "Running", completed: "Finished", failed: "Failed",
   declined: "Declined", interrupted: "Stopped", unknown: "Outcome unknown" };
@@ -109,6 +110,7 @@ export function ActivityDetails({ api, tag, item, label, children, open: control
             })}
           </ol>}
           {detail.omitted > 0 && <p>{detail.omitted} later steps omitted.</p>}
+          <AddonThreadActions tag={tag} channel={detail.channel} thread={detail.thread_ts} />
           {(controlled && slackURL || item.kind === "working" || (detail.outcome === "failed" && !detail.error)) && <div className="activity-detail-footer">
             {controlled && slackURL && <button className="activity-refresh" onClick={() => void api.open(slackURL)}>Open thread in Slack<Icon name="external" size={12} /></button>}
             {(item.kind === "working" || (detail.outcome === "failed" && !detail.error)) && <button className="activity-refresh" disabled={busy} onClick={() => void load()}><Icon name="refresh" size={12} />Refresh details</button>}

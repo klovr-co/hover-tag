@@ -6,6 +6,9 @@ client relies on. Example payloads live in `protocol/examples/`; the
 CLI and app tests both check against them, so a change that breaks a client
 fails CI.
 
+Add-ons use this protocol too, through their own versioned interface; see
+[Tag.app add-on interface](addon-interface.md).
+
 Every JSON object has `schema_version: 1`. Clients ignore fields they don't
 know. Adding fields is compatible; removing or changing one is not.
 

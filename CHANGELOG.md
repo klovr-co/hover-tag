@@ -6,6 +6,13 @@ All notable changes to Tag are documented here.
 
 ### Added
 
+- Tag.app add-on interface, version 1. A build can name trusted add-on
+  providers; each gets one **Connect** line in **Settings → General**.
+  Connecting signs in once in the browser, then Tag.app installs the
+  provider's add-on after checking its signature and interface version. An
+  add-on can add sidebar screens, Knowledge folders, named buttons and a
+  per-channel switch, never replace a built-in screen, and reads Tag data only
+  through `tag … --json`. See `docs/reference/addon-interface.md`.
 - Choose what each Tag may do without asking, with each agent's own
   settings. In the Tag's **Details**, **Permissions** shows Codex's sandbox
   (Read only, Workspace write, Full access), approval policy (Default,
