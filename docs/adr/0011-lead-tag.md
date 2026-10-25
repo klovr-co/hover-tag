@@ -1,6 +1,6 @@
 # ADR 0011: Lead routes each request to one owner and alone creates Tags
 
-- Status: Accepted
+- Status: Accepted; changed by [ADR 0012](0012-tags-as-personas.md): new Tags are personas, not instances, and creating app Tags is on hold
 - Date: 2026-10-13
 - Issue: [#232](https://github.com/klovr-co/hover-tag/issues/232)
 - Related: [ADR 0005](0005-multiple-tag-instances.md), [handoffs](../../references/handoffs.md)
