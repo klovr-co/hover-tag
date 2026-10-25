@@ -113,6 +113,32 @@ describe("Routines", () => {
     await waitFor(() => expect(document.querySelector(".rt-row.fresh")).toBeNull(), { timeout: 2000 });
   });
 
+  it("picks the timezone from a searchable list of real zones", async () => {
+    const { row, calls, say } = await open();
+    fireEvent.click(await screen.findByRole("button", { name: /Weekly PR digest/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    const zone = screen.getByRole("combobox", { name: "Timezone" });
+    expect((zone as HTMLInputElement).value).toBe("Europe/London");
+    // A typo matches nothing and is never saved: leaving the field keeps the saved zone.
+    fireEvent.focus(zone);
+    fireEvent.change(zone, { target: { value: "Europe/Londn" } });
+    expect(screen.getByText(/No timezone matches/)).toBeTruthy();
+    fireEvent.blur(zone);
+    expect((zone as HTMLInputElement).value).toBe("Europe/London");
+    // Typing a city lists matching zones; picking one sets it.
+    fireEvent.focus(zone);
+    fireEvent.change(zone, { target: { value: "tokyo" } });
+    fireEvent.click(screen.getByRole("option", { name: /Asia\/Tokyo|Asia Tokyo/ }));
+    expect((zone as HTMLInputElement).value).toBe("Asia/Tokyo");
+    fireEvent.focus(zone);
+    fireEvent.change(zone, { target: { value: "new york" } });
+    fireEvent.keyDown(zone, { key: "Enter" });
+    expect((zone as HTMLInputElement).value).toBe("America/New_York");
+    fireEvent.click(screen.getByRole("button", { name: "Save and approve" }));
+    await waitFor(() => expect(say).toHaveBeenCalledWith("Saved Weekly PR digest"));
+    expect(calls).toContainEqual([row.id, "routine", "edit", expect.stringMatching(/^r-/), "--timezone", "America/New_York", "--via", "tag-app", "--json"]);
+  });
+
   it("asks before removing, and the row slides out", async () => {
     const { calls, say } = await open();
     fireEvent.click(await screen.findByRole("button", { name: /Weekly PR digest/ }));

@@ -1,8 +1,8 @@
 // Routines: the app reads the shared examples and sends the CLI only what changed.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import routineList from "../../../protocol/examples/routine-list.json";
 import routineShow from "../../../protocol/examples/routine-show.json";
-import { cliError, emptyForm, formArgs, formOf, formProblem, outcomeGood, outcomeText, routineLine, triggerText, type Routine, type RoutineDetail, type RoutineList } from "./routines";
+import { cliError, demoRoutines, emptyForm, formArgs, formOf, formProblem, localZone, matchZones, nextWeekly, outcomeGood, outcomeText, routineLine, timeZones, triggerText, type Routine, type RoutineDetail, type RoutineList } from "./routines";
 
 const list = routineList as unknown as RoutineList;
 const routine = list.routines[0] as Routine;
@@ -56,5 +56,54 @@ describe("routine form", () => {
   it("shows the CLI's own error", () => {
     expect(cliError(JSON.stringify({ schema_version: 1, ok: false, error: "Routines run at most once an hour" }), "")).toBe("Routines run at most once an hour");
     expect(cliError("", "Traceback\nError: Start the Tag first")).toBe("Start the Tag first");
+  });
+});
+
+describe("timezones", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("lists every zone the computer knows, keeping a saved one it doesn't", () => {
+    const zones = timeZones(["Mars/Olympus_Mons", localZone()]);
+    expect(zones).toEqual(expect.arrayContaining(["UTC", "Europe/London", "America/New_York", localZone(), "Mars/Olympus_Mons"]));
+    expect(zones).toEqual([...zones].sort());
+  });
+
+  it("falls back to common zones when the webview can't list them", () => {
+    vi.spyOn(Intl as unknown as { supportedValuesOf: (key: string) => string[] }, "supportedValuesOf").mockImplementation(() => {
+      throw new RangeError("unsupported");
+    });
+    const zones = timeZones(["Asia/Kathmandu"]);
+    expect(zones).toEqual(expect.arrayContaining(["UTC", "Europe/London", "Asia/Tokyo", "Asia/Kathmandu"]));
+    expect(zones.length).toBeLessThan(40);
+  });
+
+  it("finds zones by city however they're typed", () => {
+    const zones = timeZones();
+    expect(matchZones(zones, "new york")[0]).toBe("America/New_York");
+    expect(matchZones(zones, "America/New_Y")).toEqual(["America/New_York"]);
+    expect(matchZones(zones, "lon")[0]).toBe("Europe/London");
+    expect(matchZones(zones, "Europe/Londn")).toEqual([]);
+    expect(matchZones(zones, "").length).toBeGreaterThan(0);
+  });
+});
+
+describe("demo routines", () => {
+  it("never show a next run in the past", () => {
+    const run = demoRoutines();
+    const listed = run("t1", true, true, ["list"]) as unknown as RoutineList;
+    const sample = listed.routines[0];
+    expect(new Date(sample.next_run!).getTime()).toBeGreaterThan(Date.now());
+    expect(new Date(sample.last_run!.started!).getTime()).toBeLessThan(Date.now());
+    // "mon 09:00" with its few-minutes stagger, in the routine's own zone.
+    const local = new Intl.DateTimeFormat("en-GB", { timeZone: sample.timezone, weekday: "short", hour: "2-digit", minute: "2-digit" })
+      .format(new Date(sample.next_run!));
+    expect(local).toBe("Mon 09:03");
+  });
+
+  it("works out the next weekly time across a clock change", () => {
+    // Saturday 24 Oct 2026, the day before London leaves summer time.
+    const at = nextWeekly(1, 9, 3, "Europe/London", new Date("2026-10-24T12:00:00Z"));
+    expect(at.toISOString()).toBe("2026-10-26T09:03:00.000Z");
+    expect(nextWeekly(1, 9, 3, "Europe/London", new Date("2026-10-19T08:00:00Z")).toISOString()).toBe("2026-10-19T08:03:00.000Z");
   });
 });

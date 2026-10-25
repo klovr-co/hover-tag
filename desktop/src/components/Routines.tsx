@@ -3,13 +3,13 @@
 // A Tag's routines: prompts it runs on a schedule and posts in one channel.
 // Everything goes through `tag NAME routine … --json`, the same as the CLI,
 // and saving here approves exactly what was saved.
-import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Bridge } from "../lib/bridge";
 import { parseJSON, title, type TagRow } from "../lib/protocol";
 import { useFresh, useListMotion } from "../lib/motion";
 import {
   cliError, emptyForm, formArgs, formOf, formProblem, outcomeGood, outcomeText, routineLine, SCHEDULE_EXAMPLES, triggerText,
-  when,
+  localZone, matchZones, timeZones, when,
   type Routine, type RoutineDetail, type RoutineForm, type RoutineList,
 } from "../lib/routines";
 import { ErrorLine, fitText, Icon, Switch } from "./ui";
@@ -226,7 +226,7 @@ function RoutineEditor({ tag, channels, routine, busy, cancel, save }: {
       </div>
       <div className="rt-pair">
         <label className="rt-field"><span>Timezone</span>
-          <input className="field" value={form.timezone} onChange={(e) => set("timezone")(e.target.value)} />
+          <TimezonePicker value={form.timezone} onChange={set("timezone")} />
         </label>
         <label className="rt-field"><span>Spend limit per run ($)</span>
           <input className="field" inputMode="decimal" value={form.budget} onChange={(e) => set("budget")(e.target.value)} />
@@ -248,5 +248,56 @@ function RoutineEditor({ tag, channels, routine, busy, cancel, save }: {
         <button type="submit" className="p-btn ink sm" disabled={busy}>{busy ? "Saving…" : routine ? "Save and approve" : "Add and approve"}</button>
       </div>
     </form>
+  );
+}
+
+/** A timezone field you type into: it lists matching IANA zones and saves only one of them.
+ *  A saved zone that this computer doesn't list is kept; the CLI checks every name anyway. */
+function TimezonePicker({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const zones = useMemo(() => timeZones([value, localZone()]), [value]);
+  const [query, setQuery] = useState<string | null>(null);
+  const [active, setActive] = useState(0);
+  const open = query !== null;
+  const shown = open ? matchZones(zones, query) : [];
+  const pick = (zone: string) => { onChange(zone); setQuery(null); };
+  const close = () => {
+    const exact = query && zones.find((zone) => zone.toLowerCase() === query.trim().toLowerCase());
+    if (exact) onChange(exact);
+    setQuery(null);
+  };
+  return (
+    <div className="mpick-wrap">
+      <input className="field" role="combobox" aria-expanded={open} aria-controls="rt-zones" aria-autocomplete="list"
+        aria-activedescendant={open && shown[active] ? `rt-zone-${active}` : undefined} spellCheck={false}
+        value={open ? query : value} placeholder={localZone()}
+        onFocus={(e) => { setQuery(""); setActive(0); e.currentTarget.select(); }}
+        onChange={(e) => { setQuery(e.target.value); setActive(0); }}
+        onBlur={close}
+        onKeyDown={(e) => {
+          if (!open) return;
+          if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+            e.preventDefault();
+            setActive((i) => Math.max(0, Math.min(shown.length - 1, i + (e.key === "ArrowDown" ? 1 : -1))));
+          } else if (e.key === "Enter" && shown[active]) {
+            e.preventDefault();
+            pick(shown[active]);
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            e.stopPropagation();  // Close the list, not the editor.
+            setQuery(null);
+          }
+        }} />
+      {open && (
+        <div className="mmenu below" role="listbox" id="rt-zones" aria-label="Timezones">
+          {shown.length ? shown.map((zone, index) => (
+            <button key={zone} id={`rt-zone-${index}`} type="button" role="option" aria-selected={zone === value}
+              className={index === active ? "mopt active" : "mopt"} onMouseDown={(e) => e.preventDefault()} onClick={() => pick(zone)}>
+              <span className="mck">{zone === value && <Icon name="check" size={12} />}</span>{zone.replace(/_/g, " ")}
+              {zone === localZone() && <span className="mdef">This computer</span>}
+            </button>
+          )) : <div className="mnote" role="status">No timezone matches “{query}”.</div>}
+        </div>
+      )}
+    </div>
   );
 }

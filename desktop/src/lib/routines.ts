@@ -72,6 +72,38 @@ export const outcomeGood = (run: RoutineRun) => GOOD.has(run.outcome);
 /** This computer's timezone, as the CLI expects it. */
 export const localZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 
+/** Common zones, for a webview that can't list them all. The CLI still checks any name. */
+const FALLBACK_ZONES = [
+  "UTC", "Africa/Cairo", "Africa/Johannesburg", "Africa/Lagos", "America/Chicago", "America/Denver", "America/Los_Angeles",
+  "America/Mexico_City", "America/New_York", "America/Sao_Paulo", "America/Toronto", "Asia/Dubai", "Asia/Hong_Kong",
+  "Asia/Kolkata", "Asia/Seoul", "Asia/Shanghai", "Asia/Singapore", "Asia/Tokyo", "Australia/Sydney", "Europe/Amsterdam",
+  "Europe/Berlin", "Europe/London", "Europe/Madrid", "Europe/Paris", "Pacific/Auckland",
+];
+
+/** Every IANA zone this computer knows, plus any given (the saved one, this computer's), sorted. */
+export function timeZones(keep: string[] = []): string[] {
+  let zones: string[] = [];
+  try {
+    zones = (Intl as { supportedValuesOf?: (key: string) => string[] }).supportedValuesOf?.("timeZone") ?? [];
+  } catch { zones = []; }
+  return [...new Set([...(zones.length ? zones : FALLBACK_ZONES), "UTC", ...keep.filter(Boolean)])].sort();
+}
+
+/** Zones matching what someone typed: "new york", "new_york" and "America/New" all find America/New_York. */
+export function matchZones(zones: string[], query: string, limit = 60): string[] {
+  const words = query.toLowerCase().replace(/[_/]/g, " ").split(/\s+/).filter(Boolean);
+  if (!words.length) return zones.slice(0, limit);
+  const hits = zones.filter((zone) => {
+    const name = zone.toLowerCase().replace(/[_/]/g, " ");
+    return words.every((word) => name.includes(word));
+  });
+  // Zones whose city starts with the text come first, shorter names before longer:
+  // "lon" finds Europe/London before Arctic/Longyearbyen and America/Kentucky/Louisville.
+  const city = (zone: string) => (zone.split("/").pop() ?? zone).toLowerCase().replace(/_/g, " ");
+  const rank = (zone: string) => (city(zone).startsWith(words[0]) ? 0 : 1000) + city(zone).length;
+  return hits.sort((a, b) => rank(a) - rank(b) || a.localeCompare(b)).slice(0, limit);
+}
+
 /** "Mon 19 Oct, 09:03" in the routine's own timezone, with the zone when it isn't this computer's. */
 export function when(iso: string | null, zone: string, now = new Date()) {
   if (!iso) return "";
@@ -142,11 +174,37 @@ export function cliError(stdout: string, stderr: string) {
 
 // ---- Sample data ---------------------------------------------------------------
 
+/** The next time it is `weekday` (0 = Sunday) at hour:minute in `zone`, after now. */
+export function nextWeekly(weekday: number, hour: number, minute: number, zone: string, now = new Date()): Date {
+  const parts = (at: Date) => Object.fromEntries(new Intl.DateTimeFormat("en-US", {
+    timeZone: zone, hourCycle: "h23", weekday: "short", year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric",
+  }).formatToParts(at).map((p) => [p.type, p.value]));
+  for (let ahead = 0; ahead <= 8; ahead++) {
+    const date = parts(new Date(now.getTime() + ahead * 86_400_000));
+    const wall = Date.UTC(Number(date.year), Number(date.month) - 1, Number(date.day), hour, minute);
+    // The zone's offset at that wall time, from what the zone shows at the same instant read as UTC.
+    const shown = parts(new Date(wall));
+    const offset = Date.UTC(Number(shown.year), Number(shown.month) - 1, Number(shown.day), Number(shown.hour), Number(shown.minute)) - wall;
+    const at = new Date(wall - offset);
+    if (["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(parts(at).weekday) === weekday && at > now) return at;
+  }
+  return new Date(now.getTime() + 7 * 86_400_000);
+}
+
 /** A tiny in-memory stand-in for `tag NAME routine`, for the demo app and tests. */
 export function demoRoutines() {
   const byTag = new Map<string, Routine[]>();
   const history = new Map<string, RoutineRun[]>();
   const sample = structuredClone(routineListExample.routines[0]) as unknown as Routine;
+  // The example's dates are fixed; the demo moves them around now, so "next" is never in the past.
+  const day = 86_400_000;
+  const next = nextWeekly(1, 9, 3, sample.timezone);
+  const last = new Date(next.getTime() - 7 * day);
+  sample.next_run = next.toISOString();
+  if (sample.last_run) {
+    sample.last_run = { ...sample.last_run, scheduled_for: last.toISOString(), started: new Date(last.getTime() + 4_000).toISOString(),
+      ended: new Date(last.getTime() + 97_000).toISOString() };
+  }
   const listFor = (tag: string, first: boolean) => {
     if (!byTag.has(tag)) byTag.set(tag, first ? [structuredClone(sample)] : []);
     return byTag.get(tag)!;
