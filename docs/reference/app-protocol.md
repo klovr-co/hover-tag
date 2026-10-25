@@ -660,7 +660,7 @@ Paths are relative to the Tag's knowledge:
 | --- | --- |
 | `tag NAME knowledge list --json` | `memory` (`core`, the all-channels `core.md` or `null`, and `notes`), `channels` (each with `id`, `name`, `core` and `notes`; the Tag's channels with no memory yet come last), `skills`, `limits` (`core`, `note`, `notes`) and `history.available`; see `knowledge-list.json` |
 | `tag NAME knowledge read PATH --json` | `file`: `path`, `kind` (`core`, `note`, `skill`), `version`, `body` (the markdown without its front matter), `size`, `limit`, and `written_by`, `from_thread`, `updated`. Memory files add `scope` (`all` or `channel`), `channel` and `channel_name`; `core` adds `entries`; notes add `key` and `links`; skills add `name`, `backend` and `summary`. See `knowledge-read.json` |
-| `tag NAME knowledge edit PATH --body-file FILE\|- --base VERSION --json` | `change` and the saved `file`; see `knowledge-change.json` |
+| `tag NAME knowledge edit PATH --body TEXT\|--body-file FILE\|- --base VERSION --json` | `change` and the saved `file`; see `knowledge-change.json` |
 | `tag NAME knowledge add --key KEY --text TEXT\|--text-file FILE [--kind core\|note] --channel C…\|--all-channels --json` | `change` and the `file` the entry went into |
 | `tag NAME knowledge forget PATH [--key KEY] --json` | `change`; `--key` names the entry in a `core.md` |
 | `tag NAME knowledge history [PATH] [--limit N] [--before CHANGE] --json` | `changes`, newest first (at most 200 a page; default 30), and `has_more`; see `knowledge-history.json` |

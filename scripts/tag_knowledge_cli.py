@@ -55,7 +55,9 @@ def parser() -> argparse.ArgumentParser:
     read.add_argument("path", help="such as memory/core.md or memory/channels/C0123/notes/venue.md")
     edit = command("edit", "Replace a memory file's entries or a skill's text.")
     edit.add_argument("path")
-    edit.add_argument("--body-file", required=True, type=Path, help="the new markdown, or - for stdin")
+    body = edit.add_mutually_exclusive_group(required=True)
+    body.add_argument("--body", help="the new markdown")
+    body.add_argument("--body-file", type=Path, help="the new markdown from a file, or - for stdin")
     edit.add_argument("--base", required=True, help="the version you read; refused if it changed since")
     add = command("add", "Give the Tag something to remember.")
     add.add_argument("--key", required=True, help="short name, such as report-deadline")
@@ -515,7 +517,8 @@ def run(places: knowledge.Places, tag_id: str, argv: list[str], *,
             # Record what is there now (and anything changed outside Tag) before this change.
             knowledge.sync(places)
             if args.action == "edit":
-                edit(places, args.path, body_from(args.body_file), args.base, args.via)
+                edit(places, args.path, args.body if args.body is not None else body_from(args.body_file),
+                     args.base, args.via)
                 path = args.path
             elif args.action == "add":
                 text = args.text if args.text is not None else body_from(args.text_file).rstrip("\n")

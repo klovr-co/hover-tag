@@ -50,6 +50,14 @@ class KnowledgeCommandTests(CommandTestCase):
         self.assertEqual(["undid", "edited", "saved", "saved"], [c["action"] for c in history["changes"]])
         self.assertEqual(history["changes"][0]["id"], history["changes"][1]["undone_by"])
 
+    def test_the_app_sends_the_body_as_an_argument(self) -> None:
+        self.store().save("cto", "Dana is CTO.")
+        _, read = self.run_cli("read", "memory/channels/CLAUNCH/core.md")
+        code, edited = self.run_cli("edit", "memory/channels/CLAUNCH/core.md", "--body=## cto\n- Dana Lee is CTO.\n",
+                                    "--base", read["file"]["version"], "--via", "tag-app")
+        self.assertEqual(0, code, edited)
+        self.assertEqual("- Dana Lee is CTO.", self.store().get("cto")[1]["text"])
+
     def test_a_stale_edit_is_refused(self) -> None:
         self.store().save("cto", "Dana is CTO.")
         body = self.base / "body.md"

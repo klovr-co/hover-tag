@@ -40,6 +40,8 @@ The Tag desktop app and the CLI use the same Tags, settings, and lifecycle: the 
 | Describe | Details → description **Edit** | `tag NAME describe "…"` |
 | Model and thinking level | Details → **Model** | `tag NAME settings ai model VALUE [--effort LEVEL]` |
 | Routines | The Tag → **Routines** | `tag NAME routine list\|show\|add\|edit\|pause\|resume\|remove\|run-now`; see [Routines](../concepts/routines.md) |
+| What a Tag knows | The Tag → **Knowledge**: memory and skills, Visual or Markdown, **History** with Undo | `tag NAME knowledge list\|read\|edit\|forget\|history\|show\|undo` |
+| Give a Tag something to remember | Knowledge → **Add to knowledge** | `tag NAME knowledge add --key KEY --text TEXT --channel C…\|--all-channels [--kind note]` |
 | Permissions | Details → **Permissions** | `tag NAME settings ai permissions codex-sandbox=… claude-mode=…` |
 | Rules for one Tag | Details → **Permissions** → **Rules** | `tag NAME settings ai permissions allow\|block\|remove codex\|claude RULE`; `tag NAME settings ai permissions` lists them |
 | Rules for all Tags | Settings → AI → **AI connections** → **Rules for all Tags** | `tag settings ai rules [allow\|block\|remove codex\|claude RULE]` |
