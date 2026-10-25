@@ -53,6 +53,7 @@ The Tag desktop app and the CLI use the same Tags, settings, and lifecycle: the 
 | Update | Settings → **Updates** → **Update Tag** | `tag upgrade` |
 | Release channel | Settings → **Updates** → Stable, Beta, or Alpha | `tag upgrade --channel stable\|beta\|alpha\|edge` |
 | Usage data | Settings → General → **Share usage data** | `tag telemetry on\|off` |
+| Move a Tag to another computer | Details → **Export Tag…**; **Import** on Home | `tag NAME export [--output FILE]`, then `tag import FILE` and `tag NAME setup` to reconnect Slack |
 | Remove a Tag | Details → **Remove this Tag…** | `tag NAME remove` |
 | Start setup over | No app action | `tag NAME reset` |
 | Channels, history, advanced settings | No app action | `tag NAME settings`, `tag config set` |

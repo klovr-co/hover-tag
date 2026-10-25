@@ -6,6 +6,12 @@ All notable changes to Tag are documented here.
 
 ### Added
 
+- Move a Tag to another computer. **Export Tag…** in the Tag's Details saves
+  its memory and history, skills, threads and settings to one `.hovertag`
+  file, never its passwords or tokens. **Import** on Home adds it on the new
+  computer; then connect Slack and choose the same app. Stop the Tag on the old
+  computer first. Imported routines start paused. In the terminal, use
+  `tag NAME export` and `tag import FILE`.
 - See and edit what each Tag knows. The Tag's **Knowledge** tab shows its
   memory (for all channels and for each channel) and its skills as plain
   documents, with a Visual or Markdown view. Hover an entry to see who saved
