@@ -66,13 +66,18 @@ the router. In practice:
   calls Finance. The name must come first and be followed by `:` or `,`, or
   come after `ask`. The match is exact and ignores case. "ask the finance team
   whether…" is not a call.
-- With no name, the same loop picks the persona, as it picks a skill: Lead's
-  instructions list the personas and their descriptions, and the agent names
-  its choice with a helper call. There is no separate classifier call and no
-  second agent.
+- With no name, Lead answers itself unless the request is clearly another
+  persona's area. Then Lead hands over in the thread: it posts one short line
+  ("That's Finance's area, handing you over."), and Finance's answer follows
+  straight after, in the same run. Lead's instructions list the personas and
+  their descriptions, and the agent names its choice with a helper call.
+  There is no separate classifier call, no second agent and no second model
+  call; the handover costs one short extra Slack message.
+- A persona never changes silently. A different name and picture always
+  follow a handover line, or a person naming the persona.
 - A thread remembers its persona, so a later `@Tag` without a name stays with
-  it. Naming another persona switches the thread, and the bridge says so in
-  one line.
+  it. Naming another persona (`@Tag Ops: …`) moves the thread there, which is
+  also how a person corrects a wrong handover.
 - Switching persona keeps the same session. The model keeps the whole thread
   in context and loads the new persona's skills. Nothing is retold, summarized
   or handed over.
@@ -185,7 +190,7 @@ Per feature:
 |---|---|---|
 | Watching (`when-addressed`) | #233's free filters, then the classifier | backend if turned on; else off |
 | Chime-in | its own question on every new message | backend if turned on; else off |
-| Persona suggestion | scores the descriptions, precision first | Lead's loop suggests from the descriptions it already sees, at no extra call |
+| Handover to a persona | not used; Lead's loop decides from the descriptions it already sees | the same, at no extra call |
 | Connector narrowing | recall first, within the allow list | pass the whole allow list |
 
 **Replies carry the persona's name and picture.** The bridge posts with
@@ -250,8 +255,9 @@ Each fold or split is decided by a small end-to-end set, not by argument.
 - About 10 golden tasks, each a real Slack request with the expected outcome.
   Pass or fail is graded on the outcome: what Tag did (its writes, from the
   fake Slack client and helper logs) and what it said, against checks and a
-  short rubric. The persona chosen, the skills read and the tools called are
-  recorded alongside as diagnostics, not graded. The migration kit warns that
+  short rubric. The handover is the one path check that is graded, because
+  people see it: whether Lead handed over, and to whom. The skills read and
+  the tools called are recorded alongside as diagnostics, not graded. The migration kit warns that
   "Path checks break the moment the design changes", while the article says
   to check "whether the agent loaded the right skill or called the right
   tool". Recording the path without failing on it serves both.
@@ -265,7 +271,7 @@ Each fold or split is decided by a small end-to-end set, not by argument.
   only if the folded version scores worse.
 - The harness writes the migration kit's `results.jsonl` layout, so the kit's
   `compare.py` and `estimate.py` can be used as they are (Apache-2.0,
-  dependency-free). Chime-in, watching and persona suggestion keep their own
+  dependency-free). Chime-in and watching keep their own
   labelled sets in #233's `watch_eval.py`.
 - The runs call paid models, so each run needs an agreed budget and a cost
   estimate first (`estimate.py` gives the tokens; prices come from the
@@ -288,7 +294,7 @@ Each source was read in full on 25 Oct 2026, except where marked.
   agent traces, not just individual messages" and "Actions carry implicit
   decisions, and conflicting decisions carry bad results". Its Flappy Bird
   example shows two subagents building mismatched parts. It gives no numbers.
-  *Applies:* switching persona keeps the same session, so the full trace is
+  *Applies:* a handover between personas keeps the same session, so the full trace is
   shared. A handoff to a boundary instance passes the thread link, not a
   summary. Personas never work on one request in parallel.
 - **Anthropic, [How we built our multi-agent research
@@ -324,8 +330,8 @@ Each source was read in full on 25 Oct 2026, except where marked.
   categories that are better handled separately, and where classification can
   be handled accurately". The page now notes that much of its tooling advice
   has changed since then. *Applies:* #233's classifier is a narrow routing
-  gate (answer or stay silent), and chime-in adds one more category. Persona
-  suggestion by a classifier is justified only if it is measured as accurate.
+  gate (answer or stay silent), and chime-in adds one more category. Lead's
+  handover is routing too, so the golden tasks measure it.
 - **H. Floyd, [Your Multi-Agent System Is an Org
   Chart](https://harryfloyd.substack.com/p/your-multi-agent-system-is-an-org)**
   (7 Jul 2026). **Read only in part:** the post is paywalled after its
@@ -355,7 +361,11 @@ Each source was read in full on 25 Oct 2026, except where marked.
   and `tag NAME persona list` say so, and anything that needs separation
   becomes a real instance.
 - **No @mention per persona.** People type the name. A typo goes to Lead,
-  which picks a persona.
+  which answers or hands over.
+- **A wrong handover is visible.** If Lead hands a shift question to Finance,
+  people see it. The golden tasks include requests with and without a
+  handover, and check that Lead hands over only when it should (graded, unlike
+  the other path diagnostics). People correct it by naming the persona.
 - **One context can still overflow.** Many personas and skills add
   descriptions to every run. The evaluation shows when to split.
 - **Speaking up unasked can annoy people.** Chime-in is off by default,
@@ -379,8 +389,9 @@ Each source was read in full on 25 Oct 2026, except where marked.
    message record, with their tests. Leave behind what made a profile an
    instance: `tag add --profile`, `kind: profile`, the shared Slack values and
    the inbox.
-3. **Calling and display.** The name parser in the bridge, persona choice by
-   the agent through a helper, the thread's persona, persona instructions and
+3. **Calling and display.** The name parser in the bridge, Lead's handover
+   (helper call, handover line, then the persona's reply in the same run),
+   the thread's persona, persona instructions and
    memory scope and voice for the run, `username` and `icon_url` on posts,
    and persona labels in thread context. Approval prompts carry the persona.
 4. **Proposals.** Lead proposes a persona, a `SKILL.md` (text only, with a
