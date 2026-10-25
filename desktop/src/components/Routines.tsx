@@ -27,8 +27,12 @@ export function Routines({ api, row, say }: { api: Bridge; row: TagRow; say: Say
   const load = useCallback(async () => {
     const current = ++request.current;
     const result = await api.tag([row.id, "routine", "list", "--json"]).catch(() => null);
-    if (current !== request.current || !result) return;
-    if (result.code !== 0) { setError(cliError(result.stdout, result.stderr)); setList((l) => l ?? { tag_running: false, routines: [], limits: { per_tag: 10, per_channel: 3 } }); return; }
+    if (current !== request.current) return;
+    if (!result || result.code !== 0) {
+      setError(result ? cliError(result.stdout, result.stderr) : "Couldn't reach Tag to read its routines. Trying again every 30 seconds.");
+      setList((l) => l ?? { tag_running: false, routines: [], limits: { per_tag: 10, per_channel: 3 } });
+      return;
+    }
     setList(parseJSON<RoutineList>(result.stdout));
   }, [api, row.id]);
   useEffect(() => {
@@ -42,7 +46,8 @@ export function Routines({ api, row, say }: { api: Bridge; row: TagRow; say: Say
     setBusy(id);
     setError("");
     try {
-      const result = await api.tag(args);
+      const result = await api.tag(args).catch(() => null);
+      if (!result) { setError("Couldn't reach Tag. Try again."); return false; }
       if (result.code !== 0) { setError(cliError(result.stdout, result.stderr)); return false; }
       say(done);
       await load();

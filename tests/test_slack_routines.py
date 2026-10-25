@@ -359,9 +359,12 @@ class RoutineRunTests(unittest.TestCase):
         self.assertEqual(self.calls, [])
 
     def test_mentions_of_other_tags_are_removed_from_replies(self):
-        with patch.object(slack_socket_agent.slack_identity, "is_bot_user", return_value=True, create=True):
-            record = self.run_routine(lambda kwargs: ("Done.", True))
+        self.client.users_info.return_value = {"user": {"is_bot": True, "profile": {"display_name": "Tag B"}}}
+        record = self.run_routine(lambda kwargs: ("Asked <@U0TAGB001> for help. Done.", True))
         self.assertEqual(record["outcome"], "posted")
+        text = self.posted_texts()[0]
+        self.assertNotIn("<@U0TAGB001>", text)
+        self.assertIn("Tag B", text)
 
 
 if __name__ == "__main__":

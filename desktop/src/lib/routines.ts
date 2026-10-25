@@ -107,7 +107,9 @@ export const formOf = (routine: Routine): RoutineForm => ({
 /** CLI arguments to add a routine, or to save only what changed in one. */
 export function formArgs(tag: string, form: RoutineForm, previous?: Routine): string[] {
   const before = previous ? formOf(previous) : null;
-  const changed = (key: keyof RoutineForm) => !before || form[key].trim() !== before[key].trim();
+  // An unapproved routine is approved by saving it, even when nothing changed.
+  const resend = !!previous && !previous.approved;
+  const changed = (key: keyof RoutineForm) => resend || !before || form[key].trim() !== before[key].trim();
   const args = previous ? [tag, "routine", "edit", previous.id] : [tag, "routine", "add"];
   if (changed("name")) args.push("--name", form.name.trim());
   if (changed("schedule")) args.push("--schedule", form.schedule.trim());

@@ -45,6 +45,14 @@ describe("Routines", () => {
     expect(await screen.findByText(/Routines aren't running: Can't read routines.json/)).toBeTruthy();
   });
 
+  it("says when it can't reach Tag at all", async () => {
+    const api = demoBridge();
+    const rows: TagRow[] = parseList((await api.tag(["list", "--json"])).stdout);
+    api.tag = () => Promise.reject(new Error("bridge gone"));
+    render(<Routines api={api} row={rows[0]} say={vi.fn()} />);
+    expect(await screen.findByText(/Couldn't reach Tag to read its routines/)).toBeTruthy();
+  });
+
   it("pauses with the switch and says so", async () => {
     const { row, calls, say } = await open();
     fireEvent.click(await screen.findByRole("switch", { name: "Pause Weekly PR digest" }));

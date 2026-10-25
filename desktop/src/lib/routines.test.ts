@@ -40,6 +40,9 @@ describe("routine form", () => {
       "--timezone", "Europe/London", "--channel", "C0LAUNCH1", "--prompt", "Summarise.", "--max-budget-usd", "0.50", "--via", "tag-app", "--json"]);
     const edited = { ...formOf(routine), schedule: "fri 17:30" };
     expect(formArgs("t1", edited, routine)).toEqual(["t1", "routine", "edit", routine.id, "--schedule", "fri 17:30", "--via", "tag-app", "--json"]);
+    // Reviewing an unapproved routine and saving it unchanged approves it, so every field is sent.
+    const unapproved = { ...routine, approved: false };
+    expect(formArgs("t1", formOf(unapproved), unapproved)).toEqual(expect.arrayContaining(["--name", routine.name, "--prompt", routine.prompt]));
   });
 
   it("asks for what's missing before calling the CLI", () => {

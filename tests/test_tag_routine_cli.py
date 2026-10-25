@@ -161,6 +161,8 @@ class RoutineCliTests(unittest.TestCase):
                 self.cli("add", "--name", "x", "--schedule", "daily 09:00", "--timezone", "UTC",
                          "--channel", "C0123ABCDE", "--prompt", "p", "--owner", "U0123ABC", values=values)
         with mock.patch.dict("os.environ", {"OPENTAG_CALLER_ID": "U0123ABC"}):
+            with self.assertRaisesRegex(routines.RoutineError, "only for yourself"):
+                self.cli("edit", routine_id, "--owner", "U0OTHER99", values=values)
             _, edited = self.cli("edit", routine_id, "--prompt", "Better", "--json", values=values)
         self.assertEqual((edited["routine"]["approval"]["by"], edited["routine"]["approval"]["via"]),
                          ("U0123ABC", "slack"))

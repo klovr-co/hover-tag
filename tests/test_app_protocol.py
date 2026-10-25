@@ -75,6 +75,18 @@ class ProtocolTests(unittest.TestCase):
         removed = self.cli("t1-a1", "routine", "remove", added["routine"]["id"], "--json")
         self.assertEqual(removed["removed"], added["routine"]["id"])
 
+    def test_routine_commands_find_a_tag_by_nickname_or_as_the_main_tag(self) -> None:
+        home = tag_instances.create(self.root, "t1-a1").home
+        tag_config.save_config(home / "config/settings.json", {
+            "SLACK_TEAM_ID": "T1", "SLACK_APP_ID": "A1", "SLACK_CHANNEL_IDS": "C0LAUNCH1",
+            "SLACK_ALLOWED_USER_IDS": "U0MAYA001"})
+        tag_instances.set_nickname(self.root, "t1-a1", "research")
+        self.cli("research", "routine", "add", "--name", "Digest", "--schedule", "mon 09:00", "--timezone", "UTC",
+                 "--channel", "C0LAUNCH1", "--prompt", "p", "--json")
+        self.assertEqual(self.cli("research", "routine", "list", "--json")["tag"], "t1-a1")
+        listed = self.cli("routine", "list", "--json")
+        self.assertEqual((listed["tag"], [r["name"] for r in listed["routines"]]), ("t1-a1", ["Digest"]))
+
     def test_list_rows_provide_what_apps_read(self) -> None:
         home = tag_instances.create(self.root, "t1-a1").home
         tag_config.save_config(home / "config/settings.json", {"SLACK_TEAM_ID": "T1", "SLACK_APP_ID": "A1"})

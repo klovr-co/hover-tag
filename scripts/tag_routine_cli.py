@@ -364,6 +364,8 @@ def run(home: Path, tag_id: str, argv: list[str], *, values: dict[str, str],
         return 0
     if args.action == "edit":
         changes = _fields(args, values, channels, routine)
+        if caller and changes.get("owner", caller) != caller:
+            raise routines_lib.RoutineError("From Slack you can make a routine act only for yourself.")
         if not changes:
             raise routines_lib.RoutineError("Nothing to change. Give at least one option, such as --schedule")
         updated = store.update(routine["id"], changes, by=by, via=via, now=moment)

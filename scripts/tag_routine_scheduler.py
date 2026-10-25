@@ -140,9 +140,10 @@ class RoutineScheduler:
         waiting = state.get("waiting")
         if isinstance(waiting, dict) and waiting.get("trigger") in routines_lib.TRIGGERS:
             with self.lock:
+                # Only restored runs keep when they were queued: they may have waited while Tag was stopped.
                 self.waiting[routine["id"]] = {"trigger": waiting["trigger"],
                                                "slot": _parse(waiting.get("scheduled_for")),
-                                               "key": waiting.get("key")}
+                                               "key": waiting.get("key"), "queued": _parse(waiting.get("queued"))}
         if closed.get("failures", 0) >= routines_lib.AUTO_PAUSE_FAILURES:
             self._pause(routine, f"Paused after {closed['failures']} failed runs in a row.")
 
@@ -306,7 +307,8 @@ class RoutineScheduler:
             if routine is None:
                 continue  # Removed while it waited.
             trigger, slot = entry["trigger"], entry["slot"]
-            outcome, diagnostic = self._still_wanted(routine, trigger, slot, entry.get("key"), now)
+            outcome, diagnostic = self._still_wanted(routine, trigger, slot, entry.get("key"), now,
+                                                     queued=entry.get("queued"))
             if outcome:
                 self.states.update(ready, lambda state, o=outcome, d=diagnostic, t=trigger, s=slot: (
                     state.update(waiting=None),
@@ -321,9 +323,13 @@ class RoutineScheduler:
                 self._warn("Could not start routine %s: %s", ready, exc)
 
     def _still_wanted(self, routine: dict[str, Any], trigger: str, slot: datetime | None, key: str | None,
-                      now: datetime) -> tuple[str, str]:
+                      now: datetime, *, queued: datetime | None = None) -> tuple[str, str]:
         """Why a run that waited for a free slot shouldn't run any more: (outcome, diagnostic), or empty."""
         if trigger == "run-now":
+            if queued is not None and now - queued > routines_lib.RUN_NOW_MAX_AGE:
+                minutes = int(routines_lib.RUN_NOW_MAX_AGE.total_seconds() // 60)
+                return "skipped", (f"Asked for more than {minutes} minutes before Tag could start it, "
+                                   "so it didn't run. Run it again if it's still wanted.")
             return "", ""
         if not routine["enabled"]:
             return "skipped", "Paused while it waited for a free slot."

@@ -2556,7 +2556,13 @@ def _run_cli() -> int:
     )
     tag_id = raw_arguments.pop(0) if explicit_tag else "default"
     if raw_arguments[:1] == ["routine"]:
-        return _routine_command(tag_home(), tag_id, raw_arguments[1:])
+        root = tag_home()
+        if explicit_tag:
+            # A nickname from `tag rename` works here too, and plain `tag routine` means the main Tag.
+            tag_id = tag_instances.resolve_reference(root, tag_id)
+        if tag_id == tag_instances.DEFAULT_TAG:
+            tag_id = tag_instances.select_unnamed(root)
+        return _routine_command(root, tag_id, raw_arguments[1:])
     args = parser.parse_args(raw_arguments)
     if args.activity and (args.command != "logs" or args.follow):
         parser.error("--activity requires logs and cannot be combined with --follow")

@@ -596,6 +596,24 @@ class SchedulerScenarioTests(SchedulerBase):
         self.scheduler.tick()
         self.assertEqual([c[1] for c in self.calls], ["run-now"])
 
+    def test_a_waiting_run_now_restored_long_after_it_was_asked_is_dropped(self):
+        items = [self.add(name=f"R{i}", channel=f"C0{i}ABCDEFG", limits={"timeout_seconds": 3600}) for i in range(3)]
+        self.scheduler.tick()
+        self.deferred = True
+        for item in items:
+            routines.request_run(self.home, item["id"], at=self.clock())
+        self.scheduler.tick()
+        waiting = next(i for i in items if self.states.load(i["id"])["waiting"])
+        self.pending.clear()
+        self.deferred = False
+        self.clock.now += timedelta(days=2)
+        self.scheduler = self.new_scheduler()
+        self.scheduler.recover()
+        self.scheduler._drain(self.clock())
+        self.assertEqual([c for c in self.calls if c[0] == waiting["id"]], [])
+        self.assertEqual(self.history(waiting)[-1]["outcome"], "skipped")
+        self.assertIn("10 minutes", self.history(waiting)[-1]["diagnostic"])
+
     def test_run_now_requests_older_than_ten_minutes_are_dropped(self):
         item = self.add()
         self.scheduler.tick()
