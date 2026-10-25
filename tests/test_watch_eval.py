@@ -316,6 +316,33 @@ class ChimeInSetTests(unittest.TestCase):
         self.assertTrue({"incident", "sensitive", "request", "addressed", "status"} <= categories)
 
 
+class ChimeImportTests(unittest.TestCase):
+    def test_real_posts_are_scrubbed_described_and_kept_private(self) -> None:
+        allowed = frozenset({"C1"})
+        with tempfile.TemporaryDirectory() as directory:
+            out = Path(directory) / "real" / "chime.json"
+            added, errors = harness.import_chime([
+                {"channel": "C1", "ts": "1.5", "text": "Thanks <@U123|Ann> for shipping <https://app.test/x|this> <!here>",
+                 "expected": True, "confidence": "high", "category": "win",
+                 "files": [{"mimetype": "video/mp4", "title": "demo", "url_private": "https://files.slack.com/s"}]},
+                {"channel": "CSECRET", "ts": "2.0", "text": "x", "expected": False, "confidence": "high",
+                 "category": "aside"},
+                {"channel": "C1", "ts": "3.0", "text": "", "expected": False, "confidence": "low", "category": "aside"},
+            ], out, allowed)
+            self.assertEqual((1, 2), (added, len(errors)))
+            data = json.loads(out.read_text(encoding="utf-8"))
+            [case] = data["cases"]
+            self.assertEqual("Thanks {participant} for shipping <link> {group}", case["message"])
+            self.assertNotIn("Ann", json.dumps(data))
+            self.assertNotIn("files.slack.com", json.dumps(data))
+            self.assertEqual("video", case["attachments"][0]["kind"])
+            if os.name != "nt":
+                self.assertEqual(0o600, out.stat().st_mode & 0o777)
+                self.assertEqual(0o700, out.parent.stat().st_mode & 0o777)
+            _name, cases = harness.load_cases(out)
+            self.assertEqual("<@UPSOMEONE>", cases[0].event["text"].split()[1])
+
+
 class PaidRunGuardTests(unittest.TestCase):
     def run_score(self, scorer, *, max_usd: float = 1.0, out_path: Path, cases=None) -> float:
         name, all_cases = harness.load_cases()

@@ -541,6 +541,73 @@ def import_real(items: list[dict[str, Any]], out: Path, allowed: frozenset[str])
     return len(items) - len(errors), errors
 
 
+CHIME_CATEGORIES = frozenset({"launch", "release", "demo", "win", "milestone", "finished work", "customer success",
+                              "incident", "request", "question", "status", "reminder", "logistics", "meeting notes",
+                              "sensitive", "addressed", "share", "aside", "planning", "competitor", "other"})
+
+
+def chime_case(item: dict[str, Any], allowed: frozenset[str]) -> dict[str, Any]:
+    """A real top-level post for the chime-in set: scrubbed text, attachment descriptions, label."""
+    try:
+        from scripts import watch_attachments
+    except ImportError:
+        import watch_attachments
+    channel, ts = str(item.get("channel", "")), str(item.get("ts", ""))
+    if channel not in allowed:
+        raise ValueError("channel is not on the allowed list")
+    if not re.fullmatch(r"\d+\.\d+", ts):
+        raise ValueError("ts must be a Slack timestamp")
+    if not isinstance(item.get("expected"), bool) or item.get("confidence") not in {"high", "medium", "low"}:
+        raise ValueError("expected (bool) and confidence (high, medium, low) are required")
+    if item.get("category") not in CHIME_CATEGORIES:
+        raise ValueError("unknown category")
+    text = str(item.get("text", ""))
+    text = re.sub(r"<@[A-Z0-9]+(?:\|[^>]*)?>", "{participant}", text)
+    text = re.sub(r"<(?:https?|mailto):[^>]*>|https?://\S+", "<link>", text)
+    text = re.sub(r"<!(?:subteam\^)?[^>]*>", "{group}", text)
+    text = re.sub(r"<#[A-Z0-9]+(?:\|[^>]*)?>", "#channel", text)
+    if not text.strip() and not item.get("files"):
+        raise ValueError("a post needs text or a file")
+    event = {"files": item.get("files") or [], "attachments": item.get("previews") or []}
+    case = {"id": hashlib.sha256(f"{channel}:{ts}".encode()).hexdigest()[:12], "channel": channel, "ts": ts,
+            "category": item["category"], "expected": item["expected"], "confidence": item["confidence"],
+            "message": text[:MAX_CHIME_CHARS]}
+    if attachments := watch_attachments.describe(event):
+        case["attachments"] = attachments
+    if item.get("borderline") or item["confidence"] == "low":
+        case["borderline"] = True
+    return case
+
+
+MAX_CHIME_CHARS = 2_000
+
+
+def import_chime(items: list[dict[str, Any]], out: Path, allowed: frozenset[str]) -> tuple[int, list[str]]:
+    """Add real chime-in posts to a private set (dir 700, file 600), replacing same-ID posts."""
+    out.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if os.name != "nt":
+        out.parent.chmod(0o700)
+    data = json.loads(out.read_text(encoding="utf-8")) if out.exists() else {
+        "schema_version": 1, "assistant_name": "Tag", "question": watch_classifier.CHIME_QUESTION_NAME,
+        "description": "Real top-level Slack posts for the chime-in question. Private: never commit or share.",
+        "cases": []}
+    by_id = {case["id"]: case for case in data["cases"]}
+    errors = []
+    for index, item in enumerate(items):
+        try:
+            case = chime_case(item, allowed)
+        except (ValueError, TypeError, AttributeError) as exc:
+            errors.append(f"item {index}: {exc}")
+            continue
+        by_id[case["id"]] = case
+    data["cases"] = list(by_id.values())
+    descriptor = os.open(out.with_suffix(".tmp"), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        json.dump(data, handle, ensure_ascii=False, indent=1)
+    os.replace(out.with_suffix(".tmp"), out)
+    return len(items) - len(errors), errors
+
+
 def recommend(expected: dict[str, bool], rows: list[dict[str, Any]], target: float) -> Metrics | None:
     """The lowest threshold meeting the precision target, which keeps the most recall."""
     for threshold in FINE_SWEEP:
@@ -728,6 +795,9 @@ def main(argv: list[str] | None = None) -> int:
     import_parser = commands.add_parser("import-real", help="Add real Slack cases from stdin JSON; no network.")
     import_parser.add_argument("--out", type=Path, required=True)
     import_parser.add_argument("--allowed", type=Path, required=True, help="File with one allowed channel ID per line.")
+    chime_parser = commands.add_parser("import-chime", help="Add real chime-in posts from stdin JSON; no network.")
+    chime_parser.add_argument("--out", type=Path, required=True)
+    chime_parser.add_argument("--allowed", type=Path, required=True, help="File with one allowed channel ID per line.")
     merge_parser = commands.add_parser("merge", help="Merge fixture files into one; no network.")
     merge_parser.add_argument("--out", type=Path, required=True)
     merge_parser.add_argument("inputs", type=Path, nargs="+")
@@ -738,6 +808,15 @@ def main(argv: list[str] | None = None) -> int:
         items = json.load(sys.stdin)
         added, errors = import_real(items if isinstance(items, list) else [items], args.out, allowed)
         print(f"Imported {added} case(s); {len(errors)} rejected.", file=sys.stderr)
+        for error in errors:
+            print("  " + error, file=sys.stderr)
+        return 0 if not errors else 1
+    if args.command == "import-chime":
+        allowed = frozenset(line.strip() for line in args.allowed.read_text(encoding="utf-8").splitlines() if line.strip())
+        items = json.load(sys.stdin)
+        added, errors = import_chime(items if isinstance(items, list) else [items], args.out, allowed)
+        total = len(json.loads(args.out.read_text(encoding="utf-8"))["cases"])
+        print(f"Imported {added} post(s); {len(errors)} rejected; {total} in the set.", file=sys.stderr)
         for error in errors:
             print("  " + error, file=sys.stderr)
         return 0 if not errors else 1
