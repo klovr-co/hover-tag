@@ -6,6 +6,7 @@ import unittest
 from scripts.opentag_process_env import (
     backend_environment,
     current_channel_scopes,
+    text_only_environment,
     without_telemetry_environment,
 )
 
@@ -29,6 +30,15 @@ class BackendEnvironmentTests(unittest.TestCase):
             "DISABLE_TELEMETRY": "1",
             "POSTHOG_PERSONAL_API_KEY": "third-party-key",
         })
+
+    def test_the_memory_helper_learns_the_slack_thread_of_this_run_only(self) -> None:
+        source = {"PATH": "/bin", "OPENTAG_CURRENT_THREAD_TS": "1.1"}
+        here = backend_environment(source, transport="slack", conversation_id="C1", caller_id="U1",
+                                   thread_ts="1729000000.000100")
+        self.assertEqual("1729000000.000100", here["OPENTAG_CURRENT_THREAD_TS"])
+        unthreaded = backend_environment(source, transport="slack", conversation_id="C1", caller_id="U1")
+        self.assertNotIn("OPENTAG_CURRENT_THREAD_TS", unthreaded)
+        self.assertEqual("", text_only_environment(here)["OPENTAG_CURRENT_THREAD_TS"])
 
     def test_bridge_access_control_is_not_inherited_by_backend(self) -> None:
         environment = backend_environment(

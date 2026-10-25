@@ -2507,6 +2507,7 @@ def run_backend(
     memory_receipts: Path | None = None,
     handoff_requests: Path | None = None,
     handoff_depth: int = 0,
+    thread_ts: str | None = None,
 ) -> tuple[str, bool]:
     if max_timeout is None:
         max_timeout = int(os.getenv("OPENTAG_MAX_TIMEOUT_SECONDS", "3600"))
@@ -2565,6 +2566,7 @@ def run_backend(
             memory_receipts=str(memory_receipts) if memory_receipts else None,
             handoff_requests=str(handoff_requests) if handoff_requests else None,
             handoff_depth=handoff_depth,
+            thread_ts=thread_ts,
         )
         result = subprocess.run(
             cmd,
@@ -2715,6 +2717,7 @@ def run_backend_events(
         handoff_depth=handoff_depth,
         run_limits=run_limits,
         routine_id=routine_id,
+        thread_ts=thread_ts,
     )
     try:
         process = subprocess.Popen(
@@ -5020,6 +5023,7 @@ def create_app(
                         memory_receipts=memory_receipts,
                         handoff_requests=handoff_requests,
                         handoff_depth=handoff_depth,
+                        thread_ts=thread_ts,
                     )
                 finish_activity(
                     "completed" if succeeded else
@@ -5062,6 +5066,9 @@ def create_app(
                         thread_ts=thread_ts,
                     )
                 memory_changes = tag_memory.receipt_lines(memory_receipts)
+                if memory_changes:
+                    threading.Thread(target=tag_memory.record_history, args=(logger,), daemon=True,
+                                     name="memory-history").start()
                 if succeeded and memory_changes:
                     answer = f"{answer.rstrip()}\n\n" + "\n".join(memory_changes)
                 # A Tag's own words never mention another Tag; only handoff markers do.
